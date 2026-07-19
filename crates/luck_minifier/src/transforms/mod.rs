@@ -1,0 +1,12 @@
+pub mod explicit_self;
+pub mod fold_constants;
+pub mod inline_locals;
+pub mod lift_locals;
+pub mod merge_locals;
+pub mod remove_dead_code;
+pub mod rename_locals;
+pub mod shorten_numbers;
+pub mod shorten_strings;
+pub mod simplify_indexes;
+pub mod simplify_parens;
+pub mod simplify_statements;

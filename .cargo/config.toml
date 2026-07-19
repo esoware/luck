@@ -1,0 +1,18 @@
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# With a static CRT, force a single consistent UCRT so manually linked
+# libraries cannot pull in a second, conflicting C runtime.
+[target.'cfg(target_os = "windows")']
+rustflags = [
+  "-C",
+  "link-args=/NODEFAULTLIB:libucrt.lib",
+  "-C",
+  "link-args=/DEFAULTLIB:ucrt.lib",
+]

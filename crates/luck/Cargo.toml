@@ -1,0 +1,26 @@
+[package]
+name = "luck"
+version = "2.2.0"
+authors.workspace = true
+categories.workspace = true
+description = "Lua/Luau bundler and minifier — custom parser, multi-version support, zero runtime overhead."
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+luck_token.workspace = true
+luck_lexer.workspace = true
+luck_ast.workspace = true
+luck_parser.workspace = true
+luck_codegen.workspace = true
+luck_core.workspace = true
+luck_resolver.workspace = true
+luck_bundler.workspace = true
+luck_minifier.workspace = true
+luck_formatter.workspace = true
+luck_semantic.workspace = true
+luck_linter.workspace = true

@@ -1,0 +1,85 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+authors = ["Esoware"]
+categories = ["compilers", "command-line-utilities"]
+description = "Lua/Luau bundler and minifier — custom parser, multi-version support, zero runtime overhead."
+edition = "2024"
+homepage = "https://github.com/esoware/luck"
+keywords = ["lua", "luau", "bundler", "minifier", "parser"]
+license = "MIT"
+repository = "https://github.com/esoware/luck"
+rust-version = "1.85.0"
+
+[workspace.dependencies]
+ariadne = "0.6"
+clap = { version = "4", features = ["derive"] }
+compact_str = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+json5 = "1.3"
+globset = "0.4"
+toml = "0.8"
+petgraph = "0.8"
+notify = "7"
+notify-debouncer-mini = "0.5"
+ignore = "0.4"
+insta = { version = "1", features = ["glob"] }
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+luck = { path = "crates/luck" }
+luck_core = { path = "crates/luck_core" }
+luck_resolver = { path = "crates/luck_resolver" }
+luck_bundler = { path = "crates/luck_bundler" }
+luck_minifier = { path = "crates/luck_minifier" }
+luck_token = { path = "crates/luck_token" }
+luck_lexer = { path = "crates/luck_lexer" }
+luck_ast = { path = "crates/luck_ast" }
+luck_parser = { path = "crates/luck_parser" }
+luck_codegen = { path = "crates/luck_codegen" }
+luck_formatter = { path = "crates/luck_formatter" }
+luck_semantic = { path = "crates/luck_semantic" }
+luck_linter = { path = "crates/luck_linter" }
+luck_lsp = { path = "crates/luck_lsp" }
+luck_testgen = { path = "crates/luck_testgen" }
+criterion2 = { version = "3", default-features = false }
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "net", "macros", "sync", "time"] }
+similar = "2"
+unicode-width = "0.2"
+rayon = "1"
+ec4rs = "1.2"
+mimalloc-safe = "0.1.64"
+memchr = "2"
+itoa = "1"
+simdutf8 = { version = "0.1.5", features = ["aarch64_neon"] }
+
+# Full debuginfo makes MSVC linking of the ~36 test binaries the slowest
+# part of every rebuild; line tables keep usable backtraces at a fraction
+# of the link cost.
+[profile.dev]
+debug = "line-tables-only"
+
+# Compile insta and its dependencies in release mode for faster snapshot tests.
+# See: https://insta.rs/docs/quickstart/#optional-faster-runs
+[profile.dev.package]
+insta.opt-level = 3
+similar.opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Release optimizations with debug info kept for profiling.
+# Build with `cargo build --profile=release-with-debug`.
+[profile.release-with-debug]
+inherits = "release"
+strip = false
+debug = true

@@ -1,0 +1,24 @@
+[package]
+name = "luck_bundler"
+version = "1.2.0"
+authors.workspace = true
+categories.workspace = true
+description = "Dependency graph builder and IIFE-based bundler for multi-file Lua/Luau projects."
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+luck_core.workspace = true
+luck_ast.workspace = true
+luck_resolver.workspace = true
+luck_parser.workspace = true
+luck_token.workspace = true
+petgraph.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+tempfile.workspace = true

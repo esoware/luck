@@ -1,0 +1,53 @@
+---
+source: crates/luck_bundler/tests/integration.rs
+expression: output
+---
+do
+local __luck_modules={}
+local __luck_loaded={}
+local __luck_loading={}
+local function __luck_require(id)
+local value=__luck_loaded[id]
+if value~=nil then
+if value==__luck_loading then error("luck bundle: require cycle hit while loading module #"..id,2)end
+return value
+end
+__luck_loaded[id]=__luck_loading
+value=__luck_modules[id](id)
+if value==nil then value=true end
+__luck_loaded[id]=value
+return value
+end
+-- module #1: __luck_typed
+__luck_modules[1]=function(...)
+local typed = {}
+
+export type Point = {x: number, y: number}
+
+type InternalState = {
+    count: number,
+    active: boolean,
+}
+
+local function add(a: number, b: number): number
+    return a + b
+end
+
+local function distance(p1: Point, p2: Point): number
+    local dx: number = p2.x - p1.x
+    local dy: number = p2.y - p1.y
+    return (dx * dx + dy * dy) ^ 0.5
+end
+
+typed.add = add
+typed.distance = distance
+
+return typed
+end
+local typed = __luck_require(1)
+
+local p: typed.Point = { x = 1, y = 2 }
+local result = typed.add(p.x, p.y)
+print(result)
+return result
+end

@@ -1,0 +1,628 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LuckConfig",
+  "description": "Top-level luck.json configuration.",
+  "type": "object",
+  "properties": {
+    "entries": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/EntryConfig"
+      }
+    },
+    "entry": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "exclude": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "extends": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "format": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FormatConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "include": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "lint": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LintConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lua": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "luau": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "luck_preamble": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "minify": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "output": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "output_dir": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "preamble": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "profiles": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/ProfileOverrides"
+      }
+    },
+    "root": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "search_paths": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "transforms": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TransformConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "BlockNewlineGaps": {
+      "description": "Controls whether blank lines inside blocks are preserved from source.",
+      "oneOf": [
+        {
+          "description": "Strip blank lines at the start/end of any block body.",
+          "type": "string",
+          "const": "never"
+        },
+        {
+          "description": "Keep blank lines at the start/end of block bodies verbatim.",
+          "type": "string",
+          "const": "preserve"
+        }
+      ]
+    },
+    "CallParentheses": {
+      "description": "Controls when parentheses are used around single-argument function calls.",
+      "oneOf": [
+        {
+          "description": "Always use parentheses: `f(\"hello\")`, `f({1, 2})`.",
+          "type": "string",
+          "const": "always"
+        },
+        {
+          "description": "Omit parentheses for a single string argument: `f \"hello\"`.",
+          "type": "string",
+          "const": "no_single_string"
+        },
+        {
+          "description": "Omit parentheses for a single table argument: `f {1, 2}`.",
+          "type": "string",
+          "const": "no_single_table"
+        },
+        {
+          "description": "Omit parentheses for single string or table arguments.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Preserve the source's choice: `f\"x\"` stays bare, `f(\"x\")` stays parenthesized.",
+          "type": "string",
+          "const": "input"
+        }
+      ]
+    },
+    "Category": {
+      "description": "Category of a lint rule. Owned here so the whole luck.json config (including\nthe typed `lint` section) deserializes without depending on the linter crate.",
+      "oneOf": [
+        {
+          "description": "Outright wrong or useless code.",
+          "type": "string",
+          "const": "correctness"
+        },
+        {
+          "description": "Most likely wrong or useless.",
+          "type": "string",
+          "const": "suspicious"
+        },
+        {
+          "description": "Idiomatic code style.",
+          "type": "string",
+          "const": "style"
+        },
+        {
+          "description": "Performance improvements.",
+          "type": "string",
+          "const": "performance"
+        }
+      ]
+    },
+    "CollapseSimpleStatement": {
+      "description": "Controls collapsing of simple single-statement blocks onto one line.",
+      "oneOf": [
+        {
+          "description": "Never collapse - always expand blocks.",
+          "type": "string",
+          "const": "never"
+        },
+        {
+          "description": "Collapse simple function bodies: `function() return x end`.",
+          "type": "string",
+          "const": "function_only"
+        },
+        {
+          "description": "Collapse simple conditionals: `if x then return y end`.",
+          "type": "string",
+          "const": "conditional_only"
+        },
+        {
+          "description": "Collapse both simple functions and conditionals.",
+          "type": "string",
+          "const": "always"
+        }
+      ]
+    },
+    "DiagnosticSeverity": {
+      "description": "Whether a diagnostic is an error (blocks the build) or a warning (informational).",
+      "type": "string",
+      "enum": [
+        "error",
+        "warning"
+      ]
+    },
+    "EntryConfig": {
+      "description": "A single entry point in a multi-entry build configuration.",
+      "type": "object",
+      "properties": {
+        "entry": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entry",
+        "output"
+      ]
+    },
+    "FormatConfig": {
+      "description": "Formatter settings from luck.json.",
+      "type": "object",
+      "properties": {
+        "block_newline_gaps": {
+          "description": "`\"never\"` (default) or `\"preserve\"`. Controls whether blank lines at\nthe start/end of block bodies are preserved verbatim.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlockNewlineGaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "call_parentheses": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallParentheses"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collapse_simple_statement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CollapseSimpleStatement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hexadecimal_case": {
+          "description": "`\"preserve\"` (default) / `\"lower\"` / `\"upper\"`. Case of hex digits\n`A`-`F` in numeric literals; the `0x` prefix is always lowercased.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HexCase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "indent_style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IndentStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "indent_width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "line_endings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineEndings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "line_width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "magic_trailing_comma": {
+          "description": "When true, a trailing comma in a table or call argument list forces\nthe surrounding group to break across multiple lines (Black/Prettier\nconvention). Defaults to `false` to preserve existing pack/hug behavior.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "quote_style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QuoteStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sort_requires": {
+          "description": "When true, consecutive `local NAME = require(...)` statements at the\ntop of a block are sorted alphabetically by name.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "space_after_function_names": {
+          "description": "`\"never\"` (default) / `\"definitions\"` / `\"calls\"` / `\"always\"`.\nInserts a space before `(` in function definitions, calls, or both.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpaceAfterFunction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HexCase": {
+      "description": "Case of the hexadecimal digits `A`-`F` in numeric literals. The base\nprefix (`0x`, `0b`) and exponent markers (`e`, `p`) are always lowered\nregardless - uppercase `0X` has no stylistic constituency - so this only\ngoverns the digits.",
+      "oneOf": [
+        {
+          "description": "Leave the author's digit case untouched (`0xB0` and `0xb0` both stand).",
+          "type": "string",
+          "const": "preserve"
+        },
+        {
+          "description": "`0xB0` -> `0xb0`.",
+          "type": "string",
+          "const": "lower"
+        },
+        {
+          "description": "`0xb0` -> `0xB0`.",
+          "type": "string",
+          "const": "upper"
+        }
+      ]
+    },
+    "IndentStyle": {
+      "type": "string",
+      "enum": [
+        "tabs",
+        "spaces"
+      ]
+    },
+    "LineEndings": {
+      "type": "string",
+      "enum": [
+        "unix",
+        "windows"
+      ]
+    },
+    "LintConfig": {
+      "description": "Linter settings from luck.json. This is the single source of truth for\nlint configuration; `luck_linter` re-exports it and reads it directly.",
+      "type": "object",
+      "properties": {
+        "categories": {
+          "description": "Rule categories to enable as a group (e.g. `suspicious`, `style`).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Category"
+          }
+        },
+        "disable_default_rules": {
+          "description": "When true, only rules explicitly enabled via `rule_overrides`\nrun - even correctness defaults are silenced.",
+          "type": "boolean",
+          "default": false
+        },
+        "extra_globals": {
+          "description": "Additional allowed global names (e.g. `vim`, `roblox`).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_cyclomatic_complexity": {
+          "description": "Maximum cyclomatic complexity threshold for the\n`cyclomatic_complexity` rule.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 0
+        },
+        "restricted_module_paths": {
+          "description": "Module paths whose `require` is restricted by the\n`restricted_module_paths` rule.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "rule_overrides": {
+          "description": "Per-rule overrides, keyed by rule name.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/RuleSetting"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProfileOverrides": {
+      "description": "Settings that a named profile can override (e.g. `\"release\"`).",
+      "type": "object",
+      "properties": {
+        "minify": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "transforms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TransformConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "QuoteStyle": {
+      "oneOf": [
+        {
+          "description": "Always use double quotes.",
+          "type": "string",
+          "const": "double"
+        },
+        {
+          "description": "Always use single quotes.",
+          "type": "string",
+          "const": "single"
+        },
+        {
+          "description": "Use double quotes, switching to single when that needs strictly\nfewer escaped quotes.",
+          "type": "string",
+          "const": "auto_prefer_double"
+        },
+        {
+          "description": "Use single quotes, switching to double when that needs strictly\nfewer escaped quotes.",
+          "type": "string",
+          "const": "auto_prefer_single"
+        }
+      ]
+    },
+    "RuleSetting": {
+      "description": "Per-rule override slot. `enabled` toggles a rule on/off; `severity`\noverrides the default severity (`\"error\"` or `\"warning\"`). Both are\noptional so the user can override one without touching the other.\n\nThis is the single lint rule-override type; `luck_linter` re-exports it.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "severity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiagnosticSeverity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SpaceAfterFunction": {
+      "description": "Controls inserting a space between `function`/callee and `(`.",
+      "oneOf": [
+        {
+          "description": "No space inserted: `function foo()` / `foo()`.",
+          "type": "string",
+          "const": "never"
+        },
+        {
+          "description": "Space only after `function` keyword in definitions: `function foo ()`.",
+          "type": "string",
+          "const": "definitions"
+        },
+        {
+          "description": "Space only between callee and `(` in calls: `foo ()`.",
+          "type": "string",
+          "const": "calls"
+        },
+        {
+          "description": "Space in both definitions and calls.",
+          "type": "string",
+          "const": "always"
+        }
+      ]
+    },
+    "TransformConfig": {
+      "description": "Per-transform toggle flags for the minification pipeline.",
+      "type": "object",
+      "properties": {
+        "fold_constants": {
+          "type": "boolean",
+          "default": true
+        },
+        "inline_locals": {
+          "type": "boolean",
+          "default": true
+        },
+        "lift_locals": {
+          "type": "boolean",
+          "default": true
+        },
+        "merge_locals": {
+          "type": "boolean",
+          "default": true
+        },
+        "remove_dead_code": {
+          "type": "boolean",
+          "default": true
+        },
+        "rename_globals": {
+          "description": "Rename globals DEFINED in this file (`function myHelper() end`,\n`counter = 0`). Off by default: renamed globals live under\ndifferent `_G` keys, breaking any cross-chunk consumer,\n`_G[\"name\"]` access, or loaded string that expects the original\nnames. Enable only for fully self-contained single-chunk scripts.",
+          "type": "boolean",
+          "default": false
+        },
+        "rename_locals": {
+          "type": "boolean",
+          "default": true
+        },
+        "shorten_numbers": {
+          "type": "boolean",
+          "default": true
+        },
+        "shorten_strings": {
+          "type": "boolean",
+          "default": true
+        },
+        "simplify_indexes": {
+          "type": "boolean",
+          "default": true
+        },
+        "simplify_parens": {
+          "type": "boolean",
+          "default": true
+        },
+        "simplify_statements": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

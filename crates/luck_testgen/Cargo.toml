@@ -1,0 +1,18 @@
+[package]
+name = "luck_testgen"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Internal test harness: deterministic Lua program generator and property tests."
+
+[dependencies]
+luck_token.workspace = true
+
+[dev-dependencies]
+luck_parser.workspace = true
+luck_codegen.workspace = true
+luck_formatter.workspace = true
+luck_minifier.workspace = true
+luck_core.workspace = true

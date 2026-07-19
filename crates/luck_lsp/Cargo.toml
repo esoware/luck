@@ -1,0 +1,36 @@
+[package]
+name = "luck_lsp"
+version = "0.4.0"
+authors.workspace = true
+categories.workspace = true
+description = "Language Server Protocol implementation for the luck Lua/Luau toolchain."
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+luck_token = { workspace = true }
+luck_core = { workspace = true }
+luck_ast = { workspace = true }
+luck_lexer = { workspace = true }
+luck_parser = { workspace = true }
+luck_formatter = { workspace = true }
+luck_linter = { workspace = true }
+luck_semantic = { workspace = true }
+luck_resolver = { workspace = true }
+tower-lsp = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = "0.1"
+compact_str = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lib]
+name = "luck_lsp"
+path = "src/lib.rs"

@@ -1,0 +1,17 @@
+[package]
+name = "luck_token"
+version = "0.6.0"
+authors.workspace = true
+categories.workspace = true
+description = "Token definitions, spans, and Lua version flags for the luck toolchain."
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+compact_str = { workspace = true }
+
+[dev-dependencies]

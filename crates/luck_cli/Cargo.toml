@@ -1,0 +1,50 @@
+[package]
+name = "luck_cli"
+version = "1.4.0"
+authors.workspace = true
+categories.workspace = true
+description = "Command-line interface for the luck bundler and minifier."
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ariadne.workspace = true
+luck.workspace = true
+luck_core.workspace = true
+luck_bundler.workspace = true
+luck_resolver.workspace = true
+rayon.workspace = true
+luck_formatter.workspace = true
+luck_parser.workspace = true
+luck_minifier.workspace = true
+luck_linter.workspace = true
+luck_token.workspace = true
+luck_lsp.workspace = true
+tokio.workspace = true
+clap.workspace = true
+ignore.workspace = true
+serde_json.workspace = true
+notify.workspace = true
+notify-debouncer-mini.workspace = true
+
+[target.'cfg(not(any(target_os = "linux", target_arch = "arm", target_arch = "riscv64", target_family = "wasm")))'.dependencies]
+mimalloc-safe = { workspace = true, features = ["skip_collect_on_exit"] }
+
+[target.'cfg(all(target_os = "linux", not(any(target_arch = "arm", target_arch = "aarch64", target_arch = "riscv64"))))'.dependencies]
+mimalloc-safe = { workspace = true, features = ["skip_collect_on_exit", "local_dynamic_tls"] }
+
+[target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
+mimalloc-safe = { workspace = true, features = ["skip_collect_on_exit", "local_dynamic_tls", "no_opt_arch"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+assert_cmd.workspace = true
+predicates.workspace = true
+
+[[bin]]
+name = "luck"
+path = "src/main.rs"

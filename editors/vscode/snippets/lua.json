@@ -1,0 +1,172 @@
+{
+  "function": {
+    "prefix": "function",
+    "body": [
+      "function ${1:name}(${2:args})",
+      "\t$0",
+      "end"
+    ],
+    "description": "Function declaration"
+  },
+  "local function": {
+    "prefix": "lf",
+    "body": [
+      "local function ${1:name}(${2:args})",
+      "\t$0",
+      "end"
+    ],
+    "description": "Local function declaration"
+  },
+  "anonymous function": {
+    "prefix": "fn",
+    "body": [
+      "function(${1:args})",
+      "\t$0",
+      "end"
+    ],
+    "description": "Anonymous function expression"
+  },
+  "if": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition} then",
+      "\t$0",
+      "end"
+    ],
+    "description": "if/then/end"
+  },
+  "if-else": {
+    "prefix": "ife",
+    "body": [
+      "if ${1:condition} then",
+      "\t$2",
+      "else",
+      "\t$0",
+      "end"
+    ],
+    "description": "if/then/else/end"
+  },
+  "elseif": {
+    "prefix": "elif",
+    "body": ["elseif ${1:condition} then", "\t$0"],
+    "description": "elseif/then"
+  },
+  "numeric for": {
+    "prefix": "for",
+    "body": [
+      "for ${1:i} = ${2:1}, ${3:n} do",
+      "\t$0",
+      "end"
+    ],
+    "description": "Numeric for loop"
+  },
+  "for ipairs": {
+    "prefix": "fori",
+    "body": [
+      "for ${1:i}, ${2:v} in ipairs(${3:t}) do",
+      "\t$0",
+      "end"
+    ],
+    "description": "for ... in ipairs"
+  },
+  "for pairs": {
+    "prefix": "forp",
+    "body": [
+      "for ${1:k}, ${2:v} in pairs(${3:t}) do",
+      "\t$0",
+      "end"
+    ],
+    "description": "for ... in pairs"
+  },
+  "while": {
+    "prefix": "while",
+    "body": [
+      "while ${1:condition} do",
+      "\t$0",
+      "end"
+    ],
+    "description": "while loop"
+  },
+  "repeat": {
+    "prefix": "repeat",
+    "body": [
+      "repeat",
+      "\t$0",
+      "until ${1:condition}"
+    ],
+    "description": "repeat/until"
+  },
+  "do block": {
+    "prefix": "do",
+    "body": ["do", "\t$0", "end"],
+    "description": "do/end block"
+  },
+  "local": {
+    "prefix": "local",
+    "body": ["local ${1:name} = ${0:value}"],
+    "description": "Local declaration"
+  },
+  "pcall": {
+    "prefix": "pcall",
+    "body": [
+      "local ${1:ok}, ${2:err} = pcall(function()",
+      "\t$0",
+      "end)",
+      "if not $1 then",
+      "\terror($2)",
+      "end"
+    ],
+    "description": "pcall wrapper"
+  },
+  "xpcall": {
+    "prefix": "xpcall",
+    "body": [
+      "local ${1:ok}, ${2:err} = xpcall(function()",
+      "\t$3",
+      "end, debug.traceback)",
+      "if not $1 then",
+      "\terror($2)",
+      "end$0"
+    ],
+    "description": "xpcall with traceback"
+  },
+  "require": {
+    "prefix": "require",
+    "body": ["local ${1:mod} = require(\"${2:path}\")$0"],
+    "description": "Local require"
+  },
+  "module skeleton": {
+    "prefix": "module",
+    "body": [
+      "local ${1:M} = {}",
+      "",
+      "function $1.${2:fn}()",
+      "\t$0",
+      "end",
+      "",
+      "return $1"
+    ],
+    "description": "Standard module table skeleton"
+  },
+  "class skeleton": {
+    "prefix": "class",
+    "body": [
+      "local ${1:Class} = {}",
+      "$1.__index = $1",
+      "",
+      "function $1.new(${2:args})",
+      "\tlocal self = setmetatable({}, $1)",
+      "\t$0",
+      "\treturn self",
+      "end",
+      "",
+      "return $1"
+    ],
+    "description": "OO class with metatable"
+  },
+  "print": {
+    "prefix": "p",
+    "body": ["print($0)"],
+    "description": "Quick print"
+  }
+}

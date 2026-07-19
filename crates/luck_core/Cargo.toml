@@ -1,0 +1,25 @@
+[package]
+name = "luck_core"
+version = "1.6.0"
+authors.workspace = true
+categories.workspace = true
+description = "Shared types, configuration, diagnostics, and target definitions for luck."
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+luck_token.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+json5.workspace = true
+globset.workspace = true
+ec4rs.workspace = true
+simdutf8.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

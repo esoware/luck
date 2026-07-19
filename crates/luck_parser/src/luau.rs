@@ -1,0 +1,582 @@
+//! Luau type grammar parser.
+//!
+//! Recursive descent over the type grammar, producing `luck_ast::types`
+//! nodes. Precedence, loosest to tightest: union `|`, intersection `&`,
+//! postfix `?`, primary. Function types (`(params) -> R`) are primaries
+//! disambiguated from parenthesized types by the trailing `->`.
+
+use luck_ast::shared::{ContainedSpan, Punctuated};
+use luck_ast::types::{
+    FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
+    IntersectionType, NamedType, OptionalType, ParenType, TableType, Type, TypeArgs, TypeField,
+    TypePack, TypeofType, UnionType, VariadicType,
+};
+use luck_token::{Token, TokenKind};
+
+use crate::parser::Parser;
+
+impl Parser {
+    /// Parse `: T` if present. All annotation sites share this so the
+    /// Luau gate lives in exactly one place.
+    pub fn try_parse_type_annotation(&mut self) -> Option<(Token, Type)> {
+        if self.version.is_luau() && matches!(self.peek(), TokenKind::Colon) {
+            let colon = self.advance();
+            Some((colon, self.parse_type()))
+        } else {
+            None
+        }
+    }
+
+    /// Parse a complete type. Entry point for every annotation position.
+    pub fn parse_type(&mut self) -> Type {
+        if let Err(err) = self.enter_depth() {
+            self.errors.push(err);
+            return Type::Error(self.current_span());
+        }
+
+        let result = match self.peek() {
+            // Leading separator - multiline definition style:
+            // `type T =` newline `| A` newline `| B`
+            TokenKind::Pipe => {
+                let leading_pipe = self.advance();
+                let (types, last_span) = self.parse_separated_types(TokenKind::Pipe, true);
+                Type::Union(Box::new(UnionType {
+                    span: leading_pipe.span.merge(last_span),
+                    leading_pipe: Some(leading_pipe),
+                    types,
+                }))
+            }
+            TokenKind::Ampersand => {
+                let leading_ampersand = self.advance();
+                let (types, last_span) = self.parse_separated_types(TokenKind::Ampersand, false);
+                Type::Intersection(Box::new(IntersectionType {
+                    span: leading_ampersand.span.merge(last_span),
+                    leading_ampersand: Some(leading_ampersand),
+                    types,
+                }))
+            }
+            _ => self.parse_union_level(),
+        };
+
+        self.exit_depth();
+        result
+    }
+
+    /// Collect `A sep B sep C` where every item was already known to be
+    /// part of a separated list (used for the leading-separator forms).
+    /// `across_intersections` controls whether items are intersection-level
+    /// (union lists) or postfix-level (intersection lists).
+    fn parse_separated_types(
+        &mut self,
+        separator: TokenKind,
+        across_intersections: bool,
+    ) -> (Punctuated<Type>, luck_token::Span) {
+        let mut pairs = Vec::new();
+        let mut current = if across_intersections {
+            self.parse_intersection_level()
+        } else {
+            self.parse_postfix_type()
+        };
+
+        while std::mem::discriminant(self.peek()) == std::mem::discriminant(&separator) {
+            let separator_token = self.advance();
+            let next = if across_intersections {
+                self.parse_intersection_level()
+            } else {
+                self.parse_postfix_type()
+            };
+            pairs.push((current, separator_token));
+            current = next;
+        }
+
+        let last_span = current.span();
+        (Punctuated::from_pairs(pairs, Some(current)), last_span)
+    }
+
+    fn parse_union_level(&mut self) -> Type {
+        let first = self.parse_intersection_level();
+        if !matches!(self.peek(), TokenKind::Pipe) {
+            return first;
+        }
+
+        let start_span = first.span();
+        let mut pairs = Vec::new();
+        let mut current = first;
+        while matches!(self.peek(), TokenKind::Pipe) {
+            let pipe = self.advance();
+            let next = self.parse_intersection_level();
+            pairs.push((current, pipe));
+            current = next;
+        }
+
+        let span = start_span.merge(current.span());
+        Type::Union(Box::new(UnionType {
+            span,
+            leading_pipe: None,
+            types: Punctuated::from_pairs(pairs, Some(current)),
+        }))
+    }
+
+    fn parse_intersection_level(&mut self) -> Type {
+        let first = self.parse_postfix_type();
+        if !matches!(self.peek(), TokenKind::Ampersand) {
+            return first;
+        }
+
+        let start_span = first.span();
+        let mut pairs = Vec::new();
+        let mut current = first;
+        while matches!(self.peek(), TokenKind::Ampersand) {
+            let ampersand = self.advance();
+            let next = self.parse_postfix_type();
+            pairs.push((current, ampersand));
+            current = next;
+        }
+
+        let span = start_span.merge(current.span());
+        Type::Intersection(Box::new(IntersectionType {
+            span,
+            leading_ampersand: None,
+            types: Punctuated::from_pairs(pairs, Some(current)),
+        }))
+    }
+
+    fn parse_postfix_type(&mut self) -> Type {
+        let mut result = self.parse_primary_type();
+        // `?` stacks (`T??`) - accepted permissively, same as Luau
+        while matches!(self.peek(), TokenKind::Question) {
+            let question = self.advance();
+            let span = result.span().merge(question.span);
+            result = Type::Optional(Box::new(OptionalType {
+                span,
+                type_value: result,
+                question,
+            }));
+        }
+        result
+    }
+
+    fn parse_primary_type(&mut self) -> Type {
+        match self.peek() {
+            TokenKind::Identifier(name)
+                if name == "typeof" && matches!(self.peek_at(1), TokenKind::LeftParen) =>
+            {
+                self.parse_typeof_type()
+            }
+            // `T...` - generic pack reference
+            TokenKind::Identifier(_) if matches!(self.peek_at(1), TokenKind::DotDotDot) => {
+                let name = self.advance();
+                let dots = self.advance();
+                let span = name.span.merge(dots.span);
+                Type::GenericPack(Box::new(GenericPackType { span, name, dots }))
+            }
+            TokenKind::Identifier(_) => {
+                let name = self.advance();
+                self.parse_named_type(name)
+            }
+            // Singletons. Number singletons are not valid Luau but were
+            // historically accepted by the span scanner; stay permissive
+            // so those sources keep round-tripping.
+            TokenKind::Nil
+            | TokenKind::True
+            | TokenKind::False
+            | TokenKind::StringLiteral(_)
+            | TokenKind::Number(_) => Type::Singleton(self.advance()),
+            TokenKind::LeftBrace => self.parse_table_type(),
+            TokenKind::LeftParen => self.parse_paren_or_function_type(),
+            // `<T>(...) -> R` - generic function type
+            TokenKind::Less => {
+                let generics = self.parse_generic_type_list();
+                self.parse_function_type(Some(generics))
+            }
+            // `...T` - variadic pack
+            TokenKind::DotDotDot => {
+                let dots = self.advance();
+                let type_value = self.parse_type();
+                let span = dots.span.merge(type_value.span());
+                Type::Variadic(Box::new(VariadicType {
+                    span,
+                    dots,
+                    type_value,
+                }))
+            }
+            _ => {
+                let span = self.current_span();
+                self.error(span, format!("expected type, found {}", self.peek()));
+                // Do not consume: the offending token may close an
+                // enclosing construct or start the next statement.
+                Type::Error(span)
+            }
+        }
+    }
+
+    fn parse_typeof_type(&mut self) -> Type {
+        let typeof_token = self.advance();
+        let open = self.advance(); // `(` - guaranteed by the caller's lookahead
+        let expr = self.parse_expression(0);
+        let close = self.expect(&TokenKind::RightParen).unwrap_or_else(|err| {
+            self.errors.push(err);
+            Token::new(TokenKind::RightParen, self.current_span())
+        });
+        let span = typeof_token.span.merge(close.span);
+        Type::Typeof(Box::new(TypeofType {
+            span,
+            typeof_token,
+            parens: ContainedSpan { open, close },
+            expr,
+        }))
+    }
+
+    fn parse_named_type(&mut self, first_name: Token) -> Type {
+        let (prefix, name) = if matches!(self.peek(), TokenKind::Dot) {
+            let dot = self.advance();
+            let name = self.expect_identifier().unwrap_or_else(|err| {
+                self.errors.push(err);
+                Token::new(
+                    TokenKind::Identifier(String::new().into()),
+                    self.current_span(),
+                )
+            });
+            (Some((first_name, dot)), name)
+        } else {
+            (None, first_name)
+        };
+
+        let generics = if matches!(self.peek(), TokenKind::Less) {
+            Some(self.parse_type_args())
+        } else {
+            None
+        };
+
+        let start_span = prefix
+            .as_ref()
+            .map(|(module, _)| module.span)
+            .unwrap_or(name.span);
+        let end_span = generics.as_ref().map(|args| args.span).unwrap_or(name.span);
+        Type::Named(Box::new(NamedType {
+            span: start_span.merge(end_span),
+            prefix,
+            name,
+            generics,
+        }))
+    }
+
+    /// Generic argument list at a use site: `<T, U..., (A, B)>`.
+    fn parse_type_args(&mut self) -> TypeArgs {
+        let open = self.advance(); // `<`
+        let mut pairs = Vec::new();
+        let mut current = None;
+
+        while !matches!(
+            self.peek(),
+            TokenKind::Greater | TokenKind::ShiftRight | TokenKind::GreaterEqual | TokenKind::Eof
+        ) {
+            let arg = self.parse_type();
+            let is_error = matches!(arg, Type::Error(_));
+            if matches!(self.peek(), TokenKind::Comma) {
+                let comma = self.advance();
+                pairs.push((arg, comma));
+            } else {
+                current = Some(arg);
+                break;
+            }
+            // An error without a following comma cannot make progress
+            if is_error {
+                break;
+            }
+        }
+
+        let close = self.consume_type_close_angle();
+        TypeArgs {
+            span: open.span.merge(close.span),
+            angles: ContainedSpan { open, close },
+            args: Punctuated::from_pairs(pairs, current),
+        }
+    }
+
+    /// Generic parameter list at a declaration site:
+    /// `<T, U = string, V... = ...number>`.
+    pub fn parse_generic_type_list(&mut self) -> GenericTypeList {
+        let open = self.advance(); // `<`
+        let mut pairs = Vec::new();
+        let mut current = None;
+
+        while !matches!(
+            self.peek(),
+            TokenKind::Greater | TokenKind::ShiftRight | TokenKind::GreaterEqual | TokenKind::Eof
+        ) {
+            let name = match self.expect_identifier() {
+                Ok(name) => name,
+                Err(err) => {
+                    self.errors.push(err);
+                    break;
+                }
+            };
+            let dots = if matches!(self.peek(), TokenKind::DotDotDot) {
+                Some(self.advance())
+            } else {
+                None
+            };
+            let default = if matches!(self.peek(), TokenKind::Equal) {
+                let equal = self.advance();
+                Some((equal, self.parse_type()))
+            } else {
+                None
+            };
+
+            let end_span = default
+                .as_ref()
+                .map(|(_, default_type)| default_type.span())
+                .or(dots.as_ref().map(|dots| dots.span))
+                .unwrap_or(name.span);
+            let param = GenericTypeParam {
+                span: name.span.merge(end_span),
+                name,
+                dots,
+                default,
+            };
+
+            if matches!(self.peek(), TokenKind::Comma) {
+                let comma = self.advance();
+                pairs.push((param, comma));
+            } else {
+                current = Some(param);
+                break;
+            }
+        }
+
+        let close = self.consume_type_close_angle();
+        GenericTypeList {
+            span: open.span.merge(close.span),
+            angles: ContainedSpan { open, close },
+            params: Punctuated::from_pairs(pairs, current),
+        }
+    }
+
+    fn parse_table_type(&mut self) -> Type {
+        let open = self.advance(); // `{`
+        let mut fields = Vec::new();
+
+        while !matches!(self.peek(), TokenKind::RightBrace | TokenKind::Eof) {
+            let field = self.parse_type_field();
+            let separator = if matches!(self.peek(), TokenKind::Comma | TokenKind::Semicolon) {
+                Some(self.advance())
+            } else {
+                None
+            };
+            let is_last = separator.is_none();
+            fields.push((field, separator));
+            if is_last {
+                break;
+            }
+        }
+
+        let close = self.expect(&TokenKind::RightBrace).unwrap_or_else(|err| {
+            self.errors.push(err);
+            Token::new(TokenKind::RightBrace, self.current_span())
+        });
+        Type::Table(Box::new(TableType {
+            span: open.span.merge(close.span),
+            braces: ContainedSpan { open, close },
+            fields,
+        }))
+    }
+
+    fn parse_type_field(&mut self) -> TypeField {
+        // `read`/`write` is a modifier only when a field follows it;
+        // `{ read: number }` is a field literally named "read".
+        let access = if let TokenKind::Identifier(name) = self.peek() {
+            if (name == "read" || name == "write")
+                && matches!(
+                    self.peek_at(1),
+                    TokenKind::Identifier(_) | TokenKind::LeftBracket
+                )
+            {
+                Some(self.advance())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if matches!(self.peek(), TokenKind::LeftBracket) {
+            let open = self.advance();
+            let key = self.parse_type();
+            let close = self.expect(&TokenKind::RightBracket).unwrap_or_else(|err| {
+                self.errors.push(err);
+                Token::new(TokenKind::RightBracket, self.current_span())
+            });
+            let colon = self.expect(&TokenKind::Colon).unwrap_or_else(|err| {
+                self.errors.push(err);
+                Token::new(TokenKind::Colon, self.current_span())
+            });
+            let value = self.parse_type();
+            let start_span = access.as_ref().map(|token| token.span).unwrap_or(open.span);
+            return TypeField::Indexer {
+                span: start_span.merge(value.span()),
+                access,
+                brackets: ContainedSpan { open, close },
+                key,
+                colon,
+                value,
+            };
+        }
+
+        if self.check_identifier() && matches!(self.peek_at(1), TokenKind::Colon) {
+            let name = self.advance();
+            let colon = self.advance();
+            let value = self.parse_type();
+            let start_span = access.as_ref().map(|token| token.span).unwrap_or(name.span);
+            return TypeField::Named {
+                span: start_span.merge(value.span()),
+                access,
+                name,
+                colon,
+                value,
+            };
+        }
+
+        if let Some(access_token) = access {
+            self.error(
+                access_token.span,
+                "access modifier requires a named field or indexer".to_string(),
+            );
+        }
+        let value = self.parse_type();
+        TypeField::Array {
+            span: value.span(),
+            value,
+        }
+    }
+
+    /// `(` opened: either a parenthesized type `(T)`, a pack `(T, U)`/`()`,
+    /// or function-type params `(a: T, ...U) -> R` - decided by the `->`
+    /// after the closing paren.
+    fn parse_paren_or_function_type(&mut self) -> Type {
+        let open = self.advance(); // `(`
+        let mut pairs = Vec::new();
+        let mut current = None;
+
+        while !matches!(self.peek(), TokenKind::RightParen | TokenKind::Eof) {
+            let param = if self.check_identifier() && matches!(self.peek_at(1), TokenKind::Colon) {
+                let name = self.advance();
+                let colon = self.advance();
+                let type_value = self.parse_type();
+                FunctionTypeParam {
+                    span: name.span.merge(type_value.span()),
+                    name: Some((name, colon)),
+                    type_value,
+                }
+            } else {
+                let type_value = self.parse_type();
+                FunctionTypeParam {
+                    span: type_value.span(),
+                    name: None,
+                    type_value,
+                }
+            };
+            let is_error = matches!(param.type_value, Type::Error(_));
+
+            if matches!(self.peek(), TokenKind::Comma) {
+                let comma = self.advance();
+                pairs.push((param, comma));
+            } else {
+                current = Some(param);
+                break;
+            }
+            // An error without a following comma cannot make progress
+            if is_error {
+                break;
+            }
+        }
+
+        let close = self.expect(&TokenKind::RightParen).unwrap_or_else(|err| {
+            self.errors.push(err);
+            Token::new(TokenKind::RightParen, self.current_span())
+        });
+        let parens = ContainedSpan { open, close };
+        let params = Punctuated::from_pairs(pairs, current);
+
+        if matches!(self.peek(), TokenKind::Arrow) {
+            let arrow = self.advance();
+            let return_type = self.parse_type();
+            let span = parens.open.span.merge(return_type.span());
+            return Type::Function(Box::new(FunctionType {
+                span,
+                generics: None,
+                parens,
+                params,
+                arrow,
+                return_type,
+            }));
+        }
+
+        // No arrow: plain parenthesized type or a pack. Param names are
+        // only legal in function types.
+        for param in params.iter() {
+            if let Some((name, _)) = &param.name {
+                self.error(
+                    name.span,
+                    "named parameters are only valid in function types".to_string(),
+                );
+            }
+        }
+
+        let span = parens.open.span.merge(parens.close.span);
+        let mut type_items: Vec<(Type, Option<Token>)> = params
+            .items
+            .into_iter()
+            .map(|(param, separator)| (param.type_value, separator))
+            .collect();
+        // `(T)` is a parenthesized type; `()`, `(T,)`, and `(T, U)` are packs
+        if type_items.len() == 1 && type_items[0].1.is_none() {
+            let (type_value, _) = type_items.remove(0);
+            Type::Parenthesized(Box::new(ParenType {
+                span,
+                parens,
+                type_value,
+            }))
+        } else {
+            Type::Pack(Box::new(TypePack {
+                span,
+                parens,
+                types: Punctuated { items: type_items },
+            }))
+        }
+    }
+
+    /// Function type whose generics were already consumed: `(params) -> R`.
+    fn parse_function_type(&mut self, generics: Option<GenericTypeList>) -> Type {
+        let start_span = generics
+            .as_ref()
+            .map(|list| list.span)
+            .unwrap_or(self.current_span());
+
+        if !matches!(self.peek(), TokenKind::LeftParen) {
+            let span = self.current_span();
+            self.error(
+                span,
+                format!("expected ( after generics, found {}", self.peek()),
+            );
+            return Type::Error(start_span.merge(span));
+        }
+
+        match self.parse_paren_or_function_type() {
+            Type::Function(mut function_type) => {
+                function_type.span = start_span.merge(function_type.span);
+                function_type.generics = generics;
+                Type::Function(function_type)
+            }
+            other => {
+                // `<T>` followed by a paren type with no `->` - the generics
+                // have nothing to attach to.
+                self.error(
+                    other.span(),
+                    "expected -> after generic function type parameters".to_string(),
+                );
+                other
+            }
+        }
+    }
+}

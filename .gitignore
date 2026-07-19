@@ -1,0 +1,10 @@
+/target
+.claude/settings.local.json
+CLAUDE.local.md
+
+# fuzzing
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/Cargo.lock
+REARCHITECTURE.md

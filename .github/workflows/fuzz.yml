@@ -1,0 +1,36 @@
+name: fuzz
+
+on:
+  schedule:
+    - cron: "0 4 * * *" # nightly
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fuzz_lexer, fuzz_parser, fuzz_format, fuzz_minify]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked
+      - name: Seed corpus from fixtures
+        run: |
+          mkdir -p fuzz/corpus/${{ matrix.target }}
+          find tests/fixtures -name '*.lua' -o -name '*.luau' | while read -r fixture; do
+            cp "$fixture" "fuzz/corpus/${{ matrix.target }}/$(echo "$fixture" | md5sum | cut -d' ' -f1)"
+          done
+      - name: Fuzz for 5 minutes
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=300 -timeout=30
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-artifacts
+          path: fuzz/artifacts/

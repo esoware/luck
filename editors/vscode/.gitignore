@@ -1,0 +1,25 @@
+# build output
+out/
+dist/
+*.tsbuildinfo
+
+# dependencies
+node_modules/
+
+# packaged extensions
+*.vsix
+
+# vscode test infrastructure
+.vscode-test/
+
+# bundled server binaries — produced by CI, never committed
+server/
+
+# editor / OS noise
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+
+# local-only IDE state
+.vscode/settings.json

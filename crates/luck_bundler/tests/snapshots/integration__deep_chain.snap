@@ -1,0 +1,72 @@
+---
+source: crates/luck_bundler/tests/integration.rs
+expression: output
+---
+do
+local __luck_modules={}
+local __luck_loaded={}
+local __luck_loading={}
+local function __luck_require(id)
+local value=__luck_loaded[id]
+if value~=nil then
+if value==__luck_loading then error("luck bundle: require cycle hit while loading module #"..id,2)end
+return value
+end
+__luck_loaded[id]=__luck_loading
+value=__luck_modules[id](id)
+if value==nil then value=true end
+__luck_loaded[id]=value
+return value
+end
+-- module #1: __luck_e
+__luck_modules[1]=function(...)
+local e = {}
+
+function e.compute()
+    return 1
+end
+
+return e
+end
+-- module #2: __luck_d
+__luck_modules[2]=function(...)
+local e = __luck_require(1)
+
+local d = {}
+
+function d.compute()
+    return e.compute() + 1
+end
+
+return d
+end
+-- module #3: __luck_c
+__luck_modules[3]=function(...)
+local d = __luck_require(2)
+
+local c = {}
+
+function c.compute()
+    return d.compute() + 1
+end
+
+return c
+end
+-- module #4: __luck_b
+__luck_modules[4]=function(...)
+local c = __luck_require(3)
+
+local b = {}
+
+function b.compute()
+    return c.compute() + 1
+end
+
+return b
+end
+local b = __luck_require(4)
+
+local result = b.compute()
+print(result)
+return result
+end

@@ -1,0 +1,57 @@
+[package]
+name = "luck_benchmark"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Internal benchmark harness: per-stage criterion benches run on CodSpeed."
+
+[lib]
+test = false
+bench = false
+doctest = false
+
+[[bench]]
+name = "lexer"
+harness = false
+
+[[bench]]
+name = "parser"
+harness = false
+
+[[bench]]
+name = "semantic"
+harness = false
+
+[[bench]]
+name = "linter"
+harness = false
+
+[[bench]]
+name = "codegen"
+harness = false
+
+[[bench]]
+name = "formatter"
+harness = false
+
+[[bench]]
+name = "minifier"
+harness = false
+
+[dependencies]
+luck_testgen.workspace = true
+luck_token.workspace = true
+luck_core.workspace = true
+luck_lexer.workspace = true
+luck_parser.workspace = true
+luck_semantic.workspace = true
+luck_linter.workspace = true
+luck_codegen.workspace = true
+luck_formatter.workspace = true
+luck_minifier.workspace = true
+criterion2 = { workspace = true }
+
+[features]
+codspeed = ["criterion2/codspeed"]

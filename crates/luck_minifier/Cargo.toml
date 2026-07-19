@@ -1,0 +1,26 @@
+[package]
+name = "luck_minifier"
+version = "2.0.0"
+authors.workspace = true
+categories.workspace = true
+description = "AST transform pipeline for Lua/Luau minification — constant folding, dead code removal, variable renaming."
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+itoa.workspace = true
+luck_core.workspace = true
+luck_semantic.workspace = true
+luck_token.workspace = true
+luck_ast.workspace = true
+luck_parser.workspace = true
+luck_codegen.workspace = true
+
+[dev-dependencies]
+luck_core.workspace = true
+luck_semantic.workspace = true
+luck_parser.workspace = true

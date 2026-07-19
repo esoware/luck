@@ -1,0 +1,20 @@
+[package]
+name = "luck_parser"
+version = "0.7.0"
+authors.workspace = true
+categories.workspace = true
+description = "Pratt expression parser with recursive descent for Lua 5.1–5.5 and Luau."
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+luck_token.workspace = true
+luck_ast.workspace = true
+luck_lexer.workspace = true
+
+[dev-dependencies]
+luck_codegen.workspace = true

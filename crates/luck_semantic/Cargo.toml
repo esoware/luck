@@ -1,0 +1,22 @@
+[package]
+name = "luck_semantic"
+version = "0.5.0"
+authors.workspace = true
+categories.workspace = true
+description = "Scope analysis, symbol resolution, and standard library definitions for Lua/Luau"
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+luck_token = { workspace = true }
+luck_ast = { workspace = true }
+compact_str = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+luck_parser = { workspace = true }

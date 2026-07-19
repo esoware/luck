@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://luck.dev/schemas/luaurc.schema.json",
+  "title": ".luaurc",
+  "description": "Per-directory Luau configuration. Found in `.luaurc` files; values inherit from parent directories.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "languageMode": {
+      "type": "string",
+      "enum": ["nonstrict", "strict", "nocheck"],
+      "description": "Luau type-checking strictness for files under this directory."
+    },
+    "lint": {
+      "type": "object",
+      "description": "Luau linter rule toggles.",
+      "additionalProperties": { "type": ["boolean", "string"] }
+    },
+    "lintErrors": {
+      "type": "boolean",
+      "description": "Treat lint warnings as errors."
+    },
+    "typeErrors": {
+      "type": "boolean",
+      "description": "Surface type-check errors as failures."
+    },
+    "globals": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Names treated as known globals."
+    },
+    "aliases": {
+      "type": "object",
+      "description": "@alias-prefixed require paths. Keys are alias names (without the leading @); values are paths relative to the .luaurc directory.",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

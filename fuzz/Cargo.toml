@@ -1,0 +1,49 @@
+[package]
+name = "luck-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+luck_token = { path = "../crates/luck_token" }
+luck_lexer = { path = "../crates/luck_lexer" }
+luck_parser = { path = "../crates/luck_parser" }
+luck_codegen = { path = "../crates/luck_codegen" }
+luck_formatter = { path = "../crates/luck_formatter" }
+luck_minifier = { path = "../crates/luck_minifier" }
+luck_core = { path = "../crates/luck_core" }
+
+# Standalone: not a member of the parent workspace.
+[workspace]
+
+[[bin]]
+name = "fuzz_lexer"
+path = "fuzz_targets/fuzz_lexer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_parser"
+path = "fuzz_targets/fuzz_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_format"
+path = "fuzz_targets/fuzz_format.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_minify"
+path = "fuzz_targets/fuzz_minify.rs"
+test = false
+doc = false
+bench = false

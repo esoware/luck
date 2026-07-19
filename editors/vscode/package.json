@@ -1,0 +1,532 @@
+{
+  "name": "luck",
+  "displayName": "Luck",
+  "description": "Lua/Luau language support: linter, formatter, and language server",
+  "version": "0.2.0",
+  "publisher": "luck",
+  "license": "MIT",
+  "galleryBanner": {
+    "color": "#0b1020",
+    "theme": "dark"
+  },
+  "keywords": [
+    "lua",
+    "luau",
+    "roblox",
+    "linter",
+    "formatter",
+    "lsp",
+    "language server"
+  ],
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters"
+  ],
+  "engines": {
+    "vscode": "^1.125.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Luck runs the luck binary, which executes workspace-local code paths and reads configuration files."
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Most features work, but require resolution and bundle commands need a real filesystem."
+    }
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:lua",
+    "onLanguage:luau",
+    "workspaceContains:luck.json",
+    "workspaceContains:.luaurc",
+    "workspaceContains:**/*.lua",
+    "workspaceContains:**/*.luau"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "lua",
+        "aliases": [
+          "Lua"
+        ],
+        "extensions": [
+          ".lua"
+        ],
+        "configuration": "./language-configuration/lua.json"
+      },
+      {
+        "id": "luau",
+        "aliases": [
+          "Luau"
+        ],
+        "extensions": [
+          ".luau"
+        ],
+        "configuration": "./language-configuration/luau.json"
+      },
+      {
+        "id": "luck-syntax-tree",
+        "aliases": [
+          "Luck Syntax Tree"
+        ],
+        "extensions": [
+          ".luck-ast"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lua",
+        "scopeName": "source.lua",
+        "path": "./syntaxes/lua.tmLanguage.json"
+      },
+      {
+        "language": "luau",
+        "scopeName": "source.luau",
+        "path": "./syntaxes/luau.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "lua",
+        "path": "./snippets/lua.json"
+      },
+      {
+        "language": "luau",
+        "path": "./snippets/lua.json"
+      }
+    ],
+    "jsonValidation": [
+      {
+        "fileMatch": [
+          "luck.json"
+        ],
+        "url": "./schemas/luckrc.schema.json"
+      },
+      {
+        "fileMatch": [
+          ".luaurc",
+          ".luaurc.json"
+        ],
+        "url": "./schemas/luaurc.schema.json"
+      }
+    ],
+    "semanticTokenTypes": [
+      {
+        "id": "stdlibFunction",
+        "superType": "function",
+        "description": "A function from the Lua/Luau standard library"
+      }
+    ],
+    "semanticTokenModifiers": [
+      {
+        "id": "robloxOnly",
+        "description": "Only available in Roblox Luau, not standard Luau"
+      },
+      {
+        "id": "pure",
+        "description": "Side-effect free function"
+      },
+      {
+        "id": "mustUse",
+        "description": "Return value should not be discarded"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "lua",
+        "scopes": {
+          "stdlibFunction": [
+            "support.function.lua"
+          ],
+          "stdlibFunction.deprecated": [
+            "invalid.deprecated.lua"
+          ]
+        }
+      },
+      {
+        "language": "luau",
+        "scopes": {
+          "stdlibFunction": [
+            "support.function.luau"
+          ]
+        }
+      }
+    ],
+    "configurationDefaults": {
+      "[lua]": {
+        "editor.defaultFormatter": "luck.luck",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.fixAll.luck": "explicit"
+        }
+      },
+      "[luau]": {
+        "editor.defaultFormatter": "luck.luck",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.fixAll.luck": "explicit"
+        }
+      }
+    },
+    "configuration": {
+      "title": "Luck",
+      "properties": {
+        "luck.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the luck language server."
+        },
+        "luck.server.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Absolute path to the `luck` binary. If empty, the extension uses (in order): bundled binary → `PATH` → prompt to download."
+        },
+        "luck.server.extraEnv": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Extra environment variables to pass to the luck process."
+        },
+        "luck.server.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra command-line arguments passed to luck."
+        },
+        "luck.runFromTemporaryLocation": {
+          "type": "boolean",
+          "default": false,
+          "description": "Copy the luck binary to a temporary directory before running. Use this if Windows file locking prevents updates."
+        },
+        "luck.statusBar.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Luck status bar item."
+        },
+        "luck.statusBar.click": {
+          "type": "string",
+          "default": "showOutput",
+          "enum": [
+            "showOutput",
+            "restart"
+          ],
+          "description": "Action when the status bar item is clicked."
+        },
+        "luck.trace.server": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "description": "Trace LSP messages between client and server."
+        },
+        "luck.trace.extension": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log extension internals to the Luck Extension output channel."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "luck.restart",
+        "title": "Restart Server",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.start",
+        "title": "Start Server",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.stop",
+        "title": "Stop Server",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.showServerOutput",
+        "title": "Show Server Output",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.showExtensionOutput",
+        "title": "Show Extension Output",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.showTraceOutput",
+        "title": "Show LSP Trace",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.serverVersion",
+        "title": "Show Server Version",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.formatDocument",
+        "title": "Format Document",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.formatSelection",
+        "title": "Format Selection",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.applyAllFixesFile",
+        "title": "Apply All Fixes (File)",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.applyAllFixesWorkspace",
+        "title": "Apply All Fixes (Workspace)",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.createConfig",
+        "title": "Create luck.json",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.downloadServer",
+        "title": "Download Server Binary",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.viewSyntaxTree",
+        "title": "View Syntax Tree (Debug)",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.copyDebugInfo",
+        "title": "Copy Debug Info",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.reportIssue",
+        "title": "Report an Issue",
+        "category": "Luck"
+      },
+      {
+        "command": "luck.openWalkthrough",
+        "title": "Open Getting Started Walkthrough",
+        "category": "Luck"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "luck.applyAllFixesFile",
+        "key": "ctrl+shift+.",
+        "mac": "cmd+shift+.",
+        "when": "editorTextFocus && (editorLangId == lua || editorLangId == luau)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "luck.formatDocument",
+          "when": "editorLangId == lua || editorLangId == luau"
+        },
+        {
+          "command": "luck.formatSelection",
+          "when": "editorLangId == lua || editorLangId == luau"
+        },
+        {
+          "command": "luck.applyAllFixesFile",
+          "when": "editorLangId == lua || editorLangId == luau"
+        },
+        {
+          "command": "luck.viewSyntaxTree",
+          "when": "editorLangId == lua || editorLangId == luau"
+        }
+      ],
+      "editor/context": [
+        {
+          "submenu": "luck.editorContext",
+          "group": "1_modification@100",
+          "when": "editorLangId == lua || editorLangId == luau"
+        }
+      ],
+      "luck.editorContext": [
+        {
+          "command": "luck.formatDocument",
+          "group": "1_format@1"
+        },
+        {
+          "command": "luck.formatSelection",
+          "group": "1_format@2"
+        },
+        {
+          "command": "luck.applyAllFixesFile",
+          "group": "2_fix@1"
+        },
+        {
+          "command": "luck.viewSyntaxTree",
+          "group": "9_debug@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "luck.formatDocument",
+          "when": "editorLangId == lua || editorLangId == luau",
+          "group": "navigation"
+        }
+      ]
+    },
+    "submenus": [
+      {
+        "id": "luck.editorContext",
+        "label": "Luck"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "luck",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "enum": [
+              "lint",
+              "format",
+              "check",
+              "bundle"
+            ],
+            "description": "The luck CLI subcommand to run."
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra CLI arguments."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Working directory."
+          },
+          "target": {
+            "type": "string",
+            "enum": [
+              "lua51",
+              "lua52",
+              "lua53",
+              "lua54",
+              "lua55",
+              "luau",
+              "roblox"
+            ]
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "luck",
+        "owner": "luck",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "pattern": {
+          "regexp": "^(.*?):(\\d+):(\\d+):\\s+(error|warning|info):\\s+(.*?)\\s+\\[(.+?)\\]$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5,
+          "code": 6
+        }
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "luck.gettingStarted",
+        "title": "Get Started with Luck",
+        "description": "Format, lint, and bundle Lua/Luau with the luck toolchain.",
+        "steps": [
+          {
+            "id": "install",
+            "title": "Install the luck binary",
+            "description": "Luck ships with a bundled binary for major platforms. If yours is missing, run `Luck: Download Server Binary` from the command palette.\n[Download Server](command:luck.downloadServer)",
+            "completionEvents": [
+              "onCommand:luck.downloadServer"
+            ]
+          },
+          {
+            "id": "open",
+            "title": "Open a Lua or Luau file",
+            "description": "Open any `.lua` or `.luau` file to activate the extension. Diagnostics will appear in the Problems panel.",
+            "completionEvents": [
+              "onLanguage:lua",
+              "onLanguage:luau"
+            ]
+          },
+          {
+            "id": "configure",
+            "title": "Create a config file",
+            "description": "Configure target version, formatter style, and lint rules in `luck.json`.\n[Create Config](command:luck.createConfig)",
+            "completionEvents": [
+              "onCommand:luck.createConfig"
+            ]
+          },
+          {
+            "id": "format",
+            "title": "Format your code",
+            "description": "Use `Format Document` (Shift+Alt+F) or enable format-on-save in settings.",
+            "completionEvents": [
+              "onCommand:editor.action.formatDocument"
+            ]
+          },
+          {
+            "id": "fix",
+            "title": "Auto-fix on save",
+            "description": "Luck can apply safe lint fixes automatically when saving. Enable via `editor.codeActionsOnSave`."
+          }
+        ]
+      }
+    ],
+    "viewsWelcome": [
+      {
+        "view": "explorer",
+        "contents": "Open a Lua or Luau file to start using Luck.\n[Open Folder](command:vscode.openFolder)\n[Getting Started](command:luck.openWalkthrough)",
+        "when": "workbenchState == empty"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run check && npm run bundle",
+    "check": "tsc -p ./",
+    "compile": "npm run check && npm run bundle-dev",
+    "watch": "tsc -watch -p ./",
+    "bundle": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node22 --minify",
+    "bundle-dev": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node22 --sourcemap",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^10.1.0"
+  },
+  "devDependencies": {
+    "@tsconfig/strictest": "^2.0.8",
+    "@types/node": "^26.1.1",
+    "@types/vscode": "^1.125.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.1",
+    "typescript": "^7.0.2"
+  }
+}
