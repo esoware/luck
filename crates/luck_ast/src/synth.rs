@@ -57,14 +57,14 @@
 //! ```
 //! use luck_ast::synth::Synth;
 //! use luck_ast::{Expression, Statement};
-//! use luck_token::TokenKind;
+//! use luck_token::BinOp;
 //!
 //! let synth = Synth::new();
 //! // total = a + b * 2 -- precedence handled, no manual parens.
 //! let sum = synth.binop(
 //!     synth.name_expr("a"),
-//!     TokenKind::Plus,
-//!     synth.binop(synth.name_expr("b"), TokenKind::Star, synth.number_int(2)),
+//!     BinOp::Add,
+//!     synth.binop(synth.name_expr("b"), BinOp::Mul, synth.number_int(2)),
 //! );
 //! let stmt = synth.assign(vec![synth.name_var("total")], vec![sum]);
 //! let block = synth.block(vec![stmt], None);
@@ -73,7 +73,9 @@
 
 use std::cell::Cell;
 
-use luck_token::{Assoc, CompactString, Span, Token, TokenKind, UNARY_PRECEDENCE};
+use luck_token::{
+    Assoc, BinOp, CompactString, CompoundOp, Span, Token, TokenKind, UNARY_PRECEDENCE, UnOp,
+};
 
 use crate::expr::*;
 use crate::shared::*;
@@ -249,7 +251,7 @@ impl Synth {
         Var::Index(Box::new(IndexExpression {
             span: self.next_span(),
             prefix: self.wrap_prefix(prefix),
-            brackets: self.contained(TokenKind::LeftBracket, TokenKind::RightBracket),
+            brackets: self.contained(),
             index,
         }))
     }
@@ -259,7 +261,7 @@ impl Synth {
         Var::FieldAccess(Box::new(FieldAccess {
             span: self.next_span(),
             prefix: self.wrap_prefix(prefix),
-            dot: self.token(TokenKind::Dot),
+            dot: self.next_span(),
             name: self.ident(name),
         }))
     }
@@ -315,19 +317,19 @@ impl Synth {
     #[must_use]
     pub fn number_f64(&self, value: f64) -> Expression {
         if value.is_nan() {
-            return self.binop(self.number("0"), TokenKind::Slash, self.number("0"));
+            return self.binop(self.number("0"), BinOp::Div, self.number("0"));
         }
         if value.is_infinite() {
-            let inf = self.binop(self.number("1"), TokenKind::Slash, self.number("0"));
+            let inf = self.binop(self.number("1"), BinOp::Div, self.number("0"));
             return if value < 0.0 {
-                self.unop(TokenKind::Minus, inf)
+                self.unop(UnOp::Neg, inf)
             } else {
                 inf
             };
         }
         if value.is_sign_negative() {
             // Lua has no negative literals; this also keeps -0.0's sign bit.
-            return self.unop(TokenKind::Minus, self.number_f64(-value));
+            return self.unop(UnOp::Neg, self.number_f64(-value));
         }
         let mut text = value.to_string();
         if !text.contains(['.', 'e', 'E']) {
@@ -345,7 +347,7 @@ impl Synth {
             return self.number("0x8000000000000000");
         }
         if value < 0 {
-            return self.unop(TokenKind::Minus, self.number(&(-value).to_string()));
+            return self.unop(UnOp::Neg, self.number(&(-value).to_string()));
         }
         self.number(&value.to_string())
     }
@@ -405,51 +407,45 @@ impl Synth {
 
     #[must_use]
     pub fn nil(&self) -> Expression {
-        Expression::Nil(self.token(TokenKind::Nil))
+        Expression::Nil(self.next_span())
     }
 
     #[must_use]
     pub fn boolean(&self, value: bool) -> Expression {
         if value {
-            Expression::True(self.token(TokenKind::True))
+            Expression::True(self.next_span())
         } else {
-            Expression::False(self.token(TokenKind::False))
+            Expression::False(self.next_span())
         }
     }
 
     #[must_use]
     pub fn vararg(&self) -> Expression {
-        Expression::VarArg(self.token(TokenKind::DotDotDot))
+        Expression::VarArg(self.next_span())
     }
 
     // ----- operators -----
 
     /// `lhs op rhs`, parenthesizing either operand when precedence,
     /// associativity, or a greedy if-expression would otherwise change the
-    /// parse. `op` must be a binary operator token kind.
+    /// parse.
     #[must_use]
-    pub fn binop(&self, lhs: Expression, op: TokenKind, rhs: Expression) -> Expression {
-        let Some((precedence, assoc)) = op.binary_precedence() else {
-            panic!("synth: binop requires a binary operator, got {op:?}");
-        };
+    pub fn binop(&self, lhs: Expression, op: BinOp, rhs: Expression) -> Expression {
+        let (precedence, assoc) = op.precedence();
         let lhs = self.wrap_binop_operand(lhs, precedence, assoc, Side::Left);
         let rhs = self.wrap_binop_operand(rhs, precedence, assoc, Side::Right);
         Expression::BinaryOp(Box::new(BinaryOp {
             span: self.next_span(),
             left: lhs,
-            op: self.token(op),
+            op,
+            op_span: self.next_span(),
             right: rhs,
         }))
     }
 
     /// `op operand`, parenthesizing a binary or if-expression operand.
-    /// `op` must be one of `-`, `not`, `#`, `~`.
     #[must_use]
-    pub fn unop(&self, op: TokenKind, operand: Expression) -> Expression {
-        assert!(
-            op.is_unary_op(),
-            "synth: unop requires a unary operator, got {op:?}"
-        );
+    pub fn unop(&self, op: UnOp, operand: Expression) -> Expression {
         let operand = match operand {
             wrapped @ (Expression::BinaryOp(_) | Expression::IfExpression(_)) => {
                 self.paren(wrapped)
@@ -458,7 +454,8 @@ impl Synth {
         };
         Expression::UnaryOp(Box::new(UnaryOp {
             span: self.next_span(),
-            op: self.token(op),
+            op,
+            op_span: self.next_span(),
             operand,
         }))
     }
@@ -467,7 +464,7 @@ impl Synth {
     pub fn paren(&self, expr: Expression) -> Expression {
         Expression::Parenthesized(Box::new(ParenExpression {
             span: self.next_span(),
-            parens: self.contained(TokenKind::LeftParen, TokenKind::RightParen),
+            parens: self.contained(),
             expr,
         }))
     }
@@ -485,7 +482,7 @@ impl Synth {
         Expression::TypeCast(Box::new(TypeCast {
             span: self.next_span(),
             expr,
-            double_colon: self.token(TokenKind::DoubleColon),
+            double_colon: self.next_span(),
             type_annotation: type_value,
         }))
     }
@@ -498,18 +495,16 @@ impl Synth {
         side: Side,
     ) -> Expression {
         let needs_parens = match &operand {
-            Expression::BinaryOp(inner) => match inner.op.kind.binary_precedence() {
-                Some((inner_precedence, _)) => {
-                    inner_precedence < parent_precedence
-                        || (inner_precedence == parent_precedence
-                            && parent_assoc
-                                == match side {
-                                    Side::Left => Assoc::Right,
-                                    Side::Right => Assoc::Left,
-                                })
-                }
-                None => true,
-            },
+            Expression::BinaryOp(inner) => {
+                let (inner_precedence, _) = inner.op.precedence();
+                inner_precedence < parent_precedence
+                    || (inner_precedence == parent_precedence
+                        && parent_assoc
+                            == match side {
+                                Side::Left => Assoc::Right,
+                                Side::Right => Assoc::Left,
+                            })
+            }
             // Only `^` binds tighter than unary; `a ^ -b` needs no parens
             // because a unary operator is always accepted after a binop.
             Expression::UnaryOp(_) => side == Side::Left && parent_precedence > UNARY_PRECEDENCE,
@@ -606,7 +601,7 @@ impl Synth {
             span: self.next_span(),
             callee: self.wrap_prefix(callee),
             args,
-            method: method.map(|name| (self.token(TokenKind::Colon), self.ident(name))),
+            method: method.map(|name| (self.next_span(), self.ident(name))),
         }))
     }
 
@@ -643,7 +638,7 @@ impl Synth {
 
     fn table_ctor(&self, fields: Vec<SynthField<'_>>) -> TableConstructor {
         let span = self.next_span();
-        let braces = self.contained(TokenKind::LeftBrace, TokenKind::RightBrace);
+        let braces = self.contained();
         let count = fields.len();
         let mut built = Vec::with_capacity(count);
         for (index, field) in fields.into_iter().enumerate() {
@@ -655,20 +650,20 @@ impl Synth {
                 SynthField::Named(name, value) => Field::Named {
                     span: self.next_span(),
                     name: self.ident(name),
-                    equal: self.token(TokenKind::Equal),
+                    equal: self.next_span(),
                     value,
                 },
                 SynthField::Bracketed(key, value) => Field::Bracketed {
                     span: self.next_span(),
-                    brackets: self.contained(TokenKind::LeftBracket, TokenKind::RightBracket),
+                    brackets: self.contained(),
                     key,
-                    equal: self.token(TokenKind::Equal),
+                    equal: self.next_span(),
                     value,
                 },
             };
             // The separator FOLLOWS its item; the final field carries none.
             let separator = if index + 1 < count {
-                Some(self.token(TokenKind::Comma))
+                Some(self.next_span())
             } else {
                 None
             };
@@ -701,7 +696,7 @@ impl Synth {
     pub fn function_def_full(&self, sig: FnSig, body: Block) -> Expression {
         Expression::FunctionDef(Box::new(FunctionDef {
             span: self.next_span(),
-            function_token: self.token(TokenKind::Function),
+            function_token: self.next_span(),
             body: self.function_body(sig, body),
         }))
     }
@@ -743,7 +738,7 @@ impl Synth {
         Statement::FunctionDecl(Box::new(FunctionDecl {
             span: self.next_span(),
             attributes: self.function_attributes(attributes),
-            function_token: self.token(TokenKind::Function),
+            function_token: self.next_span(),
             name: self.func_name(name_path, method),
             body: self.function_body(sig, body),
         }))
@@ -775,8 +770,8 @@ impl Synth {
         Statement::LocalFunction(Box::new(LocalFunction {
             span: self.next_span(),
             attributes: self.function_attributes(attributes),
-            local_token: self.token(TokenKind::Local),
-            function_token: self.token(TokenKind::Function),
+            local_token: self.next_span(),
+            function_token: self.next_span(),
             name: self.ident(name),
             body: self.function_body(sig, body),
         }))
@@ -787,8 +782,8 @@ impl Synth {
     pub fn global_function(&self, name: &str, sig: FnSig, body: Block) -> Statement {
         Statement::GlobalFunction(Box::new(GlobalFunction {
             span: self.next_span(),
-            global_token: self.token(TokenKind::Global),
-            function_token: self.token(TokenKind::Function),
+            global_token: self.next_span(),
+            function_token: self.next_span(),
             name: self.ident(name),
             body: self.function_body(sig, body),
         }))
@@ -797,14 +792,12 @@ impl Synth {
     fn func_name(&self, name_path: &[&str], method: Option<&str>) -> FuncName {
         let names: Vec<Token> = name_path.iter().map(|part| self.ident(part)).collect();
         // One `.` sits between each pair of names.
-        let dots: Vec<Token> = (1..names.len())
-            .map(|_| self.token(TokenKind::Dot))
-            .collect();
+        let dots: Vec<Span> = (1..names.len()).map(|_| self.next_span()).collect();
         FuncName {
             span: self.next_span(),
             names,
             dots,
-            method: method.map(|name| (self.token(TokenKind::Colon), self.ident(name))),
+            method: method.map(|name| (self.next_span(), self.ident(name))),
         }
     }
 
@@ -813,7 +806,7 @@ impl Synth {
             .iter()
             .map(|name| FunctionAttribute {
                 span: self.next_span(),
-                at_token: self.token(TokenKind::At),
+                at_token: self.next_span(),
                 name: self.ident(name),
             })
             .collect()
@@ -823,12 +816,12 @@ impl Synth {
         FunctionBody {
             span: self.next_span(),
             generics: sig.generics.map(Box::new),
-            params_parens: self.contained(TokenKind::LeftParen, TokenKind::RightParen),
+            params_parens: self.contained(),
             params: self.punctuated(sig.params),
             vararg: sig.vararg,
-            return_type: sig.return_type.map(|ty| (self.token(TokenKind::Colon), ty)),
+            return_type: sig.return_type.map(|ty| (self.next_span(), ty)),
             block,
-            end_token: self.token(TokenKind::End),
+            end_token: self.next_span(),
         }
     }
 
@@ -877,15 +870,15 @@ impl Synth {
         else_expr: Expression,
     ) -> Expression {
         let span = self.next_span();
-        let if_token = self.token(TokenKind::If);
-        let then_token = self.token(TokenKind::Then);
+        let if_token = self.next_span();
+        let then_token = self.next_span();
         let elseif_clauses: Vec<ElseIfExprClause> = elseifs
             .into_iter()
             .map(|(condition, expr)| ElseIfExprClause {
                 span: self.next_span(),
-                elseif_token: self.token(TokenKind::ElseIf),
+                elseif_token: self.next_span(),
                 condition,
-                then_token: self.token(TokenKind::Then),
+                then_token: self.next_span(),
                 expr,
             })
             .collect();
@@ -896,7 +889,7 @@ impl Synth {
             then_token,
             then_expr,
             elseif_clauses,
-            else_token: self.token(TokenKind::Else),
+            else_token: self.next_span(),
             else_expr,
         }))
     }
@@ -917,12 +910,12 @@ impl Synth {
     #[must_use]
     pub fn local_full(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
         let span = self.next_span();
-        let local_token = self.token(TokenKind::Local);
+        let local_token = self.next_span();
         let names = self.punctuated(names);
         let equal_and_exprs = if exprs.is_empty() {
             None
         } else {
-            Some((self.token(TokenKind::Equal), self.punctuated(exprs)))
+            Some((self.next_span(), self.punctuated(exprs)))
         };
         Statement::LocalAssignment(Box::new(LocalAssignment {
             span,
@@ -944,12 +937,12 @@ impl Synth {
     ) -> AttributedName {
         AttributedName {
             name: self.ident(name),
-            type_annotation: ty.map(|ty| (self.token(TokenKind::Colon), ty)),
+            type_annotation: ty.map(|ty| (self.next_span(), ty)),
             attrib: attrib.map(|attribute| Attribute {
                 span: self.next_span(),
-                open: self.token(TokenKind::Less),
+                open: self.next_span(),
                 name: self.ident(attribute),
-                close: self.token(TokenKind::Greater),
+                close: self.next_span(),
             }),
         }
     }
@@ -959,7 +952,7 @@ impl Synth {
     pub fn global_decl(&self, names: Vec<AttributedName>) -> Statement {
         Statement::GlobalDeclaration(Box::new(GlobalDeclaration {
             span: self.next_span(),
-            global_token: self.token(TokenKind::Global),
+            global_token: self.next_span(),
             names: self.punctuated(names),
         }))
     }
@@ -969,14 +962,14 @@ impl Synth {
     pub fn global_star(&self, attrib: Option<&str>) -> Statement {
         Statement::GlobalStar(Box::new(GlobalStar {
             span: self.next_span(),
-            global_token: self.token(TokenKind::Global),
+            global_token: self.next_span(),
             attrib: attrib.map(|attribute| Attribute {
                 span: self.next_span(),
-                open: self.token(TokenKind::Less),
+                open: self.next_span(),
                 name: self.ident(attribute),
-                close: self.token(TokenKind::Greater),
+                close: self.next_span(),
             }),
-            star: self.token(TokenKind::Star),
+            star: self.next_span(),
         }))
     }
 
@@ -987,34 +980,19 @@ impl Synth {
         Statement::Assignment(Box::new(Assignment {
             span: self.next_span(),
             targets: self.punctuated(targets),
-            equal: self.token(TokenKind::Equal),
+            equal: self.next_span(),
             values: self.punctuated(values),
         }))
     }
 
-    /// Luau compound assignment: `target op= value`. Accepts only the compound
-    /// operator token kinds; any other kind is a synthesis-side programmer error.
+    /// Luau compound assignment: `target op= value`.
     #[must_use]
-    pub fn compound_assign(&self, target: Var, op: TokenKind, value: Expression) -> Statement {
-        // Guard the token kind up front: a stray operator would emit a node the
-        // parser could never have produced.
-        match op {
-            TokenKind::PlusEqual
-            | TokenKind::MinusEqual
-            | TokenKind::StarEqual
-            | TokenKind::SlashEqual
-            | TokenKind::FloorDivEqual
-            | TokenKind::PercentEqual
-            | TokenKind::CaretEqual
-            | TokenKind::DotDotEqual => {}
-            other => panic!(
-                "synth: compound_assign requires a compound-assignment operator, got {other:?}"
-            ),
-        }
+    pub fn compound_assign(&self, target: Var, op: CompoundOp, value: Expression) -> Statement {
         Statement::CompoundAssignment(Box::new(CompoundAssignment {
             span: self.next_span(),
             var: target,
-            op: self.token(op),
+            op,
+            op_span: self.next_span(),
             expr: value,
         }))
     }
@@ -1037,9 +1015,9 @@ impl Synth {
     pub fn do_block(&self, block: Block) -> Statement {
         Statement::DoBlock(Box::new(DoBlock {
             span: self.next_span(),
-            do_token: self.token(TokenKind::Do),
+            do_token: self.next_span(),
             block,
-            end_token: self.token(TokenKind::End),
+            end_token: self.next_span(),
         }))
     }
 
@@ -1047,11 +1025,11 @@ impl Synth {
     pub fn while_(&self, cond: Expression, block: Block) -> Statement {
         Statement::WhileLoop(Box::new(WhileLoop {
             span: self.next_span(),
-            while_token: self.token(TokenKind::While),
+            while_token: self.next_span(),
             condition: cond,
-            do_token: self.token(TokenKind::Do),
+            do_token: self.next_span(),
             block,
-            end_token: self.token(TokenKind::End),
+            end_token: self.next_span(),
         }))
     }
 
@@ -1059,9 +1037,9 @@ impl Synth {
     pub fn repeat_(&self, block: Block, cond: Expression) -> Statement {
         Statement::RepeatLoop(Box::new(RepeatLoop {
             span: self.next_span(),
-            repeat_token: self.token(TokenKind::Repeat),
+            repeat_token: self.next_span(),
             block,
-            until_token: self.token(TokenKind::Until),
+            until_token: self.next_span(),
             condition: cond,
         }))
     }
@@ -1075,21 +1053,21 @@ impl Synth {
         else_block: Option<Block>,
     ) -> Statement {
         let span = self.next_span();
-        let if_token = self.token(TokenKind::If);
-        let then_token = self.token(TokenKind::Then);
+        let if_token = self.next_span();
+        let then_token = self.next_span();
         let elseif_clauses: Vec<ElseIfClause> = elseifs
             .into_iter()
             .map(|(condition, block)| ElseIfClause {
                 span: self.next_span(),
-                elseif_token: self.token(TokenKind::ElseIf),
+                elseif_token: self.next_span(),
                 condition,
-                then_token: self.token(TokenKind::Then),
+                then_token: self.next_span(),
                 block,
             })
             .collect();
         let else_clause = else_block.map(|block| ElseClause {
             span: self.next_span(),
-            else_token: self.token(TokenKind::Else),
+            else_token: self.next_span(),
             block,
         });
         Statement::IfStatement(Box::new(IfStatement {
@@ -1100,7 +1078,7 @@ impl Synth {
             block: then_block,
             elseif_clauses,
             else_clause,
-            end_token: self.token(TokenKind::End),
+            end_token: self.next_span(),
         }))
     }
 
@@ -1117,17 +1095,17 @@ impl Synth {
     ) -> Statement {
         Statement::NumericFor(Box::new(NumericFor {
             span: self.next_span(),
-            for_token: self.token(TokenKind::For),
+            for_token: self.next_span(),
             name: var.name,
             type_annotation: var.type_annotation,
-            equal: self.token(TokenKind::Equal),
+            equal: self.next_span(),
             start,
-            comma1: self.token(TokenKind::Comma),
+            comma1: self.next_span(),
             limit,
-            comma2_and_step: step.map(|step| (self.token(TokenKind::Comma), step)),
-            do_token: self.token(TokenKind::Do),
+            comma2_and_step: step.map(|step| (self.next_span(), step)),
+            do_token: self.next_span(),
             block,
-            end_token: self.token(TokenKind::End),
+            end_token: self.next_span(),
         }))
     }
 
@@ -1142,13 +1120,13 @@ impl Synth {
     ) -> Statement {
         Statement::GenericFor(Box::new(GenericFor {
             span: self.next_span(),
-            for_token: self.token(TokenKind::For),
+            for_token: self.next_span(),
             names: self.punctuated(names),
-            in_token: self.token(TokenKind::In),
+            in_token: self.next_span(),
             exprs: self.punctuated(exprs),
-            do_token: self.token(TokenKind::Do),
+            do_token: self.next_span(),
             block,
-            end_token: self.token(TokenKind::End),
+            end_token: self.next_span(),
         }))
     }
 
@@ -1157,7 +1135,7 @@ impl Synth {
     pub fn goto_(&self, label: &str) -> Statement {
         Statement::Goto(Box::new(GotoStatement {
             span: self.next_span(),
-            goto_token: self.token(TokenKind::Goto),
+            goto_token: self.next_span(),
             name: self.ident(label),
         }))
     }
@@ -1167,9 +1145,9 @@ impl Synth {
     pub fn label(&self, name: &str) -> Statement {
         Statement::Label(Box::new(LabelStatement {
             span: self.next_span(),
-            colons_open: self.token(TokenKind::DoubleColon),
+            colons_open: self.next_span(),
             name: self.ident(name),
-            colons_close: self.token(TokenKind::DoubleColon),
+            colons_close: self.next_span(),
         }))
     }
 
@@ -1177,21 +1155,21 @@ impl Synth {
     /// last statement - use [`Synth::break_`] there).
     #[must_use]
     pub fn break_stmt(&self) -> Statement {
-        Statement::Break(self.token(TokenKind::Break))
+        Statement::Break(self.next_span())
     }
 
     /// Bare `;` (Lua 5.2+). The formatter drops these; only compact output
     /// prints them.
     #[must_use]
     pub fn empty_stmt(&self) -> Statement {
-        Statement::EmptyStatement(self.token(TokenKind::Semicolon))
+        Statement::EmptyStatement(self.next_span())
     }
 
     #[must_use]
     pub fn return_(&self, exprs: Vec<Expression>) -> LastStatement {
         LastStatement::Return(Box::new(ReturnStatement {
             span: self.next_span(),
-            return_token: self.token(TokenKind::Return),
+            return_token: self.next_span(),
             exprs: self.punctuated(exprs),
             semicolon: None,
         }))
@@ -1199,14 +1177,13 @@ impl Synth {
 
     #[must_use]
     pub fn break_(&self) -> LastStatement {
-        LastStatement::Break(self.token(TokenKind::Break))
+        LastStatement::Break(self.next_span())
     }
 
-    /// Luau `continue`. The keyword is context-sensitive, so it rides in as an
-    /// `Identifier`, exactly as the parser produces it.
+    /// Luau `continue`.
     #[must_use]
     pub fn continue_(&self) -> LastStatement {
-        LastStatement::Continue(self.ident("continue"))
+        LastStatement::Continue(self.next_span())
     }
 
     #[must_use]
@@ -1232,7 +1209,7 @@ impl Synth {
         Parameter {
             span: self.next_span(),
             name: self.ident(name),
-            type_annotation: Some((self.token(TokenKind::Colon), ty)),
+            type_annotation: Some((self.next_span(), ty)),
         }
     }
 
@@ -1242,9 +1219,9 @@ impl Synth {
     pub fn vararg_param(&self, type_annotation: Option<Type>) -> VarArgParam {
         VarArgParam {
             span: self.next_span(),
-            dots: self.token(TokenKind::DotDotDot),
+            dots: self.next_span(),
             name: None,
-            type_annotation: type_annotation.map(|ty| (self.token(TokenKind::Colon), ty)),
+            type_annotation: type_annotation.map(|ty| (self.next_span(), ty)),
         }
     }
 
@@ -1268,7 +1245,7 @@ impl Synth {
     pub fn ty_qualified(&self, module: &str, name: &str) -> Type {
         Type::Named(Box::new(NamedType {
             span: self.next_span(),
-            prefix: Some((self.ident(module), self.token(TokenKind::Dot))),
+            prefix: Some((self.ident(module), self.next_span())),
             name: self.ident(name),
             generics: None,
         }))
@@ -1278,7 +1255,7 @@ impl Synth {
     pub fn ty_generic(&self, name: &str, args: Vec<Type>) -> Type {
         let span = self.next_span();
         let name = self.ident(name);
-        let angles = self.contained(TokenKind::Less, TokenKind::Greater);
+        let angles = self.contained();
         let generics = TypeArgs {
             span: self.next_span(),
             angles,
@@ -1297,8 +1274,8 @@ impl Synth {
     pub fn ty_typeof(&self, expr: Expression) -> Type {
         Type::Typeof(Box::new(TypeofType {
             span: self.next_span(),
-            typeof_token: self.ident("typeof"),
-            parens: self.contained(TokenKind::LeftParen, TokenKind::RightParen),
+            typeof_token: self.next_span(),
+            parens: self.contained(),
             expr,
         }))
     }
@@ -1308,7 +1285,7 @@ impl Synth {
         Type::Optional(Box::new(OptionalType {
             span: self.next_span(),
             type_value: inner,
-            question: self.token(TokenKind::Question),
+            question: self.next_span(),
         }))
     }
 
@@ -1317,7 +1294,7 @@ impl Synth {
         Type::Union(Box::new(UnionType {
             span: self.next_span(),
             leading_pipe: None,
-            types: self.punctuated_with(types, TokenKind::Pipe),
+            types: self.punctuated(types),
         }))
     }
 
@@ -1326,7 +1303,7 @@ impl Synth {
         Type::Intersection(Box::new(IntersectionType {
             span: self.next_span(),
             leading_ampersand: None,
-            types: self.punctuated_with(types, TokenKind::Ampersand),
+            types: self.punctuated(types),
         }))
     }
 
@@ -1335,7 +1312,7 @@ impl Synth {
     pub fn ty_paren(&self, inner: Type) -> Type {
         Type::Parenthesized(Box::new(ParenType {
             span: self.next_span(),
-            parens: self.contained(TokenKind::LeftParen, TokenKind::RightParen),
+            parens: self.contained(),
             type_value: inner,
         }))
     }
@@ -1366,7 +1343,7 @@ impl Synth {
     #[must_use]
     pub fn ty_table(&self, fields: Vec<SynthTypeField<'_>>) -> Type {
         let span = self.next_span();
-        let braces = self.contained(TokenKind::LeftBrace, TokenKind::RightBrace);
+        let braces = self.contained();
         let count = fields.len();
         let mut built = Vec::with_capacity(count);
         for (index, field) in fields.into_iter().enumerate() {
@@ -1379,15 +1356,15 @@ impl Synth {
                     span: self.next_span(),
                     access: access.map(|access| self.access_token(access)),
                     name: self.ident(name),
-                    colon: self.token(TokenKind::Colon),
+                    colon: self.next_span(),
                     value,
                 },
                 SynthTypeField::Indexer { access, key, value } => TypeField::Indexer {
                     span: self.next_span(),
                     access: access.map(|access| self.access_token(access)),
-                    brackets: self.contained(TokenKind::LeftBracket, TokenKind::RightBracket),
+                    brackets: self.contained(),
                     key,
-                    colon: self.token(TokenKind::Colon),
+                    colon: self.next_span(),
                     value,
                 },
                 SynthTypeField::Array(value) => TypeField::Array {
@@ -1396,7 +1373,7 @@ impl Synth {
                 },
             };
             let separator = if index + 1 < count {
-                Some(self.token(TokenKind::Comma))
+                Some(self.next_span())
             } else {
                 None
             };
@@ -1437,12 +1414,12 @@ impl Synth {
         return_type: Type,
     ) -> Type {
         let span = self.next_span();
-        let parens = self.contained(TokenKind::LeftParen, TokenKind::RightParen);
+        let parens = self.contained();
         let params: Vec<FunctionTypeParam> = params
             .into_iter()
             .map(|(name, type_value)| FunctionTypeParam {
                 span: self.next_span(),
-                name: name.map(|name| (self.ident(name), self.token(TokenKind::Colon))),
+                name: name.map(|name| (self.ident(name), self.next_span())),
                 type_value,
             })
             .collect();
@@ -1452,7 +1429,7 @@ impl Synth {
             generics,
             parens,
             params,
-            arrow: self.token(TokenKind::Arrow),
+            arrow: self.next_span(),
             return_type,
         }))
     }
@@ -1482,7 +1459,7 @@ impl Synth {
     #[must_use]
     pub fn ty_pack(&self, types: Vec<Type>) -> Type {
         let span = self.next_span();
-        let parens = self.contained(TokenKind::LeftParen, TokenKind::RightParen);
+        let parens = self.contained();
         Type::Pack(Box::new(TypePack {
             span,
             parens,
@@ -1495,7 +1472,7 @@ impl Synth {
     pub fn ty_variadic(&self, element: Type) -> Type {
         Type::Variadic(Box::new(VariadicType {
             span: self.next_span(),
-            dots: self.token(TokenKind::DotDotDot),
+            dots: self.next_span(),
             type_value: element,
         }))
     }
@@ -1506,7 +1483,7 @@ impl Synth {
         Type::GenericPack(Box::new(GenericPackType {
             span: self.next_span(),
             name: self.ident(name),
-            dots: self.token(TokenKind::DotDotDot),
+            dots: self.next_span(),
         }))
     }
 
@@ -1515,13 +1492,13 @@ impl Synth {
     #[must_use]
     pub fn generic_type_list(&self, params: Vec<(&str, bool)>) -> GenericTypeList {
         let span = self.next_span();
-        let angles = self.contained(TokenKind::Less, TokenKind::Greater);
+        let angles = self.contained();
         let built: Vec<GenericTypeParam> = params
             .into_iter()
             .map(|(name, is_pack)| GenericTypeParam {
                 span: self.next_span(),
                 name: self.ident(name),
-                dots: is_pack.then(|| self.token(TokenKind::DotDotDot)),
+                dots: is_pack.then(|| self.next_span()),
                 default: None,
             })
             .collect();
@@ -1532,9 +1509,7 @@ impl Synth {
         }
     }
 
-    /// Luau alias `[export] type Name [<generics>] = T`. The `type` and
-    /// `export` keywords are context-sensitive, so they ride in as
-    /// `Identifier`s, as the parser produces them.
+    /// Luau alias `[export] type Name [<generics>] = T`.
     #[must_use]
     pub fn type_declaration(
         &self,
@@ -1545,12 +1520,12 @@ impl Synth {
     ) -> Statement {
         Statement::TypeDeclaration(Box::new(TypeDeclaration {
             span: self.next_span(),
-            export_token: export.then(|| self.ident("export")),
-            type_token: self.ident("type"),
+            export_token: export.then(|| self.next_span()),
+            type_token: self.next_span(),
             function_token: None,
             name: self.ident(name),
             generics: generics.map(Box::new),
-            equal: Some(self.token(TokenKind::Equal)),
+            equal: Some(self.next_span()),
             type_value: TypeDeclarationValue::Alias(value),
         }))
     }
@@ -1561,9 +1536,9 @@ impl Synth {
     pub fn type_function(&self, export: bool, name: &str, sig: FnSig, body: Block) -> Statement {
         Statement::TypeDeclaration(Box::new(TypeDeclaration {
             span: self.next_span(),
-            export_token: export.then(|| self.ident("export")),
-            type_token: self.ident("type"),
-            function_token: Some(self.token(TokenKind::Function)),
+            export_token: export.then(|| self.next_span()),
+            type_token: self.next_span(),
+            function_token: Some(self.next_span()),
             name: self.ident(name),
             generics: None,
             equal: None,
@@ -1607,33 +1582,29 @@ impl Synth {
 
     // ----- internal plumbing -----
 
-    fn contained(&self, open: TokenKind, close: TokenKind) -> ContainedSpan {
+    fn contained(&self) -> ContainedSpan {
         ContainedSpan {
-            open: self.token(open),
-            close: self.token(close),
+            open: self.next_span(),
+            close: self.next_span(),
         }
     }
 
     fn paren_args(&self, args: Vec<Expression>) -> FunctionArgs {
         FunctionArgs::Parenthesized {
-            parens: self.contained(TokenKind::LeftParen, TokenKind::RightParen),
+            parens: self.contained(),
             args: self.punctuated(args),
         }
     }
 
+    /// Separator span FOLLOWS each item; the last item's is `None`.
     fn punctuated<T>(&self, items: Vec<T>) -> Punctuated<T> {
-        self.punctuated_with(items, TokenKind::Comma)
-    }
-
-    /// Separator token FOLLOWS each item; the last item's is `None`.
-    fn punctuated_with<T>(&self, items: Vec<T>, separator: TokenKind) -> Punctuated<T> {
         let count = items.len();
         let items = items
             .into_iter()
             .enumerate()
             .map(|(index, item)| {
                 let following = if index + 1 < count {
-                    Some(self.token(separator.clone()))
+                    Some(self.next_span())
                 } else {
                     None
                 };
@@ -1720,7 +1691,7 @@ mod tests {
     #[test]
     fn builds_local_with_binop() {
         let synth = Synth::new();
-        let sum = synth.binop(synth.number("1"), TokenKind::Plus, synth.number("2"));
+        let sum = synth.binop(synth.number("1"), BinOp::Add, synth.number("2"));
         let stmt = synth.local(&["x"], vec![sum]);
 
         let Statement::LocalAssignment(local) = &stmt else {
@@ -1735,8 +1706,8 @@ mod tests {
     fn binop_parenthesizes_lower_precedence_operands() {
         let synth = Synth::new();
         // (a + b) * c: the additive LHS must gain parens under `*`.
-        let sum = synth.binop(synth.name_expr("a"), TokenKind::Plus, synth.name_expr("b"));
-        let product = synth.binop(sum, TokenKind::Star, synth.name_expr("c"));
+        let sum = synth.binop(synth.name_expr("a"), BinOp::Add, synth.name_expr("b"));
+        let product = synth.binop(sum, BinOp::Mul, synth.name_expr("c"));
 
         let Expression::BinaryOp(product) = &product else {
             panic!("expected binop");
@@ -1751,8 +1722,8 @@ mod tests {
     fn binop_keeps_higher_precedence_operands_bare() {
         let synth = Synth::new();
         // a * b + c: the multiplicative LHS needs no parens under `+`.
-        let product = synth.binop(synth.name_expr("a"), TokenKind::Star, synth.name_expr("b"));
-        let sum = synth.binop(product, TokenKind::Plus, synth.name_expr("c"));
+        let product = synth.binop(synth.name_expr("a"), BinOp::Mul, synth.name_expr("b"));
+        let sum = synth.binop(product, BinOp::Add, synth.name_expr("c"));
 
         let Expression::BinaryOp(sum) = &sum else {
             panic!("expected binop");
@@ -1764,20 +1735,16 @@ mod tests {
     fn binop_honors_associativity() {
         let synth = Synth::new();
         // Left-nested concat needs parens: (a .. b) .. c is not a .. b .. c.
-        let inner = synth.binop(
-            synth.name_expr("a"),
-            TokenKind::DotDot,
-            synth.name_expr("b"),
-        );
-        let outer = synth.binop(inner, TokenKind::DotDot, synth.name_expr("c"));
+        let inner = synth.binop(synth.name_expr("a"), BinOp::Concat, synth.name_expr("b"));
+        let outer = synth.binop(inner, BinOp::Concat, synth.name_expr("c"));
         let Expression::BinaryOp(outer) = &outer else {
             panic!("expected binop");
         };
         assert!(matches!(outer.left, Expression::Parenthesized(_)));
 
         // Right-nested subtraction needs parens: a - (b - c).
-        let inner = synth.binop(synth.name_expr("b"), TokenKind::Minus, synth.name_expr("c"));
-        let outer = synth.binop(synth.name_expr("a"), TokenKind::Minus, inner);
+        let inner = synth.binop(synth.name_expr("b"), BinOp::Sub, synth.name_expr("c"));
+        let outer = synth.binop(synth.name_expr("a"), BinOp::Sub, inner);
         let Expression::BinaryOp(outer) = &outer else {
             panic!("expected binop");
         };
@@ -1788,16 +1755,16 @@ mod tests {
     fn caret_parenthesizes_unary_lhs() {
         let synth = Synth::new();
         // (-a)^b: without parens this would re-parse as -(a^b).
-        let negated = synth.unop(TokenKind::Minus, synth.name_expr("a"));
-        let power = synth.binop(negated, TokenKind::Caret, synth.name_expr("b"));
+        let negated = synth.unop(UnOp::Neg, synth.name_expr("a"));
+        let power = synth.binop(negated, BinOp::Pow, synth.name_expr("b"));
         let Expression::BinaryOp(power) = &power else {
             panic!("expected binop");
         };
         assert!(matches!(power.left, Expression::Parenthesized(_)));
 
         // a * -b stays bare: unary is always accepted after a binop.
-        let negated = synth.unop(TokenKind::Minus, synth.name_expr("b"));
-        let product = synth.binop(synth.name_expr("a"), TokenKind::Star, negated);
+        let negated = synth.unop(UnOp::Neg, synth.name_expr("b"));
+        let product = synth.binop(synth.name_expr("a"), BinOp::Mul, negated);
         let Expression::BinaryOp(product) = &product else {
             panic!("expected binop");
         };
@@ -1813,7 +1780,7 @@ mod tests {
             vec![],
             synth.number("2"),
         );
-        let sum = synth.binop(synth.name_expr("a"), TokenKind::Plus, if_expr);
+        let sum = synth.binop(synth.name_expr("a"), BinOp::Add, if_expr);
         let Expression::BinaryOp(sum) = &sum else {
             panic!("expected binop");
         };
@@ -1827,8 +1794,8 @@ mod tests {
     fn unop_parenthesizes_binop_operand() {
         let synth = Synth::new();
         // -(a + b): without parens this would re-parse as (-a) + b.
-        let sum = synth.binop(synth.name_expr("a"), TokenKind::Plus, synth.name_expr("b"));
-        let negated = synth.unop(TokenKind::Minus, sum);
+        let sum = synth.binop(synth.name_expr("a"), BinOp::Add, synth.name_expr("b"));
+        let negated = synth.unop(UnOp::Neg, sum);
         let Expression::UnaryOp(negated) = &negated else {
             panic!("expected unop");
         };
@@ -1836,16 +1803,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "binary operator")]
-    fn binop_rejects_non_operator() {
-        let synth = Synth::new();
-        let _ = synth.binop(synth.number("1"), TokenKind::Comma, synth.number("2"));
-    }
-
-    #[test]
     fn type_cast_parenthesizes_compound_operand() {
         let synth = Synth::new();
-        let sum = synth.binop(synth.name_expr("a"), TokenKind::Plus, synth.name_expr("b"));
+        let sum = synth.binop(synth.name_expr("a"), BinOp::Add, synth.name_expr("b"));
         let cast = synth.type_cast(sum, synth.ty_named("number"));
         let Expression::TypeCast(cast) = &cast else {
             panic!("expected type cast");
@@ -2252,7 +2212,6 @@ mod tests {
         let synth = Synth::new();
         let vararg = synth.vararg_param(Some(synth.ty_named("number")));
         assert!(vararg.name.is_none());
-        assert!(matches!(vararg.dots.kind, TokenKind::DotDotDot));
         assert!(vararg.type_annotation.is_some());
     }
 
@@ -2281,7 +2240,6 @@ mod tests {
             panic!("expected global star");
         };
         assert!(star.attrib.is_some());
-        assert!(matches!(star.star.kind, TokenKind::Star));
     }
 
     #[test]
@@ -2289,7 +2247,7 @@ mod tests {
         let synth = Synth::new();
         let stmt = synth.compound_assign(
             synth.name_var("counter"),
-            TokenKind::PlusEqual,
+            CompoundOp::AddAssign,
             synth.number("1"),
         );
 
@@ -2297,18 +2255,7 @@ mod tests {
             panic!("expected compound assignment");
         };
         assert!(matches!(compound.var, Var::Name(_)));
-        assert!(matches!(compound.op.kind, TokenKind::PlusEqual));
-    }
-
-    #[test]
-    #[should_panic(expected = "compound-assignment operator")]
-    fn compound_assignment_rejects_plain_operator() {
-        let synth = Synth::new();
-        let _ = synth.compound_assign(
-            synth.name_var("counter"),
-            TokenKind::Plus,
-            synth.number("1"),
-        );
+        assert_eq!(compound.op, CompoundOp::AddAssign);
     }
 
     #[test]

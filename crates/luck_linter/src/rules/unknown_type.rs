@@ -1,5 +1,6 @@
 use luck_ast::Expression;
 use luck_ast::expr::{BinaryOp, FunctionArgs, FunctionCall, Var};
+use luck_token::BinOp;
 use luck_token::{Span, StdlibEnvironment, TokenKind};
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
@@ -39,7 +40,7 @@ impl NodeRule for UnknownType {
         let Expression::BinaryOp(binop) = expr else {
             return;
         };
-        if !matches!(binop.op.kind, TokenKind::EqualEqual | TokenKind::TildeEqual) {
+        if !matches!(binop.op, BinOp::Eq | BinOp::Ne) {
             return;
         }
         let Some((callee, literal_span)) = classify_comparison(binop, ctx) else {

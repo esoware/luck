@@ -1,6 +1,6 @@
 [package]
 name = "luck_bundler"
-version = "1.2.0"
+version.workspace = true
 authors.workspace = true
 categories.workspace = true
 description = "Dependency graph builder and IIFE-based bundler for multi-file Lua/Luau projects."

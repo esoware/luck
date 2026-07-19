@@ -38,8 +38,8 @@ pub enum Type {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamedType {
     pub span: Span,
-    /// `module.` qualification: (module name, dot).
-    pub prefix: Option<(Token, Token)>,
+    /// `module.` qualification: (module name, dot span).
+    pub prefix: Option<(Token, Span)>,
     pub name: Token,
     pub generics: Option<TypeArgs>,
 }
@@ -56,7 +56,7 @@ pub struct TypeArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeofType {
     pub span: Span,
-    pub typeof_token: Token,
+    pub typeof_token: Span,
     pub parens: ContainedSpan,
     pub expr: Expression,
 }
@@ -66,9 +66,9 @@ pub struct TypeofType {
 pub struct TableType {
     pub span: Span,
     pub braces: ContainedSpan,
-    /// Fields with their following separator (`,` or `;`), same shape
-    /// as `TableConstructor.fields`.
-    pub fields: Vec<(TypeField, Option<Token>)>,
+    /// Fields with the span of their following separator (`,` or `;`),
+    /// same shape as `TableConstructor.fields`.
+    pub fields: Vec<(TypeField, Option<Span>)>,
 }
 
 /// One entry in a table type.
@@ -79,7 +79,7 @@ pub enum TypeField {
         /// Luau `read`/`write` access modifier.
         access: Option<Token>,
         name: Token,
-        colon: Token,
+        colon: Span,
         value: Type,
     },
     Indexer {
@@ -88,7 +88,7 @@ pub enum TypeField {
         access: Option<Token>,
         brackets: ContainedSpan,
         key: Type,
-        colon: Token,
+        colon: Span,
         value: Type,
     },
     /// Array shorthand `{ T }` - a bare element type.
@@ -102,7 +102,7 @@ pub struct FunctionType {
     pub generics: Option<GenericTypeList>,
     pub parens: ContainedSpan,
     pub params: Punctuated<FunctionTypeParam>,
-    pub arrow: Token,
+    pub arrow: Span,
     pub return_type: Type,
 }
 
@@ -110,8 +110,8 @@ pub struct FunctionType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionTypeParam {
     pub span: Span,
-    /// (name, colon) when the parameter is named.
-    pub name: Option<(Token, Token)>,
+    /// (name, colon span) when the parameter is named.
+    pub name: Option<(Token, Span)>,
     pub type_value: Type,
 }
 
@@ -120,7 +120,7 @@ pub struct FunctionTypeParam {
 pub struct OptionalType {
     pub span: Span,
     pub type_value: Type,
-    pub question: Token,
+    pub question: Span,
 }
 
 /// N-ary union `A | B | C`; the `|` separators live in `types`.
@@ -128,7 +128,7 @@ pub struct OptionalType {
 pub struct UnionType {
     pub span: Span,
     /// Leading `|` (allowed in multiline definitions).
-    pub leading_pipe: Option<Token>,
+    pub leading_pipe: Option<Span>,
     pub types: Punctuated<Type>,
 }
 
@@ -137,7 +137,7 @@ pub struct UnionType {
 pub struct IntersectionType {
     pub span: Span,
     /// Leading `&` (allowed in multiline definitions).
-    pub leading_ampersand: Option<Token>,
+    pub leading_ampersand: Option<Span>,
     pub types: Punctuated<Type>,
 }
 
@@ -161,7 +161,7 @@ pub struct TypePack {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VariadicType {
     pub span: Span,
-    pub dots: Token,
+    pub dots: Span,
     pub type_value: Type,
 }
 
@@ -170,7 +170,7 @@ pub struct VariadicType {
 pub struct GenericPackType {
     pub span: Span,
     pub name: Token,
-    pub dots: Token,
+    pub dots: Span,
 }
 
 /// Generic parameter list at a declaration site:
@@ -188,7 +188,7 @@ pub struct GenericTypeParam {
     pub span: Span,
     pub name: Token,
     /// `...` marking a pack parameter (`T...`).
-    pub dots: Option<Token>,
-    /// `= T` default - (equal, type). Only legal in `type` declarations.
-    pub default: Option<(Token, Type)>,
+    pub dots: Option<Span>,
+    /// `= T` default - (equal span, type). Only legal in `type` declarations.
+    pub default: Option<(Span, Type)>,
 }

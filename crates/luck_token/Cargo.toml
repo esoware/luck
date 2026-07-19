@@ -1,6 +1,6 @@
 [package]
 name = "luck_token"
-version = "0.6.0"
+version.workspace = true
 authors.workspace = true
 categories.workspace = true
 description = "Token definitions, spans, and Lua version flags for the luck toolchain."

@@ -441,7 +441,7 @@ async fn selection_range_expands_from_identifier() {
 }
 
 #[tokio::test]
-async fn semantic_tokens_mark_stdlib_names_only() {
+async fn semantic_tokens_cover_every_identifier() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("tokens.lua");
     open(&server, &uri, "print(math.pi)\nlocal mine = my_helper(1)\n").await;
@@ -454,16 +454,16 @@ async fn semantic_tokens_mark_stdlib_names_only() {
         })
         .await
         .expect("semantic tokens errored")
-        .expect("a document with stdlib names should tokenize");
+        .expect("a document with identifiers should tokenize");
     let SemanticTokensResult::Tokens(tokens) = result else {
         panic!("expected a full semantic token set");
     };
-    // Exactly `print` and `math`: `pi` follows a dot and user names must be
-    // left to the TextMate grammar, not stomped by semantic tokens.
+    // print, math, pi, mine, my_helper: every identifier gets a token,
+    // including stdlib members after a dot and unresolved globals.
     assert_eq!(
         tokens.data.len(),
-        2,
-        "only stdlib globals should tokenize: {:?}",
+        5,
+        "every identifier should tokenize: {:?}",
         tokens.data
     );
 }

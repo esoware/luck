@@ -84,8 +84,8 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    /// Single-jump dispatch on the lead byte (oxc's byte_handlers idea);
-    /// a match compiles to the same jump table as a fn-pointer array but
+    /// Single-jump dispatch on the lead byte; a match compiles to the
+    /// same jump table as a fn-pointer array but
     /// keeps the small handlers inlinable. Whitespace never reaches here -
     /// the tokenize loop consumes it before dispatching.
     #[inline]
@@ -710,8 +710,8 @@ impl<'src> Lexer<'src> {
     }
 }
 
-/// Keyword lookup with oxc's pre-gate: every Lua keyword is 2-8 bytes of
-/// lowercase ASCII, so most identifiers bail on two compares and LLVM
+/// Keyword lookup behind a cheap pre-gate: every Lua keyword is 2-8
+/// bytes of lowercase ASCII, so most identifiers bail on two compares and LLVM
 /// compiles the match into a length-first switch.
 #[inline]
 fn match_keyword(text: &str, version: LuaVersion) -> Option<TokenKind> {

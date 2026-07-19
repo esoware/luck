@@ -1,5 +1,5 @@
 use luck_ast::Expression;
-use luck_token::TokenKind;
+use luck_token::BinOp;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -52,11 +52,8 @@ fn is_zero_literal(expr: &Expression, source: &str) -> bool {
     false
 }
 
-fn is_divisive_op(kind: &TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::Slash | TokenKind::Percent | TokenKind::FloorDiv
-    )
+fn is_divisive_op(op: BinOp) -> bool {
+    matches!(op, BinOp::Div | BinOp::Mod | BinOp::FloorDiv)
 }
 
 impl NodeRule for DivideByZero {
@@ -66,13 +63,13 @@ impl NodeRule for DivideByZero {
     }
     fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Expression::BinaryOp(binop) = expr
-            && is_divisive_op(&binop.op.kind)
+            && is_divisive_op(binop.op)
             && is_zero_literal(&binop.right, ctx.source)
         {
-            let op_name = match binop.op.kind {
-                TokenKind::Slash => "division",
-                TokenKind::Percent => "modulo",
-                TokenKind::FloorDiv => "floor division",
+            let op_name = match binop.op {
+                BinOp::Div => "division",
+                BinOp::Mod => "modulo",
+                BinOp::FloorDiv => "floor division",
                 // Unreachable per `is_divisive_op`.
                 _ => "division",
             };

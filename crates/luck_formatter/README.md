@@ -4,7 +4,7 @@ Prettier-style code formatter for Lua 5.1–5.5 and Luau.
 
 ## Overview
 
-Each AST node's emitter is an `impl Format`, composing combinators (`group`, `indent`, `soft_line`, `fill`, `best_fitting`, `if_group_breaks`, …) into a tag-stream IR. A line-width-aware printer then decides which groups fit flat and which need to expand. The engine is modeled on oxc and Biome, adapted to Lua's syntax and Luau's type annotations.
+Each AST node's emitter is an `impl Format`, composing combinators (`group`, `indent`, `soft_line`, `fill`, `best_fitting`, `if_group_breaks`, …) into a tag-stream IR. A line-width-aware printer then decides which groups fit flat and which need to expand.
 
 ## Key Features
 

@@ -7,7 +7,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash(cargo:*)
 
 # Change a formatter rule
 
-The formatter is an oxc/Biome-style engine: emitters are `impl Format for
+The formatter is a Wadler/Prettier-style engine: emitters are `impl Format for
 Node` blocks composing **combinators** into a flat tag-stream IR; a printer
 walks the stream deciding which groups fit flat and which expand. Read
 `crates/luck_formatter/src/ir.rs` for the real element set and combinator

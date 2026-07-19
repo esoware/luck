@@ -1,5 +1,5 @@
 use luck_ast::Expression;
-use luck_token::TokenKind;
+use luck_token::BinOp;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -33,7 +33,7 @@ impl NodeRule for ConstantTableComparison {
     }
     fn on_expression(&self, expr: &Expression, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Expression::BinaryOp(binop) = expr
-            && matches!(binop.op.kind, TokenKind::EqualEqual | TokenKind::TildeEqual)
+            && matches!(binop.op, BinOp::Eq | BinOp::Ne)
             && (matches!(&binop.left, Expression::TableConstructor(_))
                 || matches!(&binop.right, Expression::TableConstructor(_)))
         {

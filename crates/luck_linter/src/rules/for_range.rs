@@ -1,7 +1,7 @@
 use luck_ast::Expression;
 use luck_ast::node::{AstTypesBitset, NodeType};
 use luck_ast::stmt::NumericFor;
-use luck_token::TokenKind;
+use luck_token::UnOp;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -49,7 +49,7 @@ fn literal_number(expr: &Expression, source: &str) -> Option<f64> {
             let text = &source[token.span.start as usize..token.span.end as usize];
             text.parse().ok()
         }
-        Expression::UnaryOp(unop) if matches!(unop.op.kind, TokenKind::Minus) => {
+        Expression::UnaryOp(unop) if unop.op == UnOp::Neg => {
             literal_number(&unop.operand, source).map(|n| -n)
         }
         _ => None,
@@ -60,7 +60,7 @@ fn literal_number(expr: &Expression, source: &str) -> Option<f64> {
 /// or string. Used for the 0,#t off-by-one heuristic.
 fn is_length_of_identifier(expr: &Expression) -> bool {
     if let Expression::UnaryOp(unop) = expr
-        && matches!(unop.op.kind, TokenKind::Hash)
+        && unop.op == UnOp::Len
         && let Expression::Var(var) = &unop.operand
     {
         return matches!(&**var, luck_ast::expr::Var::Name(_));

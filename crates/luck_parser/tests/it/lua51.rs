@@ -356,9 +356,9 @@ fn precedence_add_mul() {
         let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(outer) = expr {
-            assert!(matches!(outer.op.kind, luck_token::TokenKind::Plus));
+            assert!(matches!(outer.op, luck_token::BinOp::Add));
             assert!(
-                matches!(&outer.right, Expression::BinaryOp(inner) if matches!(inner.op.kind, luck_token::TokenKind::Star))
+                matches!(&outer.right, Expression::BinaryOp(inner) if matches!(inner.op, luck_token::BinOp::Mul))
             );
         } else {
             panic!("expected BinaryOp, got {:?}", expr);
@@ -377,7 +377,7 @@ fn right_assoc_power() {
         let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(outer) = expr {
-            assert!(matches!(outer.op.kind, luck_token::TokenKind::Caret));
+            assert!(matches!(outer.op, luck_token::BinOp::Pow));
             assert!(matches!(&outer.left, Expression::Number(_)));
             assert!(matches!(&outer.right, Expression::BinaryOp(_)));
         } else {
@@ -397,7 +397,7 @@ fn right_assoc_concat() {
         let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(outer) = expr {
-            assert!(matches!(outer.op.kind, luck_token::TokenKind::DotDot));
+            assert!(matches!(outer.op, luck_token::BinOp::Concat));
             assert!(matches!(&outer.right, Expression::BinaryOp(_)));
         } else {
             panic!("expected BinaryOp");
@@ -417,11 +417,11 @@ fn unary_minus_vs_exponent_precedence() {
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::UnaryOp(unary) = expr {
             assert!(
-                matches!(unary.op.kind, luck_token::TokenKind::Minus),
+                matches!(unary.op, luck_token::UnOp::Neg),
                 "outer should be unary minus"
             );
             assert!(
-                matches!(&unary.operand, Expression::BinaryOp(binop) if matches!(binop.op.kind, luck_token::TokenKind::Caret)),
+                matches!(&unary.operand, Expression::BinaryOp(binop) if matches!(binop.op, luck_token::BinOp::Pow)),
                 "operand should be exponentiation, got {:?}",
                 unary.operand
             );
@@ -442,12 +442,12 @@ fn precedence_comparison_vs_logical() {
         let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(outer) = expr {
-            assert!(matches!(outer.op.kind, luck_token::TokenKind::And));
+            assert!(matches!(outer.op, luck_token::BinOp::And));
             assert!(
-                matches!(&outer.left, Expression::BinaryOp(l) if matches!(l.op.kind, luck_token::TokenKind::Less))
+                matches!(&outer.left, Expression::BinaryOp(l) if matches!(l.op, luck_token::BinOp::Lt))
             );
             assert!(
-                matches!(&outer.right, Expression::BinaryOp(r) if matches!(r.op.kind, luck_token::TokenKind::Greater))
+                matches!(&outer.right, Expression::BinaryOp(r) if matches!(r.op, luck_token::BinOp::Gt))
             );
         } else {
             panic!("expected BinaryOp, got {:?}", expr);
@@ -467,15 +467,15 @@ fn precedence_concat_vs_comparison() {
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(outer) = expr {
             assert!(
-                matches!(outer.op.kind, luck_token::TokenKind::EqualEqual),
+                matches!(outer.op, luck_token::BinOp::Eq),
                 "outer should be ==, got {:?}",
-                outer.op.kind
+                outer.op
             );
             assert!(
-                matches!(&outer.left, Expression::BinaryOp(l) if matches!(l.op.kind, luck_token::TokenKind::DotDot))
+                matches!(&outer.left, Expression::BinaryOp(l) if matches!(l.op, luck_token::BinOp::Concat))
             );
             assert!(
-                matches!(&outer.right, Expression::BinaryOp(r) if matches!(r.op.kind, luck_token::TokenKind::DotDot))
+                matches!(&outer.right, Expression::BinaryOp(r) if matches!(r.op, luck_token::BinOp::Concat))
             );
         } else {
             panic!("expected BinaryOp, got {:?}", expr);
@@ -519,7 +519,7 @@ fn unary_length() {
         let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::UnaryOp(unary) = expr {
-            assert!(matches!(unary.op.kind, luck_token::TokenKind::Hash));
+            assert!(matches!(unary.op, luck_token::UnOp::Len));
         } else {
             panic!("expected UnaryOp, got {:?}", expr);
         }
@@ -663,7 +663,7 @@ fn parenthesized() {
         let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(binop) = expr {
-            assert!(matches!(binop.op.kind, luck_token::TokenKind::Star));
+            assert!(matches!(binop.op, luck_token::BinOp::Mul));
             assert!(matches!(&binop.left, Expression::Parenthesized(_)));
         } else {
             panic!("expected BinaryOp, got {:?}", expr);
@@ -786,9 +786,9 @@ fn logical_operators() {
         let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(outer) = expr {
-            assert!(matches!(outer.op.kind, luck_token::TokenKind::Or));
+            assert!(matches!(outer.op, luck_token::BinOp::Or));
             assert!(
-                matches!(&outer.left, Expression::BinaryOp(inner) if matches!(inner.op.kind, luck_token::TokenKind::And))
+                matches!(&outer.left, Expression::BinaryOp(inner) if matches!(inner.op, luck_token::BinOp::And))
             );
         } else {
             panic!("expected BinaryOp");
@@ -801,10 +801,10 @@ fn logical_operators() {
 #[test]
 fn comparison_operators() {
     for (src, expected_kind) in [
-        ("local x = a < b", luck_token::TokenKind::Less),
-        ("local x = a >= b", luck_token::TokenKind::GreaterEqual),
-        ("local x = a ~= b", luck_token::TokenKind::TildeEqual),
-        ("local x = a == b", luck_token::TokenKind::EqualEqual),
+        ("local x = a < b", luck_token::BinOp::Lt),
+        ("local x = a >= b", luck_token::BinOp::Ge),
+        ("local x = a ~= b", luck_token::BinOp::Ne),
+        ("local x = a == b", luck_token::BinOp::Eq),
     ] {
         let result = parse_lua51(src);
         assert_no_errors(&result);
@@ -812,7 +812,7 @@ fn comparison_operators() {
             let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
             let expr = exprs.last_item().expect("expression list has last element");
             if let Expression::BinaryOp(binop) = expr {
-                assert_eq!(binop.op.kind, expected_kind, "failed for: {}", src);
+                assert_eq!(binop.op, expected_kind, "failed for: {}", src);
             } else {
                 panic!("expected BinaryOp for: {}", src);
             }

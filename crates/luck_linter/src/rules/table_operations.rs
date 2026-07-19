@@ -2,6 +2,7 @@ use luck_ast::Expression;
 use luck_ast::expr::{FunctionArgs, FunctionCall, Var};
 use luck_ast::stmt::Statement;
 use luck_token::TokenKind;
+use luck_token::{BinOp, UnOp};
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -172,7 +173,7 @@ fn length_operand(expr: &Expression) -> Option<&Expression> {
     let Expression::UnaryOp(unop) = expr else {
         return None;
     };
-    matches!(unop.op.kind, TokenKind::Hash).then_some(&unop.operand)
+    (unop.op == UnOp::Len).then_some(&unop.operand)
 }
 
 /// Recognize `#operand + 1` and return the operand.
@@ -180,7 +181,7 @@ fn length_plus_one_operand(expr: &Expression) -> Option<&Expression> {
     let Expression::BinaryOp(binop) = expr else {
         return None;
     };
-    if !matches!(binop.op.kind, TokenKind::Plus) || !is_number_literal(&binop.right, 1.0) {
+    if !matches!(binop.op, BinOp::Add) || !is_number_literal(&binop.right, 1.0) {
         return None;
     }
     length_operand(&binop.left)
@@ -191,7 +192,7 @@ fn length_minus_one_operand(expr: &Expression) -> Option<&Expression> {
     let Expression::BinaryOp(binop) = expr else {
         return None;
     };
-    if !matches!(binop.op.kind, TokenKind::Minus) || !is_number_literal(&binop.right, 1.0) {
+    if !matches!(binop.op, BinOp::Sub) || !is_number_literal(&binop.right, 1.0) {
         return None;
     }
     length_operand(&binop.left)

@@ -14,6 +14,7 @@
 use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Var};
 use luck_ast::shared::Block;
 use luck_ast::stmt::{LastStatement, Statement};
+use luck_token::BinOp;
 use luck_token::TokenKind;
 
 /// How a statement sequence terminates.
@@ -362,8 +363,8 @@ fn count_decision_points_expression(expr: &Expression) -> u32 {
             total
         }
         Expression::BinaryOp(node) => {
-            let self_points = match node.op.kind {
-                TokenKind::And | TokenKind::Or => 1,
+            let self_points = match node.op {
+                BinOp::And | BinOp::Or => 1,
                 _ => 0,
             };
             self_points

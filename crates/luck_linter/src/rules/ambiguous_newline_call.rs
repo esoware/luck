@@ -61,7 +61,7 @@ fn check_call(call: &FunctionCall, ctx: &LintContext, out: &mut Vec<LintDiagnost
         Some((_colon, method_token)) => method_token.span.end,
         None => call.callee.span().end,
     };
-    let open_start = parens.open.span.start;
+    let open_start = parens.open.start;
     if open_start <= prefix_end {
         return;
     }
@@ -73,7 +73,7 @@ fn check_call(call: &FunctionCall, ctx: &LintContext, out: &mut Vec<LintDiagnost
         LintDiagnostic::new(
             "ambiguous_newline_call",
             "call arguments start on a new line; Lua joins this with the previous expression",
-            parens.open.span,
+            parens.open,
         )
         .with_help(
             "keep `(` on the same line as the callee, or add a semicolon if a new statement was \

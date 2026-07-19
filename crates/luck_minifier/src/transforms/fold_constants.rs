@@ -3,6 +3,7 @@ use luck_ast::shared::Block;
 use luck_ast::transform::AstTransform;
 use luck_token::LuaVersion;
 use luck_token::token::{Token, TokenKind};
+use luck_token::{BinOp, UnOp};
 
 use crate::expr::{
     LuaNumber, decode_string_literal, encode_string_literal, extract_boolean, extract_lua_number,
@@ -30,14 +31,14 @@ impl AstTransform for ConstFolder {
         match expr {
             Expression::BinaryOp(binop) => {
                 if let Some(result) =
-                    try_fold_binary(&binop.left, &binop.op, &binop.right, self.int_subtype)
+                    try_fold_binary(&binop.left, binop.op, &binop.right, self.int_subtype)
                 {
                     return result;
                 }
                 Expression::BinaryOp(binop)
             }
             Expression::UnaryOp(unop) => {
-                if let Some(result) = try_fold_unary(&unop.op, &unop.operand, self.int_subtype) {
+                if let Some(result) = try_fold_unary(unop.op, &unop.operand, self.int_subtype) {
                     return result;
                 }
                 Expression::UnaryOp(unop)
@@ -53,32 +54,32 @@ fn int_fits_f64(value: i64) -> bool {
     value.abs() <= (1i64 << 53)
 }
 
-fn fold_numeric(l: LuaNumber, op: &TokenKind, r: LuaNumber) -> Option<LuaNumber> {
+fn fold_numeric(l: LuaNumber, op: BinOp, r: LuaNumber) -> Option<LuaNumber> {
     use LuaNumber::{Float, Int};
     match (l, r) {
         (Int(a), Int(b)) => match op {
             // Integer ops wrap, matching Lua 5.3+ exactly.
-            TokenKind::Plus => Some(Int(a.wrapping_add(b))),
-            TokenKind::Minus => Some(Int(a.wrapping_sub(b))),
-            TokenKind::Star => Some(Int(a.wrapping_mul(b))),
+            BinOp::Add => Some(Int(a.wrapping_add(b))),
+            BinOp::Sub => Some(Int(a.wrapping_sub(b))),
+            BinOp::Mul => Some(Int(a.wrapping_mul(b))),
             // `/` and `^` always produce floats.
-            TokenKind::Slash => {
+            BinOp::Div => {
                 if b != 0 {
                     Some(Float(a as f64 / b as f64))
                 } else {
                     None
                 }
             }
-            TokenKind::Caret => Some(Float((a as f64).powf(b as f64))),
+            BinOp::Pow => Some(Float((a as f64).powf(b as f64))),
             // Integer % 0 and // 0 raise at runtime - never fold.
-            TokenKind::Percent => {
+            BinOp::Mod => {
                 if b != 0 {
                     Some(Int(floored_mod(a, b)))
                 } else {
                     None
                 }
             }
-            TokenKind::FloorDiv => {
+            BinOp::FloorDiv => {
                 if b != 0 {
                     Some(Int(floored_div(a, b)?))
                 } else {
@@ -124,24 +125,24 @@ fn floored_div(a: i64, b: i64) -> Option<i64> {
     }
 }
 
-fn fold_float(a: f64, op: &TokenKind, b: f64) -> Option<LuaNumber> {
+fn fold_float(a: f64, op: BinOp, b: f64) -> Option<LuaNumber> {
     let value = match op {
-        TokenKind::Plus => a + b,
-        TokenKind::Minus => a - b,
-        TokenKind::Star => a * b,
-        TokenKind::Slash if b != 0.0 => a / b,
-        TokenKind::Percent if b != 0.0 => {
+        BinOp::Add => a + b,
+        BinOp::Sub => a - b,
+        BinOp::Mul => a * b,
+        BinOp::Div if b != 0.0 => a / b,
+        BinOp::Mod if b != 0.0 => {
             // Lua uses floored modulo: a % b = a - floor(a/b) * b
             a - (a / b).floor() * b
         }
-        TokenKind::Caret => a.powf(b),
-        TokenKind::FloorDiv if b != 0.0 => (a / b).floor(),
+        BinOp::Pow => a.powf(b),
+        BinOp::FloorDiv if b != 0.0 => (a / b).floor(),
         _ => return None,
     };
     Some(LuaNumber::Float(value))
 }
 
-fn compare_numbers(l: LuaNumber, op: &TokenKind, r: LuaNumber) -> Option<bool> {
+fn compare_numbers(l: LuaNumber, op: BinOp, r: LuaNumber) -> Option<bool> {
     use LuaNumber::{Float, Int};
     use std::cmp::Ordering;
     let ordering = match (l, r) {
@@ -163,12 +164,12 @@ fn compare_numbers(l: LuaNumber, op: &TokenKind, r: LuaNumber) -> Option<bool> {
         }
     };
     Some(match op {
-        TokenKind::Less => ordering == Ordering::Less,
-        TokenKind::Greater => ordering == Ordering::Greater,
-        TokenKind::LessEqual => ordering != Ordering::Greater,
-        TokenKind::GreaterEqual => ordering != Ordering::Less,
-        TokenKind::EqualEqual => ordering == Ordering::Equal,
-        TokenKind::TildeEqual => ordering != Ordering::Equal,
+        BinOp::Lt => ordering == Ordering::Less,
+        BinOp::Gt => ordering == Ordering::Greater,
+        BinOp::Le => ordering != Ordering::Greater,
+        BinOp::Ge => ordering != Ordering::Less,
+        BinOp::Eq => ordering == Ordering::Equal,
+        BinOp::Ne => ordering != Ordering::Equal,
         _ => return None,
     })
 }
@@ -182,8 +183,8 @@ fn truncate_multi_value(expr: &Expression) -> Expression {
             Expression::Parenthesized(Box::new(ParenExpression {
                 span: sp(),
                 parens: luck_ast::shared::ContainedSpan {
-                    open: Token::new(TokenKind::LeftParen, sp()),
-                    close: Token::new(TokenKind::RightParen, sp()),
+                    open: sp(),
+                    close: sp(),
                 },
                 expr: expr.clone(),
             }))
@@ -208,7 +209,7 @@ fn extract_string_bytes(expr: &Expression) -> Option<Vec<u8>> {
 
 fn try_fold_binary(
     lhs: &Expression,
-    op: &Token,
+    op: BinOp,
     rhs: &Expression,
     int_subtype: bool,
 ) -> Option<Expression> {
@@ -216,12 +217,12 @@ fn try_fold_binary(
         extract_lua_number(lhs, int_subtype),
         extract_lua_number(rhs, int_subtype),
     ) {
-        if let Some(value) = fold_numeric(l, &op.kind, r) {
+        if let Some(value) = fold_numeric(l, op, r) {
             if let Some(folded) = make_lua_number_expr(value, int_subtype) {
                 return Some(folded);
             }
         }
-        if let Some(value) = compare_numbers(l, &op.kind, r) {
+        if let Some(value) = compare_numbers(l, op, r) {
             return Some(make_boolean_expr(value));
         }
     }
@@ -229,10 +230,10 @@ fn try_fold_binary(
     // Strings fold on their DECODED byte values - comparing or joining
     // raw escaped text conflates `"\65"` with `"\\65"` and worse.
     if let (Some(l), Some(r)) = (extract_string_bytes(lhs), extract_string_bytes(rhs)) {
-        match op.kind {
-            TokenKind::EqualEqual => return Some(make_boolean_expr(l == r)),
-            TokenKind::TildeEqual => return Some(make_boolean_expr(l != r)),
-            TokenKind::DotDot => {
+        match op {
+            BinOp::Eq => return Some(make_boolean_expr(l == r)),
+            BinOp::Ne => return Some(make_boolean_expr(l != r)),
+            BinOp::Concat => {
                 let mut joined = l;
                 joined.extend_from_slice(&r);
                 let raw = encode_string_literal(&joined);
@@ -246,15 +247,15 @@ fn try_fold_binary(
     }
 
     if let (Some(l), Some(r)) = (extract_boolean(lhs), extract_boolean(rhs)) {
-        match op.kind {
-            TokenKind::EqualEqual => return Some(make_boolean_expr(l == r)),
-            TokenKind::TildeEqual => return Some(make_boolean_expr(l != r)),
+        match op {
+            BinOp::Eq => return Some(make_boolean_expr(l == r)),
+            BinOp::Ne => return Some(make_boolean_expr(l != r)),
             _ => {}
         }
     }
 
-    match op.kind {
-        TokenKind::And => {
+    match op {
+        BinOp::And => {
             if let Some(b) = extract_boolean(lhs) {
                 if !b {
                     return Some(make_boolean_expr(false));
@@ -265,7 +266,7 @@ fn try_fold_binary(
                 return Some(lhs.clone());
             }
         }
-        TokenKind::Or => {
+        BinOp::Or => {
             if let Some(b) = extract_boolean(lhs) {
                 if b {
                     return Some(make_boolean_expr(true));
@@ -285,9 +286,9 @@ fn try_fold_binary(
     None
 }
 
-fn try_fold_unary(op: &Token, expr: &Expression, int_subtype: bool) -> Option<Expression> {
-    match op.kind {
-        TokenKind::Minus => {
+fn try_fold_unary(op: UnOp, expr: &Expression, int_subtype: bool) -> Option<Expression> {
+    match op {
+        UnOp::Neg => {
             if let Some(n) = extract_lua_number(expr, int_subtype) {
                 let negated = match n {
                     LuaNumber::Int(value) => LuaNumber::Int(value.wrapping_neg()),
@@ -297,13 +298,13 @@ fn try_fold_unary(op: &Token, expr: &Expression, int_subtype: bool) -> Option<Ex
             }
             // -(-x) -> x only when x is a number literal (metamethod/coercion safe)
             if let Expression::UnaryOp(inner) = expr
-                && matches!(inner.op.kind, TokenKind::Minus)
+                && inner.op == UnOp::Neg
                 && matches!(inner.operand, Expression::Number(_))
             {
                 return Some(inner.operand.clone());
             }
         }
-        TokenKind::Not => {
+        UnOp::Not => {
             if let Some(b) = extract_boolean(expr) {
                 return Some(make_boolean_expr(!b));
             }
@@ -315,7 +316,7 @@ fn try_fold_unary(op: &Token, expr: &Expression, int_subtype: bool) -> Option<Ex
                 return Some(make_boolean_expr(false));
             }
         }
-        TokenKind::Hash => {}
+        UnOp::Len => {}
         _ => {}
     }
     None
@@ -335,7 +336,8 @@ fn make_lua_number_expr(value: LuaNumber, int_subtype: bool) -> Option<Expressio
             if int_value < 0 {
                 return Some(Expression::UnaryOp(Box::new(UnaryOp {
                     span: sp(),
-                    op: Token::new(TokenKind::Minus, sp()),
+                    op: UnOp::Neg,
+                    op_span: sp(),
                     operand: Expression::Number(Token::new(
                         TokenKind::Number(
                             itoa::Buffer::new().format(int_value.unsigned_abs()).into(),
@@ -357,7 +359,8 @@ fn make_lua_number_expr(value: LuaNumber, int_subtype: bool) -> Option<Expressio
             if float_value == 0.0 && float_value.is_sign_negative() {
                 return Some(Expression::UnaryOp(Box::new(UnaryOp {
                     span: sp(),
-                    op: Token::new(TokenKind::Minus, sp()),
+                    op: UnOp::Neg,
+                    op_span: sp(),
                     operand: Expression::Number(Token::new(
                         TokenKind::Number(if int_subtype { "0.0" } else { "0" }.into()),
                         sp(),
@@ -375,7 +378,8 @@ fn make_lua_number_expr(value: LuaNumber, int_subtype: bool) -> Option<Expressio
             if float_value < 0.0 {
                 Some(Expression::UnaryOp(Box::new(UnaryOp {
                     span: sp(),
-                    op: Token::new(TokenKind::Minus, sp()),
+                    op: UnOp::Neg,
+                    op_span: sp(),
                     operand: number,
                 })))
             } else {
@@ -387,9 +391,9 @@ fn make_lua_number_expr(value: LuaNumber, int_subtype: bool) -> Option<Expressio
 
 fn make_boolean_expr(value: bool) -> Expression {
     if value {
-        Expression::True(Token::new(TokenKind::True, sp()))
+        Expression::True(sp())
     } else {
-        Expression::False(Token::new(TokenKind::False, sp()))
+        Expression::False(sp())
     }
 }
 

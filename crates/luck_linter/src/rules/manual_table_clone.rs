@@ -4,6 +4,7 @@ use luck_ast::shared::Block;
 use luck_ast::stmt::{Assignment, GenericFor, LocalAssignment, NumericFor, Statement};
 use luck_ast::visitor::Visitor;
 use luck_semantic::SemanticAnalysis;
+use luck_token::UnOp;
 use luck_token::{LuaVersion, Span, TokenKind};
 
 use crate::diagnostic::*;
@@ -306,7 +307,7 @@ fn length_of_identifier(expr: &Expression) -> Option<&str> {
     let Expression::UnaryOp(unop) = expr else {
         return None;
     };
-    if !matches!(unop.op.kind, TokenKind::Hash) {
+    if unop.op != UnOp::Len {
         return None;
     }
     let Expression::Var(var) = &unop.operand else {

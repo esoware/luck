@@ -7,7 +7,7 @@ use luck_ast::expr::{
     BinaryOp, Expression, FieldAccess, IfExpression, InterpolatedString, ParenExpression, UnaryOp,
     Var,
 };
-use luck_token::{Token, TokenKind};
+use luck_token::{BinOp, Token, TokenKind, UnOp};
 
 use crate::ir::*;
 use crate::quotes::normalize_quote;
@@ -16,11 +16,11 @@ use crate::tokens::write_token;
 impl Format for Expression {
     fn fmt(&self, f: &mut Formatter) {
         match self {
-            // Fixed-spelling and simple carried-text leaves.
-            Expression::Nil(token)
-            | Expression::False(token)
-            | Expression::True(token)
-            | Expression::VarArg(token) => write_token(f, token),
+            // Fixed-spelling leaves.
+            Expression::Nil(_) => token("nil").fmt(f),
+            Expression::False(_) => token("false").fmt(f),
+            Expression::True(_) => token("true").fmt(f),
+            Expression::VarArg(_) => token("...").fmt(f),
 
             Expression::Number(token) => format_number(f, token),
             Expression::StringLiteral(token) => format_string_literal(f, token),
@@ -141,11 +141,11 @@ fn format_field_access(f: &mut Formatter, access: &FieldAccess) {
 /// `fits` over its remainder - quadratic on long concat chains. Splicing them
 /// into the flat chain keeps operand/operator order (and thus the emitted
 /// text) identical while laying the chain out like a left-associative one.
-fn collect_binary_chain(binop: &BinaryOp) -> (&Expression, Vec<(&Token, &Expression)>) {
+fn collect_binary_chain(binop: &BinaryOp) -> (&Expression, Vec<(BinOp, &Expression)>) {
     let mut parts = Vec::new();
     let mut current = binop;
     loop {
-        parts.push((&current.op, &current.right));
+        parts.push((current.op, &current.right));
         match &current.left {
             Expression::BinaryOp(left_binop) => current = left_binop,
             _ => break,
@@ -153,18 +153,18 @@ fn collect_binary_chain(binop: &BinaryOp) -> (&Expression, Vec<(&Token, &Express
     }
     parts.reverse();
 
-    let mut flattened: Vec<(&Token, &Expression)> = Vec::with_capacity(parts.len());
+    let mut flattened: Vec<(BinOp, &Expression)> = Vec::with_capacity(parts.len());
     for (mut op, mut right) in parts {
         while let Expression::BinaryOp(inner) = right {
             let same_right_assoc_op = matches!(
-                (&op.kind, &inner.op.kind),
-                (TokenKind::DotDot, TokenKind::DotDot) | (TokenKind::Caret, TokenKind::Caret)
+                (op, inner.op),
+                (BinOp::Concat, BinOp::Concat) | (BinOp::Pow, BinOp::Pow)
             );
             if !same_right_assoc_op {
                 break;
             }
             flattened.push((op, &inner.left));
-            op = &inner.op;
+            op = inner.op;
             right = &inner.right;
         }
         flattened.push((op, right));
@@ -183,7 +183,7 @@ impl Format for BinaryOp {
             indent(format_with(|f| {
                 for (op, right_expr) in &chain {
                     soft_line_or_space().fmt(f);
-                    write_token(f, op);
+                    token(op.static_text()).fmt(f);
                     space().fmt(f);
                     right_expr.fmt(f);
                 }
@@ -196,18 +196,17 @@ impl Format for BinaryOp {
 
 /// `-` immediately before a nested unary `-` would form `--`, starting a
 /// comment; a space keeps the output re-parseable (`- -x`).
-fn is_double_minus_hazard(op: &Token, operand: &Expression) -> bool {
-    matches!(op.kind, TokenKind::Minus)
-        && matches!(operand, Expression::UnaryOp(inner) if matches!(inner.op.kind, TokenKind::Minus))
+fn is_double_minus_hazard(op: UnOp, operand: &Expression) -> bool {
+    op == UnOp::Neg && matches!(operand, Expression::UnaryOp(inner) if inner.op == UnOp::Neg)
 }
 
 impl Format for UnaryOp {
     fn fmt(&self, f: &mut Formatter) {
-        write_token(f, &self.op);
-        if matches!(self.op.kind, TokenKind::Not) {
+        token(self.op.static_text()).fmt(f);
+        if self.op == UnOp::Not {
             // Keyword operator: always separated from its operand.
             space().fmt(f);
-        } else if is_double_minus_hazard(&self.op, &self.operand) {
+        } else if is_double_minus_hazard(self.op, &self.operand) {
             space().fmt(f);
         }
         self.operand.fmt(f);

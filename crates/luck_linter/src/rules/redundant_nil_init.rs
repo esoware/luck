@@ -105,7 +105,6 @@ fn check_local(local: &LocalAssignment, out: &mut Vec<LintDiagnostic>) {
         .1
         .as_ref()
         .expect("kept expression is followed by a comma")
-        .span
         .start;
     let total_end = exprs
         .last_item()

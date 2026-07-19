@@ -1,7 +1,7 @@
 use luck_ast::expr::*;
 use luck_ast::shared::*;
 use luck_ast::transform::AstTransform;
-use luck_token::token::{Token, TokenKind};
+use luck_token::BinOp;
 
 use crate::tokens::default_span as sp;
 
@@ -26,14 +26,14 @@ impl AstTransform for ParenSimplifier {
             }
             Expression::BinaryOp(mut binop) => {
                 if let Expression::Parenthesized(paren) = binop.left {
-                    if can_unwrap_in_binop_lhs(&paren.expr, &binop.op) {
+                    if can_unwrap_in_binop_lhs(&paren.expr, binop.op) {
                         binop.left = paren.expr;
                     } else {
                         binop.left = make_clean_parens(paren.expr);
                     }
                 }
                 if let Expression::Parenthesized(paren) = binop.right {
-                    if can_unwrap_in_binop_rhs(&paren.expr, &binop.op) {
+                    if can_unwrap_in_binop_rhs(&paren.expr, binop.op) {
                         binop.right = paren.expr;
                     } else {
                         binop.right = make_clean_parens(paren.expr);
@@ -143,19 +143,15 @@ fn can_remove_parens(inner: &Expression) -> bool {
     }
 }
 
-fn binop_precedence(op: &Token) -> u8 {
-    op.kind
-        .binary_precedence()
-        .map_or(0, |(precedence, _)| precedence)
+fn binop_precedence(op: BinOp) -> u8 {
+    op.precedence().0
 }
 
-fn is_right_associative(op: &Token) -> bool {
-    op.kind
-        .binary_precedence()
-        .is_some_and(|(_, assoc)| assoc == luck_token::Assoc::Right)
+fn is_right_associative(op: BinOp) -> bool {
+    op.precedence().1 == luck_token::Assoc::Right
 }
 
-fn can_unwrap_in_binop_lhs(inner: &Expression, outer: &Token) -> bool {
+fn can_unwrap_in_binop_lhs(inner: &Expression, outer: BinOp) -> bool {
     match inner {
         Expression::Number(_)
         | Expression::StringLiteral(_)
@@ -167,9 +163,9 @@ fn can_unwrap_in_binop_lhs(inner: &Expression, outer: &Token) -> bool {
         | Expression::FunctionDef(_) => true,
         Expression::FunctionCall(_) => false,
         // Unary ops have lower precedence than ^, so (-a)^b needs parens
-        Expression::UnaryOp(_) => !matches!(outer.kind, TokenKind::Caret),
+        Expression::UnaryOp(_) => outer != BinOp::Pow,
         Expression::BinaryOp(binop) => {
-            let inner_prec = binop_precedence(&binop.op);
+            let inner_prec = binop_precedence(binop.op);
             let outer_prec = binop_precedence(outer);
             if inner_prec > outer_prec {
                 return true;
@@ -183,7 +179,7 @@ fn can_unwrap_in_binop_lhs(inner: &Expression, outer: &Token) -> bool {
     }
 }
 
-fn can_unwrap_in_binop_rhs(inner: &Expression, outer: &Token) -> bool {
+fn can_unwrap_in_binop_rhs(inner: &Expression, outer: BinOp) -> bool {
     match inner {
         Expression::Number(_)
         | Expression::StringLiteral(_)
@@ -196,7 +192,7 @@ fn can_unwrap_in_binop_rhs(inner: &Expression, outer: &Token) -> bool {
         Expression::FunctionCall(_) => false,
         Expression::UnaryOp(_) => true,
         Expression::BinaryOp(binop) => {
-            let inner_prec = binop_precedence(&binop.op);
+            let inner_prec = binop_precedence(binop.op);
             let outer_prec = binop_precedence(outer);
             if inner_prec > outer_prec {
                 return true;
@@ -232,8 +228,8 @@ fn make_clean_parens(expr: Expression) -> Expression {
     Expression::Parenthesized(Box::new(ParenExpression {
         span: sp(),
         parens: ContainedSpan {
-            open: Token::new(TokenKind::LeftParen, sp()),
-            close: Token::new(TokenKind::RightParen, sp()),
+            open: sp(),
+            close: sp(),
         },
         expr,
     }))

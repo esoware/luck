@@ -1,6 +1,6 @@
 [package]
 name = "luck_minifier"
-version = "2.0.0"
+version.workspace = true
 authors.workspace = true
 categories.workspace = true
 description = "AST transform pipeline for Lua/Luau minification — constant folding, dead code removal, variable renaming."

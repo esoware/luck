@@ -45,19 +45,22 @@ and feeds `luck_bundler`. On top sit `luck` (facade re-exports),
 | `luck_resolver` | Lua search paths, Luau `@aliases`, `.luaurc` chain | `lib.rs`, `luau.rs` |
 | `luck_bundler` | Require validation, dep graph (cycle detection), lazy memoizing loader emit + line maps, `ModuleId`/`ModuleInfo`, `insta` snapshots | `graph.rs`, `emitter.rs`, `module.rs` |
 | `luck_minifier` | 12-transform pipeline; passes gated by `TransformConfig` flags | `lib.rs` `minify()`, `transforms/` |
-| `luck_formatter` | oxc-style engine: `Format` trait + combinator IR (`BestFitting`, group-id conditionals), AST-in `format_block` formats synthetic ASTs (no source needed), idempotency invariant | `ir.rs`, `printer.rs`, `format_*.rs`, `comments.rs` |
+| `luck_formatter` | Wadler-style engine: `Format` trait + combinator IR (`BestFitting`, group-id conditionals), AST-in `format_block` formats synthetic ASTs (no source needed), idempotency invariant | `ir.rs`, `printer.rs`, `format_*.rs`, `comments.rs` |
 | `luck_linter` | `Rule`/`NodeRule` traits + `LintContext`, 63 stateless rules in a static `RULES` registry, node-type-bucketed parallel bus (rules declare `node_types()`; debug builds verify bucketed == brute-force dispatch), suppressions, `--fix` | `rules/`, `rule.rs`, `bus.rs` |
 | `luck_semantic` | Scope tree, refs (R/W/RW), upvalues, version- & environment-aware stdlib; typed `NonZeroU32` ids (`ScopeId`/`SymbolId`/`ReferenceId`); flat node table with parent links + per-node scope | `builder.rs`, `stdlib_model.rs`, `nodes.rs` |
 | `luck_lsp` | Library-only LSP backend (no binary); served via `luck lsp` | `backend.rs`, `serve.rs`, `providers/` |
 | `luck_cli` | Flat Clap commands (incl. `lsp`); rayon-parallel lint/fmt/check; ariadne diagnostic rendering; `ExitCode` 0/1/2; 16 MB-stack worker thread | `cli.rs`, `render.rs`, `main.rs` |
 | `luck` | Facade re-exports (no logic) | `lib.rs` |
 | `luck_testgen` | Internal harness (`publish = false`): deterministic program generator, round-trip property tests | `src/lib.rs` |
-| `luck_benchmark` | Internal (`publish = false`): per-stage criterion benches (oxc-style), run on CodSpeed in CI; real-world corpus fetched on demand from esoware/luck-bench-corpus (pinned SHA) into the gitignored `corpus/` cache | `benches/`, `src/corpus.rs` |
+| `luck_benchmark` | Internal (`publish = false`): per-stage criterion benches, run on CodSpeed in CI; real-world corpus fetched on demand from esoware/luck-bench-corpus (pinned SHA) into the gitignored `corpus/` cache | `benches/`, `src/corpus.rs` |
 
-Version bump policy per crate lives in `/bump-versions` - use the skill,
-don't guess. `editors/vscode/` holds the VS Code extension; its config
-schema (`editors/vscode/schemas/luckrc.schema.json`) is **generated** -
-see below.
+Versioning is **lockstep**: one workspace version in
+`[workspace.package]`, inherited by every publishable crate and shared
+by the VS Code extension; internal harnesses stay at 0.0.0. The bump
+procedure lives in `/bump-versions` - use the skill, don't guess.
+`editors/vscode/` holds the VS Code extension; its config schema
+(`editors/vscode/schemas/luckrc.schema.json`) is **generated** - see
+below.
 
 ## Where tests live
 
@@ -173,7 +176,7 @@ These hold across every crate. Violating any of them is a correctness bug.
     text.
 13. **No global string interner.** Identifiers stay per-token
     `CompactString`; a shared interner's lock serializes rayon workers
-    (oxc removed theirs after CPU utilization halved). Reject "intern
+    and has halved CPU utilization in comparable tools. Reject "intern
     all identifiers" proposals unless the interner is per-thread.
 
 ## Skills

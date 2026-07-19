@@ -250,6 +250,212 @@ impl TokenKind {
     }
 }
 
+/// Binary operator, stored in the AST instead of a full `Token`: the
+/// spelling is fixed per variant, so nodes carry `(BinOp, Span)` in 8+8
+/// bytes where a `Token` would cost 40.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    FloorDiv, // Lua 5.3+
+    Mod,
+    Pow,
+    Concat,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+    BitAnd, // Lua 5.3+
+    BitOr,  // Lua 5.3+
+    BitXor, // Lua 5.3+
+    Shl,    // Lua 5.3+
+    Shr,    // Lua 5.3+
+}
+
+impl BinOp {
+    #[must_use]
+    pub fn from_token_kind(kind: &TokenKind) -> Option<Self> {
+        Some(match kind {
+            TokenKind::Plus => Self::Add,
+            TokenKind::Minus => Self::Sub,
+            TokenKind::Star => Self::Mul,
+            TokenKind::Slash => Self::Div,
+            TokenKind::FloorDiv => Self::FloorDiv,
+            TokenKind::Percent => Self::Mod,
+            TokenKind::Caret => Self::Pow,
+            TokenKind::DotDot => Self::Concat,
+            TokenKind::EqualEqual => Self::Eq,
+            TokenKind::TildeEqual => Self::Ne,
+            TokenKind::Less => Self::Lt,
+            TokenKind::LessEqual => Self::Le,
+            TokenKind::Greater => Self::Gt,
+            TokenKind::GreaterEqual => Self::Ge,
+            TokenKind::And => Self::And,
+            TokenKind::Or => Self::Or,
+            TokenKind::Ampersand => Self::BitAnd,
+            TokenKind::Pipe => Self::BitOr,
+            TokenKind::Tilde => Self::BitXor,
+            TokenKind::ShiftLeft => Self::Shl,
+            TokenKind::ShiftRight => Self::Shr,
+            _ => return None,
+        })
+    }
+
+    /// The exact source spelling.
+    #[must_use]
+    pub fn static_text(self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+            Self::FloorDiv => "//",
+            Self::Mod => "%",
+            Self::Pow => "^",
+            Self::Concat => "..",
+            Self::Eq => "==",
+            Self::Ne => "~=",
+            Self::Lt => "<",
+            Self::Le => "<=",
+            Self::Gt => ">",
+            Self::Ge => ">=",
+            Self::And => "and",
+            Self::Or => "or",
+            Self::BitAnd => "&",
+            Self::BitOr => "|",
+            Self::BitXor => "~",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
+        }
+    }
+
+    /// `(precedence, associativity)`, same table as
+    /// [`TokenKind::binary_precedence`].
+    #[must_use]
+    pub fn precedence(self) -> (u8, Assoc) {
+        match self {
+            Self::Or => (1, Assoc::Left),
+            Self::And => (2, Assoc::Left),
+            Self::Lt | Self::Gt | Self::Le | Self::Ge | Self::Ne | Self::Eq => (3, Assoc::Left),
+            Self::BitOr => (4, Assoc::Left),
+            Self::BitXor => (5, Assoc::Left),
+            Self::BitAnd => (6, Assoc::Left),
+            Self::Shl | Self::Shr => (7, Assoc::Left),
+            Self::Concat => (8, Assoc::Right),
+            Self::Add | Self::Sub => (9, Assoc::Left),
+            Self::Mul | Self::Div | Self::Mod | Self::FloorDiv => (10, Assoc::Left),
+            Self::Pow => (12, Assoc::Right),
+        }
+    }
+
+    #[must_use]
+    pub fn is_comparison(self) -> bool {
+        matches!(
+            self,
+            Self::Eq | Self::Ne | Self::Lt | Self::Le | Self::Gt | Self::Ge
+        )
+    }
+}
+
+/// Unary operator (`not`, `-`, `#`, `~`), stored as `(UnOp, Span)` in the AST.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnOp {
+    Not,
+    Neg,
+    Len,
+    BitNot, // Lua 5.3+
+}
+
+impl UnOp {
+    #[must_use]
+    pub fn from_token_kind(kind: &TokenKind) -> Option<Self> {
+        Some(match kind {
+            TokenKind::Not => Self::Not,
+            TokenKind::Minus => Self::Neg,
+            TokenKind::Hash => Self::Len,
+            TokenKind::Tilde => Self::BitNot,
+            _ => return None,
+        })
+    }
+
+    /// The exact source spelling.
+    #[must_use]
+    pub fn static_text(self) -> &'static str {
+        match self {
+            Self::Not => "not",
+            Self::Neg => "-",
+            Self::Len => "#",
+            Self::BitNot => "~",
+        }
+    }
+}
+
+/// Luau compound-assignment operator, stored as `(CompoundOp, Span)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CompoundOp {
+    AddAssign,
+    SubAssign,
+    MulAssign,
+    DivAssign,
+    FloorDivAssign,
+    ModAssign,
+    PowAssign,
+    ConcatAssign,
+}
+
+impl CompoundOp {
+    #[must_use]
+    pub fn from_token_kind(kind: &TokenKind) -> Option<Self> {
+        Some(match kind {
+            TokenKind::PlusEqual => Self::AddAssign,
+            TokenKind::MinusEqual => Self::SubAssign,
+            TokenKind::StarEqual => Self::MulAssign,
+            TokenKind::SlashEqual => Self::DivAssign,
+            TokenKind::FloorDivEqual => Self::FloorDivAssign,
+            TokenKind::PercentEqual => Self::ModAssign,
+            TokenKind::CaretEqual => Self::PowAssign,
+            TokenKind::DotDotEqual => Self::ConcatAssign,
+            _ => return None,
+        })
+    }
+
+    /// The exact source spelling.
+    #[must_use]
+    pub fn static_text(self) -> &'static str {
+        match self {
+            Self::AddAssign => "+=",
+            Self::SubAssign => "-=",
+            Self::MulAssign => "*=",
+            Self::DivAssign => "/=",
+            Self::FloorDivAssign => "//=",
+            Self::ModAssign => "%=",
+            Self::PowAssign => "^=",
+            Self::ConcatAssign => "..=",
+        }
+    }
+
+    /// The underlying binary operation (`x += e` computes `x + e`).
+    #[must_use]
+    pub fn binop(self) -> BinOp {
+        match self {
+            Self::AddAssign => BinOp::Add,
+            Self::SubAssign => BinOp::Sub,
+            Self::MulAssign => BinOp::Mul,
+            Self::DivAssign => BinOp::Div,
+            Self::FloorDivAssign => BinOp::FloorDiv,
+            Self::ModAssign => BinOp::Mod,
+            Self::PowAssign => BinOp::Pow,
+            Self::ConcatAssign => BinOp::Concat,
+        }
+    }
+}
+
 /// A single token with its position in source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
@@ -333,6 +539,76 @@ mod tests {
         assert!(!TokenKind::Plus.is_stat_start());
         assert!(!TokenKind::End.is_stat_start());
         assert!(!TokenKind::Eof.is_stat_start());
+    }
+
+    #[test]
+    fn binop_matches_token_kind_precedence() {
+        let kinds = [
+            TokenKind::Or,
+            TokenKind::And,
+            TokenKind::Less,
+            TokenKind::Greater,
+            TokenKind::LessEqual,
+            TokenKind::GreaterEqual,
+            TokenKind::TildeEqual,
+            TokenKind::EqualEqual,
+            TokenKind::Pipe,
+            TokenKind::Tilde,
+            TokenKind::Ampersand,
+            TokenKind::ShiftLeft,
+            TokenKind::ShiftRight,
+            TokenKind::DotDot,
+            TokenKind::Plus,
+            TokenKind::Minus,
+            TokenKind::Star,
+            TokenKind::Slash,
+            TokenKind::Percent,
+            TokenKind::FloorDiv,
+            TokenKind::Caret,
+        ];
+        for kind in kinds {
+            let op = BinOp::from_token_kind(&kind).expect("binary operator kind");
+            assert_eq!(Some(op.precedence()), kind.binary_precedence(), "{kind:?}");
+        }
+        assert_eq!(BinOp::from_token_kind(&TokenKind::Not), None);
+        assert_eq!(BinOp::from_token_kind(&TokenKind::Equal), None);
+    }
+
+    #[test]
+    fn unop_and_compound_round_trip() {
+        for (kind, expected) in [
+            (TokenKind::Not, "not"),
+            (TokenKind::Minus, "-"),
+            (TokenKind::Hash, "#"),
+            (TokenKind::Tilde, "~"),
+        ] {
+            let op = UnOp::from_token_kind(&kind).expect("unary operator kind");
+            assert_eq!(op.static_text(), expected);
+        }
+        for (kind, expected, folded) in [
+            (TokenKind::PlusEqual, "+=", BinOp::Add),
+            (TokenKind::MinusEqual, "-=", BinOp::Sub),
+            (TokenKind::StarEqual, "*=", BinOp::Mul),
+            (TokenKind::SlashEqual, "/=", BinOp::Div),
+            (TokenKind::FloorDivEqual, "//=", BinOp::FloorDiv),
+            (TokenKind::PercentEqual, "%=", BinOp::Mod),
+            (TokenKind::CaretEqual, "^=", BinOp::Pow),
+            (TokenKind::DotDotEqual, "..=", BinOp::Concat),
+        ] {
+            let op = CompoundOp::from_token_kind(&kind).expect("compound operator kind");
+            assert_eq!(op.static_text(), expected);
+            assert_eq!(op.binop(), folded);
+        }
+    }
+
+    #[test]
+    fn binop_comparison_classification() {
+        assert!(BinOp::Eq.is_comparison());
+        assert!(BinOp::Lt.is_comparison());
+        assert!(BinOp::Ge.is_comparison());
+        assert!(!BinOp::Add.is_comparison());
+        assert!(!BinOp::And.is_comparison());
+        assert!(!BinOp::Concat.is_comparison());
     }
 
     #[test]

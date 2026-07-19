@@ -1,5 +1,4 @@
-//! Deterministic bench inputs, shaped like oxc's `TestFiles` so bench
-//! bodies stay close to theirs. Two generated files exercise the Lua 5.4
+//! Deterministic bench inputs. Two generated files exercise the Lua 5.4
 //! and Luau grammars at identical seeds; the idiomatic fixtures supply a
 //! small real-code sample.
 

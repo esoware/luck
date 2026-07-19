@@ -1,6 +1,6 @@
 [package]
 name = "luck_linter"
-version = "0.11.0"
+version.workspace = true
 authors.workspace = true
 categories.workspace = true
 description = "Lua/Luau linter with scope-aware analysis and auto-fix support"

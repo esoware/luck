@@ -4,21 +4,24 @@ use crate::expr::Expression;
 use crate::stmt::{LastStatement, Statement};
 use crate::types::{GenericTypeList, Type};
 
-/// A sequence of items separated by tokens (typically commas).
+/// A sequence of items separated by fixed tokens (typically commas).
 ///
-/// Each item carries its FOLLOWING separator; the final item's is
-/// `None` (a `Some` on the final item preserves a dangling separator
-/// from parse recovery). Same shape as table-constructor fields.
+/// Each item carries the SPAN of its following separator; the final
+/// item's is `None` (a `Some` on the final item preserves a dangling
+/// separator from parse recovery). Same shape as table-constructor
+/// fields. Separator spelling is implied by context, so only the span
+/// is stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Punctuated<T> {
-    pub items: Vec<(T, Option<Token>)>,
+    pub items: Vec<(T, Option<Span>)>,
 }
 
-/// Paired delimiters (parens, brackets, braces).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Paired delimiter spans (parens, brackets, braces, angles). The
+/// delimiter spelling is implied by the owning node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContainedSpan {
-    pub open: Token,
-    pub close: Token,
+    pub open: Span,
+    pub close: Span,
 }
 
 /// Function body: params + optional return type + block + end.
@@ -30,10 +33,10 @@ pub struct FunctionBody {
     pub params_parens: ContainedSpan,
     pub params: Punctuated<Parameter>,
     pub vararg: Option<VarArgParam>,
-    /// Luau: `: T` return annotation after `)` - (colon, type).
-    pub return_type: Option<(Token, Type)>,
+    /// Luau: `: T` return annotation after `)` - (colon span, type).
+    pub return_type: Option<(Span, Type)>,
     pub block: Block,
-    pub end_token: Token,
+    pub end_token: Span,
 }
 
 /// A typed name: function parameter or generic-for loop binding.
@@ -41,18 +44,18 @@ pub struct FunctionBody {
 pub struct Parameter {
     pub span: Span,
     pub name: Token,
-    /// Luau: `: T` - (colon, type).
-    pub type_annotation: Option<(Token, Type)>,
+    /// Luau: `: T` - (colon span, type).
+    pub type_annotation: Option<(Span, Type)>,
 }
 
 /// Vararg parameter (`...` or `...name` in Lua 5.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VarArgParam {
     pub span: Span,
-    pub dots: Token,
+    pub dots: Span,
     pub name: Option<Token>,
-    /// Luau: `: T` - (colon, type). The type may be a pack (`...number`).
-    pub type_annotation: Option<(Token, Type)>,
+    /// Luau: `: T` - (colon span, type). The type may be a pack (`...number`).
+    pub type_annotation: Option<(Span, Type)>,
 }
 
 /// Block of statements with optional last statement.
@@ -70,13 +73,13 @@ pub enum Field {
         span: Span,
         brackets: ContainedSpan,
         key: Expression,
-        equal: Token,
+        equal: Span,
         value: Expression,
     },
     Named {
         span: Span,
         name: Token,
-        equal: Token,
+        equal: Span,
         value: Expression,
     },
     Positional {

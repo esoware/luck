@@ -1,5 +1,6 @@
 use luck_ast::Expression;
 use luck_ast::node::{AstTypesBitset, NodeType};
+use luck_token::UnOp;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -30,7 +31,7 @@ fn extract_number(expr: &Expression, source: &str) -> Option<f64> {
         let text = &source[token.span.start as usize..token.span.end as usize];
         text.parse().ok()
     } else if let Expression::UnaryOp(unop) = expr {
-        if let luck_token::TokenKind::Minus = &unop.op.kind {
+        if let UnOp::Neg = unop.op {
             extract_number(&unop.operand, source).map(|n| -n)
         } else {
             None

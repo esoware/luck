@@ -1,6 +1,6 @@
 [package]
 name = "luck_core"
-version = "1.6.0"
+version.workspace = true
 authors.workspace = true
 categories.workspace = true
 description = "Shared types, configuration, diagnostics, and target definitions for luck."

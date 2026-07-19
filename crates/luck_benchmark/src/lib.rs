@@ -1,6 +1,5 @@
 //! Internal benchmark harness. One criterion bench binary per pipeline
-//! stage, mirroring oxc's `tasks/benchmark` layout so their bench code
-//! can be lifted with minimal adaptation. Run locally with
+//! stage, so each stage's numbers move independently. Run locally with
 //! `cargo bench -p luck_benchmark`; CI runs the same binaries under
 //! CodSpeed via the `codspeed` feature.
 

@@ -1,5 +1,5 @@
 use luck_ast::Expression;
-use luck_token::TokenKind;
+use luck_token::BinOp;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -50,11 +50,11 @@ impl NodeRule for MisleadingAndOr {
     }
     fn on_expression(&self, expr: &Expression, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Expression::BinaryOp(outer) = expr
-            && matches!(outer.op.kind, TokenKind::Or)
+            && matches!(outer.op, BinOp::Or)
         {
             let lhs = unparen(&outer.left);
             if let Expression::BinaryOp(inner) = lhs
-                && matches!(inner.op.kind, TokenKind::And)
+                && matches!(inner.op, BinOp::And)
                 && is_falsy_literal(&inner.right)
             {
                 out.push(

@@ -1,5 +1,5 @@
-//! Byte-level output builder for the code emitters, modeled on oxc's
-//! `CodeBuffer`. Skips per-push UTF-8 machinery for the ASCII punctuation
+//! Byte-level output builder for the code emitters. Skips per-push
+//! UTF-8 machinery for the ASCII punctuation
 //! that dominates generated code while holding a UTF-8 invariant so the
 //! final `String` conversion is zero-copy.
 

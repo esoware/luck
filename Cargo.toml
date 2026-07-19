@@ -3,6 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
+version = "0.1.0"
 authors = ["Esoware"]
 categories = ["compilers", "command-line-utilities"]
 description = "Lua/Luau bundler and minifier — custom parser, multi-version support, zero runtime overhead."
@@ -31,20 +32,20 @@ insta = { version = "1", features = ["glob"] }
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
-luck = { path = "crates/luck" }
-luck_core = { path = "crates/luck_core" }
-luck_resolver = { path = "crates/luck_resolver" }
-luck_bundler = { path = "crates/luck_bundler" }
-luck_minifier = { path = "crates/luck_minifier" }
-luck_token = { path = "crates/luck_token" }
-luck_lexer = { path = "crates/luck_lexer" }
-luck_ast = { path = "crates/luck_ast" }
-luck_parser = { path = "crates/luck_parser" }
-luck_codegen = { path = "crates/luck_codegen" }
-luck_formatter = { path = "crates/luck_formatter" }
-luck_semantic = { path = "crates/luck_semantic" }
-luck_linter = { path = "crates/luck_linter" }
-luck_lsp = { path = "crates/luck_lsp" }
+luck = { version = "0.1.0", path = "crates/luck" }
+luck_core = { version = "0.1.0", path = "crates/luck_core" }
+luck_resolver = { version = "0.1.0", path = "crates/luck_resolver" }
+luck_bundler = { version = "0.1.0", path = "crates/luck_bundler" }
+luck_minifier = { version = "0.1.0", path = "crates/luck_minifier" }
+luck_token = { version = "0.1.0", path = "crates/luck_token" }
+luck_lexer = { version = "0.1.0", path = "crates/luck_lexer" }
+luck_ast = { version = "0.1.0", path = "crates/luck_ast" }
+luck_parser = { version = "0.1.0", path = "crates/luck_parser" }
+luck_codegen = { version = "0.1.0", path = "crates/luck_codegen" }
+luck_formatter = { version = "0.1.0", path = "crates/luck_formatter" }
+luck_semantic = { version = "0.1.0", path = "crates/luck_semantic" }
+luck_linter = { version = "0.1.0", path = "crates/luck_linter" }
+luck_lsp = { version = "0.1.0", path = "crates/luck_lsp" }
 luck_testgen = { path = "crates/luck_testgen" }
 criterion2 = { version = "3", default-features = false }
 ureq = "3"

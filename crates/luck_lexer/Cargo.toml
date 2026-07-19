@@ -1,6 +1,6 @@
 [package]
 name = "luck_lexer"
-version = "0.4.0"
+version.workspace = true
 authors.workspace = true
 categories.workspace = true
 description = "Single-pass lexer for Lua 5.1–5.5 and Luau, version-gated token production."

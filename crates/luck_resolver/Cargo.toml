@@ -1,6 +1,6 @@
 [package]
 name = "luck_resolver"
-version = "1.1.0"
+version.workspace = true
 authors.workspace = true
 categories.workspace = true
 description = "Module resolution for Lua 5.x search paths and Luau relative imports with @aliases."

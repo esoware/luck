@@ -1,5 +1,5 @@
 use luck_ast::Expression;
-use luck_token::TokenKind;
+use luck_token::BinOp;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -28,7 +28,7 @@ impl Rule for CompareNan {
 
 fn is_nan_expr(expr: &Expression, source: &str) -> bool {
     if let Expression::BinaryOp(binop) = expr
-        && let TokenKind::Slash = &binop.op.kind
+        && binop.op == BinOp::Div
     {
         return is_zero(&binop.left, source) && is_zero(&binop.right, source);
     }
@@ -50,7 +50,7 @@ impl NodeRule for CompareNan {
     }
     fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Expression::BinaryOp(binop) = expr
-            && matches!(binop.op.kind, TokenKind::EqualEqual | TokenKind::TildeEqual)
+            && matches!(binop.op, BinOp::Eq | BinOp::Ne)
             && (is_nan_expr(&binop.left, ctx.source) || is_nan_expr(&binop.right, ctx.source))
         {
             out.push(

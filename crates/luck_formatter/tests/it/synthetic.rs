@@ -6,7 +6,7 @@
 
 use luck_ast::Block;
 use luck_ast::synth::{FnSig, Synth, SynthField, SynthTypeField, TypeFieldAccess};
-use luck_token::{LuaVersion, TokenKind};
+use luck_token::{BinOp, LuaVersion, UnOp};
 
 use luck_formatter::{Comments, FormatOptions, blocks_equiv, format_block};
 
@@ -112,30 +112,26 @@ fn precedence_parens_roundtrip() {
     let synth = Synth::new();
     // (a + b) * c
     let grouped_sum = synth.binop(
-        synth.binop(synth.name_expr("a"), TokenKind::Plus, synth.name_expr("b")),
-        TokenKind::Star,
+        synth.binop(synth.name_expr("a"), BinOp::Add, synth.name_expr("b")),
+        BinOp::Mul,
         synth.name_expr("c"),
     );
     // a - (b - c)
     let right_sub = synth.binop(
         synth.name_expr("a"),
-        TokenKind::Minus,
-        synth.binop(synth.name_expr("b"), TokenKind::Minus, synth.name_expr("c")),
+        BinOp::Sub,
+        synth.binop(synth.name_expr("b"), BinOp::Sub, synth.name_expr("c")),
     );
     // (-a) ^ b
     let unary_power = synth.binop(
-        synth.unop(TokenKind::Minus, synth.name_expr("a")),
-        TokenKind::Caret,
+        synth.unop(UnOp::Neg, synth.name_expr("a")),
+        BinOp::Pow,
         synth.name_expr("b"),
     );
     // (a .. b) .. c
     let left_concat = synth.binop(
-        synth.binop(
-            synth.name_expr("a"),
-            TokenKind::DotDot,
-            synth.name_expr("b"),
-        ),
-        TokenKind::DotDot,
+        synth.binop(synth.name_expr("a"), BinOp::Concat, synth.name_expr("b")),
+        BinOp::Concat,
         synth.name_expr("c"),
     );
     let ret = synth.return_(vec![grouped_sum, right_sub, unary_power, left_concat]);
@@ -159,7 +155,7 @@ fn if_expression_operand_roundtrips() {
         vec![],
         synth.number("2"),
     );
-    let guarded = synth.binop(synth.name_expr("a"), TokenKind::Or, if_expr);
+    let guarded = synth.binop(synth.name_expr("a"), BinOp::Or, if_expr);
     let block = synth.block(vec![], Some(synth.return_(vec![guarded])));
     let output = assert_roundtrips(&block);
     assert!(

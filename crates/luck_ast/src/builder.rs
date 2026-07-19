@@ -1,4 +1,4 @@
-use luck_token::{Span, Token};
+use luck_token::Span;
 
 use crate::expr::*;
 use crate::shared::*;
@@ -48,15 +48,15 @@ impl<T> Punctuated<T> {
         Self { items: Vec::new() }
     }
 
-    /// Append an item; `separator` is the token FOLLOWING it, if any.
-    pub fn push(&mut self, item: T, separator: Option<Token>) {
+    /// Append an item; `separator` is the span of the token FOLLOWING it, if any.
+    pub fn push(&mut self, item: T, separator: Option<Span>) {
         self.items.push((item, separator));
     }
 
     /// Build from parser-style accumulation: every item in `pairs` was
     /// followed by its separator, then an optional final item.
-    pub fn from_pairs(pairs: Vec<(T, Token)>, last: Option<T>) -> Self {
-        let mut items: Vec<(T, Option<Token>)> = pairs
+    pub fn from_pairs(pairs: Vec<(T, Span)>, last: Option<T>) -> Self {
+        let mut items: Vec<(T, Option<Span>)> = pairs
             .into_iter()
             .map(|(item, sep)| (item, Some(sep)))
             .collect();
@@ -88,7 +88,7 @@ impl Statement {
             Statement::GlobalStar(s) => s.span,
             Statement::CompoundAssignment(s) => s.span,
             Statement::TypeDeclaration(s) => s.span,
-            Statement::EmptyStatement(t) | Statement::Break(t) => t.span,
+            Statement::EmptyStatement(span) | Statement::Break(span) => *span,
             Statement::Error(span) => *span,
         }
     }
@@ -98,7 +98,7 @@ impl LastStatement {
     pub fn span(&self) -> Span {
         match self {
             LastStatement::Return(s) => s.span,
-            LastStatement::Break(t) | LastStatement::Continue(t) => t.span,
+            LastStatement::Break(span) | LastStatement::Continue(span) => *span,
             LastStatement::Error(span) => *span,
         }
     }
@@ -107,12 +107,11 @@ impl LastStatement {
 impl Expression {
     pub fn span(&self) -> Span {
         match self {
-            Expression::Nil(t)
-            | Expression::False(t)
-            | Expression::True(t)
-            | Expression::Number(t)
-            | Expression::StringLiteral(t)
-            | Expression::VarArg(t) => t.span,
+            Expression::Nil(span)
+            | Expression::False(span)
+            | Expression::True(span)
+            | Expression::VarArg(span) => *span,
+            Expression::Number(t) | Expression::StringLiteral(t) => t.span,
             Expression::FunctionDef(e) => e.span,
             Expression::Var(e) => e.span(),
             Expression::FunctionCall(e) => e.span,

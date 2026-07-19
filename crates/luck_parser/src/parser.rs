@@ -98,18 +98,33 @@ impl Parser {
         }
     }
 
-    pub fn check_identifier(&self) -> bool {
-        matches!(self.peek(), TokenKind::Identifier(_))
+    /// Consume the current token, keeping only its span. For fixed-spelling
+    /// tokens the AST stores bare spans, so the payload writeback `advance`
+    /// does is unnecessary.
+    #[inline]
+    pub fn advance_span(&mut self) -> Span {
+        if self.pos < self.tokens.len() {
+            let span = self.tokens[self.pos].span;
+            self.pos += 1;
+            span
+        } else {
+            self.eof_span()
+        }
     }
 
-    pub fn expect(&mut self, kind: &TokenKind) -> Result<Token, ParseError> {
+    /// `expect` for fixed-spelling tokens: returns only the span.
+    pub fn expect_span(&mut self, kind: &TokenKind) -> Result<Span, ParseError> {
         if std::mem::discriminant(self.peek()) == std::mem::discriminant(kind) {
-            Ok(self.advance())
+            Ok(self.advance_span())
         } else {
             let span = self.current_span();
             let message = format!("expected {}, found {}", kind, self.peek());
             Err(Self::make_error(span, message))
         }
+    }
+
+    pub fn check_identifier(&self) -> bool {
+        matches!(self.peek(), TokenKind::Identifier(_))
     }
 
     pub fn expect_identifier(&mut self) -> Result<Token, ParseError> {
@@ -223,11 +238,11 @@ impl Parser {
             while matches!(self.peek(), TokenKind::Semicolon) {
                 if self.version.has_empty_statement() {
                     // 5.2+: semicolons are empty statements
-                    let token = self.advance();
-                    stmts.push(luck_ast::Statement::EmptyStatement(token));
+                    let span = self.advance_span();
+                    stmts.push(luck_ast::Statement::EmptyStatement(span));
                 } else {
                     // 5.1: just consume semicolons as separators
-                    self.advance();
+                    self.advance_span();
                 }
             }
 
@@ -237,10 +252,10 @@ impl Parser {
                     break;
                 }
                 TokenKind::Break if self.version.break_is_last_stat_only() => {
-                    let token = self.advance();
-                    last_stmt = Some(Box::new(luck_ast::LastStatement::Break(token)));
+                    let span = self.advance_span();
+                    last_stmt = Some(Box::new(luck_ast::LastStatement::Break(span)));
                     if matches!(self.peek(), TokenKind::Semicolon) {
-                        self.advance();
+                        self.advance_span();
                     }
                     break;
                 }
@@ -256,10 +271,10 @@ impl Parser {
                         && name == "continue"
                         && is_continue_context(self.peek_at(1)) =>
                 {
-                    let token = self.advance();
-                    last_stmt = Some(Box::new(luck_ast::LastStatement::Continue(token)));
+                    let span = self.advance_span();
+                    last_stmt = Some(Box::new(luck_ast::LastStatement::Continue(span)));
                     if matches!(self.peek(), TokenKind::Semicolon) {
-                        self.advance();
+                        self.advance_span();
                     }
                     break;
                 }
@@ -318,27 +333,27 @@ impl Parser {
     /// Consume a closing `>` in type context, recovering if absent.
     /// Adjacent tokens lex greedily - `Foo<Bar<T>>` produces `ShiftRight`,
     /// `Foo<T>=x` produces `GreaterEqual` - so those are split: the first
-    /// `>` is returned and the remainder stays current.
-    pub(crate) fn consume_type_close_angle(&mut self) -> Token {
+    /// `>`'s span is returned and the remainder stays current.
+    pub(crate) fn consume_type_close_angle(&mut self) -> Span {
         match self.peek() {
-            TokenKind::Greater => self.advance(),
+            TokenKind::Greater => self.advance_span(),
             TokenKind::ShiftRight => {
                 let span = self.tokens[self.pos].span;
                 self.tokens[self.pos] =
                     Token::new(TokenKind::Greater, Span::new(span.start + 1, span.end));
-                Token::new(TokenKind::Greater, Span::new(span.start, span.start + 1))
+                Span::new(span.start, span.start + 1)
             }
             TokenKind::GreaterEqual => {
                 let span = self.tokens[self.pos].span;
                 self.tokens[self.pos] =
                     Token::new(TokenKind::Equal, Span::new(span.start + 1, span.end));
-                Token::new(TokenKind::Greater, Span::new(span.start, span.start + 1))
+                Span::new(span.start, span.start + 1)
             }
             _ => {
                 let span = self.current_span();
                 let message = format!("expected > to close generics, found {}", self.peek());
                 self.error(span, message);
-                Token::new(TokenKind::Greater, span)
+                span
             }
         }
     }
@@ -349,7 +364,7 @@ impl Parser {
         let mut current = self.parse_expression(0);
 
         while matches!(self.peek(), TokenKind::Comma) {
-            let comma = self.advance();
+            let comma = self.advance_span();
             let next = self.parse_expression(0);
             pairs.push((current, comma));
             current = next;

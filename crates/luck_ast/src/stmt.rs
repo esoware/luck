@@ -1,4 +1,4 @@
-use luck_token::{Span, Token};
+use luck_token::{CompoundOp, Span, Token};
 
 use crate::expr::{Expression, FunctionCall, Var};
 use crate::shared::{Block, FunctionBody, Parameter, Punctuated};
@@ -18,14 +18,14 @@ pub enum Statement {
     FunctionDecl(Box<FunctionDecl>),
     LocalFunction(Box<LocalFunction>),
     LocalAssignment(Box<LocalAssignment>),
-    EmptyStatement(Token),
+    EmptyStatement(Span),
     Goto(Box<GotoStatement>),
     Label(Box<LabelStatement>),
     GlobalDeclaration(Box<GlobalDeclaration>),
     GlobalFunction(Box<GlobalFunction>),
     GlobalStar(Box<GlobalStar>),
     /// Lua 5.2+: `break` as a regular statement (not just last statement)
-    Break(Token),
+    Break(Span),
     CompoundAssignment(Box<CompoundAssignment>),
     TypeDeclaration(Box<TypeDeclaration>),
     Error(Span),
@@ -35,8 +35,8 @@ pub enum Statement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LastStatement {
     Return(Box<ReturnStatement>),
-    Break(Token),
-    Continue(Token),
+    Break(Span),
+    Continue(Span),
     Error(Span),
 }
 
@@ -45,7 +45,7 @@ pub enum LastStatement {
 pub struct Assignment {
     pub span: Span,
     pub targets: Punctuated<Var>,
-    pub equal: Token,
+    pub equal: Span,
     pub values: Punctuated<Expression>,
 }
 
@@ -60,29 +60,29 @@ pub struct FunctionCallStmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoBlock {
     pub span: Span,
-    pub do_token: Token,
+    pub do_token: Span,
     pub block: Block,
-    pub end_token: Token,
+    pub end_token: Span,
 }
 
 /// `while condition do ... end` loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhileLoop {
     pub span: Span,
-    pub while_token: Token,
+    pub while_token: Span,
     pub condition: Expression,
-    pub do_token: Token,
+    pub do_token: Span,
     pub block: Block,
-    pub end_token: Token,
+    pub end_token: Span,
 }
 
 /// `repeat ... until condition` loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepeatLoop {
     pub span: Span,
-    pub repeat_token: Token,
+    pub repeat_token: Span,
     pub block: Block,
-    pub until_token: Token,
+    pub until_token: Span,
     pub condition: Expression,
 }
 
@@ -90,22 +90,22 @@ pub struct RepeatLoop {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IfStatement {
     pub span: Span,
-    pub if_token: Token,
+    pub if_token: Span,
     pub condition: Expression,
-    pub then_token: Token,
+    pub then_token: Span,
     pub block: Block,
     pub elseif_clauses: Vec<ElseIfClause>,
     pub else_clause: Option<ElseClause>,
-    pub end_token: Token,
+    pub end_token: Span,
 }
 
 /// An `elseif condition then ...` clause within an if statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElseIfClause {
     pub span: Span,
-    pub elseif_token: Token,
+    pub elseif_token: Span,
     pub condition: Expression,
-    pub then_token: Token,
+    pub then_token: Span,
     pub block: Block,
 }
 
@@ -113,7 +113,7 @@ pub struct ElseIfClause {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElseClause {
     pub span: Span,
-    pub else_token: Token,
+    pub else_token: Span,
     pub block: Block,
 }
 
@@ -121,31 +121,31 @@ pub struct ElseClause {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NumericFor {
     pub span: Span,
-    pub for_token: Token,
+    pub for_token: Span,
     pub name: Token,
-    /// Luau: `: T` on the loop variable - (colon, type).
-    pub type_annotation: Option<(Token, Type)>,
-    pub equal: Token,
+    /// Luau: `: T` on the loop variable - (colon span, type).
+    pub type_annotation: Option<(Span, Type)>,
+    pub equal: Span,
     pub start: Expression,
-    pub comma1: Token,
+    pub comma1: Span,
     pub limit: Expression,
-    pub comma2_and_step: Option<(Token, Expression)>,
-    pub do_token: Token,
+    pub comma2_and_step: Option<(Span, Expression)>,
+    pub do_token: Span,
     pub block: Block,
-    pub end_token: Token,
+    pub end_token: Span,
 }
 
 /// `for names in exprs do ... end` generic iterator loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericFor {
     pub span: Span,
-    pub for_token: Token,
+    pub for_token: Span,
     pub names: Punctuated<Parameter>,
-    pub in_token: Token,
+    pub in_token: Span,
     pub exprs: Punctuated<Expression>,
-    pub do_token: Token,
+    pub do_token: Span,
     pub block: Block,
-    pub end_token: Token,
+    pub end_token: Span,
 }
 
 /// Dotted function name with optional method: `a.b.c:method`.
@@ -153,8 +153,9 @@ pub struct GenericFor {
 pub struct FuncName {
     pub span: Span,
     pub names: Vec<Token>,
-    pub dots: Vec<Token>,
-    pub method: Option<(Token, Token)>,
+    pub dots: Vec<Span>,
+    /// `:method` - (colon span, method name).
+    pub method: Option<(Span, Token)>,
 }
 
 /// Luau function attribute: `@native`, `@checked`, `@deprecated`, etc.
@@ -163,7 +164,7 @@ pub struct FuncName {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionAttribute {
     pub span: Span,
-    pub at_token: Token,
+    pub at_token: Span,
     pub name: Token,
 }
 
@@ -173,7 +174,7 @@ pub struct FunctionDecl {
     pub span: Span,
     /// Luau: `@attr` list preceding `function`. Empty outside Luau.
     pub attributes: Vec<FunctionAttribute>,
-    pub function_token: Token,
+    pub function_token: Span,
     pub name: FuncName,
     pub body: FunctionBody,
 }
@@ -184,19 +185,21 @@ pub struct LocalFunction {
     pub span: Span,
     /// Luau: `@attr` list preceding `local function`. Empty outside Luau.
     pub attributes: Vec<FunctionAttribute>,
-    pub local_token: Token,
-    pub function_token: Token,
+    pub local_token: Span,
+    pub function_token: Span,
     pub name: Token,
     pub body: FunctionBody,
 }
 
-/// Lua 5.4 local variable attribute: `<const>` or `<close>`.
+/// Lua 5.4 local variable attribute: `<const>` or `<close>`. The name
+/// stays a token: the parser accepts any identifier there and diagnoses
+/// unknown attribute names downstream with the original spelling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attribute {
     pub span: Span,
-    pub open: Token,
+    pub open: Span,
     pub name: Token,
-    pub close: Token,
+    pub close: Span,
 }
 
 /// One declared name with its optional attribute: `x <const>`.
@@ -206,9 +209,9 @@ pub struct Attribute {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttributedName {
     pub name: Token,
-    /// Luau: `: T` annotation - (colon, type). Mutually exclusive with
+    /// Luau: `: T` annotation - (colon span, type). Mutually exclusive with
     /// `attrib` in practice: attributes are Lua 5.4+, annotations Luau.
-    pub type_annotation: Option<(Token, Type)>,
+    pub type_annotation: Option<(Span, Type)>,
     pub attrib: Option<Attribute>,
 }
 
@@ -216,16 +219,16 @@ pub struct AttributedName {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalAssignment {
     pub span: Span,
-    pub local_token: Token,
+    pub local_token: Span,
     pub names: Punctuated<AttributedName>,
-    pub equal_and_exprs: Option<(Token, Punctuated<Expression>)>,
+    pub equal_and_exprs: Option<(Span, Punctuated<Expression>)>,
 }
 
 /// `goto name` statement (Lua 5.2+).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GotoStatement {
     pub span: Span,
-    pub goto_token: Token,
+    pub goto_token: Span,
     pub name: Token,
 }
 
@@ -233,18 +236,18 @@ pub struct GotoStatement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelStatement {
     pub span: Span,
-    pub colons_open: Token,
+    pub colons_open: Span,
     pub name: Token,
-    pub colons_close: Token,
+    pub colons_close: Span,
 }
 
 /// `return [exprs]` statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReturnStatement {
     pub span: Span,
-    pub return_token: Token,
+    pub return_token: Span,
     pub exprs: Punctuated<Expression>,
-    pub semicolon: Option<Token>,
+    pub semicolon: Option<Span>,
 }
 
 /// Luau compound assignment (e.g. `x += 1`)
@@ -252,7 +255,8 @@ pub struct ReturnStatement {
 pub struct CompoundAssignment {
     pub span: Span,
     pub var: Var,
-    pub op: Token,
+    pub op: CompoundOp,
+    pub op_span: Span,
     pub expr: Expression,
 }
 
@@ -262,14 +266,14 @@ pub struct CompoundAssignment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDeclaration {
     pub span: Span,
-    pub export_token: Option<Token>,
-    pub type_token: Token,
+    pub export_token: Option<Span>,
+    pub type_token: Span,
     /// `function` keyword - present only for `type function Name funcbody`.
-    pub function_token: Option<Token>,
+    pub function_token: Option<Span>,
     pub name: Token,
     pub generics: Option<Box<GenericTypeList>>,
     /// `=` - present only for the alias form.
-    pub equal: Option<Token>,
+    pub equal: Option<Span>,
     pub type_value: TypeDeclarationValue,
 }
 
@@ -287,7 +291,7 @@ pub enum TypeDeclarationValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalDeclaration {
     pub span: Span,
-    pub global_token: Token,
+    pub global_token: Span,
     pub names: Punctuated<AttributedName>,
 }
 
@@ -295,8 +299,8 @@ pub struct GlobalDeclaration {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalFunction {
     pub span: Span,
-    pub global_token: Token,
-    pub function_token: Token,
+    pub global_token: Span,
+    pub function_token: Span,
     pub name: Token,
     pub body: FunctionBody,
 }
@@ -305,7 +309,7 @@ pub struct GlobalFunction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalStar {
     pub span: Span,
-    pub global_token: Token,
+    pub global_token: Span,
     pub attrib: Option<Attribute>,
-    pub star: Token,
+    pub star: Span,
 }

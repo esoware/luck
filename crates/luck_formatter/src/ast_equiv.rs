@@ -11,7 +11,7 @@ use luck_ast::types::{
     FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, NamedType, TableType, Type,
     TypeArgs, TypeField,
 };
-use luck_token::Token;
+use luck_token::{Span, Token};
 
 /// First point of divergence between two ASTs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,14 +287,14 @@ fn expr_eq(left: &Expression, right: &Expression, path: &str) -> Result<(), AstD
         }
         (Expression::Var(a), Expression::Var(b)) => var_eq(a, b, path),
         (Expression::BinaryOp(a), Expression::BinaryOp(b)) => {
-            if a.op.kind != b.op.kind {
+            if a.op != b.op {
                 return Err(AstDiff::new(path, "binary op differs"));
             }
             expr_eq(&a.left, &b.left, &child(path, "lhs"))?;
             expr_eq(&a.right, &b.right, &child(path, "rhs"))
         }
         (Expression::UnaryOp(a), Expression::UnaryOp(b)) => {
-            if a.op.kind != b.op.kind {
+            if a.op != b.op {
                 return Err(AstDiff::new(path, "unary op differs"));
             }
             expr_eq(&a.operand, &b.operand, &child(path, "operand"))
@@ -469,8 +469,8 @@ fn param_eq(left: &Parameter, right: &Parameter, path: &str) -> Result<(), AstDi
 /// Compare an optional `: Type` annotation. Presence must agree on both
 /// sides - a dropped annotation is data loss, not a formatter tolerance.
 fn type_annotation_eq(
-    left: &Option<(Token, Type)>,
-    right: &Option<(Token, Type)>,
+    left: &Option<(Span, Type)>,
+    right: &Option<(Span, Type)>,
     path: &str,
 ) -> Result<(), AstDiff> {
     match (left, right) {

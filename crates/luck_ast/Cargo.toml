@@ -1,6 +1,6 @@
 [package]
 name = "luck_ast"
-version = "0.6.0"
+version.workspace = true
 authors.workspace = true
 categories.workspace = true
 description = "AST node types, visitor pattern, and mutable transform infrastructure for Lua/Luau."

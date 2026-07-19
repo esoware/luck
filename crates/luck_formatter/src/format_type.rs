@@ -5,7 +5,7 @@
 //! synthetic (decompiler-built) types format identically to parsed ones.
 
 use luck_ast::types::*;
-use luck_token::Token;
+use luck_token::Span;
 
 use crate::ir::*;
 use crate::tokens::FormatToken;
@@ -65,7 +65,7 @@ fn write_named(f: &mut Formatter, named: &NamedType) {
 
 /// `typeof(expr)` - the inner expression formats through its own impl.
 fn write_typeof(f: &mut Formatter, typeof_type: &TypeofType) {
-    FormatToken(&typeof_type.typeof_token).fmt(f);
+    token("typeof").fmt(f);
     token("(").fmt(f);
     typeof_type.expr.fmt(f);
     token(")").fmt(f);
@@ -128,7 +128,7 @@ fn write_function_type(f: &mut Formatter, function: &FunctionType) {
 /// matching how Prettier lays out TypeScript unions. The AST's
 /// `leading_pipe`/`leading_ampersand` is intentionally normalized away - the
 /// leading operator is driven by the break decision, not by the source.
-fn write_alternation(f: &mut Formatter, items: &[(Type, Option<Token>)], operator: &'static str) {
+fn write_alternation(f: &mut Formatter, items: &[(Type, Option<Span>)], operator: &'static str) {
     let group_id = f.group_id();
     group_with_id(
         group_id,
@@ -231,7 +231,7 @@ impl Format for FunctionTypeParam {
 
 /// Emit a comma-separated punctuated list, breaking one item per line when the
 /// enclosing group expands. Source separators are normalized to `,`.
-fn write_punctuated<T: Format>(f: &mut Formatter, items: &[(T, Option<Token>)]) {
+fn write_punctuated<T: Format>(f: &mut Formatter, items: &[(T, Option<Span>)]) {
     for (index, (item, _separator)) in items.iter().enumerate() {
         if index > 0 {
             token(",").fmt(f);
@@ -249,7 +249,7 @@ fn write_delimited<T: Format>(
     f: &mut Formatter,
     open: &'static str,
     close: &'static str,
-    items: &[(T, Option<Token>)],
+    items: &[(T, Option<Span>)],
 ) {
     if items.is_empty() {
         token(open).fmt(f);

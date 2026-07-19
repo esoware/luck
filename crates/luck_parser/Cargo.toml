@@ -1,6 +1,6 @@
 [package]
 name = "luck_parser"
-version = "0.7.0"
+version.workspace = true
 authors.workspace = true
 categories.workspace = true
 description = "Pratt expression parser with recursive descent for Lua 5.1–5.5 and Luau."

@@ -1,6 +1,6 @@
 [package]
 name = "luck_codegen"
-version = "0.3.0"
+version.workspace = true
 authors.workspace = true
 categories.workspace = true
 description = "Compact code printer and source-slicing emitter for Lua ASTs."

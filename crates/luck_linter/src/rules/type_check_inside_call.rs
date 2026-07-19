@@ -1,6 +1,6 @@
 use luck_ast::Expression;
 use luck_ast::node::{AstTypesBitset, NodeType};
-use luck_token::TokenKind;
+use luck_token::BinOp;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -49,7 +49,7 @@ fn check_call(
         let single_arg = if args.len() == 1 { args.first() } else { None };
 
         if let Some(Expression::BinaryOp(binop)) = single_arg
-            && matches!(binop.op.kind, TokenKind::EqualEqual | TokenKind::TildeEqual)
+            && matches!(binop.op, BinOp::Eq | BinOp::Ne)
         {
             out.push(
                 LintDiagnostic::new(

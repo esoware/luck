@@ -91,7 +91,7 @@ impl AttributeChecker<'_, '_> {
                 .with_fix(Fix {
                     description: "remove the redundant @native attribute".into(),
                     edits: vec![TextEdit {
-                        span: Span::new(attribute.at_token.span.start, edit_end),
+                        span: Span::new(attribute.at_token.start, edit_end),
                         replacement: String::new(),
                     }],
                 }),

@@ -223,7 +223,7 @@ pub struct SourceError {
 
 pub use comment::{Comment, CommentKind, CommentPosition};
 pub use compact_str::CompactString;
-pub use token::{Assoc, Token, TokenKind, UNARY_PRECEDENCE};
+pub use token::{Assoc, BinOp, CompoundOp, Token, TokenKind, UNARY_PRECEDENCE, UnOp};
 
 #[cfg(test)]
 mod tests {

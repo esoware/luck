@@ -2,67 +2,136 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "Lua",
   "scopeName": "source.lua",
-  "fileTypes": ["lua"],
+  "fileTypes": [
+    "lua"
+  ],
   "patterns": [
-    { "include": "#shebang" },
-    { "include": "#comment" },
-    { "include": "#string" },
-    { "include": "#number" },
-    { "include": "#function-definition" },
-    { "include": "#keyword-modifier" },
-    { "include": "#goto-statement" },
-    { "include": "#label" },
-    { "include": "#keyword-control" },
-    { "include": "#constant" },
-    { "include": "#self" },
-    { "include": "#vararg" },
-    { "include": "#attribute" },
-    { "include": "#stdlib-namespace" },
-    { "include": "#stdlib-global" },
-    { "include": "#stdlib-constant" },
-    { "include": "#function-call" },
-    { "include": "#property" },
-    { "include": "#operator" },
-    { "include": "#identifier" }
+    {
+      "include": "#shebang"
+    },
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#function-definition"
+    },
+    {
+      "include": "#keyword-modifier"
+    },
+    {
+      "include": "#goto-statement"
+    },
+    {
+      "include": "#label"
+    },
+    {
+      "include": "#keyword-control"
+    },
+    {
+      "include": "#constant"
+    },
+    {
+      "include": "#self"
+    },
+    {
+      "include": "#vararg"
+    },
+    {
+      "include": "#attribute"
+    },
+    {
+      "include": "#stdlib-namespace"
+    },
+    {
+      "include": "#stdlib-global"
+    },
+    {
+      "include": "#stdlib-constant"
+    },
+    {
+      "include": "#function-call"
+    },
+    {
+      "include": "#identifiers"
+    },
+    {
+      "include": "#operator"
+    }
   ],
   "repository": {
     "shebang": {
       "name": "comment.line.shebang.lua",
       "match": "\\A#!.*$"
     },
-
     "comment": {
       "patterns": [
         {
           "name": "comment.block.documentation.lua",
           "begin": "(--)\\[(=*)\\[(?=\\s*@)",
-          "beginCaptures": { "0": { "name": "punctuation.definition.comment.lua" } },
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.lua"
+            }
+          },
           "end": "\\]\\2\\]",
-          "endCaptures": { "0": { "name": "punctuation.definition.comment.lua" } },
-          "patterns": [{ "include": "#luadoc" }]
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.lua"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#luadoc"
+            }
+          ]
         },
         {
           "name": "comment.block.lua",
           "begin": "--\\[(=*)\\[",
-          "beginCaptures": { "0": { "name": "punctuation.definition.comment.lua" } },
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.lua"
+            }
+          },
           "end": "\\]\\1\\]",
-          "endCaptures": { "0": { "name": "punctuation.definition.comment.lua" } }
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.lua"
+            }
+          }
         },
         {
           "name": "comment.line.documentation.lua",
           "begin": "---(?=\\s*@)",
-          "beginCaptures": { "0": { "name": "punctuation.definition.comment.lua" } },
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.lua"
+            }
+          },
           "end": "$",
-          "patterns": [{ "include": "#luadoc" }]
+          "patterns": [
+            {
+              "include": "#luadoc"
+            }
+          ]
         },
         {
           "name": "comment.line.double-dash.lua",
           "match": "(--).*$",
-          "captures": { "1": { "name": "punctuation.definition.comment.lua" } }
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.comment.lua"
+            }
+          }
         }
       ]
     },
-
     "luadoc": {
       "patterns": [
         {
@@ -75,46 +144,93 @@
         }
       ]
     },
-
     "string": {
       "patterns": [
         {
           "name": "string.quoted.double.lua",
           "begin": "\"",
           "end": "\"|(?=$)",
-          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.lua" } },
-          "endCaptures": { "0": { "name": "punctuation.definition.string.end.lua" } },
-          "patterns": [{ "include": "#string-escape" }]
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.lua"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.lua"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#string-escape"
+            }
+          ]
         },
         {
           "name": "string.quoted.single.lua",
           "begin": "'",
           "end": "'|(?=$)",
-          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.lua" } },
-          "endCaptures": { "0": { "name": "punctuation.definition.string.end.lua" } },
-          "patterns": [{ "include": "#string-escape" }]
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.lua"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.lua"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#string-escape"
+            }
+          ]
         },
         {
           "name": "string.quoted.other.long.lua",
           "begin": "\\[(=*)\\[",
           "end": "\\]\\1\\]",
-          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.lua" } },
-          "endCaptures": { "0": { "name": "punctuation.definition.string.end.lua" } }
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.lua"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.lua"
+            }
+          }
         }
       ]
     },
-
     "string-escape": {
       "patterns": [
-        { "name": "constant.character.escape.lua", "match": "\\\\(a|b|f|n|r|t|v|\\\\|'|\"|\\n|\\?)" },
-        { "name": "constant.character.escape.byte.lua", "match": "\\\\\\d{1,3}" },
-        { "name": "constant.character.escape.hex.lua", "match": "\\\\x[0-9A-Fa-f]{2}" },
-        { "name": "constant.character.escape.unicode.lua", "match": "\\\\u\\{[0-9A-Fa-f]+\\}" },
-        { "name": "constant.character.escape.linecontinuation.lua", "match": "\\\\z" },
-        { "name": "invalid.illegal.unrecognized-escape.lua", "match": "\\\\." }
+        {
+          "name": "constant.character.escape.lua",
+          "match": "\\\\(a|b|f|n|r|t|v|\\\\|'|\"|\\n|\\?)"
+        },
+        {
+          "name": "constant.character.escape.byte.lua",
+          "match": "\\\\\\d{1,3}"
+        },
+        {
+          "name": "constant.character.escape.hex.lua",
+          "match": "\\\\x[0-9A-Fa-f]{2}"
+        },
+        {
+          "name": "constant.character.escape.unicode.lua",
+          "match": "\\\\u\\{[0-9A-Fa-f]+\\}"
+        },
+        {
+          "name": "constant.character.escape.linecontinuation.lua",
+          "match": "\\\\z"
+        },
+        {
+          "name": "invalid.illegal.unrecognized-escape.lua",
+          "match": "\\\\."
+        }
       ]
     },
-
     "number": {
       "patterns": [
         {
@@ -135,147 +251,285 @@
         }
       ]
     },
-
     "constant": {
       "name": "constant.language.lua",
       "match": "\\b(true|false|nil)\\b"
     },
-
     "keyword-control": {
       "name": "keyword.control.lua",
       "match": "\\b(if|then|else|elseif|end|do|while|for|in|repeat|until|break|return)\\b"
     },
-
     "keyword-modifier": {
       "patterns": [
-        { "name": "storage.modifier.local.lua", "match": "\\b(local)\\b" },
-        { "name": "storage.modifier.global.lua", "match": "\\b(global)\\b(?=\\s+[A-Za-z_*])" }
+        {
+          "name": "storage.modifier.local.lua",
+          "match": "\\b(local)\\b"
+        },
+        {
+          "name": "storage.modifier.global.lua",
+          "match": "\\b(global)\\b(?=\\s+[A-Za-z_*])"
+        }
       ]
     },
-
     "self": {
       "name": "variable.language.self.lua",
       "match": "\\bself\\b"
     },
-
     "vararg": {
       "name": "variable.language.vararg.lua",
       "match": "\\.\\.\\."
     },
-
     "goto-statement": {
       "match": "\\b(goto)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
       "captures": {
-        "1": { "name": "keyword.control.goto.lua" },
-        "2": { "name": "entity.name.label.lua" }
+        "1": {
+          "name": "keyword.control.goto.lua"
+        },
+        "2": {
+          "name": "entity.name.label.lua"
+        }
       }
     },
-
     "label": {
       "match": "(::)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(::)",
       "captures": {
-        "1": { "name": "punctuation.definition.label.lua" },
-        "2": { "name": "entity.name.label.lua" },
-        "3": { "name": "punctuation.definition.label.lua" }
+        "1": {
+          "name": "punctuation.definition.label.lua"
+        },
+        "2": {
+          "name": "entity.name.label.lua"
+        },
+        "3": {
+          "name": "punctuation.definition.label.lua"
+        }
       }
     },
-
     "attribute": {
       "match": "(<)\\s*(const|close)\\s*(>)",
       "captures": {
-        "1": { "name": "punctuation.definition.attribute.lua" },
-        "2": { "name": "storage.modifier.attribute.lua" },
-        "3": { "name": "punctuation.definition.attribute.lua" }
+        "1": {
+          "name": "punctuation.definition.attribute.lua"
+        },
+        "2": {
+          "name": "storage.modifier.attribute.lua"
+        },
+        "3": {
+          "name": "punctuation.definition.attribute.lua"
+        }
       }
     },
-
     "function-definition": {
       "name": "meta.function.lua",
       "begin": "\\b(?:(local)\\s+)?(function)\\b\\s*((?:[A-Za-z_][A-Za-z0-9_]*\\s*[.:]\\s*)*)([A-Za-z_][A-Za-z0-9_]*)?",
       "beginCaptures": {
-        "1": { "name": "storage.modifier.local.lua" },
-        "2": { "name": "storage.type.function.lua" },
+        "1": {
+          "name": "storage.modifier.local.lua"
+        },
+        "2": {
+          "name": "storage.type.function.lua"
+        },
         "3": {
           "patterns": [
-            { "name": "variable.other.lua", "match": "[A-Za-z_][A-Za-z0-9_]*" },
-            { "name": "punctuation.accessor.lua", "match": "[.:]" }
+            {
+              "name": "variable.other.constant.object.lua",
+              "match": "\\b[A-Z][A-Z0-9_]*\\b(?![A-Za-z0-9_])"
+            },
+            {
+              "name": "variable.other.object.lua",
+              "match": "[A-Za-z_][A-Za-z0-9_]*"
+            },
+            {
+              "name": "punctuation.accessor.lua",
+              "match": "[.:]"
+            }
           ]
         },
-        "4": { "name": "entity.name.function.lua" }
+        "4": {
+          "name": "entity.name.function.lua"
+        }
       },
       "end": "(?<=\\))|(?=[^\\s(])",
-      "patterns": [{ "include": "#parameters" }]
+      "patterns": [
+        {
+          "include": "#parameters"
+        }
+      ]
     },
-
     "parameters": {
       "name": "meta.parameters.lua",
       "begin": "\\(",
       "end": "\\)",
-      "beginCaptures": { "0": { "name": "punctuation.definition.parameters.begin.lua" } },
-      "endCaptures": { "0": { "name": "punctuation.definition.parameters.end.lua" } },
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.parameters.begin.lua"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.parameters.end.lua"
+        }
+      },
       "patterns": [
-        { "include": "#comment" },
-        { "name": "variable.language.vararg.lua", "match": "\\.\\.\\." },
-        { "name": "variable.parameter.lua", "match": "[A-Za-z_][A-Za-z0-9_]*" },
-        { "name": "punctuation.separator.parameter.lua", "match": "," }
+        {
+          "include": "#comment"
+        },
+        {
+          "name": "variable.language.vararg.lua",
+          "match": "\\.\\.\\."
+        },
+        {
+          "name": "variable.parameter.lua",
+          "match": "[A-Za-z_][A-Za-z0-9_]*"
+        },
+        {
+          "name": "punctuation.separator.parameter.lua",
+          "match": ","
+        }
       ]
     },
-
     "stdlib-namespace": {
       "name": "support.class.lua",
       "match": "(?<![.:\\w])(coroutine|debug|io|math|os|package|string|table|utf8|bit32)\\b"
     },
-
     "stdlib-global": {
       "name": "support.function.builtin.lua",
       "match": "(?<![.:\\w])(assert|collectgarbage|dofile|error|getmetatable|ipairs|load|loadfile|loadstring|next|pairs|pcall|print|rawequal|rawget|rawlen|rawset|require|select|setmetatable|tonumber|tostring|type|unpack|xpcall|warn|gcinfo|getfenv|setfenv|module|newproxy)\\b"
     },
-
     "stdlib-constant": {
       "name": "support.variable.builtin.lua",
       "match": "(?<![.:\\w])(_G|_VERSION|_ENV)\\b"
     },
-
     "function-call": {
       "name": "entity.name.function.lua",
       "match": "(?<![.:\\w])[A-Za-z_][A-Za-z0-9_]*(?=\\s*(?:[({\"']|\\[=*\\[))"
     },
-
-    "property": {
+    "operator": {
+      "patterns": [
+        {
+          "name": "keyword.operator.logical.lua",
+          "match": "\\b(and|or|not)\\b"
+        },
+        {
+          "name": "keyword.operator.bitwise.lua",
+          "match": "<<|>>"
+        },
+        {
+          "name": "keyword.operator.comparison.lua",
+          "match": "==|~=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.assignment.lua",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.concatenation.lua",
+          "match": "\\.\\."
+        },
+        {
+          "name": "keyword.operator.arithmetic.lua",
+          "match": "//|[+\\-*/%^]"
+        },
+        {
+          "name": "keyword.operator.bitwise.lua",
+          "match": "[&|~]"
+        },
+        {
+          "name": "keyword.operator.length.lua",
+          "match": "#"
+        }
+      ]
+    },
+    "identifiers": {
       "patterns": [
         {
           "match": "([.:])\\s*([A-Za-z_][A-Za-z0-9_]*)(?=\\s*(?:[({\"']|\\[=*\\[))",
           "captures": {
-            "1": { "name": "punctuation.accessor.lua" },
-            "2": { "name": "entity.name.function.lua" }
+            "1": {
+              "name": "punctuation.accessor.lua"
+            },
+            "2": {
+              "name": "entity.name.function.lua"
+            }
+          }
+        },
+        {
+          "match": "([.:])\\s*(?:([A-Z][A-Z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))(?![A-Za-z0-9_])(?=\\s*(?:\\.\\s*[A-Za-z_]|:\\s*[A-Za-z_][A-Za-z0-9_]*\\s*(?:[({\"']|\\[=*\\[)))",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.lua"
+            },
+            "2": {
+              "name": "variable.other.constant.object.property.lua"
+            },
+            "3": {
+              "name": "variable.other.object.property.lua"
+            }
+          }
+        },
+        {
+          "match": "(?:([A-Z][A-Z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))(?![A-Za-z0-9_])(?=\\s*(?:\\.\\s*[A-Za-z_]|:\\s*[A-Za-z_][A-Za-z0-9_]*\\s*(?:[({\"']|\\[=*\\[)))",
+          "captures": {
+            "1": {
+              "name": "variable.other.constant.object.lua"
+            },
+            "2": {
+              "name": "variable.other.object.lua"
+            }
+          }
+        },
+        {
+          "match": "(?:([.:])\\s*)?([A-Za-z_][A-Za-z0-9_]*)(?=\\s*=\\s*function\\b)",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.lua"
+            },
+            "2": {
+              "name": "entity.name.function.lua"
+            }
+          }
+        },
+        {
+          "match": "(?:([.:])\\s*)?([A-Za-z_][A-Za-z0-9_]*)(?=\\s*=\\s*(?:assert|collectgarbage|dofile|error|gcinfo|getfenv|getmetatable|ipairs|load|loadfile|loadstring|module|newproxy|next|pairs|pcall|print|rawequal|rawget|rawlen|rawset|require|select|setfenv|setmetatable|tonumber|tostring|type|unpack|warn|xpcall)\\b(?!\\s*(?:[.:({\"'`\\[])))",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.lua"
+            },
+            "2": {
+              "name": "support.function.builtin.lua"
+            }
+          }
+        },
+        {
+          "match": "([.:])\\s*([A-Z][A-Z0-9_]*)(?![A-Za-z0-9_])",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.lua"
+            },
+            "2": {
+              "name": "variable.other.constant.property.lua"
+            }
           }
         },
         {
           "match": "([.:])\\s*([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "punctuation.accessor.lua" },
-            "2": { "name": "variable.other.property.lua" }
+            "1": {
+              "name": "punctuation.accessor.lua"
+            },
+            "2": {
+              "name": "variable.other.property.lua"
+            }
           }
+        },
+        {
+          "name": "variable.other.constant.lua",
+          "match": "\\b[A-Z][A-Z0-9_]*\\b(?![A-Za-z0-9_])"
+        },
+        {
+          "name": "variable.other.readwrite.lua",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
         }
       ]
-    },
-
-    "operator": {
-      "patterns": [
-        { "name": "keyword.operator.logical.lua", "match": "\\b(and|or|not)\\b" },
-        { "name": "keyword.operator.bitwise.lua", "match": "<<|>>" },
-        { "name": "keyword.operator.comparison.lua", "match": "==|~=|<=|>=|<|>" },
-        { "name": "keyword.operator.assignment.lua", "match": "=" },
-        { "name": "keyword.operator.concatenation.lua", "match": "\\.\\." },
-        { "name": "keyword.operator.arithmetic.lua", "match": "//|[+\\-*/%^]" },
-        { "name": "keyword.operator.bitwise.lua", "match": "[&|~]" },
-        { "name": "keyword.operator.length.lua", "match": "#" }
-      ]
-    },
-
-    "identifier": {
-      "name": "variable.other.lua",
-      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
     }
   }
 }

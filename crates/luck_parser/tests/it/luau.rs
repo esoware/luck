@@ -12,7 +12,7 @@ fn compound_assign_plus() {
         assert!(
             matches!(&ca.var, Var::Name(t) if t.kind == luck_token::TokenKind::Identifier("x".into()))
         );
-        assert_eq!(ca.op.kind, luck_token::TokenKind::PlusEqual);
+        assert_eq!(ca.op, luck_token::CompoundOp::AddAssign);
     } else {
         panic!(
             "expected CompoundAssignment, got {:?}",
@@ -28,7 +28,7 @@ fn compound_assign_index() {
     assert_eq!(result.block.stmts.len(), 1);
     if let Statement::CompoundAssignment(ca) = &result.block.stmts[0] {
         assert!(matches!(&ca.var, Var::Index(_)));
-        assert_eq!(ca.op.kind, luck_token::TokenKind::StarEqual);
+        assert_eq!(ca.op, luck_token::CompoundOp::MulAssign);
     } else {
         panic!("expected CompoundAssignment");
     }
@@ -41,7 +41,7 @@ fn compound_assign_field_concat() {
     assert_eq!(result.block.stmts.len(), 1);
     if let Statement::CompoundAssignment(ca) = &result.block.stmts[0] {
         assert!(matches!(&ca.var, Var::FieldAccess(_)));
-        assert_eq!(ca.op.kind, luck_token::TokenKind::DotDotEqual);
+        assert_eq!(ca.op, luck_token::CompoundOp::ConcatAssign);
     } else {
         panic!("expected CompoundAssignment");
     }
@@ -50,19 +50,19 @@ fn compound_assign_field_concat() {
 #[test]
 fn compound_assign_all_operators() {
     for (src, expected_kind) in [
-        ("x += 1", luck_token::TokenKind::PlusEqual),
-        ("x -= 1", luck_token::TokenKind::MinusEqual),
-        ("x *= 1", luck_token::TokenKind::StarEqual),
-        ("x /= 1", luck_token::TokenKind::SlashEqual),
-        ("x //= 1", luck_token::TokenKind::FloorDivEqual),
-        ("x %= 1", luck_token::TokenKind::PercentEqual),
-        ("x ^= 1", luck_token::TokenKind::CaretEqual),
-        ("x ..= 1", luck_token::TokenKind::DotDotEqual),
+        ("x += 1", luck_token::CompoundOp::AddAssign),
+        ("x -= 1", luck_token::CompoundOp::SubAssign),
+        ("x *= 1", luck_token::CompoundOp::MulAssign),
+        ("x /= 1", luck_token::CompoundOp::DivAssign),
+        ("x //= 1", luck_token::CompoundOp::FloorDivAssign),
+        ("x %= 1", luck_token::CompoundOp::ModAssign),
+        ("x ^= 1", luck_token::CompoundOp::PowAssign),
+        ("x ..= 1", luck_token::CompoundOp::ConcatAssign),
     ] {
         let result = parse_luau(src);
         assert_no_errors(&result);
         if let Statement::CompoundAssignment(ca) = &result.block.stmts[0] {
-            assert_eq!(ca.op.kind, expected_kind, "failed for: {}", src);
+            assert_eq!(ca.op, expected_kind, "failed for: {}", src);
         } else {
             panic!("expected CompoundAssignment for: {}", src);
         }

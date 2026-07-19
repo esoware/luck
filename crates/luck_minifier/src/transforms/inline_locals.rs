@@ -7,7 +7,7 @@ use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_ast::visitor::Visitor;
-use luck_token::token::{Token, TokenKind};
+use luck_token::token::TokenKind;
 
 /// Inline single-use local variables whose initializer is a CLOSED
 /// LITERAL expression, removing the declaration.
@@ -225,8 +225,8 @@ impl AstTransform for Inliner {
                     return Expression::Parenthesized(Box::new(ParenExpression {
                         span: sp(),
                         parens: ContainedSpan {
-                            open: Token::new(TokenKind::LeftParen, sp()),
-                            close: Token::new(TokenKind::RightParen, sp()),
+                            open: sp(),
+                            close: sp(),
                         },
                         expr: replacement,
                     }));

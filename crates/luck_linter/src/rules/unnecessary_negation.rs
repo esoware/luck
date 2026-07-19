@@ -1,5 +1,6 @@
 use luck_ast::expr::Expression;
-use luck_token::{Span, TokenKind};
+use luck_token::Span;
+use luck_token::{BinOp, UnOp};
 
 use crate::diagnostic::{Category, Fix, LintDiagnostic, Severity, TextEdit};
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -29,14 +30,14 @@ impl Rule for UnnecessaryNegation {
     }
 }
 
-fn flipped_operator(kind: &TokenKind) -> Option<&'static str> {
-    match kind {
-        TokenKind::EqualEqual => Some("~="),
-        TokenKind::TildeEqual => Some("=="),
-        TokenKind::Less => Some(">="),
-        TokenKind::LessEqual => Some(">"),
-        TokenKind::Greater => Some("<="),
-        TokenKind::GreaterEqual => Some("<"),
+fn flipped_operator(op: BinOp) -> Option<&'static str> {
+    match op {
+        BinOp::Eq => Some("~="),
+        BinOp::Ne => Some("=="),
+        BinOp::Lt => Some(">="),
+        BinOp::Le => Some(">"),
+        BinOp::Gt => Some("<="),
+        BinOp::Ge => Some("<"),
         _ => None,
     }
 }
@@ -54,7 +55,7 @@ impl NodeRule for UnnecessaryNegation {
         let Expression::UnaryOp(unary) = expr else {
             return;
         };
-        if !matches!(unary.op.kind, TokenKind::Not) {
+        if unary.op != UnOp::Not {
             return;
         }
         let Expression::Parenthesized(paren) = &unary.operand else {
@@ -63,7 +64,7 @@ impl NodeRule for UnnecessaryNegation {
         let Expression::BinaryOp(comparison) = &paren.expr else {
             return;
         };
-        let Some(flipped) = flipped_operator(&comparison.op.kind) else {
+        let Some(flipped) = flipped_operator(comparison.op) else {
             return;
         };
         let (Some(lhs), Some(rhs)) = (
@@ -75,10 +76,7 @@ impl NodeRule for UnnecessaryNegation {
         // Only ==/~= get an autofix: that inversion is exact (~= is defined
         // as the negation of ==, sharing __eq), while relational flips
         // differ for NaN and __lt/__le metamethods.
-        let is_equality = matches!(
-            comparison.op.kind,
-            TokenKind::EqualEqual | TokenKind::TildeEqual
-        );
+        let is_equality = matches!(comparison.op, BinOp::Eq | BinOp::Ne);
         let fix = is_equality.then(|| Fix {
             description: "invert the comparison operator".to_string(),
             // The parens stay: with no parent context here, a bare

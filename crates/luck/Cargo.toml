@@ -1,6 +1,6 @@
 [package]
 name = "luck"
-version = "2.2.0"
+version.workspace = true
 authors.workspace = true
 categories.workspace = true
 description = "Lua/Luau bundler and minifier — custom parser, multi-version support, zero runtime overhead."

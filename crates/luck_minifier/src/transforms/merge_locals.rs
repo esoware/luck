@@ -5,7 +5,8 @@ use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_ast::visitor::Visitor;
-use luck_token::token::{Token, TokenKind};
+use luck_token::Span;
+use luck_token::Token;
 
 use crate::expr::{ident_name_string, is_pure_expression};
 use crate::tokens::default_span as sp;
@@ -17,8 +18,8 @@ pub fn merge(block: Block) -> Block {
 
 struct LocalMerger;
 
-fn make_comma() -> Token {
-    Token::new(TokenKind::Comma, sp())
+fn make_comma() -> Span {
+    sp()
 }
 
 fn extract_single_assignment_parts(stmt: &Statement) -> Option<(&Token, &Expression, bool)> {
@@ -98,7 +99,7 @@ impl AstTransform for LocalMerger {
                     let total = group.len();
                     let mut group_names: Vec<AttributedName> = Vec::with_capacity(total);
                     let mut group_exprs: Vec<Expression> = Vec::with_capacity(total);
-                    let mut local_token: Option<Token> = None;
+                    let mut local_token: Option<Span> = None;
                     for stmt in group {
                         match stmt {
                             Statement::LocalAssignment(local) => {
@@ -136,10 +137,7 @@ impl AstTransform for LocalMerger {
                             local_token: local_token
                                 .expect("local group starts with a local assignment"),
                             names: build_punctuated(group_names),
-                            equal_and_exprs: Some((
-                                Token::new(TokenKind::Equal, sp()),
-                                build_punctuated(group_exprs),
-                            )),
+                            equal_and_exprs: Some((sp(), build_punctuated(group_exprs))),
                         };
                         merged.push(self.transform_statement(Statement::LocalAssignment(
                             Box::new(merged_local),
@@ -147,7 +145,7 @@ impl AstTransform for LocalMerger {
                     } else {
                         let var_punct = {
                             let len = group_names.len();
-                            let mut pairs: Vec<(Var, Token)> = Vec::new();
+                            let mut pairs: Vec<(Var, Span)> = Vec::new();
                             let mut names = group_names.into_iter();
                             let last = names.next_back().expect("group is non-empty");
                             for attributed in names.take(len - 1) {
@@ -158,7 +156,7 @@ impl AstTransform for LocalMerger {
                         let merged_assign = Assignment {
                             span: sp(),
                             targets: var_punct,
-                            equal: Token::new(TokenKind::Equal, sp()),
+                            equal: sp(),
                             values: build_punctuated(group_exprs),
                         };
                         merged.push(
@@ -179,7 +177,7 @@ impl AstTransform for LocalMerger {
                 }
                 if group.len() >= 2 {
                     let mut names: Vec<AttributedName> = Vec::new();
-                    let mut local_token: Option<Token> = None;
+                    let mut local_token: Option<Span> = None;
                     for stmt in group {
                         let Statement::LocalAssignment(local) = stmt else {
                             unreachable!("bare-local group members are local assignments")
@@ -270,7 +268,7 @@ fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
                     if let Some(Statement::Assignment(assign)) = iter.next() {
                         let fused = Statement::LocalAssignment(Box::new(LocalAssignment {
                             span: local.span,
-                            local_token: local.local_token.clone(),
+                            local_token: local.local_token,
                             names: local.names.clone(),
                             equal_and_exprs: Some((assign.equal, assign.values)),
                         }));

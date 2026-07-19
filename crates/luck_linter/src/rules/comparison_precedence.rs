@@ -1,5 +1,5 @@
 use luck_ast::Expression;
-use luck_token::TokenKind;
+use luck_token::{BinOp, UnOp};
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -30,23 +30,11 @@ impl Rule for ComparisonPrecedence {
     }
 }
 
-fn is_compare_op(kind: &TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::Less
-            | TokenKind::LessEqual
-            | TokenKind::Greater
-            | TokenKind::GreaterEqual
-            | TokenKind::EqualEqual
-            | TokenKind::TildeEqual
-    )
-}
-
 /// Returns the inner comparison binop if `expr` is one and is not wrapped
 /// in explicit parentheses (parentheses signal author intent).
 fn inner_compare(expr: &Expression) -> Option<&luck_ast::expr::BinaryOp> {
     if let Expression::BinaryOp(binop) = expr
-        && is_compare_op(&binop.op.kind)
+        && binop.op.is_comparison()
     {
         return Some(binop);
     }
@@ -56,7 +44,7 @@ fn inner_compare(expr: &Expression) -> Option<&luck_ast::expr::BinaryOp> {
 /// A bare `not ...` operand. A `Parenthesized` wrapper around the `not`
 /// means the author was explicit (`(not x) == y`), so it does not count.
 fn is_unparenthesized_not(expr: &Expression) -> bool {
-    matches!(expr, Expression::UnaryOp(unop) if matches!(unop.op.kind, TokenKind::Not))
+    matches!(expr, Expression::UnaryOp(unop) if unop.op == UnOp::Not)
 }
 
 impl NodeRule for ComparisonPrecedence {
@@ -66,7 +54,7 @@ impl NodeRule for ComparisonPrecedence {
     }
     fn on_expression(&self, expr: &Expression, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Expression::BinaryOp(outer) = expr
-            && is_compare_op(&outer.op.kind)
+            && outer.op.is_comparison()
         {
             let chained_side = if inner_compare(&outer.left).is_some() {
                 Some("left")
@@ -86,21 +74,19 @@ impl NodeRule for ComparisonPrecedence {
             }
 
             if is_unparenthesized_not(&outer.left) && !is_unparenthesized_not(&outer.right) {
-                let (parsed_as, help) = match &outer.op.kind {
-                    TokenKind::EqualEqual => (
+                let (parsed_as, help) = match outer.op {
+                    BinOp::Eq => (
                         "(not x) == y",
                         "consider `x ~= y`, or add parentheses to make intent explicit",
                     ),
-                    TokenKind::TildeEqual => (
+                    BinOp::Ne => (
                         "(not x) ~= y",
                         "consider `x == y`, or add parentheses to make intent explicit",
                     ),
-                    TokenKind::Less => ("(not x) < y", "add parentheses to clarify intent"),
-                    TokenKind::LessEqual => ("(not x) <= y", "add parentheses to clarify intent"),
-                    TokenKind::Greater => ("(not x) > y", "add parentheses to clarify intent"),
-                    TokenKind::GreaterEqual => {
-                        ("(not x) >= y", "add parentheses to clarify intent")
-                    }
+                    BinOp::Lt => ("(not x) < y", "add parentheses to clarify intent"),
+                    BinOp::Le => ("(not x) <= y", "add parentheses to clarify intent"),
+                    BinOp::Gt => ("(not x) > y", "add parentheses to clarify intent"),
+                    BinOp::Ge => ("(not x) >= y", "add parentheses to clarify intent"),
                     _ => return,
                 };
                 out.push(

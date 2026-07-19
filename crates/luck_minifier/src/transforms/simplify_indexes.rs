@@ -1,7 +1,7 @@
 use luck_ast::expr::*;
 use luck_ast::shared::*;
 use luck_ast::transform::AstTransform;
-use luck_token::token::{Token, TokenKind};
+use luck_token::token::TokenKind;
 
 use crate::expr::is_valid_identifier;
 use crate::tokens::{default_span as sp, make_ident};
@@ -27,7 +27,7 @@ impl AstTransform for IndexSimplifier {
                     return Var::FieldAccess(Box::new(FieldAccess {
                         span: sp(),
                         prefix: index_expr.prefix,
-                        dot: Token::new(TokenKind::Dot, sp()),
+                        dot: sp(),
                         name: make_ident(&s),
                     }));
                 }
@@ -86,7 +86,7 @@ impl AstTransform for IndexSimplifier {
                                     Field::Named {
                                         span: sp(),
                                         name: make_ident(&s),
-                                        equal: equal.clone(),
+                                        equal: *equal,
                                         value: self.transform_expression(value.clone()),
                                     }
                                 } else {
@@ -94,11 +94,11 @@ impl AstTransform for IndexSimplifier {
                                     Field::Bracketed {
                                         span: sp(),
                                         brackets: ContainedSpan {
-                                            open: Token::new(TokenKind::LeftBracket, sp()),
-                                            close: Token::new(TokenKind::RightBracket, sp()),
+                                            open: sp(),
+                                            close: sp(),
                                         },
                                         key: Expression::StringLiteral(token.clone()),
-                                        equal: equal.clone(),
+                                        equal: *equal,
                                         value: new_val,
                                     }
                                 }

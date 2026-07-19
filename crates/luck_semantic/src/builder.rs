@@ -14,6 +14,17 @@ pub struct ScopeTreeBuilder {
     // is branchless; `outer_scopes` holds only the enclosing scopes.
     current_scope: ScopeId,
     outer_scopes: Vec<ScopeId>,
+    /// One scoped map for the whole build: per name, the stack of live
+    /// declarations (innermost last). Sequential shadowing is stack order;
+    /// resolution is one O(1) lookup. A flat scan-backwards `actives` array
+    /// benchmarked quadratic on files with hundreds of live module-level
+    /// locals, and per-scope maps cost an allocation per block - this keeps
+    /// one map whose per-name stacks (and their capacity) are reused.
+    bindings: std::collections::HashMap<CompactString, Vec<SymbolId>>,
+    /// Undo log: names declared since each scope entry, popped on exit.
+    declared_names: Vec<CompactString>,
+    /// `declared_names` length at each scope entry.
+    binding_marks: Vec<usize>,
 }
 
 impl ScopeTreeBuilder {
@@ -24,6 +35,9 @@ impl ScopeTreeBuilder {
             // always the first scope and therefore index 0.
             current_scope: ScopeId::from_index(0),
             outer_scopes: Vec::new(),
+            bindings: std::collections::HashMap::new(),
+            declared_names: Vec::new(),
+            binding_marks: Vec::new(),
         }
     }
 
@@ -37,6 +51,7 @@ impl ScopeTreeBuilder {
         let id = self.tree.add_scope(Some(self.current_scope), kind, span);
         self.outer_scopes
             .push(std::mem::replace(&mut self.current_scope, id));
+        self.binding_marks.push(self.declared_names.len());
         id
     }
 
@@ -45,6 +60,24 @@ impl ScopeTreeBuilder {
             .outer_scopes
             .pop()
             .expect("pop_scope without matching push");
+        let mark = self
+            .binding_marks
+            .pop()
+            .expect("pop_scope without matching push");
+        // Emptied stacks stay in the map so a re-declared name reuses the
+        // Vec's capacity instead of reallocating.
+        for name in self.declared_names.drain(mark..) {
+            if let Some(stack) = self.bindings.get_mut(&name) {
+                stack.pop();
+            }
+        }
+    }
+
+    fn resolve(&self, name: &str) -> Option<SymbolId> {
+        self.bindings
+            .get(name)
+            .and_then(|stack| stack.last())
+            .copied()
     }
 
     fn declare_local(
@@ -53,8 +86,13 @@ impl ScopeTreeBuilder {
         span: luck_token::Span,
         kind: SymbolKind,
     ) -> SymbolId {
-        self.tree
-            .add_symbol(name.clone(), self.current_scope, kind, span)
+        let shadows = self.resolve(name);
+        let id = self
+            .tree
+            .add_symbol(name.clone(), self.current_scope, kind, span, shadows);
+        self.bindings.entry(name.clone()).or_default().push(id);
+        self.declared_names.push(name.clone());
+        id
     }
 
     fn reference_name(
@@ -63,8 +101,9 @@ impl ScopeTreeBuilder {
         span: luck_token::Span,
         kind: ReferenceKind,
     ) {
+        let resolved = self.resolve(name);
         self.tree
-            .add_reference(name.clone(), span, self.current_scope, kind);
+            .add_reference(name.clone(), span, self.current_scope, kind, resolved);
     }
 
     fn visit_var_read(&mut self, var: &Var) {

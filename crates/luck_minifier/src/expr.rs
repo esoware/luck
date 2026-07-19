@@ -1,6 +1,7 @@
 use luck_ast::expr::{Expression, Var};
 use luck_ast::shared::Field;
 use luck_token::token::TokenKind;
+use luck_token::{BinOp, UnOp};
 
 /// Extract a compile-time boolean value from a `true`/`false` literal.
 pub fn extract_boolean(expr: &Expression) -> Option<bool> {
@@ -57,7 +58,7 @@ pub fn is_pure_expression(expr: &Expression, allow_var_reads: bool) -> bool {
             }
         }
         Expression::BinaryOp(binop) => {
-            let is_logic_op = matches!(binop.op.kind, TokenKind::And | TokenKind::Or);
+            let is_logic_op = matches!(binop.op, BinOp::And | BinOp::Or);
             if is_logic_op {
                 // and/or never invoke metamethods - pure if operands are pure
                 is_pure_expression(&binop.left, allow_var_reads)
@@ -102,28 +103,28 @@ pub fn is_always_truthy(expr: &Expression) -> bool {
         Expression::TableConstructor(_) => true,
         Expression::True(_) => true,
         Expression::Parenthesized(paren) => is_always_truthy(&paren.expr),
-        Expression::UnaryOp(unop) if matches!(unop.op.kind, TokenKind::Minus) => {
+        Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
             is_literal_expression(&unop.operand) && is_always_truthy(&unop.operand)
         }
-        Expression::UnaryOp(unop) if matches!(unop.op.kind, TokenKind::Hash) => {
+        Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Len) => {
             is_literal_expression(&unop.operand)
         }
         Expression::BinaryOp(binop) => {
             let is_arithmetic = matches!(
-                binop.op.kind,
-                TokenKind::Plus
-                    | TokenKind::Minus
-                    | TokenKind::Star
-                    | TokenKind::Slash
-                    | TokenKind::FloorDiv
-                    | TokenKind::Percent
-                    | TokenKind::Caret
-                    | TokenKind::DotDot
-                    | TokenKind::Ampersand
-                    | TokenKind::Pipe
-                    | TokenKind::Tilde
-                    | TokenKind::ShiftLeft
-                    | TokenKind::ShiftRight
+                binop.op,
+                BinOp::Add
+                    | BinOp::Sub
+                    | BinOp::Mul
+                    | BinOp::Div
+                    | BinOp::FloorDiv
+                    | BinOp::Mod
+                    | BinOp::Pow
+                    | BinOp::Concat
+                    | BinOp::BitAnd
+                    | BinOp::BitOr
+                    | BinOp::BitXor
+                    | BinOp::Shl
+                    | BinOp::Shr
             );
             is_arithmetic
                 && is_literal_expression(&binop.left)
@@ -178,7 +179,7 @@ pub fn extract_lua_number(expr: &Expression, int_subtype: bool) -> Option<LuaNum
             };
             luck_token::literal::parse_lua_number(text, int_subtype)
         }
-        Expression::UnaryOp(unop) if matches!(unop.op.kind, TokenKind::Minus) => {
+        Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
             match extract_lua_number(&unop.operand, int_subtype)? {
                 LuaNumber::Int(value) => Some(LuaNumber::Int(value.wrapping_neg())),
                 LuaNumber::Float(value) => Some(LuaNumber::Float(-value)),

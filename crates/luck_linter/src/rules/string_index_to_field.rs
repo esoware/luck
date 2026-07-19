@@ -73,8 +73,8 @@ impl IndexChecker<'_> {
         // with `.name`. Anchor the replacement at the opening bracket;
         // the index expression's span already covers the whole bracket
         // pair plus its contents.
-        let open_byte = idx.brackets.open.span.start;
-        let close_byte = idx.brackets.close.span.end;
+        let open_byte = idx.brackets.open.start;
+        let close_byte = idx.brackets.close.end;
         let replacement = format!(".{name}");
 
         self.diagnostics.push(

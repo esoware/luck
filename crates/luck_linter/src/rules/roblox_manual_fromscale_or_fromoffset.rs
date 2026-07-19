@@ -1,4 +1,5 @@
 use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Var};
+use luck_token::UnOp;
 use luck_token::literal::{LuaNumber, parse_lua_number};
 use luck_token::{StdlibEnvironment, Token, TokenKind};
 
@@ -66,7 +67,7 @@ fn number_token_value(token: &Token) -> Option<f64> {
 fn literal_arg_value(expr: &Expression) -> Option<f64> {
     match expr {
         Expression::Number(token) => number_token_value(token),
-        Expression::UnaryOp(unary) if matches!(unary.op.kind, TokenKind::Minus) => {
+        Expression::UnaryOp(unary) if unary.op == UnOp::Neg => {
             if let Expression::Number(token) = &unary.operand {
                 number_token_value(token).map(|value| -value)
             } else {

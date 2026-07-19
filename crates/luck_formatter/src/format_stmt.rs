@@ -91,18 +91,13 @@ fn write_local_assignment(f: &mut Formatter, local: &LocalAssignment) {
 /// Lua 5.4 `<const>`/`<close>` attribute.
 fn write_attributed_name(f: &mut Formatter, attributed: &AttributedName) {
     crate::write!(f, [FormatToken(&attributed.name)]);
-    if let Some((colon, annotation)) = &attributed.type_annotation {
-        crate::write!(f, [FormatToken(colon), space(), annotation]);
+    if let Some((_, annotation)) = &attributed.type_annotation {
+        crate::write!(f, [token(":"), space(), annotation]);
     }
     if let Some(attrib) = &attributed.attrib {
         crate::write!(
             f,
-            [
-                space(),
-                FormatToken(&attrib.open),
-                FormatToken(&attrib.name),
-                FormatToken(&attrib.close),
-            ]
+            [space(), token("<"), FormatToken(&attrib.name), token(">"),]
         );
     }
 }
@@ -124,7 +119,7 @@ fn write_compound_assignment(f: &mut Formatter, compound: &CompoundAssignment) {
         f,
         [group(format_with(|f| {
             compound.var.fmt(f);
-            crate::write!(f, [space(), FormatToken(&compound.op), space()]);
+            crate::write!(f, [space(), token(compound.op.static_text()), space()]);
             compound.expr.fmt(f);
         }))]
     );
@@ -255,8 +250,8 @@ fn write_if_statement(f: &mut Formatter, if_stmt: &IfStatement) {
 fn write_numeric_for(f: &mut Formatter, num_for: &NumericFor) {
     crate::write!(f, [token("for"), space(), FormatToken(&num_for.name)]);
     // Luau: `: T` on the loop variable.
-    if let Some((colon, annotation)) = &num_for.type_annotation {
-        crate::write!(f, [FormatToken(colon), space(), annotation]);
+    if let Some((_, annotation)) = &num_for.type_annotation {
+        crate::write!(f, [token(":"), space(), annotation]);
     }
     crate::write!(
         f,
@@ -311,14 +306,7 @@ fn write_goto(f: &mut Formatter, goto: &GotoStatement) {
 
 /// Lua 5.2+ `::name::`.
 fn write_label(f: &mut Formatter, label: &LabelStatement) {
-    crate::write!(
-        f,
-        [
-            FormatToken(&label.colons_open),
-            FormatToken(&label.name),
-            FormatToken(&label.colons_close),
-        ]
-    );
+    crate::write!(f, [token("::"), FormatToken(&label.name), token("::"),]);
 }
 
 /// Lua 5.5 `global name, ...`.
@@ -342,15 +330,10 @@ fn write_global_star(f: &mut Formatter, global_star: &GlobalStar) {
     if let Some(attrib) = &global_star.attrib {
         crate::write!(
             f,
-            [
-                FormatToken(&attrib.open),
-                FormatToken(&attrib.name),
-                FormatToken(&attrib.close),
-                space(),
-            ]
+            [token("<"), FormatToken(&attrib.name), token(">"), space(),]
         );
     }
-    crate::write!(f, [FormatToken(&global_star.star)]);
+    crate::write!(f, [token("*")]);
 }
 
 fn write_function_decl(f: &mut Formatter, decl: &FunctionDecl) {
@@ -394,14 +377,7 @@ fn write_global_function(f: &mut Formatter, func: &GlobalFunction) {
 /// declaration. Dropping them would change runtime behavior.
 fn write_function_attributes(f: &mut Formatter, attributes: &[FunctionAttribute]) {
     for attr in attributes {
-        crate::write!(
-            f,
-            [
-                FormatToken(&attr.at_token),
-                FormatToken(&attr.name),
-                hard_line()
-            ]
-        );
+        crate::write!(f, [token("@"), FormatToken(&attr.name), hard_line()]);
     }
 }
 
@@ -413,8 +389,8 @@ fn write_func_name(f: &mut Formatter, name: &FuncName) {
         }
         crate::write!(f, [FormatToken(name_token)]);
     }
-    if let Some((colon, method_name)) = &name.method {
-        crate::write!(f, [FormatToken(colon), FormatToken(method_name)]);
+    if let Some((_, method_name)) = &name.method {
+        crate::write!(f, [token(":"), FormatToken(method_name)]);
     }
 }
 
@@ -475,8 +451,8 @@ fn write_punctuated_params(f: &mut Formatter, params: &Punctuated<Parameter>) {
             crate::write!(f, [space()]);
         }
         crate::write!(f, [FormatToken(&param.name)]);
-        if let Some((colon, annotation)) = &param.type_annotation {
-            crate::write!(f, [FormatToken(colon), space(), annotation]);
+        if let Some((_, annotation)) = &param.type_annotation {
+            crate::write!(f, [token(":"), space(), annotation]);
         }
         if idx + 1 < params.items.len() || sep.is_some() {
             crate::write!(f, [token(",")]);

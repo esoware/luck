@@ -1,5 +1,5 @@
 use luck_ast::Expression;
-use luck_token::{LuaVersion, TokenKind};
+use luck_token::{BinOp, LuaVersion, UnOp};
 
 use crate::common::assert_no_errors;
 use luck_parser::ParseResult;
@@ -26,12 +26,12 @@ fn bitwise_and_or_precedence() {
     let expr = extract_local_expr(&result);
     if let Expression::BinaryOp(outer) = expr {
         assert!(
-            matches!(outer.op.kind, TokenKind::Pipe),
+            matches!(outer.op, BinOp::BitOr),
             "expected Pipe at top, got {:?}",
-            outer.op.kind
+            outer.op
         );
         assert!(
-            matches!(&outer.left, Expression::BinaryOp(inner) if matches!(inner.op.kind, TokenKind::Ampersand)),
+            matches!(&outer.left, Expression::BinaryOp(inner) if matches!(inner.op, BinOp::BitAnd)),
             "expected Ampersand on left"
         );
     } else {
@@ -45,7 +45,7 @@ fn unary_bitwise_not() {
     assert_no_errors(&result);
     let expr = extract_local_expr(&result);
     if let Expression::UnaryOp(unary) = expr {
-        assert!(matches!(unary.op.kind, TokenKind::Tilde));
+        assert!(matches!(unary.op, UnOp::BitNot));
     } else {
         panic!("expected UnaryOp, got {:?}", expr);
     }
@@ -57,7 +57,7 @@ fn floor_division() {
     assert_no_errors(&result);
     let expr = extract_local_expr(&result);
     if let Expression::BinaryOp(binop) = expr {
-        assert!(matches!(binop.op.kind, TokenKind::FloorDiv));
+        assert!(matches!(binop.op, BinOp::FloorDiv));
     } else {
         panic!("expected BinaryOp, got {:?}", expr);
     }
@@ -69,7 +69,7 @@ fn left_shift() {
     assert_no_errors(&result);
     let expr = extract_local_expr(&result);
     if let Expression::BinaryOp(binop) = expr {
-        assert!(matches!(binop.op.kind, TokenKind::ShiftLeft));
+        assert!(matches!(binop.op, BinOp::Shl));
     } else {
         panic!("expected BinaryOp, got {:?}", expr);
     }
@@ -84,15 +84,15 @@ fn shift_and_bitwise_precedence() {
     let expr = extract_local_expr(&result);
     if let Expression::BinaryOp(outer) = expr {
         assert!(
-            matches!(outer.op.kind, TokenKind::Ampersand),
+            matches!(outer.op, BinOp::BitAnd),
             "expected Ampersand at top, got {:?}",
-            outer.op.kind
+            outer.op
         );
         if let Expression::BinaryOp(inner) = &outer.left {
             assert!(
-                matches!(inner.op.kind, TokenKind::ShiftRight),
+                matches!(inner.op, BinOp::Shr),
                 "expected ShiftRight on left, got {:?}",
-                inner.op.kind
+                inner.op
             );
         } else {
             panic!("expected BinaryOp on left");
@@ -108,7 +108,7 @@ fn bitwise_xor() {
     assert_no_errors(&result);
     let expr = extract_local_expr(&result);
     if let Expression::BinaryOp(binop) = expr {
-        assert!(matches!(binop.op.kind, TokenKind::Tilde));
+        assert!(matches!(binop.op, BinOp::BitXor));
     } else {
         panic!("expected BinaryOp, got {:?}", expr);
     }

@@ -51,9 +51,6 @@ pub struct Scope {
     pub kind: ScopeKind,
     pub span: Span,
     pub symbols: Vec<SymbolId>,
-    /// Latest declaration of each name in this scope (sequential
-    /// shadowing: later `local x` replaces the entry).
-    pub by_name: std::collections::HashMap<CompactString, SymbolId>,
     pub children: Vec<ScopeId>,
 }
 
@@ -151,7 +148,6 @@ impl ScopeTree {
             kind,
             span,
             symbols: Vec::new(),
-            by_name: std::collections::HashMap::new(),
             children: Vec::new(),
         });
         if let Some(parent_id) = parent {
@@ -160,18 +156,17 @@ impl ScopeTree {
         id
     }
 
+    /// Record a declared symbol. Resolution happens at build time on the
+    /// builder's flat binding stack, so `shadows` arrives pre-computed.
     pub fn add_symbol(
         &mut self,
         name: CompactString,
         scope: ScopeId,
         kind: SymbolKind,
         definition_span: Span,
+        shadows: Option<SymbolId>,
     ) -> SymbolId {
         let id = SymbolId::from_index(self.symbols.len());
-
-        let shadows = self.resolve_name(&name, scope);
-
-        self.scopes[scope.index()].by_name.insert(name.clone(), id);
         self.symbols.push(Symbol {
             id,
             name,
@@ -187,15 +182,17 @@ impl ScopeTree {
         id
     }
 
+    /// Record a reference whose binding was already resolved on the
+    /// builder's binding stack (`None` = global).
     pub fn add_reference(
         &mut self,
         name: CompactString,
         span: Span,
         scope: ScopeId,
         kind: ReferenceKind,
+        resolved: Option<SymbolId>,
     ) -> ReferenceId {
         let id = ReferenceId::from_index(self.references.len());
-        let resolved = self.resolve_name(&name, scope);
 
         if let Some(sym_id) = resolved {
             let sym_scope = self.symbols[sym_id.index()].scope;
@@ -217,22 +214,6 @@ impl ScopeTree {
             resolved,
         });
         id
-    }
-
-    /// Resolve a name by walking up the scope chain. Each level is an
-    /// O(1) map lookup; the map always holds the LATEST declaration of a
-    /// name in its scope, which is exactly Lua's sequential-shadowing
-    /// rule because references resolve at insertion time.
-    fn resolve_name(&self, name: &str, scope: ScopeId) -> Option<SymbolId> {
-        let mut current = Some(scope);
-        while let Some(scope_id) = current {
-            let scope = &self.scopes[scope_id.index()];
-            if let Some(&sym_id) = scope.by_name.get(name) {
-                return Some(sym_id);
-            }
-            current = scope.parent;
-        }
-        None
     }
 
     /// Check if traversing from `from` scope to `to` scope crosses a function boundary.

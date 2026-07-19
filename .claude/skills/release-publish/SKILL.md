@@ -21,9 +21,16 @@ cargo test --workspace
 cargo build --workspace --release
 ```
 
-Also verify versions were bumped for every crate whose behavior changed
-since the last tag (`/bump-versions`), and that `luck` (facade) tracks
-the highest bump.
+Also verify the lockstep workspace version was bumped (`/bump-versions`):
+every publishable crate and the VS Code extension share ONE version,
+inherited from `[workspace.package]`. If `cargo metadata` shows any
+publishable crate at a different version, stop - a spot was missed.
+
+Known blocker: the crate name `luck` is already taken on crates.io by an
+unrelated project. The facade (and possibly the binary crate) need a
+registry name decision (`publish = false`, a rename, or a `luck-*`
+prefix) before first publish - surface this to the human, do not pick
+for them.
 
 ## 2. Dependency-ordered publish list
 
@@ -55,24 +62,25 @@ Verify the order is still correct against reality before emitting it
 cargo metadata --format-version=1 --no-deps
 ```
 
-Only include crates whose version changed. For each, the human runs
-`cargo publish -p <crate>` and waits for the registry to index before
-the next dependent.
+Versions move in lockstep, so every publishable crate ships every
+release - the full ordered list above, no skipping. For each, the human
+runs `cargo publish -p <crate>` and waits for the registry to index
+before the next dependent.
 
 ## 3. Tag
 
-After publishing: `git tag v<luck_cli-version>` (annotated), push the
+After publishing: `git tag v<workspace-version>` (annotated), push the
 tag. The VS Code build workflow (`.github/workflows/vscode.yml`)
-triggers on `vscode-v*` tags - tag `vscode-v<extension-version>` only
-when the extension itself should ship.
+triggers on `vscode-v*` tags - tag `vscode-v<workspace-version>` when
+the extension should ship (its version is the same workspace number).
 
 ## 4. VS Code extension
 
-`editors/vscode/` versions independently. Before tagging a `vscode-v*`
-release: bump `editors/vscode/package.json` version, confirm the schema
-(`schemas/luckrc.schema.json`) is current (`cargo test -p luck_core`),
-and confirm the extension's declared CLI compatibility matches the
-published `luck_cli`.
+`editors/vscode/` shares the workspace version (kept in sync by
+`/bump-versions`; the LSP's reported `serverInfo.version` is the same
+number, so the extension UI and the extension version always agree).
+Before tagging a `vscode-v*` release: confirm the schema
+(`schemas/luckrc.schema.json`) is current (`cargo test -p luck_core`).
 
 ## 5. Hand-off format
 

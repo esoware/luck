@@ -3,7 +3,7 @@
 //! [`FormatFunctionBody`] is the shared entry the statement- and
 //! expression-level function emitters call into; the call/argument layout
 //! ports the old formatter's hugging and parameter-breaking heuristics onto
-//! the oxc-style IR.
+//! the combinator IR.
 
 use luck_ast::expr::{Expression, FunctionArgs, FunctionCall};
 use luck_ast::shared::{FunctionBody, Parameter, Punctuated, VarArgParam};
@@ -43,12 +43,12 @@ impl Format for FormatFunctionBody<'_> {
         let is_empty = body.block.stmts.is_empty() && body.block.last_stmt.is_none();
         let has_dangling_comments = f
             .comments
-            .has_dangling_comments(body.block.span.start, body.end_token.span.start);
+            .has_dangling_comments(body.block.span.start, body.end_token.start);
         if is_empty && has_dangling_comments {
             // A body that is empty of statements but holds comments keeps
             // them indented inside, not relocated after the function.
             let anchor = body.block.span.start;
-            let end = body.end_token.span.start;
+            let end = body.end_token.start;
             indent(format_with(move |f| {
                 hard_line().fmt(f);
                 f.emit_dangling_comments(anchor, end);
@@ -141,7 +141,7 @@ impl Format for VarArgParam {
 
 /// A single link in a method/call chain: optional `:method` accessor + args.
 struct ChainSegment<'a> {
-    accessor: Option<(&'a Token, &'a Token)>,
+    accessor: Option<&'a Token>,
     args: &'a FunctionArgs,
 }
 
@@ -151,7 +151,7 @@ fn collect_chain(call: &FunctionCall) -> (&Expression, Vec<ChainSegment<'_>>) {
     let mut current = call;
     loop {
         segments.push(ChainSegment {
-            accessor: current.method.as_ref().map(|(colon, name)| (colon, name)),
+            accessor: current.method.as_ref().map(|(_, name)| name),
             args: &current.args,
         });
         match &current.callee {
@@ -182,9 +182,9 @@ impl Format for FunctionCall {
                 root.fmt(f);
                 indent(format_with(|f| {
                     for segment in &segments {
-                        if let Some((colon, name)) = segment.accessor {
+                        if let Some(name) = segment.accessor {
                             soft_line().fmt(f);
-                            FormatToken(colon).fmt(f);
+                            token(":").fmt(f);
                             FormatToken(name).fmt(f);
                         }
                         segment.args.fmt(f);
@@ -196,8 +196,8 @@ impl Format for FunctionCall {
         } else {
             root.fmt(f);
             for segment in &segments {
-                if let Some((colon, name)) = segment.accessor {
-                    FormatToken(colon).fmt(f);
+                if let Some(name) = segment.accessor {
+                    token(":").fmt(f);
                     FormatToken(name).fmt(f);
                 }
                 segment.args.fmt(f);
@@ -400,7 +400,7 @@ fn write_normalized_string(f: &mut Formatter, literal: &Token) {
 mod tests {
     use luck_ast::shared::{Parameter, VarArgParam};
     use luck_ast::synth::Synth;
-    use luck_token::{Span, Token, TokenKind};
+    use luck_token::Span;
 
     use crate::ir::{Format, Formatter};
     use crate::printer::{PrinterOptions, print};
@@ -440,7 +440,7 @@ mod tests {
     fn bare_vararg() {
         let vararg = VarArgParam {
             span: Span::new(0, 0),
-            dots: Token::new(TokenKind::DotDotDot, Span::new(0, 0)),
+            dots: Span::new(0, 0),
             name: None,
             type_annotation: None,
         };

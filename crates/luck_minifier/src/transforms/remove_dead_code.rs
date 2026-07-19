@@ -5,7 +5,8 @@ use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_ast::visitor::Visitor;
-use luck_token::token::{Token, TokenKind};
+use luck_token::token::TokenKind;
+use luck_token::{BinOp, UnOp};
 
 use crate::expr::{extract_boolean, ident_name_string, is_nil, is_pure_expression};
 use crate::tokens::default_span as sp;
@@ -181,9 +182,9 @@ impl AstTransform for DeadCodeTransform {
                         let new_block = self.transform_block(if_stmt.block.clone());
                         return Statement::DoBlock(Box::new(DoBlock {
                             span: sp(),
-                            do_token: Token::new(TokenKind::Do, sp()),
+                            do_token: sp(),
                             block: new_block,
-                            end_token: Token::new(TokenKind::End, sp()),
+                            end_token: sp(),
                         }));
                     } else {
                         if let Some(else_clause) = &if_stmt.else_clause {
@@ -191,9 +192,9 @@ impl AstTransform for DeadCodeTransform {
                             let new_block = self.transform_block(else_clause.block.clone());
                             return Statement::DoBlock(Box::new(DoBlock {
                                 span: sp(),
-                                do_token: Token::new(TokenKind::Do, sp()),
+                                do_token: sp(),
                                 block: new_block,
-                                end_token: Token::new(TokenKind::End, sp()),
+                                end_token: sp(),
                             }));
                         } else if let Some(first_elseif) = if_stmt.elseif_clauses.first() {
                             self.changed = true;
@@ -204,13 +205,13 @@ impl AstTransform for DeadCodeTransform {
                                 if_stmt.elseif_clauses.iter().skip(1).cloned().collect();
                             let new_if = IfStatement {
                                 span: sp(),
-                                if_token: if_stmt.if_token.clone(),
+                                if_token: if_stmt.if_token,
                                 condition: new_cond,
-                                then_token: if_stmt.then_token.clone(),
+                                then_token: if_stmt.then_token,
                                 block: new_block,
                                 elseif_clauses: remaining,
                                 else_clause: if_stmt.else_clause.clone(),
-                                end_token: if_stmt.end_token.clone(),
+                                end_token: if_stmt.end_token,
                             };
                             return self
                                 .transform_statement(Statement::IfStatement(Box::new(new_if)));
@@ -228,19 +229,19 @@ impl AstTransform for DeadCodeTransform {
                     let new_block = self.transform_block(else_clause.block.clone());
                     let new_if = IfStatement {
                         span: sp(),
-                        if_token: if_stmt.if_token.clone(),
+                        if_token: if_stmt.if_token,
                         condition: negated,
-                        then_token: if_stmt.then_token.clone(),
+                        then_token: if_stmt.then_token,
                         block: new_block,
                         elseif_clauses: Vec::new(),
                         else_clause: None,
-                        end_token: if_stmt.end_token.clone(),
+                        end_token: if_stmt.end_token,
                     };
                     return Statement::IfStatement(Box::new(new_if));
                 }
 
                 if let Expression::UnaryOp(unop) = &if_stmt.condition
-                    && matches!(unop.op.kind, TokenKind::Not)
+                    && matches!(unop.op, UnOp::Not)
                     && if_stmt.else_clause.is_some()
                     && if_stmt.elseif_clauses.is_empty()
                 {
@@ -248,17 +249,17 @@ impl AstTransform for DeadCodeTransform {
                     let else_clause = if_stmt.else_clause.as_ref().expect("checked is_some above");
                     let new_if = IfStatement {
                         span: sp(),
-                        if_token: if_stmt.if_token.clone(),
+                        if_token: if_stmt.if_token,
                         condition: unop.operand.clone(),
-                        then_token: if_stmt.then_token.clone(),
+                        then_token: if_stmt.then_token,
                         block: self.transform_block(else_clause.block.clone()),
                         elseif_clauses: Vec::new(),
                         else_clause: Some(ElseClause {
                             span: sp(),
-                            else_token: else_clause.else_token.clone(),
+                            else_token: else_clause.else_token,
                             block: self.transform_block(if_stmt.block.clone()),
                         }),
-                        end_token: if_stmt.end_token.clone(),
+                        end_token: if_stmt.end_token,
                     };
                     return Statement::IfStatement(Box::new(new_if));
                 }
@@ -272,9 +273,9 @@ impl AstTransform for DeadCodeTransform {
                 let new_block = self.transform_block(repeat_loop.block.clone());
                 Statement::DoBlock(Box::new(DoBlock {
                     span: sp(),
-                    do_token: Token::new(TokenKind::Do, sp()),
+                    do_token: sp(),
                     block: new_block,
-                    end_token: Token::new(TokenKind::End, sp()),
+                    end_token: sp(),
                 }))
             }
             // step=1 is the default; stripping it saves bytes
@@ -300,7 +301,7 @@ impl AstTransform for DeadCodeTransform {
                         self.changed = true;
                         return Statement::LocalAssignment(Box::new(LocalAssignment {
                             span: sp(),
-                            local_token: local.local_token.clone(),
+                            local_token: local.local_token,
                             names: local.names.clone(),
                             equal_and_exprs: None,
                         }));
@@ -316,9 +317,9 @@ impl AstTransform for DeadCodeTransform {
         let expr = self.walk_expression(expr);
         // `cond and X or X` -> `X` when both branches identical and cond is pure
         if let Expression::BinaryOp(ref outer) = expr
-            && matches!(outer.op.kind, TokenKind::Or)
+            && matches!(outer.op, BinOp::Or)
             && let Expression::BinaryOp(ref inner) = outer.left
-            && matches!(inner.op.kind, TokenKind::And)
+            && matches!(inner.op, BinOp::And)
             && inner.right == outer.right
             && is_pure_expression(&inner.left, true)
             // X must be pure too: a falsy-returning CALL evaluates twice
@@ -337,7 +338,8 @@ fn negate_expression(expr: Expression) -> Expression {
     // which metamethod is called (__lt vs __le, etc.)
     Expression::UnaryOp(Box::new(UnaryOp {
         span: sp(),
-        op: Token::new(TokenKind::Not, sp()),
+        op: UnOp::Not,
+        op_span: sp(),
         operand: expr,
     }))
 }

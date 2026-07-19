@@ -53,10 +53,7 @@ impl AstTransform for ExplicitSelfRewriter {
                     // saving: 3 bytes per self reference (4 -> 1 after rename)
                     if self_refs >= 2 {
                         func_decl.name.names.push(method_name);
-                        func_decl
-                            .name
-                            .dots
-                            .push(Token::new(TokenKind::Dot, Span::default()));
+                        func_decl.name.dots.push(Span::default());
 
                         let self_param = Parameter {
                             span: Span::default(),
@@ -65,16 +62,14 @@ impl AstTransform for ExplicitSelfRewriter {
                         };
 
                         // `self` needs a comma only when params follow it.
-                        let self_sep = (!func_decl.body.params.is_empty())
-                            .then(|| Token::new(TokenKind::Comma, Span::default()));
+                        let self_sep = (!func_decl.body.params.is_empty()).then(Span::default);
                         func_decl
                             .body
                             .params
                             .items
                             .insert(0, (self_param, self_sep));
                     } else {
-                        func_decl.name.method =
-                            Some((Token::new(TokenKind::Colon, Span::default()), method_name));
+                        func_decl.name.method = Some((Span::default(), method_name));
                     }
                 }
                 func_decl.body = self.walk_function_body(func_decl.body);

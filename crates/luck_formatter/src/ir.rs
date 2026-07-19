@@ -1,4 +1,4 @@
-//! Formatter IR: a Wadler/Prettier document algebra in the Biome/oxc style.
+//! Formatter IR: a Wadler/Prettier document algebra.
 //!
 //! The document is a flat element stream; structure is expressed by paired
 //! `Tag` start/end markers rather than nested ownership, which keeps

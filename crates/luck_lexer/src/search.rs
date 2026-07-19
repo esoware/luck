@@ -1,5 +1,5 @@
-//! Byte lookup tables for batched scanning, modeled on oxc's
-//! `SafeByteMatchTable`. A table marks the bytes a scan must stop at;
+//! Byte lookup tables for batched scanning. A table marks the bytes a
+//! scan must stop at;
 //! `find_match` walks fixed-size batches so the inner loop vectorizes.
 
 pub const SEARCH_BATCH_SIZE: usize = 32;

@@ -1,17 +1,21 @@
-use luck_token::{Span, Token};
+use luck_token::{BinOp, Span, Token, UnOp};
 
 use crate::shared::{ContainedSpan, Field, FunctionBody, Punctuated};
 use crate::types::Type;
 
 /// A Lua expression node.
+///
+/// Fixed-spelling leaves (`nil`, `true`, `false`, `...`) carry only their
+/// span; literal leaves carry the full token because the text is the
+/// payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expression {
-    Nil(Token),
-    False(Token),
-    True(Token),
+    Nil(Span),
+    False(Span),
+    True(Span),
     Number(Token),
     StringLiteral(Token),
-    VarArg(Token),
+    VarArg(Span),
     FunctionDef(Box<FunctionDef>),
     Var(Box<Var>),
     FunctionCall(Box<FunctionCall>),
@@ -39,7 +43,8 @@ pub struct FunctionCall {
     pub span: Span,
     pub callee: Expression,
     pub args: FunctionArgs,
-    pub method: Option<(Token, Token)>,
+    /// `:method` - (colon span, method name).
+    pub method: Option<(Span, Token)>,
 }
 
 /// Function call arguments: parenthesized list, table literal, or string literal.
@@ -58,7 +63,8 @@ pub enum FunctionArgs {
 pub struct BinaryOp {
     pub span: Span,
     pub left: Expression,
-    pub op: Token,
+    pub op: BinOp,
+    pub op_span: Span,
     pub right: Expression,
 }
 
@@ -66,7 +72,8 @@ pub struct BinaryOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnaryOp {
     pub span: Span,
-    pub op: Token,
+    pub op: UnOp,
+    pub op_span: Span,
     pub operand: Expression,
 }
 
@@ -83,7 +90,7 @@ pub struct ParenExpression {
 pub struct TableConstructor {
     pub span: Span,
     pub braces: ContainedSpan,
-    pub fields: Vec<(Field, Option<Token>)>,
+    pub fields: Vec<(Field, Option<Span>)>,
 }
 
 /// Index expression: `prefix[index]`.
@@ -100,7 +107,7 @@ pub struct IndexExpression {
 pub struct FieldAccess {
     pub span: Span,
     pub prefix: Expression,
-    pub dot: Token,
+    pub dot: Span,
     pub name: Token,
 }
 
@@ -108,7 +115,7 @@ pub struct FieldAccess {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionDef {
     pub span: Span,
-    pub function_token: Token,
+    pub function_token: Span,
     pub body: FunctionBody,
 }
 
@@ -116,12 +123,12 @@ pub struct FunctionDef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IfExpression {
     pub span: Span,
-    pub if_token: Token,
+    pub if_token: Span,
     pub condition: Expression,
-    pub then_token: Token,
+    pub then_token: Span,
     pub then_expr: Expression,
     pub elseif_clauses: Vec<ElseIfExprClause>,
-    pub else_token: Token,
+    pub else_token: Span,
     pub else_expr: Expression,
 }
 
@@ -129,9 +136,9 @@ pub struct IfExpression {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElseIfExprClause {
     pub span: Span,
-    pub elseif_token: Token,
+    pub elseif_token: Span,
     pub condition: Expression,
-    pub then_token: Token,
+    pub then_token: Span,
     pub expr: Expression,
 }
 
@@ -154,6 +161,6 @@ pub struct InterpSegment {
 pub struct TypeCast {
     pub span: Span,
     pub expr: Expression,
-    pub double_colon: Token,
+    pub double_colon: Span,
     pub type_annotation: Type,
 }

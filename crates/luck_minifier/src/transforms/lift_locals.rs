@@ -348,7 +348,7 @@ fn rewrite_block(block: Block, liftable: &HashSet<String>) -> Block {
                         new_stmts.push(Statement::Assignment(Box::new(Assignment {
                             span: local.span,
                             targets,
-                            equal: Token::new(TokenKind::Equal, sp()),
+                            equal: sp(),
                             values: exprs,
                         })));
                     }
@@ -370,7 +370,7 @@ fn rewrite_block(block: Block, liftable: &HashSet<String>) -> Block {
                     new_stmts.push(Statement::Assignment(Box::new(Assignment {
                         span: lf.span,
                         targets: Punctuated::from_item(Var::Name(lf.name)),
-                        equal: Token::new(TokenKind::Equal, sp()),
+                        equal: sp(),
                         values: Punctuated::from_item(body_block),
                     })));
                 } else {
@@ -462,7 +462,7 @@ fn prepend_declaration(block: &mut Block, names: &[String]) {
             .into_iter()
             .enumerate()
             .map(|(idx, attributed)| {
-                let sep = (idx + 1 < total).then(|| Token::new(TokenKind::Comma, sp()));
+                let sep = (idx + 1 < total).then(sp);
                 (attributed, sep)
             })
             .collect(),
@@ -472,7 +472,7 @@ fn prepend_declaration(block: &mut Block, names: &[String]) {
         0,
         Statement::LocalAssignment(Box::new(LocalAssignment {
             span: sp(),
-            local_token: Token::new(TokenKind::Local, sp()),
+            local_token: sp(),
             names,
             equal_and_exprs: None,
         })),
