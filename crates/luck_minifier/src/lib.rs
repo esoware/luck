@@ -67,15 +67,35 @@ pub fn minify(
     // SLOWER than simply re-running the full chain until the output
     // stabilizes - real programs converge in 2-3 rounds either way, and
     // the flat loop does the least redundant work per round.
-    let mut previous_output = luck_codegen::compact(&block, source);
+    //
+    // Each improving round re-parses its own output before the next one.
+    // Transform-built nodes are not always shaped like their parsed
+    // equivalents (paren wrappers, span-less tokens), and a pass that
+    // matches on the parsed shape can miss work that would be visible
+    // after a round trip - the idempotency invariant (minify(minify(x)) ==
+    // minify(x)) held only by luck before this. Judging the fixpoint on
+    // freshly parsed ASTs makes the emitted text the convergence domain.
+    let mut current_source = source.to_string();
+    let mut previous_output = luck_codegen::compact(&block, &current_source);
     for _ in 0..MAX_PIPELINE_ROUNDS {
         block = apply_core_transforms(block, config, target);
         block = apply_tail_transforms(block, config, target);
-        let output = luck_codegen::compact(&block, source);
+        let output = luck_codegen::compact(&block, &current_source);
         if output == previous_output {
             break;
         }
         previous_output = output;
+        current_source.clone_from(&previous_output);
+        let reparsed = luck_parser::parse(&current_source, version);
+        debug_assert!(
+            reparsed.errors.is_empty(),
+            "minified round output failed to reparse: {:?}",
+            reparsed.errors
+        );
+        if !reparsed.errors.is_empty() {
+            break;
+        }
+        block = reparsed.block;
     }
 
     Ok(previous_output)

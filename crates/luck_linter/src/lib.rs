@@ -768,4 +768,3 @@ mod tests {
         assert!(diags.iter().any(|d| d.rule == "undefined_variable"));
     }
 }
-

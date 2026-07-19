@@ -109,7 +109,13 @@ impl Format for Field {
             }
             Field::Bracketed { key, value, .. } => {
                 token("[").fmt(f);
-                key.fmt(f);
+                if crate::format_expr::starts_with_bracket(key) {
+                    crate::write!(f, [space()]);
+                    key.fmt(f);
+                    crate::write!(f, [space()]);
+                } else {
+                    key.fmt(f);
+                }
                 crate::write!(f, [token("]"), space(), token("="), space()]);
                 value.fmt(f);
             }

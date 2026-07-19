@@ -61,8 +61,11 @@ impl AstTransform for ExplicitSelfRewriter {
                             type_annotation: None,
                         };
 
-                        // `self` needs a comma only when params follow it.
-                        let self_sep = (!func_decl.body.params.is_empty()).then(Span::default);
+                        // `self` needs a comma when anything follows it -
+                        // named params or a bare `...`.
+                        let has_following =
+                            !func_decl.body.params.is_empty() || func_decl.body.vararg.is_some();
+                        let self_sep = has_following.then(Span::default);
                         func_decl
                             .body
                             .params
@@ -122,6 +125,15 @@ mod tests {
     fn no_params_case() {
         let result = minify(
             "local t = {}\nfunction t:method()\n  self.a = 1\n  self.b = 2\nend\nreturn t\n",
+        );
+        assert!(reparses(&result), "Parse errors\nOutput: {result}");
+        assert!(!result.contains("self"), "self should be renamed: {result}");
+    }
+
+    #[test]
+    fn vararg_only_method_keeps_comma() {
+        let result = minify(
+            "local t = {}\nfunction t:method(...)\n  self.a = 1\n  self.b = 2\n  return ...\nend\nreturn t\n",
         );
         assert!(reparses(&result), "Parse errors\nOutput: {result}");
         assert!(!result.contains("self"), "self should be renamed: {result}");

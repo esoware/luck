@@ -211,8 +211,37 @@ impl AstTransform for Inliner {
         }
     }
 
+    fn transform_statement(&mut self, stmt: Statement) -> Statement {
+        let stmt = self.walk_statement(stmt);
+        // Statement-level calls hold their FunctionCall directly, outside
+        // any Expression, so the expression-level callee guard never runs.
+        if let Statement::FunctionCall(mut call_stmt) = stmt {
+            call_stmt.call.callee = ensure_prefix(call_stmt.call.callee);
+            return Statement::FunctionCall(call_stmt);
+        }
+        stmt
+    }
+
+    fn transform_var(&mut self, var: Var) -> Var {
+        match self.walk_var(var) {
+            Var::Index(mut index) => {
+                index.prefix = ensure_prefix(index.prefix);
+                Var::Index(index)
+            }
+            Var::FieldAccess(mut access) => {
+                access.prefix = ensure_prefix(access.prefix);
+                Var::FieldAccess(access)
+            }
+            var @ Var::Name(_) => var,
+        }
+    }
+
     fn transform_expression(&mut self, expr: Expression) -> Expression {
         let expr = self.walk_expression(expr);
+        if let Expression::FunctionCall(mut call) = expr {
+            call.callee = ensure_prefix(call.callee);
+            return Expression::FunctionCall(call);
+        }
         if let Expression::Var(ref var) = expr
             && let Var::Name(ref name) = **var
         {
@@ -236,6 +265,27 @@ impl AstTransform for Inliner {
         }
         expr
     }
+}
+
+/// Prefix positions (index/field prefixes, call callees) admit only vars,
+/// calls, and parenthesized expressions; an inlined literal landing there
+/// must gain parens or the output re-parses differently (`x["k"]` with
+/// `x = 37.5` would become the invalid `37.5["k"]`).
+fn ensure_prefix(expr: Expression) -> Expression {
+    if matches!(
+        expr,
+        Expression::Var(_) | Expression::FunctionCall(_) | Expression::Parenthesized(_)
+    ) {
+        return expr;
+    }
+    Expression::Parenthesized(Box::new(ParenExpression {
+        span: sp(),
+        parens: ContainedSpan {
+            open: sp(),
+            close: sp(),
+        },
+        expr,
+    }))
 }
 
 impl Inliner {
@@ -302,6 +352,33 @@ mod tests {
         assert!(
             !r.contains("local x"),
             "Declaration inside if block not inlined: {r}"
+        );
+    }
+
+    #[test]
+    fn parenthesizes_literal_inlined_into_index_prefix() {
+        let r = apply("local x = 37.5\nreturn x[\"k\"]\n");
+        assert!(
+            r.contains("(37.5)[\"k\"]"),
+            "Literal in index-prefix position must gain parens: {r}"
+        );
+    }
+
+    #[test]
+    fn parenthesizes_literal_inlined_into_field_prefix() {
+        let r = apply("local x = \"s\"\nreturn x.len\n");
+        assert!(
+            r.contains("(\"s\").len"),
+            "Literal in field-prefix position must gain parens: {r}"
+        );
+    }
+
+    #[test]
+    fn parenthesizes_literal_inlined_into_statement_call_receiver() {
+        let r = apply("local x = false\nx:resize(9)\n");
+        assert!(
+            r.contains("(false):resize(9)"),
+            "Literal receiver of a statement call must gain parens: {r}"
         );
     }
 

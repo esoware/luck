@@ -40,10 +40,19 @@ harness = false
 name = "minifier"
 harness = false
 
+[[bench]]
+name = "bundler"
+harness = false
+
+[[bench]]
+name = "synth"
+harness = false
+
 [dependencies]
 luck_testgen.workspace = true
 luck_token.workspace = true
 luck_core.workspace = true
+luck_ast.workspace = true
 luck_lexer.workspace = true
 luck_parser.workspace = true
 luck_semantic.workspace = true
@@ -51,8 +60,11 @@ luck_linter.workspace = true
 luck_codegen.workspace = true
 luck_formatter.workspace = true
 luck_minifier.workspace = true
+luck_bundler.workspace = true
 criterion2 = { workspace = true }
 ureq = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
 
 [features]
 codspeed = ["criterion2/codspeed"]

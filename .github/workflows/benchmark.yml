@@ -35,7 +35,17 @@ jobs:
       fail-fast: false
       matrix:
         component:
-          [lexer, parser, semantic, linter, codegen, formatter, minifier]
+          [
+            lexer,
+            parser,
+            semantic,
+            linter,
+            codegen,
+            formatter,
+            minifier,
+            bundler,
+            synth,
+          ]
     name: Bench ${{ matrix.component }}
     steps:
       - uses: actions/checkout@v4
@@ -67,3 +77,19 @@ jobs:
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
           run: cargo codspeed run ${{ matrix.component }}
+
+  minsize:
+    runs-on: ubuntu-latest
+    name: Minsize snapshot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: benchmark
+          save-if: false
+
+      - name: Check minsize.snap is current
+        run: cargo test -p luck_benchmark --test metrics minsize_is_up_to_date -- --ignored

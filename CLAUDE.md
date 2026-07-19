@@ -18,8 +18,9 @@ cargo test --doc --workspace                           # doctests (nextest does 
 cargo fmt --all                                        # format
 cargo clippy --workspace --all-targets -- -D warnings  # must be zero warnings
 cargo insta accept                                     # accept snapshots (non-interactive; `review` is for humans)
-cargo bench -p luck_benchmark                          # criterion benches, one per stage (--bench lexer|parser|semantic|linter|codegen|formatter|minifier)
+cargo bench -p luck_benchmark                          # criterion benches, one per stage (--bench lexer|parser|semantic|linter|codegen|formatter|minifier|bundler|synth)
 cargo test -p luck_core regenerate_luckrc_schema -- --ignored  # regen VS Code schema after config changes
+cargo test -p luck_benchmark --test metrics regenerate_minsize -- --ignored  # regen committed minsize.snap after minifier/corpus changes
 ```
 
 ## Architecture
@@ -51,8 +52,8 @@ and feeds `luck_bundler`. On top sit `luck` (facade re-exports),
 | `luck_lsp` | Library-only LSP backend (no binary); served via `luck lsp` | `backend.rs`, `serve.rs`, `providers/` |
 | `luck_cli` | Flat Clap commands (incl. `lsp`); rayon-parallel lint/fmt/check; ariadne diagnostic rendering; `ExitCode` 0/1/2; 16 MB-stack worker thread | `cli.rs`, `render.rs`, `main.rs` |
 | `luck` | Facade re-exports (no logic) | `lib.rs` |
-| `luck_testgen` | Internal harness (`publish = false`): deterministic program generator, round-trip property tests | `src/lib.rs` |
-| `luck_benchmark` | Internal (`publish = false`): per-stage criterion benches, run on CodSpeed in CI; real-world corpus fetched on demand from esoware/luck-bench-corpus (pinned SHA) into the gitignored `corpus/` cache | `benches/`, `src/corpus.rs` |
+| `luck_testgen` | Internal harness (`publish = false`): two deterministic program generators - runtime-safe (`generate`) and full-grammar/parse-only (`generate_full`, every version-gated construct) - plus round-trip property tests over both | `src/lib.rs`, `src/full.rs` |
+| `luck_benchmark` | Internal (`publish = false`): per-stage criterion benches (incl. bundler + synth-AST), run on CodSpeed in CI; corpus = full-grammar gen files, real-world files from esoware/luck-bench-corpus, and pinned Roact/Penlight project tarballs, all cached in the gitignored `corpus/`; committed `minsize.snap` (oxc-style size tracking) checked by CI, regen command above | `benches/`, `src/corpus.rs`, `tests/metrics.rs` |
 
 Versioning is **lockstep**: one workspace version in
 `[workspace.package]`, inherited by every publishable crate and shared

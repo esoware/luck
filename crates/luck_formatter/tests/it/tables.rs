@@ -75,3 +75,26 @@ fn long_single_field_expanded() {
         &opts,
     );
 }
+
+#[test]
+fn long_string_bracket_key_keeps_space() {
+    // `[[[k]]]` would re-lex the first two brackets as a long-string
+    // opener; the space is load-bearing.
+    assert_format(
+        "local t = { [ [[k]] ] = 1 }\n",
+        "local t = { [ [[k]] ] = 1 }\n",
+    );
+}
+
+#[test]
+fn long_string_index_keeps_space() {
+    assert_format("t[ [[k]] ] = 2\n", "t[ [[k]] ] = 2\n");
+}
+
+#[test]
+fn fill_entry_with_grouped_dot_chain() {
+    // A >=3-segment access chain forms its own group inside a fill entry;
+    // the fill printer must not mistake the group's soft lines for entry
+    // separators.
+    assert_format("local t={a.b.c.d,x,y}\n", "local t = { a.b.c.d, x, y }\n");
+}

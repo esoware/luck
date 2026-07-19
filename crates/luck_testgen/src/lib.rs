@@ -11,6 +11,10 @@
 
 use luck_token::LuaVersion;
 
+mod full;
+
+pub use full::{FullGenerator, generate_full};
+
 /// xorshift64* - deterministic, no external dependency, stable across
 /// platforms. Speed and statistical quality are irrelevant here; only
 /// reproducibility matters.

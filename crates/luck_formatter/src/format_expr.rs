@@ -85,10 +85,49 @@ impl Format for Var {
             Var::Index(index) => {
                 index.prefix.fmt(f);
                 token("[").fmt(f);
-                index.index.fmt(f);
+                if starts_with_bracket(&index.index) {
+                    space().fmt(f);
+                    index.index.fmt(f);
+                    space().fmt(f);
+                } else {
+                    index.index.fmt(f);
+                }
                 token("]").fmt(f);
             }
         }
+    }
+}
+
+/// Whether the expression's leftmost rendered token begins with `[`: a
+/// long-bracket string on the left spine. Emitting it directly after an
+/// opening `[` would lex as a long-string opener (`[[`), so index and
+/// bracket-field sites pad with spaces when this returns true.
+pub(crate) fn starts_with_bracket(expr: &Expression) -> bool {
+    match expr {
+        Expression::StringLiteral(token) => match &token.kind {
+            TokenKind::StringLiteral(literal) => literal.starts_with('['),
+            _ => false,
+        },
+        Expression::BinaryOp(binop) => starts_with_bracket(&binop.left),
+        Expression::TypeCast(cast) => starts_with_bracket(&cast.expr),
+        Expression::FunctionCall(call) => starts_with_bracket(&call.callee),
+        Expression::Var(var) => match var.as_ref() {
+            Var::Name(_) => false,
+            Var::Index(index) => starts_with_bracket(&index.prefix),
+            Var::FieldAccess(access) => starts_with_bracket(&access.prefix),
+        },
+        Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Parenthesized(_)
+        | Expression::TableConstructor(_)
+        | Expression::UnaryOp(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::Error(_) => false,
     }
 }
 

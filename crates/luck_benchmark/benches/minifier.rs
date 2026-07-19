@@ -1,4 +1,4 @@
-use luck_benchmark::corpus::test_files;
+use luck_benchmark::corpus::{test_files, test_projects};
 use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use luck_core::transform_config::TransformConfig;
 
@@ -16,6 +16,28 @@ fn bench_minifier(criterion: &mut Criterion) {
             b.iter(|| {
                 luck_minifier::minify(black_box(source_text), target, &config, "bench.lua")
                     .expect("bench corpus must minify")
+            });
+        });
+    }
+
+    for project in test_projects() {
+        let id = BenchmarkId::from_parameter(project.name);
+        let target = project.target;
+        let config = TransformConfig::default();
+        let files = project.files;
+        group.bench_function(id, |b| {
+            b.iter(|| {
+                for (name, source_text) in &files {
+                    black_box(
+                        luck_minifier::minify(
+                            black_box(source_text.as_str()),
+                            target,
+                            &config,
+                            name,
+                        )
+                        .expect("bench corpus must minify"),
+                    );
+                }
             });
         });
     }

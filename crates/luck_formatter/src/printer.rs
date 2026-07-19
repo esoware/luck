@@ -325,8 +325,15 @@ impl Printer {
                     };
                     self.modes.push(mode);
                     index += 1;
-                }
-                FormatElement::Tag(Tag::EndEntry) => {
+                    // Entry content prints through `print_element`, not this
+                    // loop's arms: a grouped chain inside an entry carries its
+                    // own `Line` elements, and the `Line` arm above must only
+                    // ever see the separators between entries. A nested fill
+                    // consumes its own entries via recursion, so the first
+                    // `EndEntry` seen here is this entry's.
+                    while !matches!(&elements[index], FormatElement::Tag(Tag::EndEntry)) {
+                        index = self.print_element(elements, index);
+                    }
                     self.modes.pop();
                     index += 1;
                 }

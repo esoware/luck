@@ -67,6 +67,17 @@ fn parse_owned(source: String, version: LuaVersion) -> ParseResult {
     }
     let mut parser = parser::Parser::new(&source, version);
     let block = parser.parse_block();
+    // A chunk must consume its whole input. `parse_block` returns at any
+    // block boundary (a `return`, a stray `end`), and silently accepting
+    // trailing statements would drop them from the AST - every downstream
+    // consumer (minifier, formatter, bundler) would then silently discard
+    // user code. Suppressed after an earlier error: recovery may already
+    // have abandoned the tail, and the first error is the real one.
+    if !parser.at_eof() && !parser.has_errors() {
+        let span = parser.current_span();
+        let message = format!("expected end of file, found {}", parser.peek());
+        parser.error(span, message);
+    }
     let (comments, errors) = parser.finish();
     ParseResult {
         block,

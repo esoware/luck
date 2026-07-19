@@ -93,3 +93,28 @@ fn leading_comma_in_table() {
         "leading comma in table constructor should be an error"
     );
 }
+
+#[test]
+fn statements_after_top_level_return_error() {
+    // Silent acceptance would drop the tail from the AST entirely.
+    let result = parse("return 1\nlocal x = 2");
+    assert!(
+        !result.errors.is_empty(),
+        "statements after a top-level return must be an error"
+    );
+}
+
+#[test]
+fn stray_end_at_top_level_errors() {
+    let result = parse("local x = 1\nend");
+    assert!(
+        !result.errors.is_empty(),
+        "a stray end at top level must be an error"
+    );
+}
+
+#[test]
+fn trailing_semicolon_after_return_is_valid() {
+    let result = parse("return 1;");
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+}

@@ -49,6 +49,8 @@ luck_lsp = { version = "0.1.0", path = "crates/luck_lsp" }
 luck_testgen = { path = "crates/luck_testgen" }
 criterion2 = { version = "3", default-features = false }
 ureq = "3"
+flate2 = "1"
+tar = "0.4"
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "net", "macros", "sync", "time"] }
 similar = "2"

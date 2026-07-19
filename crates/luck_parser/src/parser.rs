@@ -109,6 +109,11 @@ impl<'src> Parser<'src> {
         matches!(self.peek(), TokenKind::Eof)
     }
 
+    #[inline]
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+
     pub fn enter_depth(&mut self) -> Result<(), ParseError> {
         self.depth += 1;
         if self.depth > self.max_depth {
