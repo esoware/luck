@@ -25,6 +25,11 @@ fn make_comma() -> Span {
 fn extract_single_assignment_parts(stmt: &Statement) -> Option<(&Token, &Expression, bool)> {
     match stmt {
         Statement::LocalAssignment(local) => {
+            // Const declarations stay unmerged: mixing them with plain
+            // locals in one statement would extend or drop const-ness.
+            if local.is_const {
+                return None;
+            }
             if let Some((_, exprs)) = &local.equal_and_exprs {
                 let names: Vec<_> = local.names.iter().collect();
                 let expr_list: Vec<_> = exprs.iter().collect();
@@ -138,6 +143,7 @@ impl AstTransform for LocalMerger {
                                 .expect("local group starts with a local assignment"),
                             names: build_punctuated(group_names),
                             equal_and_exprs: Some((sp(), build_punctuated(group_exprs))),
+                            is_const: false,
                         };
                         merged.push(self.transform_statement(Statement::LocalAssignment(
                             Box::new(merged_local),
@@ -194,6 +200,7 @@ impl AstTransform for LocalMerger {
                             .expect("bare-local group starts with a local assignment"),
                         names: build_punctuated(names),
                         equal_and_exprs: None,
+                        is_const: false,
                     })));
                 } else {
                     let stmt = group.pop().expect("group holds the first statement");
@@ -220,7 +227,7 @@ impl AstTransform for LocalMerger {
 }
 
 fn is_bare_local(stmt: &Statement) -> bool {
-    matches!(stmt, Statement::LocalAssignment(local) if local.equal_and_exprs.is_none())
+    matches!(stmt, Statement::LocalAssignment(local) if local.equal_and_exprs.is_none() && !local.is_const)
 }
 
 fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
@@ -271,6 +278,7 @@ fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
                             local_token: local.local_token,
                             names: local.names.clone(),
                             equal_and_exprs: Some((assign.equal, assign.values)),
+                            is_const: false,
                         }));
                         result.push(fused);
                         continue;

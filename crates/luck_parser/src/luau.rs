@@ -15,6 +15,10 @@ use luck_token::{Span, Token, TokenKind};
 
 use crate::parser::Parser;
 
+/// Real Luau's flat type-suffix chain rejects `A | B & C`, `A? & B`, etc.
+const MIXED_TYPE_MSG: &str =
+    "mixing union and intersection types is not allowed; consider wrapping in parentheses";
+
 impl Parser<'_> {
     /// Parse `: T` if present. All annotation sites share this so the
     /// Luau gate lives in exactly one place.
@@ -71,12 +75,24 @@ impl Parser<'_> {
         separator: TokenKind,
         across_intersections: bool,
     ) -> (Punctuated<Type>, Span) {
+        let check_mixing = |parser: &mut Self, item: &Type| {
+            let is_mixed = if across_intersections {
+                matches!(item, Type::Intersection(_))
+            } else {
+                matches!(item, Type::Optional(_))
+            };
+            if is_mixed {
+                parser.error(item.span(), MIXED_TYPE_MSG.to_string());
+            }
+        };
+
         let mut pairs = Vec::new();
         let mut current = if across_intersections {
             self.parse_intersection_level()
         } else {
             self.parse_postfix_type()
         };
+        check_mixing(self, &current);
 
         while std::mem::discriminant(self.peek()) == std::mem::discriminant(&separator) {
             let separator_span = self.advance_span();
@@ -85,6 +101,7 @@ impl Parser<'_> {
             } else {
                 self.parse_postfix_type()
             };
+            check_mixing(self, &next);
             pairs.push((current, separator_span));
             current = next;
         }
@@ -99,12 +116,21 @@ impl Parser<'_> {
             return first;
         }
 
+        // Real Luau's type suffix chain is flat: `A | B & C` (in either
+        // order) is "Mixing union and intersection types is not allowed".
+        if matches!(first, Type::Intersection(_)) {
+            self.error(first.span(), MIXED_TYPE_MSG.to_string());
+        }
+
         let start_span = first.span();
         let mut pairs = Vec::new();
         let mut current = first;
         while matches!(self.peek(), TokenKind::Pipe) {
             let pipe = self.advance_span();
             let next = self.parse_intersection_level();
+            if matches!(next, Type::Intersection(_)) {
+                self.error(next.span(), MIXED_TYPE_MSG.to_string());
+            }
             pairs.push((current, pipe));
             current = next;
         }
@@ -123,12 +149,21 @@ impl Parser<'_> {
             return first;
         }
 
+        // `?` marks a union in real Luau, so `A? & B` and `A & B?` are
+        // the same mixing error as `A | B & C`.
+        if matches!(first, Type::Optional(_)) {
+            self.error(first.span(), MIXED_TYPE_MSG.to_string());
+        }
+
         let start_span = first.span();
         let mut pairs = Vec::new();
         let mut current = first;
         while matches!(self.peek(), TokenKind::Ampersand) {
             let ampersand = self.advance_span();
             let next = self.parse_postfix_type();
+            if matches!(next, Type::Optional(_)) {
+                self.error(next.span(), MIXED_TYPE_MSG.to_string());
+            }
             pairs.push((current, ampersand));
             current = next;
         }
@@ -186,7 +221,7 @@ impl Parser<'_> {
             TokenKind::LeftParen => self.parse_paren_or_function_type(),
             // `<T>(...) -> R` - generic function type
             TokenKind::Less => {
-                let generics = self.parse_generic_type_list();
+                let generics = self.parse_generic_type_list(false);
                 self.parse_function_type(Some(generics))
             }
             // `...T` - variadic pack
@@ -298,10 +333,12 @@ impl Parser<'_> {
 
     /// Generic parameter list at a declaration site:
     /// `<T, U = string, V... = ...number>`.
-    pub fn parse_generic_type_list(&mut self) -> GenericTypeList {
+    pub fn parse_generic_type_list(&mut self, allow_defaults: bool) -> GenericTypeList {
         let open = self.advance_span(); // `<`
         let mut pairs = Vec::new();
         let mut current = None;
+        let mut seen_pack = false;
+        let mut seen_default = false;
 
         while !matches!(
             self.peek(),
@@ -325,6 +362,54 @@ impl Parser<'_> {
             } else {
                 None
             };
+
+            // Grammar: plain type parameters come before type packs, a
+            // defaulted parameter forces defaults on the rest, pack
+            // defaults must be packs, and defaults exist only in type
+            // alias declarations.
+            if dots.is_none() && seen_pack {
+                self.error(
+                    name.span,
+                    "generic types come before generic type packs".to_string(),
+                );
+            }
+            seen_pack |= dots.is_some();
+            match &default {
+                Some((_, default_type)) => {
+                    if !allow_defaults {
+                        self.error(
+                            default_type.span(),
+                            "default type parameters are only allowed in type alias declarations"
+                                .to_string(),
+                        );
+                    }
+                    let default_is_pack = matches!(
+                        default_type,
+                        Type::Pack(_) | Type::Variadic(_) | Type::GenericPack(_)
+                    );
+                    if dots.is_some() && !default_is_pack {
+                        self.error(
+                            default_type.span(),
+                            "a generic type pack default must be a type pack".to_string(),
+                        );
+                    }
+                    if dots.is_none() && default_is_pack {
+                        self.error(
+                            default_type.span(),
+                            "a generic type default must be a single type".to_string(),
+                        );
+                    }
+                    seen_default = true;
+                }
+                None => {
+                    if dots.is_none() && seen_default {
+                        self.error(
+                            name.span,
+                            "expected a default type after a defaulted type parameter".to_string(),
+                        );
+                    }
+                }
+            }
 
             let end_span = default
                 .as_ref()
@@ -370,6 +455,31 @@ impl Parser<'_> {
             fields.push((field, separator));
             if is_last {
                 break;
+            }
+        }
+
+        // Grammar: `TableType ::= '{' Type '}' | '{' [PropList] '}'` -
+        // an array table holds exactly one type, and a PropList holds at
+        // most one indexer.
+        let mut seen_indexer = false;
+        for (idx, (field, _)) in fields.iter().enumerate() {
+            match field {
+                TypeField::Indexer { span, .. } => {
+                    if seen_indexer {
+                        self.error(*span, "cannot have more than one table indexer".to_string());
+                    }
+                    seen_indexer = true;
+                }
+                TypeField::Array { span, .. } => {
+                    if idx > 0 || fields.len() > 1 {
+                        self.error(
+                            *span,
+                            "an array-like table type holds exactly one element type; use named fields or an indexer instead".to_string(),
+                        );
+                        break;
+                    }
+                }
+                TypeField::Named { .. } => {}
             }
         }
 

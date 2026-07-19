@@ -19,6 +19,26 @@ fn binding_param(name: Token, type_annotation: Option<(Span, luck_ast::Type)>) -
     }
 }
 
+/// Attribute arguments are restricted to the grammar's `literal`
+/// production: nil, booleans, numbers, strings, and tables of literals
+/// with plain-name or positional fields.
+fn is_attribute_literal(expr: &Expression) -> bool {
+    match expr {
+        Expression::Nil(_)
+        | Expression::True(_)
+        | Expression::False(_)
+        | Expression::Number(_)
+        | Expression::StringLiteral(_) => true,
+        Expression::TableConstructor(table) => table.fields.iter().all(|(field, _)| match field {
+            Field::Named { value, .. } | Field::Positional { value, .. } => {
+                is_attribute_literal(value)
+            }
+            Field::Bracketed { .. } => false,
+        }),
+        _ => false,
+    }
+}
+
 impl Parser<'_> {
     /// Parse a single statement. Returns None if error recovery consumed everything.
     pub fn parse_statement(&mut self) -> Option<Statement> {
@@ -33,6 +53,9 @@ impl Parser<'_> {
             TokenKind::Break if !self.version.break_is_last_stat_only() => {
                 // 5.2+: break can appear as a regular statement
                 let span = self.advance_span();
+                if self.loop_depth == 0 {
+                    self.error(span, "break outside a loop".to_string());
+                }
                 Some(Statement::Break(span))
             }
             TokenKind::Goto if self.version.has_goto() => Some(self.parse_goto_statement()),
@@ -61,6 +84,17 @@ impl Parser<'_> {
                                 && next == "type"
                             {
                                 return Some(self.parse_export_type_declaration());
+                            }
+                        }
+                        "const" => {
+                            // `const name...` / `const function` = const
+                            // declaration; `const = 1`, `const()`, `const.x`
+                            // keep `const` as an ordinary identifier.
+                            if matches!(
+                                self.peek_next(),
+                                TokenKind::Identifier(_) | TokenKind::Function
+                            ) {
+                                return Some(self.parse_const_statement());
                             }
                         }
                         _ => {}
@@ -173,7 +207,7 @@ impl Parser<'_> {
         self.push_context("while-loop", while_token);
         let condition = self.parse_expression(0);
         let do_token = self.expect_keyword(TokenKind::Do);
-        let block = self.parse_block();
+        let block = self.parse_loop_block();
         let end_token = self.expect_keyword(TokenKind::End);
         self.pop_context();
         let span = while_token.merge(end_token);
@@ -246,7 +280,7 @@ impl Parser<'_> {
         };
 
         let do_token = self.expect_keyword(TokenKind::Do);
-        let block = self.parse_block();
+        let block = self.parse_loop_block();
         let end_token = self.expect_keyword(TokenKind::End);
         let span = for_token.merge(end_token);
 
@@ -296,7 +330,7 @@ impl Parser<'_> {
         let in_token = self.expect_keyword(TokenKind::In);
         let exprs = self.parse_expression_list();
         let do_token = self.expect_keyword(TokenKind::Do);
-        let block = self.parse_block();
+        let block = self.parse_loop_block();
         let end_token = self.expect_keyword(TokenKind::End);
         let span = for_token.merge(end_token);
 
@@ -316,7 +350,7 @@ impl Parser<'_> {
     fn parse_repeat_loop(&mut self) -> Statement {
         let repeat_token = self.advance_span();
         self.push_context("repeat-loop", repeat_token);
-        let block = self.parse_block();
+        let block = self.parse_loop_block();
         let until_token = self.expect_keyword(TokenKind::Until);
         let condition = self.parse_expression(0);
         let span = repeat_token.merge(condition.span());
@@ -422,7 +456,7 @@ impl Parser<'_> {
         let local_token = self.advance_span();
 
         if matches!(self.peek(), TokenKind::Function) {
-            return self.parse_local_function(local_token, attributes);
+            return self.parse_local_function(local_token, attributes, false);
         }
 
         if let Some(attr) = attributes.first() {
@@ -432,13 +466,25 @@ impl Parser<'_> {
                 "attributes are only allowed on function declarations".to_string(),
             );
         }
-        self.parse_local_assignment(local_token)
+        self.parse_local_assignment(local_token, false)
+    }
+
+    /// Parse Luau `const` declarations, dispatched from the contextual
+    /// `const` identifier: `const bindinglist '=' explist` or
+    /// `const function NAME funcbody`.
+    fn parse_const_statement(&mut self) -> Statement {
+        let const_token = self.advance_span(); // contextual `const`
+        if matches!(self.peek(), TokenKind::Function) {
+            return self.parse_local_function(const_token, Vec::new(), true);
+        }
+        self.parse_local_assignment(const_token, true)
     }
 
     fn parse_local_function(
         &mut self,
         local_token: Span,
         attributes: Vec<FunctionAttribute>,
+        is_const: bool,
     ) -> Statement {
         let function_token = self.advance_span();
         self.push_context("local function", local_token);
@@ -461,17 +507,42 @@ impl Parser<'_> {
             function_token,
             name,
             body,
+            is_const,
         }))
     }
 
-    fn parse_local_assignment(&mut self, local_token: Span) -> Statement {
+    fn parse_local_assignment(&mut self, local_token: Span, is_const: bool) -> Statement {
         let names = self.parse_attname_list();
+
+        // 5.4 §3.3.7: "A list of variables can contain at most one
+        // to-be-closed variable."
+        let mut seen_close = false;
+        for attributed in names.iter() {
+            if let Some(attrib) = &attributed.attrib
+                && let TokenKind::Identifier(attr_name) = &attrib.name.kind
+                && attr_name == "close"
+            {
+                if seen_close {
+                    self.error(
+                        attrib.span,
+                        "multiple to-be-closed variables in local list".to_string(),
+                    );
+                }
+                seen_close = true;
+            }
+        }
 
         let equal_and_exprs = if matches!(self.peek(), TokenKind::Equal) {
             let equal = self.advance_span();
             let exprs = self.parse_expression_list();
             Some((equal, exprs))
         } else {
+            // Grammar: `const bindinglist '=' explist` - the initializer
+            // is not optional.
+            if is_const {
+                let span = self.current_span();
+                self.error(span, "missing initializer in const declaration".to_string());
+            }
             None
         };
 
@@ -488,6 +559,7 @@ impl Parser<'_> {
             local_token,
             names,
             equal_and_exprs,
+            is_const,
         }))
     }
 
@@ -576,6 +648,16 @@ impl Parser<'_> {
         if matches!(self.peek(), TokenKind::Less) {
             let attrib = self.parse_attribute();
             if matches!(self.peek(), TokenKind::Star) {
+                // 5.5 §3.3.7: only local variables can have the close
+                // attribute.
+                if let TokenKind::Identifier(attr_name) = &attrib.name.kind
+                    && attr_name == "close"
+                {
+                    self.error(
+                        attrib.span,
+                        "only local variables can have the close attribute".to_string(),
+                    );
+                }
                 let star = self.advance_span();
                 let span = global_token.merge(star);
                 return Statement::GlobalStar(Box::new(GlobalStar {
@@ -586,23 +668,54 @@ impl Parser<'_> {
                 }));
             }
             let names = self.parse_attname_list_with_leading(Some(attrib));
-            let end_span = punctuated_last_name_span(&names).unwrap_or(global_token);
-            let span = global_token.merge(end_span);
-            return Statement::GlobalDeclaration(Box::new(GlobalDeclaration {
-                span,
-                global_token,
-                names,
-            }));
+            return self.finish_global_declaration(global_token, names);
         }
 
-        // `global name [, name]*` - variable declarations
+        // `global name [, name]* [= explist]` - variable declarations
         let names = self.parse_attname_list();
-        let end_span = punctuated_last_name_span(&names).unwrap_or(global_token);
+        self.finish_global_declaration(global_token, names)
+    }
+
+    /// Parse the optional `= explist` tail of a `global` declaration
+    /// (5.5 §3.3.7: `stat ::= global attnamelist ['=' explist]`).
+    fn finish_global_declaration(
+        &mut self,
+        global_token: Span,
+        names: Punctuated<AttributedName>,
+    ) -> Statement {
+        // 5.5 §3.3.7: only local variables can have the close attribute.
+        for attributed in names.iter() {
+            if let Some(attrib) = &attributed.attrib
+                && let TokenKind::Identifier(attr_name) = &attrib.name.kind
+                && attr_name == "close"
+            {
+                self.error(
+                    attrib.span,
+                    "only local variables can have the close attribute".to_string(),
+                );
+            }
+        }
+
+        let equal_and_exprs = if matches!(self.peek(), TokenKind::Equal) {
+            let equal = self.advance_span();
+            let exprs = self.parse_expression_list();
+            Some((equal, exprs))
+        } else {
+            None
+        };
+
+        let end_span = equal_and_exprs
+            .as_ref()
+            .and_then(|(_, exprs)| punctuated_last_span(exprs))
+            .or_else(|| punctuated_last_name_span(&names))
+            .unwrap_or(global_token);
         let span = global_token.merge(end_span);
+
         Statement::GlobalDeclaration(Box::new(GlobalDeclaration {
             span,
             global_token,
             names,
+            equal_and_exprs,
         }))
     }
 
@@ -625,6 +738,15 @@ impl Parser<'_> {
                 self.current_span(),
             )
         });
+        // 5.4 §3.3.7: "There are two possible attributes"; real Lua
+        // rejects anything else at parse time.
+        if let TokenKind::Identifier(attr_name) = &name.kind
+            && !attr_name.is_empty()
+            && attr_name != "const"
+            && attr_name != "close"
+        {
+            self.error(name.span, format!("unknown attribute '{attr_name}'"));
+        }
         let close = self.expect_span(&TokenKind::Greater).unwrap_or_else(|err| {
             self.errors.push(err);
             self.current_span()
@@ -669,21 +791,28 @@ impl Parser<'_> {
         // Luau: type annotation after name
         let first_type_annotation = self.try_parse_type_annotation();
 
-        // Leading attrib applies to the first name. A second, trailing
-        // attrib on the same name is an error - consume it so parsing
-        // recovers instead of silently dropping it.
+        // 5.5 §3.3.7: a prefixed attribute applies to ALL names in the
+        // list, so it is distributed onto every name that lacks its own
+        // trailing attribute (the emitted trailing form is equivalent).
+        // A name carrying both is an error - consume the trailing one so
+        // parsing recovers instead of silently dropping it.
+        let resolve_attrib =
+            |parser: &mut Self, leading: Option<&Attribute>, trailing: Option<Attribute>| match (
+                leading, trailing,
+            ) {
+                (Some(_), Some(trailing)) => {
+                    parser.error(
+                        trailing.span,
+                        "name already has a leading attribute".to_string(),
+                    );
+                    leading.cloned()
+                }
+                (Some(leading), None) => Some(leading.clone()),
+                (None, trailing) => trailing,
+            };
+
         let trailing_attrib = self.try_parse_attribute();
-        let first_attrib = match (leading_attrib, trailing_attrib) {
-            (Some(leading), Some(trailing)) => {
-                self.error(
-                    trailing.span,
-                    "name already has a leading attribute".to_string(),
-                );
-                Some(leading)
-            }
-            (Some(leading), None) => Some(leading),
-            (None, trailing) => trailing,
-        };
+        let first_attrib = resolve_attrib(self, leading_attrib.as_ref(), trailing_attrib);
 
         let mut pairs = Vec::new();
         let mut current = AttributedName {
@@ -698,7 +827,8 @@ impl Parser<'_> {
                 Ok(name) => {
                     // Luau: type annotation after name
                     let type_annotation = self.try_parse_type_annotation();
-                    let attrib = self.try_parse_attribute();
+                    let trailing = self.try_parse_attribute();
+                    let attrib = resolve_attrib(self, leading_attrib.as_ref(), trailing);
                     pairs.push((current, comma));
                     current = AttributedName {
                         name,
@@ -831,7 +961,7 @@ impl Parser<'_> {
         });
 
         let generics = if matches!(self.peek(), TokenKind::Less) {
-            Some(Box::new(self.parse_generic_type_list()))
+            Some(Box::new(self.parse_generic_type_list(true)))
         } else {
             None
         };
@@ -865,23 +995,146 @@ impl Parser<'_> {
     /// Parse `@native function ...` (Luau attributed function declaration).
     /// `@native` and friends change runtime codegen, so the attributes are
     /// kept on the AST and re-emitted - dropping them changes behavior.
-    fn parse_attributed_function(&mut self) -> Statement {
+    /// Parse a run of Luau attributes covering both grammar forms:
+    /// `attribute ::= '@' NAME | '@[' parattr {',' parattr} ']'` with
+    /// `parattr ::= NAME [pars]` and literal-only arguments.
+    pub(crate) fn parse_function_attributes(&mut self) -> Vec<FunctionAttribute> {
         let mut attributes = Vec::new();
         while matches!(self.peek(), TokenKind::At) {
             let at_token = self.advance_span(); // `@`
-            let name = self.expect_identifier().unwrap_or_else(|err| {
-                self.errors.push(err);
-                Token::new(
-                    TokenKind::Identifier(String::new().into()),
-                    self.current_span(),
-                )
-            });
-            attributes.push(FunctionAttribute {
-                span: at_token.merge(name.span),
-                at_token,
-                name,
-            });
+            if matches!(self.peek(), TokenKind::LeftBracket) {
+                self.advance_span(); // `[`
+                loop {
+                    let name = self.expect_identifier().unwrap_or_else(|err| {
+                        self.errors.push(err);
+                        Token::new(
+                            TokenKind::Identifier(String::new().into()),
+                            self.current_span(),
+                        )
+                    });
+                    let args = self.parse_attribute_args();
+                    self.validate_function_attribute(&name, args.is_some(), &attributes);
+                    let end_span = args
+                        .as_ref()
+                        .and_then(punctuated_last_span)
+                        .unwrap_or(name.span);
+                    attributes.push(FunctionAttribute {
+                        span: at_token.merge(end_span),
+                        at_token,
+                        name,
+                        args,
+                    });
+                    if matches!(self.peek(), TokenKind::Comma) {
+                        self.advance_span();
+                    } else {
+                        break;
+                    }
+                }
+                if let Err(err) = self.expect_span(&TokenKind::RightBracket) {
+                    self.errors.push(err);
+                }
+            } else {
+                let name = self.expect_identifier().unwrap_or_else(|err| {
+                    self.errors.push(err);
+                    Token::new(
+                        TokenKind::Identifier(String::new().into()),
+                        self.current_span(),
+                    )
+                });
+                self.validate_function_attribute(&name, false, &attributes);
+                attributes.push(FunctionAttribute {
+                    span: at_token.merge(name.span),
+                    at_token,
+                    name,
+                    args: None,
+                });
+            }
         }
+        attributes
+    }
+
+    /// Parse the optional `pars` of a parenthesized attribute:
+    /// `pars ::= '(' [litlist] ')' | littable | STRING`. The string and
+    /// table sugar canonicalize to a one-element argument list.
+    fn parse_attribute_args(&mut self) -> Option<Punctuated<Expression>> {
+        match self.peek() {
+            TokenKind::LeftParen => {
+                self.advance_span();
+                let args = if matches!(self.peek(), TokenKind::RightParen) {
+                    Punctuated::empty()
+                } else {
+                    self.parse_expression_list()
+                };
+                if let Err(err) = self.expect_span(&TokenKind::RightParen) {
+                    self.errors.push(err);
+                }
+                for expr in args.iter() {
+                    if !is_attribute_literal(expr) {
+                        self.error(
+                            expr.span(),
+                            "attribute arguments must be literals".to_string(),
+                        );
+                    }
+                }
+                Some(args)
+            }
+            TokenKind::StringLiteral(_) => {
+                let token = self.advance();
+                let mut args = Punctuated::empty();
+                args.push(Expression::StringLiteral(token), None);
+                Some(args)
+            }
+            TokenKind::LeftBrace => {
+                let table = self.parse_table_constructor();
+                let expr = Expression::TableConstructor(Box::new(table));
+                if !is_attribute_literal(&expr) {
+                    self.error(
+                        expr.span(),
+                        "attribute arguments must be literals".to_string(),
+                    );
+                }
+                let mut args = Punctuated::empty();
+                args.push(expr, None);
+                Some(args)
+            }
+            _ => None,
+        }
+    }
+
+    /// Luau validates attributes at parse time: only
+    /// checked/native/deprecated exist, duplicates are errors, and only
+    /// `deprecated` accepts arguments.
+    fn validate_function_attribute(
+        &mut self,
+        name: &Token,
+        has_args: bool,
+        previous: &[FunctionAttribute],
+    ) {
+        let TokenKind::Identifier(attr_name) = &name.kind else {
+            return;
+        };
+        if attr_name.is_empty() {
+            return;
+        }
+        if !matches!(attr_name.as_str(), "checked" | "native" | "deprecated") {
+            self.error(name.span, format!("invalid attribute '@{attr_name}'"));
+            return;
+        }
+        if has_args && attr_name != "deprecated" {
+            self.error(
+                name.span,
+                format!("attribute '@{attr_name}' does not take arguments"),
+            );
+        }
+        if previous.iter().any(|prev| {
+            matches!(&prev.name.kind, TokenKind::Identifier(existing) if existing == attr_name)
+        }) {
+            self.error(name.span, format!("duplicate attribute '@{attr_name}'"));
+        }
+    }
+
+    fn parse_attributed_function(&mut self) -> Statement {
+        let attributes = self.parse_function_attributes();
 
         // The next token should be `function` (global) or `local` (local function)
         if matches!(self.peek(), TokenKind::Local) {

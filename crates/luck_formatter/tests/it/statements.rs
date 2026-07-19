@@ -156,3 +156,32 @@ fn long_if_condition_breaks() {
         &opts,
     );
 }
+
+#[test]
+fn global_declaration_with_initializer() {
+    // 5.5: global attnamelist ['=' explist]
+    assert_format_with(
+        "global x=1\n",
+        "global x = 1\n",
+        luck_token::LuaVersion::Lua55,
+        &luck_formatter::FormatOptions::default(),
+    );
+    assert_format_with(
+        "global a,b=1,f(2)\n",
+        "global a, b = 1, f(2)\n",
+        luck_token::LuaVersion::Lua55,
+        &luck_formatter::FormatOptions::default(),
+    );
+}
+
+#[test]
+fn leading_attribute_formats_as_distributed_trailing() {
+    // The leading attribute applies to all names (5.5 §3.3.7); the
+    // formatter canonicalizes to the equivalent per-name trailing form.
+    assert_format_with(
+        "local <const> x, y = 1, 2\n",
+        "local x <const>, y <const> = 1, 2\n",
+        luck_token::LuaVersion::Lua55,
+        &luck_formatter::FormatOptions::default(),
+    );
+}

@@ -22,7 +22,7 @@ end
 __luck_modules[1]=function(...)
 local typed = {}
 
-export type Point = {x: number, y: number}
+ type Point = {x: number, y: number}
 
 type InternalState = {
     count: number,

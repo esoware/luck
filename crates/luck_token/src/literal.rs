@@ -3,6 +3,8 @@
 //! text instead of decoded values caused an entire class of miscompiles
 //! (UTF-8 corruption, escape-state confusion, \"5\" != \"A\").
 
+use crate::LuaVersion;
+
 /// A compile-time Lua number carrying the 5.3+ integer/float subtype.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LuaNumber {
@@ -37,9 +39,11 @@ pub fn parse_lua_number(text: &str, int_subtype: bool) -> Option<LuaNumber> {
 
 /// Decode a string literal token's raw text to its runtime byte value.
 /// Handles both quote forms with all Lua escapes and long-bracket strings
-/// (leading-newline strip, no escapes). Returns None on any form this
-/// doesn't model exactly - callers must then refuse to fold.
-pub fn decode_string_literal(raw: &str) -> Option<Vec<u8>> {
+/// (EOL normalization, leading-newline strip, no escapes). Returns None
+/// on any form this doesn't model exactly - callers must then refuse to
+/// fold. Version-dependent: 5.1 treats undefined escapes as the literal
+/// character, and Luau's long strings do not treat a lone CR as a newline.
+pub fn decode_string_literal(raw: &str, version: LuaVersion) -> Option<Vec<u8>> {
     let bytes = raw.as_bytes();
     if raw.starts_with('[') {
         let after_open = raw.find('[')? + 1;
@@ -49,17 +53,39 @@ pub fn decode_string_literal(raw: &str) -> Option<Vec<u8>> {
         if content_start > content_end {
             return Some(Vec::new());
         }
-        let mut content = &raw[content_start..content_end];
-        // A long string's first character being a newline is skipped.
-        if let Some(stripped) = content.strip_prefix("\r\n") {
-            content = stripped;
-        } else if let Some(stripped) = content
-            .strip_prefix('\n')
-            .or_else(|| content.strip_prefix('\r'))
-        {
-            content = stripped;
+        let content = &raw.as_bytes()[content_start..content_end];
+        // Every EOL sequence normalizes to a single newline, and a
+        // newline right after the opening bracket is dropped (5.4 §3.1).
+        // PUC recognizes CR, LF, CRLF, and LFCR; Luau only LF and CRLF,
+        // keeping a lone CR as a literal byte (Lexer::fixupMultilineString).
+        let mut out = Vec::with_capacity(content.len());
+        let mut idx = 0;
+        while idx < content.len() {
+            let byte = content[idx];
+            let next = content.get(idx + 1).copied();
+            match byte {
+                b'\r' if next == Some(b'\n') => {
+                    out.push(b'\n');
+                    idx += 2;
+                }
+                b'\r' if !version.is_luau() => {
+                    out.push(b'\n');
+                    idx += 1;
+                }
+                b'\n' if next == Some(b'\r') && !version.is_luau() => {
+                    out.push(b'\n');
+                    idx += 2;
+                }
+                _ => {
+                    out.push(byte);
+                    idx += 1;
+                }
+            }
         }
-        return Some(content.as_bytes().to_vec());
+        if out.first() == Some(&b'\n') {
+            out.remove(0);
+        }
+        return Some(out);
     }
 
     let quote = *bytes.first()?;
@@ -90,21 +116,29 @@ pub fn decode_string_literal(raw: &str) -> Option<Vec<u8>> {
             b'\\' => out.push(b'\\'),
             b'"' => out.push(b'"'),
             b'\'' => out.push(b'\''),
-            b'\n' => out.push(b'\n'),
+            b'\n' => {
+                out.push(b'\n');
+                if !version.is_luau() && inner.get(idx) == Some(&b'\r') {
+                    idx += 1;
+                }
+            }
             b'\r' => {
                 out.push(b'\n');
                 if inner.get(idx) == Some(&b'\n') {
                     idx += 1;
                 }
             }
-            b'x' => {
+            b'x' if version.has_hex_escape() => {
                 let hi = char::from(*inner.get(idx)?).to_digit(16)?;
                 let lo = char::from(*inner.get(idx + 1)?).to_digit(16)?;
                 out.push((hi * 16 + lo) as u8);
                 idx += 2;
             }
-            b'z' => {
-                while inner.get(idx).is_some_and(|b| b.is_ascii_whitespace()) {
+            b'z' if version.has_whitespace_escape() => {
+                while inner
+                    .get(idx)
+                    .is_some_and(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C))
+                {
                     idx += 1;
                 }
             }
@@ -124,7 +158,7 @@ pub fn decode_string_literal(raw: &str) -> Option<Vec<u8>> {
                 }
                 out.push(value as u8);
             }
-            b'u' => {
+            b'u' if version.has_unicode_escape() => {
                 if inner.get(idx) != Some(&b'{') {
                     return None;
                 }
@@ -142,6 +176,10 @@ pub fn decode_string_literal(raw: &str) -> Option<Vec<u8>> {
                 let mut buf = [0u8; 4];
                 out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
             }
+            // Lua 5.1 treats any other escaped character as that literal
+            // character; under strict versions such tokens cannot exist,
+            // so refuse to fold rather than guess.
+            _ if !version.has_strict_escapes() => out.push(escaped),
             _ => return None,
         }
     }
@@ -205,6 +243,10 @@ pub fn encode_string_literal(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn decode(raw: &str) -> Option<Vec<u8>> {
+        decode_string_literal(raw, LuaVersion::Lua54)
+    }
 
     #[test]
     fn number_plain_int_and_float() {
@@ -292,72 +334,157 @@ mod tests {
 
     #[test]
     fn decode_simple_string() {
-        assert_eq!(decode_string_literal(r#""hello""#), Some(b"hello".to_vec()));
-        assert_eq!(decode_string_literal("'hi'"), Some(b"hi".to_vec()));
-        assert_eq!(decode_string_literal(r#""""#), Some(Vec::new()));
+        assert_eq!(decode(r#""hello""#), Some(b"hello".to_vec()));
+        assert_eq!(decode("'hi'"), Some(b"hi".to_vec()));
+        assert_eq!(decode(r#""""#), Some(Vec::new()));
     }
 
     #[test]
     fn decode_escape_classes() {
-        assert_eq!(decode_string_literal(r#""\n""#), Some(vec![b'\n']));
-        assert_eq!(decode_string_literal(r#""\t""#), Some(vec![b'\t']));
-        assert_eq!(decode_string_literal(r#""\\""#), Some(vec![b'\\']));
-        assert_eq!(decode_string_literal(r#""\"""#), Some(vec![b'"']));
-        assert_eq!(decode_string_literal(r#""\a""#), Some(vec![0x07]));
-        assert_eq!(decode_string_literal(r#""\r""#), Some(vec![b'\r']));
+        assert_eq!(decode(r#""\n""#), Some(vec![b'\n']));
+        assert_eq!(decode(r#""\t""#), Some(vec![b'\t']));
+        assert_eq!(decode(r#""\\""#), Some(vec![b'\\']));
+        assert_eq!(decode(r#""\"""#), Some(vec![b'"']));
+        assert_eq!(decode(r#""\a""#), Some(vec![0x07]));
+        assert_eq!(decode(r#""\r""#), Some(vec![b'\r']));
     }
 
     #[test]
     fn decode_hex_escape() {
-        assert_eq!(decode_string_literal(r#""\x41""#), Some(vec![0x41]));
-        assert_eq!(decode_string_literal(r#""\xff""#), Some(vec![0xFF]));
+        assert_eq!(decode(r#""\x41""#), Some(vec![0x41]));
+        assert_eq!(decode(r#""\xff""#), Some(vec![0xFF]));
     }
 
     #[test]
     fn decode_decimal_escape() {
-        assert_eq!(decode_string_literal(r#""\65""#), Some(vec![65]));
-        assert_eq!(decode_string_literal(r#""\9""#), Some(vec![9]));
-        assert_eq!(decode_string_literal(r#""\255""#), Some(vec![255]));
+        assert_eq!(decode(r#""\65""#), Some(vec![65]));
+        assert_eq!(decode(r#""\9""#), Some(vec![9]));
+        assert_eq!(decode(r#""\255""#), Some(vec![255]));
     }
 
     #[test]
     fn decode_decimal_escape_out_of_range() {
-        assert_eq!(decode_string_literal(r#""\256""#), None);
-        assert_eq!(decode_string_literal(r#""\300""#), None);
+        assert_eq!(decode(r#""\256""#), None);
+        assert_eq!(decode(r#""\300""#), None);
     }
 
     #[test]
     fn decode_unicode_escape() {
-        assert_eq!(decode_string_literal(r#""\u{48}""#), Some(b"H".to_vec()));
+        assert_eq!(decode(r#""\u{48}""#), Some(b"H".to_vec()));
         // U+00E9 (e-acute) encodes to two UTF-8 bytes.
-        assert_eq!(decode_string_literal(r#""\u{e9}""#), Some(vec![0xC3, 0xA9]));
+        assert_eq!(decode(r#""\u{e9}""#), Some(vec![0xC3, 0xA9]));
     }
 
     #[test]
     fn decode_z_line_continuation() {
         // `\z` skips the whitespace run that follows, including newlines.
-        assert_eq!(
-            decode_string_literal("\"a\\z   \n   b\""),
-            Some(b"ab".to_vec())
-        );
+        assert_eq!(decode("\"a\\z   \n   b\""), Some(b"ab".to_vec()));
     }
 
     #[test]
     fn decode_bad_escape_is_none() {
-        assert_eq!(decode_string_literal(r#""\q""#), None);
+        assert_eq!(decode(r#""\q""#), None);
+        assert_eq!(decode_string_literal(r#""\q""#, LuaVersion::Luau), None);
+    }
+
+    #[test]
+    fn decode_lua51_lax_escapes_are_literal() {
+        // Real 5.1 saves any escaped non-digit as that character, so
+        // \m, \x, \z, \u are content, not escapes (5.2 §8.1 tightened this).
+        let lua51 = LuaVersion::Lua51;
+        assert_eq!(decode_string_literal(r#""\m""#, lua51), Some(b"m".to_vec()));
+        assert_eq!(
+            decode_string_literal(r#""\x41""#, lua51),
+            Some(b"x41".to_vec())
+        );
+        assert_eq!(
+            decode_string_literal(r#""a\z  b""#, lua51),
+            Some(b"az  b".to_vec())
+        );
+        assert_eq!(
+            decode_string_literal(r#""\u{48}""#, lua51),
+            Some(b"u{48}".to_vec())
+        );
+        // Decimal escapes exist in 5.1 and stay escapes.
+        assert_eq!(decode_string_literal(r#""\65""#, lua51), Some(vec![65]));
+    }
+
+    #[test]
+    fn decode_version_gated_escapes_refuse_fold() {
+        // \u{} does not exist before 5.3; a strict version that lacks the
+        // escape must refuse to fold rather than guess.
+        assert_eq!(
+            decode_string_literal(r#""\u{48}""#, LuaVersion::Lua52),
+            None
+        );
+    }
+
+    #[test]
+    fn decode_long_bracket_eol_normalization() {
+        // 5.4 §3.1: any EOL sequence converts to a simple newline.
+        let lua54 = LuaVersion::Lua54;
+        assert_eq!(
+            decode_string_literal("[[a\rb]]", lua54),
+            Some(b"a\nb".to_vec())
+        );
+        assert_eq!(
+            decode_string_literal("[[a\r\nb]]", lua54),
+            Some(b"a\nb".to_vec())
+        );
+        assert_eq!(
+            decode_string_literal("[[a\n\rb]]", lua54),
+            Some(b"a\nb".to_vec())
+        );
+        // Leading EOL of any form is dropped.
+        assert_eq!(
+            decode_string_literal("[[\r\nhi]]", lua54),
+            Some(b"hi".to_vec())
+        );
+        assert_eq!(
+            decode_string_literal("[[\n\rhi]]", lua54),
+            Some(b"hi".to_vec())
+        );
+        assert_eq!(
+            decode_string_literal("[[\rhi]]", lua54),
+            Some(b"hi".to_vec())
+        );
+        // Two CRLFs are two newlines, one stripped.
+        assert_eq!(
+            decode_string_literal("[[\r\n\r\nhi]]", lua54),
+            Some(b"\nhi".to_vec())
+        );
+    }
+
+    #[test]
+    fn decode_long_bracket_eol_luau_lone_cr_is_content() {
+        // Luau's Lexer::fixupMultilineString only recognizes LF and CRLF.
+        let luau = LuaVersion::Luau;
+        assert_eq!(
+            decode_string_literal("[[a\rb]]", luau),
+            Some(b"a\rb".to_vec())
+        );
+        assert_eq!(
+            decode_string_literal("[[a\r\nb]]", luau),
+            Some(b"a\nb".to_vec())
+        );
+        assert_eq!(
+            decode_string_literal("[[a\n\rb]]", luau),
+            Some(b"a\n\rb".to_vec())
+        );
+        assert_eq!(
+            decode_string_literal("[[\rhi]]", luau),
+            Some(b"\rhi".to_vec())
+        );
     }
 
     #[test]
     fn decode_long_bracket_string() {
-        assert_eq!(decode_string_literal("[[hello]]"), Some(b"hello".to_vec()));
-        assert_eq!(decode_string_literal("[==[x]==]"), Some(b"x".to_vec()));
+        assert_eq!(decode("[[hello]]"), Some(b"hello".to_vec()));
+        assert_eq!(decode("[==[x]==]"), Some(b"x".to_vec()));
         // A leading newline in a long string is stripped.
-        assert_eq!(
-            decode_string_literal("[[\nhello]]"),
-            Some(b"hello".to_vec())
-        );
+        assert_eq!(decode("[[\nhello]]"), Some(b"hello".to_vec()));
         // Long strings do not process escapes.
-        assert_eq!(decode_string_literal("[[a\\nb]]"), Some(b"a\\nb".to_vec()));
+        assert_eq!(decode("[[a\\nb]]"), Some(b"a\\nb".to_vec()));
     }
 
     #[test]
@@ -394,7 +521,7 @@ mod tests {
         for bytes in cases {
             let encoded = encode_string_literal(bytes);
             assert_eq!(
-                decode_string_literal(&encoded).as_deref(),
+                decode(&encoded).as_deref(),
                 Some(*bytes),
                 "round trip failed for {bytes:?} (encoded {encoded:?})"
             );

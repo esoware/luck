@@ -1,6 +1,4 @@
-//! Programmatic AST construction (`luck_ast::synth`) and the source-less
-//! emit paths a decompiler backend uses: compact codegen and `format_block`
-//! with no source text.
+//! Programmatic AST construction (`luck_ast::synth`)
 
 use luck_ast::shared::Block;
 use luck_ast::stmt::Statement;
@@ -12,8 +10,7 @@ use luck_token::{BinOp, UnOp};
 const MODULE_COUNT: usize = 150;
 
 /// One OOP-style module: class table, constructor, two methods with loops
-/// and conditionals. Statement mix mirrors what a bytecode decompiler
-/// emits: locals, assignments through index/field vars, calls, control flow.
+/// and conditionals.
 fn build_module(synth: &Synth, module_index: usize) -> Vec<Statement> {
     let class = format!("Module{module_index}");
 

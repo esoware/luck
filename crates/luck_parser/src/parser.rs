@@ -24,12 +24,19 @@ fn is_continue_context(next: &TokenKind) -> bool {
 /// stream.
 pub struct Parser<'src> {
     lexer: Lexer<'src>,
+    source: &'src str,
     current: Token,
     next: Token,
     prev_span: Span,
     pub version: LuaVersion,
     depth: u32,
     max_depth: u32,
+    /// Nesting depth of enclosing loops; reset inside function bodies.
+    /// `break`/`continue` at depth 0 is a compile error in every Lua.
+    pub(crate) loop_depth: u32,
+    /// Whether `...` is valid here. Main chunks are vararg; function
+    /// bodies are vararg only when their params end in `...`.
+    pub(crate) is_vararg_scope: bool,
     pub(crate) errors: Vec<ParseError>,
     /// Stack tracking what construct is being parsed, for contextual error messages.
     pub(crate) context_stack: Vec<(&'static str, Span)>,
@@ -42,15 +49,26 @@ impl<'src> Parser<'src> {
         let next = lexer.next_token();
         Self {
             lexer,
+            source,
             current,
             next,
             prev_span: Span::new(0, 0),
             version,
             depth: 0,
             max_depth: 256,
+            loop_depth: 0,
+            is_vararg_scope: true,
             errors: Vec::new(),
             context_stack: Vec::new(),
         }
+    }
+
+    /// Whether the source between the previous token and the current one
+    /// contains a line break. Drives the 5.1/Luau "ambiguous syntax"
+    /// check for `(` call suffixes.
+    pub(crate) fn newline_before_current(&self) -> bool {
+        let between = &self.source[self.prev_span.end as usize..self.current.span.start as usize];
+        between.bytes().any(|b| b == b'\n' || b == b'\r')
     }
 
     #[inline]
@@ -187,6 +205,15 @@ impl<'src> Parser<'src> {
         (comments, errors)
     }
 
+    /// Parse a loop body: identical to `parse_block` but with
+    /// `break`/`continue` made valid inside it.
+    pub fn parse_loop_block(&mut self) -> Block {
+        self.loop_depth += 1;
+        let block = self.parse_block();
+        self.loop_depth -= 1;
+        block
+    }
+
     /// Parse a block (statement list with optional trailing return/break/continue).
     pub fn parse_block(&mut self) -> Block {
         let start_span = self.current_span();
@@ -202,17 +229,24 @@ impl<'src> Parser<'src> {
 
         let mut stmts = Vec::new();
         let mut last_stmt = None;
+        // 5.1 and Luau have no empty statement: a single `;` may only
+        // FOLLOW a statement (block ::= {stat [';']}), so a leading or
+        // doubled `;` is a parse error there. 5.2+ treats `;` as a
+        // statement of its own.
+        let mut can_take_separator = false;
 
         loop {
-            // Skip semicolons in Lua 5.1 (they are statement separators, not statements)
             while matches!(self.peek(), TokenKind::Semicolon) {
                 if self.version.has_empty_statement() {
-                    // 5.2+: semicolons are empty statements
                     let span = self.advance_span();
                     stmts.push(luck_ast::Statement::EmptyStatement(span));
                 } else {
-                    // 5.1: just consume semicolons as separators
+                    let span = self.current_span();
+                    if !can_take_separator {
+                        self.error(span, "unexpected token ';'".to_string());
+                    }
                     self.advance_span();
+                    can_take_separator = false;
                 }
             }
 
@@ -223,6 +257,9 @@ impl<'src> Parser<'src> {
                 }
                 TokenKind::Break if self.version.break_is_last_stat_only() => {
                     let span = self.advance_span();
+                    if self.loop_depth == 0 {
+                        self.error(span, "break outside a loop".to_string());
+                    }
                     last_stmt = Some(Box::new(luck_ast::LastStatement::Break(span)));
                     if matches!(self.peek(), TokenKind::Semicolon) {
                         self.advance_span();
@@ -242,6 +279,9 @@ impl<'src> Parser<'src> {
                         && is_continue_context(self.peek_next()) =>
                 {
                     let span = self.advance_span();
+                    if self.loop_depth == 0 {
+                        self.error(span, "continue outside a loop".to_string());
+                    }
                     last_stmt = Some(Box::new(luck_ast::LastStatement::Continue(span)));
                     if matches!(self.peek(), TokenKind::Semicolon) {
                         self.advance_span();
@@ -255,6 +295,7 @@ impl<'src> Parser<'src> {
                             // parse_statement returned None - error recovery already happened
                         }
                     }
+                    can_take_separator = true;
                 }
                 _ => {
                     // Unknown token that doesn't start a statement and isn't a block-ender.
@@ -263,6 +304,7 @@ impl<'src> Parser<'src> {
                     self.error(span, format!("unexpected token {}", self.peek()));
                     self.synchronize();
                     stmts.push(luck_ast::Statement::Error(span));
+                    can_take_separator = true;
                 }
             }
         }

@@ -41,3 +41,50 @@ fn number_hex_lower() {
 fn number_hex_upper() {
     assert_eq!(first_kind("0XAB"), TokenKind::Number("0XAB".into()));
 }
+
+#[test]
+fn number_adjacent_to_concat_is_malformed() {
+    // Every real Lua numeral scanner consumes the dots, so `1..2` is
+    // "malformed number", never `1 .. 2`.
+    for version in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Luau] {
+        for source in ["return 1..2", "return 1.5..2", "return 1e5..2"] {
+            let result = luck_lexer::lex(source, version);
+            assert!(
+                !result.errors.is_empty(),
+                "{source} must be malformed under {version:?}"
+            );
+        }
+    }
+    // With a space the concat is valid.
+    for version in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Luau] {
+        let result = luck_lexer::lex("return 1 ..2", version);
+        assert!(result.errors.is_empty(), "spaced concat lexes: {version:?}");
+    }
+}
+
+#[test]
+fn hex_number_adjacent_to_concat_per_version() {
+    // 5.1's hex scanner stops at the dot: `0xFF..2` is a valid concat
+    // there. Luau's scanner consumes the dots: malformed. 5.2+ fails
+    // in the hex-float path.
+    assert!(
+        luck_lexer::lex("return 0xFF..2", LuaVersion::Lua51)
+            .errors
+            .is_empty()
+    );
+    assert!(
+        !luck_lexer::lex("return 0xFF..2", LuaVersion::Luau)
+            .errors
+            .is_empty()
+    );
+    assert!(
+        !luck_lexer::lex("return 0xFF..2", LuaVersion::Lua54)
+            .errors
+            .is_empty()
+    );
+    assert!(
+        !luck_lexer::lex("return 0b1..2", LuaVersion::Luau)
+            .errors
+            .is_empty()
+    );
+}

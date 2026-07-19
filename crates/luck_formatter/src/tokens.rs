@@ -3,7 +3,7 @@
 //! The formatter never slices source for leaf text: fixed-spelling kinds
 //! map to static strings, and literal kinds (identifiers, numbers, strings,
 //! interpolation parts) carry their text in the `TokenKind`. This is what
-//! makes synthetic (decompiler-built) ASTs formattable.
+//! makes synthetic ASTs formattable.
 
 use luck_token::{Token, TokenKind};
 

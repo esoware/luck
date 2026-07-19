@@ -98,6 +98,26 @@ pub fn emit_with_line_map(
         *next_line += fragment.matches('\n').count();
     };
 
+    // Luau hot comments only apply before any code: hoist the entry
+    // module's leading run above the loader so they keep their effect.
+    if version.is_luau() {
+        let entry_module = &modules[entry_id.0];
+        for line in entry_module.source.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("--") {
+                if rest.starts_with('!') {
+                    push(&mut output, &mut next_line, trimmed);
+                    push(&mut output, &mut next_line, "\n");
+                }
+                continue;
+            }
+            break;
+        }
+    }
+
     push(&mut output, &mut next_line, "do\n");
     push(&mut output, &mut next_line, LOADER);
 
@@ -247,7 +267,25 @@ fn transform_module_body(
             &owned_parse_result.block
         }
     };
-    let replacements = collect_require_replacements(block, path_to_slot, dependencies);
+    let mut replacements = collect_require_replacements(block, path_to_slot, dependencies);
+
+    // Luau rejects `export type` below the top level, and every bundled
+    // module body lands inside a loader function (the entry inside the
+    // wrapping do-block). Dropping the `export` keyword keeps the alias
+    // usable within its module; cross-module type imports cannot survive
+    // bundling either way.
+    for stmt in &block.stmts {
+        if let luck_ast::Statement::TypeDeclaration(type_decl) = stmt
+            && let Some(export_span) = type_decl.export_token
+        {
+            replacements.push((
+                export_span.start as usize,
+                export_span.end as usize,
+                String::new(),
+            ));
+        }
+    }
+    replacements.sort_by_key(|(start, _, _)| *start);
 
     if replacements.is_empty() {
         return source.to_string();

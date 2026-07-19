@@ -20,6 +20,7 @@ mod expr;
 mod luau;
 mod parser;
 mod stmt;
+mod validate;
 
 use luck_ast::Block;
 use luck_token::{Comment, LuaVersion};
@@ -42,6 +43,19 @@ pub type ParseError = luck_token::SourceError;
 #[must_use]
 pub fn parse(source: impl Into<String>, version: LuaVersion) -> ParseResult {
     parse_owned(source.into(), version)
+}
+
+/// Scope-context checks real Lua performs at compile time but that need
+/// extra AST walks: writes to const bindings, goto/label resolution, and
+/// Luau's continue/until rule. NOT part of [`parse`] - transform
+/// pipelines don't pay for it; diagnostic front ends (`luck check`)
+/// opt in explicitly. Only meaningful on a clean parse; recovery ASTs
+/// cascade misleading secondary errors.
+#[must_use]
+pub fn validate(block: &Block, version: LuaVersion) -> Vec<ParseError> {
+    let mut errors = Vec::new();
+    validate::validate(block, version, &mut errors);
+    errors
 }
 
 fn parse_owned(source: String, version: LuaVersion) -> ParseResult {

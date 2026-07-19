@@ -90,3 +90,118 @@ fn named_vararg_in_lua54_not_consumed() {
         panic!("expected FunctionDecl");
     }
 }
+
+#[test]
+fn break_outside_loop_rejected() {
+    for version in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Luau] {
+        assert_has_errors(&parse("break", version));
+        assert_has_errors(&parse("do break end", version));
+        assert_has_errors(&parse("function f() break end", version));
+        // Function bodies reset the loop context.
+        assert_has_errors(&parse(
+            "while true do local f = function() break end end",
+            version,
+        ));
+        assert_no_errors(&parse("while true do break end", version));
+        assert_no_errors(&parse("repeat break until x", version));
+        assert_no_errors(&parse("for i = 1, 2 do break end", version));
+        assert_no_errors(&parse("while true do do break end end", version));
+    }
+}
+
+#[test]
+fn continue_outside_loop_rejected() {
+    assert_has_errors(&parse("continue", LuaVersion::Luau));
+    assert_has_errors(&parse(
+        "while true do local f = function() continue end end",
+        LuaVersion::Luau,
+    ));
+    assert_no_errors(&parse("while true do continue end", LuaVersion::Luau));
+}
+
+#[test]
+fn vararg_outside_vararg_function_rejected() {
+    for version in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Luau] {
+        // Main chunks are vararg.
+        assert_no_errors(&parse("return ...", version));
+        assert_no_errors(&parse("local function f(...) return ... end", version));
+        assert_has_errors(&parse("local function f() return ... end", version));
+        // Non-vararg function nested in a vararg one.
+        assert_has_errors(&parse(
+            "local function f(...) local g = function(x) return ... end end",
+            version,
+        ));
+    }
+}
+
+#[test]
+fn unknown_lua_attribute_rejected() {
+    for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
+        assert_no_errors(&parse("local x <const> = 1", version));
+        assert_no_errors(&parse("local x <close> = nil", version));
+        assert_has_errors(&parse("local x <foo> = 1", version));
+    }
+}
+
+#[test]
+fn multiple_close_attributes_rejected() {
+    // 5.4 §3.3.7: at most one to-be-closed variable per list.
+    assert_has_errors(&parse(
+        "local x <close>, y <close> = a, b",
+        LuaVersion::Lua54,
+    ));
+    assert_no_errors(&parse(
+        "local x <close>, y <const> = a, 1",
+        LuaVersion::Lua54,
+    ));
+}
+
+#[test]
+fn close_attribute_on_globals_rejected() {
+    // 5.5 §3.3.7: only local variables can have the close attribute.
+    assert_has_errors(&parse("global x <close>", LuaVersion::Lua55));
+    assert_has_errors(&parse("global <close> x", LuaVersion::Lua55));
+    assert_has_errors(&parse("global <close> *", LuaVersion::Lua55));
+    assert_no_errors(&parse("global x <const>", LuaVersion::Lua55));
+    assert_no_errors(&parse("global <const> *", LuaVersion::Lua55));
+}
+
+#[test]
+fn empty_statement_gated_by_version() {
+    // 5.1 and Luau have no empty statement: `;` only follows a stat.
+    for version in [LuaVersion::Lua51, LuaVersion::Luau] {
+        assert_has_errors(&parse(";", version));
+        assert_has_errors(&parse(";local x = 1", version));
+        assert_has_errors(&parse("local x = 1;;", version));
+        assert_no_errors(&parse("local x = 1;", version));
+        assert_no_errors(&parse("local x = 1; local y = 2;", version));
+    }
+    for version in [LuaVersion::Lua52, LuaVersion::Lua54] {
+        assert_no_errors(&parse(";", version));
+        assert_no_errors(&parse(";;local x = 1;;", version));
+    }
+}
+
+#[test]
+fn ambiguous_newline_call_gated_by_version() {
+    // 5.1 and Luau hard-error on a call whose `(` opens a new line.
+    let source = "a = b\n(f)(g)";
+    assert_has_errors(&parse(source, LuaVersion::Lua51));
+    assert_has_errors(&parse(source, LuaVersion::Luau));
+    assert_no_errors(&parse(source, LuaVersion::Lua54));
+    // Same line: fine everywhere.
+    assert_no_errors(&parse("a = b(f)(g)", LuaVersion::Lua51));
+    // Non-paren call args never trigger the check.
+    assert_no_errors(&parse("a = b\n{ x = 1 }", LuaVersion::Lua51));
+}
+
+#[test]
+fn luau_function_attribute_names_validated() {
+    assert_no_errors(&parse("@native function f() end", LuaVersion::Luau));
+    assert_no_errors(&parse(
+        "@checked @native function f() end",
+        LuaVersion::Luau,
+    ));
+    assert_has_errors(&parse("@totallymadeup function f() end", LuaVersion::Luau));
+    assert_has_errors(&parse("@native @native function f() end", LuaVersion::Luau));
+}

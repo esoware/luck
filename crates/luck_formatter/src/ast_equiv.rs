@@ -178,10 +178,15 @@ fn stmt_eq(left: &Statement, right: &Statement, path: &str) -> Result<(), AstDif
                 }
                 _ => return Err(AstDiff::new(path, "FunctionDecl method presence differs")),
             }
+            function_attributes_eq(&l.attributes, &r.attributes, &child(path, "FunctionDecl"))?;
             function_body_eq(&l.body, &r.body, &child(path, "FunctionDecl/body"))
         }
         (Statement::LocalFunction(l), Statement::LocalFunction(r)) => {
             token_text_eq(&l.name, &r.name, &child(path, "LocalFunction/name"))?;
+            if l.is_const != r.is_const {
+                return Err(AstDiff::new(path, "LocalFunction const-ness differs"));
+            }
+            function_attributes_eq(&l.attributes, &r.attributes, &child(path, "LocalFunction"))?;
             function_body_eq(&l.body, &r.body, &child(path, "LocalFunction/body"))
         }
         (Statement::GlobalFunction(l), Statement::GlobalFunction(r)) => {
@@ -189,6 +194,9 @@ fn stmt_eq(left: &Statement, right: &Statement, path: &str) -> Result<(), AstDif
             function_body_eq(&l.body, &r.body, &child(path, "GlobalFunction/body"))
         }
         (Statement::LocalAssignment(l), Statement::LocalAssignment(r)) => {
+            if l.is_const != r.is_const {
+                return Err(AstDiff::new(path, "LocalAssignment const-ness differs"));
+            }
             punctuated_eq(
                 &l.names,
                 &r.names,
@@ -210,12 +218,24 @@ fn stmt_eq(left: &Statement, right: &Statement, path: &str) -> Result<(), AstDif
         (Statement::Label(l), Statement::Label(r)) => {
             token_text_eq(&l.name, &r.name, &child(path, "Label/name"))
         }
-        (Statement::GlobalDeclaration(l), Statement::GlobalDeclaration(r)) => punctuated_eq(
-            &l.names,
-            &r.names,
-            &child(path, "GlobalDeclaration/names"),
-            attributed_name_eq,
-        ),
+        (Statement::GlobalDeclaration(l), Statement::GlobalDeclaration(r)) => {
+            punctuated_eq(
+                &l.names,
+                &r.names,
+                &child(path, "GlobalDeclaration/names"),
+                attributed_name_eq,
+            )?;
+            match (&l.equal_and_exprs, &r.equal_and_exprs) {
+                (None, None) => Ok(()),
+                (Some((_, a)), Some((_, b))) => {
+                    punctuated_eq(a, b, &child(path, "GlobalDeclaration/exprs"), expr_eq)
+                }
+                _ => Err(AstDiff::new(
+                    path,
+                    "GlobalDeclaration exprs presence differs",
+                )),
+            }
+        }
         (Statement::GlobalStar(_), Statement::GlobalStar(_)) => Ok(()),
         (Statement::Break(_), Statement::Break(_)) => Ok(()),
         (Statement::CompoundAssignment(l), Statement::CompoundAssignment(r)) => {
@@ -310,6 +330,7 @@ fn expr_eq(left: &Expression, right: &Expression, path: &str) -> Result<(), AstD
             function_call_eq(a, b, &child(path, "Call"))
         }
         (Expression::FunctionDef(a), Expression::FunctionDef(b)) => {
+            function_attributes_eq(&a.attributes, &b.attributes, &child(path, "FunctionDef"))?;
             function_body_eq(&a.body, &b.body, &child(path, "FunctionDef"))
         }
         (Expression::TableConstructor(a), Expression::TableConstructor(b)) => {
@@ -921,6 +942,29 @@ fn string_literal_eq(left: &luck_token::Token, right: &luck_token::Token) -> boo
 
 /// Decode a raw Lua string literal (short quoted form or long bracket form)
 /// to its byte contents. Returns `None` for malformed input.
+/// Attribute lists compare by name and argument values; dropping or
+/// reordering `@native`/`@[deprecated(...)]` changes runtime behavior.
+fn function_attributes_eq(
+    left: &[luck_ast::stmt::FunctionAttribute],
+    right: &[luck_ast::stmt::FunctionAttribute],
+    path: &str,
+) -> Result<(), AstDiff> {
+    if left.len() != right.len() {
+        return Err(AstDiff::new(path, "attribute count differs"));
+    }
+    for (i, (l, r)) in left.iter().zip(right).enumerate() {
+        token_text_eq(&l.name, &r.name, &child(path, &format!("attr[{i}]")))?;
+        match (&l.args, &r.args) {
+            (None, None) => {}
+            (Some(a), Some(b)) => {
+                punctuated_eq(a, b, &child(path, &format!("attr[{i}]/args")), expr_eq)?;
+            }
+            _ => return Err(AstDiff::new(path, "attribute args presence differs")),
+        }
+    }
+    Ok(())
+}
+
 fn decode_string_literal(raw: &str) -> Option<Vec<u8>> {
     let bytes = raw.as_bytes();
     match bytes.first()? {
@@ -992,7 +1036,11 @@ fn decode_short_string(bytes: &[u8]) -> Option<Vec<u8>> {
                 }
                 contents.push(u8::try_from(value).ok()?);
             }
-            _ => return None,
+            // Undefined escapes only lex under 5.1, where they mean the
+            // literal character. Decoding both sides the same way keeps the
+            // comparison exact; returning None would fall back to raw
+            // equality and misreport a plain quote swap as a mismatch.
+            _ => contents.push(escape),
         }
     }
     Some(contents)

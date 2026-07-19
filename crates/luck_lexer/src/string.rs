@@ -39,6 +39,10 @@ pub fn lex_short_string(
                     }
                     Some(b'\n') => {
                         cursor.advance();
+                        // PUC treats LFCR as one EOL sequence after `\`.
+                        if !version.is_luau() && cursor.peek() == Some(b'\r') {
+                            cursor.advance();
+                        }
                     }
                     Some(b'\r') => {
                         cursor.advance();
@@ -146,6 +150,11 @@ pub fn lex_short_string(
                         cursor.advance();
                     }
                     Some(b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'\'' | b'"') => {
+                        cursor.advance();
+                    }
+                    // Lua 5.1 accepts any other escaped character as that
+                    // literal character; 5.2+ and Luau reject it.
+                    Some(_) if !version.has_strict_escapes() => {
                         cursor.advance();
                     }
                     Some(ch) => {

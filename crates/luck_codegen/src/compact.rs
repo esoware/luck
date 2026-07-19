@@ -218,10 +218,7 @@ impl CompactPrinter {
 
     fn emit_function_decl(&mut self, func_decl: &FunctionDecl) {
         // Luau: `@native` etc. change runtime behavior - never drop them.
-        for attr in &func_decl.attributes {
-            self.emit_str("@");
-            self.emit_token(&attr.name);
-        }
+        self.emit_function_attributes(&func_decl.attributes);
         self.emit_str("function");
         self.emit_func_name(&func_decl.name);
         self.emit_function_body(&func_decl.body);
@@ -242,18 +239,37 @@ impl CompactPrinter {
 
     fn emit_local_function(&mut self, local_fn: &LocalFunction) {
         // Luau: `@native` etc. change runtime behavior - never drop them.
-        for attr in &local_fn.attributes {
-            self.emit_str("@");
-            self.emit_token(&attr.name);
-        }
-        self.emit_str("local");
+        self.emit_function_attributes(&local_fn.attributes);
+        self.emit_str(if local_fn.is_const { "const" } else { "local" });
         self.emit_str("function");
         self.emit_token(&local_fn.name);
         self.emit_function_body(&local_fn.body);
     }
 
+    /// Emit the Luau attribute list. Arguments only exist on the
+    /// bracketed form, so attributes with args re-emit as `@[name(...)]`.
+    fn emit_function_attributes(&mut self, attributes: &[luck_ast::stmt::FunctionAttribute]) {
+        for attr in attributes {
+            self.emit_str("@");
+            if let Some(args) = &attr.args {
+                self.emit_str("[");
+                self.emit_token(&attr.name);
+                self.emit_str("(");
+                self.emit_punctuated_exprs(args);
+                self.emit_str(")");
+                self.emit_str("]");
+            } else {
+                self.emit_token(&attr.name);
+            }
+        }
+    }
+
     fn emit_local_assignment(&mut self, local_assign: &LocalAssignment) {
-        self.emit_str("local");
+        self.emit_str(if local_assign.is_const {
+            "const"
+        } else {
+            "local"
+        });
         for (attributed, sep) in &local_assign.names.items {
             self.emit_attributed_name(attributed);
             if sep.is_some() {
@@ -332,6 +348,10 @@ impl CompactPrinter {
                 self.emit_str(",");
             }
         }
+        if let Some((_, exprs)) = &global_decl.equal_and_exprs {
+            self.emit_str("=");
+            self.emit_punctuated_exprs(exprs);
+        }
     }
 
     fn emit_global_function(&mut self, global_fn: &GlobalFunction) {
@@ -381,6 +401,7 @@ impl CompactPrinter {
     }
 
     fn emit_function_def(&mut self, func_def: &FunctionDef) {
+        self.emit_function_attributes(&func_def.attributes);
         self.emit_str("function");
         self.emit_function_body(&func_def.body);
     }
@@ -486,6 +507,12 @@ impl CompactPrinter {
         for segment in &interp.segments {
             self.emit_interp_token(&segment.literal);
             if let Some(expr) = &segment.expr {
+                // `{{` is a parse error in Luau: an expression starting
+                // with a table constructor needs a space after the
+                // interpolation opener.
+                if luck_ast::query::expr_starts_with_brace(expr) {
+                    self.output.print_ascii_byte(b' ');
+                }
                 self.emit_expression(expr);
             }
         }

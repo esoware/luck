@@ -180,8 +180,14 @@ fn walk_statement<'ast>(
             walk_var(&compound.var, labels, goto_names, nested);
             walk_expression(&compound.expr, labels, goto_names, nested);
         }
+        Statement::GlobalDeclaration(global) => {
+            if let Some((_, exprs)) = &global.equal_and_exprs {
+                for expr in exprs.iter() {
+                    walk_expression(expr, labels, goto_names, nested);
+                }
+            }
+        }
         Statement::EmptyStatement(_)
-        | Statement::GlobalDeclaration(_)
         | Statement::GlobalStar(_)
         | Statement::Break(_)
         | Statement::TypeDeclaration(_)
@@ -365,7 +371,9 @@ mod tests {
 
     #[test]
     fn flags_label_in_different_function() {
-        let diags = run("function f() ::a:: print() end function g() goto a end");
+        // g's goto targets g's own label (a cross-function goto would
+        // not parse); f's label has no goto anywhere.
+        let diags = run("function f() ::a:: print() end function g() ::a:: goto a end");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
@@ -389,7 +397,10 @@ mod tests {
 
     #[test]
     fn flags_label_unreachable_from_inner_function() {
-        let diags = run("::a:: local f = function() goto a end");
+        // The inner goto binds to the inner function's own label; the
+        // outer label stays unused (labels are not visible across
+        // function boundaries).
+        let diags = run("::a:: local f = function() ::a:: goto a end");
         assert_eq!(
             diags.len(),
             1,

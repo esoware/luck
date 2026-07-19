@@ -8,7 +8,7 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 
 ## Key Features
 
-- **Formats ASTs directly** — the primary entry point, `format_block`, formats an AST with no source text required, so programmatically constructed ASTs (e.g. decompiler output) and synthetic comments format the same as parsed source.
+- **Formats ASTs directly** — the primary entry point, `format_block`, formats an AST with no source text required, so programmatically constructed ASTs and synthetic comments format the same as parsed source.
 - **Comment preservation** — comments are tracked separately and reinserted at their original positions. `-- luck: format off` / `-- luck: format on` directives suppress formatting for a region.
 - **Hug patterns** — a single function or table argument inside a call stays inline rather than forcing the outer group to expand.
 - **Access chain breaking** — long method chains (`foo:bar():baz()`) break at each call with proper indentation.

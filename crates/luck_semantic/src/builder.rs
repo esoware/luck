@@ -175,6 +175,17 @@ impl ScopeTreeBuilder {
             if let TokenKind::Identifier(name) = &param.name.kind {
                 self.declare_local(name, param.name.span, SymbolKind::Parameter);
             }
+            if let Some((_, annotation)) = &param.type_annotation {
+                self.visit_type(annotation);
+            }
+        }
+        if let Some(vararg) = &body.vararg {
+            if let Some((_, annotation)) = &vararg.type_annotation {
+                self.visit_type(annotation);
+            }
+        }
+        if let Some((_, annotation)) = &body.return_type {
+            self.visit_type(annotation);
         }
 
         self.visit_block(&body.block);
@@ -202,6 +213,11 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
                     }
                 }
                 for attributed in local.names.iter() {
+                    // Annotations can reference runtime bindings via
+                    // typeof(expr).
+                    if let Some((_, annotation)) = &attributed.type_annotation {
+                        self.visit_type(annotation);
+                    }
                     if let TokenKind::Identifier(n) = &attributed.name.kind {
                         self.declare_local(n, attributed.name.span, SymbolKind::Local);
                     }
@@ -292,6 +308,9 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
                 if let TokenKind::Identifier(name) = &num_for.name.kind {
                     self.declare_local(name, num_for.name.span, SymbolKind::NumericForVariable);
                 }
+                if let Some((_, annotation)) = &num_for.type_annotation {
+                    self.visit_type(annotation);
+                }
                 self.visit_block(&num_for.block);
                 self.pop_scope();
             }
@@ -304,6 +323,9 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
                 for binding in gen_for.names.iter() {
                     if let TokenKind::Identifier(n) = &binding.name.kind {
                         self.declare_local(n, binding.name.span, SymbolKind::IteratorVariable);
+                    }
+                    if let Some((_, annotation)) = &binding.type_annotation {
+                        self.visit_type(annotation);
                     }
                 }
                 self.visit_block(&gen_for.block);
@@ -320,16 +342,36 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
                     _ => self.visit_var_write(&compound.var),
                 }
             }
-            luck_ast::Statement::GlobalDeclaration(_)
-            | luck_ast::Statement::GlobalFunction(_)
-            | luck_ast::Statement::GlobalStar(_) => {
-                // Lua 5.5 globals - no scope analysis needed for now
+            // Lua 5.5 globals declare no locals, but their initializers
+            // and function bodies still reference the enclosing scopes.
+            luck_ast::Statement::GlobalDeclaration(global_decl) => {
+                if let Some((_, exprs)) = &global_decl.equal_and_exprs {
+                    for expr in exprs.iter() {
+                        self.visit_expression(expr);
+                    }
+                }
+            }
+            luck_ast::Statement::GlobalFunction(global_func) => {
+                self.visit_function_body(&global_func.body);
+            }
+            luck_ast::Statement::GlobalStar(_) => {}
+            // Type aliases reference runtime bindings via typeof(expr),
+            // and `type function` bodies are ordinary Luau code.
+            luck_ast::Statement::TypeDeclaration(type_decl) => {
+                if let Some(generics) = &type_decl.generics {
+                    self.walk_generic_type_list(generics);
+                }
+                match &type_decl.type_value {
+                    luck_ast::stmt::TypeDeclarationValue::Alias(alias) => self.visit_type(alias),
+                    luck_ast::stmt::TypeDeclarationValue::TypeFunction(body) => {
+                        self.visit_function_body(body)
+                    }
+                }
             }
             luck_ast::Statement::Goto(_)
             | luck_ast::Statement::Label(_)
             | luck_ast::Statement::EmptyStatement(_)
             | luck_ast::Statement::Break(_)
-            | luck_ast::Statement::TypeDeclaration(_)
             | luck_ast::Statement::Error(_) => {}
         }
     }
@@ -372,6 +414,7 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
             }
             Expression::TypeCast(cast) => {
                 self.visit_expression(&cast.expr);
+                self.visit_type(&cast.type_annotation);
             }
             Expression::Nil(_)
             | Expression::False(_)

@@ -125,10 +125,25 @@ impl LuaVersion {
         matches!(self, Self::Lua51 | Self::Luau)
     }
 
+    /// Whether a call's `(` on a new line is an "ambiguous syntax"
+    /// parse error (5.1 and Luau). 5.2+ parses it as a call.
+    #[must_use]
+    pub fn has_ambiguous_call_newline_error(self) -> bool {
+        matches!(self, Self::Lua51 | Self::Luau)
+    }
+
     /// Whether `;` is a valid empty statement (Lua 5.2+, NOT Luau).
     #[must_use]
     pub fn has_empty_statement(self) -> bool {
         matches!(self, Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55)
+    }
+
+    /// Whether undefined escape sequences are lexer errors. Lua 5.1
+    /// treats any escaped non-digit character as that literal character
+    /// (`"\m"` is `"m"`); 5.2+ and Luau reject them.
+    #[must_use]
+    pub fn has_strict_escapes(self) -> bool {
+        !matches!(self, Self::Lua51)
     }
 
     /// Whether `\x` hex escape is supported in strings.
@@ -172,6 +187,13 @@ impl LuaVersion {
         matches!(self, Self::Luau)
     }
 
+    /// Whether for-loop control variables are read-only (5.5 makes
+    /// assigning to them a compile error; earlier versions allow it).
+    #[must_use]
+    pub fn has_const_for_variables(self) -> bool {
+        matches!(self, Self::Lua55)
+    }
+
     /// Whether named varargs (...name) are supported.
     #[must_use]
     pub fn has_named_varargs(self) -> bool {
@@ -193,6 +215,22 @@ impl LuaVersion {
     #[must_use]
     pub fn has_interpolated_strings(self) -> bool {
         matches!(self, Self::Luau)
+    }
+
+    /// Whether float `%` is computed as fmod plus a sign fix (5.3+).
+    /// 5.1, 5.2, and Luau compute `a - floor(a/b)*b`, which loses
+    /// precision at large magnitudes and the sign of zero results.
+    #[must_use]
+    pub fn has_fmod_float_modulo(self) -> bool {
+        matches!(self, Self::Lua53 | Self::Lua54 | Self::Lua55)
+    }
+
+    /// Whether the float `%` sign fix compares operand signs directly
+    /// (5.4+). 5.3 tests `fmod(a,b)*b < 0`, whose product can underflow
+    /// to zero for subnormal operands and skip the fix.
+    #[must_use]
+    pub fn has_float_modulo_sign_compare(self) -> bool {
+        matches!(self, Self::Lua54 | Self::Lua55)
     }
 }
 

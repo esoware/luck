@@ -370,13 +370,26 @@ impl Generator {
     }
 
     fn numeric_for(&mut self) {
-        let loop_var = self.fresh_name();
+        // 5.5 control variables are read-only: keep the name globally
+        // unique (a bare-stem shadow would make later writes resolve to
+        // the loop var) and never offer it as an assignment target.
+        let readonly = self.version.has_const_for_variables();
+        let loop_var = if readonly {
+            const STEMS: [&str; 6] = ["alpha", "beta", "gamma", "delta", "value", "item"];
+            let stem = STEMS[self.rng.below(STEMS.len())];
+            self.next_id += 1;
+            format!("{stem}{}", self.next_id)
+        } else {
+            self.fresh_name()
+        };
         let stop = 1 + self.rng.below(4);
         self.line(&format!("for {loop_var} = 1, {stop} do"));
         self.depth += 1;
         self.indent += 1;
         self.scopes.push(Vec::new());
-        self.declare(loop_var, Kind::Num);
+        if !readonly {
+            self.declare(loop_var, Kind::Num);
+        }
         self.small_body();
         self.scopes.pop();
         self.indent -= 1;

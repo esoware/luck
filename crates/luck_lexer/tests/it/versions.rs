@@ -408,14 +408,14 @@ fn underscore_separator_luau() {
         );
     }
 
-    assert!(
-        !lex("0x_FF", LuaVersion::Luau).errors.is_empty(),
-        "underscore at start"
-    );
-    assert!(
-        !lex("100_", LuaVersion::Luau).errors.is_empty(),
-        "underscore at end"
-    );
+    // Real Luau strips underscores anywhere before conversion, so
+    // prefix-adjacent, doubled, and trailing underscores all lex.
+    for source in ["0x_FF", "0b_0101_0101", "100_", "1__2", "0xFF_"] {
+        assert!(
+            lex(source, LuaVersion::Luau).errors.is_empty(),
+            "{source} must lex under Luau"
+        );
+    }
 
     // In non-Luau, splits into number + identifier
     let result = lex("1_000", LuaVersion::Lua54);
@@ -537,14 +537,15 @@ fn unicode_escape_only_53_plus_and_luau() {
             version
         );
     }
-    for version in [LuaVersion::Lua51, LuaVersion::Lua52] {
-        let result = lex("\"\\u{41}\"", version);
-        assert!(
-            !result.errors.is_empty(),
-            "\\u{{41}} should fail in {:?}",
-            version
-        );
-    }
+    // 5.2 is strict and lacks \u - error. 5.1 laxly accepts any escaped
+    // non-digit as that literal character, so it lexes (value "u{41}").
+    let result = lex("\"\\u{41}\"", LuaVersion::Lua52);
+    assert!(!result.errors.is_empty(), "\\u{{41}} should fail in Lua52");
+    let result = lex("\"\\u{41}\"", LuaVersion::Lua51);
+    assert!(
+        result.errors.is_empty(),
+        "\\u{{41}} lexes under 5.1 as literal chars"
+    );
 }
 
 #[test]

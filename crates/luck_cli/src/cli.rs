@@ -1850,7 +1850,13 @@ fn run_check(args: CheckArgs) -> ExitCode {
 
                     let target = target_for(file_path);
                     let file_label = file_path.to_string_lossy().to_string();
-                    let result = luck_parser::parse(source, target.lua_version());
+                    let mut result = luck_parser::parse(source, target.lua_version());
+                    if result.errors.is_empty() {
+                        // Compile-time checks real Lua performs beyond the
+                        // grammar (const writes, goto resolution). Opt-in
+                        // here only - transform pipelines skip the cost.
+                        result.errors = luck_parser::validate(&result.block, target.lua_version());
+                    }
                     if result.errors.is_empty() {
                         return None;
                     }

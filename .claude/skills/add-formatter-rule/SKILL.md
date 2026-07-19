@@ -15,7 +15,7 @@ API before writing anything - it is authoritative.
 
 Leaf text comes from **token-carried values** (`crate::tokens`), never from
 source slices. This is what lets `format_block` format synthetic
-(decompiler-built) ASTs; do not add source-text dependence to emitters.
+ASTs; do not add source-text dependence to emitters.
 
 ## Layout
 

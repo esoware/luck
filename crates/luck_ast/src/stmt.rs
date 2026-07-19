@@ -166,6 +166,9 @@ pub struct FunctionAttribute {
     pub span: Span,
     pub at_token: Span,
     pub name: Token,
+    /// Literal arguments of the bracketed `@[name(...)]` form; None for
+    /// the plain `@name` form (and `@[name]` without arguments).
+    pub args: Option<Punctuated<Expression>>,
 }
 
 /// Global function declaration: `function name(...) ... end`.
@@ -189,6 +192,9 @@ pub struct LocalFunction {
     pub function_token: Span,
     pub name: Token,
     pub body: FunctionBody,
+    /// Luau `const function NAME funcbody` - emitted with `const` in
+    /// place of `local`.
+    pub is_const: bool,
 }
 
 /// Lua 5.4 local variable attribute: `<const>` or `<close>`. The name
@@ -222,6 +228,9 @@ pub struct LocalAssignment {
     pub local_token: Span,
     pub names: Punctuated<AttributedName>,
     pub equal_and_exprs: Option<(Span, Punctuated<Expression>)>,
+    /// Luau `const bindinglist = explist` - emitted with `const` in
+    /// place of `local`; every name in the list is read-only.
+    pub is_const: bool,
 }
 
 /// `goto name` statement (Lua 5.2+).
@@ -287,12 +296,13 @@ pub enum TypeDeclarationValue {
     TypeFunction(Box<FunctionBody>),
 }
 
-/// Lua 5.5 `global` variable declaration (no initializer)
+/// Lua 5.5 `global` variable declaration: `global names [= exprs]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalDeclaration {
     pub span: Span,
     pub global_token: Span,
     pub names: Punctuated<AttributedName>,
+    pub equal_and_exprs: Option<(Span, Punctuated<Expression>)>,
 }
 
 /// Lua 5.5 `global function`

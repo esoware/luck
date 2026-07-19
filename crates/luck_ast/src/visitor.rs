@@ -117,6 +117,11 @@ pub trait Visitor<'ast> {
             }
             Statement::GlobalDeclaration(global_decl) => {
                 self.walk_attributed_names(&global_decl.names);
+                if let Some((_, exprs)) = &global_decl.equal_and_exprs {
+                    for expr in exprs.iter() {
+                        self.visit_expression(expr);
+                    }
+                }
             }
             Statement::TypeDeclaration(type_decl) => {
                 if let Some(generics) = &type_decl.generics {
@@ -414,6 +419,7 @@ mod tests {
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
                 local_token: span(),
+                is_const: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("x".into())),
                     type_annotation: None,
@@ -469,6 +475,7 @@ mod tests {
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
                 local_token: span(),
+                is_const: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("t".into())),
                     type_annotation: None,
@@ -491,6 +498,7 @@ mod tests {
                 Statement::LocalAssignment(Box::new(LocalAssignment {
                     span: span(),
                     local_token: span(),
+                    is_const: false,
                     names: Punctuated::from_item(AttributedName {
                         name: token(TokenKind::Identifier("x".into())),
                         type_annotation: None,
@@ -501,6 +509,7 @@ mod tests {
                 Statement::LocalAssignment(Box::new(LocalAssignment {
                     span: span(),
                     local_token: span(),
+                    is_const: false,
                     names: Punctuated::from_item(AttributedName {
                         name: token(TokenKind::Identifier("y".into())),
                         type_annotation: None,
@@ -556,6 +565,7 @@ mod tests {
                 span: span(),
                 attributes: Vec::new(),
                 local_token: span(),
+                is_const: false,
                 function_token: span(),
                 name: token(TokenKind::Identifier("f".into())),
                 body,

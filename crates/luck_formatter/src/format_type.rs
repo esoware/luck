@@ -2,7 +2,7 @@
 //!
 //! Types are formatted directly from the parsed [`Type`] tree - no source
 //! slicing, no re-tokenizing. Every leaf goes through [`crate::tokens`] so
-//! synthetic (decompiler-built) types format identically to parsed ones.
+//! synthetic types format identically to parsed ones.
 
 use luck_ast::types::*;
 use luck_token::Span;

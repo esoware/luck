@@ -10,7 +10,7 @@
 
 </div>
 
-Luck is a collection of high-performance tools for Lua and Luau, written in Rust: a bundler, minifier, formatter, linter, and language server behind one CLI and one config file. Multi-file projects in, a single file out — across Lua 5.1, 5.2, 5.3, 5.4, 5.5, and Luau (standalone and Roblox).
+Luck is a collection of high-performance tools for Lua 5.1 through 5.5 & Luau (standalone and Roblox), written in Rust: a formatter, linter, language server, parser, bundler and minifier behind one CLI and one config file. Multi-file projects in, a single file out.
 
 The lexer, parser, AST, and code generator are all hand-written, with no external parser dependency, so every tool works from the same exact syntax tree.
 

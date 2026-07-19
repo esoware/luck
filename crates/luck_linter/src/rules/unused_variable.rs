@@ -81,3 +81,33 @@ impl Rule for UnusedVariable {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use luck_token::LuaVersion;
+
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        crate::test_support::run_rule(&UnusedVariable, source, LuaVersion::Luau)
+    }
+
+    #[test]
+    fn ignores_variable_read_by_typeof() {
+        // typeof(expr) inside a type position references the runtime
+        // binding; it must count as a use.
+        let diags = run("local n = 1\ntype T = typeof(n)\nexport type U = T");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_variable_read_by_typeof_in_cast() {
+        let diags = run("local n = 1\nlocal m = (nil :: typeof(n))\nprint(m)");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_variable_unused_despite_type_alias() {
+        let diags = run("local n = 1\ntype T = number\nexport type U = T");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+}

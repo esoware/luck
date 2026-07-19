@@ -236,7 +236,11 @@ fn analyze_statement(stmt: &Statement) -> BranchSummary {
         Statement::EmptyStatement(_) => {}
         Statement::Goto(_) => {}
         Statement::Label(_) => {}
-        Statement::GlobalDeclaration(_) => {}
+        Statement::GlobalDeclaration(node) => {
+            if let Some((_, exprs)) = &node.equal_and_exprs {
+                summary.decision_points += count_decision_points_punctuated_exprs(exprs);
+            }
+        }
         Statement::GlobalFunction(_) => {}
         Statement::GlobalStar(_) => {}
         // Lua 5.2+: bare `break` statement.

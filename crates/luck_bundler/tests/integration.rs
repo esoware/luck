@@ -272,3 +272,38 @@ fn test_lua54_const_close_attrs() {
         .expect("bundle failed");
     insta::assert_snapshot!("lua54_const_close_attrs", output);
 }
+
+#[test]
+fn test_luau_hot_comments_hoisted() {
+    // Hot comments only apply before any code: the entry module's
+    // leading run must reach the very top of the bundle.
+    let output =
+        run_bundle("luau", "hot_comments", LuaTarget::Luau, "main.luau").expect("bundle failed");
+    assert!(
+        output.starts_with("--!strict\n--!native\n"),
+        "entry hot comments must lead the bundle:\n{output}"
+    );
+}
+
+#[test]
+fn test_luau_export_type_stripped_in_thunks() {
+    // `export type` is invalid below the top level; bundled module
+    // bodies live inside loader functions, so the keyword is dropped
+    // (the alias stays usable within its module).
+    let output =
+        run_bundle("luau", "export_type", LuaTarget::Luau, "main.luau").expect("bundle failed");
+    assert!(
+        !output.contains("export type"),
+        "export must be stripped inside thunks:\n{output}"
+    );
+    assert!(
+        output.contains("type Adder"),
+        "the alias itself must survive:\n{output}"
+    );
+    let reparsed = luck_parser::parse(&output, luck_token::LuaVersion::Luau);
+    assert!(
+        reparsed.errors.is_empty(),
+        "bundle must reparse: {:?}",
+        reparsed.errors
+    );
+}

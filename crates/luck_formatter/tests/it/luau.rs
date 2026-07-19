@@ -161,3 +161,13 @@ fn luau_params_break_without_trailing_comma() {
         reparse.errors,
     );
 }
+
+#[test]
+fn interp_expr_starting_with_table_gets_space() {
+    // `{{` is a parse error in Luau; the formatter separates the
+    // interpolation opener from a leading table constructor.
+    assert_luau(
+        "return `list { {1, 2} } tail`\n",
+        "return `list { { 1, 2 } } tail`\n",
+    );
+}

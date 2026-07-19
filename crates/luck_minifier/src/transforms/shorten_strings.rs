@@ -1,8 +1,8 @@
 use luck_ast::expr::Expression;
 use luck_ast::shared::Block;
 use luck_ast::transform::AstTransform;
-use luck_token::Span;
 use luck_token::token::{Token, TokenKind};
+use luck_token::{LuaVersion, Span};
 
 use crate::expr::{decode_string_literal, encode_string_literal};
 
@@ -12,11 +12,13 @@ use crate::expr::{decode_string_literal, encode_string_literal};
 /// Decode -> encode is exact (full escape semantics, UTF-8 and arbitrary
 /// bytes preserved), replacing the old textual scanner that reinterpreted
 /// bytes as chars and mis-tracked escape state.
-pub fn shorten(block: Block) -> Block {
-    StringShortener.transform_block(block)
+pub fn shorten(block: Block, version: LuaVersion) -> Block {
+    StringShortener { version }.transform_block(block)
 }
 
-struct StringShortener;
+struct StringShortener {
+    version: LuaVersion,
+}
 
 impl AstTransform for StringShortener {
     fn transform_expression(&mut self, expr: Expression) -> Expression {
@@ -25,7 +27,7 @@ impl AstTransform for StringShortener {
         match expr {
             Expression::StringLiteral(ref token) => {
                 if let TokenKind::StringLiteral(ref raw) = token.kind
-                    && let Some(bytes) = decode_string_literal(raw)
+                    && let Some(bytes) = decode_string_literal(raw, self.version)
                 {
                     let candidate = encode_string_literal(&bytes);
                     if candidate.len() < raw.len() {
@@ -53,7 +55,7 @@ mod tests {
             "parse failed: {:?}",
             result.errors
         );
-        let block = shorten(result.block);
+        let block = shorten(result.block, luck_token::LuaVersion::Lua54);
         luck_codegen::compact(&block, source)
     }
 

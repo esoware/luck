@@ -35,6 +35,36 @@ impl Format for Expression {
             // an anonymous def is the `function` keyword plus its body.
             Expression::FunctionCall(call) => call.fmt(f),
             Expression::FunctionDef(def) => {
+                // Luau attributes on a function expression stay inline;
+                // dropping them would change runtime behavior.
+                for attr in &def.attributes {
+                    match &attr.args {
+                        Some(args) => {
+                            crate::write!(
+                                f,
+                                [
+                                    token("@"),
+                                    token("["),
+                                    crate::tokens::FormatToken(&attr.name),
+                                    token("(")
+                                ]
+                            );
+                            for (idx, (arg, _)) in args.items.iter().enumerate() {
+                                if idx > 0 {
+                                    crate::write!(f, [token(","), space()]);
+                                }
+                                arg.fmt(f);
+                            }
+                            crate::write!(f, [token(")"), token("]"), space()]);
+                        }
+                        None => {
+                            crate::write!(
+                                f,
+                                [token("@"), crate::tokens::FormatToken(&attr.name), space()]
+                            );
+                        }
+                    }
+                }
                 token("function").fmt(f);
                 crate::format_function::FormatFunctionBody { body: &def.body }.fmt(f);
             }
@@ -302,7 +332,18 @@ impl Format for InterpolatedString {
         for segment in &self.segments {
             write_token(f, &segment.literal);
             if let Some(expr) = &segment.expr {
+                // `{{` is a parse error in Luau: an expression starting
+                // with a table constructor needs a space after the
+                // interpolation opener (and before the closer, for
+                // symmetry when the table also ends the expression).
+                let braced = luck_ast::query::expr_starts_with_brace(expr);
+                if braced {
+                    crate::write!(f, [space()]);
+                }
                 expr.fmt(f);
+                if braced {
+                    crate::write!(f, [space()]);
+                }
             }
         }
     }

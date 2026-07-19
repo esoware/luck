@@ -127,3 +127,76 @@ fn named_vararg_after_params() {
         panic!("expected FunctionDecl");
     }
 }
+
+#[test]
+fn global_with_initializer() {
+    // 5.5 §3.3.7: stat ::= global attnamelist ['=' explist]
+    let result = parse_lua55("global x = 1");
+    assert_no_errors(&result);
+    if let Statement::GlobalDeclaration(gd) = &result.block.stmts[0] {
+        let (_, exprs) = gd.equal_and_exprs.as_ref().expect("initializer parsed");
+        assert_eq!(exprs.len(), 1);
+    } else {
+        panic!(
+            "expected GlobalDeclaration, got {:?}",
+            result.block.stmts[0]
+        );
+    }
+
+    let result = parse_lua55("global a, b = 1, 2");
+    assert_no_errors(&result);
+    if let Statement::GlobalDeclaration(gd) = &result.block.stmts[0] {
+        assert_eq!(gd.names.len(), 2);
+        let (_, exprs) = gd.equal_and_exprs.as_ref().expect("initializer parsed");
+        assert_eq!(exprs.len(), 2);
+    } else {
+        panic!(
+            "expected GlobalDeclaration, got {:?}",
+            result.block.stmts[0]
+        );
+    }
+}
+
+#[test]
+fn global_attributed_with_initializer() {
+    let result = parse_lua55("global x <const> = 1");
+    assert_no_errors(&result);
+    if let Statement::GlobalDeclaration(gd) = &result.block.stmts[0] {
+        assert!(gd.equal_and_exprs.is_some());
+    } else {
+        panic!(
+            "expected GlobalDeclaration, got {:?}",
+            result.block.stmts[0]
+        );
+    }
+}
+
+#[test]
+fn leading_attribute_distributes_to_all_names() {
+    // 5.5 §3.3.7: "A prefixed attribute applies to all names in the list."
+    let result = parse_lua55("local <const> x, y = 1, 2");
+    assert_no_errors(&result);
+    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+        let attribs: Vec<_> = local
+            .names
+            .iter()
+            .map(|n| n.attrib.as_ref().map(|a| a.name.kind.clone()))
+            .collect();
+        assert_eq!(attribs.len(), 2);
+        assert!(
+            attribs.iter().all(|a| a.is_some()),
+            "leading attrib must apply to every name: {attribs:?}"
+        );
+    } else {
+        panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
+    }
+}
+
+#[test]
+fn leading_attribute_conflicts_with_trailing_on_any_name() {
+    let result = parse_lua55("local <const> x, y <close> = 1, 2");
+    assert!(
+        !result.errors.is_empty(),
+        "leading + trailing attrib on the list must error"
+    );
+}

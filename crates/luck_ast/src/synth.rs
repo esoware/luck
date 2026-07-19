@@ -3,9 +3,8 @@
 //! Builds `luck_ast` nodes without any source text. Hand-writing the node
 //! structs means spelling out every `Token { kind, span }`; this module hides
 //! that behind small constructors. The intended consumer is a tool that emits
-//! an AST directly - a bytecode decompiler backend above all - so the
-//! constructors also take over the output-validity duties such a tool would
-//! otherwise have to reimplement.
+//! an AST directly - so the constructors also take over the output-validity duties
+//! such a tool would otherwise have to reimplement.
 //!
 //! # Spans
 //!
@@ -287,8 +286,7 @@ impl Synth {
     }
 
     /// `prefix.name` when `name` is a safe identifier in every dialect,
-    /// `prefix["name"]` otherwise. The right default for decompiled field
-    /// names, which come from arbitrary constant strings.
+    /// `prefix["name"]` otherwise.
     #[must_use]
     pub fn field_or_index(&self, prefix: Expression, name: &str) -> Expression {
         if is_safe_field_name(name) {
@@ -696,6 +694,7 @@ impl Synth {
     pub fn function_def_full(&self, sig: FnSig, body: Block) -> Expression {
         Expression::FunctionDef(Box::new(FunctionDef {
             span: self.next_span(),
+            attributes: Vec::new(),
             function_token: self.next_span(),
             body: self.function_body(sig, body),
         }))
@@ -774,6 +773,7 @@ impl Synth {
             function_token: self.next_span(),
             name: self.ident(name),
             body: self.function_body(sig, body),
+            is_const: false,
         }))
     }
 
@@ -808,6 +808,7 @@ impl Synth {
                 span: self.next_span(),
                 at_token: self.next_span(),
                 name: self.ident(name),
+                args: None,
             })
             .collect()
     }
@@ -922,6 +923,7 @@ impl Synth {
             local_token,
             names,
             equal_and_exprs,
+            is_const: false,
         }))
     }
 
@@ -947,13 +949,18 @@ impl Synth {
         }
     }
 
-    /// Lua 5.5 `global names` declaration (no initializer).
+    /// Lua 5.5 `global names [= exprs]` declaration.
     #[must_use]
-    pub fn global_decl(&self, names: Vec<AttributedName>) -> Statement {
+    pub fn global_decl(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
         Statement::GlobalDeclaration(Box::new(GlobalDeclaration {
             span: self.next_span(),
             global_token: self.next_span(),
             names: self.punctuated(names),
+            equal_and_exprs: if exprs.is_empty() {
+                None
+            } else {
+                Some((self.next_span(), self.punctuated(exprs)))
+            },
         }))
     }
 
@@ -997,8 +1004,7 @@ impl Synth {
         }))
     }
 
-    /// A call expression as a statement. Panics on a non-call expression - a
-    /// decompiler only discards the results of calls.
+    /// A call expression as a statement. Panics on a non-call expression.
     #[must_use]
     pub fn call_stmt(&self, call_expr: Expression) -> Statement {
         let call = match call_expr {
@@ -2227,7 +2233,10 @@ mod tests {
     #[test]
     fn builds_globals() {
         let synth = Synth::new();
-        let decl = synth.global_decl(vec![synth.attributed_name("shared", None, Some("const"))]);
+        let decl = synth.global_decl(
+            vec![synth.attributed_name("shared", None, Some("const"))],
+            vec![],
+        );
         let Statement::GlobalDeclaration(decl) = &decl else {
             panic!("expected global declaration");
         };

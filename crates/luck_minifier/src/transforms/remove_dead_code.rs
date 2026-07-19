@@ -33,6 +33,56 @@ fn remove_unused_locals(block: Block) -> (Block, bool) {
     (block, transform.changed)
 }
 
+/// Whether a block contains a `break`/`continue` that binds to the loop
+/// directly enclosing it. Nested loops capture their own exits and
+/// function bodies are separate control-flow units, so neither is
+/// descended into.
+fn has_loop_exit(block: &Block) -> bool {
+    if matches!(
+        block.last_stmt.as_deref(),
+        Some(LastStatement::Break(_) | LastStatement::Continue(_))
+    ) {
+        return true;
+    }
+    block.stmts.iter().any(stmt_has_loop_exit)
+}
+
+fn stmt_has_loop_exit(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::Break(_) => true,
+        Statement::DoBlock(do_block) => has_loop_exit(&do_block.block),
+        Statement::IfStatement(if_stmt) => {
+            has_loop_exit(&if_stmt.block)
+                || if_stmt
+                    .elseif_clauses
+                    .iter()
+                    .any(|clause| has_loop_exit(&clause.block))
+                || if_stmt
+                    .else_clause
+                    .as_ref()
+                    .is_some_and(|clause| has_loop_exit(&clause.block))
+        }
+        Statement::WhileLoop(_)
+        | Statement::RepeatLoop(_)
+        | Statement::NumericFor(_)
+        | Statement::GenericFor(_)
+        | Statement::FunctionDecl(_)
+        | Statement::LocalFunction(_)
+        | Statement::GlobalFunction(_)
+        | Statement::Assignment(_)
+        | Statement::FunctionCall(_)
+        | Statement::LocalAssignment(_)
+        | Statement::EmptyStatement(_)
+        | Statement::Goto(_)
+        | Statement::Label(_)
+        | Statement::GlobalDeclaration(_)
+        | Statement::GlobalStar(_)
+        | Statement::CompoundAssignment(_)
+        | Statement::TypeDeclaration(_)
+        | Statement::Error(_) => false,
+    }
+}
+
 fn collect_all_references(block: &Block) -> HashSet<String> {
     let mut collector = ReferenceCollector {
         references: HashSet::new(),
@@ -266,8 +316,12 @@ impl AstTransform for DeadCodeTransform {
 
                 self.walk_statement(stmt)
             }
+            // A body-level break/continue binds to THIS repeat; in a
+            // do-block it would rebind to an outer loop (or be invalid),
+            // so the rewrite only fires when none exists.
             Statement::RepeatLoop(ref repeat_loop)
-                if is_const_truthy(&repeat_loop.condition) == Some(true) =>
+                if is_const_truthy(&repeat_loop.condition) == Some(true)
+                    && !has_loop_exit(&repeat_loop.block) =>
             {
                 self.changed = true;
                 let new_block = self.transform_block(repeat_loop.block.clone());
@@ -297,13 +351,19 @@ impl AstTransform for DeadCodeTransform {
                 if let Some((_, exprs)) = &local.equal_and_exprs {
                     let names: Vec<_> = local.names.iter().collect();
                     let expr_list: Vec<_> = exprs.iter().collect();
-                    if names.len() == 1 && expr_list.len() == 1 && is_nil(expr_list[0]) {
+                    // Const declarations keep their mandatory initializer.
+                    if names.len() == 1
+                        && expr_list.len() == 1
+                        && is_nil(expr_list[0])
+                        && !local.is_const
+                    {
                         self.changed = true;
                         return Statement::LocalAssignment(Box::new(LocalAssignment {
                             span: sp(),
                             local_token: local.local_token,
                             names: local.names.clone(),
                             equal_and_exprs: None,
+                            is_const: false,
                         }));
                     }
                 }
@@ -499,5 +559,22 @@ mod tests {
             r.contains("x=x") || r.contains("x = x"),
             "global self-assignment must be preserved: {r}"
         );
+    }
+
+    #[test]
+    fn repeat_until_true_without_break_becomes_do_block() {
+        let r = apply("repeat print(1) until true\n");
+        assert!(r.contains("do"), "repeat->do rewrite expected: {r}");
+        assert!(!r.contains("repeat"), "repeat should be gone: {r}");
+    }
+
+    #[test]
+    fn repeat_until_true_with_break_is_kept() {
+        // `break` binds to the repeat; a do-block would rebind it to an
+        // outer loop (or make it invalid).
+        let r = apply("while f() do repeat if g() then break end until true end\n");
+        assert!(r.contains("repeat"), "repeat with break must be kept: {r}");
+        let r = apply("repeat break until true\n");
+        assert!(r.contains("repeat"), "repeat with break must be kept: {r}");
     }
 }

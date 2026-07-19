@@ -411,10 +411,21 @@ fn luau_type_function_declaration() {
 }
 
 #[test]
-fn luau_cast_chain() {
+fn luau_interp_expr_starting_with_table_gets_space() {
+    // `{{` is a parse error in Luau; the printer must separate the
+    // interpolation opener from a leading table constructor.
     vluau(
-        "local  x  =  y  ::  number  ::  string",
-        "local x=y::number::string",
+        "return  `list { {1, 2} } tail`",
+        "return`list { {1,2}} tail`",
+    );
+}
+
+#[test]
+fn luau_cast_chain() {
+    // Chaining requires parens (asexp allows one cast per simpleexp).
+    vluau(
+        "local  x  =  ( y  ::  number )  ::  string",
+        "local x=(y::number)::string",
     );
 }
 

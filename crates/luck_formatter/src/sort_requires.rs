@@ -157,10 +157,14 @@ fn walk_nested_blocks<'a>(
         Statement::Assignment(node) => walk_exprs(source, &node.values, disabled, out),
         Statement::FunctionCall(call) => walk_call(source, &call.call, disabled, out),
         Statement::CompoundAssignment(node) => walk_expr(source, &node.expr, disabled, out),
+        Statement::GlobalDeclaration(global) => {
+            if let Some((_, exprs)) = &global.equal_and_exprs {
+                walk_exprs(source, exprs, disabled, out);
+            }
+        }
         Statement::EmptyStatement(_)
         | Statement::Goto(_)
         | Statement::Label(_)
-        | Statement::GlobalDeclaration(_)
         | Statement::GlobalStar(_)
         | Statement::Break(_)
         | Statement::TypeDeclaration(_)

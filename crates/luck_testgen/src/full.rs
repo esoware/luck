@@ -48,6 +48,9 @@ pub struct FullGenerator {
     stmt_depth: usize,
     vararg_fns: Vec<bool>,
     names: Vec<String>,
+    /// Names the validator treats as read-only (const bindings, 5.5 for
+    /// control variables) - never used as assignment targets.
+    readonly_names: Vec<String>,
     callables: Vec<String>,
     type_aliases: Vec<(String, usize)>,
     next_id: usize,
@@ -65,6 +68,7 @@ impl FullGenerator {
             // The chunk itself is a vararg function in every version.
             vararg_fns: vec![true],
             names: Vec::new(),
+            readonly_names: Vec::new(),
             callables: BUILTIN_CALLEES.iter().map(|s| (*s).to_string()).collect(),
             type_aliases: Vec::new(),
             next_id: 0,
@@ -104,6 +108,21 @@ impl FullGenerator {
         }
         let idx = self.rng.below(self.names.len());
         self.names[idx].clone()
+    }
+
+    /// A name that can appear on the left of `=`: read-only bindings
+    /// would make the program invalid, and the fallback is a global.
+    fn known_writable_name(&mut self) -> String {
+        let writable: Vec<&String> = self
+            .names
+            .iter()
+            .filter(|name| !self.readonly_names.contains(name))
+            .collect();
+        if writable.is_empty() {
+            return "sink".to_string();
+        }
+        let idx = self.rng.below(writable.len());
+        writable[idx].clone()
     }
 
     fn known_callable(&mut self) -> String {
@@ -228,6 +247,7 @@ impl FullGenerator {
         let value = self.expr(MAX_EXPR_DEPTH);
         let semicolon = if self.rng.chance(15) { ";" } else { "" };
         if self.version.has_attributes() && self.rng.chance(10) {
+            self.readonly_names.push(name.clone());
             if self.version.has_leading_attributes() && self.rng.chance(50) {
                 // Lua 5.5
                 self.line(&format!("local <const> {name} = {value}{semicolon}"));
@@ -235,6 +255,10 @@ impl FullGenerator {
                 // Lua 5.4+
                 self.line(&format!("local {name} <const> = {value}{semicolon}"));
             }
+        } else if self.version.is_luau() && self.rng.chance(10) {
+            // Luau const binding
+            self.readonly_names.push(name.clone());
+            self.line(&format!("const {name} = {value}{semicolon}"));
         } else if self.version.is_luau() && self.rng.chance(35) {
             let annotation = self.type_expr(2);
             self.line(&format!("local {name}: {annotation} = {value}{semicolon}"));
@@ -266,7 +290,7 @@ impl FullGenerator {
     }
 
     fn assign_target(&mut self) -> String {
-        let base = self.known_name();
+        let base = self.known_writable_name();
         match self.rng.below(4) {
             0 => base,
             1 => format!("{base}.field"),
@@ -332,6 +356,10 @@ impl FullGenerator {
 
     fn numeric_for(&mut self) {
         let loop_var = self.fresh_name();
+        // 5.5 makes for control variables read-only.
+        if self.version.has_const_for_variables() {
+            self.readonly_names.push(loop_var.clone());
+        }
         let stop = self.expr(1);
         let header = if self.rng.chance(40) {
             format!("for {loop_var} = 1, {stop}, 2 do")
@@ -339,13 +367,17 @@ impl FullGenerator {
             format!("for {loop_var} = 1, {stop} do")
         };
         self.line(&header);
-        self.loop_body();
+        self.loop_body(true);
         self.line("end");
     }
 
     fn generic_for(&mut self) {
         let key = self.fresh_name();
         let value = self.fresh_name();
+        if self.version.has_const_for_variables() {
+            self.readonly_names.push(key.clone());
+            self.readonly_names.push(value.clone());
+        }
         let subject = self.known_name();
         let iterator = match self.rng.below(3) {
             0 => format!("ipairs({subject})"),
@@ -353,20 +385,23 @@ impl FullGenerator {
             _ => format!("next, {subject}, nil"),
         };
         self.line(&format!("for {key}, {value} in {iterator} do"));
-        self.loop_body();
+        self.loop_body(true);
         self.line("end");
     }
 
     fn while_stmt(&mut self) {
         let condition = self.condition();
         self.line(&format!("while {condition} do"));
-        self.loop_body();
+        self.loop_body(true);
         self.line("end");
     }
 
     fn repeat_stmt(&mut self) {
+        // No goto-continue idiom here: a repeat block's trailing label
+        // still precedes `until`, which can see the block's locals, so
+        // real Lua rejects a goto that jumps over any of them.
         self.line("repeat");
-        self.loop_body();
+        self.loop_body(false);
         let condition = self.condition();
         self.line(&format!("until {condition}"));
     }
@@ -381,8 +416,8 @@ impl FullGenerator {
     /// statement of an `if` block, valid in every version including the
     /// 5.1/Luau last-statement restriction), Luau `continue`, and the
     /// 5.2+ goto-continue idiom with the label in end-of-block position.
-    fn loop_body(&mut self) {
-        let use_goto_label = self.version.has_goto() && self.rng.chance(30);
+    fn loop_body(&mut self, allow_goto_label: bool) {
+        let use_goto_label = allow_goto_label && self.version.has_goto() && self.rng.chance(30);
         let label = if use_goto_label {
             self.next_label += 1;
             Some(format!("continue_{}", self.next_label))

@@ -115,6 +115,8 @@ pub struct FieldAccess {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionDef {
     pub span: Span,
+    /// Luau: `@attr` list preceding `function`. Empty outside Luau.
+    pub attributes: Vec<crate::stmt::FunctionAttribute>,
     pub function_token: Span,
     pub body: FunctionBody,
 }

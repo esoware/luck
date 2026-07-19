@@ -13,6 +13,11 @@ impl Parser<'_> {
         let mut left = self.parse_prefix();
 
         while let Some(op) = BinOp::from_token_kind(self.peek()) {
+            // Luau has no bitwise operators; its lexer only emits `&`/`|`
+            // for the type grammar, so they must not bind as binops here.
+            if op.is_bitwise() && !self.version.has_bitwise_ops() {
+                break;
+            }
             let (precedence, assoc) = op.precedence();
             if precedence < min_precedence {
                 break;
@@ -81,14 +86,17 @@ impl Parser<'_> {
         self.parse_type_assertions(primary)
     }
 
-    /// Wrap a just-parsed primary in any trailing Luau `:: Type` assertions.
-    /// A no-op outside Luau. Loops so chained `x :: A :: B` parses left to right.
-    fn parse_type_assertions(&mut self, mut expr: Expression) -> Expression {
-        while self.version.is_luau() && matches!(self.peek(), TokenKind::DoubleColon) {
+    /// Wrap a just-parsed primary in a trailing Luau `:: Type` assertion.
+    /// A no-op outside Luau. Exactly one cast per simpleexp, matching the
+    /// grammar's `asexp ::= simpleexp ['::' Type]` - `x :: A :: B` is a
+    /// parse error in real Luau, so a second `::` is left for the caller
+    /// to reject as an unexpected token.
+    fn parse_type_assertions(&mut self, expr: Expression) -> Expression {
+        if self.version.is_luau() && matches!(self.peek(), TokenKind::DoubleColon) {
             let double_colon = self.advance_span();
             let type_annotation = self.parse_type();
             let span = expr.span().merge(type_annotation.span());
-            expr = Expression::TypeCast(Box::new(TypeCast {
+            return Expression::TypeCast(Box::new(TypeCast {
                 span,
                 expr,
                 double_colon,
@@ -106,8 +114,19 @@ impl Parser<'_> {
             TokenKind::True => Expression::True(self.advance_span()),
             TokenKind::Number(_) => Expression::Number(self.advance()),
             TokenKind::StringLiteral(_) => Expression::StringLiteral(self.advance()),
-            TokenKind::DotDotDot => Expression::VarArg(self.advance_span()),
+            TokenKind::DotDotDot => {
+                let span = self.advance_span();
+                if !self.is_vararg_scope {
+                    self.error(
+                        span,
+                        "cannot use '...' outside a vararg function".to_string(),
+                    );
+                }
+                Expression::VarArg(span)
+            }
             TokenKind::Function => self.parse_function_def(),
+            // Luau: `simpleexp ::= attributes 'function' funcbody`
+            TokenKind::At if self.version.is_luau() => self.parse_function_def(),
             TokenKind::LeftBrace => self.parse_table_constructor_expr(),
             TokenKind::LeftParen => {
                 let open = self.advance_span();
@@ -220,6 +239,19 @@ impl Parser<'_> {
                     }));
                 }
                 TokenKind::LeftParen | TokenKind::LeftBrace | TokenKind::StringLiteral(_) => {
+                    // 5.1 and Luau reject a call whose `(` starts on a new
+                    // line ("ambiguous syntax: function call x new
+                    // statement"); 5.2+ dropped the restriction.
+                    if matches!(self.peek(), TokenKind::LeftParen)
+                        && self.version.has_ambiguous_call_newline_error()
+                        && self.newline_before_current()
+                    {
+                        let span = self.current_span();
+                        self.error(
+                            span,
+                            "ambiguous syntax (function call x new statement): put '(' on the same line".to_string(),
+                        );
+                    }
                     let args = self.parse_function_args();
                     let args_span = function_args_span(&args);
                     let span = expr.span().merge(args_span);
@@ -303,6 +335,16 @@ impl Parser<'_> {
             TokenKind::InterpEnd(_) => {
                 // Plain string with no interpolations: InterpBegin("") + InterpEnd("text")
                 let end_token = self.advance();
+                // A queued plain-string InterpEnd points back INSIDE the
+                // Begin token's span; a detached InterpEnd means `{}`
+                // held no expression, which real Luau rejects.
+                if end_token.span.start >= begin_token.span.end {
+                    self.error(
+                        end_token.span,
+                        "malformed interpolated string: expected expression inside '{}'"
+                            .to_string(),
+                    );
+                }
                 segments.push(InterpSegment {
                     literal: begin_token,
                     expr: None,
@@ -409,13 +451,29 @@ impl Parser<'_> {
         }
     }
 
-    /// Parse `function(params) block end`.
+    /// Parse `function(params) block end`, optionally preceded by Luau
+    /// `@attr` attributes (`simpleexp ::= attributes 'function' funcbody`).
     fn parse_function_def(&mut self) -> Expression {
+        let attributes = if matches!(self.peek(), TokenKind::At) {
+            self.parse_function_attributes()
+        } else {
+            Vec::new()
+        };
+        let start_span = attributes
+            .first()
+            .map(|attr| attr.span)
+            .unwrap_or(self.current_span());
+        if !matches!(self.peek(), TokenKind::Function) {
+            let span = self.current_span();
+            self.error(span, "expected 'function' after attribute".to_string());
+            return Expression::Error(span);
+        }
         let function_token = self.advance_span(); // `function`
         let body = self.parse_function_body();
-        let span = function_token.merge(body.span);
+        let span = start_span.merge(body.span);
         Expression::FunctionDef(Box::new(FunctionDef {
             span,
+            attributes,
             function_token,
             body,
         }))
@@ -425,7 +483,7 @@ impl Parser<'_> {
     pub fn parse_function_body(&mut self) -> FunctionBody {
         // Luau: generic list before the parens - `function f<T>(x: T)`
         let generics = if self.version.is_luau() && matches!(self.peek(), TokenKind::Less) {
-            Some(Box::new(self.parse_generic_type_list()))
+            Some(Box::new(self.parse_generic_type_list(false)))
         } else {
             None
         };
@@ -574,7 +632,14 @@ impl Parser<'_> {
         // Luau: optional return type annotation after `)`
         let return_type = self.try_parse_type_annotation();
 
+        // A function body is a fresh control-flow and vararg scope:
+        // break/continue may not escape into it, and `...` is only
+        // valid when this function's params end in `...`.
+        let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
+        let saved_vararg_scope = std::mem::replace(&mut self.is_vararg_scope, vararg.is_some());
         let block = self.parse_block();
+        self.loop_depth = saved_loop_depth;
+        self.is_vararg_scope = saved_vararg_scope;
 
         let end_token = self.expect_span(&TokenKind::End).unwrap_or_else(|err| {
             self.errors.push(err);

@@ -1,7 +1,6 @@
-//! End-to-end proof of the AST-in path (`format_block`), the decompiler
-//! contract: format a programmatically built tree with no source text, then
-//! re-parse the output and require it be error-free and structurally identical
-//! to the tree we started from. This is the guarantee source-based tests can't
+//! End-to-end proof of the AST-in path (`format_block`), format a programmatically
+//! built tree with no source text, then re-parse the output and require it be error-free and structurally
+//! identical to the tree we started from. This is the guarantee source-based tests can't
 //! give - there is no original text to lean on, only the AST.
 
 use luck_ast::Block;
@@ -261,7 +260,7 @@ fn attributed_local_roundtrips_in_lua54() {
 #[test]
 fn globals_roundtrip_in_lua55() {
     let synth = Synth::new();
-    let decl = synth.global_decl(vec![synth.attributed_name("shared", None, None)]);
+    let decl = synth.global_decl(vec![synth.attributed_name("shared", None, None)], vec![]);
     let func = synth.global_function("main", FnSig::default(), synth.block(vec![], None));
     let star = synth.global_star(None);
     let block = synth.block(vec![decl, func, star], None);

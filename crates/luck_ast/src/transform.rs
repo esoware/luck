@@ -131,6 +131,9 @@ pub trait AstTransform {
             }
             Statement::GlobalDeclaration(mut global_decl) => {
                 global_decl.names = self.walk_attributed_names(global_decl.names);
+                global_decl.equal_and_exprs = global_decl
+                    .equal_and_exprs
+                    .map(|(equal, exprs)| (equal, self.walk_punctuated_exprs(exprs)));
                 Statement::GlobalDeclaration(global_decl)
             }
             Statement::TypeDeclaration(mut type_decl) => {
@@ -604,6 +607,7 @@ mod tests {
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
                 local_token: span(),
+                is_const: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("x".into())),
                     type_annotation: None,
@@ -653,6 +657,7 @@ mod tests {
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
                 local_token: span(),
+                is_const: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("t".into())),
                     type_annotation: None,
@@ -702,6 +707,7 @@ mod tests {
                 span: span(),
                 attributes: Vec::new(),
                 local_token: span(),
+                is_const: false,
                 function_token: span(),
                 name: token(TokenKind::Identifier("f".into())),
                 body,
@@ -780,6 +786,7 @@ mod tests {
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
                 local_token: span(),
+                is_const: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("x".into())),
                     type_annotation: None,

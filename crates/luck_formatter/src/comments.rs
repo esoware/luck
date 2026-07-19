@@ -1,13 +1,13 @@
 //! Comment interleaving for both formatter input modes.
 //!
 //! Parsed source carries comments as a sorted `Vec<Comment>` keyed by byte
-//! offsets (`attached_to`); a synthetic AST (decompiler output) carries
+//! offsets (`attached_to`); a synthetic AST carries
 //! `SyntheticComment`s keyed by the anchor node's span start. Both resolve
 //! to owned text at construction, so emission never slices source.
 //!
 //! The sourced store is a cursor over the sorted array (same model the old
 //! formatter used). The synthetic store is a map keyed by anchor, because
-//! synthesis order does not guarantee document order and a decompiler may
+//! synthesis order does not guarantee document order and a synthesizer may
 //! attach comments to every statement - per-anchor lookup has to stay cheap
 //! at that density. The synthetic store additionally carries the set of
 //! anchors that want a blank line before them ([`Comments::with_blank_before`]),
@@ -148,8 +148,8 @@ impl Comments {
     }
 
     /// Request a blank line before each statement whose span start is in
-    /// `anchors` - the source-less way to separate logical regions (basic
-    /// blocks, decompiled protos). Only meaningful for synthetic input; on
+    /// `anchors` - the source-less way to separate logical regions.
+    ///  Only meaningful for synthetic input; on
     /// the parsed path blank lines come from the source itself.
     #[must_use]
     pub fn with_blank_before(mut self, anchors: impl IntoIterator<Item = u32>) -> Self {

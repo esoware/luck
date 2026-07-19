@@ -60,6 +60,31 @@ pub fn minify(
             .map(|e| errors::e008(file_path, e.span.into(), &e.message))
             .collect());
     }
+    // Luau hot comments (--!strict, --!native, --!optimize N, ...) set
+    // per-file runtime and analysis modes; they only apply before any
+    // code, so the leading run must survive minification at the top.
+    let hot_comment_prefix = if version.is_luau() {
+        let mut prefix = String::new();
+        let mut boundary = 0usize;
+        for comment in &result.comments {
+            let start = comment.span.start as usize;
+            let end = comment.span.end as usize;
+            if source[boundary..start].chars().any(|c| !c.is_whitespace()) {
+                break;
+            }
+            let text = &source[start..end];
+            if let Some(rest) = text.strip_prefix("--")
+                && rest.starts_with('!')
+            {
+                prefix.push_str(text.trim_end());
+                prefix.push('\n');
+            }
+            boundary = end;
+        }
+        prefix
+    } else {
+        String::new()
+    };
     let mut block = result.block;
 
     // One flat fixpoint loop. Both a nested core-only inner loop (with
@@ -89,7 +114,7 @@ pub fn minify(
         let reparsed = luck_parser::parse(&current_source, version);
         debug_assert!(
             reparsed.errors.is_empty(),
-            "minified round output failed to reparse: {:?}",
+            "minified round output failed to reparse: {:?}\noutput:\n{current_source}",
             reparsed.errors
         );
         if !reparsed.errors.is_empty() {
@@ -98,7 +123,11 @@ pub fn minify(
         block = reparsed.block;
     }
 
-    Ok(previous_output)
+    if hot_comment_prefix.is_empty() {
+        Ok(previous_output)
+    } else {
+        Ok(format!("{hot_comment_prefix}{previous_output}"))
+    }
 }
 
 /// One round of the cheap peephole passes, in dependency order.
@@ -153,7 +182,7 @@ fn apply_core_transforms(
         block
     };
     let block = if config.shorten_strings {
-        transforms::shorten_strings::shorten(block)
+        transforms::shorten_strings::shorten(block, version)
     } else {
         block
     };
@@ -691,5 +720,52 @@ mod tests {
     fn no_fold_overflow_to_inf() {
         let result = minify_lua54("local x = 1e308 * 10\nreturn x\n");
         assert!(result.contains("*"), "Should not fold to inf: {result}");
+    }
+    #[test]
+    fn luau_hot_comments_survive_minification() {
+        let output = minify(
+            "--!strict
+--!native
+--!optimize 2
+local x: number = 1
+return x
+",
+            LuaTarget::Luau,
+            &TransformConfig::default(),
+            "<test>",
+        )
+        .expect("minify failed");
+        assert!(
+            output.starts_with(
+                "--!strict
+--!native
+--!optimize 2
+"
+            ),
+            "hot comments must lead the output: {output}"
+        );
+        // Idempotent: a second pass keeps exactly one copy.
+        let second = minify(
+            &output,
+            LuaTarget::Luau,
+            &TransformConfig::default(),
+            "<test>",
+        )
+        .expect("second minify failed");
+        assert_eq!(output, second, "hot comment prefix must be stable");
+    }
+
+    #[test]
+    fn regular_comments_still_dropped() {
+        let output = minify(
+            "-- plain comment
+return 1
+",
+            LuaTarget::Luau,
+            &TransformConfig::default(),
+            "<test>",
+        )
+        .expect("minify failed");
+        assert!(!output.contains("plain comment"), "{output}");
     }
 }

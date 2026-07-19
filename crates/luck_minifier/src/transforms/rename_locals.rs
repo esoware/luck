@@ -354,14 +354,27 @@ impl Analyzer {
             Statement::GlobalFunction(global_func) => {
                 self.analyze_function_body(&global_func.body);
             }
+            Statement::GlobalDeclaration(global_decl) => {
+                if let Some((_, exprs)) = &global_decl.equal_and_exprs {
+                    for expr in exprs.iter() {
+                        self.analyze_expr(expr);
+                    }
+                }
+            }
+            // Luau `type function` bodies are ordinary code that AstRenamer
+            // walks via walk_function_body; the analyzer must match or the
+            // binding indices desync (and the renamer panics).
+            Statement::TypeDeclaration(type_decl) => {
+                if let TypeDeclarationValue::TypeFunction(body) = &type_decl.type_value {
+                    self.analyze_function_body(body);
+                }
+            }
             // Leaves with no bindings or references the renamer touches.
             Statement::EmptyStatement(_)
             | Statement::Goto(_)
             | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
             | Statement::GlobalStar(_)
             | Statement::Break(_)
-            | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
         }
     }
@@ -628,24 +641,42 @@ impl Analyzer {
             }
         }
 
-        // zero-frequency fallback
-        let mut fallback_idx = 0;
-        for name in &mut slot_to_name {
-            if name.is_empty() {
-                loop {
-                    if fallback_idx == candidates.len() {
-                        let candidate = name_gen.index_to_name(fallback_idx);
-                        is_keyword.push(keyword_set.contains(candidate.as_str()));
-                        candidates.push(candidate);
-                        taken_scopes.push(vec![0u64; scope_words]);
-                    }
-                    let candidate_idx = fallback_idx;
-                    fallback_idx += 1;
-                    if !is_keyword[candidate_idx] {
-                        *name = candidates[candidate_idx].clone();
-                        break;
-                    }
+        // Zero-frequency slots (declared but never referenced) still wear
+        // a name in the output, so they run through the same liveness
+        // conflict check: handing them the first short name regardless
+        // captured co-live slots (an unreferenced param stole the name of
+        // an upvalue used inside the same function body).
+        for slot in 0..slot_count {
+            if !slot_to_name[slot].is_empty() {
+                continue;
+            }
+            let forbidden = &slot_forbidden[slot];
+            let slot_live = &slot_liveness[slot];
+            let mut idx = 0;
+            loop {
+                if idx == candidates.len() {
+                    let name = name_gen.index_to_name(idx);
+                    is_keyword.push(keyword_set.contains(name.as_str()));
+                    candidates.push(name);
+                    taken_scopes.push(vec![0u64; scope_words]);
                 }
+                let candidate_idx = idx;
+                idx += 1;
+                let conflicts = slot_live.iter().any(|&scope| {
+                    taken_scopes[candidate_idx][scope / 64] & (1u64 << (scope % 64)) != 0
+                });
+                if conflicts || is_keyword[candidate_idx] {
+                    continue;
+                }
+                let candidate = &candidates[candidate_idx];
+                if forbidden.contains(candidate.as_str()) {
+                    continue;
+                }
+                for &scope in slot_live {
+                    taken_scopes[candidate_idx][scope / 64] |= 1u64 << (scope % 64);
+                }
+                slot_to_name[slot] = candidate.clone();
+                break;
             }
         }
 
@@ -1389,11 +1420,17 @@ fn collect_name_reads_from_stmt(
         // Function bodies are separate scopes; their reads don't count here.
         Statement::FunctionDecl(_) | Statement::LocalFunction(_) | Statement::GlobalFunction(_) => {
         }
+        Statement::GlobalDeclaration(global_decl) => {
+            if let Some((_, exprs)) = &global_decl.equal_and_exprs {
+                for expr in exprs.iter() {
+                    collect_name_reads_from_expr(expr, locals, reads);
+                }
+            }
+        }
         // Leaves and declarations that read no names at this scope.
         Statement::EmptyStatement(_)
         | Statement::Goto(_)
         | Statement::Label(_)
-        | Statement::GlobalDeclaration(_)
         | Statement::GlobalStar(_)
         | Statement::Break(_)
         | Statement::TypeDeclaration(_)
@@ -1594,6 +1631,32 @@ mod tests {
         assert!(
             result.contains('g'),
             "global 'g' read via typecast must be preserved: {result}"
+        );
+    }
+
+    #[test]
+    fn unreferenced_param_never_captures_live_upvalue() {
+        // The zero-frequency name fallback used to hand an unreferenced
+        // param the same short name as an upvalue read inside the body,
+        // capturing it.
+        let result = apply(
+            "local cache = string.rep
+function W.new(p)
+	print(cache)
+end
+cache = f()
+",
+        );
+        let reparsed = luck_parser::parse(&result, luck_token::LuaVersion::Lua54);
+        assert!(reparsed.errors.is_empty(), "must reparse: {result}");
+        // The upvalue read inside the body and the outer local must
+        // still be the SAME name, and the param a different one.
+        let body_start = result.find("function W.new(").expect("decl kept") + 15;
+        let param = &result[body_start..body_start + 1];
+        let outer = &result[6..7];
+        assert_ne!(
+            param, outer,
+            "param must not shadow the captured upvalue: {result}"
         );
     }
 }

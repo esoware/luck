@@ -279,6 +279,17 @@ pub enum BinOp {
 }
 
 impl BinOp {
+    /// Bitwise operators exist in 5.3+ only. The lexer already rejects
+    /// them for 5.1/5.2, but Luau emits `&`/`|` tokens for its type
+    /// grammar, so the parser must gate on this too.
+    #[must_use]
+    pub fn is_bitwise(self) -> bool {
+        matches!(
+            self,
+            Self::BitAnd | Self::BitOr | Self::BitXor | Self::Shl | Self::Shr
+        )
+    }
+
     #[must_use]
     pub fn from_token_kind(kind: &TokenKind) -> Option<Self> {
         Some(match kind {

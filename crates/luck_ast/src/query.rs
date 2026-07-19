@@ -37,3 +37,21 @@ pub fn var_starts_with_paren(var: &Var) -> bool {
         Var::Index(index) => expr_starts_with_paren(&index.prefix),
     }
 }
+
+/// Whether a reprinted expression's first token is `{`. Inside an
+/// interpolated string, `{` directly after the interpolation opener
+/// forms `{{`, which Luau rejects - printers must separate them.
+pub fn expr_starts_with_brace(expr: &Expression) -> bool {
+    match expr {
+        Expression::TableConstructor(_) => true,
+        Expression::FunctionCall(call) => expr_starts_with_brace(&call.callee),
+        Expression::BinaryOp(binop) => expr_starts_with_brace(&binop.left),
+        Expression::TypeCast(cast) => expr_starts_with_brace(&cast.expr),
+        Expression::Var(var) => match var.as_ref() {
+            Var::Name(_) => false,
+            Var::FieldAccess(field_access) => expr_starts_with_brace(&field_access.prefix),
+            Var::Index(index) => expr_starts_with_brace(&index.prefix),
+        },
+        _ => false,
+    }
+}

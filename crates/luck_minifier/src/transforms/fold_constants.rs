@@ -14,14 +14,11 @@ use crate::tokens::default_span as sp;
 /// Evaluate compile-time constant expressions (arithmetic, string concat, boolean logic).
 /// Version-aware: Lua 5.3+ integer/float subtypes are preserved exactly.
 pub fn fold(block: Block, version: LuaVersion) -> Block {
-    ConstFolder {
-        int_subtype: version.has_integer_subtype(),
-    }
-    .transform_block(block)
+    ConstFolder { version }.transform_block(block)
 }
 
 struct ConstFolder {
-    int_subtype: bool,
+    version: LuaVersion,
 }
 
 impl AstTransform for ConstFolder {
@@ -31,14 +28,16 @@ impl AstTransform for ConstFolder {
         match expr {
             Expression::BinaryOp(binop) => {
                 if let Some(result) =
-                    try_fold_binary(&binop.left, binop.op, &binop.right, self.int_subtype)
+                    try_fold_binary(&binop.left, binop.op, &binop.right, self.version)
                 {
                     return result;
                 }
                 Expression::BinaryOp(binop)
             }
             Expression::UnaryOp(unop) => {
-                if let Some(result) = try_fold_unary(unop.op, &unop.operand, self.int_subtype) {
+                if let Some(result) =
+                    try_fold_unary(unop.op, &unop.operand, self.version.has_integer_subtype())
+                {
                     return result;
                 }
                 Expression::UnaryOp(unop)
@@ -54,7 +53,7 @@ fn int_fits_f64(value: i64) -> bool {
     value.abs() <= (1i64 << 53)
 }
 
-fn fold_numeric(l: LuaNumber, op: BinOp, r: LuaNumber) -> Option<LuaNumber> {
+fn fold_numeric(l: LuaNumber, op: BinOp, r: LuaNumber, version: LuaVersion) -> Option<LuaNumber> {
     use LuaNumber::{Float, Int};
     match (l, r) {
         (Int(a), Int(b)) => match op {
@@ -88,18 +87,18 @@ fn fold_numeric(l: LuaNumber, op: BinOp, r: LuaNumber) -> Option<LuaNumber> {
             }
             _ => None,
         },
-        (Float(a), Float(b)) => fold_float(a, op, b),
+        (Float(a), Float(b)) => fold_float(a, op, b, version),
         (Int(a), Float(b)) => {
             if !int_fits_f64(a) {
                 return None;
             }
-            fold_float(a as f64, op, b)
+            fold_float(a as f64, op, b, version)
         }
         (Float(a), Int(b)) => {
             if !int_fits_f64(b) {
                 return None;
             }
-            fold_float(a, op, b as f64)
+            fold_float(a, op, b as f64, version)
         }
     }
 }
@@ -125,15 +124,30 @@ fn floored_div(a: i64, b: i64) -> Option<i64> {
     }
 }
 
-fn fold_float(a: f64, op: BinOp, b: f64) -> Option<LuaNumber> {
+fn fold_float(a: f64, op: BinOp, b: f64, version: LuaVersion) -> Option<LuaNumber> {
     let value = match op {
         BinOp::Add => a + b,
         BinOp::Sub => a - b,
         BinOp::Mul => a * b,
         BinOp::Div if b != 0.0 => a / b,
         BinOp::Mod if b != 0.0 => {
-            // Lua uses floored modulo: a % b = a - floor(a/b) * b
-            a - (a / b).floor() * b
+            if version.has_fmod_float_modulo() {
+                // 5.3+ luai_nummod: fmod plus a sign fix. The floor
+                // formula is wrong at large magnitudes (1e16 % 3) and
+                // for the sign of zero results (-6.0 % 3.0 is -0.0).
+                let m = a % b;
+                let needs_fix = if version.has_float_modulo_sign_compare() {
+                    // Lua 5.4+
+                    if m > 0.0 { b < 0.0 } else { m < 0.0 && b > 0.0 }
+                } else {
+                    // Lua 5.3
+                    m * b < 0.0
+                };
+                if needs_fix { m + b } else { m }
+            } else {
+                // 5.1, 5.2, and Luau: a - floor(a/b)*b, exactly.
+                a - (a / b).floor() * b
+            }
         }
         BinOp::Pow => a.powf(b),
         BinOp::FloorDiv if b != 0.0 => (a / b).floor(),
@@ -193,16 +207,16 @@ fn truncate_multi_value(expr: &Expression) -> Expression {
     }
 }
 
-fn extract_string_bytes(expr: &Expression) -> Option<Vec<u8>> {
+fn extract_string_bytes(expr: &Expression, version: LuaVersion) -> Option<Vec<u8>> {
     match expr {
         Expression::StringLiteral(token) => {
             if let TokenKind::StringLiteral(ref raw) = token.kind {
-                decode_string_literal(raw)
+                decode_string_literal(raw, version)
             } else {
                 None
             }
         }
-        Expression::Parenthesized(paren) => extract_string_bytes(&paren.expr),
+        Expression::Parenthesized(paren) => extract_string_bytes(&paren.expr, version),
         _ => None,
     }
 }
@@ -211,13 +225,14 @@ fn try_fold_binary(
     lhs: &Expression,
     op: BinOp,
     rhs: &Expression,
-    int_subtype: bool,
+    version: LuaVersion,
 ) -> Option<Expression> {
+    let int_subtype = version.has_integer_subtype();
     if let (Some(l), Some(r)) = (
         extract_lua_number(lhs, int_subtype),
         extract_lua_number(rhs, int_subtype),
     ) {
-        if let Some(value) = fold_numeric(l, op, r) {
+        if let Some(value) = fold_numeric(l, op, r, version) {
             if let Some(folded) = make_lua_number_expr(value, int_subtype) {
                 return Some(folded);
             }
@@ -229,7 +244,10 @@ fn try_fold_binary(
 
     // Strings fold on their DECODED byte values - comparing or joining
     // raw escaped text conflates `"\65"` with `"\\65"` and worse.
-    if let (Some(l), Some(r)) = (extract_string_bytes(lhs), extract_string_bytes(rhs)) {
+    if let (Some(l), Some(r)) = (
+        extract_string_bytes(lhs, version),
+        extract_string_bytes(rhs, version),
+    ) {
         match op {
             BinOp::Eq => return Some(make_boolean_expr(l == r)),
             BinOp::Ne => return Some(make_boolean_expr(l != r)),
@@ -589,6 +607,42 @@ mod tests {
         assert!(
             result.contains("%"),
             "Should not fold modulo by zero, got: {result}"
+        );
+    }
+
+    fn apply_v(source: &str, version: luck_token::LuaVersion) -> String {
+        let result = luck_parser::parse(source, version);
+        assert!(result.errors.is_empty(), "parse failed");
+        let block = fold(result.block, version);
+        luck_codegen::compact(&block, source)
+    }
+
+    #[test]
+    fn float_modulo_fmod_semantics_53_plus() {
+        // 5.3+ luai_nummod is fmod + sign fix: 1e16 % 3 == 1.0 exactly.
+        // The floor formula gives 0.0 (precision loss at 1e16).
+        let result = apply_v("return 1e16 % 3\n", luck_token::LuaVersion::Lua54);
+        assert!(result.contains("1"), "5.4 folds 1e16%3 to 1.0: {result}");
+        assert!(!result.contains('%'), "must fold: {result}");
+        // 5.1's floor formula really does produce 0.0 - mirror it.
+        let result = apply_v("return 1e16 % 3\n", luck_token::LuaVersion::Lua51);
+        assert!(!result.contains('%'), "5.1 folds too: {result}");
+        assert!(result.contains("0"), "5.1 floor formula gives 0: {result}");
+    }
+
+    #[test]
+    fn float_modulo_preserves_negative_zero_53_plus() {
+        // fmod(-6.0, 3.0) is -0.0 under 5.3+; the floor formula loses
+        // the sign. Observable via 1/x and tostring.
+        let result = apply_v("return -6.0 % 3.0\n", luck_token::LuaVersion::Lua54);
+        assert!(
+            result.contains("-0"),
+            "5.4 keeps the sign of zero: {result}"
+        );
+        let result = apply_v("return -6.0 % 3.0\n", luck_token::LuaVersion::Lua51);
+        assert!(
+            !result.contains("-0"),
+            "5.1 floor formula gives +0: {result}"
         );
     }
 }

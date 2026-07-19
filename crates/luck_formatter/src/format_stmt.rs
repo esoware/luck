@@ -62,7 +62,13 @@ impl Format for Statement {
 }
 
 fn write_local_assignment(f: &mut Formatter, local: &LocalAssignment) {
-    crate::write!(f, [token("local"), space()]);
+    crate::write!(
+        f,
+        [
+            token(if local.is_const { "const" } else { "local" }),
+            space()
+        ]
+    );
 
     // Names get their own group so a long binding list breaks independently
     // of the value list.
@@ -309,7 +315,7 @@ fn write_label(f: &mut Formatter, label: &LabelStatement) {
     crate::write!(f, [token("::"), FormatToken(&label.name), token("::"),]);
 }
 
-/// Lua 5.5 `global name, ...`.
+/// Lua 5.5 `global name, ... [= exprs]`.
 fn write_global_declaration(f: &mut Formatter, global: &GlobalDeclaration) {
     crate::write!(f, [token("global"), space()]);
     for (idx, (attributed, sep)) in global.names.items.iter().enumerate() {
@@ -320,6 +326,10 @@ fn write_global_declaration(f: &mut Formatter, global: &GlobalDeclaration) {
         if idx + 1 < global.names.items.len() || sep.is_some() {
             crate::write!(f, [token(",")]);
         }
+    }
+    if let Some((_equal, exprs)) = &global.equal_and_exprs {
+        crate::write!(f, [space(), token("="), space()]);
+        write_punctuated_exprs(f, exprs);
     }
 }
 
@@ -348,7 +358,7 @@ fn write_local_function(f: &mut Formatter, func: &LocalFunction) {
     crate::write!(
         f,
         [
-            token("local"),
+            token(if func.is_const { "const" } else { "local" }),
             space(),
             token("function"),
             space(),
@@ -377,7 +387,25 @@ fn write_global_function(f: &mut Formatter, func: &GlobalFunction) {
 /// declaration. Dropping them would change runtime behavior.
 fn write_function_attributes(f: &mut Formatter, attributes: &[FunctionAttribute]) {
     for attr in attributes {
-        crate::write!(f, [token("@"), FormatToken(&attr.name), hard_line()]);
+        match &attr.args {
+            // Arguments only exist on the bracketed form.
+            Some(args) => {
+                crate::write!(
+                    f,
+                    [token("@"), token("["), FormatToken(&attr.name), token("(")]
+                );
+                for (idx, (expr, _)) in args.items.iter().enumerate() {
+                    if idx > 0 {
+                        crate::write!(f, [token(","), space()]);
+                    }
+                    expr.fmt(f);
+                }
+                crate::write!(f, [token(")"), token("]"), hard_line()]);
+            }
+            None => {
+                crate::write!(f, [token("@"), FormatToken(&attr.name), hard_line()]);
+            }
+        }
     }
 }
 

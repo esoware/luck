@@ -53,7 +53,7 @@ impl AstTransform for Lifter {
             return body;
         }
 
-        body.block = rewrite_block(body.block, &liftable_set);
+        body.block = rewrite_block(body.block, &liftable_set, &mut Vec::new());
         body.block = self.transform_block(body.block);
 
         prepend_declaration(&mut body.block, &liftable_ordered);
@@ -78,7 +78,10 @@ fn collect_liftable(
     for stmt in &block.stmts {
         match stmt {
             Statement::LocalAssignment(local) => {
-                let has_attribs = local.names.iter().any(|n| n.attrib.is_some());
+                // Const bindings cannot be lifted: the hoisted bare
+                // declaration would lack the mandatory initializer and
+                // the later write would assign to a const.
+                let has_attribs = local.names.iter().any(|n| n.attrib.is_some()) || local.is_const;
                 // A bare `local x` inside a loop resets to nil each
                 // iteration; lifted to function scope it would keep the
                 // previous iteration's value.
@@ -119,7 +122,9 @@ fn collect_liftable(
             }
             Statement::LocalFunction(lf) => {
                 let name = ident_name_string(&lf.name);
-                if !(is_in_parent(scope_names, &name) || captured.contains(&name))
+                if !lf.is_const
+                    && !is_in_parent(scope_names, &name)
+                    && !captured.contains(&name)
                     && liftable.insert(name.clone())
                 {
                     liftable_ordered.push(name.clone());
@@ -321,8 +326,18 @@ impl<'ast> Visitor<'ast> for NameCollector<'_> {
 }
 
 /// Rewrite a block: convert lifted `local X=Y` to `X=Y`, remove bare `local X`.
-fn rewrite_block(block: Block, liftable: &HashSet<String>) -> Block {
+/// `shadowed` carries names bound by NON-lifted declarations (loop control
+/// variables, kept locals) on the path here: a declaration whose name is
+/// currently shadowed must stay a `local` - rewriting it into an
+/// assignment would rebind it to the shadowing binding, not the hoisted
+/// one (e.g. a renamed shadow inside `for l = ...` assigning the loop var).
+fn rewrite_block(
+    block: Block,
+    liftable: &HashSet<String>,
+    shadowed: &mut Vec<HashSet<String>>,
+) -> Block {
     let mut new_stmts: Vec<Statement> = Vec::new();
+    shadowed.push(HashSet::new());
 
     for stmt in block.stmts {
         match stmt {
@@ -332,7 +347,10 @@ fn rewrite_block(block: Block, liftable: &HashSet<String>) -> Block {
                     .iter()
                     .map(|attributed| ident_name_string(&attributed.name))
                     .collect();
-                let all_lifted = names.iter().all(|n| liftable.contains(n));
+                let all_lifted = names.iter().all(|n| liftable.contains(n))
+                    && !names
+                        .iter()
+                        .any(|n| shadowed.iter().any(|frame| frame.contains(n)));
 
                 if all_lifted {
                     if let Some((_, exprs)) = local.equal_and_exprs {
@@ -354,15 +372,22 @@ fn rewrite_block(block: Block, liftable: &HashSet<String>) -> Block {
                     }
                     // bare `local X` with no values: just drop it
                 } else {
+                    for name in names {
+                        shadowed
+                            .last_mut()
+                            .expect("frame pushed above")
+                            .insert(name);
+                    }
                     new_stmts.push(Statement::LocalAssignment(local));
                 }
             }
             Statement::LocalFunction(lf) => {
                 let name = ident_name_string(&lf.name);
-                if liftable.contains(&name) {
+                if liftable.contains(&name) && !shadowed.iter().any(|frame| frame.contains(&name)) {
                     // local function f(x)...end -> f=function(x)...end
                     let func_expr = Expression::FunctionDef(Box::new(FunctionDef {
                         span: lf.span,
+                        attributes: lf.attributes,
                         function_token: lf.function_token,
                         body: lf.body,
                     }));
@@ -374,43 +399,57 @@ fn rewrite_block(block: Block, liftable: &HashSet<String>) -> Block {
                         values: Punctuated::from_item(body_block),
                     })));
                 } else {
+                    shadowed
+                        .last_mut()
+                        .expect("frame pushed above")
+                        .insert(name);
                     new_stmts.push(Statement::LocalFunction(lf));
                 }
             }
             Statement::DoBlock(mut do_block) => {
-                do_block.block = rewrite_block(do_block.block, liftable);
+                do_block.block = rewrite_block(do_block.block, liftable, shadowed);
                 new_stmts.push(Statement::DoBlock(do_block));
             }
             Statement::WhileLoop(mut wl) => {
-                wl.block = rewrite_block(wl.block, liftable);
+                wl.block = rewrite_block(wl.block, liftable, shadowed);
                 new_stmts.push(Statement::WhileLoop(wl));
             }
             Statement::RepeatLoop(mut rl) => {
-                rl.block = rewrite_block(rl.block, liftable);
+                rl.block = rewrite_block(rl.block, liftable, shadowed);
                 new_stmts.push(Statement::RepeatLoop(rl));
             }
             Statement::IfStatement(mut if_stmt) => {
-                if_stmt.block = rewrite_block(if_stmt.block, liftable);
+                if_stmt.block = rewrite_block(if_stmt.block, liftable, shadowed);
                 if_stmt.elseif_clauses = if_stmt
                     .elseif_clauses
                     .into_iter()
                     .map(|mut clause| {
-                        clause.block = rewrite_block(clause.block, liftable);
+                        clause.block = rewrite_block(clause.block, liftable, shadowed);
                         clause
                     })
                     .collect();
                 if_stmt.else_clause = if_stmt.else_clause.map(|mut ec| {
-                    ec.block = rewrite_block(ec.block, liftable);
+                    ec.block = rewrite_block(ec.block, liftable, shadowed);
                     ec
                 });
                 new_stmts.push(Statement::IfStatement(if_stmt));
             }
             Statement::NumericFor(mut nf) => {
-                nf.block = rewrite_block(nf.block, liftable);
+                let mut frame = HashSet::new();
+                frame.insert(ident_name_string(&nf.name));
+                shadowed.push(frame);
+                nf.block = rewrite_block(nf.block, liftable, shadowed);
+                shadowed.pop();
                 new_stmts.push(Statement::NumericFor(nf));
             }
             Statement::GenericFor(mut gf) => {
-                gf.block = rewrite_block(gf.block, liftable);
+                let mut frame = HashSet::new();
+                for binding in gf.names.iter() {
+                    frame.insert(ident_name_string(&binding.name));
+                }
+                shadowed.push(frame);
+                gf.block = rewrite_block(gf.block, liftable, shadowed);
+                shadowed.pop();
                 new_stmts.push(Statement::GenericFor(gf));
             }
             // No lifted local to rewrite here. Function declarations (including
@@ -432,6 +471,7 @@ fn rewrite_block(block: Block, liftable: &HashSet<String>) -> Block {
         }
     }
 
+    shadowed.pop();
     Block {
         span: block.span,
         stmts: new_stmts,
@@ -475,6 +515,7 @@ fn prepend_declaration(block: &mut Block, names: &[String]) {
             local_token: sp(),
             names,
             equal_and_exprs: None,
+            is_const: false,
         })),
     );
 }
@@ -560,5 +601,33 @@ mod tests {
             "return s\n",
         ));
         assert!(reparses(&result), "Parse errors\nOutput: {result}");
+    }
+
+    #[test]
+    fn shadowed_declaration_is_never_rewritten_to_assignment() {
+        // The lift rewrite matches by NAME: a shadowing declaration that
+        // shares a lifted name must stay a `local`, or its rewrite would
+        // rebind to the shadowing binding (here, the for control var).
+        let result = minify(concat!(
+            "function W.new(c)\n",
+            "  for l = 1, 3 do\n",
+            "    if c then\n",
+            "      local l = f()\n",
+            "      print(l)\n",
+            "    end\n",
+            "  end\n",
+            "  while c do\n",
+            "    local l = g()\n",
+            "    print(l)\n",
+            "  end\n",
+            "end\n",
+        ));
+        assert!(reparses(&result), "Parse errors\nOutput: {result}");
+        // The declaration under the for-var shadow must survive as a
+        // `local` (the while-loop one may be lifted).
+        assert!(
+            result.contains("local l=f()") || result.contains("local l = f()"),
+            "shadowed decl must stay local: {result}"
+        );
     }
 }

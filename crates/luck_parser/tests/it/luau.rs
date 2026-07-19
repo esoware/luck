@@ -264,7 +264,11 @@ fn type_cast_binds_tighter_than_binary_op() {
 /// Chained assertions parse left-to-right.
 #[test]
 fn type_cast_chained() {
+    // Grammar: asexp ::= simpleexp ['::' Type] - one cast per simpleexp;
+    // real Luau rejects a second `::` (wrap in parens to chain).
     let result = parse_luau("local x = v :: A :: B");
+    assert!(!result.errors.is_empty(), "chained casts must error");
+    let result = parse_luau("local x = (v :: A) :: B");
     assert_no_errors(&result);
 }
 
@@ -285,7 +289,7 @@ fn type_declaration_simple() {
 
 #[test]
 fn type_declaration_generic() {
-    let result = parse_luau("type Pair<T> = {T, T}");
+    let result = parse_luau("type Pair<T> = { first: T, second: T }");
     assert_no_errors(&result);
     if let Statement::TypeDeclaration(td) = &result.block.stmts[0] {
         assert!(td.generics.is_some());
@@ -550,4 +554,111 @@ fn export_type_function_parses() {
     } else {
         panic!("expected TypeDeclaration");
     }
+}
+
+#[test]
+fn bitwise_operators_rejected() {
+    // Luau has no bitwise operators; `&`/`|` only exist in type syntax
+    // (compatibility page: bitwise operators = not supported).
+    for source in [
+        "local a = 1 & 2",
+        "local a = 1 | 2",
+        "return x & y",
+        "return x | y",
+    ] {
+        let result = parse_luau(source);
+        assert!(
+            !result.errors.is_empty(),
+            "Luau must reject bitwise binop: {source}"
+        );
+    }
+    // The same tokens still work in type positions.
+    let result = parse_luau("type U = number | string\ntype I = A & B");
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+}
+
+#[test]
+fn const_bindings() {
+    // Grammar: 'const' bindinglist '=' explist | 'const' 'function' NAME funcbody
+    let result = parse_luau("const x = 1");
+    assert_no_errors(&result);
+    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+        assert!(local.is_const);
+        assert!(local.equal_and_exprs.is_some());
+    } else {
+        panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
+    }
+
+    let result = parse_luau("const a, b = 1, 2");
+    assert_no_errors(&result);
+
+    let result = parse_luau("const n: number = 5");
+    assert_no_errors(&result);
+
+    let result = parse_luau("const function cf() end");
+    assert_no_errors(&result);
+    if let Statement::LocalFunction(func) = &result.block.stmts[0] {
+        assert!(func.is_const);
+    } else {
+        panic!("expected LocalFunction, got {:?}", result.block.stmts[0]);
+    }
+}
+
+#[test]
+fn const_requires_initializer() {
+    let result = parse_luau("const x");
+    assert!(!result.errors.is_empty(), "missing initializer must error");
+}
+
+#[test]
+fn const_stays_contextual() {
+    // `const` remains an ordinary identifier when no binding follows.
+    assert_no_errors(&parse_luau("const = 1"));
+    assert_no_errors(&parse_luau("const.x = 1"));
+    assert_no_errors(&parse_luau("const()"));
+    assert_no_errors(&parse_luau("local const = 2\nprint(const)"));
+    // And non-Luau versions never treat it specially.
+    let result = luck_parser::parse("const x = 1", luck_token::LuaVersion::Lua54);
+    assert!(!result.errors.is_empty(), "const decl is Luau-only");
+}
+
+#[test]
+fn bracketed_and_parameterized_attributes() {
+    // attribute ::= '@' NAME | '@[' parattr {',' parattr} ']'
+    assert_no_errors(&parse_luau("@[deprecated] function f() end"));
+    assert_no_errors(&parse_luau("@[deprecated(\"use g\")] function f() end"));
+    assert_no_errors(&parse_luau("@[checked, native] function f() end"));
+    // Arguments must be literals, and only deprecated takes them.
+    assert!(
+        !parse_luau("@[deprecated(foo())] function f() end")
+            .errors
+            .is_empty()
+    );
+    assert!(
+        !parse_luau("@[native(1)] function f() end")
+            .errors
+            .is_empty()
+    );
+}
+
+#[test]
+fn attributes_on_function_expressions() {
+    // simpleexp ::= attributes 'function' funcbody
+    assert_no_errors(&parse_luau("local k = @native function() end"));
+    assert_no_errors(&parse_luau("f(@checked function() end)"));
+    assert!(
+        !parse_luau("local k = @nonsense function() end")
+            .errors
+            .is_empty()
+    );
+}
+
+#[test]
+fn empty_interpolation_rejected() {
+    let result = parse_luau("return `a{}b`");
+    assert!(!result.errors.is_empty(), "empty interpolation must error");
+    // Plain backtick strings still parse.
+    assert_no_errors(&parse_luau("return `plain`"));
+    assert_no_errors(&parse_luau("return ``"));
+    assert_no_errors(&parse_luau("return `a{1}b`"));
 }

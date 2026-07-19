@@ -106,6 +106,16 @@ fn lex_hex_number(
         ));
     }
 
+    // Luau's numeral scanner consumes dots in hex literals too, so
+    // `0xFF..2` is malformed there. 5.1's hex scanner stops at the dot
+    // (valid concat) and 5.2+ already failed in the hex-float path.
+    if version.is_luau() && cursor.peek() == Some(b'.') && cursor.peek_at(1) == Some(b'.') {
+        return Err(crate::lex_error(
+            Span::new(start as u32, (cursor.position() + 2) as u32),
+            "malformed number (a numeral cannot directly precede '..')",
+        ));
+    }
+
     let raw = &source[start..cursor.position()];
     validate_underscore_placement(raw, start, version)?;
     Ok(TokenKind::Number(raw.into()))
@@ -126,6 +136,14 @@ fn lex_binary_number(
         return Err(crate::lex_error(
             Span::new(start as u32, cursor.position() as u32),
             "binary literal requires at least one digit",
+        ));
+    }
+
+    // Binary literals are Luau-only, and Luau's scanner consumes dots.
+    if cursor.peek() == Some(b'.') && cursor.peek_at(1) == Some(b'.') {
+        return Err(crate::lex_error(
+            Span::new(start as u32, (cursor.position() + 2) as u32),
+            "malformed number (a numeral cannot directly precede '..')",
         ));
     }
 
@@ -174,6 +192,17 @@ fn lex_decimal_number(
         }
     }
 
+    // Every real Lua numeral scanner consumes `.` greedily, so a number
+    // running straight into `..` is "malformed number", never a concat;
+    // `1 ..2` needs the space. (5.1's hex scanner stops at `.`, so hex
+    // is exempt there - see lex_hex_number.)
+    if cursor.peek() == Some(b'.') && cursor.peek_at(1) == Some(b'.') {
+        return Err(crate::lex_error(
+            Span::new(start as u32, (cursor.position() + 2) as u32),
+            "malformed number (a numeral cannot directly precede '..')",
+        ));
+    }
+
     let raw = &source[start..cursor.position()];
     validate_underscore_placement(raw, start, version)?;
     Ok(TokenKind::Number(raw.into()))
@@ -195,55 +224,19 @@ fn eat_decimal_digits(cursor: &mut Cursor, allow_underscores: bool) {
     }
 }
 
-/// Validate underscore placement in number literals. Underscores can appear between digits
-/// but not at start/end of the digit sequence or adjacent to prefix (0x, 0b).
+/// Reject underscore separators outside Luau. Luau itself strips
+/// underscores anywhere in the literal before conversion, so `0b_01`,
+/// `1__2`, and `12_` are all valid there - no placement rules.
 fn validate_underscore_placement(
     raw: &str,
     start: usize,
     version: LuaVersion,
 ) -> Result<(), LexError> {
-    if !raw.contains('_') {
-        return Ok(());
-    }
-
-    if !version.has_underscore_separators() {
+    if raw.contains('_') && !version.has_underscore_separators() {
         return Err(crate::lex_error(
             Span::new(start as u32, (start + raw.len()) as u32),
             "underscore separators in numbers are not supported in this Lua version",
         ));
     }
-
-    let bytes = raw.as_bytes();
-
-    let digit_start =
-        if bytes.len() >= 2 && bytes[0] == b'0' && matches!(bytes[1], b'x' | b'X' | b'b' | b'B') {
-            2
-        } else {
-            0
-        };
-
-    if digit_start < bytes.len() && bytes[digit_start] == b'_' {
-        return Err(crate::lex_error(
-            Span::new(start as u32, (start + raw.len()) as u32),
-            "underscore cannot appear at start of number digits",
-        ));
-    }
-
-    if bytes.last() == Some(&b'_') {
-        return Err(crate::lex_error(
-            Span::new(start as u32, (start + raw.len()) as u32),
-            "underscore cannot appear at end of number",
-        ));
-    }
-
-    for window in bytes.windows(2) {
-        if window[0] == b'_' && window[1] == b'_' {
-            return Err(crate::lex_error(
-                Span::new(start as u32, (start + raw.len()) as u32),
-                "consecutive underscores in number literal",
-            ));
-        }
-    }
-
     Ok(())
 }

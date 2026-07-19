@@ -56,7 +56,7 @@ impl NodeRule for DuplicateKeys {
                                 &ctx.source[token.span.start as usize..token.span.end as usize];
                             // Compare decoded VALUES: `["\97"]` and `["a"]`
                             // are the same key; raw text says otherwise.
-                            luck_token::literal::decode_string_literal(text)
+                            luck_token::literal::decode_string_literal(text, ctx.semantic.version)
                                 .and_then(|bytes| String::from_utf8(bytes).ok())
                                 .map(|value| (value, token.span))
                         } else {

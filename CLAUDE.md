@@ -39,7 +39,7 @@ and feeds `luck_bundler`. On top sit `luck` (facade re-exports),
 |-------|------|-----------|
 | `luck_token` | Spans, `LuaVersion`, `StdlibEnvironment`, `SourceError`, `CompactString` storage, `CodeBuffer` byte-level output builder | `lib.rs`, `code_buffer.rs` |
 | `luck_lexer` | Single-pass tokenizer; comments emitted separately; memchr + byte-table batched scanning for strings/comments | `lexer.rs`, `search.rs` |
-| `luck_ast` | `Expression`/`Statement`/`Type` <=64 B, `Visitor`, `AstTransform`, `synth` builder (dummy-span AST construction for programmatic/decompiler use), `NodeType`/`NodeKind`/`AstTypesBitset` for node-table dispatch | `expr.rs`, `stmt.rs`, `types.rs`, `transform.rs`, `synth.rs`, `node.rs` |
+| `luck_ast` | `Expression`/`Statement`/`Type` <=64 B, `Visitor`, `AstTransform`, `synth` builder (dummy-span AST construction for programmatic use), `NodeType`/`NodeKind`/`AstTypesBitset` for node-table dispatch | `expr.rs`, `stmt.rs`, `types.rs`, `transform.rs`, `synth.rs`, `node.rs` |
 | `luck_parser` | Pratt expressions + recursive-descent statements + full Luau type grammar, version-gated | `expr.rs`, `stmt.rs`, `luau.rs` |
 | `luck_codegen` | Compact printer (ambiguity cases live in `separator.rs` + its tests) | `compact.rs`, `separator.rs` |
 | `luck_core` | `LuaTarget`, typed config + `FormatOptions`/`LintConfig` enums, `TransformConfig`, diagnostics E001-E012/W001-W004, schemars schema, `source_io` (SIMD-validated file reads) | `config.rs`, `diagnostics.rs`, `format_options.rs` |

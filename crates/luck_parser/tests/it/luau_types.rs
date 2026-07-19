@@ -80,11 +80,15 @@ fn intersection_type() {
 
 #[test]
 fn intersection_binds_tighter_than_union() {
-    let Type::Union(union) = alias_type("type X = A & B | C") else {
+    // Real Luau's suffix chain is flat: mixing `&` and `|` without
+    // parentheses is a parse error, not a precedence question.
+    let result = crate::common::parse_luau("type X = A & B | C");
+    assert!(!result.errors.is_empty(), "mixed union/intersection errors");
+    let Type::Union(union) = alias_type("type X = (A & B) | C") else {
         panic!("expected Union at top level");
     };
     assert_eq!(union.types.len(), 2);
-    assert!(matches!(union.types.first(), Some(Type::Intersection(_))));
+    assert!(matches!(union.types.first(), Some(Type::Parenthesized(_))));
 }
 
 #[test]
@@ -364,7 +368,10 @@ fn cast_with_complex_type() {
 
 #[test]
 fn chained_casts() {
+    // One cast per simpleexp; real Luau requires parens to chain.
     let result = parse_luau("local x = y :: any :: number");
+    assert!(!result.errors.is_empty(), "chained casts must error");
+    let result = parse_luau("local x = (y :: any) :: number");
     assert_no_errors(&result);
 }
 
@@ -380,4 +387,81 @@ fn annotation_not_confused_with_method_call() {
 fn type_annotations_rejected_outside_luau() {
     let result = luck_parser::parse("local x: number = 1", LuaVersion::Lua54);
     assert!(!result.errors.is_empty());
+}
+
+#[test]
+fn mixed_union_intersection_rejected() {
+    for source in [
+        "type X = A | B & C",
+        "type X = A & B | C",
+        "type X = A & B?",
+        "type X = A? & B",
+    ] {
+        let result = crate::common::parse_luau(source);
+        assert!(!result.errors.is_empty(), "must reject mixing: {source}");
+    }
+    for source in [
+        "type X = (A & B) | C",
+        "type X = A & (B?)",
+        "type X = A? | B",
+        "type X = A | B | C?",
+    ] {
+        let result = crate::common::parse_luau(source);
+        assert!(
+            result.errors.is_empty(),
+            "parenthesized forms parse: {source}"
+        );
+    }
+}
+
+#[test]
+fn table_type_shape_rules() {
+    // TableType ::= '{' Type '}' | '{' [PropList] '}'
+    let bad = [
+        "type T = {number, x: string}",
+        "type T = {x: string, number}",
+        "type T = {number, string}",
+        "type T = {[string]: number, [number]: string}",
+    ];
+    for source in bad {
+        let result = crate::common::parse_luau(source);
+        assert!(!result.errors.is_empty(), "must reject: {source}");
+    }
+    let good = [
+        "type T = {number}",
+        "type T = {x: string, y: number}",
+        "type T = {[string]: number, x: boolean}",
+        "type T = {x: boolean, [string]: number}",
+    ];
+    for source in good {
+        let result = crate::common::parse_luau(source);
+        assert!(result.errors.is_empty(), "must accept: {source}");
+    }
+}
+
+#[test]
+fn generic_type_list_ordering() {
+    // Packs come last; a defaulted param forces defaults on the rest;
+    // pack defaults must be packs; defaults are alias-only.
+    let bad = [
+        "type X<T..., U> = U",
+        "type X<T = number, U> = U",
+        "type X<T... = number> = number",
+        "type X<T = U...> = number",
+        "local f = function<T = number>(x: T) return x end",
+    ];
+    for source in bad {
+        let result = crate::common::parse_luau(source);
+        assert!(!result.errors.is_empty(), "must reject: {source}");
+    }
+    let good = [
+        "type X<T, U...> = T",
+        "type X<T, U = number> = U",
+        "type X<T... = ...number> = number",
+        "type X<T... = (string, number)> = number",
+    ];
+    for source in good {
+        let result = crate::common::parse_luau(source);
+        assert!(result.errors.is_empty(), "must accept: {source}");
+    }
 }

@@ -3,8 +3,8 @@
 //! Prettier-style code formatter for Lua 5.1-5.5 and Luau.
 //!
 //! The primary entry point is [`format_block`], which formats an AST
-//! directly - including programmatically constructed ASTs with dummy spans
-//! (decompiler output). [`format`] and [`format_range`] are thin wrappers
+//! directly - including programmatically constructed ASTs with dummy spans.
+//! [`format`] and [`format_range`] are thin wrappers
 //! that parse source text first; they additionally get source-fidelity
 //! features (blank-line preservation, `-- luck: format off` verbatim
 //! regions, comment attachment by byte position).

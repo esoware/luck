@@ -108,8 +108,7 @@ fn format_is_idempotent_and_reparses() {
             );
         }
 
-        // Same guarantees on the AST-in path (`format_block`, the
-        // decompiler contract): the parsed program, fed back in as a raw
+        // Same guarantees on the AST-in path: the parsed program, fed back in as a raw
         // AST with no source or comments, must still round-trip to valid,
         // structurally identical Lua.
         let via_ast = format_block(&original.block, Comments::none(), &options);
@@ -131,6 +130,9 @@ fn format_is_idempotent_and_reparses() {
 fn minify_is_idempotent_and_reparses() {
     let config = TransformConfig::default();
     for_each_program(|source, version, target, label| {
+        // TEMP-DEBUG
+        std::fs::write(std::env::temp_dir().join("luck_min_input.lua"), source).unwrap();
+        std::fs::write(std::env::temp_dir().join("luck_min_label.txt"), &label).unwrap();
         let Ok(first) = luck_minifier::minify(source, target, &config, "gen.lua") else {
             panic!("{label}: minify errored on valid input:\n{source}");
         };

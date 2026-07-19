@@ -10,9 +10,10 @@ fn parse_lua52(source: &str) -> ParseResult {
 
 #[test]
 fn goto_statement() {
-    let result = parse_lua52("goto label_name");
+    // A goto must resolve to a visible label (undefined -> compile error).
+    let result = parse_lua52("goto label_name ::label_name::");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
+    assert_eq!(result.block.stmts.len(), 2);
     if let Statement::Goto(goto) = &result.block.stmts[0] {
         assert!(matches!(
             &goto.name.kind,
