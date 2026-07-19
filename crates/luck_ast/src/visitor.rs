@@ -5,30 +5,30 @@ use crate::types::*;
 
 /// Read-only AST traversal. Override `visit_*` methods to inspect nodes,
 /// call `self.walk_*` inside overrides to continue recursion.
-pub trait Visitor {
-    fn visit_block(&mut self, block: &Block) {
+pub trait Visitor<'ast> {
+    fn visit_block(&mut self, block: &'ast Block) {
         self.walk_block(block);
     }
-    fn visit_statement(&mut self, stmt: &Statement) {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         self.walk_statement(stmt);
     }
-    fn visit_expression(&mut self, expr: &Expression) {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         self.walk_expression(expr);
     }
-    fn visit_var(&mut self, var: &Var) {
+    fn visit_var(&mut self, var: &'ast Var) {
         self.walk_var(var);
     }
-    fn visit_function_body(&mut self, body: &FunctionBody) {
+    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
         self.walk_function_body(body);
     }
-    fn visit_last_statement(&mut self, last: &LastStatement) {
+    fn visit_last_statement(&mut self, last: &'ast LastStatement) {
         self.walk_last_statement(last);
     }
-    fn visit_type(&mut self, type_value: &Type) {
+    fn visit_type(&mut self, type_value: &'ast Type) {
         self.walk_type(type_value);
     }
 
-    fn walk_block(&mut self, block: &Block) {
+    fn walk_block(&mut self, block: &'ast Block) {
         for stmt in &block.stmts {
             self.visit_statement(stmt);
         }
@@ -37,7 +37,7 @@ pub trait Visitor {
         }
     }
 
-    fn walk_statement(&mut self, stmt: &Statement) {
+    fn walk_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::Assignment(assignment) => {
                 for var in assignment.targets.iter() {
@@ -136,7 +136,7 @@ pub trait Visitor {
         }
     }
 
-    fn walk_expression(&mut self, expr: &Expression) {
+    fn walk_expression(&mut self, expr: &'ast Expression) {
         match expr {
             Expression::Nil(_)
             | Expression::False(_)
@@ -190,7 +190,7 @@ pub trait Visitor {
         }
     }
 
-    fn walk_var(&mut self, var: &Var) {
+    fn walk_var(&mut self, var: &'ast Var) {
         match var {
             Var::Name(_) => {}
             Var::Index(index_expr) => {
@@ -203,7 +203,7 @@ pub trait Visitor {
         }
     }
 
-    fn walk_function_body(&mut self, body: &FunctionBody) {
+    fn walk_function_body(&mut self, body: &'ast FunctionBody) {
         if let Some(generics) = &body.generics {
             self.walk_generic_type_list(generics);
         }
@@ -223,7 +223,7 @@ pub trait Visitor {
         self.visit_block(&body.block);
     }
 
-    fn walk_last_statement(&mut self, last: &LastStatement) {
+    fn walk_last_statement(&mut self, last: &'ast LastStatement) {
         match last {
             LastStatement::Return(ret) => {
                 for expr in ret.exprs.iter() {
@@ -234,12 +234,12 @@ pub trait Visitor {
         }
     }
 
-    fn walk_function_call(&mut self, call: &FunctionCall) {
+    fn walk_function_call(&mut self, call: &'ast FunctionCall) {
         self.visit_expression(&call.callee);
         self.walk_function_args(&call.args);
     }
 
-    fn walk_function_args(&mut self, args: &FunctionArgs) {
+    fn walk_function_args(&mut self, args: &'ast FunctionArgs) {
         match args {
             FunctionArgs::Parenthesized { args, .. } => {
                 for expr in args.iter() {
@@ -253,7 +253,7 @@ pub trait Visitor {
         }
     }
 
-    fn walk_table_constructor(&mut self, table: &TableConstructor) {
+    fn walk_table_constructor(&mut self, table: &'ast TableConstructor) {
         for (field, _) in &table.fields {
             match field {
                 Field::Bracketed { key, value, .. } => {
@@ -270,7 +270,7 @@ pub trait Visitor {
         }
     }
 
-    fn walk_type(&mut self, type_value: &Type) {
+    fn walk_type(&mut self, type_value: &'ast Type) {
         match type_value {
             Type::Named(named) => {
                 if let Some(generics) = &named.generics {
@@ -326,7 +326,7 @@ pub trait Visitor {
         }
     }
 
-    fn walk_generic_type_list(&mut self, generics: &GenericTypeList) {
+    fn walk_generic_type_list(&mut self, generics: &'ast GenericTypeList) {
         for param in generics.params.iter() {
             if let Some((_, default)) = &param.default {
                 self.visit_type(default);
@@ -334,7 +334,7 @@ pub trait Visitor {
         }
     }
 
-    fn walk_attributed_names(&mut self, names: &Punctuated<AttributedName>) {
+    fn walk_attributed_names(&mut self, names: &'ast Punctuated<AttributedName>) {
         for name in names.iter() {
             if let Some((_, name_type)) = &name.type_annotation {
                 self.visit_type(name_type);
@@ -391,16 +391,16 @@ mod tests {
     }
 
     struct ExprCounter(usize);
-    impl Visitor for ExprCounter {
-        fn visit_expression(&mut self, expr: &Expression) {
+    impl<'ast> Visitor<'ast> for ExprCounter {
+        fn visit_expression(&mut self, expr: &'ast Expression) {
             self.0 += 1;
             self.walk_expression(expr);
         }
     }
 
     struct StmtCounter(usize);
-    impl Visitor for StmtCounter {
-        fn visit_statement(&mut self, stmt: &Statement) {
+    impl<'ast> Visitor<'ast> for StmtCounter {
+        fn visit_statement(&mut self, stmt: &'ast Statement) {
             self.0 += 1;
             self.walk_statement(stmt);
         }

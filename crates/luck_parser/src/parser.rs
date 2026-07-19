@@ -1,5 +1,5 @@
 use luck_ast::{Block, shared::Punctuated};
-use luck_lexer::LexError;
+use luck_lexer::Lexer;
 use luck_token::{Comment, LuaVersion, Span, Token, TokenKind};
 
 use crate::ParseError;
@@ -18,98 +18,65 @@ fn is_continue_context(next: &TokenKind) -> bool {
     )
 }
 
-/// Recursive descent parser that converts a token stream into a Lua AST.
-pub struct Parser {
-    tokens: Vec<Token>,
-    pos: usize,
-    pub comments: Vec<Comment>,
+/// Recursive descent parser that consumes tokens straight from the lexer.
+/// Lua needs exactly one token of lookahead, so the parser holds a
+/// two-slot `current`/`next` buffer instead of a materialized token
+/// stream.
+pub struct Parser<'src> {
+    lexer: Lexer<'src>,
+    current: Token,
+    next: Token,
+    prev_span: Span,
     pub version: LuaVersion,
     depth: u32,
     max_depth: u32,
     pub(crate) errors: Vec<ParseError>,
-    /// Span covering the entire source, used for EOF positions
-    source_len: u32,
     /// Stack tracking what construct is being parsed, for contextual error messages.
     pub(crate) context_stack: Vec<(&'static str, Span)>,
 }
 
-/// Sentinel returned when the token stream is exhausted.
-const EOF_KIND: TokenKind = TokenKind::Eof;
-
-impl Parser {
-    pub fn new(
-        tokens: Vec<Token>,
-        comments: Vec<Comment>,
-        version: LuaVersion,
-        source: &str,
-    ) -> Self {
+impl<'src> Parser<'src> {
+    pub fn new(source: &'src str, version: LuaVersion) -> Self {
+        let mut lexer = Lexer::new(source, version);
+        let current = lexer.next_token();
+        let next = lexer.next_token();
         Self {
-            tokens,
-            pos: 0,
-            comments,
+            lexer,
+            current,
+            next,
+            prev_span: Span::new(0, 0),
             version,
             depth: 0,
             max_depth: 256,
             errors: Vec::new(),
-            source_len: source.len() as u32,
             context_stack: Vec::new(),
         }
     }
 
     #[inline]
     pub fn peek(&self) -> &TokenKind {
-        self.tokens
-            .get(self.pos)
-            .map(|t| &t.kind)
-            .unwrap_or(&EOF_KIND)
+        &self.current.kind
     }
 
+    /// One token of lookahead - all the Lua grammar ever needs.
     #[inline]
-    pub fn peek_token(&self) -> &Token {
-        static EOF_TOKEN: std::sync::LazyLock<Token> =
-            std::sync::LazyLock::new(|| Token::new(TokenKind::Eof, Span::new(0, 0)));
-        self.tokens.get(self.pos).unwrap_or(&EOF_TOKEN)
-    }
-
-    /// Look ahead by `offset` tokens (0 = current).
-    #[inline]
-    pub fn peek_at(&self, offset: usize) -> &TokenKind {
-        self.tokens
-            .get(self.pos + offset)
-            .map(|t| &t.kind)
-            .unwrap_or(&EOF_KIND)
+    pub fn peek_next(&self) -> &TokenKind {
+        &self.next.kind
     }
 
     #[inline]
     pub fn advance(&mut self) -> Token {
-        if self.pos < self.tokens.len() {
-            // Tokens are consumed exactly once (pos never rewinds), so
-            // take ownership instead of deep-cloning every CompactString
-            // payload. The placeholder keeps the original span because
-            // `tokens[pos - 1].span` is read after consumption for
-            // previous-token diagnostics.
-            let span = self.tokens[self.pos].span;
-            let token =
-                std::mem::replace(&mut self.tokens[self.pos], Token::new(TokenKind::Eof, span));
-            self.pos += 1;
-            token
-        } else {
-            Token::new(TokenKind::Eof, self.eof_span())
-        }
+        self.prev_span = self.current.span;
+        std::mem::replace(
+            &mut self.current,
+            std::mem::replace(&mut self.next, self.lexer.next_token()),
+        )
     }
 
-    /// Consume the current token, keeping only its span. For fixed-spelling
-    /// tokens the AST stores bare spans, so the payload writeback `advance`
-    /// does is unnecessary.
+    /// Consume the current token, keeping only its span.
     #[inline]
     pub fn advance_span(&mut self) -> Span {
-        if self.pos < self.tokens.len() {
-            let span = self.tokens[self.pos].span;
-            self.pos += 1;
-            span
-        } else {
-            self.eof_span()
-        }
+        self.advance().span
     }
 
     /// `expect` for fixed-spelling tokens: returns only the span.
@@ -203,18 +170,16 @@ impl Parser {
         }
     }
 
-    /// Merge lex errors and parse errors, sorted by position.
-    pub fn into_errors(mut self, lex_errors: Vec<LexError>) -> Vec<ParseError> {
-        let mut parse_errors: Vec<ParseError> = lex_errors
-            .into_iter()
-            .map(|e| ParseError {
-                span: e.span,
-                message: e.message,
-            })
-            .collect();
-        parse_errors.append(&mut self.errors);
-        parse_errors.sort_by_key(|e| e.span.start);
-        parse_errors
+    /// Drain the lexer to EOF (comments and lex errors past the last
+    /// parsed statement must still be collected), then yield the
+    /// comments and all errors merged and sorted by position.
+    pub fn finish(mut self) -> (Vec<Comment>, Vec<ParseError>) {
+        while !matches!(self.lexer.next_token().kind, TokenKind::Eof) {}
+        let (comments, lex_errors) = self.lexer.finish();
+        let mut errors = lex_errors;
+        errors.append(&mut self.errors);
+        errors.sort_by_key(|e| e.span.start);
+        (comments, errors)
     }
 
     /// Parse a block (statement list with optional trailing return/break/continue).
@@ -269,7 +234,7 @@ impl Parser {
                 TokenKind::Identifier(name)
                     if self.version.is_luau()
                         && name == "continue"
-                        && is_continue_context(self.peek_at(1)) =>
+                        && is_continue_context(self.peek_next()) =>
                 {
                     let span = self.advance_span();
                     last_stmt = Some(Box::new(luck_ast::LastStatement::Continue(span)));
@@ -315,19 +280,11 @@ impl Parser {
 
     #[inline]
     pub fn current_span(&self) -> Span {
-        self.peek_token().span
+        self.current.span
     }
 
     fn previous_span(&self) -> Span {
-        if self.pos > 0 {
-            self.tokens[self.pos - 1].span
-        } else {
-            Span::new(0, 0)
-        }
-    }
-
-    pub fn eof_span(&self) -> Span {
-        Span::new(self.source_len, self.source_len)
+        self.prev_span
     }
 
     /// Consume a closing `>` in type context, recovering if absent.
@@ -338,15 +295,13 @@ impl Parser {
         match self.peek() {
             TokenKind::Greater => self.advance_span(),
             TokenKind::ShiftRight => {
-                let span = self.tokens[self.pos].span;
-                self.tokens[self.pos] =
-                    Token::new(TokenKind::Greater, Span::new(span.start + 1, span.end));
+                let span = self.current.span;
+                self.current = Token::new(TokenKind::Greater, Span::new(span.start + 1, span.end));
                 Span::new(span.start, span.start + 1)
             }
             TokenKind::GreaterEqual => {
-                let span = self.tokens[self.pos].span;
-                self.tokens[self.pos] =
-                    Token::new(TokenKind::Equal, Span::new(span.start + 1, span.end));
+                let span = self.current.span;
+                self.current = Token::new(TokenKind::Equal, Span::new(span.start + 1, span.end));
                 Span::new(span.start, span.start + 1)
             }
             _ => {

@@ -48,6 +48,7 @@ fn dispatch(
 ) {
     match node.kind {
         NodeKind::Statement(stmt) => rule.on_statement(stmt, ctx, out),
+        NodeKind::LastStatement(last) => rule.on_last_statement(last, ctx, out),
         NodeKind::Expression(expr) => rule.on_expression(expr, ctx, out),
     }
 }

@@ -19,7 +19,7 @@ fn binding_param(name: Token, type_annotation: Option<(Span, luck_ast::Type)>) -
     }
 }
 
-impl Parser {
+impl Parser<'_> {
     /// Parse a single statement. Returns None if error recovery consumed everything.
     pub fn parse_statement(&mut self) -> Option<Statement> {
         match self.peek() {
@@ -49,7 +49,7 @@ impl Parser {
                         "type" => {
                             // `type Name` or `type function Name` = type declaration
                             if matches!(
-                                self.peek_at(1),
+                                self.peek_next(),
                                 TokenKind::Identifier(_) | TokenKind::Function
                             ) {
                                 return Some(self.parse_type_declaration(None));
@@ -57,7 +57,7 @@ impl Parser {
                         }
                         "export" => {
                             // `export type Name` = exported type declaration
-                            if let TokenKind::Identifier(next) = self.peek_at(1)
+                            if let TokenKind::Identifier(next) = self.peek_next()
                                 && next == "type"
                             {
                                 return Some(self.parse_export_type_declaration());

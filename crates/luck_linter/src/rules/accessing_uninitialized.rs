@@ -98,8 +98,8 @@ impl UninitCollector {
     }
 }
 
-impl Visitor for UninitCollector {
-    fn visit_statement(&mut self, stmt: &Statement) {
+impl<'ast> Visitor<'ast> for UninitCollector {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         if let Statement::LocalAssignment(local) = stmt
             && local.equal_and_exprs.is_none()
         {

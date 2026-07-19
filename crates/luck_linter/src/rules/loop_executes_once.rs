@@ -66,8 +66,8 @@ impl LoopChecker {
     }
 }
 
-impl Visitor for LoopChecker {
-    fn visit_statement(&mut self, stmt: &Statement) {
+impl<'ast> Visitor<'ast> for LoopChecker {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::WhileLoop(node) => {
                 self.check_loop_body(&node.block, node.span, "while");

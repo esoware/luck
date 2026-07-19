@@ -55,20 +55,20 @@ impl SpanStack {
     }
 }
 
-impl Visitor for SpanStack {
-    fn visit_statement(&mut self, stmt: &Statement) {
+impl<'ast> Visitor<'ast> for SpanStack {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         let span = stmt.span();
         self.record(span);
         self.walk_statement(stmt);
     }
 
-    fn visit_expression(&mut self, expr: &Expression) {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         let span = expr.span();
         self.record(span);
         self.walk_expression(expr);
     }
 
-    fn visit_block(&mut self, block: &Block) {
+    fn visit_block(&mut self, block: &'ast Block) {
         self.walk_block(block);
     }
 }

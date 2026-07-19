@@ -1,7 +1,7 @@
-//! Flat table of every `Statement` and `Expression` node, in the same
-//! pre-order the linter's shared walk used to produce. Rules iterate this
-//! once instead of re-walking the tree; each entry carries its parent and
-//! enclosing scope.
+//! Flat table of every `Statement`, `LastStatement`, and `Expression`
+//! node, in the same pre-order the linter's shared walk used to produce.
+//! Rules iterate this once instead of re-walking the tree; each entry
+//! carries its parent and enclosing scope.
 
 use luck_ast::node::{AstTypesBitset, NodeKind, NodeType};
 use luck_ast::shared::Block;
@@ -72,7 +72,6 @@ pub fn collect_nodes<'ast>(block: &'ast Block, scope_tree: &ScopeTree) -> Nodes<
         present_types: AstTypesBitset::new(),
         current_parent: None,
         sweep: ScopeSweep::new(scope_tree),
-        _marker: std::marker::PhantomData,
     };
     collector.visit_block(block);
     Nodes {
@@ -132,7 +131,6 @@ struct NodeCollector<'ast> {
     present_types: AstTypesBitset,
     current_parent: Option<NodeId>,
     sweep: ScopeSweep,
-    _marker: std::marker::PhantomData<&'ast Block>,
 }
 
 impl<'ast> NodeCollector<'ast> {
@@ -151,21 +149,8 @@ impl<'ast> NodeCollector<'ast> {
     }
 }
 
-/// Restores the `'ast` lifetime the `Visitor` trait's anonymous-lifetime
-/// signatures erase.
-///
-/// SAFETY: `NodeCollector` is private and only driven by `collect_nodes`,
-/// which starts the walk at the one `&'ast Block` it was given; every ref
-/// the default `walk_*` methods pass back down is a re-borrow of that
-/// block's subtree and therefore lives for `'ast`.
-unsafe fn restore_ast_lifetime<'ast, T: ?Sized>(reference: &T) -> &'ast T {
-    unsafe { &*std::ptr::from_ref(reference) }
-}
-
-impl<'ast> Visitor for NodeCollector<'ast> {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
-        // SAFETY: see `restore_ast_lifetime`.
-        let stmt: &'ast luck_ast::Statement = unsafe { restore_ast_lifetime(stmt) };
+impl<'ast> Visitor<'ast> for NodeCollector<'ast> {
+    fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
         let saved_parent = self.current_parent;
         let id = self.push_node(NodeKind::Statement(stmt), stmt.span().start);
         self.current_parent = Some(id);
@@ -173,13 +158,19 @@ impl<'ast> Visitor for NodeCollector<'ast> {
         self.current_parent = saved_parent;
     }
 
-    fn visit_expression(&mut self, expr: &luck_ast::Expression) {
-        // SAFETY: see `restore_ast_lifetime`.
-        let expr: &'ast luck_ast::Expression = unsafe { restore_ast_lifetime(expr) };
+    fn visit_expression(&mut self, expr: &'ast luck_ast::Expression) {
         let saved_parent = self.current_parent;
         let id = self.push_node(NodeKind::Expression(expr), expr.span().start);
         self.current_parent = Some(id);
         self.walk_expression(expr);
+        self.current_parent = saved_parent;
+    }
+
+    fn visit_last_statement(&mut self, last: &'ast luck_ast::LastStatement) {
+        let saved_parent = self.current_parent;
+        let id = self.push_node(NodeKind::LastStatement(last), last.span().start);
+        self.current_parent = Some(id);
+        self.walk_last_statement(last);
         self.current_parent = saved_parent;
     }
 }

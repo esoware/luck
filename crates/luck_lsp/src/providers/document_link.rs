@@ -32,8 +32,8 @@ struct LinkCollector<'a> {
     out: Vec<DocumentLink>,
 }
 
-impl Visitor for LinkCollector<'_> {
-    fn visit_expression(&mut self, expr: &Expression) {
+impl<'ast> Visitor<'ast> for LinkCollector<'_> {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         if let Expression::FunctionCall(call) = expr {
             self.try_record(call);
         }

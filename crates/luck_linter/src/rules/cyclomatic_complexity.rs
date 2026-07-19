@@ -81,8 +81,8 @@ impl<'src> ComplexityChecker<'src> {
     }
 }
 
-impl Visitor for ComplexityChecker<'_> {
-    fn visit_statement(&mut self, stmt: &Statement) {
+impl<'ast> Visitor<'ast> for ComplexityChecker<'_> {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::FunctionDecl(decl) => {
                 // Re-slice the full dotted name from source so methods
@@ -103,7 +103,7 @@ impl Visitor for ComplexityChecker<'_> {
         self.walk_statement(stmt);
     }
 
-    fn visit_expression(&mut self, expr: &Expression) {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         if let Expression::FunctionDef(func_def) = expr {
             self.check_function(&func_def.body, func_def.span, None);
         }

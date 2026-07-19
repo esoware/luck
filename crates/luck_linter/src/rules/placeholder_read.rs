@@ -85,8 +85,8 @@ impl PlaceholderChecker {
     }
 }
 
-impl Visitor for PlaceholderChecker {
-    fn visit_expression(&mut self, expr: &Expression) {
+impl<'ast> Visitor<'ast> for PlaceholderChecker {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         if let Expression::Var(var) = expr {
             self.visit_var_as_read(var);
             return;
@@ -94,7 +94,7 @@ impl Visitor for PlaceholderChecker {
         self.walk_expression(expr);
     }
 
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
+    fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
         match stmt {
             // Assignment LHS: skip the targets (they're writes), visit
             // values (they may contain reads).

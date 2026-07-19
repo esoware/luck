@@ -15,7 +15,7 @@ use luck_token::{Span, Token, TokenKind};
 
 use crate::parser::Parser;
 
-impl Parser {
+impl Parser<'_> {
     /// Parse `: T` if present. All annotation sites share this so the
     /// Luau gate lives in exactly one place.
     pub fn try_parse_type_annotation(&mut self) -> Option<(Span, Type)> {
@@ -159,12 +159,12 @@ impl Parser {
     fn parse_primary_type(&mut self) -> Type {
         match self.peek() {
             TokenKind::Identifier(name)
-                if name == "typeof" && matches!(self.peek_at(1), TokenKind::LeftParen) =>
+                if name == "typeof" && matches!(self.peek_next(), TokenKind::LeftParen) =>
             {
                 self.parse_typeof_type()
             }
             // `T...` - generic pack reference
-            TokenKind::Identifier(_) if matches!(self.peek_at(1), TokenKind::DotDotDot) => {
+            TokenKind::Identifier(_) if matches!(self.peek_next(), TokenKind::DotDotDot) => {
                 let name = self.advance();
                 let dots = self.advance_span();
                 let span = name.span.merge(dots);
@@ -392,7 +392,7 @@ impl Parser {
         let access = if let TokenKind::Identifier(name) = self.peek() {
             if (name == "read" || name == "write")
                 && matches!(
-                    self.peek_at(1),
+                    self.peek_next(),
                     TokenKind::Identifier(_) | TokenKind::LeftBracket
                 )
             {
@@ -429,7 +429,7 @@ impl Parser {
             };
         }
 
-        if self.check_identifier() && matches!(self.peek_at(1), TokenKind::Colon) {
+        if self.check_identifier() && matches!(self.peek_next(), TokenKind::Colon) {
             let name = self.advance();
             let colon = self.advance_span();
             let value = self.parse_type();
@@ -465,7 +465,7 @@ impl Parser {
         let mut current = None;
 
         while !matches!(self.peek(), TokenKind::RightParen | TokenKind::Eof) {
-            let param = if self.check_identifier() && matches!(self.peek_at(1), TokenKind::Colon) {
+            let param = if self.check_identifier() && matches!(self.peek_next(), TokenKind::Colon) {
                 let name = self.advance();
                 let colon = self.advance_span();
                 let type_value = self.parse_type();

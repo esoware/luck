@@ -91,8 +91,8 @@ impl RedefineChecker {
     }
 }
 
-impl Visitor for RedefineChecker {
-    fn visit_block(&mut self, block: &Block) {
+impl<'ast> Visitor<'ast> for RedefineChecker {
+    fn visit_block(&mut self, block: &'ast Block) {
         self.check_block(block);
         // Recurse into every nested block via the default walk so that
         // inner blocks (if/while/for/do/function bodies) get their own

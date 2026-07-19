@@ -60,4 +60,12 @@ pub trait NodeRule: Rule {
         _out: &mut Vec<LintDiagnostic>,
     ) {
     }
+
+    fn on_last_statement(
+        &self,
+        _last: &luck_ast::stmt::LastStatement,
+        _ctx: &LintContext,
+        _out: &mut Vec<LintDiagnostic>,
+    ) {
+    }
 }

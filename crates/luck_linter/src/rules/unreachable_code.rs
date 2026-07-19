@@ -64,8 +64,8 @@ impl UnreachableChecker {
     }
 }
 
-impl Visitor for UnreachableChecker {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
+impl<'ast> Visitor<'ast> for UnreachableChecker {
+    fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
         match stmt {
             luck_ast::Statement::DoBlock(d) => self.check_block(&d.block),
             luck_ast::Statement::WhileLoop(w) => self.check_block(&w.block),

@@ -182,8 +182,8 @@ impl ScopeTreeBuilder {
     }
 }
 
-impl Visitor for ScopeTreeBuilder {
-    fn visit_block(&mut self, block: &Block) {
+impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
+    fn visit_block(&mut self, block: &'ast Block) {
         for stmt in &block.stmts {
             self.visit_statement(stmt);
         }
@@ -192,7 +192,7 @@ impl Visitor for ScopeTreeBuilder {
         }
     }
 
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
+    fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
         match stmt {
             luck_ast::Statement::LocalAssignment(local) => {
                 // Visit values first (they see the outer scope)
@@ -334,7 +334,7 @@ impl Visitor for ScopeTreeBuilder {
         }
     }
 
-    fn visit_expression(&mut self, expr: &Expression) {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         match expr {
             Expression::Var(var) => self.visit_var_read(var),
             Expression::FunctionCall(call) => self.visit_call(call),
@@ -383,7 +383,7 @@ impl Visitor for ScopeTreeBuilder {
         }
     }
 
-    fn visit_last_statement(&mut self, stmt: &luck_ast::LastStatement) {
+    fn visit_last_statement(&mut self, stmt: &'ast luck_ast::LastStatement) {
         match stmt {
             luck_ast::LastStatement::Return(ret) => {
                 for expr in ret.exprs.iter() {

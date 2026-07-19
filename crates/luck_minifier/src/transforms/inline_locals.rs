@@ -98,8 +98,8 @@ struct CandidateScanner {
     ref_counts: HashMap<String, usize>,
 }
 
-impl Visitor for CandidateScanner {
-    fn visit_statement(&mut self, stmt: &Statement) {
+impl<'ast> Visitor<'ast> for CandidateScanner {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalAssignment(local) => {
                 let is_single = local
@@ -164,7 +164,7 @@ impl Visitor for CandidateScanner {
         self.walk_statement(stmt);
     }
 
-    fn visit_function_body(&mut self, body: &FunctionBody) {
+    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
         for param in body.params.iter() {
             if let TokenKind::Identifier(name) = &param.name.kind {
                 self.shadowed.insert(name.to_string());
@@ -173,7 +173,7 @@ impl Visitor for CandidateScanner {
         self.walk_function_body(body);
     }
 
-    fn visit_var(&mut self, var: &Var) {
+    fn visit_var(&mut self, var: &'ast Var) {
         if let Var::Name(name) = var {
             *self.ref_counts.entry(ident_name_string(name)).or_insert(0) += 1;
         }

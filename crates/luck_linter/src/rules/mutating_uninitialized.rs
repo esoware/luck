@@ -140,8 +140,8 @@ impl MutationCollector {
     }
 }
 
-impl Visitor for MutationCollector {
-    fn visit_statement(&mut self, stmt: &Statement) {
+impl<'ast> Visitor<'ast> for MutationCollector {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalAssignment(local) if local.equal_and_exprs.is_none() => {
                 for attributed in local.names.iter() {

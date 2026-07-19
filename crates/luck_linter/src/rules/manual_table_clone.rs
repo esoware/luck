@@ -140,8 +140,8 @@ impl<'src> CloneChecker<'src> {
     }
 }
 
-impl Visitor for CloneChecker<'_> {
-    fn visit_block(&mut self, block: &Block) {
+impl<'ast> Visitor<'ast> for CloneChecker<'_> {
+    fn visit_block(&mut self, block: &'ast Block) {
         self.scan_block(block);
         self.walk_block(block);
     }

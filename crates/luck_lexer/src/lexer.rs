@@ -17,10 +17,14 @@ pub struct Lexer<'src> {
     cursor: Cursor<'src>,
     source: &'src str,
     version: LuaVersion,
-    tokens: Vec<Token>,
+    /// Second token of a double emit (empty interpolated strings produce
+    /// InterpBegin + InterpEnd from one dispatch), handed out first on
+    /// the next `next_token` call.
+    queued: Option<Token>,
     comments: Vec<Comment>,
     errors: Vec<LexError>,
     last_token_start: u32,
+    has_token: bool,
     saw_newline_since_last_token: bool,
     /// Leading comments waiting for their `attached_to` to be set when the next token is found.
     pending_leading_comments: Vec<PendingComment>,
@@ -39,59 +43,95 @@ struct PendingComment {
 
 impl<'src> Lexer<'src> {
     pub fn new(source: &'src str, version: LuaVersion) -> Self {
-        Self {
+        let mut lexer = Self {
             cursor: Cursor::new(source.as_bytes()),
             source,
             version,
-            tokens: Vec::new(),
+            queued: None,
             comments: Vec::new(),
             errors: Vec::new(),
             last_token_start: 0,
+            has_token: false,
             saw_newline_since_last_token: true, // start of file counts as "after newline"
             pending_leading_comments: Vec::new(),
             interp_brace_stack: Vec::new(),
-        }
-    }
+        };
 
-    pub fn tokenize(&mut self) -> LexResult {
         // UTF-8 BOM: PUC Lua's loadfile and Luau both skip it.
-        if self.source.starts_with('\u{FEFF}') {
-            self.cursor.advance();
-            self.cursor.advance();
-            self.cursor.advance();
+        if lexer.source.starts_with('\u{FEFF}') {
+            lexer.cursor.advance();
+            lexer.cursor.advance();
+            lexer.cursor.advance();
         }
 
         // Lua skips any first line beginning with '#', not just '#!'.
-        if self.cursor.peek() == Some(b'#') {
-            self.lex_shebang();
+        if lexer.cursor.peek() == Some(b'#') {
+            lexer.lex_shebang();
         }
 
+        lexer
+    }
+
+    pub fn tokenize(&mut self) -> LexResult {
+        let mut tokens = Vec::new();
         loop {
             self.handle_whitespace();
             let Some(byte) = self.cursor.peek() else {
                 break;
             };
-            self.dispatch_byte(byte);
+            if let Some(token) = self.dispatch_byte(byte) {
+                tokens.push(token);
+                if let Some(queued) = self.queued.take() {
+                    tokens.push(queued);
+                }
+            }
         }
 
         let eof_start = self.cursor.position();
-        self.push_token(TokenKind::Eof, eof_start);
+        tokens.push(self.make_token(TokenKind::Eof, eof_start));
 
         LexResult {
-            tokens: std::mem::take(&mut self.tokens),
+            tokens,
             comments: std::mem::take(&mut self.comments),
             errors: std::mem::take(&mut self.errors),
         }
     }
 
+    /// Lex and return the next token on demand, without materializing the
+    /// whole stream. Comments and errors accumulate on the lexer; collect
+    /// them with [`Lexer::finish`] once the caller has drained to EOF.
+    /// Returns EOF tokens forever once the source is exhausted.
+    pub fn next_token(&mut self) -> Token {
+        if let Some(token) = self.queued.take() {
+            return token;
+        }
+        loop {
+            self.handle_whitespace();
+            let Some(byte) = self.cursor.peek() else {
+                let eof_start = self.cursor.position();
+                return self.make_token(TokenKind::Eof, eof_start);
+            };
+            if let Some(token) = self.dispatch_byte(byte) {
+                return token;
+            }
+        }
+    }
+
+    /// Consume the lexer after streaming, yielding the accumulated
+    /// comments and errors.
+    pub fn finish(self) -> (Vec<Comment>, Vec<LexError>) {
+        (self.comments, self.errors)
+    }
+
     /// Single-jump dispatch on the lead byte; a match compiles to the
     /// same jump table as a fn-pointer array but
     /// keeps the small handlers inlinable. Whitespace never reaches here -
-    /// the tokenize loop consumes it before dispatching.
+    /// the tokenize loop consumes it before dispatching. Returns `None`
+    /// when the dispatch produced no token (comments, error recovery).
     #[inline]
-    fn dispatch_byte(&mut self, byte: u8) {
+    fn dispatch_byte(&mut self, byte: u8) -> Option<Token> {
         match byte {
-            b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.lex_identifier(),
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' => Some(self.lex_identifier()),
             b'0'..=b'9' => self.handle_digit(),
             b'"' | b'\'' => self.handle_quote(),
             b'`' => self.handle_backtick(),
@@ -124,63 +164,73 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    fn handle_digit(&mut self) {
+    fn handle_digit(&mut self) -> Option<Token> {
         let start = self.cursor.position();
         match lex_number(&mut self.cursor, self.source, self.version) {
-            Ok(kind) => self.push_token(kind, start),
-            Err(err) => self.errors.push(err),
+            Ok(kind) => Some(self.make_token(kind, start)),
+            Err(err) => {
+                self.errors.push(err);
+                None
+            }
         }
     }
 
-    fn handle_dot(&mut self) {
+    fn handle_dot(&mut self) -> Option<Token> {
         if self.cursor.peek_at(1).is_some_and(|b| b.is_ascii_digit()) {
-            self.handle_digit();
+            self.handle_digit()
         } else {
-            self.lex_symbol();
+            self.lex_symbol()
         }
     }
 
-    fn handle_quote(&mut self) {
+    fn handle_quote(&mut self) -> Option<Token> {
         let start = self.cursor.position();
         match lex_short_string(&mut self.cursor, self.source, self.version) {
-            Ok(kind) => self.push_token(kind, start),
-            Err(err) => self.errors.push(err),
+            Ok(kind) => Some(self.make_token(kind, start)),
+            Err(err) => {
+                self.errors.push(err);
+                None
+            }
         }
     }
 
-    fn handle_backtick(&mut self) {
+    fn handle_backtick(&mut self) -> Option<Token> {
         if self.version.is_luau() {
-            self.lex_interpolated_string();
+            self.lex_interpolated_string()
         } else {
-            self.lex_symbol();
+            self.lex_symbol()
         }
     }
 
-    fn handle_minus(&mut self) {
+    fn handle_minus(&mut self) -> Option<Token> {
         if self.cursor.peek_at(1) == Some(b'-') {
             self.lex_comment();
+            None
         } else {
-            self.lex_symbol();
+            self.lex_symbol()
         }
     }
 
-    fn handle_bracket_open(&mut self) {
+    fn handle_bracket_open(&mut self) -> Option<Token> {
         if let Some(level) = try_count_long_bracket_level(&self.cursor) {
             let start = self.cursor.position();
             skip_long_bracket_open(&mut self.cursor, level);
             match crate::string::lex_long_bracket_body(&mut self.cursor, self.source, start, level)
             {
-                Ok(Some(kind)) => self.push_token(kind, start),
+                Ok(Some(kind)) => Some(self.make_token(kind, start)),
                 Ok(None) => unreachable!("level was already validated"),
-                Err(err) => self.errors.push(err),
+                Err(err) => {
+                    self.errors.push(err);
+                    None
+                }
             }
         } else {
-            self.lex_symbol();
+            self.lex_symbol()
         }
     }
 
     #[inline]
-    fn push_token(&mut self, kind: TokenKind, start: usize) {
+    fn make_token(&mut self, kind: TokenKind, start: usize) -> Token {
         let span = Span::new(start as u32, self.cursor.position() as u32);
 
         for pending in self.pending_leading_comments.drain(..) {
@@ -195,8 +245,9 @@ impl<'src> Lexer<'src> {
         }
 
         self.last_token_start = span.start;
+        self.has_token = true;
         self.saw_newline_since_last_token = false;
-        self.tokens.push(Token::new(kind, span));
+        Token::new(kind, span)
     }
 
     fn lex_shebang(&mut self) {
@@ -240,7 +291,7 @@ impl<'src> Lexer<'src> {
         let span = Span::new(start as u32, self.cursor.position() as u32);
         let followed_by_newline = matches!(self.cursor.peek(), Some(b'\n') | Some(b'\r') | None);
 
-        if preceded_by_newline || self.tokens.is_empty() {
+        if preceded_by_newline || !self.has_token {
             self.pending_leading_comments.push(PendingComment {
                 span,
                 kind: CommentKind::Line,
@@ -311,7 +362,7 @@ impl<'src> Lexer<'src> {
             }
         }
 
-        if preceded_by_newline || self.tokens.is_empty() {
+        if preceded_by_newline || !self.has_token {
             self.pending_leading_comments.push(PendingComment {
                 span,
                 kind,
@@ -332,7 +383,7 @@ impl<'src> Lexer<'src> {
         Ok(())
     }
 
-    fn lex_identifier(&mut self) {
+    fn lex_identifier(&mut self) -> Token {
         let start = self.cursor.position();
         self.cursor
             .eat_while(|b| b.is_ascii_alphanumeric() || b == b'_');
@@ -340,10 +391,10 @@ impl<'src> Lexer<'src> {
 
         let kind =
             match_keyword(text, self.version).unwrap_or_else(|| TokenKind::Identifier(text.into()));
-        self.push_token(kind, start);
+        self.make_token(kind, start)
     }
 
-    fn lex_symbol(&mut self) {
+    fn lex_symbol(&mut self) -> Option<Token> {
         let start = self.cursor.position();
         let byte = self
             .cursor
@@ -396,8 +447,7 @@ impl<'src> Lexer<'src> {
                     if *depth == 0 {
                         // Depth 0 means this `}` closes the interpolation - resume string scanning
                         self.interp_brace_stack.pop();
-                        self.lex_interp_continuation(start);
-                        return;
+                        return self.lex_interp_continuation(start);
                     } else {
                         *depth -= 1;
                     }
@@ -480,7 +530,7 @@ impl<'src> Lexer<'src> {
                     TokenKind::Tilde
                 } else {
                     self.errors.push(crate::lex_error(Span::new(start as u32, self.cursor.position() as u32), "standalone '~' is not supported in this Lua version (use '~=' for not-equal)"));
-                    return;
+                    return None;
                 }
             }
             b'&' => {
@@ -492,7 +542,7 @@ impl<'src> Lexer<'src> {
                         Span::new(start as u32, self.cursor.position() as u32),
                         "'&' is not supported in this Lua version",
                     ));
-                    return;
+                    return None;
                 }
             }
             b'|' => {
@@ -504,7 +554,7 @@ impl<'src> Lexer<'src> {
                         Span::new(start as u32, self.cursor.position() as u32),
                         "'|' is not supported in this Lua version",
                     ));
-                    return;
+                    return None;
                 }
             }
             b'<' => {
@@ -537,7 +587,7 @@ impl<'src> Lexer<'src> {
                         Span::new(start as u32, self.cursor.position() as u32),
                         "'@' is not supported in this Lua version",
                     ));
-                    return;
+                    return None;
                 }
             }
             b'?' => {
@@ -548,7 +598,7 @@ impl<'src> Lexer<'src> {
                         Span::new(start as u32, self.cursor.position() as u32),
                         "'?' is not supported in this Lua version",
                     ));
-                    return;
+                    return None;
                 }
             }
             _ => {
@@ -562,45 +612,49 @@ impl<'src> Lexer<'src> {
                     Span::new(start as u32, self.cursor.position() as u32),
                     format!("unexpected character '{unexpected}'"),
                 ));
-                return;
+                return None;
             }
         };
 
-        self.push_token(kind, start);
+        Some(self.make_token(kind, start))
     }
 
     /// Resume scanning an interpolated string after `}` closes an expression.
     /// Produces InterpMid (if another `{` follows) or InterpEnd (if `` ` `` closes the string).
-    fn lex_interp_continuation(&mut self, start: usize) {
+    fn lex_interp_continuation(&mut self, start: usize) -> Option<Token> {
         match self.scan_interp_segment(start) {
-            None => {}
+            None => None,
             Some((text, InterpSegmentEnd::OpenBrace)) => {
-                self.push_token(TokenKind::InterpMid(text), start);
+                let token = self.make_token(TokenKind::InterpMid(text), start);
                 self.interp_brace_stack.push(0);
+                Some(token)
             }
             Some((text, InterpSegmentEnd::Backtick)) => {
-                self.push_token(TokenKind::InterpEnd(text), start);
+                Some(self.make_token(TokenKind::InterpEnd(text), start))
             }
         }
     }
 
     /// Lex an interpolated string starting at backtick. Produces InterpBegin + expression
     /// tokens + InterpMid/InterpEnd sequences. Plain strings emit InterpBegin("") + InterpEnd(text).
-    fn lex_interpolated_string(&mut self) {
+    fn lex_interpolated_string(&mut self) -> Option<Token> {
         let start = self.cursor.position();
         self.cursor.advance();
 
         match self.scan_interp_segment(start) {
-            None => {}
+            None => None,
             Some((text, InterpSegmentEnd::OpenBrace)) => {
-                self.push_token(TokenKind::InterpBegin(text), start);
+                let token = self.make_token(TokenKind::InterpBegin(text), start);
                 self.interp_brace_stack.push(0);
+                Some(token)
             }
             Some((text, InterpSegmentEnd::Backtick)) => {
                 // Emit InterpBegin("") + InterpEnd(text) so parser sees a consistent begin/end pair
                 let end_pos = self.cursor.position();
-                self.push_token(TokenKind::InterpBegin(CompactString::default()), start);
-                self.push_token(TokenKind::InterpEnd(text), end_pos - 1);
+                let begin =
+                    self.make_token(TokenKind::InterpBegin(CompactString::default()), start);
+                self.queued = Some(self.make_token(TokenKind::InterpEnd(text), end_pos - 1));
+                Some(begin)
             }
         }
     }

@@ -25,8 +25,8 @@ fn count_self_refs(body: &FunctionBody) -> usize {
 
 struct SelfCounter(usize);
 
-impl Visitor for SelfCounter {
-    fn visit_var(&mut self, var: &Var) {
+impl<'ast> Visitor<'ast> for SelfCounter {
+    fn visit_var(&mut self, var: &'ast Var) {
         if let Var::Name(name) = var {
             if ident_name_string(name) == "self" {
                 self.0 += 1;
@@ -35,12 +35,12 @@ impl Visitor for SelfCounter {
         self.walk_var(var);
     }
 
-    fn visit_expression(&mut self, expr: &Expression) {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         self.walk_expression(expr);
     }
 
     // don't descend into nested function bodies - their `self` is separate
-    fn visit_function_body(&mut self, _body: &FunctionBody) {}
+    fn visit_function_body(&mut self, _body: &'ast FunctionBody) {}
 }
 
 impl AstTransform for ExplicitSelfRewriter {

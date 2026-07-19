@@ -87,8 +87,8 @@ impl RequireFinder<'_> {
     }
 }
 
-impl Visitor for RequireFinder<'_> {
-    fn visit_expression(&mut self, expr: &Expression) {
+impl<'ast> Visitor<'ast> for RequireFinder<'_> {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         if let Expression::FunctionCall(func_call) = expr
             && is_require_call(func_call)
         {
@@ -97,7 +97,7 @@ impl Visitor for RequireFinder<'_> {
         self.walk_expression(expr);
     }
 
-    fn visit_statement(&mut self, stmt: &Statement) {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         // Statement-level calls never surface as Expression::FunctionCall
         // in the walk; a bare `require("side_effects")` statement is legal
         // and rewrites to a bare `__luck_require(n)` call.
@@ -181,8 +181,8 @@ fn check_package_loaded(block: &Block, file_path: &str, diagnostics: &mut Vec<Di
         diagnostics: Vec<Diagnostic>,
     }
 
-    impl Visitor for PackageLoadedVisitor {
-        fn visit_statement(&mut self, stmt: &Statement) {
+    impl<'ast> Visitor<'ast> for PackageLoadedVisitor {
+        fn visit_statement(&mut self, stmt: &'ast Statement) {
             if let Statement::Assignment(assignment) = stmt {
                 for var in assignment.targets.iter() {
                     if is_package_loaded_access(var) {

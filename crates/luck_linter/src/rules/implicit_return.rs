@@ -72,8 +72,8 @@ impl ImplicitReturnChecker {
     }
 }
 
-impl Visitor for ImplicitReturnChecker {
-    fn visit_statement(&mut self, stmt: &Statement) {
+impl<'ast> Visitor<'ast> for ImplicitReturnChecker {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         // Each function is its own control-flow unit; we scan the body
         // independently before recursing into nested functions.
         match stmt {
@@ -91,7 +91,7 @@ impl Visitor for ImplicitReturnChecker {
         self.walk_statement(stmt);
     }
 
-    fn visit_expression(&mut self, expr: &Expression) {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         if let Expression::FunctionDef(func_def) = expr {
             self.check_function_body(&func_def.body, func_def.span);
         }

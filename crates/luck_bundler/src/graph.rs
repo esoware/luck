@@ -181,7 +181,7 @@ fn process_module(
         return;
     }
 
-    let parse_result = luck_parser::parse(&source, lua_version);
+    let parse_result = luck_parser::parse(source, lua_version);
     if !parse_result.errors.is_empty() {
         for err in &parse_result.errors {
             let span = err.span.start as usize..err.span.end as usize;
@@ -240,7 +240,7 @@ fn process_module(
     node_indices.push(node_idx);
     modules.push(ModuleInfo {
         path: file_path.to_string(),
-        source,
+        source: parse_result.source,
         dependencies: deps,
         sanitized_name: sanitized,
         parsed_block: Some(parse_result.block),

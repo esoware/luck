@@ -127,8 +127,8 @@ impl MergeChecker<'_> {
     }
 }
 
-impl Visitor for MergeChecker<'_> {
-    fn visit_block(&mut self, block: &Block) {
+impl<'ast> Visitor<'ast> for MergeChecker<'_> {
+    fn visit_block(&mut self, block: &'ast Block) {
         self.process_block(block);
         self.walk_block(block);
     }

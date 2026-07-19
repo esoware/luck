@@ -100,8 +100,8 @@ impl DefinitionCollector<'_> {
     }
 }
 
-impl Visitor for DefinitionCollector<'_> {
-    fn visit_statement(&mut self, stmt: &Statement) {
+impl<'ast> Visitor<'ast> for DefinitionCollector<'_> {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalFunction(local_fn) => {
                 self.record(local_fn.name.span, &local_fn.body);
@@ -193,15 +193,15 @@ impl CallChecker<'_> {
     }
 }
 
-impl Visitor for CallChecker<'_> {
-    fn visit_expression(&mut self, expr: &Expression) {
+impl<'ast> Visitor<'ast> for CallChecker<'_> {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         if let Expression::FunctionCall(call) = expr {
             self.check_call(call);
         }
         self.walk_expression(expr);
     }
 
-    fn visit_statement(&mut self, stmt: &Statement) {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         if let Statement::FunctionCall(call_stmt) = stmt {
             self.check_call(&call_stmt.call);
         }

@@ -173,8 +173,8 @@ impl FieldWriteChecker<'_> {
     }
 }
 
-impl Visitor for FieldWriteChecker<'_> {
-    fn visit_statement(&mut self, stmt: &Statement) {
+impl<'ast> Visitor<'ast> for FieldWriteChecker<'_> {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::Assignment(assign) => {
                 for var in assign.targets.iter() {

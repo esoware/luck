@@ -156,8 +156,8 @@ fn is_reserved(name: &str, version: LuaVersion) -> bool {
         || (name == "continue" && version.has_continue())
 }
 
-impl Visitor for IndexChecker<'_> {
-    fn visit_var(&mut self, var: &Var) {
+impl<'ast> Visitor<'ast> for IndexChecker<'_> {
+    fn visit_var(&mut self, var: &'ast Var) {
         if let Var::Index(idx) = var {
             self.check_index(idx);
         }

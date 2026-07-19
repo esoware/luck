@@ -5,7 +5,7 @@ use luck_token::{Assoc, BinOp, Span, Token, TokenKind, UNARY_PRECEDENCE, UnOp};
 
 use crate::parser::Parser;
 
-impl Parser {
+impl Parser<'_> {
     /// Pratt expression parser. The left side grows iteratively; only the
     /// right-hand operand recurses, avoiding stack overflow on long chains.
     #[inline]
@@ -697,7 +697,7 @@ impl Parser {
         }
 
         // `Name = expr` - need lookahead: identifier followed by `=`
-        if self.check_identifier() && matches!(self.peek_at(1), TokenKind::Equal) {
+        if self.check_identifier() && matches!(self.peek_next(), TokenKind::Equal) {
             let name = self.advance();
             let equal = self.advance_span();
             let value = self.parse_expression(0);

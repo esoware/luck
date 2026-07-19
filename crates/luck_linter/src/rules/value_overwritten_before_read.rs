@@ -156,8 +156,8 @@ impl InitializedCollector {
     }
 }
 
-impl Visitor for InitializedCollector {
-    fn visit_statement(&mut self, stmt: &Statement) {
+impl<'ast> Visitor<'ast> for InitializedCollector {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         if let Statement::LocalAssignment(local) = stmt
             && local.equal_and_exprs.is_some()
         {

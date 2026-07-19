@@ -69,8 +69,8 @@ impl ReturnChecker {
     }
 }
 
-impl Visitor for ReturnChecker {
-    fn visit_function_body(&mut self, body: &FunctionBody) {
+impl<'ast> Visitor<'ast> for ReturnChecker {
+    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
         self.check_tail(&body.block);
         self.walk_function_body(body);
     }

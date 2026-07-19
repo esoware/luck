@@ -146,8 +146,8 @@ impl TargetFinder {
     }
 }
 
-impl Visitor for TargetFinder {
-    fn visit_var(&mut self, var: &Var) {
+impl<'ast> Visitor<'ast> for TargetFinder {
+    fn visit_var(&mut self, var: &'ast Var) {
         match var {
             Var::Name(token) => {
                 if let TokenKind::Identifier(name) = &token.kind {
@@ -165,7 +165,7 @@ impl Visitor for TargetFinder {
         }
     }
 
-    fn visit_expression(&mut self, expr: &Expression) {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         if let Expression::FunctionCall(call) = expr {
             self.record_call(call);
         }
@@ -255,8 +255,8 @@ struct CallSiteFinder<'src> {
     result: Option<CallSite>,
 }
 
-impl Visitor for CallSiteFinder<'_> {
-    fn visit_expression(&mut self, expr: &Expression) {
+impl<'ast> Visitor<'ast> for CallSiteFinder<'_> {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         if let Expression::FunctionCall(call) = expr {
             self.try_record(call);
         }

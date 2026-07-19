@@ -566,8 +566,8 @@ mod tests {
     }
 
     struct NilCounter(usize);
-    impl Visitor for NilCounter {
-        fn visit_expression(&mut self, expr: &Expression) {
+    impl<'ast> Visitor<'ast> for NilCounter {
+        fn visit_expression(&mut self, expr: &'ast Expression) {
             if matches!(expr, Expression::Nil(_)) {
                 self.0 += 1;
             }
@@ -576,8 +576,8 @@ mod tests {
     }
 
     struct FalseCounter(usize);
-    impl Visitor for FalseCounter {
-        fn visit_expression(&mut self, expr: &Expression) {
+    impl<'ast> Visitor<'ast> for FalseCounter {
+        fn visit_expression(&mut self, expr: &'ast Expression) {
             if matches!(expr, Expression::False(_)) {
                 self.0 += 1;
             }

@@ -213,15 +213,15 @@ impl RequireCallFinder<'_> {
     }
 }
 
-impl Visitor for RequireCallFinder<'_> {
-    fn visit_expression(&mut self, expr: &Expression) {
+impl<'ast> Visitor<'ast> for RequireCallFinder<'_> {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         if let Expression::FunctionCall(call) = expr {
             self.check_call(call);
         }
         self.walk_expression(expr);
     }
 
-    fn visit_statement(&mut self, stmt: &Statement) {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         // Statement-level calls don't surface as Expression::FunctionCall.
         if let Statement::FunctionCall(call_stmt) = stmt {
             self.check_call(&call_stmt.call);

@@ -36,17 +36,42 @@ pub struct ParseResult {
 /// A parse error with position and message.
 pub type ParseError = luck_token::SourceError;
 
+/// Callers that own their source `String` should pass it by value: the
+/// text is stored in `ParseResult.source` without a copy. Borrowed
+/// `&str` input is copied once, as before.
 #[must_use]
-pub fn parse(source: &str, version: LuaVersion) -> ParseResult {
-    let lex_result = luck_lexer::lex(source, version);
-    let mut parser = parser::Parser::new(lex_result.tokens, lex_result.comments, version, source);
+pub fn parse(source: impl Into<String>, version: LuaVersion) -> ParseResult {
+    parse_owned(source.into(), version)
+}
+
+fn parse_owned(source: String, version: LuaVersion) -> ParseResult {
+    // Spans are u32 (hard invariant 2); a larger input would silently
+    // wrap every span past 4 GB, so refuse it up front.
+    if source.len() > u32::MAX as usize {
+        return ParseResult {
+            block: Block {
+                span: luck_token::Span::new(0, 0),
+                stmts: Vec::new(),
+                last_stmt: None,
+            },
+            comments: Vec::new(),
+            errors: vec![ParseError {
+                span: luck_token::Span::new(0, 0),
+                message: format!(
+                    "input is {} bytes; the maximum supported file size is 4 GiB",
+                    source.len()
+                ),
+            }],
+            source,
+        };
+    }
+    let mut parser = parser::Parser::new(&source, version);
     let block = parser.parse_block();
-    let comments = std::mem::take(&mut parser.comments);
-    let errors = parser.into_errors(lex_result.errors);
+    let (comments, errors) = parser.finish();
     ParseResult {
         block,
         comments,
         errors,
-        source: source.to_string(),
+        source,
     }
 }

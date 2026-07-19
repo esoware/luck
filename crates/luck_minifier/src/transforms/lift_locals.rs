@@ -270,8 +270,8 @@ struct ClosureCaptureCollector<'a> {
     captures: &'a mut HashSet<String>,
 }
 
-impl Visitor for ClosureCaptureCollector<'_> {
-    fn visit_expression(&mut self, expr: &Expression) {
+impl<'ast> Visitor<'ast> for ClosureCaptureCollector<'_> {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         if let Expression::FunctionDef(func_def) = expr {
             let mut name_collector = NameCollector {
                 names: self.captures,
@@ -282,7 +282,7 @@ impl Visitor for ClosureCaptureCollector<'_> {
         self.walk_expression(expr);
     }
 
-    fn visit_statement(&mut self, stmt: &Statement) {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         // Statement-level function bodies capture too - `local function f()
         // return m end` holds `m` exactly like an expression closure does.
         match stmt {
@@ -307,15 +307,15 @@ struct NameCollector<'a> {
     names: &'a mut HashSet<String>,
 }
 
-impl Visitor for NameCollector<'_> {
-    fn visit_var(&mut self, var: &Var) {
+impl<'ast> Visitor<'ast> for NameCollector<'_> {
+    fn visit_var(&mut self, var: &'ast Var) {
         if let Var::Name(name) = var {
             self.names.insert(ident_name_string(name));
         }
         self.walk_var(var);
     }
 
-    fn visit_expression(&mut self, expr: &Expression) {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         self.walk_expression(expr);
     }
 }

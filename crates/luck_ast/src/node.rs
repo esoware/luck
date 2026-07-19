@@ -2,11 +2,11 @@
 //! flat node table (`luck_semantic`) and the linter's bucketed dispatch.
 
 use crate::expr::Expression;
-use crate::stmt::Statement;
+use crate::stmt::{LastStatement, Statement};
 
-/// One variant per `Statement` and `Expression` variant. `of_stmt` and
-/// `of_expr` are exhaustive, so adding an AST variant without a
-/// `NodeType` fails to compile.
+/// One variant per `Statement`, `LastStatement`, and `Expression`
+/// variant. `of_stmt`, `of_last_stmt`, and `of_expr` are exhaustive, so
+/// adding an AST variant without a `NodeType` fails to compile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum NodeType {
@@ -48,10 +48,14 @@ pub enum NodeType {
     InterpolatedString,
     TypeCast,
     ErrorExpr,
+    Return,
+    LastBreak,
+    LastContinue,
+    ErrorLastStmt,
 }
 
 impl NodeType {
-    pub const COUNT: usize = NodeType::ErrorExpr as usize + 1;
+    pub const COUNT: usize = NodeType::ErrorLastStmt as usize + 1;
 
     #[must_use]
     pub fn of_stmt(stmt: &Statement) -> Self {
@@ -77,6 +81,16 @@ impl NodeType {
             Statement::CompoundAssignment(_) => NodeType::CompoundAssignment,
             Statement::TypeDeclaration(_) => NodeType::TypeDeclaration,
             Statement::Error(_) => NodeType::ErrorStmt,
+        }
+    }
+
+    #[must_use]
+    pub fn of_last_stmt(last: &LastStatement) -> Self {
+        match last {
+            LastStatement::Return(_) => NodeType::Return,
+            LastStatement::Break(_) => NodeType::LastBreak,
+            LastStatement::Continue(_) => NodeType::LastContinue,
+            LastStatement::Error(_) => NodeType::ErrorLastStmt,
         }
     }
 
@@ -108,6 +122,7 @@ impl NodeType {
 #[derive(Clone, Copy)]
 pub enum NodeKind<'ast> {
     Statement(&'ast Statement),
+    LastStatement(&'ast LastStatement),
     Expression(&'ast Expression),
 }
 
@@ -116,6 +131,7 @@ impl NodeKind<'_> {
     pub fn node_type(self) -> NodeType {
         match self {
             NodeKind::Statement(stmt) => NodeType::of_stmt(stmt),
+            NodeKind::LastStatement(last) => NodeType::of_last_stmt(last),
             NodeKind::Expression(expr) => NodeType::of_expr(expr),
         }
     }
@@ -123,7 +139,7 @@ impl NodeKind<'_> {
 
 const WORD_COUNT: usize = NodeType::COUNT.div_ceil(64);
 
-const _: () = assert!(NodeType::ErrorExpr as usize == NodeType::COUNT - 1);
+const _: () = assert!(NodeType::ErrorLastStmt as usize == NodeType::COUNT - 1);
 const _: () = assert!(NodeType::COUNT <= WORD_COUNT * 64);
 
 /// Fixed-size set of [`NodeType`]s, const-constructible so rules can

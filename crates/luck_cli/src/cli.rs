@@ -1850,7 +1850,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
 
                     let target = target_for(file_path);
                     let file_label = file_path.to_string_lossy().to_string();
-                    let result = luck_parser::parse(&source, target.lua_version());
+                    let result = luck_parser::parse(source, target.lua_version());
                     if result.errors.is_empty() {
                         return None;
                     }
@@ -1867,7 +1867,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
                         })
                         .collect();
                     let mut cache = FileCache::new();
-                    cache.add_file(file_label.clone(), source);
+                    cache.add_file(file_label.clone(), result.source);
                     Some(render_diagnostics_to_buffer(&diagnostics, &mut cache))
                 })
                 .collect();

@@ -309,8 +309,8 @@ struct ReferenceFinder<'a> {
     found: bool,
 }
 
-impl Visitor for ReferenceFinder<'_> {
-    fn visit_var(&mut self, var: &Var) {
+impl<'ast> Visitor<'ast> for ReferenceFinder<'_> {
+    fn visit_var(&mut self, var: &'ast Var) {
         if self.found {
             return;
         }
@@ -323,14 +323,14 @@ impl Visitor for ReferenceFinder<'_> {
         self.walk_var(var);
     }
 
-    fn visit_expression(&mut self, expr: &Expression) {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         if self.found {
             return;
         }
         self.walk_expression(expr);
     }
 
-    fn visit_statement(&mut self, stmt: &Statement) {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         if self.found {
             return;
         }

@@ -30,8 +30,8 @@ pub(crate) mod test_support;
 pub use fix::{FIXPOINT_BUDGET, FixpointError, apply_fixes, apply_fixes_fixpoint};
 
 use diagnostic::{Category, LintDiagnostic, Severity};
-use luck_ast::shared::Block;
-use luck_ast::visitor::Visitor;
+use luck_ast::node::NodeKind;
+use luck_semantic::nodes::Nodes;
 use luck_token::{LuaVersion, StdlibEnvironment};
 
 /// The lint configuration types live in `luck_core` as the single source of
@@ -125,7 +125,7 @@ pub fn lint_parsed(
 
     let nodes = luck_semantic::nodes::collect_nodes(&parse_result.block, &semantic.scope_tree);
 
-    let statement_spans = collect_statement_spans(&parse_result.block);
+    let statement_spans = collect_statement_spans(&nodes);
     let suppression =
         suppression::Suppression::from_comments(&parse_result.comments, source, &statement_spans);
 
@@ -248,29 +248,20 @@ pub fn lint_parsed(
     diagnostics
 }
 
-fn collect_statement_spans(block: &Block) -> Vec<(u32, u32)> {
-    struct SpanCollector {
-        spans: Vec<(u32, u32)>,
-    }
-
-    impl Visitor for SpanCollector {
-        fn visit_statement(&mut self, statement: &luck_ast::stmt::Statement) {
-            let span = statement.span();
-            self.spans.push((span.start, span.end));
-            self.walk_statement(statement);
-        }
-
-        fn visit_last_statement(&mut self, last: &luck_ast::stmt::LastStatement) {
-            let span = last.span();
-            self.spans.push((span.start, span.end));
-            self.walk_last_statement(last);
-        }
-    }
-
-    let mut collector = SpanCollector { spans: Vec::new() };
-    collector.visit_block(block);
-    collector.spans.sort_unstable_by_key(|(start, _)| *start);
-    collector.spans
+/// Statement spans for suppression resolution: one linear pass over the
+/// node table. Suppression expects the list sorted by start offset.
+fn collect_statement_spans(nodes: &Nodes) -> Vec<(u32, u32)> {
+    let mut spans: Vec<(u32, u32)> = nodes
+        .iter()
+        .filter_map(|node| match node.kind {
+            NodeKind::Statement(stmt) => Some(stmt.span()),
+            NodeKind::LastStatement(last) => Some(last.span()),
+            NodeKind::Expression(_) => None,
+        })
+        .map(|span| (span.start, span.end))
+        .collect();
+    spans.sort_unstable_by_key(|(start, _)| *start);
+    spans
 }
 
 /// Decide whether a rule runs for this lint pass, applying both the
@@ -777,3 +768,4 @@ mod tests {
         assert!(diags.iter().any(|d| d.rule == "undefined_variable"));
     }
 }
+

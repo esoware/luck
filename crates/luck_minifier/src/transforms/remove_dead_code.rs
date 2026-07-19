@@ -45,15 +45,15 @@ struct ReferenceCollector {
     references: HashSet<String>,
 }
 
-impl Visitor for ReferenceCollector {
-    fn visit_var(&mut self, var: &Var) {
+impl<'ast> Visitor<'ast> for ReferenceCollector {
+    fn visit_var(&mut self, var: &'ast Var) {
         if let Var::Name(name) = var {
             self.references.insert(ident_name_string(name));
         }
         self.walk_var(var);
     }
 
-    fn visit_expression(&mut self, expr: &Expression) {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
         self.walk_expression(expr);
     }
 }

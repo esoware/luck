@@ -110,8 +110,8 @@ impl MultiStmtChecker {
     }
 }
 
-impl Visitor for MultiStmtChecker {
-    fn visit_block(&mut self, block: &Block) {
+impl<'ast> Visitor<'ast> for MultiStmtChecker {
+    fn visit_block(&mut self, block: &'ast Block) {
         self.check_block(block);
         self.walk_block(block);
     }

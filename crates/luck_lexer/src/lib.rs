@@ -21,6 +21,7 @@ mod number;
 mod search;
 mod string;
 
+pub use lexer::Lexer;
 use luck_token::{Comment, LuaVersion, Token};
 
 #[derive(Debug)]

@@ -229,8 +229,8 @@ struct LocalCollector {
     out: Vec<(String, Span)>,
 }
 
-impl Visitor for LocalCollector {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
+impl<'ast> Visitor<'ast> for LocalCollector {
+    fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
         use luck_ast::Statement;
         match stmt {
             Statement::LocalAssignment(local) => {
@@ -266,7 +266,7 @@ impl Visitor for LocalCollector {
         self.walk_statement(stmt);
     }
 
-    fn visit_function_body(&mut self, body: &luck_ast::shared::FunctionBody) {
+    fn visit_function_body(&mut self, body: &'ast luck_ast::shared::FunctionBody) {
         for param in body.params.iter() {
             if param.name.span.end <= self.offset {
                 if let TokenKind::Identifier(ident) = &param.name.kind {
