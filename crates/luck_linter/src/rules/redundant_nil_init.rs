@@ -1,10 +1,10 @@
 use luck_ast::Expression;
+use luck_ast::node::{AstTypesBitset, NodeType};
 use luck_ast::stmt::LocalAssignment;
-use luck_ast::visitor::Visitor;
 use luck_token::Span;
 
 use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, NodeRule, Rule};
 
 /// `local x = nil` is equivalent to `local x` in Lua semantics. The
 /// `= nil` adds no information and only costs source-code bytes.
@@ -25,126 +25,112 @@ impl Rule for RedundantNilInit {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let _semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
-        let mut checker = NilInitChecker {
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+        crate::bus::run_single(self, ctx)
     }
 }
 
-struct NilInitChecker {
-    diagnostics: Vec<LintDiagnostic>,
-}
+fn check_local(local: &LocalAssignment, out: &mut Vec<LintDiagnostic>) {
+    let Some((equal, exprs)) = &local.equal_and_exprs else {
+        return;
+    };
 
-impl NilInitChecker {
-    fn check_local(&mut self, local: &LocalAssignment) {
-        let Some((equal, exprs)) = &local.equal_and_exprs else {
-            return;
-        };
+    let values: Vec<&Expression> = exprs.iter().collect();
 
-        let values: Vec<&Expression> = exprs.iter().collect();
+    if values.is_empty() {
+        return;
+    }
 
-        if values.is_empty() {
-            return;
+    let mut trailing_nils = 0usize;
+    for expr in values.iter().rev() {
+        if matches!(expr, Expression::Nil(_)) {
+            trailing_nils += 1;
+        } else {
+            break;
         }
+    }
+    if trailing_nils == 0 {
+        return;
+    }
 
-        let mut trailing_nils = 0usize;
-        for expr in values.iter().rev() {
-            if matches!(expr, Expression::Nil(_)) {
-                trailing_nils += 1;
-            } else {
-                break;
-            }
-        }
-        if trailing_nils == 0 {
-            return;
-        }
+    let names_count = local.names.iter().count();
+    let all_nil = trailing_nils == values.len();
 
-        let names_count = local.names.iter().count();
-        let all_nil = trailing_nils == values.len();
-
-        if all_nil {
-            let edit_start = last_name_end_byte(local);
-            let edit_end = local.span.end;
-            self.diagnostics.push(
-                LintDiagnostic::new(
-                    "redundant_nil_init",
-                    "redundant `= nil` initializer; uninitialized locals are nil".to_string(),
-                    local.span,
-                )
-                .with_help("drop the `= nil` to rely on the default value".to_string())
-                .with_fix(Fix {
-                    description: "drop redundant `= nil` initializer".to_string(),
-                    edits: vec![TextEdit {
-                        span: Span::new(edit_start, edit_end),
-                        replacement: String::new(),
-                    }],
-                }),
-            );
-            let _ = equal;
-            return;
-        }
-
-        // Mixed case. Lua's multi-return rule: an expression in the
-        // last position of a value list expands to all its return
-        // values; in any earlier position it's truncated to one. So
-        // dropping a trailing `nil` is only safe if the new last
-        // expression isn't a multi-return-capable form that wasn't
-        // already truncated. We require the expression that would
-        // become the new last value to be neither a function call nor
-        // a vararg.
-        let target_keep = values.len() - trailing_nils;
-        if target_keep == 0 {
-            // Handled by the all-nil branch above.
-            return;
-        }
-        let new_last = values[target_keep - 1];
-        if matches!(
-            new_last,
-            Expression::FunctionCall(_) | Expression::VarArg(_)
-        ) {
-            return;
-        }
-        let _ = names_count;
-
-        // Range to delete: from the comma BEFORE the first dropped value
-        // through the end of the last value.
-        let comma_byte = exprs.items[target_keep - 1]
-            .1
-            .as_ref()
-            .expect("kept expression is followed by a comma")
-            .span
-            .start;
-        let total_end = exprs
-            .last_item()
-            .map(|e| e.span().end)
-            .unwrap_or(comma_byte);
-
-        self.diagnostics.push(
+    if all_nil {
+        let edit_start = last_name_end_byte(local);
+        let edit_end = local.span.end;
+        out.push(
             LintDiagnostic::new(
                 "redundant_nil_init",
-                format!(
-                    "{} trailing `nil` value{} in local initializer",
-                    trailing_nils,
-                    if trailing_nils == 1 { "" } else { "s" }
-                ),
+                "redundant `= nil` initializer; uninitialized locals are nil".to_string(),
                 local.span,
             )
-            .with_help("drop trailing `nil` values; the locals default to nil".to_string())
+            .with_help("drop the `= nil` to rely on the default value".to_string())
             .with_fix(Fix {
-                description: "drop trailing `nil` initializers".to_string(),
+                description: "drop redundant `= nil` initializer".to_string(),
                 edits: vec![TextEdit {
-                    span: Span::new(comma_byte, total_end),
+                    span: Span::new(edit_start, edit_end),
                     replacement: String::new(),
                 }],
             }),
         );
+        let _ = equal;
+        return;
     }
+
+    // Mixed case. Lua's multi-return rule: an expression in the
+    // last position of a value list expands to all its return
+    // values; in any earlier position it's truncated to one. So
+    // dropping a trailing `nil` is only safe if the new last
+    // expression isn't a multi-return-capable form that wasn't
+    // already truncated. We require the expression that would
+    // become the new last value to be neither a function call nor
+    // a vararg.
+    let target_keep = values.len() - trailing_nils;
+    if target_keep == 0 {
+        // Handled by the all-nil branch above.
+        return;
+    }
+    let new_last = values[target_keep - 1];
+    if matches!(
+        new_last,
+        Expression::FunctionCall(_) | Expression::VarArg(_)
+    ) {
+        return;
+    }
+    let _ = names_count;
+
+    // Range to delete: from the comma BEFORE the first dropped value
+    // through the end of the last value.
+    let comma_byte = exprs.items[target_keep - 1]
+        .1
+        .as_ref()
+        .expect("kept expression is followed by a comma")
+        .span
+        .start;
+    let total_end = exprs
+        .last_item()
+        .map(|e| e.span().end)
+        .unwrap_or(comma_byte);
+
+    out.push(
+        LintDiagnostic::new(
+            "redundant_nil_init",
+            format!(
+                "{} trailing `nil` value{} in local initializer",
+                trailing_nils,
+                if trailing_nils == 1 { "" } else { "s" }
+            ),
+            local.span,
+        )
+        .with_help("drop trailing `nil` values; the locals default to nil".to_string())
+        .with_fix(Fix {
+            description: "drop trailing `nil` initializers".to_string(),
+            edits: vec![TextEdit {
+                span: Span::new(comma_byte, total_end),
+                replacement: String::new(),
+            }],
+        }),
+    );
 }
 
 /// Byte offset just past the last name (or attribute) in the binding list.
@@ -162,12 +148,20 @@ fn last_name_end_byte(local: &LocalAssignment) -> u32 {
     end
 }
 
-impl Visitor for NilInitChecker {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
+impl NodeRule for RedundantNilInit {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::LocalAssignment]);
+        Some(&TYPES)
+    }
+    fn on_statement(
+        &self,
+        stmt: &luck_ast::Statement,
+        _ctx: &LintContext,
+        out: &mut Vec<LintDiagnostic>,
+    ) {
         if let luck_ast::Statement::LocalAssignment(local) = stmt {
-            self.check_local(local);
+            check_local(local, out);
         }
-        self.walk_statement(stmt);
     }
 }
 

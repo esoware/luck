@@ -15,13 +15,14 @@ use luck_ast::types::{
     TypePack, TypeofType, UnionType, VariadicType,
 };
 use luck_token::Span;
+use luck_token::code_buffer::CodeBuffer;
 use luck_token::token::{Token, TokenKind};
 
 use crate::separator::{self, Separator};
 
 /// Emits an AST as compact Lua code with minimal whitespace.
 pub struct CompactPrinter<'src> {
-    output: String,
+    output: CodeBuffer,
     last_token: Option<TokenKind>,
     source: &'src str,
 }
@@ -31,14 +32,14 @@ impl<'src> CompactPrinter<'src> {
         Self {
             // Capacity hint only: compact output stays at or under source
             // length, and synthetic ASTs (empty source) just start empty.
-            output: String::with_capacity(source.len()),
+            output: CodeBuffer::with_capacity(source.len()),
             last_token: None,
             source,
         }
     }
 
     pub fn output(self) -> String {
-        self.output
+        self.output.into_string()
     }
 
     fn emit_token(&mut self, token: &Token) {
@@ -49,9 +50,9 @@ impl<'src> CompactPrinter<'src> {
         if let Some(ref prev) = self.last_token
             && separator::needs_separator(prev, &token.kind) == Separator::Space
         {
-            self.output.push(' ');
+            self.output.print_ascii_byte(b' ');
         }
-        self.output.push_str(text);
+        self.output.print_str(text);
         self.last_token = Some(token.kind.clone());
     }
 
@@ -64,7 +65,7 @@ impl<'src> CompactPrinter<'src> {
                 && luck_ast::query::stmt_starts_with_paren(stmt)
                 && !matches!(self.last_token, Some(TokenKind::Semicolon))
             {
-                self.output.push(';');
+                self.output.print_ascii_byte(b';');
                 self.last_token = Some(TokenKind::Semicolon);
             }
             self.emit_statement(stmt);
@@ -404,7 +405,7 @@ impl<'src> CompactPrinter<'src> {
                 } else {
                     // Parser should always produce separators between fields,
                     // but emit a comma as fallback to prevent broken output.
-                    self.output.push(',');
+                    self.output.print_ascii_byte(b',');
                     self.last_token = Some(TokenKind::Comma);
                 }
             }
@@ -493,16 +494,18 @@ impl<'src> CompactPrinter<'src> {
     /// InterpMid("text") -> `}text{`
     /// InterpEnd("text") -> `` }text` ``
     fn emit_interp_token(&mut self, token: &Token) {
-        let text = match &token.kind {
-            TokenKind::InterpBegin(s) => format!("`{s}{{"),
-            TokenKind::InterpMid(s) => format!("}}{s}{{"),
-            TokenKind::InterpEnd(s) => format!("}}{s}`"),
+        let (open, text, close) = match &token.kind {
+            TokenKind::InterpBegin(s) => (b'`', s, b'{'),
+            TokenKind::InterpMid(s) => (b'}', s, b'{'),
+            TokenKind::InterpEnd(s) => (b'}', s, b'`'),
             _ => {
                 self.emit_token(token);
                 return;
             }
         };
-        self.output.push_str(&text);
+        self.output.print_ascii_byte(open);
+        self.output.print_str(text);
+        self.output.print_ascii_byte(close);
         self.last_token = Some(token.kind.clone());
     }
 
@@ -627,7 +630,7 @@ impl<'src> CompactPrinter<'src> {
                 } else {
                     // Parser should always produce separators between fields,
                     // but emit a comma as fallback to prevent broken output.
-                    self.output.push(',');
+                    self.output.print_ascii_byte(b',');
                     self.last_token = Some(TokenKind::Comma);
                 }
             }

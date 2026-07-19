@@ -5,6 +5,7 @@ use luck_token::TokenKind;
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct TableOperations;
 
@@ -31,6 +32,11 @@ impl Rule for TableOperations {
 }
 
 impl NodeRule for TableOperations {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset =
+            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
+        Some(&TYPES)
+    }
     fn on_statement(&self, stmt: &Statement, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Statement::FunctionCall(call_stmt) = stmt {
             check_call(&call_stmt.call, ctx, out);

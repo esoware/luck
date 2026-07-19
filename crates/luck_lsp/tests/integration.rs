@@ -10,15 +10,17 @@ use luck_lsp::backend::{Backend, CapturedNotifier};
 use tower_lsp::LanguageServer;
 use tower_lsp::lsp_types::{
     CodeActionContext, CodeActionOrCommand, CodeActionParams, CompletionParams, CompletionResponse,
-    DidOpenTextDocumentParams, DocumentFormattingParams, DocumentHighlightKind,
-    DocumentHighlightParams, DocumentLinkParams, DocumentRangeFormattingParams,
-    DocumentSymbolParams, DocumentSymbolResponse, FoldingRangeParams, FormattingOptions,
-    GotoDefinitionParams, GotoDefinitionResponse, HoverContents, HoverParams, InitializeParams,
-    InlayHintLabel, InlayHintParams, PartialResultParams, Position, PrepareRenameResponse, Range,
-    ReferenceContext, ReferenceParams, RenameParams, SelectionRangeParams, SemanticTokensParams,
-    SemanticTokensRangeParams, SemanticTokensRangeResult, SemanticTokensResult,
-    SignatureHelpParams, TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, Url,
-    WorkDoneProgressParams, WorkspaceSymbolParams,
+    DidChangeTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
+    DocumentHighlightKind, DocumentHighlightParams, DocumentLinkParams,
+    DocumentRangeFormattingParams, DocumentSymbolParams, DocumentSymbolResponse,
+    FoldingRangeParams, FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse,
+    HoverContents, HoverParams, InitializeParams, PartialResultParams, Position,
+    PrepareRenameResponse, Range, ReferenceContext, ReferenceParams, RenameParams,
+    SelectionRangeParams, SemanticTokensParams, SemanticTokensRangeParams,
+    SemanticTokensRangeResult, SemanticTokensResult, SignatureHelpParams,
+    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams, Url, VersionedTextDocumentIdentifier, WorkDoneProgressParams,
+    WorkspaceSymbolParams,
 };
 
 fn workspace_uri(name: &str) -> Url {
@@ -30,19 +32,6 @@ fn position_params(uri: &Url, line: u32, character: u32) -> TextDocumentPosition
     TextDocumentPositionParams {
         text_document: TextDocumentIdentifier { uri: uri.clone() },
         position: Position { line, character },
-    }
-}
-
-fn whole_document_range() -> Range {
-    Range {
-        start: Position {
-            line: 0,
-            character: 0,
-        },
-        end: Position {
-            line: u32::MAX,
-            character: 0,
-        },
     }
 }
 
@@ -412,34 +401,6 @@ async fn document_highlight_finds_all_occurrences() {
 }
 
 #[tokio::test]
-async fn inlay_hints_label_stdlib_arguments() {
-    let server = Backend::new(CapturedNotifier::default());
-    let uri = workspace_uri("inlay.lua");
-    open(&server, &uri, "local s = string.format(\"%d\", 5)\n").await;
-
-    let hints = server
-        .inlay_hint(InlayHintParams {
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            range: whole_document_range(),
-        })
-        .await
-        .expect("inlay hint errored")
-        .expect("literal stdlib arguments should produce hints");
-    assert!(
-        !hints.is_empty(),
-        "string.format with literal args should yield inlay hints"
-    );
-    let InlayHintLabel::String(label) = &hints[0].label else {
-        panic!("inlay hint label should be a plain string");
-    };
-    assert!(
-        label.contains("arg1"),
-        "the first hint should label the first parameter: {label}"
-    );
-}
-
-#[tokio::test]
 async fn selection_range_expands_from_identifier() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("selection.lua");
@@ -480,10 +441,10 @@ async fn selection_range_expands_from_identifier() {
 }
 
 #[tokio::test]
-async fn semantic_tokens_are_non_empty() {
+async fn semantic_tokens_mark_stdlib_names_only() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("tokens.lua");
-    open(&server, &uri, "local x = 42\nlocal y = x + 1\n").await;
+    open(&server, &uri, "print(math.pi)\nlocal mine = my_helper(1)\n").await;
 
     let result = server
         .semantic_tokens_full(SemanticTokensParams {
@@ -493,14 +454,17 @@ async fn semantic_tokens_are_non_empty() {
         })
         .await
         .expect("semantic tokens errored")
-        .expect("a document with names and keywords should tokenize");
+        .expect("a document with stdlib names should tokenize");
     let SemanticTokensResult::Tokens(tokens) = result else {
         panic!("expected a full semantic token set");
     };
-    assert!(
-        tokens.data.len() >= 5,
-        "keywords, identifiers and numbers should all tokenize: got {}",
-        tokens.data.len()
+    // Exactly `print` and `math`: `pi` follows a dot and user names must be
+    // left to the TextMate grammar, not stomped by semantic tokens.
+    assert_eq!(
+        tokens.data.len(),
+        2,
+        "only stdlib globals should tokenize: {:?}",
+        tokens.data
     );
 }
 
@@ -872,7 +836,7 @@ async fn workspace_symbols_filter_across_open_documents() {
 async fn semantic_tokens_range_returns_subset() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("tokens_range.lua");
-    open(&server, &uri, "local a = 1\nlocal b = 2\nlocal c = 3\n").await;
+    open(&server, &uri, "print(1)\nprint(2)\nprint(3)\n").await;
 
     let full = server
         .semantic_tokens_full(SemanticTokensParams {
@@ -918,4 +882,62 @@ async fn semantic_tokens_range_returns_subset() {
     );
     // Delta re-encoding: the first ranged token is absolute (line 1).
     assert_eq!(ranged.data[0].delta_line, 1);
+}
+
+#[tokio::test]
+async fn did_change_applies_multi_change_batch_with_shifted_ranges() {
+    let server = Backend::new(CapturedNotifier::default());
+    let uri = workspace_uri("batch.lua");
+    open(&server, &uri, "local a = 1\nlocal b = 2\nlocal c = 3").await;
+
+    // A single batch whose first edit inserts a line - the second edit's
+    // range is expressed against the text the first one produced, so the
+    // per-change line index must be refreshed between them.
+    server
+        .did_change(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: 2,
+            },
+            content_changes: vec![
+                TextDocumentContentChangeEvent {
+                    range: Some(Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 11,
+                        },
+                    }),
+                    range_length: None,
+                    text: "local a = 10\nlocal aa = 11".to_string(),
+                },
+                TextDocumentContentChangeEvent {
+                    range: Some(Range {
+                        start: Position {
+                            line: 3,
+                            character: 10,
+                        },
+                        end: Position {
+                            line: 3,
+                            character: 11,
+                        },
+                    }),
+                    range_length: None,
+                    text: "30".to_string(),
+                },
+            ],
+        })
+        .await;
+
+    let text = server
+        .document_text(&uri)
+        .await
+        .expect("document remains open after applying the batch");
+    assert_eq!(
+        text, "local a = 10\nlocal aa = 11\nlocal b = 2\nlocal c = 30",
+        "second edit must land on the line shifted by the first"
+    );
 }

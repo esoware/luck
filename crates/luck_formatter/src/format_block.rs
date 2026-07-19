@@ -201,7 +201,7 @@ pub(crate) fn is_simple_block(block: &Block) -> bool {
 
 /// Emit the line break between two adjacent items, upgraded to a blank line
 /// when the source has one (or, on the source-less path, when a neighbor
-/// wants surrounding blanks).
+/// wants surrounding blanks or the next statement's anchor requested one).
 fn emit_separator(f: &mut Formatter, previous_end: u32, next_start: u32, synthetic_blank: bool) {
     let is_blank = match f.comments.source_text() {
         Some(source) => {
@@ -214,7 +214,7 @@ fn emit_separator(f: &mut Formatter, previous_end: u32, next_start: u32, synthet
                 .min(next_start);
             has_blank_line(source, previous_end, gap_end)
         }
-        None => synthetic_blank,
+        None => synthetic_blank || f.comments.has_synthetic_blank_before(next_start),
     };
     if is_blank {
         crate::write!(f, [empty_line()]);

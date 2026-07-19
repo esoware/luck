@@ -25,9 +25,11 @@ pub(crate) fn run_rule_roblox(rule: &dyn Rule, source: &str) -> Vec<LintDiagnost
         LuaVersion::Luau,
         StdlibEnvironment::Roblox,
     );
+    let nodes = luck_semantic::nodes::collect_nodes(&parse.block, &semantic.scope_tree);
     rule.check(&LintContext {
         block: &parse.block,
         semantic: &semantic,
+        nodes: &nodes,
         source,
         comments: &parse.comments,
         config: &LintConfig::default(),
@@ -46,9 +48,11 @@ pub(crate) fn run_rule_with_config(
     for name in &config.extra_globals {
         semantic.extra_globals.insert(name.clone());
     }
+    let nodes = luck_semantic::nodes::collect_nodes(&parse.block, &semantic.scope_tree);
     rule.check(&LintContext {
         block: &parse.block,
         semantic: &semantic,
+        nodes: &nodes,
         source,
         comments: &parse.comments,
         config,

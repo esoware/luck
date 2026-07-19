@@ -1,8 +1,8 @@
 use luck_ast::Expression;
-use luck_ast::visitor::Visitor;
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, NodeRule, Rule};
 
 pub struct UnbalancedAssignment;
 
@@ -21,20 +21,8 @@ impl Rule for UnbalancedAssignment {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let _semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
-        let mut checker = UnbalancedChecker {
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+        crate::bus::run_single(self, ctx)
     }
-}
-
-struct UnbalancedChecker {
-    diagnostics: Vec<LintDiagnostic>,
 }
 
 fn count_punctuated_exprs(punct: &luck_ast::shared::Punctuated<Expression>) -> usize {
@@ -48,15 +36,25 @@ fn last_is_multiret(punct: &luck_ast::shared::Punctuated<Expression>) -> bool {
     )
 }
 
-impl Visitor for UnbalancedChecker {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
+impl NodeRule for UnbalancedAssignment {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset =
+            AstTypesBitset::from_types(&[NodeType::LocalAssignment, NodeType::Assignment]);
+        Some(&TYPES)
+    }
+    fn on_statement(
+        &self,
+        stmt: &luck_ast::Statement,
+        _ctx: &LintContext,
+        out: &mut Vec<LintDiagnostic>,
+    ) {
         match stmt {
             luck_ast::Statement::LocalAssignment(local) => {
                 if let Some((_, exprs)) = &local.equal_and_exprs {
                     let names = local.names.len();
                     let values = count_punctuated_exprs(exprs);
                     if !last_is_multiret(exprs) && names != values && values > 0 {
-                        self.diagnostics.push(LintDiagnostic::new(
+                        out.push(LintDiagnostic::new(
                             "unbalanced_assignment",
                             format!("{names} name(s) but {values} value(s) in assignment"),
                             local.span,
@@ -68,7 +66,7 @@ impl Visitor for UnbalancedChecker {
                 let targets = assign.targets.len();
                 let values = count_punctuated_exprs(&assign.values);
                 if !last_is_multiret(&assign.values) && targets != values {
-                    self.diagnostics.push(LintDiagnostic::new(
+                    out.push(LintDiagnostic::new(
                         "unbalanced_assignment",
                         format!("{targets} target(s) but {values} value(s) in assignment"),
                         assign.span,
@@ -77,6 +75,5 @@ impl Visitor for UnbalancedChecker {
             }
             _ => {}
         }
-        self.walk_statement(stmt);
     }
 }

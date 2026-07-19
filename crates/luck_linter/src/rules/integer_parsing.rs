@@ -1,9 +1,9 @@
 use luck_ast::Expression;
-use luck_ast::visitor::Visitor;
+use luck_ast::node::{AstTypesBitset, NodeType};
 use luck_token::{LuaVersion, Span};
 
 use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Numeric literals that exceed the precision of the target runtime's
 /// number representation. On Lua 5.1/5.2 every number is an IEEE-754
@@ -26,24 +26,14 @@ impl Rule for IntegerParsing {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
-        let mut checker = LiteralChecker {
-            source,
-            version: semantic.version,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+        crate::bus::run_single(self, ctx)
     }
 }
 
-struct LiteralChecker<'src> {
-    source: &'src str,
+struct LiteralChecker<'a> {
+    source: &'a str,
     version: LuaVersion,
-    diagnostics: Vec<LintDiagnostic>,
+    out: &'a mut Vec<LintDiagnostic>,
 }
 
 /// Whether the runtime treats integers as a distinct 64-bit subtype.
@@ -125,7 +115,7 @@ impl LiteralChecker<'_> {
                         Err(_) => true,
                     };
                     if above {
-                        self.diagnostics.push(LintDiagnostic::new("integer_parsing", format!(
+                        self.out.push(LintDiagnostic::new("integer_parsing", format!(
                                 "decimal integer `{raw}` exceeds 2^63-1; will be parsed as a float and lose precision"
                             ), span).with_help(
                                 "use a hex literal or split into smaller values".to_string(),
@@ -147,7 +137,7 @@ impl LiteralChecker<'_> {
     }
 
     fn push_double_precision(&mut self, span: Span, raw: &str) {
-        self.diagnostics.push(
+        self.out.push(
             LintDiagnostic::new(
                 "integer_parsing",
                 format!(
@@ -160,18 +150,26 @@ impl LiteralChecker<'_> {
     }
 
     fn push_hex_overflow(&mut self, span: Span, raw: &str) {
-        self.diagnostics.push(LintDiagnostic::new("integer_parsing", format!(
+        self.out.push(LintDiagnostic::new("integer_parsing", format!(
                 "hex literal `{raw}` exceeds 64-bit integer range; will wrap or be parsed as a float"
             ), span).with_help("use a smaller value or split across two values".to_string()));
     }
 }
 
-impl Visitor for LiteralChecker<'_> {
-    fn visit_expression(&mut self, expr: &Expression) {
+impl NodeRule for IntegerParsing {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::Number]);
+        Some(&TYPES)
+    }
+    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Expression::Number(token) = expr {
-            self.check_number(token.span);
+            LiteralChecker {
+                source: ctx.source,
+                version: ctx.semantic.version,
+                out,
+            }
+            .check_number(token.span);
         }
-        self.walk_expression(expr);
     }
 }
 

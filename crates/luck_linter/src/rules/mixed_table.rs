@@ -3,6 +3,7 @@ use luck_ast::shared::Field;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 /// Mixing positional fields and identifier-keyed record fields in one
 /// table constructor confuses readers and breaks `ipairs` expectations:
@@ -32,6 +33,10 @@ impl Rule for MixedTable {
 }
 
 impl NodeRule for MixedTable {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::TableConstructor]);
+        Some(&TYPES)
+    }
     fn on_expression(
         &self,
         expr: &luck_ast::expr::Expression,

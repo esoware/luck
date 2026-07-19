@@ -23,17 +23,16 @@ use tower_lsp::lsp_types::{
     DocumentSymbolResponse, FileSystemWatcher, FoldingRange, FoldingRangeParams,
     FoldingRangeProviderCapability, GlobPattern, GotoDefinitionParams, GotoDefinitionResponse,
     Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, InlayHint, InlayHintParams, InlayHintServerCapabilities, Location,
-    MessageType, OneOf, Position, PrepareRenameResponse, ReferenceParams, Registration,
-    RenameOptions, RenameParams, SaveOptions, SelectionRange, SelectionRangeParams,
-    SelectionRangeProviderCapability, SemanticTokensFullOptions, SemanticTokensOptions,
-    SemanticTokensRangeParams, SemanticTokensRangeResult, SemanticTokensRegistrationOptions,
-    SemanticTokensResult, SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo,
-    SignatureHelp, SignatureHelpOptions, SignatureHelpParams, StaticRegistrationOptions,
-    SymbolInformation, TextDocumentPositionParams, TextDocumentRegistrationOptions,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions, TextEdit, Url, WorkDoneProgressOptions, WorkspaceEdit,
-    WorkspaceSymbolParams,
+    InitializedParams, Location, MessageType, OneOf, Position, PrepareRenameResponse,
+    ReferenceParams, Registration, RenameOptions, RenameParams, SaveOptions, SelectionRange,
+    SelectionRangeParams, SelectionRangeProviderCapability, SemanticTokensFullOptions,
+    SemanticTokensOptions, SemanticTokensRangeParams, SemanticTokensRangeResult,
+    SemanticTokensRegistrationOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
+    ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
+    StaticRegistrationOptions, SymbolInformation, TextDocumentPositionParams,
+    TextDocumentRegistrationOptions, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url, WorkDoneProgressOptions,
+    WorkspaceEdit, WorkspaceSymbolParams,
 };
 use tower_lsp::{Client, LanguageServer};
 
@@ -42,8 +41,8 @@ use crate::diagnostics::to_lsp_diagnostics;
 use crate::line_index::LineIndex;
 use crate::providers::{
     code_action, completion, definition, document_link, document_symbol, folding, highlights,
-    hover, inlay_hints, references, rename, selection_range, semantic_tokens, signature_help,
-    syntax_tree, workspace_symbol,
+    hover, references, rename, selection_range, semantic_tokens, signature_help, syntax_tree,
+    workspace_symbol,
 };
 
 /// In-memory snapshot of a single open document.
@@ -235,7 +234,8 @@ impl<N: Notifier> Backend<N> {
         let mut text = doc.text.clone();
         let mut line_index = doc.line_index.clone();
         let mut dirty = false;
-        for change in params.content_changes {
+        let mut changes = params.content_changes.into_iter().peekable();
+        while let Some(change) = changes.next() {
             match change.range {
                 Some(range) => {
                     let start_byte = line_index.offset(&text, range.start) as usize;
@@ -249,14 +249,19 @@ impl<N: Notifier> Backend<N> {
                         return false;
                     }
                     text.replace_range(start_byte..end_byte, &change.text);
-                    line_index = LineIndex::new(&text);
                     dirty = true;
                 }
                 None => {
                     text = change.text;
-                    line_index = LineIndex::new(&text);
                     dirty = true;
                 }
+            }
+            // Each subsequent change's range is relative to the text this one
+            // produced, so refresh the index for the next iteration only. The
+            // final index the store keeps is rebuilt by `doc.update` below, so
+            // rebuilding it here too would be redundant.
+            if changes.peek().is_some() {
+                line_index = LineIndex::new(&text);
             }
         }
         if dirty {
@@ -321,9 +326,6 @@ impl<N: Notifier> LanguageServer for Backend<N> {
                         },
                     ),
                 ),
-                inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
-                    Default::default(),
-                ))),
                 document_highlight_provider: Some(OneOf::Left(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
@@ -642,14 +644,6 @@ impl<N: Notifier> LanguageServer for Backend<N> {
             return Ok(None);
         };
         Ok(Some(semantic_tokens::semantic_tokens(&doc)))
-    }
-
-    async fn inlay_hint(&self, params: InlayHintParams) -> JsonRpcResult<Option<Vec<InlayHint>>> {
-        let doc = self.snapshot(&params.text_document.uri).await;
-        let Some(doc) = doc else {
-            return Ok(None);
-        };
-        Ok(Some(inlay_hints::inlay_hints(&doc, &params)))
     }
 
     async fn document_highlight(

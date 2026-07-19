@@ -150,7 +150,18 @@ fn format_shortest_decimal(value: f64, must_stay_float_formed: bool) -> String {
         return if must_stay_float_formed { "0." } else { "0" }.to_string();
     }
 
-    let formatted = format!("{value}");
+    // Shortest-roundtrip digits without the fmt machinery. ryu uses
+    // exponent form for extreme magnitudes where Display does not; the
+    // 'e'-aware paths below handle both, and every candidate still passes
+    // the roundtrips() gate.
+    let mut ryu_buffer = ryu::Buffer::new();
+    let formatted = ryu_buffer.format(value);
+
+    // Exponent forms are already float-formed and must skip the trailing-
+    // zero trim, which would otherwise eat exponent digits ("1.5e300").
+    if formatted.contains('e') || formatted.contains('E') {
+        return formatted.to_string();
+    }
 
     if formatted.contains('.') {
         let trimmed = formatted.trim_end_matches('0');
@@ -166,10 +177,10 @@ fn format_shortest_decimal(value: f64, must_stay_float_formed: bool) -> String {
         return trimmed.to_string();
     }
 
-    if must_stay_float_formed && !formatted.contains('e') && !formatted.contains('E') {
+    if must_stay_float_formed {
         return format!("{formatted}.");
     }
-    formatted
+    formatted.to_string()
 }
 
 #[cfg(test)]

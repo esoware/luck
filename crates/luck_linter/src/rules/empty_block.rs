@@ -2,6 +2,7 @@ use luck_ast::shared::Block;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct EmptyBlock;
 
@@ -29,6 +30,17 @@ fn is_empty_block(block: &Block) -> bool {
 }
 
 impl NodeRule for EmptyBlock {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[
+            NodeType::IfStatement,
+            NodeType::WhileLoop,
+            NodeType::DoBlock,
+            NodeType::NumericFor,
+            NodeType::GenericFor,
+            NodeType::RepeatLoop,
+        ]);
+        Some(&TYPES)
+    }
     fn on_statement(
         &self,
         stmt: &luck_ast::stmt::Statement,

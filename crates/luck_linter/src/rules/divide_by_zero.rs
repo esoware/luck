@@ -3,6 +3,7 @@ use luck_token::TokenKind;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 /// Literal `/ 0`, `% 0`, and `// 0`. On Lua 5.1/5.2 these produce `inf`,
 /// `nan`, or `nan` respectively (silently). On 5.3+ floor and modulo by
@@ -59,6 +60,10 @@ fn is_divisive_op(kind: &TokenKind) -> bool {
 }
 
 impl NodeRule for DivideByZero {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::BinaryOp]);
+        Some(&TYPES)
+    }
     fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Expression::BinaryOp(binop) = expr
             && is_divisive_op(&binop.op.kind)

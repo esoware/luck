@@ -295,21 +295,21 @@ mod tests {
 
     #[test]
     fn named_type() {
-        let mut synth = Synth::new();
+        let synth = Synth::new();
         let ty = synth.ty_named("number");
         assert_eq!(render(&ty), "number");
     }
 
     #[test]
     fn qualified_type() {
-        let mut synth = Synth::new();
+        let synth = Synth::new();
         let ty = synth.ty_qualified("module", "Type");
         assert_eq!(render(&ty), "module.Type");
     }
 
     #[test]
     fn optional_is_tight() {
-        let mut synth = Synth::new();
+        let synth = Synth::new();
         let inner = synth.ty_named("string");
         let ty = synth.ty_optional(inner);
         assert_eq!(render(&ty), "string?");
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn union_flat_has_spaced_pipes() {
-        let mut synth = Synth::new();
+        let synth = Synth::new();
         let a = synth.ty_named("string");
         let b = synth.ty_named("number");
         let ty = synth.ty_union(vec![a, b]);
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn intersection_flat_has_spaced_ampersands() {
-        let mut synth = Synth::new();
+        let synth = Synth::new();
         let a = synth.ty_named("A");
         let b = synth.ty_named("B");
         let ty = synth.ty_intersection(vec![a, b]);
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn generic_args() {
-        let mut synth = Synth::new();
+        let synth = Synth::new();
         let key = synth.ty_named("string");
         let value = synth.ty_named("number");
         let ty = synth.ty_generic("Map", vec![key, value]);
@@ -344,19 +344,16 @@ mod tests {
 
     #[test]
     fn table_type_flat_has_inner_spaces() {
-        let mut synth = Synth::new();
+        let synth = Synth::new();
         let name_type = synth.ty_named("string");
         let age_type = synth.ty_named("number");
-        let ty = synth.ty_table(vec![
-            ("name".to_string(), name_type),
-            ("age".to_string(), age_type),
-        ]);
+        let ty = synth.ty_record(vec![("name", name_type), ("age", age_type)]);
         assert_eq!(render(&ty), "{ name: string, age: number }");
     }
 
     #[test]
     fn array_shorthand_has_no_trailing_comma() {
-        let mut synth = Synth::new();
+        let synth = Synth::new();
         let element = synth.ty_named("string");
         let ty = synth.ty_table_array(element);
         assert_eq!(render(&ty), "{ string }");
@@ -364,7 +361,7 @@ mod tests {
 
     #[test]
     fn function_type() {
-        let mut synth = Synth::new();
+        let synth = Synth::new();
         let param = synth.ty_named("number");
         let return_type = synth.ty_named("boolean");
         let ty = synth.ty_function(vec![param], return_type);
@@ -373,7 +370,7 @@ mod tests {
 
     #[test]
     fn variadic_pack_is_tight() {
-        let mut synth = Synth::new();
+        let synth = Synth::new();
         let element = synth.ty_named("number");
         let ty = synth.ty_variadic(element);
         assert_eq!(render(&ty), "...number");

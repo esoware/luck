@@ -1,47 +1,9 @@
 use luck_ast::Expression;
 use luck_ast::expr::*;
 use luck_ast::shared::*;
-use luck_token::{Span, Token, TokenKind};
+use luck_token::{Assoc, Span, Token, TokenKind, UNARY_PRECEDENCE};
 
 use crate::parser::Parser;
-
-/// Operator associativity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Assoc {
-    Left,
-    Right,
-}
-
-/// Precedence level for unary operators (not, #, -).
-const UNARY_PRECEDENCE: u8 = 11;
-
-/// Return (precedence, associativity) for a binary operator token, if applicable.
-/// Version-gated operators (bitwise, floor div) are included unconditionally here;
-/// the lexer ensures they only appear in the token stream for supporting versions.
-fn binary_precedence(kind: &TokenKind) -> Option<(u8, Assoc)> {
-    match kind {
-        TokenKind::Or => Some((1, Assoc::Left)),
-        TokenKind::And => Some((2, Assoc::Left)),
-        TokenKind::Less
-        | TokenKind::Greater
-        | TokenKind::LessEqual
-        | TokenKind::GreaterEqual
-        | TokenKind::TildeEqual
-        | TokenKind::EqualEqual => Some((3, Assoc::Left)),
-        // Lua 5.3+ bitwise operators
-        TokenKind::Pipe => Some((4, Assoc::Left)),
-        TokenKind::Tilde => Some((5, Assoc::Left)),
-        TokenKind::Ampersand => Some((6, Assoc::Left)),
-        TokenKind::ShiftLeft | TokenKind::ShiftRight => Some((7, Assoc::Left)),
-        TokenKind::DotDot => Some((8, Assoc::Right)),
-        TokenKind::Plus | TokenKind::Minus => Some((9, Assoc::Left)),
-        TokenKind::Star | TokenKind::Slash | TokenKind::Percent | TokenKind::FloorDiv => {
-            Some((10, Assoc::Left))
-        }
-        TokenKind::Caret => Some((12, Assoc::Right)),
-        _ => None,
-    }
-}
 
 impl Parser {
     /// Pratt expression parser. The left side grows iteratively; only the
@@ -50,7 +12,7 @@ impl Parser {
     pub fn parse_expression(&mut self, min_precedence: u8) -> Expression {
         let mut left = self.parse_prefix();
 
-        while let Some((precedence, assoc)) = binary_precedence(self.peek()) {
+        while let Some((precedence, assoc)) = self.peek().binary_precedence() {
             if precedence < min_precedence {
                 break;
             }

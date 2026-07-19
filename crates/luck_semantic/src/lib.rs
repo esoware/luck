@@ -19,6 +19,7 @@
 //! ```
 
 pub mod builder;
+pub mod nodes;
 pub mod scope;
 pub mod stdlib_model;
 

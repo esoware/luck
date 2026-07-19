@@ -144,29 +144,15 @@ fn can_remove_parens(inner: &Expression) -> bool {
 }
 
 fn binop_precedence(op: &Token) -> u8 {
-    match op.kind {
-        TokenKind::Or => 1,
-        TokenKind::And => 2,
-        TokenKind::Less
-        | TokenKind::Greater
-        | TokenKind::LessEqual
-        | TokenKind::GreaterEqual
-        | TokenKind::EqualEqual
-        | TokenKind::TildeEqual => 3,
-        TokenKind::Pipe => 4,
-        TokenKind::Tilde => 5,
-        TokenKind::Ampersand => 6,
-        TokenKind::ShiftLeft | TokenKind::ShiftRight => 7,
-        TokenKind::DotDot => 8,
-        TokenKind::Plus | TokenKind::Minus => 9,
-        TokenKind::Star | TokenKind::Slash | TokenKind::FloorDiv | TokenKind::Percent => 10,
-        TokenKind::Caret => 12,
-        _ => 0,
-    }
+    op.kind
+        .binary_precedence()
+        .map_or(0, |(precedence, _)| precedence)
 }
 
 fn is_right_associative(op: &Token) -> bool {
-    matches!(op.kind, TokenKind::Caret | TokenKind::DotDot)
+    op.kind
+        .binary_precedence()
+        .is_some_and(|(_, assoc)| assoc == luck_token::Assoc::Right)
 }
 
 fn can_unwrap_in_binop_lhs(inner: &Expression, outer: &Token) -> bool {

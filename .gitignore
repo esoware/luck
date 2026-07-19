@@ -2,6 +2,9 @@
 .claude/settings.local.json
 CLAUDE.local.md
 
+# fetched bench inputs (see luck_benchmark corpus.rs)
+crates/luck_benchmark/corpus/
+
 # fuzzing
 fuzz/target/
 fuzz/corpus/

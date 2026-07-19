@@ -52,6 +52,7 @@ luck_codegen.workspace = true
 luck_formatter.workspace = true
 luck_minifier.workspace = true
 criterion2 = { workspace = true }
+ureq = { workspace = true }
 
 [features]
 codspeed = ["criterion2/codspeed"]

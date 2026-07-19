@@ -47,6 +47,7 @@ luck_linter = { path = "crates/luck_linter" }
 luck_lsp = { path = "crates/luck_lsp" }
 luck_testgen = { path = "crates/luck_testgen" }
 criterion2 = { version = "3", default-features = false }
+ureq = "3"
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "net", "macros", "sync", "time"] }
 similar = "2"
@@ -56,6 +57,7 @@ ec4rs = "1.2"
 mimalloc-safe = "0.1.64"
 memchr = "2"
 itoa = "1"
+ryu = "1"
 simdutf8 = { version = "0.1.5", features = ["aarch64_neon"] }
 
 # Full debuginfo makes MSVC linking of the ~36 test binaries the slowest

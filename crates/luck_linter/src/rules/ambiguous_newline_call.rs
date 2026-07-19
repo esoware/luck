@@ -3,6 +3,7 @@ use luck_ast::expr::{FunctionArgs, FunctionCall};
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct AmbiguousNewlineCall;
 
@@ -29,6 +30,11 @@ impl Rule for AmbiguousNewlineCall {
 }
 
 impl NodeRule for AmbiguousNewlineCall {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset =
+            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
+        Some(&TYPES)
+    }
     fn on_statement(
         &self,
         stmt: &luck_ast::stmt::Statement,

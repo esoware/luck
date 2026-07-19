@@ -36,23 +36,23 @@ and feeds `luck_bundler`. On top sit `luck` (facade re-exports),
 
 | Crate | Role | Key entry |
 |-------|------|-----------|
-| `luck_token` | Spans, `LuaVersion`, `StdlibEnvironment`, `SourceError`, `CompactString` storage | `lib.rs` |
-| `luck_lexer` | Single-pass tokenizer; comments emitted separately | `lexer.rs` |
-| `luck_ast` | `Expression`/`Statement`/`Type` <=64 B, `Visitor`, `AstTransform`, `synth` builder (dummy-span AST construction for programmatic/decompiler use) | `expr.rs`, `stmt.rs`, `types.rs`, `transform.rs`, `synth.rs` |
+| `luck_token` | Spans, `LuaVersion`, `StdlibEnvironment`, `SourceError`, `CompactString` storage, `CodeBuffer` byte-level output builder | `lib.rs`, `code_buffer.rs` |
+| `luck_lexer` | Single-pass tokenizer; comments emitted separately; memchr + byte-table batched scanning for strings/comments | `lexer.rs`, `search.rs` |
+| `luck_ast` | `Expression`/`Statement`/`Type` <=64 B, `Visitor`, `AstTransform`, `synth` builder (dummy-span AST construction for programmatic/decompiler use), `NodeType`/`NodeKind`/`AstTypesBitset` for node-table dispatch | `expr.rs`, `stmt.rs`, `types.rs`, `transform.rs`, `synth.rs`, `node.rs` |
 | `luck_parser` | Pratt expressions + recursive-descent statements + full Luau type grammar, version-gated | `expr.rs`, `stmt.rs`, `luau.rs` |
 | `luck_codegen` | Compact printer (ambiguity cases live in `separator.rs` + its tests) | `compact.rs`, `separator.rs` |
-| `luck_core` | `LuaTarget`, typed config + `FormatOptions`/`LintConfig` enums, `TransformConfig`, diagnostics E001-E012/W001-W004, schemars schema | `config.rs`, `diagnostics.rs`, `format_options.rs` |
+| `luck_core` | `LuaTarget`, typed config + `FormatOptions`/`LintConfig` enums, `TransformConfig`, diagnostics E001-E012/W001-W004, schemars schema, `source_io` (SIMD-validated file reads) | `config.rs`, `diagnostics.rs`, `format_options.rs` |
 | `luck_resolver` | Lua search paths, Luau `@aliases`, `.luaurc` chain | `lib.rs`, `luau.rs` |
 | `luck_bundler` | Require validation, dep graph (cycle detection), lazy memoizing loader emit + line maps, `ModuleId`/`ModuleInfo`, `insta` snapshots | `graph.rs`, `emitter.rs`, `module.rs` |
 | `luck_minifier` | 12-transform pipeline; passes gated by `TransformConfig` flags | `lib.rs` `minify()`, `transforms/` |
 | `luck_formatter` | oxc-style engine: `Format` trait + combinator IR (`BestFitting`, group-id conditionals), AST-in `format_block` formats synthetic ASTs (no source needed), idempotency invariant | `ir.rs`, `printer.rs`, `format_*.rs`, `comments.rs` |
-| `luck_linter` | `Rule`/`NodeRule` traits + `LintContext`, 63 stateless rules in a static `RULES` registry, single-pass bus for node-local rules, suppressions, `--fix` | `rules/`, `rule.rs`, `bus.rs` |
-| `luck_semantic` | Scope tree, refs (R/W/RW), upvalues, version- & environment-aware stdlib | `builder.rs`, `stdlib_model.rs` |
+| `luck_linter` | `Rule`/`NodeRule` traits + `LintContext`, 63 stateless rules in a static `RULES` registry, node-type-bucketed parallel bus (rules declare `node_types()`; debug builds verify bucketed == brute-force dispatch), suppressions, `--fix` | `rules/`, `rule.rs`, `bus.rs` |
+| `luck_semantic` | Scope tree, refs (R/W/RW), upvalues, version- & environment-aware stdlib; typed `NonZeroU32` ids (`ScopeId`/`SymbolId`/`ReferenceId`); flat node table with parent links + per-node scope | `builder.rs`, `stdlib_model.rs`, `nodes.rs` |
 | `luck_lsp` | Library-only LSP backend (no binary); served via `luck lsp` | `backend.rs`, `serve.rs`, `providers/` |
 | `luck_cli` | Flat Clap commands (incl. `lsp`); rayon-parallel lint/fmt/check; ariadne diagnostic rendering; `ExitCode` 0/1/2; 16 MB-stack worker thread | `cli.rs`, `render.rs`, `main.rs` |
 | `luck` | Facade re-exports (no logic) | `lib.rs` |
 | `luck_testgen` | Internal harness (`publish = false`): deterministic program generator, round-trip property tests | `src/lib.rs` |
-| `luck_benchmark` | Internal (`publish = false`): per-stage criterion benches (oxc-style), run on CodSpeed in CI | `benches/`, `src/corpus.rs` |
+| `luck_benchmark` | Internal (`publish = false`): per-stage criterion benches (oxc-style), run on CodSpeed in CI; real-world corpus fetched on demand from esoware/luck-bench-corpus (pinned SHA) into the gitignored `corpus/` cache | `benches/`, `src/corpus.rs` |
 
 Version bump policy per crate lives in `/bump-versions` - use the skill,
 don't guess. `editors/vscode/` holds the VS Code extension; its config

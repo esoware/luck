@@ -9,6 +9,7 @@
 //! `Flat` or `Expanded`; every decision is recorded per `GroupId` so
 //! conditional content elsewhere can query it.
 
+use luck_token::code_buffer::CodeBuffer;
 use unicode_width::UnicodeWidthStr;
 
 use crate::ir::{FormatElement, GroupId, LineMode, PrintMode, Tag};
@@ -29,7 +30,7 @@ pub fn print(elements: &[FormatElement], group_count: u32, options: &PrinterOpti
         // Element count is the only size signal available here (synthetic
         // ASTs have no source); a few output bytes per element is a close
         // enough hint to avoid most realloc copies.
-        output: String::with_capacity(elements.len() * 4),
+        output: CodeBuffer::with_capacity(elements.len() * 4),
         line_start: 0,
         column: 0,
         indents: Vec::new(),
@@ -42,7 +43,7 @@ pub fn print(elements: &[FormatElement], group_count: u32, options: &PrinterOpti
     propagate_expand(elements, &mut printer.group_modes);
     printer.print_elements(elements);
     printer.flush_suffixes();
-    printer.output
+    printer.output.into_string()
 }
 
 /// One entry on the indent stack. `None` keeps push/pop symmetric for
@@ -56,7 +57,7 @@ enum Indent {
 
 struct Printer {
     options: PrinterOptions,
-    output: String,
+    output: CodeBuffer,
     /// Byte offset in `output` where the current line begins.
     line_start: usize,
     /// Display width of the current line so far.
@@ -486,10 +487,10 @@ impl Printer {
         }
         if self.is_pending_space {
             self.is_pending_space = false;
-            self.output.push(' ');
+            self.output.print_ascii_byte(b' ');
             self.column += 1;
         }
-        self.output.push_str(content);
+        self.output.print_str(content);
         match content.rfind('\n') {
             Some(last_newline) => {
                 // Multi-line text: column restarts after its last line
@@ -506,12 +507,12 @@ impl Printer {
         self.trim_trailing_whitespace();
         if is_blank_line {
             // Exactly one blank line, never a stack of them
-            while !self.output.ends_with("\n\n") {
-                self.output.push('\n');
+            while !self.output.as_bytes().ends_with(b"\n\n") {
+                self.output.print_ascii_byte(b'\n');
             }
-        } else if !self.output.ends_with("\n\n") {
+        } else if !self.output.as_bytes().ends_with(b"\n\n") {
             // A hard break directly after a blank line folds into it
-            self.output.push('\n');
+            self.output.print_ascii_byte(b'\n');
         }
         self.line_start = self.output.len();
         self.column = 0;
@@ -536,10 +537,12 @@ impl Printer {
     }
 
     fn trim_trailing_whitespace(&mut self) {
-        let trimmed_len = self.output[self.line_start..]
-            .trim_end_matches([' ', '\t'])
-            .len();
-        self.output.truncate(self.line_start + trimmed_len);
+        let bytes = self.output.as_bytes();
+        let mut trimmed_end = bytes.len();
+        while trimmed_end > self.line_start && matches!(bytes[trimmed_end - 1], b' ' | b'\t') {
+            trimmed_end -= 1;
+        }
+        self.output.truncate(trimmed_end);
     }
 
     fn flush_indent(&mut self) {
@@ -561,22 +564,16 @@ impl Printer {
             .sum();
 
         if self.options.use_tabs {
-            for _ in 0..width {
-                self.output.push('\t');
-            }
+            self.output.print_ascii_repeat(b'\t', width);
             // Tabs count as one column here; the printer's width model
             // treats a tab as a single cell, matching the old printer.
             self.column += width;
         } else {
             let spaces = width * self.options.indent_width as usize;
-            for _ in 0..spaces {
-                self.output.push(' ');
-            }
+            self.output.print_ascii_repeat(b' ', spaces);
             self.column += spaces;
         }
-        for _ in 0..align_extra {
-            self.output.push(' ');
-        }
+        self.output.print_ascii_repeat(b' ', align_extra);
         self.column += align_extra;
     }
 }

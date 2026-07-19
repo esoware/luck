@@ -4,6 +4,7 @@ use luck_token::{StdlibEnvironment, Token, TokenKind};
 
 use crate::diagnostic::{Category, Fix, LintDiagnostic, Severity, TextEdit};
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct RobloxManualFromScaleOrFromOffset;
 
@@ -77,6 +78,10 @@ fn literal_arg_value(expr: &Expression) -> Option<f64> {
 }
 
 impl NodeRule for RobloxManualFromScaleOrFromOffset {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::FunctionCallExpr]);
+        Some(&TYPES)
+    }
     fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if ctx.semantic.environment != StdlibEnvironment::Roblox {
             return;

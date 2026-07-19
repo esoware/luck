@@ -1,12 +1,12 @@
 use luck_ast::Expression;
 use luck_ast::expr::FunctionCall;
-use luck_ast::visitor::Visitor;
 use luck_semantic::SemanticAnalysis;
 use luck_semantic::stdlib_model::{EntryKind, StdlibEntry};
 use luck_token::Span;
 
 use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 /// Warns when a stdlib call that is marked `must_use` (because it
 /// returns a value with no observable side effects) is invoked in
@@ -28,24 +28,13 @@ impl Rule for MustUse {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
-        let mut checker = MustUseChecker {
-            source,
-            semantic,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+        crate::bus::run_single(self, ctx)
     }
 }
 
 struct MustUseChecker<'a> {
     source: &'a str,
     semantic: &'a SemanticAnalysis,
-    diagnostics: Vec<LintDiagnostic>,
 }
 
 impl<'src> MustUseChecker<'src> {
@@ -102,14 +91,27 @@ impl<'src> MustUseChecker<'src> {
     }
 }
 
-impl Visitor for MustUseChecker<'_> {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
-        // Only function-call *statements* discard the return; expression
-        // contexts (assignments, args, returns, etc.) are fine.
+impl NodeRule for MustUse {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::FunctionCallStmt]);
+        Some(&TYPES)
+    }
+    // Only function-call *statements* discard the return; expression
+    // contexts (assignments, args, returns, etc.) are fine.
+    fn on_statement(
+        &self,
+        stmt: &luck_ast::Statement,
+        ctx: &LintContext,
+        out: &mut Vec<LintDiagnostic>,
+    ) {
         if let luck_ast::Statement::FunctionCall(call_stmt) = stmt
-            && let Some(name) = self.must_use_name(&call_stmt.call)
+            && let Some(name) = (MustUseChecker {
+                source: ctx.source,
+                semantic: ctx.semantic,
+            })
+            .must_use_name(&call_stmt.call)
         {
-            self.diagnostics.push(
+            out.push(
                 LintDiagnostic::new(
                     "must_use",
                     format!("return value of '{name}' is discarded"),
@@ -118,7 +120,6 @@ impl Visitor for MustUseChecker<'_> {
                 .with_help("assign the result or remove the call".to_string()),
             );
         }
-        self.walk_statement(stmt);
     }
 }
 

@@ -1,7 +1,6 @@
 use luck_ast::Expression;
 use luck_ast::expr::{FunctionArgs, FunctionCall, Var};
 use luck_ast::shared::Punctuated;
-use luck_ast::visitor::Visitor;
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, TokenKind};
 
@@ -9,7 +8,8 @@ use crate::diagnostic::*;
 use crate::format_pattern::{
     PatternError, validate_format, validate_lua_pattern, validate_pack_format,
 };
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 /// Inspects calls to the `string.*` family that take a literal pattern
 /// or format string and validates the literal up front. Both the dotted
@@ -33,17 +33,7 @@ impl Rule for FormatString {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
-        let mut checker = FormatChecker {
-            source,
-            semantic,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+        crate::bus::run_single(self, ctx)
     }
 }
 
@@ -75,13 +65,13 @@ enum ArgCount {
     None,
 }
 
-struct FormatChecker<'src> {
+struct FormatChecker<'src, 'out> {
     source: &'src str,
     semantic: &'src SemanticAnalysis,
-    diagnostics: Vec<LintDiagnostic>,
+    out: &'out mut Vec<LintDiagnostic>,
 }
 
-impl<'src> FormatChecker<'src> {
+impl<'src> FormatChecker<'src, '_> {
     fn check_call(&mut self, call: &FunctionCall) {
         let Some((dsl, arg_kind, literal_expr_idx)) = self.classify_callee(call) else {
             return;
@@ -306,7 +296,7 @@ impl<'src> FormatChecker<'src> {
         if given == expected_extra {
             return;
         }
-        self.diagnostics.push(LintDiagnostic::new(
+        self.out.push(LintDiagnostic::new(
             "format_string",
             format!("format expects {expected_extra} substitutions, given {given}"),
             literal_span,
@@ -354,7 +344,7 @@ impl<'src> FormatChecker<'src> {
 
     fn report_literal_error(&mut self, message: &str, span_start: u32, kind: &str) {
         let span = Span::new(span_start, span_start + 1);
-        self.diagnostics.push(LintDiagnostic::new(
+        self.out.push(LintDiagnostic::new(
             "format_string",
             format!("invalid {kind}: {message}"),
             span,
@@ -365,7 +355,7 @@ impl<'src> FormatChecker<'src> {
         let offset = pattern_error_offset(&err);
         let span_start = body_offset + offset;
         let span = Span::new(span_start, span_start + 1);
-        self.diagnostics.push(LintDiagnostic::new(
+        self.out.push(LintDiagnostic::new(
             "format_string",
             format!("invalid {kind}: {err}"),
             span,
@@ -373,23 +363,40 @@ impl<'src> FormatChecker<'src> {
     }
 }
 
-impl Visitor for FormatChecker<'_> {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
-        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
-            self.check_call(&call_stmt.call);
-            self.check_method_literal_receiver(&call_stmt.call);
-            self.check_gsub_replacement(&call_stmt.call);
-        }
-        self.walk_statement(stmt);
+impl NodeRule for FormatString {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset =
+            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
+        Some(&TYPES)
     }
-
-    fn visit_expression(&mut self, expr: &Expression) {
-        if let Expression::FunctionCall(call) = expr {
-            self.check_call(call);
-            self.check_method_literal_receiver(call);
-            self.check_gsub_replacement(call);
+    fn on_statement(
+        &self,
+        stmt: &luck_ast::Statement,
+        ctx: &LintContext,
+        out: &mut Vec<LintDiagnostic>,
+    ) {
+        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
+            let mut checker = FormatChecker {
+                source: ctx.source,
+                semantic: ctx.semantic,
+                out,
+            };
+            checker.check_call(&call_stmt.call);
+            checker.check_method_literal_receiver(&call_stmt.call);
+            checker.check_gsub_replacement(&call_stmt.call);
         }
-        self.walk_expression(expr);
+    }
+    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
+        if let Expression::FunctionCall(call) = expr {
+            let mut checker = FormatChecker {
+                source: ctx.source,
+                semantic: ctx.semantic,
+                out,
+            };
+            checker.check_call(call);
+            checker.check_method_literal_receiver(call);
+            checker.check_gsub_replacement(call);
+        }
     }
 }
 

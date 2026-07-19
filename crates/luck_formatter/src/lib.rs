@@ -178,8 +178,10 @@ fn run_pipeline(block: &Block, mut formatter: ir::Formatter) -> String {
 ///
 /// Works on any AST, including programmatically constructed ones with dummy
 /// spans (see `luck_ast::synth`). Pass [`Comments::synthetic`] to attach
-/// generated comments, [`Comments::from_source`] when the AST came from real
-/// source and comment/blank-line fidelity matters, or [`Comments::none`].
+/// generated comments (chain [`Comments::with_blank_before`] to request
+/// blank lines between statements), [`Comments::from_source`] when the AST
+/// came from real source and comment/blank-line fidelity matters, or
+/// [`Comments::none`].
 #[must_use]
 pub fn format_block(block: &Block, comments: Comments, options: &FormatOptions) -> String {
     let formatter = ir::Formatter::with_context(options.clone(), comments);

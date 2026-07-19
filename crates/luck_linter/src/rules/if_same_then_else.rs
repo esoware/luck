@@ -1,8 +1,8 @@
+use luck_ast::node::{AstTypesBitset, NodeType};
 use luck_ast::shared::Block;
-use luck_ast::visitor::Visitor;
 
 use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, NodeRule, Rule};
 
 pub struct IfSameThenElse;
 
@@ -21,22 +21,8 @@ impl Rule for IfSameThenElse {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let _semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
-        let mut checker = SameThenElseChecker {
-            source,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+        crate::bus::run_single(self, ctx)
     }
-}
-
-struct SameThenElseChecker<'a> {
-    source: &'a str,
-    diagnostics: Vec<LintDiagnostic>,
 }
 
 fn block_source<'a>(source: &'a str, block: &Block) -> &'a str {
@@ -49,16 +35,25 @@ fn block_source<'a>(source: &'a str, block: &Block) -> &'a str {
     }
 }
 
-impl Visitor for SameThenElseChecker<'_> {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
+impl NodeRule for IfSameThenElse {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::IfStatement]);
+        Some(&TYPES)
+    }
+    fn on_statement(
+        &self,
+        stmt: &luck_ast::Statement,
+        ctx: &LintContext,
+        out: &mut Vec<LintDiagnostic>,
+    ) {
         if let luck_ast::Statement::IfStatement(if_stmt) = stmt
             && let Some(else_clause) = &if_stmt.else_clause
         {
-            let then_src = block_source(self.source, &if_stmt.block);
-            let else_src = block_source(self.source, &else_clause.block);
+            let then_src = block_source(ctx.source, &if_stmt.block);
+            let else_src = block_source(ctx.source, &else_clause.block);
 
             if !then_src.is_empty() && then_src.trim() == else_src.trim() {
-                self.diagnostics.push(
+                out.push(
                     LintDiagnostic::new(
                         "if_same_then_else",
                         "if and else branches have identical bodies".to_string(),
@@ -68,7 +63,6 @@ impl Visitor for SameThenElseChecker<'_> {
                 );
             }
         }
-        self.walk_statement(stmt);
     }
 }
 

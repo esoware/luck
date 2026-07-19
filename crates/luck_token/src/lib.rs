@@ -15,6 +15,7 @@
 //! assert_eq!(Span::new(0, 2).merge(Span::new(5, 7)), Span::new(0, 7));
 //! ```
 
+pub mod code_buffer;
 pub mod comment;
 pub mod literal;
 pub mod token;
@@ -222,7 +223,7 @@ pub struct SourceError {
 
 pub use comment::{Comment, CommentKind, CommentPosition};
 pub use compact_str::CompactString;
-pub use token::{Token, TokenKind};
+pub use token::{Assoc, Token, TokenKind, UNARY_PRECEDENCE};
 
 #[cfg(test)]
 mod tests {

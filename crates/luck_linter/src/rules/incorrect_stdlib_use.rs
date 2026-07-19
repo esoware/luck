@@ -1,12 +1,12 @@
 use luck_ast::Expression;
 use luck_ast::expr::{FunctionArgs, FunctionCall};
-use luck_ast::visitor::Visitor;
 use luck_semantic::SemanticAnalysis;
 use luck_semantic::stdlib_model::{EntryKind, StdlibArgKind, StdlibEntry, StdlibFunction};
 use luck_token::Span;
 
 use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct IncorrectStdlibUse;
 
@@ -25,27 +25,17 @@ impl Rule for IncorrectStdlibUse {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
-        let mut checker = StdlibChecker {
-            source,
-            semantic,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+        crate::bus::run_single(self, ctx)
     }
 }
 
-struct StdlibChecker<'a> {
+struct StdlibChecker<'a, 'out> {
     source: &'a str,
     semantic: &'a SemanticAnalysis,
-    diagnostics: Vec<LintDiagnostic>,
+    out: &'out mut Vec<LintDiagnostic>,
 }
 
-impl<'src> StdlibChecker<'src> {
+impl<'src> StdlibChecker<'src, '_> {
     fn check_call(&mut self, call: &FunctionCall) {
         // Method calls don't resolve to stdlib paths.
         if call.method.is_some() {
@@ -75,7 +65,7 @@ impl<'src> StdlibChecker<'src> {
         });
 
         if arg_count < func.min_args && !has_multi_value_tail {
-            self.diagnostics.push(LintDiagnostic::new(
+            self.out.push(LintDiagnostic::new(
                 "incorrect_stdlib_use",
                 format!(
                     "'{name}' requires at least {} argument(s), got {arg_count}",
@@ -88,7 +78,7 @@ impl<'src> StdlibChecker<'src> {
         if let Some(max) = func.max_args
             && arg_count > max
         {
-            self.diagnostics.push(LintDiagnostic::new(
+            self.out.push(LintDiagnostic::new(
                 "incorrect_stdlib_use",
                 format!("'{name}' accepts at most {max} argument(s), got {arg_count}"),
                 call.span,
@@ -116,7 +106,7 @@ impl<'src> StdlibChecker<'src> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 let position = idx + 1;
-                self.diagnostics.push(LintDiagnostic::new(
+                self.out.push(LintDiagnostic::new(
                     "incorrect_stdlib_use",
                     format!(
                         "'{name}' argument {position} must be one of {allowed_list}, got '{value}'",
@@ -202,19 +192,36 @@ fn string_literal_value<'src>(expr: &Expression, source: &'src str) -> Option<(&
     }
 }
 
-impl Visitor for StdlibChecker<'_> {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
-        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
-            self.check_call(&call_stmt.call);
-        }
-        self.walk_statement(stmt);
+impl NodeRule for IncorrectStdlibUse {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset =
+            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
+        Some(&TYPES)
     }
-
-    fn visit_expression(&mut self, expr: &Expression) {
-        if let Expression::FunctionCall(call) = expr {
-            self.check_call(call);
+    fn on_statement(
+        &self,
+        stmt: &luck_ast::Statement,
+        ctx: &LintContext,
+        out: &mut Vec<LintDiagnostic>,
+    ) {
+        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
+            StdlibChecker {
+                source: ctx.source,
+                semantic: ctx.semantic,
+                out,
+            }
+            .check_call(&call_stmt.call);
         }
-        self.walk_expression(expr);
+    }
+    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
+        if let Expression::FunctionCall(call) = expr {
+            StdlibChecker {
+                source: ctx.source,
+                semantic: ctx.semantic,
+                out,
+            }
+            .check_call(call);
+        }
     }
 }
 

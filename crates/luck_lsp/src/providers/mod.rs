@@ -13,7 +13,6 @@ pub mod document_symbol;
 pub mod folding;
 pub mod highlights;
 pub mod hover;
-pub mod inlay_hints;
 pub mod references;
 pub mod rename;
 pub mod selection_range;

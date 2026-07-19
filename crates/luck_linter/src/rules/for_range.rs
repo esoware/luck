@@ -1,10 +1,10 @@
 use luck_ast::Expression;
+use luck_ast::node::{AstTypesBitset, NodeType};
 use luck_ast::stmt::NumericFor;
-use luck_ast::visitor::Visitor;
 use luck_token::TokenKind;
 
 use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Numeric-for ranges that cannot iterate or are obvious off-by-one
 /// mistakes (zero step, negative step with start < end, start > end with
@@ -33,22 +33,13 @@ impl Rule for ForRange {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let _semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
-        let mut checker = RangeChecker {
-            source,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+        crate::bus::run_single(self, ctx)
     }
 }
 
-struct RangeChecker<'src> {
-    source: &'src str,
-    diagnostics: Vec<LintDiagnostic>,
+struct RangeChecker<'a> {
+    source: &'a str,
+    out: &'a mut Vec<LintDiagnostic>,
 }
 
 /// Parse a numeric literal, optionally wrapped in a unary minus.
@@ -91,7 +82,7 @@ impl RangeChecker<'_> {
         if let Some(s) = step
             && s == 0.0
         {
-            self.diagnostics.push(
+            self.out.push(
                 LintDiagnostic::new(
                     "for_range",
                     "numeric for loop with step 0 never advances".to_string(),
@@ -107,7 +98,7 @@ impl RangeChecker<'_> {
             && step_value < 0.0
             && start_value < limit_value
         {
-            self.diagnostics.push(LintDiagnostic::new("for_range", format!(
+            self.out.push(LintDiagnostic::new("for_range", format!(
                     "numeric for from {start_value} to {limit_value} with negative step never iterates"
                 ), num_for.span).with_help("swap start and limit, or use a positive step".to_string()));
             return;
@@ -121,7 +112,7 @@ impl RangeChecker<'_> {
             && let Some(step_value) = step
             && step_value > 0.0
         {
-            self.diagnostics.push(LintDiagnostic::new("for_range", format!(
+            self.out.push(LintDiagnostic::new("for_range", format!(
                     "numeric for from {start_value} to {limit_value} with positive step never iterates"
                 ), num_for.span).with_help("swap start and limit, or use a negative step".to_string()));
             return;
@@ -134,7 +125,7 @@ impl RangeChecker<'_> {
             && start_value == 0.0
             && is_length_of_identifier(&num_for.limit)
         {
-            self.diagnostics.push(
+            self.out.push(
                 LintDiagnostic::new(
                     "for_range",
                     "numeric for starts at 0; Lua sequences are 1-indexed".to_string(),
@@ -153,7 +144,7 @@ impl RangeChecker<'_> {
         {
             let has_step_expr = num_for.comma2_and_step.is_some();
             if limit_value == 0.0 && (!has_step_expr || step.is_some_and(|s| s > 0.0)) {
-                self.diagnostics.push(
+                self.out.push(
                     LintDiagnostic::new(
                         "for_range",
                         "numeric for from a length to 0 should iterate backwards but has no -1 step, and 0 should probably be 1 since Lua sequences are 1-indexed".to_string(),
@@ -166,7 +157,7 @@ impl RangeChecker<'_> {
                 return;
             }
             if limit_value == 1.0 && !has_step_expr {
-                self.diagnostics.push(
+                self.out.push(
                     LintDiagnostic::new(
                         "for_range",
                         "numeric for from a length to 1 should iterate backwards; did you forget a -1 step?".to_string(),
@@ -196,7 +187,7 @@ impl RangeChecker<'_> {
             let last_value = start_value + count * step_value;
             let mismatch = limit_value - last_value;
             if count >= 0.0 && last_value != limit_value && mismatch != mismatch.floor() {
-                self.diagnostics.push(
+                self.out.push(
                     LintDiagnostic::new(
                         "for_range",
                         format!(
@@ -213,12 +204,24 @@ impl RangeChecker<'_> {
     }
 }
 
-impl Visitor for RangeChecker<'_> {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
+impl NodeRule for ForRange {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::NumericFor]);
+        Some(&TYPES)
+    }
+    fn on_statement(
+        &self,
+        stmt: &luck_ast::Statement,
+        ctx: &LintContext,
+        out: &mut Vec<LintDiagnostic>,
+    ) {
         if let luck_ast::Statement::NumericFor(num_for) = stmt {
-            self.check_for(num_for);
+            RangeChecker {
+                source: ctx.source,
+                out,
+            }
+            .check_for(num_for);
         }
-        self.walk_statement(stmt);
     }
 }
 

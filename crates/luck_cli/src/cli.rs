@@ -1202,88 +1202,99 @@ fn run_lint(args: LintArgs) -> ExitCode {
     }
 
     use rayon::prelude::*;
-    let outcomes: Vec<LintOutcome> = files
-        .par_iter()
-        .map(|file_path| {
-            let mut outcome = LintOutcome {
-                errors: 0,
-                warnings: 0,
-                fixed: false,
-                stderr_notes: Vec::new(),
-                stderr_render: Vec::new(),
-                stdout_lines: String::new(),
-            };
-            let source = match luck_core::source_io::read_source_file(file_path) {
-                Ok(text) => text,
-                Err(error) => {
-                    outcome.stderr_notes.push(format!(
-                        "Error: cannot read {}: {error}",
-                        file_path.display()
-                    ));
-                    // A skipped file must fail the run - CI going green while
-                    // files silently went unlinted is worse than a hard stop.
-                    outcome.errors += 1;
-                    return outcome;
-                }
-            };
-
-            let target = target_for(file_path);
-            let mut diagnostics = luck_linter::lint_target(&source, target, &lint_config);
-            let mut current_source = source;
-
-            if args.fix && diagnostics.iter().any(|diag| diag.fix.is_some()) {
-                let fixed_source =
-                    luck_linter::apply_fixes(&current_source, &diagnostics, target.lua_version());
-                if fixed_source != current_source {
-                    if let Err(error) = std::fs::write(file_path, &fixed_source) {
-                        outcome.stderr_notes.push(format!(
-                            "Error: cannot write {}: {error}",
-                            file_path.display()
-                        ));
-                    } else {
-                        outcome.fixed = true;
-                        diagnostics = luck_linter::lint_target(&fixed_source, target, &lint_config);
-                        current_source = fixed_source;
-                    }
-                }
-            }
-
-            for diag in &diagnostics {
-                match diag.severity {
-                    Severity::Error => outcome.errors += 1,
-                    Severity::Warning => outcome.warnings += 1,
-                }
-            }
-
-            if !diagnostics.is_empty() && !args.silent {
-                let file_label = file_path.to_string_lossy().to_string();
-                let (render, lines) =
-                    render_lint_diagnostics(args.format, &file_label, current_source, &diagnostics);
-                outcome.stderr_render = render;
-                outcome.stdout_lines = lines;
-            }
-            outcome
-        })
-        .collect();
-
     let mut total_errors = 0u32;
     let mut total_warnings = 0u32;
     let mut total_fixed = 0u32;
     {
-        // One lock and one flush per stream for the whole run; per-outcome
-        // writes would take the stream lock per diagnostic batch.
+        // One lock and one flush per stream for the whole run; files are
+        // processed in bounded sorted groups so peak outcome memory stays
+        // flat on huge projects while output order is preserved.
         use std::io::Write;
         let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
         let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
-        for outcome in &outcomes {
-            for note in &outcome.stderr_notes {
-                let _ = writeln!(stderr, "{note}");
+        for chunk in files.chunks(parallel_chunk_size()) {
+            let outcomes: Vec<LintOutcome> = chunk
+                .par_iter()
+                .map(|file_path| {
+                    let mut outcome = LintOutcome {
+                        errors: 0,
+                        warnings: 0,
+                        fixed: false,
+                        stderr_notes: Vec::new(),
+                        stderr_render: Vec::new(),
+                        stdout_lines: String::new(),
+                    };
+                    let source = match luck_core::source_io::read_source_file(file_path) {
+                        Ok(text) => text,
+                        Err(error) => {
+                            outcome.stderr_notes.push(format!(
+                                "Error: cannot read {}: {error}",
+                                file_path.display()
+                            ));
+                            // A skipped file must fail the run - CI going green while
+                            // files silently went unlinted is worse than a hard stop.
+                            outcome.errors += 1;
+                            return outcome;
+                        }
+                    };
+
+                    let target = target_for(file_path);
+                    let mut diagnostics = luck_linter::lint_target(&source, target, &lint_config);
+                    let mut current_source = source;
+
+                    if args.fix && diagnostics.iter().any(|diag| diag.fix.is_some()) {
+                        let fixed_source = luck_linter::apply_fixes(
+                            &current_source,
+                            &diagnostics,
+                            target.lua_version(),
+                        );
+                        if fixed_source != current_source {
+                            if let Err(error) = std::fs::write(file_path, &fixed_source) {
+                                outcome.stderr_notes.push(format!(
+                                    "Error: cannot write {}: {error}",
+                                    file_path.display()
+                                ));
+                            } else {
+                                outcome.fixed = true;
+                                diagnostics =
+                                    luck_linter::lint_target(&fixed_source, target, &lint_config);
+                                current_source = fixed_source;
+                            }
+                        }
+                    }
+
+                    for diag in &diagnostics {
+                        match diag.severity {
+                            Severity::Error => outcome.errors += 1,
+                            Severity::Warning => outcome.warnings += 1,
+                        }
+                    }
+
+                    if !diagnostics.is_empty() && !args.silent {
+                        let file_label = file_path.to_string_lossy().to_string();
+                        let (render, lines) = render_lint_diagnostics(
+                            args.format,
+                            &file_label,
+                            current_source,
+                            &diagnostics,
+                        );
+                        outcome.stderr_render = render;
+                        outcome.stdout_lines = lines;
+                    }
+                    outcome
+                })
+                .collect();
+
+            for outcome in &outcomes {
+                for note in &outcome.stderr_notes {
+                    let _ = writeln!(stderr, "{note}");
+                }
+                let _ = stderr.write_all(&outcome.stderr_render);
+                let _ = stdout.write_all(outcome.stdout_lines.as_bytes());
+                total_errors += outcome.errors;
+                total_warnings += outcome.warnings;
+                total_fixed += u32::from(outcome.fixed);
             }
-            let _ = stderr.write_all(&outcome.stderr_render);
-            let _ = stdout.write_all(outcome.stdout_lines.as_bytes());
-            total_errors += outcome.errors;
-            total_warnings += outcome.warnings;
-            total_fixed += u32::from(outcome.fixed);
         }
     }
 
@@ -1600,83 +1611,92 @@ fn run_fmt(args: FmtArgs) -> ExitCode {
     }
 
     use rayon::prelude::*;
-    let outcomes: Vec<FmtOutcome> = files
-        .par_iter()
-        .map(|file_path| {
-            let source = match luck_core::source_io::read_source_file(file_path) {
-                Ok(text) => text,
-                Err(error) => {
-                    return FmtOutcome::ReadError(format!(
-                        "Error: cannot read {}: {error}",
-                        file_path.display()
-                    ));
-                }
-            };
-
-            let range = match resolve_format_range(args.range_start, args.range_end, source.len()) {
-                Ok(range) => range,
-                Err(message) => return FmtOutcome::RangeError(message),
-            };
-
-            let target = target_for(file_path);
-            let file_label = file_path.to_string_lossy().to_string();
-            let formatted = match format_document(
-                &source,
-                &file_label,
-                file_path,
-                target,
-                &luck_config,
-                !args.no_editorconfig,
-                range,
-            ) {
-                FormatOutcome::ParseError(rendered) => return FmtOutcome::ParseError(rendered),
-                FormatOutcome::Unchanged => return FmtOutcome::Unchanged,
-                FormatOutcome::Changed(output) => output,
-            };
-
-            let path_str = file_path.display().to_string();
-            if report_only {
-                FmtOutcome::Changed(path_str)
-            } else if let Err(error) = std::fs::write(file_path, &formatted) {
-                FmtOutcome::WriteError(format!("Error: cannot write {path_str}: {error}"))
-            } else {
-                FmtOutcome::Written(path_str)
-            }
-        })
-        .collect();
-
     let mut changed: Vec<String> = Vec::new();
     let mut had_parse_error = false;
     {
         // One lock and one flush per stream for the whole run; the early
-        // returns flush through BufWriter's drop.
+        // returns flush through BufWriter's drop. Bounded sorted groups
+        // keep peak outcome memory flat on huge projects.
         use std::io::Write;
         let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
         let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
-        for outcome in outcomes {
-            match outcome {
-                FmtOutcome::ReadError(message) => {
-                    let _ = writeln!(stderr, "{message}");
-                    // A skipped file must fail the run, same as a parse error.
-                    had_parse_error = true;
-                }
-                FmtOutcome::RangeError(message) => {
-                    let _ = writeln!(stderr, "{message}");
-                    return ExitCode::from(EXIT_USAGE);
-                }
-                FmtOutcome::ParseError(rendered) => {
-                    let _ = stderr.write_all(&rendered);
-                    had_parse_error = true;
-                }
-                FmtOutcome::Unchanged => {}
-                FmtOutcome::Changed(path_str) => changed.push(path_str),
-                FmtOutcome::WriteError(message) => {
-                    let _ = writeln!(stderr, "{message}");
-                    return ExitCode::from(EXIT_FAILURE);
-                }
-                FmtOutcome::Written(path_str) => {
-                    if args.verbosity != Verbosity::Quiet {
-                        let _ = writeln!(stdout, "{path_str}");
+        for chunk in files.chunks(parallel_chunk_size()) {
+            let outcomes: Vec<FmtOutcome> = chunk
+                .par_iter()
+                .map(|file_path| {
+                    let source = match luck_core::source_io::read_source_file(file_path) {
+                        Ok(text) => text,
+                        Err(error) => {
+                            return FmtOutcome::ReadError(format!(
+                                "Error: cannot read {}: {error}",
+                                file_path.display()
+                            ));
+                        }
+                    };
+
+                    let range = match resolve_format_range(
+                        args.range_start,
+                        args.range_end,
+                        source.len(),
+                    ) {
+                        Ok(range) => range,
+                        Err(message) => return FmtOutcome::RangeError(message),
+                    };
+
+                    let target = target_for(file_path);
+                    let file_label = file_path.to_string_lossy().to_string();
+                    let formatted = match format_document(
+                        &source,
+                        &file_label,
+                        file_path,
+                        target,
+                        &luck_config,
+                        !args.no_editorconfig,
+                        range,
+                    ) {
+                        FormatOutcome::ParseError(rendered) => {
+                            return FmtOutcome::ParseError(rendered);
+                        }
+                        FormatOutcome::Unchanged => return FmtOutcome::Unchanged,
+                        FormatOutcome::Changed(output) => output,
+                    };
+
+                    let path_str = file_path.display().to_string();
+                    if report_only {
+                        FmtOutcome::Changed(path_str)
+                    } else if let Err(error) = std::fs::write(file_path, &formatted) {
+                        FmtOutcome::WriteError(format!("Error: cannot write {path_str}: {error}"))
+                    } else {
+                        FmtOutcome::Written(path_str)
+                    }
+                })
+                .collect();
+
+            for outcome in outcomes {
+                match outcome {
+                    FmtOutcome::ReadError(message) => {
+                        let _ = writeln!(stderr, "{message}");
+                        // A skipped file must fail the run, same as a parse error.
+                        had_parse_error = true;
+                    }
+                    FmtOutcome::RangeError(message) => {
+                        let _ = writeln!(stderr, "{message}");
+                        return ExitCode::from(EXIT_USAGE);
+                    }
+                    FmtOutcome::ParseError(rendered) => {
+                        let _ = stderr.write_all(&rendered);
+                        had_parse_error = true;
+                    }
+                    FmtOutcome::Unchanged => {}
+                    FmtOutcome::Changed(path_str) => changed.push(path_str),
+                    FmtOutcome::WriteError(message) => {
+                        let _ = writeln!(stderr, "{message}");
+                        return ExitCode::from(EXIT_FAILURE);
+                    }
+                    FmtOutcome::Written(path_str) => {
+                        if args.verbosity != Verbosity::Quiet {
+                            let _ = writeln!(stdout, "{path_str}");
+                        }
                     }
                 }
             }
@@ -1808,46 +1828,54 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // Files parse in parallel; rendered errors flush in input order so
     // output matches the sequential loop byte-for-byte.
     use rayon::prelude::*;
-    let outcomes: Vec<Option<Vec<u8>>> = files
-        .par_iter()
-        .map(|file_path| {
-            let source = match luck_core::source_io::read_source_file(file_path) {
-                Ok(text) => text,
-                Err(error) => {
-                    return Some(
-                        format!("Error: cannot read {}: {error}\n", file_path.display())
-                            .into_bytes(),
-                    );
-                }
-            };
-
-            let target = target_for(file_path);
-            let file_label = file_path.to_string_lossy().to_string();
-            let result = luck_parser::parse(&source, target.lua_version());
-            if result.errors.is_empty() {
-                return None;
-            }
-
-            let diagnostics: Vec<Diagnostic> = result
-                .errors
-                .iter()
-                .map(|err| {
-                    luck_core::diagnostics::errors::e008(&file_label, err.span.into(), &err.message)
-                })
-                .collect();
-            let mut cache = FileCache::new();
-            cache.add_file(file_label.clone(), source);
-            Some(render_diagnostics_to_buffer(&diagnostics, &mut cache))
-        })
-        .collect();
-
     let mut files_with_errors = 0u32;
     {
+        // One lock and one flush for the whole run; bounded sorted groups
+        // keep peak outcome memory flat on huge projects.
         use std::io::Write;
         let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
-        for rendered in outcomes.into_iter().flatten() {
-            files_with_errors += 1;
-            let _ = stderr.write_all(&rendered);
+        for chunk in files.chunks(parallel_chunk_size()) {
+            let outcomes: Vec<Option<Vec<u8>>> = chunk
+                .par_iter()
+                .map(|file_path| {
+                    let source = match luck_core::source_io::read_source_file(file_path) {
+                        Ok(text) => text,
+                        Err(error) => {
+                            return Some(
+                                format!("Error: cannot read {}: {error}\n", file_path.display())
+                                    .into_bytes(),
+                            );
+                        }
+                    };
+
+                    let target = target_for(file_path);
+                    let file_label = file_path.to_string_lossy().to_string();
+                    let result = luck_parser::parse(&source, target.lua_version());
+                    if result.errors.is_empty() {
+                        return None;
+                    }
+
+                    let diagnostics: Vec<Diagnostic> = result
+                        .errors
+                        .iter()
+                        .map(|err| {
+                            luck_core::diagnostics::errors::e008(
+                                &file_label,
+                                err.span.into(),
+                                &err.message,
+                            )
+                        })
+                        .collect();
+                    let mut cache = FileCache::new();
+                    cache.add_file(file_label.clone(), source);
+                    Some(render_diagnostics_to_buffer(&diagnostics, &mut cache))
+                })
+                .collect();
+
+            for rendered in outcomes.into_iter().flatten() {
+                files_with_errors += 1;
+                let _ = stderr.write_all(&rendered);
+            }
         }
     }
 
@@ -2090,6 +2118,13 @@ fn collect_lua_files(dir: &Path, filter: &luck_core::config::ProjectFilter) -> V
     }
     files.sort();
     files
+}
+
+/// Group size for the parallel drivers: a few batches per thread keeps
+/// the pool saturated while bounding how many rendered outcomes are held
+/// in memory at once.
+fn parallel_chunk_size() -> usize {
+    rayon::current_num_threads() * 4
 }
 
 fn current_dir_or_exit() -> PathBuf {

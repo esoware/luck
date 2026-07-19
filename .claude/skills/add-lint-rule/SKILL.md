@@ -55,11 +55,14 @@ The default-on category has the highest bar.
 **Node-local (preferred)** - the rule fires by pattern-matching a single
 statement or expression, with no traversal state (no scope stacks, no
 statement-sequence windows, no CFG). Implement `NodeRule` hooks; the
-shared bus makes ONE walk for all such rules, and `Rule::check`
-delegates to `bus::run_single` so per-rule tests run unchanged:
+shared bus runs ONE pass over the flat node table (built by
+`luck_semantic::nodes`) for all such rules, bucketed by node type, and
+`Rule::check` delegates to `bus::run_single` so per-rule tests run
+unchanged:
 
 ```rust
 use luck_ast::expr::Expression;
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -78,6 +81,18 @@ impl Rule for $ArgumentsRule {
 }
 
 impl NodeRule for $ArgumentsRule {
+    // REQUIRED in practice: the exact node types the hooks match on.
+    // The bus only offers those types to this rule, and files containing
+    // none of them skip the rule entirely. Omitting this (the default
+    // None) runs the rule against every node - correct but slow.
+    // Over-including a type is safe; omitting one the hook matches would
+    // silently disable the rule for it - the debug-build dual-dispatch
+    // verifier in lint_parsed catches that mismatch in any test run.
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::BinaryOp]);
+        Some(&TYPES)
+    }
+
     // Also available: on_statement(&self, stmt, ctx, out).
     fn on_expression(
         &self,
@@ -90,6 +105,11 @@ impl NodeRule for $ArgumentsRule {
     }
 }
 ```
+
+`NodeType` has one variant per `Statement`/`Expression` variant
+(statement/expression calls are `FunctionCallStmt` vs `FunctionCallExpr`).
+If the hook needs the enclosing node, use `ctx.nodes` (parent links and
+per-node `ScopeId`) instead of promoting the rule to whole-tree.
 
 **Whole-tree** - the rule needs traversal state (scope tracking,
 adjacent-statement patterns, control flow). Implement `check` directly

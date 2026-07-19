@@ -1,7 +1,10 @@
-//! Semantic tokens. The lexer is the cheapest source for "every name and
-//! keyword in the file" - we re-run it and classify each identifier
-//! against the stdlib model so deprecated/Roblox names get distinct
-//! modifiers.
+//! Semantic tokens. The TextMate grammar owns the base coloring; the
+//! server layers on only what the grammar cannot know: which bare names
+//! resolve to stdlib entries for the active target, with deprecated /
+//! readonly / defaultLibrary modifiers. Emitting a token for every
+//! identifier would override the grammar's call and property scopes and
+//! flatten user code to a single color, so plain identifiers, keywords,
+//! literals, and operators are deliberately left untouched.
 
 use luck_semantic::stdlib_model::{EntryKind, StdlibEntry, library_for};
 use luck_token::TokenKind;
@@ -15,25 +18,12 @@ use crate::backend::DocumentState;
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::NAMESPACE,
     SemanticTokenType::FUNCTION,
-    SemanticTokenType::PARAMETER,
-    SemanticTokenType::VARIABLE,
     SemanticTokenType::PROPERTY,
-    SemanticTokenType::KEYWORD,
-    SemanticTokenType::STRING,
-    SemanticTokenType::NUMBER,
-    SemanticTokenType::COMMENT,
-    SemanticTokenType::OPERATOR,
-    SemanticTokenType::TYPE,
 ];
 
 const TY_NAMESPACE: u32 = 0;
 const TY_FUNCTION: u32 = 1;
-const TY_VARIABLE: u32 = 3;
-const TY_PROPERTY: u32 = 4;
-const TY_KEYWORD: u32 = 5;
-const TY_STRING: u32 = 6;
-const TY_NUMBER: u32 = 7;
-const TY_OPERATOR: u32 = 9;
+const TY_PROPERTY: u32 = 2;
 
 pub const TOKEN_MODIFIERS: &[SemanticTokenModifier] = &[
     SemanticTokenModifier::DEPRECATED,
@@ -73,18 +63,35 @@ fn encode_tokens(doc: &DocumentState, byte_range: Option<(u32, u32)>) -> Semanti
     let lib = library_for(doc.target.lua_version());
     let environment = doc.target.stdlib_environment();
 
-    let mut raw: Vec<(u32, u32, u32, u32, u32)> = Vec::with_capacity(result.tokens.len());
+    let mut raw: Vec<(u32, u32, u32, u32, u32)> = Vec::new();
 
+    let mut after_accessor = false;
     for token in &result.tokens {
+        // A name after `.` or `:` is a field or method, not a global, so a
+        // bare-globals lookup would mislabel it (e.g. `t.type`).
+        let is_accessed_name = after_accessor;
+        after_accessor = matches!(token.kind, TokenKind::Dot | TokenKind::Colon);
+        if is_accessed_name {
+            continue;
+        }
+        let TokenKind::Identifier(name) = &token.kind else {
+            continue;
+        };
         if let Some((start, end)) = byte_range {
             if token.span.end < start || token.span.start > end {
                 continue;
             }
         }
+        let Some(entry) = lib
+            .globals
+            .get(name.as_str())
+            .filter(|entry| entry.available_in_luau(environment))
+        else {
+            continue;
+        };
+        let (ty, modifiers) = stdlib_classify(entry);
         let pos = doc.line_index.position(&doc.text, token.span.start);
         let length = utf16_len(&doc.text, token.span.start, token.span.end);
-        let (ty, modifiers) = classify(token, lib, environment);
-        let Some(ty) = ty else { continue };
         raw.push((pos.line, pos.character, length, ty, modifiers));
     }
 
@@ -118,42 +125,8 @@ fn encode_tokens(doc: &DocumentState, byte_range: Option<(u32, u32)>) -> Semanti
     }
 }
 
-fn classify(
-    token: &luck_token::Token,
-    lib: &'static luck_semantic::stdlib_model::StdlibLibrary,
-    environment: luck_token::StdlibEnvironment,
-) -> (Option<u32>, u32) {
-    use TokenKind::*;
-    match &token.kind {
-        Identifier(name) => {
-            if let Some(entry) = lib
-                .globals
-                .get(name.as_str())
-                .filter(|entry| entry.available_in_luau(environment))
-            {
-                let (ty, modifiers) = stdlib_classify(entry, MOD_DEFAULT_LIBRARY);
-                (Some(ty), modifiers)
-            } else {
-                (Some(TY_VARIABLE), 0)
-            }
-        }
-        Number(_) => (Some(TY_NUMBER), 0),
-        StringLiteral(_) => (Some(TY_STRING), 0),
-        And | Break | Do | Else | ElseIf | End | False | For | Function | If | In | Local | Nil
-        | Not | Or | Repeat | Return | Then | True | Until | While | Goto | Global => {
-            (Some(TY_KEYWORD), 0)
-        }
-        Plus | Minus | Star | Slash | FloorDiv | Percent | Caret | Hash | Equal | EqualEqual
-        | TildeEqual | Less | Greater | LessEqual | GreaterEqual | DotDot | DotDotDot
-        | Ampersand | Pipe | Tilde | ShiftLeft | ShiftRight | Arrow | Question | At | PlusEqual
-        | MinusEqual | StarEqual | SlashEqual | FloorDivEqual | PercentEqual | CaretEqual
-        | DotDotEqual => (Some(TY_OPERATOR), 0),
-        _ => (None, 0),
-    }
-}
-
-fn stdlib_classify(entry: &StdlibEntry, base_modifiers: u32) -> (u32, u32) {
-    let mut modifiers = base_modifiers;
+fn stdlib_classify(entry: &StdlibEntry) -> (u32, u32) {
+    let mut modifiers = MOD_DEFAULT_LIBRARY;
     let ty = match &entry.kind {
         EntryKind::Function(f) => {
             if f.deprecated.is_some() {

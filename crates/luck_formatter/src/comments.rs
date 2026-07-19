@@ -6,8 +6,14 @@
 //! to owned text at construction, so emission never slices source.
 //!
 //! The sourced store is a cursor over the sorted array (same model the old
-//! formatter used); the synthetic store is anchor-keyed removal, because
-//! synthesis order does not guarantee document order.
+//! formatter used). The synthetic store is a map keyed by anchor, because
+//! synthesis order does not guarantee document order and a decompiler may
+//! attach comments to every statement - per-anchor lookup has to stay cheap
+//! at that density. The synthetic store additionally carries the set of
+//! anchors that want a blank line before them ([`Comments::with_blank_before`]),
+//! the source-less replacement for blank-line preservation.
+
+use std::collections::{BTreeMap, HashSet};
 
 use compact_str::CompactString;
 use luck_ast::synth::SyntheticComment;
@@ -37,8 +43,13 @@ enum Store {
         disabled_ranges: Vec<(u32, u32)>,
     },
     Synthetic {
-        /// Anchor-keyed; drained as anchors are formatted.
-        entries: Vec<SyntheticComment>,
+        /// Anchor-keyed; entries drain as their anchors are formatted, and
+        /// whatever remains flushes at end of file in anchor order.
+        entries: BTreeMap<u32, Vec<SyntheticComment>>,
+        /// Total entries still unprinted, for checkpoint/restore.
+        remaining: usize,
+        /// Anchors (statement span starts) that want a blank line before them.
+        blank_before: HashSet<u32>,
     },
     Empty,
 }
@@ -119,8 +130,48 @@ impl Comments {
     }
 
     pub fn synthetic(comments: Vec<SyntheticComment>) -> Self {
+        let remaining = comments.len();
+        let mut entries: BTreeMap<u32, Vec<SyntheticComment>> = BTreeMap::new();
+        for comment in comments {
+            entries
+                .entry(comment.attached_to)
+                .or_default()
+                .push(comment);
+        }
         Self {
-            store: Store::Synthetic { entries: comments },
+            store: Store::Synthetic {
+                entries,
+                remaining,
+                blank_before: HashSet::new(),
+            },
+        }
+    }
+
+    /// Request a blank line before each statement whose span start is in
+    /// `anchors` - the source-less way to separate logical regions (basic
+    /// blocks, decompiled protos). Only meaningful for synthetic input; on
+    /// the parsed path blank lines come from the source itself.
+    #[must_use]
+    pub fn with_blank_before(mut self, anchors: impl IntoIterator<Item = u32>) -> Self {
+        if matches!(self.store, Store::Empty) {
+            self.store = Store::Synthetic {
+                entries: BTreeMap::new(),
+                remaining: 0,
+                blank_before: HashSet::new(),
+            };
+        }
+        if let Store::Synthetic { blank_before, .. } = &mut self.store {
+            blank_before.extend(anchors);
+        }
+        self
+    }
+
+    /// Whether the statement anchored at `anchor` asked for a blank line
+    /// before it (synthetic path only).
+    pub(crate) fn has_synthetic_blank_before(&self, anchor: u32) -> bool {
+        match &self.store {
+            Store::Synthetic { blank_before, .. } => blank_before.contains(&anchor),
+            Store::Sourced { .. } | Store::Empty => false,
         }
     }
 
@@ -155,16 +206,18 @@ impl Comments {
         }
     }
 
-    /// Whether an unprinted comment starts before `end` - used to detect
-    /// dangling comments in otherwise-empty bodies.
-    pub fn has_pending_comments_before(&self, end: u32) -> bool {
+    /// Whether an empty region ending at `end` holds comments: on the parsed
+    /// path any unprinted comment before `end`, on the synthetic path any
+    /// comment anchored to the region itself at `anchor` (a block span start).
+    pub fn has_dangling_comments(&self, anchor: u32, end: u32) -> bool {
         match &self.store {
             Store::Sourced {
                 entries, printed, ..
             } => entries
                 .get(*printed)
                 .is_some_and(|entry| entry.span_start < end),
-            Store::Synthetic { .. } | Store::Empty => false,
+            Store::Synthetic { entries, .. } => entries.contains_key(&anchor),
+            Store::Empty => false,
         }
     }
 
@@ -189,7 +242,7 @@ impl Comments {
     pub(crate) fn checkpoint(&self) -> usize {
         match &self.store {
             Store::Sourced { printed, .. } => *printed,
-            Store::Synthetic { entries } => entries.len(),
+            Store::Synthetic { remaining, .. } => *remaining,
             Store::Empty => 0,
         }
     }
@@ -197,9 +250,9 @@ impl Comments {
     pub(crate) fn restore(&mut self, checkpoint: usize) {
         match &mut self.store {
             Store::Sourced { printed, .. } => *printed = checkpoint,
-            Store::Synthetic { entries } => {
+            Store::Synthetic { remaining, .. } => {
                 debug_assert!(
-                    entries.len() == checkpoint,
+                    *remaining == checkpoint,
                     "synthetic comments were taken inside a speculative region"
                 );
             }
@@ -249,18 +302,9 @@ impl Formatter {
                 }
                 taken
             }
-            Store::Synthetic { entries } => {
-                let mut taken = Vec::new();
-                entries.retain(|entry| {
-                    if entry.attached_to == anchor && entry.is_leading {
-                        taken.push(synthetic_comment_text(&entry.text));
-                        false
-                    } else {
-                        true
-                    }
-                });
-                taken
-            }
+            Store::Synthetic {
+                entries, remaining, ..
+            } => take_synthetic(entries, remaining, anchor, |entry| entry.is_leading),
             Store::Empty => Vec::new(),
         };
 
@@ -323,18 +367,12 @@ impl Formatter {
                 }
                 placements
             }
-            Store::Synthetic { entries } => {
-                let mut placements = Vec::new();
-                entries.retain(|entry| {
-                    if entry.attached_to == anchor && !entry.is_leading {
-                        placements.push(Placement::Suffix(synthetic_comment_text(&entry.text)));
-                        false
-                    } else {
-                        true
-                    }
-                });
-                placements
-            }
+            Store::Synthetic {
+                entries, remaining, ..
+            } => take_synthetic(entries, remaining, anchor, |entry| !entry.is_leading)
+                .into_iter()
+                .map(Placement::Suffix)
+                .collect(),
             Store::Empty => Vec::new(),
         };
 
@@ -355,9 +393,12 @@ impl Formatter {
     }
 
     /// Emit comments dangling in an empty region (e.g. a function body with
-    /// no statements), one per line. The caller provides surrounding line
-    /// structure; only separators between multiple comments are emitted here.
-    pub fn emit_dangling_comments(&mut self, end: u32) {
+    /// no statements), one per line. On the parsed path these are the
+    /// unprinted comments before `end`; on the synthetic path they anchor to
+    /// the region itself at `anchor` (a block span start). The caller
+    /// provides surrounding line structure; only separators between multiple
+    /// comments are emitted here.
+    pub fn emit_dangling_comments(&mut self, anchor: u32, end: u32) {
         let texts: Vec<CompactString> = match &mut self.comments.store {
             Store::Sourced {
                 entries, printed, ..
@@ -373,8 +414,10 @@ impl Formatter {
                 }
                 taken
             }
-            // Synthetic comments anchor to statements; an empty region has none
-            Store::Synthetic { .. } | Store::Empty => Vec::new(),
+            Store::Synthetic {
+                entries, remaining, ..
+            } => take_synthetic(entries, remaining, anchor, |_| true),
+            Store::Empty => Vec::new(),
         };
         for (index, text) in texts.into_iter().enumerate() {
             if index > 0 {
@@ -397,10 +440,16 @@ impl Formatter {
                 *printed = entries.len();
                 taken
             }
-            Store::Synthetic { entries } => entries
-                .drain(..)
-                .map(|entry| synthetic_comment_text(&entry.text))
-                .collect(),
+            Store::Synthetic {
+                entries, remaining, ..
+            } => {
+                *remaining = 0;
+                std::mem::take(entries)
+                    .into_values()
+                    .flatten()
+                    .map(|entry| synthetic_comment_text(&entry.text))
+                    .collect()
+            }
             Store::Empty => Vec::new(),
         };
 
@@ -411,6 +460,32 @@ impl Formatter {
             self.push(FormatElement::Text(text.clone()));
         }
     }
+}
+
+/// Drain the entries at `anchor` matching `filter`, preserving insertion
+/// order, and keep the store's remaining-count in sync.
+fn take_synthetic(
+    entries: &mut BTreeMap<u32, Vec<SyntheticComment>>,
+    remaining: &mut usize,
+    anchor: u32,
+    filter: impl Fn(&SyntheticComment) -> bool,
+) -> Vec<CompactString> {
+    let mut taken = Vec::new();
+    if let Some(list) = entries.get_mut(&anchor) {
+        list.retain(|entry| {
+            if filter(entry) {
+                taken.push(synthetic_comment_text(&entry.text));
+                false
+            } else {
+                true
+            }
+        });
+        if list.is_empty() {
+            entries.remove(&anchor);
+        }
+    }
+    *remaining -= taken.len();
+    taken
 }
 
 #[cfg(test)]
@@ -507,6 +582,68 @@ mod tests {
             .iter()
             .any(|element| matches!(element, FormatElement::Tag(Tag::StartLineSuffix)));
         assert!(has_suffix);
+    }
+
+    #[test]
+    fn synthetic_dangling_drained_by_anchor() {
+        let synthetic = vec![SyntheticComment {
+            attached_to: 9,
+            text: "unreachable".into(),
+            is_leading: true,
+        }];
+        let comments = Comments::synthetic(synthetic);
+        assert!(comments.has_dangling_comments(9, 0));
+        assert!(!comments.has_dangling_comments(8, 0));
+
+        let mut formatter = Formatter::with_context(crate::FormatOptions::default(), comments);
+        formatter.emit_dangling_comments(9, 0);
+        let emitted = formatter.elements().iter().any(
+            |element| matches!(element, FormatElement::Text(text) if text == "-- unreachable"),
+        );
+        assert!(emitted);
+        assert!(!formatter.comments.has_dangling_comments(9, 0));
+    }
+
+    #[test]
+    fn synthetic_blank_before_recorded() {
+        let comments = Comments::synthetic(vec![]).with_blank_before([3, 7]);
+        assert!(comments.has_synthetic_blank_before(3));
+        assert!(comments.has_synthetic_blank_before(7));
+        assert!(!comments.has_synthetic_blank_before(5));
+
+        // Upgrades an empty store so `Comments::none()` users can opt in too.
+        let from_none = Comments::none().with_blank_before([2]);
+        assert!(from_none.has_synthetic_blank_before(2));
+    }
+
+    #[test]
+    fn synthetic_remaining_flushes_in_anchor_order() {
+        let synthetic = vec![
+            SyntheticComment {
+                attached_to: 20,
+                text: "second".into(),
+                is_leading: true,
+            },
+            SyntheticComment {
+                attached_to: 10,
+                text: "first".into(),
+                is_leading: true,
+            },
+        ];
+        let mut formatter = Formatter::with_context(
+            crate::FormatOptions::default(),
+            Comments::synthetic(synthetic),
+        );
+        formatter.emit_remaining_comments(false);
+        let texts: Vec<&str> = formatter
+            .elements()
+            .iter()
+            .filter_map(|element| match element {
+                FormatElement::Text(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["-- first", "-- second"]);
     }
 
     #[test]

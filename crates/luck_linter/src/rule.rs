@@ -1,5 +1,7 @@
+use luck_ast::node::AstTypesBitset;
 use luck_ast::shared::Block;
 use luck_semantic::SemanticAnalysis;
+use luck_semantic::nodes::Nodes;
 use luck_token::Comment;
 
 use crate::LintConfig;
@@ -9,6 +11,7 @@ use crate::diagnostic::{Category, LintDiagnostic, Severity};
 pub struct LintContext<'a> {
     pub block: &'a Block,
     pub semantic: &'a SemanticAnalysis,
+    pub nodes: &'a Nodes<'a>,
     pub source: &'a str,
     pub comments: &'a [Comment],
     pub config: &'a LintConfig,
@@ -34,6 +37,14 @@ pub trait Rule: Send + Sync {
 /// [`crate::bus::run_single`]; rules that need traversal state (scope
 /// stacks, statement sequences, CFG) stay whole-tree `Rule`s.
 pub trait NodeRule: Rule {
+    /// Node types this rule's hooks act on; `None` runs on every node.
+    /// Over-including a type is harmless; omitting one silently disables
+    /// the rule for it, which the debug dual-dispatch check in the driver
+    /// catches.
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        None
+    }
+
     fn on_statement(
         &self,
         _stmt: &luck_ast::stmt::Statement,

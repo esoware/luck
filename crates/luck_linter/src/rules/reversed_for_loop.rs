@@ -1,8 +1,8 @@
 use luck_ast::Expression;
-use luck_ast::visitor::Visitor;
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, NodeRule, Rule};
 
 pub struct ReversedForLoop;
 
@@ -21,22 +21,8 @@ impl Rule for ReversedForLoop {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let _semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
-        let mut checker = ReversedForChecker {
-            source,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+        crate::bus::run_single(self, ctx)
     }
-}
-
-struct ReversedForChecker<'a> {
-    source: &'a str,
-    diagnostics: Vec<LintDiagnostic>,
 }
 
 fn extract_number(expr: &Expression, source: &str) -> Option<f64> {
@@ -54,17 +40,26 @@ fn extract_number(expr: &Expression, source: &str) -> Option<f64> {
     }
 }
 
-impl Visitor for ReversedForChecker<'_> {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
+impl NodeRule for ReversedForLoop {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::NumericFor]);
+        Some(&TYPES)
+    }
+    fn on_statement(
+        &self,
+        stmt: &luck_ast::Statement,
+        ctx: &LintContext,
+        out: &mut Vec<LintDiagnostic>,
+    ) {
         if let luck_ast::Statement::NumericFor(num_for) = stmt {
-            let start = extract_number(&num_for.start, self.source);
-            let limit = extract_number(&num_for.limit, self.source);
+            let start = extract_number(&num_for.start, ctx.source);
+            let limit = extract_number(&num_for.limit, ctx.source);
 
             if let (Some(s), Some(l)) = (start, limit)
                 && s > l
                 && num_for.comma2_and_step.is_none()
             {
-                self.diagnostics.push(
+                out.push(
                     LintDiagnostic::new(
                         "reversed_for_loop",
                         format!("for loop from {s} to {l} without step -1 will never execute"),
@@ -74,6 +69,5 @@ impl Visitor for ReversedForChecker<'_> {
                 );
             }
         }
-        self.walk_statement(stmt);
     }
 }

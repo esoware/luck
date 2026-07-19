@@ -3,7 +3,6 @@ import {
 	LanguageClient,
 	LanguageClientOptions,
 	ServerOptions,
-	TransportKind,
 	RevealOutputChannelOn,
 } from "vscode-languageclient/node";
 import { discoverServer } from "./discover";
@@ -61,17 +60,18 @@ export class LuckClient implements vscode.Disposable {
 		const extraArgs = config.get<string[]>("server.args", []) ?? [];
 
 		const baseArgs = ["lsp", ...extraArgs];
+		// No `transport` here: vscode-languageclient appends `--stdio` to the
+		// args when TransportKind.stdio is declared, which `luck lsp` rejects.
+		// An Executable without a transport already talks over stdio pipes.
 		const serverOptions: ServerOptions = {
 			run: {
 				command,
 				args: baseArgs,
-				transport: TransportKind.stdio,
 				options: { env: { ...process.env, ...extraEnv } },
 			},
 			debug: {
 				command,
 				args: baseArgs,
-				transport: TransportKind.stdio,
 				options: { env: { ...process.env, ...extraEnv, RUST_LOG: "debug" } },
 			},
 		};

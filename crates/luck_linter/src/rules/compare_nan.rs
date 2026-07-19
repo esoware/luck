@@ -3,6 +3,7 @@ use luck_token::TokenKind;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct CompareNan;
 
@@ -43,6 +44,10 @@ fn is_zero(expr: &Expression, source: &str) -> bool {
 }
 
 impl NodeRule for CompareNan {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::BinaryOp]);
+        Some(&TYPES)
+    }
     fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Expression::BinaryOp(binop) = expr
             && matches!(binop.op.kind, TokenKind::EqualEqual | TokenKind::TildeEqual)

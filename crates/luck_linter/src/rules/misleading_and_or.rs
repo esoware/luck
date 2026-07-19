@@ -3,6 +3,7 @@ use luck_token::TokenKind;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 /// `(cond and a) or b` is the canonical Lua ternary idiom, but it
 /// collapses to `b` whenever `a` is `false` or `nil`. Writing
@@ -43,6 +44,10 @@ fn is_falsy_literal(expr: &Expression) -> bool {
 }
 
 impl NodeRule for MisleadingAndOr {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::BinaryOp]);
+        Some(&TYPES)
+    }
     fn on_expression(&self, expr: &Expression, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Expression::BinaryOp(outer) = expr
             && matches!(outer.op.kind, TokenKind::Or)

@@ -114,48 +114,6 @@
         "url": "./schemas/luaurc.schema.json"
       }
     ],
-    "semanticTokenTypes": [
-      {
-        "id": "stdlibFunction",
-        "superType": "function",
-        "description": "A function from the Lua/Luau standard library"
-      }
-    ],
-    "semanticTokenModifiers": [
-      {
-        "id": "robloxOnly",
-        "description": "Only available in Roblox Luau, not standard Luau"
-      },
-      {
-        "id": "pure",
-        "description": "Side-effect free function"
-      },
-      {
-        "id": "mustUse",
-        "description": "Return value should not be discarded"
-      }
-    ],
-    "semanticTokenScopes": [
-      {
-        "language": "lua",
-        "scopes": {
-          "stdlibFunction": [
-            "support.function.lua"
-          ],
-          "stdlibFunction.deprecated": [
-            "invalid.deprecated.lua"
-          ]
-        }
-      },
-      {
-        "language": "luau",
-        "scopes": {
-          "stdlibFunction": [
-            "support.function.luau"
-          ]
-        }
-      }
-    ],
     "configurationDefaults": {
       "[lua]": {
         "editor.defaultFormatter": "luck.luck",

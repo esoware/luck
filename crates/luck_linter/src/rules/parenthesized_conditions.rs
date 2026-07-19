@@ -2,6 +2,7 @@ use luck_ast::Expression;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct ParenthesizedConditions;
 
@@ -45,6 +46,11 @@ fn is_parenthesized(expr: &Expression) -> bool {
 }
 
 impl NodeRule for ParenthesizedConditions {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset =
+            AstTypesBitset::from_types(&[NodeType::IfStatement, NodeType::WhileLoop]);
+        Some(&TYPES)
+    }
     fn on_statement(
         &self,
         stmt: &luck_ast::stmt::Statement,

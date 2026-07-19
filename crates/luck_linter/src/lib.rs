@@ -123,6 +123,8 @@ pub fn lint_parsed(
         semantic.extra_globals.insert(name.clone());
     }
 
+    let nodes = luck_semantic::nodes::collect_nodes(&parse_result.block, &semantic.scope_tree);
+
     let statement_spans = collect_statement_spans(&parse_result.block);
     let suppression =
         suppression::Suppression::from_comments(&parse_result.comments, source, &statement_spans);
@@ -130,26 +132,39 @@ pub fn lint_parsed(
     let lint_ctx = rule::LintContext {
         block: &parse_result.block,
         semantic: &semantic,
+        nodes: &nodes,
         source,
         comments: &parse_result.comments,
         config,
     };
 
-    // Node-local rules share ONE pre-order walk (the bus); whole-tree
-    // rules fan out across cores in parallel with it. Results land in
-    // per-registry-slot vecs, so concatenation order, and therefore
-    // stable-sort tie order, is identical to a sequential loop over
-    // the registry.
+    // Node-local rules share ONE pass over the node table (the bus);
+    // whole-tree rules fan out across cores in parallel with it. Results
+    // land in per-registry-slot vecs, so concatenation order, and
+    // therefore stable-sort tie order, is identical to a sequential loop
+    // over the registry. A node rule whose declared types are absent from
+    // this file is dropped before dispatch.
     use rayon::prelude::*;
     let mut whole_rules: Vec<(usize, &'static dyn rule::Rule)> = Vec::new();
     let mut node_rules: Vec<(usize, &'static dyn rule::NodeRule)> = Vec::new();
+    #[cfg(debug_assertions)]
+    let mut skipped_node_rules: Vec<&'static dyn rule::NodeRule> = Vec::new();
     for (slot, entry) in rules::RULES.iter().enumerate() {
         if !is_rule_enabled(entry.rule(), config) {
             continue;
         }
         match entry {
             rules::RuleEntry::Whole(whole) => whole_rules.push((slot, *whole)),
-            rules::RuleEntry::Node(_, node) => node_rules.push((slot, *node)),
+            rules::RuleEntry::Node(_, node) => {
+                if let Some(types) = node.node_types()
+                    && !nodes.contains_any(types)
+                {
+                    #[cfg(debug_assertions)]
+                    skipped_node_rules.push(*node);
+                    continue;
+                }
+                node_rules.push((slot, *node));
+            }
         }
     }
 
@@ -164,6 +179,38 @@ pub fn lint_parsed(
                 .collect::<Vec<_>>()
         },
     );
+
+    // Bucketed dispatch and the file-level skip must be pure
+    // optimizations: re-run every node rule against every node and
+    // require identical diagnostics. A mismatch means a rule's
+    // `node_types()` is missing a type its hooks act on.
+    #[cfg(debug_assertions)]
+    {
+        let reference_results = bus::run_every_node(&node_rule_refs, &lint_ctx);
+        for ((_, rule), (bucketed, reference)) in node_rules
+            .iter()
+            .zip(bus_results.iter().zip(&reference_results))
+        {
+            assert_eq!(
+                bucketed,
+                reference,
+                "rule '{}': bucketed dispatch diverged from every-node dispatch; \
+                 its node_types() declaration is missing a type",
+                rule.name()
+            );
+        }
+        for (rule, reference) in skipped_node_rules
+            .iter()
+            .zip(bus::run_every_node(&skipped_node_rules, &lint_ctx))
+        {
+            assert!(
+                reference.is_empty(),
+                "rule '{}' was skipped for this file but produces diagnostics; \
+                 its node_types() declaration is missing a type",
+                rule.name()
+            );
+        }
+    }
 
     let mut per_slot: Vec<Vec<LintDiagnostic>> = vec![Vec::new(); rules::RULES.len()];
     for ((slot, _), diags) in node_rules.iter().zip(bus_results) {

@@ -1,10 +1,10 @@
 use luck_ast::Statement;
 use luck_ast::stmt::FunctionAttribute;
-use luck_ast::visitor::Visitor;
 use luck_token::{CommentKind, Span};
 
 use crate::diagnostic::{Category, Fix, LintDiagnostic, Severity, TextEdit};
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct RedundantNativeAttribute;
 
@@ -26,18 +26,7 @@ impl Rule for RedundantNativeAttribute {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        if !ctx.semantic.version.is_luau() {
-            return Vec::new();
-        }
-        if !has_native_directive(ctx) {
-            return Vec::new();
-        }
-        let mut checker = AttributeChecker {
-            source: ctx.source,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(ctx.block);
-        checker.diagnostics
+        crate::bus::run_single(self, ctx)
     }
 }
 
@@ -70,12 +59,12 @@ fn has_native_directive(ctx: &LintContext) -> bool {
     })
 }
 
-struct AttributeChecker<'src> {
+struct AttributeChecker<'src, 'out> {
     source: &'src str,
-    diagnostics: Vec<LintDiagnostic>,
+    out: &'out mut Vec<LintDiagnostic>,
 }
 
-impl AttributeChecker<'_> {
+impl AttributeChecker<'_, '_> {
     fn check_attributes(&mut self, attributes: &[FunctionAttribute]) {
         for attribute in attributes {
             let name =
@@ -93,7 +82,7 @@ impl AttributeChecker<'_> {
             ) {
                 edit_end += 1;
             }
-            self.diagnostics.push(
+            self.out.push(
                 LintDiagnostic::new(
                     "redundant_native_attribute",
                     "@native attribute is redundant in a --!native module",
@@ -111,15 +100,28 @@ impl AttributeChecker<'_> {
     }
 }
 
-impl Visitor for AttributeChecker<'_> {
-    fn visit_statement(&mut self, stmt: &Statement) {
-        if let Statement::FunctionDecl(decl) = stmt {
-            self.check_attributes(&decl.attributes);
+impl NodeRule for RedundantNativeAttribute {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset =
+            AstTypesBitset::from_types(&[NodeType::FunctionDecl, NodeType::LocalFunction]);
+        Some(&TYPES)
+    }
+    fn on_statement(&self, stmt: &Statement, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
+        let attributes = match stmt {
+            Statement::FunctionDecl(decl) => &decl.attributes,
+            Statement::LocalFunction(local) => &local.attributes,
+            _ => return,
+        };
+        // Attribute check first: the directive scan walks the comment
+        // list, so only pay for it on functions that carry attributes.
+        if attributes.is_empty() || !ctx.semantic.version.is_luau() || !has_native_directive(ctx) {
+            return;
         }
-        if let Statement::LocalFunction(local) = stmt {
-            self.check_attributes(&local.attributes);
+        AttributeChecker {
+            source: ctx.source,
+            out,
         }
-        self.walk_statement(stmt);
+        .check_attributes(attributes);
     }
 }
 

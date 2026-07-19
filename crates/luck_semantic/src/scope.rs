@@ -29,6 +29,8 @@ macro_rules! define_index_id {
     };
 }
 
+pub(crate) use define_index_id;
+
 define_index_id!(ScopeId);
 define_index_id!(SymbolId);
 define_index_id!(ReferenceId);

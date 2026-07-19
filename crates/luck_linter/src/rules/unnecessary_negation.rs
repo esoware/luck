@@ -3,6 +3,7 @@ use luck_token::{Span, TokenKind};
 
 use crate::diagnostic::{Category, Fix, LintDiagnostic, Severity, TextEdit};
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct UnnecessaryNegation;
 
@@ -45,6 +46,10 @@ fn slice(source: &str, span: Span) -> Option<&str> {
 }
 
 impl NodeRule for UnnecessaryNegation {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::UnaryOp]);
+        Some(&TYPES)
+    }
     fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         let Expression::UnaryOp(unary) = expr else {
             return;

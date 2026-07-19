@@ -3,6 +3,7 @@ use luck_token::TokenKind;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 /// Lua's comparison operators (`<`, `<=`, `>`, `>=`, `==`, `~=`) are
 /// all left-associative with the same precedence, so `a < b == c` parses
@@ -59,6 +60,10 @@ fn is_unparenthesized_not(expr: &Expression) -> bool {
 }
 
 impl NodeRule for ComparisonPrecedence {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::BinaryOp]);
+        Some(&TYPES)
+    }
     fn on_expression(&self, expr: &Expression, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Expression::BinaryOp(outer) = expr
             && is_compare_op(&outer.op.kind)

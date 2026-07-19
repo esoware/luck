@@ -9,8 +9,8 @@ Lua/Luau language support powered by the luck toolchain:
 - **Signature help** with active-parameter tracking
 - **Document symbols** outline
 - **Code actions**: per-fix quickfix, `source.fixAll.luck`, "disable rule for this line"
-- **Semantic highlighting** (deprecated and Roblox-only entries get distinct modifiers)
-- **Inlay hints** for stdlib parameters
+- **Semantic highlighting** limited to stdlib names (deprecated entries get
+  strikethrough); everything else is colored by the TextMate grammar
 - **Document highlights**, folding ranges, selection ranges, document links
 - **Snippets** for common Lua patterns
 - **TextMate grammar** for both Lua and Luau (type annotations, string interpolation, attributes, generics)

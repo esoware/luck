@@ -1,6 +1,6 @@
 use luck_ast::Expression;
 use luck_ast::expr::{FunctionArgs, FunctionCall};
-use luck_ast::visitor::Visitor;
+use luck_ast::node::{AstTypesBitset, NodeType};
 use luck_semantic::SemanticAnalysis;
 use luck_semantic::stdlib_model::{
     EntryKind, StdlibDeprecation, StdlibEntry, expand_replace_template,
@@ -8,7 +8,7 @@ use luck_semantic::stdlib_model::{
 use luck_token::Span;
 
 use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, NodeRule, Rule};
 
 pub struct Deprecated;
 
@@ -27,27 +27,17 @@ impl Rule for Deprecated {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
-        let mut checker = DeprecatedChecker {
-            source,
-            semantic,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+        crate::bus::run_single(self, ctx)
     }
 }
 
-struct DeprecatedChecker<'a> {
-    source: &'a str,
-    semantic: &'a SemanticAnalysis,
-    diagnostics: Vec<LintDiagnostic>,
+struct DeprecatedChecker<'src, 'out> {
+    source: &'src str,
+    semantic: &'src SemanticAnalysis,
+    out: &'out mut Vec<LintDiagnostic>,
 }
 
-impl<'src> DeprecatedChecker<'src> {
+impl<'src> DeprecatedChecker<'src, '_> {
     fn check_call(&mut self, call: &FunctionCall, is_statement: bool) {
         // Method calls (`obj:method(...)`) hit instance metatables, not
         // stdlib paths - we can't resolve them with confidence.
@@ -68,7 +58,7 @@ impl<'src> DeprecatedChecker<'src> {
         };
 
         let fix = self.build_fix(call, deprecation, &display_name, is_statement);
-        self.diagnostics.push(
+        self.out.push(
             LintDiagnostic::new(
                 "deprecated",
                 format!("'{display_name}' is deprecated"),
@@ -169,19 +159,36 @@ fn function_deprecation(entry: &StdlibEntry) -> Option<&StdlibDeprecation> {
     }
 }
 
-impl Visitor for DeprecatedChecker<'_> {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
-        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
-            self.check_call(&call_stmt.call, true);
-        }
-        self.walk_statement(stmt);
+impl NodeRule for Deprecated {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset =
+            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
+        Some(&TYPES)
     }
-
-    fn visit_expression(&mut self, expr: &Expression) {
-        if let Expression::FunctionCall(call) = expr {
-            self.check_call(call, false);
+    fn on_statement(
+        &self,
+        stmt: &luck_ast::Statement,
+        ctx: &LintContext,
+        out: &mut Vec<LintDiagnostic>,
+    ) {
+        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
+            DeprecatedChecker {
+                source: ctx.source,
+                semantic: ctx.semantic,
+                out,
+            }
+            .check_call(&call_stmt.call, true);
         }
-        self.walk_expression(expr);
+    }
+    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
+        if let Expression::FunctionCall(call) = expr {
+            DeprecatedChecker {
+                source: ctx.source,
+                semantic: ctx.semantic,
+                out,
+            }
+            .check_call(call, false);
+        }
     }
 }
 

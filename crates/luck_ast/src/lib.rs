@@ -21,13 +21,14 @@
 //! use luck_ast::Expression;
 //! use luck_ast::synth::Synth;
 //!
-//! let mut synth = Synth::new();
+//! let synth = Synth::new();
 //! let expr = synth.number("42");
 //! assert!(matches!(expr, Expression::Number(_)));
 //! ```
 
 pub mod builder;
 pub mod expr;
+pub mod node;
 pub mod query;
 pub mod shared;
 pub mod stmt;

@@ -233,9 +233,11 @@ mod tests {
         // raw source and is responsible for surfacing its own diagnostic.
         let parse = luck_parser::parse(source, version);
         let semantic = luck_semantic::analyze(&parse.block, version);
+        let nodes = luck_semantic::nodes::collect_nodes(&parse.block, &semantic.scope_tree);
         BadStringEscape.check(&crate::rule::LintContext {
             block: &parse.block,
             semantic: &semantic,
+            nodes: &nodes,
             source,
             comments: &parse.comments,
             config: &crate::LintConfig::default(),

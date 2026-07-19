@@ -1,5 +1,6 @@
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct DuplicateConditions;
 
@@ -33,6 +34,10 @@ fn expression_source(source: &str, span: luck_token::Span) -> &str {
 }
 
 impl NodeRule for DuplicateConditions {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::IfStatement]);
+        Some(&TYPES)
+    }
     fn on_statement(
         &self,
         stmt: &luck_ast::stmt::Statement,

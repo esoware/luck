@@ -8,7 +8,7 @@
 //! - formatting + range formatting, backed by [`luck_formatter`]
 //! - hover, completion, signature help, document symbols,
 //!   code actions (per-fix + source.fixAll.luck + rule-disable
-//!   comments), semantic tokens, inlay hints, document highlights,
+//!   comments), semantic tokens, document highlights,
 //!   folding ranges, selection ranges, document links
 //! - custom requests: `luck/syntaxTree`, `luck/fixAllWorkspace`
 //!

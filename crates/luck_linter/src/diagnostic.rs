@@ -9,7 +9,7 @@ pub type Severity = luck_core::DiagnosticSeverity;
 /// deserializes there; re-exported here for the rule code.
 pub use luck_core::Category;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LintDiagnostic {
     pub rule: &'static str,
     pub category: Category,
@@ -65,13 +65,13 @@ impl LintDiagnostic {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Fix {
     pub description: String,
     pub edits: Vec<TextEdit>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextEdit {
     pub span: Span,
     pub replacement: String,

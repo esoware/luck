@@ -181,7 +181,48 @@ impl fmt::Display for TokenKind {
     }
 }
 
+/// Binary operator associativity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Assoc {
+    Left,
+    Right,
+}
+
+/// Precedence level of the unary operators (`not`, `#`, `-`, `~`). Sits
+/// between multiplicative (10) and `^` (12), per the Lua reference manual.
+pub const UNARY_PRECEDENCE: u8 = 11;
+
 impl TokenKind {
+    /// `(precedence, associativity)` for a binary operator token. The single
+    /// precedence table shared by the parser, the minifier's paren
+    /// simplifier, and the AST synthesizer; returns `None` for any token
+    /// that is not a binary operator. Version-gated operators (bitwise,
+    /// floor div) are included unconditionally; the lexer ensures they only
+    /// appear in the token stream for supporting versions.
+    #[must_use]
+    pub fn binary_precedence(&self) -> Option<(u8, Assoc)> {
+        match self {
+            Self::Or => Some((1, Assoc::Left)),
+            Self::And => Some((2, Assoc::Left)),
+            Self::Less
+            | Self::Greater
+            | Self::LessEqual
+            | Self::GreaterEqual
+            | Self::TildeEqual
+            | Self::EqualEqual => Some((3, Assoc::Left)),
+            // Lua 5.3+ bitwise operators
+            Self::Pipe => Some((4, Assoc::Left)),
+            Self::Tilde => Some((5, Assoc::Left)),
+            Self::Ampersand => Some((6, Assoc::Left)),
+            Self::ShiftLeft | Self::ShiftRight => Some((7, Assoc::Left)),
+            Self::DotDot => Some((8, Assoc::Right)),
+            Self::Plus | Self::Minus => Some((9, Assoc::Left)),
+            Self::Star | Self::Slash | Self::Percent | Self::FloorDiv => Some((10, Assoc::Left)),
+            Self::Caret => Some((12, Assoc::Right)),
+            _ => None,
+        }
+    }
+
     pub fn is_stat_start(&self) -> bool {
         matches!(
             self,

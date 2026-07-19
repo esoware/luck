@@ -43,14 +43,15 @@ impl Format for FormatFunctionBody<'_> {
         let is_empty = body.block.stmts.is_empty() && body.block.last_stmt.is_none();
         let has_dangling_comments = f
             .comments
-            .has_pending_comments_before(body.end_token.span.start);
+            .has_dangling_comments(body.block.span.start, body.end_token.span.start);
         if is_empty && has_dangling_comments {
             // A body that is empty of statements but holds comments keeps
             // them indented inside, not relocated after the function.
+            let anchor = body.block.span.start;
             let end = body.end_token.span.start;
             indent(format_with(move |f| {
                 hard_line().fmt(f);
-                f.emit_dangling_comments(end);
+                f.emit_dangling_comments(anchor, end);
             }))
             .fmt(f);
             hard_line().fmt(f);
@@ -422,7 +423,7 @@ mod tests {
 
     #[test]
     fn typed_parameter() {
-        let mut synth = Synth::new();
+        let synth = Synth::new();
         let number = synth.ty_named("number");
         let param: Parameter = synth.param_typed("n", number);
         assert_eq!(render(&param), "n: number");
@@ -430,7 +431,7 @@ mod tests {
 
     #[test]
     fn plain_parameter() {
-        let mut synth = Synth::new();
+        let synth = Synth::new();
         let param: Parameter = synth.param("value");
         assert_eq!(render(&param), "value");
     }

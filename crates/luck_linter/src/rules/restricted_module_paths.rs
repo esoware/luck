@@ -1,11 +1,11 @@
 use luck_ast::Expression;
 use luck_ast::expr::{FunctionArgs, FunctionCall, Var};
-use luck_ast::visitor::Visitor;
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, TokenKind};
 
 use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct RestrictedModulePaths;
 
@@ -24,33 +24,18 @@ impl Rule for RestrictedModulePaths {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
-        let paths = &ctx.config.restricted_module_paths;
-        if paths.is_empty() {
-            return Vec::new();
-        }
-        let mut checker = RestrictedChecker {
-            source,
-            semantic,
-            paths,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+        crate::bus::run_single(self, ctx)
     }
 }
 
-struct RestrictedChecker<'src> {
+struct RestrictedChecker<'src, 'out> {
     source: &'src str,
     semantic: &'src SemanticAnalysis,
     paths: &'src [String],
-    diagnostics: Vec<LintDiagnostic>,
+    out: &'out mut Vec<LintDiagnostic>,
 }
 
-impl<'src> RestrictedChecker<'src> {
+impl<'src> RestrictedChecker<'src, '_> {
     fn check_call(&mut self, call: &FunctionCall) {
         // Only flag direct `require(...)` calls. Method-form
         // `obj:require(...)` could be any user method.
@@ -103,7 +88,7 @@ impl<'src> RestrictedChecker<'src> {
 
         for restricted in self.paths {
             if path_matches(&literal_text, restricted) {
-                self.diagnostics.push(
+                self.out.push(
                     LintDiagnostic::new(
                         "restricted_module_paths",
                         format!("require of restricted module '{literal_text}'"),
@@ -135,19 +120,46 @@ impl<'src> RestrictedChecker<'src> {
     }
 }
 
-impl Visitor for RestrictedChecker<'_> {
-    fn visit_statement(&mut self, stmt: &luck_ast::Statement) {
-        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
-            self.check_call(&call_stmt.call);
-        }
-        self.walk_statement(stmt);
+fn checker<'src, 'out>(
+    ctx: &'src LintContext<'src>,
+    out: &'out mut Vec<LintDiagnostic>,
+) -> Option<RestrictedChecker<'src, 'out>> {
+    let paths = &ctx.config.restricted_module_paths;
+    if paths.is_empty() {
+        return None;
     }
+    Some(RestrictedChecker {
+        source: ctx.source,
+        semantic: ctx.semantic,
+        paths,
+        out,
+    })
+}
 
-    fn visit_expression(&mut self, expr: &Expression) {
-        if let Expression::FunctionCall(call) = expr {
-            self.check_call(call);
+impl NodeRule for RestrictedModulePaths {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset =
+            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
+        Some(&TYPES)
+    }
+    fn on_statement(
+        &self,
+        stmt: &luck_ast::Statement,
+        ctx: &LintContext,
+        out: &mut Vec<LintDiagnostic>,
+    ) {
+        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt
+            && let Some(mut checker) = checker(ctx, out)
+        {
+            checker.check_call(&call_stmt.call);
         }
-        self.walk_expression(expr);
+    }
+    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
+        if let Expression::FunctionCall(call) = expr
+            && let Some(mut checker) = checker(ctx, out)
+        {
+            checker.check_call(call);
+        }
     }
 }
 

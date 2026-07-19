@@ -5,6 +5,7 @@ use luck_token::TokenKind;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
+use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct DuplicateKeys;
 
@@ -28,6 +29,10 @@ impl Rule for DuplicateKeys {
 }
 
 impl NodeRule for DuplicateKeys {
+    fn node_types(&self) -> Option<&'static AstTypesBitset> {
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::TableConstructor]);
+        Some(&TYPES)
+    }
     fn on_expression(
         &self,
         expr: &luck_ast::expr::Expression,
