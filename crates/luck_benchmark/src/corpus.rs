@@ -58,18 +58,37 @@ fn cache_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus")
 }
 
+// CI runners see transient connection resets from GitHub's raw and
+// codeload hosts; a failed fetch fails the whole bench job, so retry
+// with backoff before giving up.
+fn fetch_bytes(url: &str) -> Vec<u8> {
+    let mut delay = std::time::Duration::from_secs(1);
+    let mut last_error = String::new();
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(delay);
+            delay *= 2;
+        }
+        match ureq::get(url).call() {
+            Ok(mut response) => match response.body_mut().read_to_vec() {
+                Ok(bytes) => return bytes,
+                Err(error) => last_error = error.to_string(),
+            },
+            Err(error) => last_error = error.to_string(),
+        }
+    }
+    panic!("failed to fetch {url} after 3 attempts: {last_error}")
+}
+
 fn fetch_corpus_file(file_name: &str) -> String {
     let cache_path = cache_dir().join(file_name);
     if let Ok(text) = std::fs::read_to_string(&cache_path) {
         return text;
     }
     let url = format!("{CORPUS_URL_BASE}/{file_name}");
-    let text = ureq::get(&url)
-        .call()
-        .unwrap_or_else(|error| panic!("failed to fetch {url}: {error}"))
-        .body_mut()
-        .read_to_string()
-        .unwrap_or_else(|error| panic!("failed to read {url}: {error}"));
+    let bytes = fetch_bytes(&url);
+    let text = String::from_utf8(bytes)
+        .unwrap_or_else(|error| panic!("failed to read {url} as UTF-8: {error}"));
     let _ = std::fs::create_dir_all(cache_dir());
     let _ = std::fs::write(&cache_path, &text);
     text
@@ -83,12 +102,7 @@ fn fetch_project_tarball(owner_repo: &str, top_level: &str, sha: &str) -> PathBu
         return extracted;
     }
     let url = format!("https://codeload.github.com/{owner_repo}/tar.gz/{sha}");
-    let bytes = ureq::get(&url)
-        .call()
-        .unwrap_or_else(|error| panic!("failed to fetch {url}: {error}"))
-        .body_mut()
-        .read_to_vec()
-        .unwrap_or_else(|error| panic!("failed to read {url}: {error}"));
+    let bytes = fetch_bytes(&url);
     let _ = std::fs::create_dir_all(cache_dir());
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes.as_slice()));
     archive

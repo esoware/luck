@@ -63,6 +63,14 @@ jobs:
         with:
           tool: cargo-codspeed
 
+      # Network-fetched bench inputs are pinned to SHAs in corpus.rs, so a
+      # cache keyed on that file avoids refetching (and the flakes that
+      # come with it) until a pin changes.
+      - uses: actions/cache@v4
+        with:
+          path: crates/luck_benchmark/corpus
+          key: bench-corpus-${{ hashFiles('crates/luck_benchmark/src/corpus.rs') }}
+
       - name: Build benchmark
         run: |
           cargo codspeed build -p luck_benchmark \
@@ -87,6 +95,11 @@ jobs:
         with:
           shared-key: benchmark
           save-if: false
+
+      - uses: actions/cache@v4
+        with:
+          path: crates/luck_benchmark/corpus
+          key: bench-corpus-${{ hashFiles('crates/luck_benchmark/src/corpus.rs') }}
 
       - name: Check minsize.snap is current
         run: cargo test -p luck_benchmark --test metrics minsize_is_up_to_date -- --ignored
