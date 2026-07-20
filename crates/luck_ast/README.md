@@ -13,7 +13,7 @@ Abstract syntax tree definitions and traversal infrastructure for Lua 5.1–5.5 
 - **64-byte enum budget** — `Expression`, `Statement`, and `Type` are each ≤64 bytes by boxing large variants. Size tests in `lib.rs` fail the build if a variant grows past the budget.
 - **Exhaustive matching** — neither enum is `#[non_exhaustive]`. Every transform and visitor must cover every variant, so adding a new node surfaces every site that needs updating.
 - **Visitor and AstTransform traits** — one for read-only analysis, one for ownership-based rewrites. Both own recursion through `walk_*` defaults (including `walk_type` for the type grammar); consumers override only the cases they care about.
-- **Programmatic synthesis** — the `synth` module (`luck_ast::synth::Synth`) builds AST nodes without any source text, handing out fresh monotonic dummy spans (`Synth::starting_at` partitions ranges when several synthesizers feed one tree). Constructors take `&self`, so calls nest; `binop`/`unop`/`type_cast` parenthesize operands by operator precedence, prefix positions auto-wrap non-prefix expressions, and string/number constructors handle escaping and literal-less values (negatives, infinities, NaN, `i64::MIN`, non-UTF-8 byte strings). It targets tools that emit an AST directly and carries `SyntheticComment` for node-anchored comment attachment. `builder.rs` provides only `Punctuated<T>` helpers and `span()` accessors — there are no fluent `with_*` constructors.
+- **Programmatic synthesis** — the `synth` module (`luck_ast::synth::Synth`) builds AST nodes without any source text, handing out fresh monotonic dummy spans (`Synth::starting_at` partitions ranges when several synthesizers feed one tree). Constructors take `&self`, so calls nest; `binop`/`unop`/`type_cast` parenthesize operands by operator precedence, prefix positions auto-wrap non-prefix expressions, and string/number constructors handle escaping and literal-less values (negatives, infinities, NaN, `i64::MIN`, non-UTF-8 byte strings). It targets tools that emit an AST directly and carries `SyntheticComment` for node-anchored comment attachment. The node types carry data only — there are no fluent `with_*` constructors; `span()` accessors live in `span.rs` and `Punctuated<T>` helpers alongside the type in `shared.rs`.
 
 ## Architecture
 
@@ -29,8 +29,7 @@ A `Block` is the fundamental unit: a sequence of `Statement`s followed by an opt
 
 ### Shared Types
 
-- **`Punctuated<T>`** preserves separator tokens for comma-separated lists, used for argument lists, variable lists, and field lists.
-- **`ContainedSpan`** holds the open/close delimiter pair for parens, brackets, and braces, preserving exact source positions of enclosing punctuation.
+- **`Punctuated<T>`** is a comma-separated list — a `Vec<T>` plus a `has_trailing_separator` flag. Separator spelling and position are implied by context, so no separator tokens or spans are stored. Used for argument lists, variable lists, and field lists.
 - **`FunctionBody`** holds parameters, body block, and optional return type annotation, plus an optional Luau generic list (`<T, U...>`), shared across the four function-bearing variants.
 - **`Parameter`** is a typed name — a name with an optional Luau type annotation. It is reused both for function parameters and generic-for loop bindings; the trailing `...` rides in a separate `VarArgParam`.
 - **`Field`** is a table constructor entry — keyed (`[expr] = expr`), named (`name = expr`), or positional (`expr`).

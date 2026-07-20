@@ -1,6 +1,6 @@
 use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Var};
 use luck_token::UnOp;
-use luck_token::literal::{LuaNumber, parse_lua_number};
+use luck_token::literal::{LuaNumber, NumberSubtypes, parse_lua_number};
 use luck_token::{StdlibEnvironment, TokenKind};
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
@@ -55,7 +55,7 @@ fn is_udim2_new_call(call: &FunctionCall, ctx: &LintContext) -> bool {
 }
 
 fn number_literal_value(literal: &luck_ast::expr::Literal) -> Option<f64> {
-    match parse_lua_number(&literal.text, true)? {
+    match parse_lua_number(&literal.text, NumberSubtypes::IntFloat)? {
         LuaNumber::Int(int_value) => Some(int_value as f64),
         LuaNumber::Float(float_value) => Some(float_value),
     }

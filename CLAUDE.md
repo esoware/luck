@@ -38,7 +38,7 @@ and feeds `luck_bundler`. On top sit `luck` (facade re-exports),
 
 | Crate | Role | Key entry |
 |-------|------|-----------|
-| `luck_token` | Spans, `LuaVersion`, `StdlibEnvironment`, `SourceError`, `CompactString` storage, `CodeBuffer` byte-level output builder | `lib.rs`, `code_buffer.rs` |
+| `luck_token` | Spans, `LuaVersion`, `StdlibEnvironment`, `SourceError`, shared literal decode/encode, `CompactString` storage, `CodeBuffer` byte-level output builder | `span.rs`, `version.rs`, `token.rs`, `literal.rs`, `code_buffer.rs` |
 | `luck_lexer` | Single-pass tokenizer; comments emitted separately; memchr + byte-table batched scanning for strings/comments | `lexer.rs`, `search.rs` |
 | `luck_ast` | `Expression`/`Statement`/`Type` <=64 B, `Visitor`, `AstTransform`, `synth` builder (dummy-span AST construction for programmatic use), `NodeType`/`NodeKind`/`AstTypesBitset` for node-table dispatch | `expr.rs`, `stmt.rs`, `types.rs`, `transform.rs`, `synth.rs`, `node.rs` |
 | `luck_parser` | Pratt expressions + recursive-descent statements + full Luau type grammar, version-gated | `expr.rs`, `stmt.rs`, `luau.rs` |

@@ -180,9 +180,9 @@ pub fn lex_short_string(
     }
 }
 
-/// Check if a long bracket starts at the current position without consuming.
-/// Returns Some(level) if `[=*[` is found.
-pub fn try_count_long_bracket_level(cursor: &Cursor) -> Option<usize> {
+/// Level of a long-bracket opener at the cursor (`[==[` is level 2),
+/// without consuming. `None` when the cursor is not at `[=*[`.
+pub fn long_bracket_level(cursor: &Cursor) -> Option<usize> {
     if cursor.peek() != Some(b'[') {
         return None;
     }
@@ -194,28 +194,29 @@ pub fn try_count_long_bracket_level(cursor: &Cursor) -> Option<usize> {
         level += 1;
     }
 
-    if cursor.peek_at(offset) == Some(b'[') {
-        Some(level)
-    } else {
-        None
-    }
+    (cursor.peek_at(offset) == Some(b'[')).then_some(level)
 }
 
-/// Advance cursor past a `[=*[` opening of known level, then lex the body until `]=*]`.
-pub fn lex_long_bracket_body(
-    cursor: &mut Cursor,
-    source: &str,
-    start: usize,
-    level: usize,
-) -> Result<Option<TokenKind>, LexError> {
+/// Advance cursor past a long bracket opening `[=*[` of known level.
+pub fn skip_long_bracket_open(cursor: &mut Cursor, level: usize) {
+    cursor.advance(); // [
+    for _ in 0..level {
+        cursor.advance(); // =
+    }
+    cursor.advance(); // [
+}
+
+/// Scan from just past a long-bracket opener to its matching `]=*]`
+/// closer of `level`, consuming the closer. Returns `true` when the
+/// closer was found; on EOF it consumes the remainder and returns
+/// `false` so the caller can raise a context-specific unterminated
+/// error. Shared by long-bracket strings and block comments.
+pub fn scan_to_long_bracket_close(cursor: &mut Cursor, level: usize) -> bool {
     loop {
         let rest = cursor.rest();
         let Some(bracket_offset) = memchr::memchr(b']', rest) else {
             cursor.advance_by(rest.len());
-            return Err(lex_error(
-                Span::new(start as u32, cursor.position() as u32),
-                "unterminated long bracket string",
-            ));
+            return false;
         };
         cursor.advance_by(bracket_offset);
         let mut closing_level = 0;
@@ -226,18 +227,26 @@ pub fn lex_long_bracket_body(
         }
         if closing_level == level && cursor.peek_at(offset) == Some(b']') {
             cursor.advance_by(offset + 1);
-            let raw = &source[start..cursor.position()];
-            return Ok(Some(TokenKind::StringLiteral(raw.into())));
+            return true;
         }
         cursor.advance();
     }
 }
 
-/// Advance cursor past a long bracket opening `[=*[` of known level.
-pub fn skip_long_bracket_open(cursor: &mut Cursor, level: usize) {
-    cursor.advance(); // [
-    for _ in 0..level {
-        cursor.advance(); // =
+/// Lex a long-bracket string body of known `level`, from a cursor
+/// positioned just past the `[=*[` opener.
+pub fn lex_long_bracket_body(
+    cursor: &mut Cursor,
+    source: &str,
+    start: usize,
+    level: usize,
+) -> Result<TokenKind, LexError> {
+    if !scan_to_long_bracket_close(cursor, level) {
+        return Err(lex_error(
+            Span::new(start as u32, cursor.position() as u32),
+            "unterminated long bracket string",
+        ));
     }
-    cursor.advance(); // [
+    let raw = &source[start..cursor.position()];
+    Ok(TokenKind::StringLiteral(raw.into()))
 }

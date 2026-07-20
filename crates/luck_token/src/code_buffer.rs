@@ -5,29 +5,29 @@
 
 /// A string builder over a byte buffer.
 ///
-/// INVARIANT: `buf` is valid UTF-8 at every public-method boundary. All
+/// INVARIANT: `bytes` is valid UTF-8 at every public-method boundary. All
 /// safe methods preserve it, so `into_string` can skip re-validation.
 #[derive(Debug, Default)]
 pub struct CodeBuffer {
-    buf: Vec<u8>,
+    bytes: Vec<u8>,
 }
 
 impl CodeBuffer {
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            buf: Vec::with_capacity(capacity),
+            bytes: Vec::with_capacity(capacity),
         }
     }
 
     #[inline]
     pub fn len(&self) -> usize {
-        self.buf.len()
+        self.bytes.len()
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.buf.is_empty()
+        self.bytes.is_empty()
     }
 
     /// Push a single ASCII byte. The assertion compiles away when the byte
@@ -39,14 +39,14 @@ impl CodeBuffer {
 
         #[cold]
         #[inline(never)]
-        fn push_slow(buf: &mut Vec<u8>, byte: u8) {
-            buf.push(byte);
+        fn push_slow(bytes: &mut Vec<u8>, byte: u8) {
+            bytes.push(byte);
         }
 
-        if self.buf.len() < self.buf.capacity() {
-            self.buf.push(byte);
+        if self.bytes.len() < self.bytes.capacity() {
+            self.bytes.push(byte);
         } else {
-            push_slow(&mut self.buf, byte);
+            push_slow(&mut self.bytes, byte);
         }
     }
 
@@ -54,29 +54,29 @@ impl CodeBuffer {
     #[inline]
     pub fn print_ascii_repeat(&mut self, byte: u8, count: usize) {
         assert!(byte.is_ascii(), "byte {byte} is not ASCII");
-        self.buf.extend(std::iter::repeat_n(byte, count));
+        self.bytes.extend(std::iter::repeat_n(byte, count));
     }
 
     #[inline]
     pub fn print_char(&mut self, ch: char) {
         let mut encoded = [0; 4];
-        self.buf
+        self.bytes
             .extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
     }
 
     #[inline]
     pub fn print_str(&mut self, text: &str) {
-        self.buf.extend_from_slice(text.as_bytes());
+        self.bytes.extend_from_slice(text.as_bytes());
     }
 
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
-        &self.buf
+        &self.bytes
     }
 
     #[inline]
     pub fn last_byte(&self) -> Option<u8> {
-        self.buf.last().copied()
+        self.bytes.last().copied()
     }
 
     /// Shorten the buffer to `new_len` bytes. The cut must land on a UTF-8
@@ -84,22 +84,22 @@ impl CodeBuffer {
     #[inline]
     pub fn truncate(&mut self, new_len: usize) {
         debug_assert!(
-            std::str::from_utf8(&self.buf[..new_len.min(self.buf.len())]).is_ok(),
+            std::str::from_utf8(&self.bytes[..new_len.min(self.bytes.len())]).is_ok(),
             "truncation must land on a UTF-8 boundary"
         );
-        self.buf.truncate(new_len);
+        self.bytes.truncate(new_len);
     }
 
     #[must_use]
     #[inline]
     pub fn into_string(self) -> String {
         if cfg!(debug_assertions) {
-            String::from_utf8(self.buf).expect("CodeBuffer must hold valid UTF-8")
+            String::from_utf8(self.bytes).expect("CodeBuffer must hold valid UTF-8")
         } else {
             // SAFETY: every safe method preserves the UTF-8 invariant, and
-            // `truncate` debug-asserts its cut point, so `buf` is valid
+            // `truncate` debug-asserts its cut point, so `bytes` is valid
             // UTF-8 here.
-            unsafe { String::from_utf8_unchecked(self.buf) }
+            unsafe { String::from_utf8_unchecked(self.bytes) }
         }
     }
 }

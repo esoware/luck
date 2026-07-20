@@ -16,6 +16,65 @@ pub struct Punctuated<T> {
     pub has_trailing_separator: bool,
 }
 
+impl<T> Punctuated<T> {
+    pub fn empty() -> Self {
+        Self {
+            items: Vec::new(),
+            has_trailing_separator: false,
+        }
+    }
+
+    pub fn from_item(item: T) -> Self {
+        Self {
+            items: vec![item],
+            has_trailing_separator: false,
+        }
+    }
+
+    pub fn from_items(items: Vec<T>) -> Self {
+        Self {
+            items,
+            has_trailing_separator: false,
+        }
+    }
+
+    pub fn push(&mut self, item: T) {
+        self.items.push(item);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.items.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.items.iter_mut()
+    }
+
+    pub fn get(&self, index: usize) -> Option<&T> {
+        self.items.get(index)
+    }
+
+    pub fn first(&self) -> Option<&T> {
+        self.items.first()
+    }
+
+    pub fn last_item(&self) -> Option<&T> {
+        self.items.last()
+    }
+
+    pub fn into_items(self) -> Vec<T> {
+        self.items
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
 /// Function body: params + optional return type + block, closed by `end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionBody {

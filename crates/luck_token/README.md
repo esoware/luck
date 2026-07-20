@@ -13,8 +13,9 @@ The crate has zero internal dependencies. Its only external dependency is `compa
 - **Compact spans** — `Span` uses `u32` start and end. Source files are capped at 4 GB; every AST node shrinks by half compared to `usize` spans.
 - **Version-gated feature flags** — `LuaVersion` exposes predicates like `has_goto()`, `has_bitwise_ops()`, `has_attributes()`, `has_integer_division()`. Downstream crates branch on capabilities, not version numbers.
 - **Inline string storage** — `TokenKind` payloads use `CompactString`. Strings ≤24 bytes live on the stack; most Lua identifiers fit.
-- **Single error type** — `SourceError` is the only error struct in the toolchain. `LexError`, `ParseError`, and `FormatError` are type aliases for it, so errors flow end-to-end without conversion.
-- **First-class comments** — `Comment` records kind (line, block, shebang), position (leading, trailing, standalone), and an `attached_to` slot the parser fills during AST construction.
+- **Single error type** — `SourceError` carries a span and a message, and is the only error struct in the toolchain. `LexError`, `ParseError`, and `FormatError` are type aliases for it, so errors flow end-to-end without conversion.
+- **Shared literal semantics** — `parse_lua_number`, `decode_string_literal`, and `encode_string_literal` decode literal token text to runtime values (and back), so every crate that folds or re-emits literals shares one implementation instead of re-parsing raw text.
+- **First-class comments** — `Comment` records kind (line, single- or multi-line block, shebang), position (leading, trailing), and an `attached_to` slot the parser fills during AST construction.
 
 ## Architecture
 
@@ -22,7 +23,7 @@ The crate has zero internal dependencies. Its only external dependency is `compa
 
 A `Span` is a `(u32, u32)` byte range in the original source. Every diagnostic and AST node carries one. The narrow width matters at scale: AST nodes embed multiple spans, and across a million-node program the savings compound.
 
-`SourceError` carries a span, a message, and optional help text. It is expressive enough to cover lexer, parser, and formatter failures, which is why downstream crates type-alias rather than redefine.
+`SourceError` carries a span and a message. It is expressive enough to cover lexer, parser, and formatter failures, which is why downstream crates type-alias rather than redefine.
 
 ### LuaVersion
 

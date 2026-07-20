@@ -223,6 +223,7 @@ impl TokenKind {
         }
     }
 
+    #[must_use]
     pub fn is_stat_start(&self) -> bool {
         matches!(
             self,
@@ -245,6 +246,7 @@ impl TokenKind {
         )
     }
 
+    #[must_use]
     pub fn is_unary_op(&self) -> bool {
         matches!(self, Self::Minus | Self::Not | Self::Hash | Self::Tilde)
     }

@@ -53,13 +53,13 @@ pub fn lex(source: &str, version: LuaVersion) -> LexResult {
         return LexResult {
             tokens: Vec::new(),
             comments: Vec::new(),
-            errors: vec![LexError {
-                span: luck_token::Span::new(0, 0),
-                message: format!(
+            errors: vec![lex_error(
+                luck_token::Span::new(0, 0),
+                format!(
                     "input is {} bytes; the maximum supported file size is 4 GiB",
                     source.len()
                 ),
-            }],
+            )],
         };
     }
     let mut lexer = lexer::Lexer::new(source, version);

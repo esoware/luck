@@ -1,68 +1,12 @@
+//! `span()` accessors for the node enums, kept together so span extraction
+//! is one greppable surface rather than scattered across the node modules.
+
 use luck_token::Span;
 
-use crate::expr::*;
-use crate::shared::*;
-use crate::stmt::*;
-use crate::types::*;
-
-impl<T> Punctuated<T> {
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
-        self.items.iter()
-    }
-
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
-        self.items.iter_mut()
-    }
-
-    pub fn get(&self, index: usize) -> Option<&T> {
-        self.items.get(index)
-    }
-
-    pub fn first(&self) -> Option<&T> {
-        self.items.first()
-    }
-
-    pub fn last_item(&self) -> Option<&T> {
-        self.items.last()
-    }
-
-    pub fn into_items(self) -> Vec<T> {
-        self.items
-    }
-
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    pub fn from_item(item: T) -> Self {
-        Self {
-            items: vec![item],
-            has_trailing_separator: false,
-        }
-    }
-
-    pub fn from_items(items: Vec<T>) -> Self {
-        Self {
-            items,
-            has_trailing_separator: false,
-        }
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            items: Vec::new(),
-            has_trailing_separator: false,
-        }
-    }
-
-    pub fn push(&mut self, item: T) {
-        self.items.push(item);
-    }
-}
+use crate::expr::{Expression, Var};
+use crate::shared::Field;
+use crate::stmt::{LastStatement, Statement};
+use crate::types::{Type, TypeField};
 
 impl Statement {
     pub fn span(&self) -> Span {
@@ -108,7 +52,7 @@ impl Expression {
             | Expression::False(span)
             | Expression::True(span)
             | Expression::VarArg(span) => *span,
-            Expression::Number(t) | Expression::StringLiteral(t) => t.span,
+            Expression::Number(literal) | Expression::StringLiteral(literal) => literal.span,
             Expression::FunctionDef(e) => e.span,
             Expression::Var(e) => e.span(),
             Expression::FunctionCall(e) => e.span,
@@ -127,7 +71,7 @@ impl Expression {
 impl Var {
     pub fn span(&self) -> Span {
         match self {
-            Var::Name(t) => t.span,
+            Var::Name(token) => token.span,
             Var::Index(e) => e.span,
             Var::FieldAccess(e) => e.span,
         }

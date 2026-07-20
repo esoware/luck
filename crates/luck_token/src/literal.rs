@@ -12,8 +12,18 @@ pub enum LuaNumber {
     Float(f64),
 }
 
-pub fn parse_lua_number(text: &str, int_subtype: bool) -> Option<LuaNumber> {
-    if !int_subtype {
+/// Whether the target dialect distinguishes integer and float number
+/// subtypes (Lua 5.3+, [`LuaVersion::has_integer_subtype`]) or models every
+/// number as a single f64 (5.1, 5.2, Luau). Governs whether
+/// [`parse_lua_number`] may return [`LuaNumber::Int`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumberSubtypes {
+    Unified,
+    IntFloat,
+}
+
+pub fn parse_lua_number(text: &str, subtypes: NumberSubtypes) -> Option<LuaNumber> {
+    if subtypes == NumberSubtypes::Unified {
         return text.parse::<f64>().ok().map(LuaNumber::Float);
     }
     let lower = text.to_ascii_lowercase();
@@ -173,8 +183,8 @@ pub fn decode_string_literal(raw: &str, version: LuaVersion) -> Option<Vec<u8>> 
                     idx += 1;
                 }
                 let ch = char::from_u32(value)?;
-                let mut buf = [0u8; 4];
-                out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                let mut encoded = [0u8; 4];
+                out.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
             }
             // Lua 5.1 treats any other escaped character as that literal
             // character; under strict versions such tokens cannot exist,
@@ -193,7 +203,7 @@ pub fn decode_string_literal(raw: &str, version: LuaVersion) -> Option<Vec<u8>> 
 pub fn encode_string_literal(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() + 2);
     out.push('"');
-    let pending_digit_follows = |out: &mut String, byte: u8, next_is_digit: bool| {
+    let push_decimal_escape = |out: &mut String, byte: u8, next_is_digit: bool| {
         // Pad to 3 digits when a digit follows so the escape can't
         // absorb it (`\9` + `9` must not read as `\99`).
         if next_is_digit {
@@ -222,7 +232,7 @@ pub fn encode_string_literal(bytes: &[u8]) -> String {
                     let next_is_digit = bytes
                         .get(absolute + ch.len_utf8())
                         .is_some_and(|b| b.is_ascii_digit());
-                    pending_digit_follows(&mut out, ch as u8, next_is_digit);
+                    push_decimal_escape(&mut out, ch as u8, next_is_digit);
                 }
                 _ => out.push(ch),
             }
@@ -232,7 +242,7 @@ pub fn encode_string_literal(bytes: &[u8]) -> String {
             let next_is_digit = bytes
                 .get(offset + invalid_offset + 1)
                 .is_some_and(|b| b.is_ascii_digit());
-            pending_digit_follows(&mut out, byte, next_is_digit);
+            push_decimal_escape(&mut out, byte, next_is_digit);
         }
         offset += chunk.invalid().len();
     }
@@ -250,83 +260,116 @@ mod tests {
 
     #[test]
     fn number_plain_int_and_float() {
-        assert_eq!(parse_lua_number("1", true), Some(LuaNumber::Int(1)));
-        assert_eq!(parse_lua_number("42", true), Some(LuaNumber::Int(42)));
-        assert_eq!(parse_lua_number("1.5", true), Some(LuaNumber::Float(1.5)));
-        assert_eq!(parse_lua_number("0.0", true), Some(LuaNumber::Float(0.0)));
+        assert_eq!(
+            parse_lua_number("1", NumberSubtypes::IntFloat),
+            Some(LuaNumber::Int(1))
+        );
+        assert_eq!(
+            parse_lua_number("42", NumberSubtypes::IntFloat),
+            Some(LuaNumber::Int(42))
+        );
+        assert_eq!(
+            parse_lua_number("1.5", NumberSubtypes::IntFloat),
+            Some(LuaNumber::Float(1.5))
+        );
+        assert_eq!(
+            parse_lua_number("0.0", NumberSubtypes::IntFloat),
+            Some(LuaNumber::Float(0.0))
+        );
     }
 
     #[test]
     fn number_exponent_forms() {
         assert_eq!(
-            parse_lua_number("1e3", true),
+            parse_lua_number("1e3", NumberSubtypes::IntFloat),
             Some(LuaNumber::Float(1000.0))
         );
-        assert_eq!(parse_lua_number("2E2", true), Some(LuaNumber::Float(200.0)));
         assert_eq!(
-            parse_lua_number("1.5e-1", true),
+            parse_lua_number("2E2", NumberSubtypes::IntFloat),
+            Some(LuaNumber::Float(200.0))
+        );
+        assert_eq!(
+            parse_lua_number("1.5e-1", NumberSubtypes::IntFloat),
             Some(LuaNumber::Float(0.15))
         );
     }
 
     #[test]
     fn number_without_int_subtype_is_always_float() {
-        assert_eq!(parse_lua_number("1", false), Some(LuaNumber::Float(1.0)));
-        assert_eq!(parse_lua_number("42", false), Some(LuaNumber::Float(42.0)));
+        assert_eq!(
+            parse_lua_number("1", NumberSubtypes::Unified),
+            Some(LuaNumber::Float(1.0))
+        );
+        assert_eq!(
+            parse_lua_number("42", NumberSubtypes::Unified),
+            Some(LuaNumber::Float(42.0))
+        );
     }
 
     #[test]
     fn number_hex_int() {
-        assert_eq!(parse_lua_number("0x1A", true), Some(LuaNumber::Int(26)));
-        assert_eq!(parse_lua_number("0xff", true), Some(LuaNumber::Int(255)));
-        assert_eq!(parse_lua_number("0X10", true), Some(LuaNumber::Int(16)));
+        assert_eq!(
+            parse_lua_number("0x1A", NumberSubtypes::IntFloat),
+            Some(LuaNumber::Int(26))
+        );
+        assert_eq!(
+            parse_lua_number("0xff", NumberSubtypes::IntFloat),
+            Some(LuaNumber::Int(255))
+        );
+        assert_eq!(
+            parse_lua_number("0X10", NumberSubtypes::IntFloat),
+            Some(LuaNumber::Int(16))
+        );
     }
 
     #[test]
     fn number_hex_wraparound_into_i64_range() {
         // Lua 5.3+ hex integers wrap: u64 max reinterprets as -1.
         assert_eq!(
-            parse_lua_number("0xffffffffffffffff", true),
+            parse_lua_number("0xffffffffffffffff", NumberSubtypes::IntFloat),
             Some(LuaNumber::Int(-1))
         );
         // 2^63 reinterprets as i64::MIN.
         assert_eq!(
-            parse_lua_number("0x8000000000000000", true),
+            parse_lua_number("0x8000000000000000", NumberSubtypes::IntFloat),
             Some(LuaNumber::Int(i64::MIN))
         );
         // Beyond u64 range cannot be folded at all.
-        assert_eq!(parse_lua_number("0x10000000000000000", true), None);
+        assert_eq!(
+            parse_lua_number("0x10000000000000000", NumberSubtypes::IntFloat),
+            None
+        );
     }
 
     #[test]
     fn number_hex_floats_rejected() {
-        assert_eq!(parse_lua_number("0x1.8p1", true), None);
-        assert_eq!(parse_lua_number("0x1p4", true), None);
+        assert_eq!(parse_lua_number("0x1.8p1", NumberSubtypes::IntFloat), None);
+        assert_eq!(parse_lua_number("0x1p4", NumberSubtypes::IntFloat), None);
     }
 
     #[test]
     fn number_decimal_overflow_promotes_to_float() {
-        let parsed = parse_lua_number("99999999999999999999", true);
+        let parsed = parse_lua_number("99999999999999999999", NumberSubtypes::IntFloat);
         assert!(matches!(parsed, Some(LuaNumber::Float(_))));
     }
 
     #[test]
     fn number_invalid_input() {
-        assert_eq!(parse_lua_number("abc", true), None);
-        assert_eq!(parse_lua_number("", true), None);
-        assert_eq!(parse_lua_number("1.2.3", true), None);
+        assert_eq!(parse_lua_number("abc", NumberSubtypes::IntFloat), None);
+        assert_eq!(parse_lua_number("", NumberSubtypes::IntFloat), None);
+        assert_eq!(parse_lua_number("1.2.3", NumberSubtypes::IntFloat), None);
     }
 
     #[test]
     fn number_int_and_float_are_distinct() {
         assert_ne!(LuaNumber::Int(1), LuaNumber::Float(1.0));
         assert_eq!(
-            parse_lua_number("1", true),
+            parse_lua_number("1", NumberSubtypes::IntFloat),
             Some(LuaNumber::Int(1)),
             "1 must fold as an integer under int_subtype"
         );
         assert_eq!(
-            parse_lua_number("1.0", true),
+            parse_lua_number("1.0", NumberSubtypes::IntFloat),
             Some(LuaNumber::Float(1.0)),
             "1.0 must fold as a float"
         );

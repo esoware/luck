@@ -1,7 +1,9 @@
 use crate::cursor::Cursor;
 use crate::number::lex_number;
 use crate::search::{ByteMatchTable, byte_match_table};
-use crate::string::{lex_short_string, skip_long_bracket_open, try_count_long_bracket_level};
+use crate::string::{
+    lex_short_string, long_bracket_level, scan_to_long_bracket_close, skip_long_bracket_open,
+};
 use crate::{LexError, LexResult};
 use luck_token::{
     Comment, CommentKind, CommentPosition, CompactString, LuaVersion, Span, Token, TokenKind,
@@ -212,13 +214,12 @@ impl<'src> Lexer<'src> {
     }
 
     fn handle_bracket_open(&mut self) -> Option<Token> {
-        if let Some(level) = try_count_long_bracket_level(&self.cursor) {
+        if let Some(level) = long_bracket_level(&self.cursor) {
             let start = self.cursor.position();
             skip_long_bracket_open(&mut self.cursor, level);
             match crate::string::lex_long_bracket_body(&mut self.cursor, self.source, start, level)
             {
-                Ok(Some(kind)) => Some(self.make_token(kind, start)),
-                Ok(None) => unreachable!("level was already validated"),
+                Ok(kind) => Some(self.make_token(kind, start)),
                 Err(err) => {
                     self.errors.push(err);
                     None
@@ -273,7 +274,7 @@ impl<'src> Lexer<'src> {
 
         self.cursor.advance(); // -
         self.cursor.advance(); // -
-        if let Some(level) = try_count_long_bracket_level(&self.cursor) {
+        if let Some(level) = long_bracket_level(&self.cursor) {
             skip_long_bracket_open(&mut self.cursor, level);
             match self.lex_block_comment_body(start, level) {
                 Ok(()) => {}
@@ -312,37 +313,23 @@ impl<'src> Lexer<'src> {
 
     fn lex_block_comment_body(&mut self, start: usize, level: usize) -> Result<(), LexError> {
         let preceded_by_newline = self.saw_newline_since_last_token;
-        let mut has_newline_in_body = false;
 
-        loop {
-            let rest = self.cursor.rest();
-            let Some(bracket_offset) = memchr::memchr(b']', rest) else {
-                self.cursor.advance_by(rest.len());
-                return Err(crate::lex_error(
-                    Span::new(start as u32, self.cursor.position() as u32),
-                    "unterminated block comment",
-                ));
-            };
-            if !has_newline_in_body
-                && memchr::memchr2(b'\n', b'\r', &rest[..bracket_offset]).is_some()
-            {
-                has_newline_in_body = true;
-            }
-            self.cursor.advance_by(bracket_offset);
-            let mut closing_level = 0;
-            let mut offset = 1;
-            while self.cursor.peek_at(offset) == Some(b'=') {
-                closing_level += 1;
-                offset += 1;
-            }
-            if closing_level == level && self.cursor.peek_at(offset) == Some(b']') {
-                self.cursor.advance_by(offset + 1);
-                break;
-            }
-            self.cursor.advance();
+        if !scan_to_long_bracket_close(&mut self.cursor, level) {
+            return Err(crate::lex_error(
+                Span::new(start as u32, self.cursor.position() as u32),
+                "unterminated block comment",
+            ));
         }
 
         let span = Span::new(start as u32, self.cursor.position() as u32);
+        // The delimiters (`--[=*[` and `]=*]`) never hold a line break, so
+        // scanning the whole span is equivalent to scanning only the body.
+        let has_newline_in_body = memchr::memchr2(
+            b'\n',
+            b'\r',
+            &self.source.as_bytes()[start..self.cursor.position()],
+        )
+        .is_some();
         let kind = if has_newline_in_body {
             CommentKind::MultiLineBlock
         } else {

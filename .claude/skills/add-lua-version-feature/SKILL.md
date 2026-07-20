@@ -30,7 +30,7 @@ Copy this checklist into your response and check items off as you go:
 
 | Where | What |
 |---|---|
-| `crates/luck_token/src/lib.rs` | `LuaVersion` + feature predicates |
+| `crates/luck_token/src/version.rs` | `LuaVersion` + feature predicates |
 | `crates/luck_lexer/src/{lexer,number,string}.rs` | lexer gating |
 | `crates/luck_parser/src/expr.rs` | Pratt expression parser |
 | `crates/luck_parser/src/stmt.rs` | recursive-descent statement parser |
@@ -42,7 +42,7 @@ Copy this checklist into your response and check items off as you go:
 
 ### 1. Add the predicate
 
-In `crates/luck_token/src/lib.rs`. The naming convention is
+In `crates/luck_token/src/version.rs`. The naming convention is
 **`has_<feature>`** - match the existing family (`has_goto`,
 `has_floor_div`, `has_bitwise_ops`, `has_compound_assignment`, ...).
 The only `is_` predicates are the dialect checks `is_luau`/`is_roblox`;

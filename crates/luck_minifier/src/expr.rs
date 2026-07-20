@@ -1,7 +1,7 @@
 use luck_ast::expr::{Expression, Var};
 use luck_ast::shared::Field;
 use luck_token::token::TokenKind;
-use luck_token::{BinOp, UnOp};
+use luck_token::{BinOp, NumberSubtypes, UnOp};
 
 /// Extract a compile-time boolean value from a `true`/`false` literal.
 pub fn extract_boolean(expr: &Expression) -> Option<bool> {
@@ -172,9 +172,14 @@ pub use luck_token::literal::{LuaNumber, decode_string_literal, encode_string_li
 /// Extract a number with subtype fidelity. With `int_subtype` false
 /// (5.1/5.2/Luau) every number is a Float, mirroring the single f64 type.
 pub fn extract_lua_number(expr: &Expression, int_subtype: bool) -> Option<LuaNumber> {
+    let subtypes = if int_subtype {
+        NumberSubtypes::IntFloat
+    } else {
+        NumberSubtypes::Unified
+    };
     match expr {
         Expression::Number(literal) => {
-            luck_token::literal::parse_lua_number(&literal.text, int_subtype)
+            luck_token::literal::parse_lua_number(&literal.text, subtypes)
         }
         Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
             match extract_lua_number(&unop.operand, int_subtype)? {

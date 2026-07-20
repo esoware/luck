@@ -26,11 +26,11 @@
 //! assert!(matches!(expr, Expression::Number(_)));
 //! ```
 
-pub mod builder;
 pub mod expr;
 pub mod node;
 pub mod query;
 pub mod shared;
+pub mod span;
 pub mod stmt;
 pub mod synth;
 pub mod transform;
