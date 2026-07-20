@@ -259,6 +259,39 @@ mod tests {
     }
 
     #[test]
+    fn named_vararg_declares_symbol() {
+        // Lua 5.5: `...name` binds the vararg table to a name.
+        let result = luck_parser::parse(
+            "local function f(...args) return args end",
+            LuaVersion::Lua55,
+        );
+        assert!(
+            result.errors.is_empty(),
+            "parse errors: {:?}",
+            result.errors
+        );
+        let analysis = analyze(&result.block, LuaVersion::Lua55);
+        let args_sym = analysis
+            .scope_tree
+            .symbols
+            .iter()
+            .find(|s| s.name == "args")
+            .expect("named vararg must be declared");
+        assert_eq!(args_sym.kind, scope::SymbolKind::Parameter);
+        let args_refs: Vec<_> = analysis
+            .scope_tree
+            .references
+            .iter()
+            .filter(|r| r.name == "args")
+            .collect();
+        assert_eq!(args_refs.len(), 1);
+        assert!(
+            args_refs[0].resolved == Some(args_sym.id),
+            "reference must resolve to the vararg binding"
+        );
+    }
+
+    #[test]
     fn unused_variable_detection() {
         let analysis = parse_and_analyze("local unused = 1\nlocal used = 2\nprint(used)");
         let unused: Vec<_> = analysis.scope_tree.unused_symbols().collect();

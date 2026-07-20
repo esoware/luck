@@ -180,6 +180,13 @@ impl ScopeTreeBuilder {
             }
         }
         if let Some(vararg) = &body.vararg {
+            // Lua 5.5 `...name` binds the vararg table to a fresh local,
+            // as if by `local name = {...}` at function entry.
+            if let Some(name_token) = &vararg.name
+                && let TokenKind::Identifier(name) = &name_token.kind
+            {
+                self.declare_local(name, name_token.span, SymbolKind::Parameter);
+            }
             if let Some(annotation) = &vararg.type_annotation {
                 self.visit_type(annotation);
             }

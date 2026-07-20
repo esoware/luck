@@ -95,6 +95,28 @@ mod tests {
     }
 
     #[test]
+    fn flags_unused_named_vararg() {
+        // Lua 5.5 named vararg binds like a parameter.
+        let source = "local function f(...args) end";
+        let diags = crate::test_support::run_rule(&UnusedArgument, source, LuaVersion::Lua55);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = apply(source, &diags[0]);
+        assert_eq!(fixed, "local function f(..._args) end");
+        let parse = luck_parser::parse(&fixed, LuaVersion::Lua55);
+        assert!(parse.errors.is_empty(), "reparse: {:?}", parse.errors);
+    }
+
+    #[test]
+    fn ignores_used_named_vararg() {
+        let diags = crate::test_support::run_rule(
+            &UnusedArgument,
+            "local function f(...args) return args end",
+            LuaVersion::Lua55,
+        );
+        assert_eq!(diags.len(), 0, "{diags:?}");
+    }
+
+    #[test]
     fn fix_prefixes_underscore_and_reparses() {
         let source = "local function f(x) end";
         let diags = run(source);

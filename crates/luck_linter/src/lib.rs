@@ -346,6 +346,20 @@ mod tests {
     }
 
     #[test]
+    fn named_vararg_not_flagged_undefined() {
+        // Lua 5.5 `...name` declares a binding; its uses are not globals.
+        let diags = lint(
+            "local function f(...args) return args end\nf(1)",
+            LuaVersion::Lua55,
+            &LintConfig::default(),
+        );
+        assert!(
+            diags.iter().all(|d| d.rule != "undefined_variable"),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
     fn known_globals_not_flagged() {
         let diags = lint(
             "print(tostring(1))",
