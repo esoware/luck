@@ -152,7 +152,9 @@ pub type FormatError = luck_token::SourceError;
 fn run_pipeline(block: &Block, mut formatter: ir::Formatter) -> String {
     formatter.emit_shebang();
     block.fmt(&mut formatter);
-    let has_statements = !block.stmts.is_empty() || block.last_stmt.is_some();
+    // Empty and error statements print nothing, so a block holding only
+    // those must not open a line before the trailing comment flush.
+    let has_statements = format_block::first_item_start(block).is_some();
     formatter.emit_remaining_comments(has_statements);
 
     let printer_options = printer::PrinterOptions {

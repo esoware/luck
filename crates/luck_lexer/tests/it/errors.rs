@@ -28,6 +28,21 @@ fn error_invalid_escape() {
 }
 
 #[test]
+fn error_invalid_multibyte_escape_recovers_on_char_boundary() {
+    // Fuzz-found: the invalid-escape error path used to advance one byte
+    // past a multi-byte escaped char, leaving the cursor mid-sequence and
+    // panicking on the next token's source slice.
+    let result = luck_lexer::lex("\"\\\u{7C5}\" y", luck_token::LuaVersion::Lua55);
+    assert!(!result.errors.is_empty(), "{:?}", result.errors);
+    assert!(result.errors[0].message.contains("invalid escape"));
+    assert!(
+        result.errors[0].message.contains('\u{7C5}'),
+        "message should carry the full char, not its first byte: {:?}",
+        result.errors[0].message
+    );
+}
+
+#[test]
 fn error_decimal_escape_too_large() {
     let result = lex51("\"\\256\"");
     assert!(!result.errors.is_empty());

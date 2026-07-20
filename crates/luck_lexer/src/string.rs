@@ -160,9 +160,18 @@ pub fn lex_short_string(
                     Some(ch) => {
                         let escape_start = cursor.position() - 1;
                         cursor.advance();
+                        // Consume the full UTF-8 sequence so recovery resumes
+                        // on a char boundary; continuation bytes are 0b10xxxxxx.
+                        while cursor.peek().is_some_and(|byte| (byte & 0xC0) == 0x80) {
+                            cursor.advance();
+                        }
+                        let escaped = source[escape_start + 1..]
+                            .chars()
+                            .next()
+                            .unwrap_or(ch as char);
                         return Err(crate::lex_error(
                             Span::new(escape_start as u32, cursor.position() as u32),
-                            format!("invalid escape sequence '\\{}'", ch as char),
+                            format!("invalid escape sequence '\\{escaped}'"),
                         ));
                     }
                 }

@@ -118,7 +118,7 @@ impl Format for Block {
 }
 
 /// Start offset of the first item that will produce output.
-fn first_item_start(block: &Block) -> Option<u32> {
+pub(crate) fn first_item_start(block: &Block) -> Option<u32> {
     block
         .stmts
         .iter()
