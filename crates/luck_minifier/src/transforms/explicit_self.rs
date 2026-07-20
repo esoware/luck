@@ -6,7 +6,7 @@ use luck_ast::visitor::Visitor;
 use luck_token::Span;
 use luck_token::token::{Token, TokenKind};
 
-use crate::expr::ident_name_string;
+use crate::expr::ident_name;
 
 /// Rewrite `function X:Y(params)` -> `function X.Y(self, params)` when `self`
 /// is referenced enough in the body. The renamer then shortens the explicit
@@ -28,7 +28,7 @@ struct SelfCounter(usize);
 impl<'ast> Visitor<'ast> for SelfCounter {
     fn visit_var(&mut self, var: &'ast Var) {
         if let Var::Name(name) = var {
-            if ident_name_string(name) == "self" {
+            if ident_name(name) == "self" {
                 self.0 += 1;
             }
         }

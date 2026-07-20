@@ -1,32 +1,17 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use luck_ast::expr::*;
 use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_core::types::LuaTarget;
+use luck_token::CompactString;
 
-use crate::expr::ident_name_string;
+use crate::expr::ident_name;
 use crate::name_gen::NameGenerator;
 use crate::tokens::make_ident;
 
 pub fn rename(block: Block, target: LuaTarget, rename_globals: bool) -> Block {
-    // True globals come from real binding resolution: every reference
-    // that resolves to no local. The old flat name-set excluded any name
-    // used as a local ANYWHERE in the file, so a global read could be
-    // captured by a renamed local sharing its name.
-    let analysis = luck_semantic::analyze_with_environment(
-        &block,
-        target.lua_version(),
-        target.stdlib_environment(),
-    );
-    let global_names: HashSet<String> = analysis
-        .scope_tree
-        .references
-        .iter()
-        .filter(|reference| reference.resolved.is_none())
-        .map(|reference| reference.name.to_string())
-        .collect();
     // Renaming file-defined globals pollutes `_G` under different keys -
     // strictly opt-in (TransformConfig::rename_globals).
     let (func_globals, assign_globals) = if rename_globals {
@@ -34,24 +19,25 @@ pub fn rename(block: Block, target: LuaTarget, rename_globals: bool) -> Block {
         let assign_globals = collect_assignfirst_globals(&block, &func_globals);
         (func_globals, assign_globals)
     } else {
-        (HashSet::new(), HashSet::new())
+        (FxHashSet::default(), FxHashSet::default())
     };
 
-    let mut true_globals = global_names;
-    for name in func_globals.iter().chain(assign_globals.iter()) {
-        true_globals.remove(name);
-    }
-
-    let mut analyzer = Analyzer::new(&true_globals, &func_globals, &assign_globals);
+    // True globals come from real binding resolution: the analyzer walks
+    // the same positional scoping rules as the renamer (declaration
+    // order, shadowing, repeat-until conditions, function name scoping),
+    // so any reference that resolves to no binding is a global. A flat
+    // name-set that excluded any name used as a local ANYWHERE in the
+    // file let a global read be captured by a renamed local sharing its
+    // name.
+    let mut analyzer = Analyzer::new(&func_globals, &assign_globals);
     analyzer.analyze_block(&block);
     analyzer.propagate_globals();
 
     let (slot_count, slot_liveness) = analyzer.assign_slots();
 
-    let slot_names =
-        analyzer.generate_names(slot_count, target.keywords(), &true_globals, &slot_liveness);
+    let slot_names = analyzer.generate_names(slot_count, target.keywords(), &slot_liveness);
 
-    let binding_new_names: Vec<String> = analyzer
+    let binding_new_names: Vec<CompactString> = analyzer
         .bindings
         .iter()
         .map(|binding| {
@@ -63,14 +49,51 @@ pub fn rename(block: Block, target: LuaTarget, rename_globals: bool) -> Block {
         })
         .collect();
 
-    let mut renamer = AstRenamer::new(
-        binding_new_names,
-        &true_globals,
-        &func_globals,
-        &assign_globals,
-    );
+    let mut renamer = AstRenamer::new(binding_new_names, &func_globals, &assign_globals);
     renamer.pre_declare_root_block(&block);
     renamer.transform_block(block)
+}
+
+/// Scope-id set as a bitset: scope ids are small and dense, and the hot
+/// operations are whole-set union and intersection.
+#[derive(Default)]
+struct ScopeSet(Vec<u64>);
+
+impl ScopeSet {
+    fn insert(&mut self, scope: usize) {
+        let word = scope / 64;
+        if word >= self.0.len() {
+            self.0.resize(word + 1, 0);
+        }
+        self.0[word] |= 1 << (scope % 64);
+    }
+
+    fn contains(&self, scope: usize) -> bool {
+        self.0
+            .get(scope / 64)
+            .is_some_and(|word| word & (1 << (scope % 64)) != 0)
+    }
+
+    fn union_with(&mut self, other: &ScopeSet) {
+        if other.0.len() > self.0.len() {
+            self.0.resize(other.0.len(), 0);
+        }
+        for (dst, src) in self.0.iter_mut().zip(&other.0) {
+            *dst |= src;
+        }
+    }
+
+    fn intersects(&self, other: &ScopeSet) -> bool {
+        self.0.iter().zip(&other.0).any(|(a, b)| a & b != 0)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.0.iter().enumerate().flat_map(|(word_idx, &word)| {
+            (0..64)
+                .filter(move |bit| word & (1 << bit) != 0)
+                .map(move |bit| word_idx * 64 + bit)
+        })
+    }
 }
 
 struct ScopeNode {
@@ -78,20 +101,20 @@ struct ScopeNode {
     children: Vec<usize>,
     binding_ids: Vec<usize>,
     // after propagate_globals: includes globals from all descendant scopes too
-    global_refs: HashSet<String>,
+    global_refs: FxHashSet<CompactString>,
 }
 
 struct BindingInfo {
-    original_name: String,
+    original_name: CompactString,
     scope_id: usize,
     ref_count: usize,
     slot: u32,
     is_fixed: bool,
     // declaring scope + reference scopes + all scopes on the path between them
-    live_scopes: HashSet<usize>,
+    live_scopes: ScopeSet,
 }
 
-struct Analyzer {
+struct Analyzer<'globals> {
     scopes: Vec<ScopeNode>,
     bindings: Vec<BindingInfo>,
     // NonEmptyStack layout: the top lives in `current_scope_id` so reading
@@ -99,33 +122,30 @@ struct Analyzer {
     current_scope_id: usize,
     outer_scope_ids: Vec<usize>,
     // original name -> stack of binding IDs; innermost binding on top
-    name_stack: HashMap<String, Vec<usize>>,
-    true_globals: HashSet<String>,
-    func_globals: HashSet<String>,
-    assign_globals: HashSet<String>,
+    name_stack: FxHashMap<CompactString, Vec<usize>>,
+    func_globals: &'globals FxHashSet<CompactString>,
+    assign_globals: &'globals FxHashSet<CompactString>,
 }
 
-impl Analyzer {
+impl<'globals> Analyzer<'globals> {
     fn new(
-        true_globals: &HashSet<String>,
-        func_globals: &HashSet<String>,
-        assign_globals: &HashSet<String>,
+        func_globals: &'globals FxHashSet<CompactString>,
+        assign_globals: &'globals FxHashSet<CompactString>,
     ) -> Self {
         let root_scope = ScopeNode {
             parent: None,
             children: Vec::new(),
             binding_ids: Vec::new(),
-            global_refs: HashSet::new(),
+            global_refs: FxHashSet::default(),
         };
         Self {
             scopes: vec![root_scope],
             bindings: Vec::new(),
             current_scope_id: 0,
             outer_scope_ids: Vec::new(),
-            name_stack: HashMap::new(),
-            true_globals: true_globals.clone(),
-            func_globals: func_globals.clone(),
-            assign_globals: assign_globals.clone(),
+            name_stack: FxHashMap::default(),
+            func_globals,
+            assign_globals,
         }
     }
 
@@ -140,7 +160,7 @@ impl Analyzer {
             parent: Some(parent),
             children: Vec::new(),
             binding_ids: Vec::new(),
-            global_refs: HashSet::new(),
+            global_refs: FxHashSet::default(),
         });
         self.scopes[parent].children.push(new_id);
         self.outer_scope_ids
@@ -151,13 +171,18 @@ impl Analyzer {
     fn exit_scope(&mut self) {
         let scope_id = self.current_scope_id;
         self.current_scope_id = self.outer_scope_ids.pop().expect("scope stack underflow");
-        let binding_ids: Vec<usize> = self.scopes[scope_id].binding_ids.clone();
-        for &binding_id in binding_ids.iter().rev() {
-            let name = &self.bindings[binding_id].original_name;
-            if let Some(stack) = self.name_stack.get_mut(name) {
+        let Self {
+            scopes,
+            bindings,
+            name_stack,
+            ..
+        } = self;
+        for &binding_id in scopes[scope_id].binding_ids.iter().rev() {
+            let name = &bindings[binding_id].original_name;
+            if let Some(stack) = name_stack.get_mut(name) {
                 stack.pop();
                 if stack.is_empty() {
-                    self.name_stack.remove(name);
+                    name_stack.remove(name);
                 }
             }
         }
@@ -166,10 +191,11 @@ impl Analyzer {
     fn declare_binding(&mut self, name: &str, is_fixed: bool) -> usize {
         let scope_id = self.current_scope();
         let binding_id = self.bindings.len();
-        let mut live_scopes = HashSet::new();
+        let mut live_scopes = ScopeSet::default();
         live_scopes.insert(scope_id);
+        let name = CompactString::from(name);
         self.bindings.push(BindingInfo {
-            original_name: name.to_string(),
+            original_name: name.clone(),
             scope_id,
             ref_count: 0,
             slot: u32::MAX,
@@ -177,10 +203,7 @@ impl Analyzer {
             live_scopes,
         });
         self.scopes[scope_id].binding_ids.push(binding_id);
-        self.name_stack
-            .entry(name.to_string())
-            .or_default()
-            .push(binding_id);
+        self.name_stack.entry(name).or_default().push(binding_id);
         binding_id
     }
 
@@ -202,10 +225,11 @@ impl Analyzer {
             }
             return;
         }
-        if self.true_globals.contains(name) {
-            let scope_id = self.current_scope();
-            self.scopes[scope_id].global_refs.insert(name.to_string());
-        }
+        // Unresolved means global: func/assign pseudo-globals are
+        // pre-declared as root bindings, so every reference to them
+        // resolves above and never lands here.
+        let scope_id = self.current_scope();
+        self.scopes[scope_id].global_refs.insert(name.into());
     }
 
     fn analyze_block(&mut self, block: &Block) {
@@ -227,9 +251,9 @@ impl Analyzer {
                 && func_decl.name.names.len() == 1
                 && func_decl.name.method.is_none()
             {
-                let name = ident_name_string(&func_decl.name.names[0]);
-                if self.func_globals.contains(&name) {
-                    self.declare_binding(&name, false);
+                let name = ident_name(&func_decl.name.names[0]);
+                if self.func_globals.contains(name) {
+                    self.declare_binding(name, false);
                 }
             }
         }
@@ -237,11 +261,10 @@ impl Analyzer {
             if let Statement::Assignment(assign) = stmt {
                 for var in assign.targets.iter() {
                     if let Var::Name(name_tok) = var {
-                        let name = ident_name_string(name_tok);
-                        if self.assign_globals.contains(&name)
-                            && !self.name_stack.contains_key(&name)
+                        let name = ident_name(name_tok);
+                        if self.assign_globals.contains(name) && !self.name_stack.contains_key(name)
                         {
-                            self.declare_binding(&name, false);
+                            self.declare_binding(name, false);
                         }
                     }
                 }
@@ -259,22 +282,22 @@ impl Analyzer {
                     }
                 }
                 for name_tok in local.names.iter() {
-                    let name = ident_name_string(&name_tok.name);
+                    let name = ident_name(&name_tok.name);
                     let is_fixed = name == "self" || name == "_ENV";
-                    self.declare_binding(&name, is_fixed);
+                    self.declare_binding(name, is_fixed);
                 }
             }
             Statement::LocalFunction(local_func) => {
-                let name = ident_name_string(&local_func.name);
+                let name = ident_name(&local_func.name);
                 let is_fixed = name == "self" || name == "_ENV";
-                self.declare_binding(&name, is_fixed);
+                self.declare_binding(name, is_fixed);
                 self.analyze_function_body(&local_func.body);
             }
             Statement::FunctionDecl(func_decl) => {
                 self.analyze_function_body(&func_decl.body);
                 if !func_decl.name.names.is_empty() {
-                    let name = ident_name_string(&func_decl.name.names[0]);
-                    self.reference_name(&name);
+                    let name = ident_name(&func_decl.name.names[0]);
+                    self.reference_name(name);
                 }
             }
             Statement::Assignment(assign) => {
@@ -329,7 +352,7 @@ impl Analyzer {
                     self.analyze_expr(step);
                 }
                 self.enter_scope();
-                self.declare_binding(&ident_name_string(&numeric_for.name), false);
+                self.declare_binding(ident_name(&numeric_for.name), false);
                 self.analyze_block(&numeric_for.block);
                 self.exit_scope();
             }
@@ -339,7 +362,7 @@ impl Analyzer {
                 }
                 self.enter_scope();
                 for binding in generic_for.names.iter() {
-                    self.declare_binding(&ident_name_string(&binding.name), false);
+                    self.declare_binding(ident_name(&binding.name), false);
                 }
                 self.analyze_block(&generic_for.block);
                 self.exit_scope();
@@ -440,7 +463,7 @@ impl Analyzer {
 
     fn analyze_var(&mut self, var: &Var) {
         match var {
-            Var::Name(name) => self.reference_name(&ident_name_string(name)),
+            Var::Name(name) => self.reference_name(ident_name(name)),
             Var::FieldAccess(fa) => self.analyze_expr(&fa.prefix),
             Var::Index(ie) => {
                 self.analyze_expr(&ie.prefix);
@@ -478,17 +501,17 @@ impl Analyzer {
         // explicit params are always renameable - implicit `self` from `:` syntax
         // never appears in the params list
         for param in body.params.iter() {
-            let name = ident_name_string(&param.name);
-            self.declare_binding(&name, name == "_ENV");
+            let name = ident_name(&param.name);
+            self.declare_binding(name, name == "_ENV");
         }
         self.analyze_block(&body.block);
         self.exit_scope();
     }
 }
 
-impl Analyzer {
-    fn assign_slots(&mut self) -> (usize, Vec<HashSet<usize>>) {
-        let mut slot_liveness: Vec<HashSet<usize>> = Vec::new();
+impl Analyzer<'_> {
+    fn assign_slots(&mut self) -> (usize, Vec<ScopeSet>) {
+        let mut slot_liveness: Vec<ScopeSet> = Vec::new();
         let mut total_slots: usize = 0;
         self.assign_slots_dfs(0, &mut slot_liveness, &mut total_slots);
         (total_slots, slot_liveness)
@@ -497,20 +520,19 @@ impl Analyzer {
     fn assign_slots_dfs(
         &mut self,
         scope_id: usize,
-        slot_liveness: &mut Vec<HashSet<usize>>,
+        slot_liveness: &mut Vec<ScopeSet>,
         total_slots: &mut usize,
     ) {
-        let binding_ids: Vec<usize> = self.scopes[scope_id].binding_ids.clone();
-
-        for binding_id in &binding_ids {
-            if self.bindings[*binding_id].is_fixed {
+        for binding_idx in 0..self.scopes[scope_id].binding_ids.len() {
+            let binding_id = self.scopes[scope_id].binding_ids[binding_idx];
+            if self.bindings[binding_id].is_fixed {
                 continue;
             }
 
             // Find a reusable slot: one not live in this scope
             let mut found_slot = None;
             for (slot_idx, liveness) in slot_liveness.iter().enumerate() {
-                if !liveness.contains(&scope_id) {
+                if !liveness.contains(scope_id) {
                     found_slot = Some(slot_idx as u32);
                     break;
                 }
@@ -520,35 +542,35 @@ impl Analyzer {
                 Some(s) => s,
                 None => {
                     let s = slot_liveness.len() as u32;
-                    slot_liveness.push(HashSet::new());
+                    slot_liveness.push(ScopeSet::default());
                     s
                 }
             };
 
-            self.bindings[*binding_id].slot = slot;
+            self.bindings[binding_id].slot = slot;
             *total_slots = (*total_slots).max((slot + 1) as usize);
 
-            // Merge this binding's liveness into the slot
-            let live_scopes = self.bindings[*binding_id].live_scopes.clone();
-            slot_liveness[slot as usize].extend(live_scopes);
+            slot_liveness[slot as usize].union_with(&self.bindings[binding_id].live_scopes);
         }
 
-        let children: Vec<usize> = self.scopes[scope_id].children.clone();
-        for child_id in children {
+        for child_idx in 0..self.scopes[scope_id].children.len() {
+            let child_id = self.scopes[scope_id].children[child_idx];
             self.assign_slots_dfs(child_id, slot_liveness, total_slots);
         }
     }
 }
 
-impl Analyzer {
+impl Analyzer<'_> {
     fn propagate_globals(&mut self) {
         // reverse order so children are processed before parents
         for scope_id in (0..self.scopes.len()).rev() {
-            let children: Vec<usize> = self.scopes[scope_id].children.clone();
-            for child_id in children {
-                let child_globals: Vec<String> =
-                    self.scopes[child_id].global_refs.iter().cloned().collect();
-                self.scopes[scope_id].global_refs.extend(child_globals);
+            for child_idx in 0..self.scopes[scope_id].children.len() {
+                let child_id = self.scopes[scope_id].children[child_idx];
+                // Scopes are created parent-first, so child_id > scope_id.
+                let (head, tail) = self.scopes.split_at_mut(child_id);
+                head[scope_id]
+                    .global_refs
+                    .extend(tail[0].global_refs.iter().cloned());
             }
         }
     }
@@ -557,9 +579,8 @@ impl Analyzer {
         &self,
         slot_count: usize,
         keywords: &[&'static str],
-        _true_globals: &HashSet<String>,
-        slot_liveness: &[HashSet<usize>],
-    ) -> Vec<String> {
+        slot_liveness: &[ScopeSet],
+    ) -> Vec<CompactString> {
         if slot_count == 0 {
             return Vec::new();
         }
@@ -574,11 +595,11 @@ impl Analyzer {
             slot_frequencies[binding.slot as usize].1 += binding.ref_count;
         }
 
-        let mut slot_forbidden: Vec<HashSet<&str>> = Vec::with_capacity(slot_count);
+        let mut slot_forbidden: Vec<FxHashSet<&str>> = Vec::with_capacity(slot_count);
         for slot_idx in 0..slot_count {
-            let mut forbidden = HashSet::new();
+            let mut forbidden = FxHashSet::default();
             if slot_idx < slot_liveness.len() {
-                for &scope_id in &slot_liveness[slot_idx] {
+                for scope_id in slot_liveness[slot_idx].iter() {
                     for global_name in &self.scopes[scope_id].global_refs {
                         forbidden.insert(global_name.as_str());
                     }
@@ -595,50 +616,14 @@ impl Analyzer {
 
         active_slots.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-        let keyword_set: HashSet<&str> = keywords.iter().copied().collect();
-        let name_gen = NameGenerator::new(keywords);
-        let mut slot_to_name = vec![String::new(); slot_count];
-        // Every slot scans candidates from index 0, so the generated names
-        // (and their keyword-ness) are computed once and shared.
-        let mut candidates: Vec<String> = Vec::new();
-        let mut is_keyword: Vec<bool> = Vec::new();
-        // Per candidate: bitset over scope ids where the name is already
-        // worn by some slot. "Live scope has the bit set" is the same
-        // conflict predicate as the pairwise liveness intersection, but
-        // the hot reject path costs one bit test instead of hashing.
-        let mut taken_scopes: Vec<Vec<u64>> = Vec::new();
-        let scope_words = self.scopes.len().div_ceil(64);
+        let mut pool = CandidatePool::new(keywords);
+        let mut slot_to_name = vec![CompactString::default(); slot_count];
 
         for &(slot, _) in &active_slots {
-            let forbidden = &slot_forbidden[slot as usize];
-            let slot_live = &slot_liveness[slot as usize];
-            let mut idx = 0;
-            loop {
-                if idx == candidates.len() {
-                    let name = name_gen.index_to_name(idx);
-                    is_keyword.push(keyword_set.contains(name.as_str()));
-                    candidates.push(name);
-                    taken_scopes.push(vec![0u64; scope_words]);
-                }
-                let candidate_idx = idx;
-                idx += 1;
-                // non-overlapping slots can share the same name
-                let conflicts = slot_live.iter().any(|&scope| {
-                    taken_scopes[candidate_idx][scope / 64] & (1u64 << (scope % 64)) != 0
-                });
-                if conflicts || is_keyword[candidate_idx] {
-                    continue;
-                }
-                let candidate = &candidates[candidate_idx];
-                if forbidden.contains(candidate.as_str()) {
-                    continue;
-                }
-                for &scope in slot_live {
-                    taken_scopes[candidate_idx][scope / 64] |= 1u64 << (scope % 64);
-                }
-                slot_to_name[slot as usize] = candidate.clone();
-                break;
-            }
+            slot_to_name[slot as usize] = pool.pick(
+                &slot_liveness[slot as usize],
+                &slot_forbidden[slot as usize],
+            );
         }
 
         // Zero-frequency slots (declared but never referenced) still wear
@@ -647,36 +632,8 @@ impl Analyzer {
         // captured co-live slots (an unreferenced param stole the name of
         // an upvalue used inside the same function body).
         for slot in 0..slot_count {
-            if !slot_to_name[slot].is_empty() {
-                continue;
-            }
-            let forbidden = &slot_forbidden[slot];
-            let slot_live = &slot_liveness[slot];
-            let mut idx = 0;
-            loop {
-                if idx == candidates.len() {
-                    let name = name_gen.index_to_name(idx);
-                    is_keyword.push(keyword_set.contains(name.as_str()));
-                    candidates.push(name);
-                    taken_scopes.push(vec![0u64; scope_words]);
-                }
-                let candidate_idx = idx;
-                idx += 1;
-                let conflicts = slot_live.iter().any(|&scope| {
-                    taken_scopes[candidate_idx][scope / 64] & (1u64 << (scope % 64)) != 0
-                });
-                if conflicts || is_keyword[candidate_idx] {
-                    continue;
-                }
-                let candidate = &candidates[candidate_idx];
-                if forbidden.contains(candidate.as_str()) {
-                    continue;
-                }
-                for &scope in slot_live {
-                    taken_scopes[candidate_idx][scope / 64] |= 1u64 << (scope % 64);
-                }
-                slot_to_name[slot] = candidate.clone();
-                break;
+            if slot_to_name[slot].is_empty() {
+                slot_to_name[slot] = pool.pick(&slot_liveness[slot], &slot_forbidden[slot]);
             }
         }
 
@@ -684,43 +641,94 @@ impl Analyzer {
     }
 }
 
-struct AstRenamer {
-    binding_new_names: Vec<String>,
-    next_binding_id: usize,
-    name_stack: HashMap<String, Vec<String>>,
-    scope_binding_names: Vec<Vec<String>>,
-
-    func_globals: HashSet<String>,
-    assign_globals: HashSet<String>,
+/// Shared candidate-name state for [`Analyzer::generate_names`]. Every
+/// slot scans candidates from index 0, so the generated names (and their
+/// keyword-ness) are computed once and shared.
+struct CandidatePool {
+    name_gen: NameGenerator,
+    keyword_set: FxHashSet<&'static str>,
+    candidates: Vec<CompactString>,
+    is_keyword: Vec<bool>,
+    // Per candidate: the scopes where the name is already worn by some
+    // slot. Non-overlapping slots can share the same name.
+    taken_scopes: Vec<ScopeSet>,
 }
 
-impl AstRenamer {
+impl CandidatePool {
+    fn new(keywords: &[&'static str]) -> Self {
+        Self {
+            name_gen: NameGenerator::new(keywords),
+            keyword_set: keywords.iter().copied().collect(),
+            candidates: Vec::new(),
+            is_keyword: Vec::new(),
+            taken_scopes: Vec::new(),
+        }
+    }
+
+    fn pick(&mut self, slot_live: &ScopeSet, forbidden: &FxHashSet<&str>) -> CompactString {
+        let mut idx = 0;
+        loop {
+            if idx == self.candidates.len() {
+                let name = self.name_gen.index_to_name(idx);
+                self.is_keyword
+                    .push(self.keyword_set.contains(name.as_str()));
+                self.candidates.push(name);
+                self.taken_scopes.push(ScopeSet::default());
+            }
+            let candidate_idx = idx;
+            idx += 1;
+            if slot_live.intersects(&self.taken_scopes[candidate_idx])
+                || self.is_keyword[candidate_idx]
+            {
+                continue;
+            }
+            let candidate = &self.candidates[candidate_idx];
+            if forbidden.contains(candidate.as_str()) {
+                continue;
+            }
+            self.taken_scopes[candidate_idx].union_with(slot_live);
+            return self.candidates[candidate_idx].clone();
+        }
+    }
+}
+
+struct AstRenamer<'globals> {
+    binding_new_names: Vec<CompactString>,
+    next_binding_id: usize,
+    name_stack: FxHashMap<CompactString, Vec<CompactString>>,
+    scope_binding_names: Vec<Vec<CompactString>>,
+
+    func_globals: &'globals FxHashSet<CompactString>,
+    assign_globals: &'globals FxHashSet<CompactString>,
+}
+
+impl<'globals> AstRenamer<'globals> {
     fn new(
-        binding_new_names: Vec<String>,
-        _true_globals: &HashSet<String>,
-        func_globals: &HashSet<String>,
-        assign_globals: &HashSet<String>,
+        binding_new_names: Vec<CompactString>,
+        func_globals: &'globals FxHashSet<CompactString>,
+        assign_globals: &'globals FxHashSet<CompactString>,
     ) -> Self {
         Self {
             binding_new_names,
             next_binding_id: 0,
-            name_stack: HashMap::new(),
+            name_stack: FxHashMap::default(),
             scope_binding_names: vec![Vec::new()],
-            func_globals: func_globals.clone(),
-            assign_globals: assign_globals.clone(),
+            func_globals,
+            assign_globals,
         }
     }
 
-    fn declare_binding(&mut self, original: &str) -> String {
+    fn declare_binding(&mut self, original: &str) -> CompactString {
         let new_name = self.binding_new_names[self.next_binding_id].clone();
         self.next_binding_id += 1;
+        let original = CompactString::from(original);
+        if let Some(scope_names) = self.scope_binding_names.last_mut() {
+            scope_names.push(original.clone());
+        }
         self.name_stack
-            .entry(original.to_string())
+            .entry(original)
             .or_default()
             .push(new_name.clone());
-        if let Some(scope_names) = self.scope_binding_names.last_mut() {
-            scope_names.push(original.to_string());
-        }
         new_name
     }
 
@@ -741,13 +749,13 @@ impl AstRenamer {
         }
     }
 
-    fn resolve_name(&self, original: &str) -> String {
+    fn resolve_name(&self, original: &str) -> CompactString {
         if let Some(stack) = self.name_stack.get(original) {
             if let Some(new_name) = stack.last() {
                 return new_name.clone();
             }
         }
-        original.to_string()
+        original.into()
     }
 
     // must match Analyzer::pre_declare_root_bindings exactly
@@ -757,9 +765,9 @@ impl AstRenamer {
                 && func_decl.name.names.len() == 1
                 && func_decl.name.method.is_none()
             {
-                let name = ident_name_string(&func_decl.name.names[0]);
-                if self.func_globals.contains(&name) {
-                    self.declare_binding(&name);
+                let name = ident_name(&func_decl.name.names[0]);
+                if self.func_globals.contains(name) {
+                    self.declare_binding(name);
                 }
             }
         }
@@ -767,11 +775,10 @@ impl AstRenamer {
             if let Statement::Assignment(assign) = stmt {
                 for var in assign.targets.iter() {
                     if let Var::Name(name_tok) = var {
-                        let name = ident_name_string(name_tok);
-                        if self.assign_globals.contains(&name)
-                            && !self.name_stack.contains_key(&name)
+                        let name = ident_name(name_tok);
+                        if self.assign_globals.contains(name) && !self.name_stack.contains_key(name)
                         {
-                            self.declare_binding(&name);
+                            self.declare_binding(name);
                         }
                     }
                 }
@@ -780,7 +787,7 @@ impl AstRenamer {
     }
 }
 
-impl AstTransform for AstRenamer {
+impl AstTransform for AstRenamer<'_> {
     fn transform_block(&mut self, block: Block) -> Block {
         let new_stmts: Vec<_> = block
             .stmts
@@ -807,8 +814,7 @@ impl AstTransform for AstRenamer {
                 Statement::LocalAssignment(local)
             }
             Statement::LocalFunction(mut local_func) => {
-                let original = ident_name_string(&local_func.name);
-                let new_name = self.declare_binding(&original);
+                let new_name = self.declare_binding(ident_name(&local_func.name));
                 local_func.name = make_ident(&new_name);
                 local_func.body = self.walk_function_body(local_func.body);
                 Statement::LocalFunction(local_func)
@@ -816,8 +822,7 @@ impl AstTransform for AstRenamer {
             Statement::FunctionDecl(mut func_decl) => {
                 func_decl.body = self.walk_function_body(func_decl.body);
                 if !func_decl.name.names.is_empty() {
-                    let original = ident_name_string(&func_decl.name.names[0]);
-                    let resolved = self.resolve_name(&original);
+                    let resolved = self.resolve_name(ident_name(&func_decl.name.names[0]));
                     func_decl.name.names[0] = make_ident(&resolved);
                 }
                 Statement::FunctionDecl(func_decl)
@@ -871,8 +876,7 @@ impl AstTransform for AstRenamer {
                 numeric_for.limit = self.transform_expression(numeric_for.limit);
                 numeric_for.step = numeric_for.step.map(|step| self.transform_expression(step));
                 self.enter_scope();
-                let original = ident_name_string(&numeric_for.name);
-                let new_name = self.declare_binding(&original);
+                let new_name = self.declare_binding(ident_name(&numeric_for.name));
                 numeric_for.name = make_ident(&new_name);
                 numeric_for.block = self.transform_block(numeric_for.block);
                 self.exit_scope();
@@ -911,8 +915,7 @@ impl AstTransform for AstRenamer {
     fn transform_var(&mut self, var: Var) -> Var {
         match var {
             Var::Name(name) => {
-                let original = ident_name_string(&name);
-                let resolved = self.resolve_name(&original);
+                let resolved = self.resolve_name(ident_name(&name));
                 Var::Name(make_ident(&resolved))
             }
             other => self.walk_var(other),
@@ -926,8 +929,7 @@ impl AstTransform for AstRenamer {
             .items
             .into_iter()
             .map(|mut param| {
-                let original = ident_name_string(&param.name);
-                let new_name = self.declare_binding(&original);
+                let new_name = self.declare_binding(ident_name(&param.name));
                 param.name = make_ident(&new_name);
                 param
             })
@@ -939,16 +941,12 @@ impl AstTransform for AstRenamer {
 
     fn walk_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
         call.callee = match call.callee {
-            Expression::Var(var) => match *var {
+            Expression::Var(var) => match var {
                 Var::Name(name) => {
-                    let original = ident_name_string(&name);
-                    let resolved = self.resolve_name(&original);
-                    Expression::Var(Box::new(Var::Name(make_ident(&resolved))))
+                    let resolved = self.resolve_name(ident_name(&name));
+                    Expression::Var(Var::Name(make_ident(&resolved)))
                 }
-                other => {
-                    let var = self.transform_var(other);
-                    Expression::Var(Box::new(var))
-                }
+                other => Expression::Var(self.transform_var(other)),
             },
             // Any non-Var callee (call chains, parens, etc.) resolves its names
             // through the normal expression transform.
@@ -976,12 +974,11 @@ impl AstTransform for AstRenamer {
 
 /// Rename every declared local while keeping its `<attrib>` attached.
 fn rename_attributed_names(
-    declare: &mut dyn FnMut(&str) -> String,
+    declare: &mut dyn FnMut(&str) -> CompactString,
     names: Punctuated<AttributedName>,
 ) -> Punctuated<AttributedName> {
     let rename = |attributed: AttributedName| {
-        let original = ident_name_string(&attributed.name);
-        let new_name = declare(&original);
+        let new_name = declare(ident_name(&attributed.name));
         AttributedName {
             name: make_ident(&new_name),
             // Renaming a local never changes its declared type
@@ -995,15 +992,14 @@ fn rename_attributed_names(
 }
 
 fn rename_punctuated_names(
-    declare: &mut dyn FnMut(&str) -> String,
+    declare: &mut dyn FnMut(&str) -> CompactString,
     mut names: Punctuated<luck_ast::Parameter>,
 ) -> Punctuated<luck_ast::Parameter> {
     names.items = names
         .items
         .into_iter()
         .map(|mut binding| {
-            let original = ident_name_string(&binding.name);
-            let new_name = declare(&original);
+            let new_name = declare(ident_name(&binding.name));
             // Renaming a loop binding never changes its declared type
             binding.name = make_ident(&new_name);
             binding
@@ -1012,17 +1008,17 @@ fn rename_punctuated_names(
     names
 }
 
-fn collect_toplevel_function_globals(block: &Block) -> HashSet<String> {
-    let mut top_locals = HashSet::new();
+fn collect_toplevel_function_globals(block: &Block) -> FxHashSet<CompactString> {
+    let mut top_locals: FxHashSet<CompactString> = FxHashSet::default();
     for stmt in &block.stmts {
         match stmt {
             Statement::LocalAssignment(local) => {
                 for attributed in local.names.iter() {
-                    top_locals.insert(ident_name_string(&attributed.name));
+                    top_locals.insert(ident_name(&attributed.name).into());
                 }
             }
             Statement::LocalFunction(local_func) => {
-                top_locals.insert(ident_name_string(&local_func.name));
+                top_locals.insert(ident_name(&local_func.name).into());
             }
             // Only `local` declarations introduce local names at this level;
             // everything else either declares globals or no name binding.
@@ -1048,15 +1044,15 @@ fn collect_toplevel_function_globals(block: &Block) -> HashSet<String> {
         }
     }
 
-    let mut func_globals = HashSet::new();
+    let mut func_globals = FxHashSet::default();
     for stmt in &block.stmts {
         if let Statement::FunctionDecl(func_decl) = stmt
             && func_decl.name.names.len() == 1
             && func_decl.name.method.is_none()
         {
-            let name = ident_name_string(&func_decl.name.names[0]);
-            if !top_locals.contains(&name) {
-                func_globals.insert(name);
+            let name = ident_name(&func_decl.name.names[0]);
+            if !top_locals.contains(name) {
+                func_globals.insert(name.into());
             }
         }
     }
@@ -1064,11 +1060,14 @@ fn collect_toplevel_function_globals(block: &Block) -> HashSet<String> {
     func_globals
 }
 
-fn collect_assignfirst_globals(block: &Block, func_globals: &HashSet<String>) -> HashSet<String> {
-    let mut read_globals: HashSet<String> = HashSet::new();
-    let mut assign_first: HashSet<String> = HashSet::new();
+fn collect_assignfirst_globals(
+    block: &Block,
+    func_globals: &FxHashSet<CompactString>,
+) -> FxHashSet<CompactString> {
+    let mut read_globals: FxHashSet<CompactString> = FxHashSet::default();
+    let mut assign_first: FxHashSet<CompactString> = FxHashSet::default();
 
-    let mut all_locals = HashSet::new();
+    let mut all_locals = FxHashSet::default();
     collect_top_level_locals(block, &mut all_locals);
 
     for stmt in &block.stmts {
@@ -1079,22 +1078,21 @@ fn collect_assignfirst_globals(block: &Block, func_globals: &HashSet<String>) ->
                 }
                 for var in assign.targets.iter() {
                     if let Var::Name(name) = var {
-                        let var_name = ident_name_string(name);
-                        if !all_locals.contains(&var_name)
-                            && !func_globals.contains(&var_name)
-                            && !read_globals.contains(&var_name)
-                            && !assign_first.contains(&var_name)
+                        let var_name = ident_name(name);
+                        if !all_locals.contains(var_name)
+                            && !func_globals.contains(var_name)
+                            && !read_globals.contains(var_name)
+                            && !assign_first.contains(var_name)
                         {
-                            assign_first.insert(var_name);
+                            assign_first.insert(var_name.into());
                         }
                     }
                     if let Var::FieldAccess(fa) = var
-                        && let Expression::Var(inner) = &fa.prefix
-                        && let Var::Name(name) = inner.as_ref()
+                        && let Expression::Var(Var::Name(name)) = &fa.prefix
                     {
-                        let var_name = ident_name_string(name);
-                        if !all_locals.contains(&var_name) {
-                            read_globals.insert(var_name);
+                        let var_name = ident_name(name);
+                        if !all_locals.contains(var_name) {
+                            read_globals.insert(var_name.into());
                         }
                     }
                 }
@@ -1129,16 +1127,16 @@ fn collect_assignfirst_globals(block: &Block, func_globals: &HashSet<String>) ->
     assign_first
 }
 
-fn collect_top_level_locals(block: &Block, locals: &mut HashSet<String>) {
+fn collect_top_level_locals(block: &Block, locals: &mut FxHashSet<CompactString>) {
     for stmt in &block.stmts {
         match stmt {
             Statement::LocalAssignment(local) => {
                 for attributed in local.names.iter() {
-                    locals.insert(ident_name_string(&attributed.name));
+                    locals.insert(ident_name(&attributed.name).into());
                 }
             }
             Statement::LocalFunction(local_func) => {
-                locals.insert(ident_name_string(&local_func.name));
+                locals.insert(ident_name(&local_func.name).into());
             }
             Statement::DoBlock(d) => collect_top_level_locals(&d.block, locals),
             Statement::WhileLoop(w) => collect_top_level_locals(&w.block, locals),
@@ -1153,12 +1151,12 @@ fn collect_top_level_locals(block: &Block, locals: &mut HashSet<String>) {
                 }
             }
             Statement::NumericFor(nf) => {
-                locals.insert(ident_name_string(&nf.name));
+                locals.insert(ident_name(&nf.name).into());
                 collect_top_level_locals(&nf.block, locals);
             }
             Statement::GenericFor(gf) => {
                 for binding in gf.names.iter() {
-                    locals.insert(ident_name_string(&binding.name));
+                    locals.insert(ident_name(&binding.name).into());
                 }
                 collect_top_level_locals(&gf.block, locals);
             }
@@ -1184,15 +1182,15 @@ fn collect_top_level_locals(block: &Block, locals: &mut HashSet<String>) {
 
 fn collect_name_reads_from_expr(
     expr: &Expression,
-    locals: &HashSet<String>,
-    reads: &mut HashSet<String>,
+    locals: &FxHashSet<CompactString>,
+    reads: &mut FxHashSet<CompactString>,
 ) {
     match expr {
-        Expression::Var(var) => match var.as_ref() {
+        Expression::Var(var) => match var {
             Var::Name(name) => {
-                let var_name = ident_name_string(name);
-                if !locals.contains(&var_name) {
-                    reads.insert(var_name);
+                let var_name = ident_name(name);
+                if !locals.contains(var_name) {
+                    reads.insert(var_name.into());
                 }
             }
             Var::FieldAccess(fa) => {
@@ -1268,8 +1266,8 @@ fn collect_name_reads_from_expr(
 
 fn collect_name_reads_from_func_args(
     args: &FunctionArgs,
-    locals: &HashSet<String>,
-    reads: &mut HashSet<String>,
+    locals: &FxHashSet<CompactString>,
+    reads: &mut FxHashSet<CompactString>,
 ) {
     match args {
         FunctionArgs::Parenthesized { args, .. } => {
@@ -1300,8 +1298,8 @@ fn collect_name_reads_from_func_args(
 
 fn collect_name_reads_from_stmt(
     stmt: &Statement,
-    locals: &HashSet<String>,
-    reads: &mut HashSet<String>,
+    locals: &FxHashSet<CompactString>,
+    reads: &mut FxHashSet<CompactString>,
 ) {
     match stmt {
         Statement::FunctionCall(call_stmt) => {
@@ -1322,9 +1320,9 @@ fn collect_name_reads_from_stmt(
             for var in assign.targets.iter() {
                 match var {
                     Var::Name(name) => {
-                        let var_name = ident_name_string(name);
-                        if !locals.contains(&var_name) {
-                            reads.insert(var_name);
+                        let var_name = ident_name(name);
+                        if !locals.contains(var_name) {
+                            reads.insert(var_name.into());
                         }
                     }
                     Var::FieldAccess(fa) => {
@@ -1392,9 +1390,9 @@ fn collect_name_reads_from_stmt(
         Statement::CompoundAssignment(ca) => {
             match &ca.var {
                 Var::Name(name) => {
-                    let var_name = ident_name_string(name);
-                    if !locals.contains(&var_name) {
-                        reads.insert(var_name);
+                    let var_name = ident_name(name);
+                    if !locals.contains(var_name) {
+                        reads.insert(var_name.into());
                     }
                 }
                 Var::FieldAccess(fa) => {

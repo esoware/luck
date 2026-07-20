@@ -32,15 +32,10 @@ fn check_call(
     ctx: &LintContext,
     out: &mut Vec<LintDiagnostic>,
 ) {
-    let is_type_call = if let Expression::Var(var) = &call.callee {
-        if let luck_ast::expr::Var::Name(token) = var.as_ref() {
-            let name = &ctx.source[token.span.start as usize..token.span.end as usize];
-            // Shadowed `type` is a user function.
-            (name == "type" || name == "typeof")
-                && !ctx.semantic.resolves_to_local(name, token.span)
-        } else {
-            false
-        }
+    let is_type_call = if let Expression::Var(luck_ast::expr::Var::Name(token)) = &call.callee {
+        let name = &ctx.source[token.span.start as usize..token.span.end as usize];
+        // Shadowed `type` is a user function.
+        (name == "type" || name == "typeof") && !ctx.semantic.resolves_to_local(name, token.span)
     } else {
         false
     };

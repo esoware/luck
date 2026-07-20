@@ -58,7 +58,7 @@ impl<'src> MustUseChecker<'src> {
         let Expression::Var(var) = expr else {
             return None;
         };
-        match var.as_ref() {
+        match var {
             luck_ast::expr::Var::Name(token) => {
                 let name = self.slice(token.span);
                 // Shadowed base names are user values, not the stdlib.
@@ -71,7 +71,7 @@ impl<'src> MustUseChecker<'src> {
                 let Expression::Var(prefix_var) = &fa.prefix else {
                     return None;
                 };
-                let luck_ast::expr::Var::Name(prefix_token) = prefix_var.as_ref() else {
+                let luck_ast::expr::Var::Name(prefix_token) = prefix_var else {
                     return None;
                 };
                 let prefix = self.slice(prefix_token.span);

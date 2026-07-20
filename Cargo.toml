@@ -59,6 +59,7 @@ rayon = "1"
 ec4rs = "1.2"
 mimalloc-safe = "0.1.64"
 memchr = "2"
+rustc-hash = "2"
 itoa = "1"
 ryu = "1"
 simdutf8 = { version = "0.1.5", features = ["aarch64_neon"] }

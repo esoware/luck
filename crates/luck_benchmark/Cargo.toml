@@ -62,6 +62,7 @@ luck_formatter.workspace = true
 luck_minifier.workspace = true
 luck_bundler.workspace = true
 criterion2 = { workspace = true }
+mimalloc-safe = { workspace = true }
 ureq = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }

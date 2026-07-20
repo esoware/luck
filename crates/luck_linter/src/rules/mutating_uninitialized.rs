@@ -122,7 +122,7 @@ impl MutationCollector {
             Var::Name(_) => {}
             Var::FieldAccess(fa) => {
                 if let Expression::Var(prefix_var) = &fa.prefix
-                    && let Var::Name(token) = prefix_var.as_ref()
+                    && let Var::Name(token) = prefix_var
                     && let TokenKind::Identifier(_) = &token.kind
                 {
                     self.field_write_prefix_positions.push(token.span.start);
@@ -130,7 +130,7 @@ impl MutationCollector {
             }
             Var::Index(idx) => {
                 if let Expression::Var(prefix_var) = &idx.prefix
-                    && let Var::Name(token) = prefix_var.as_ref()
+                    && let Var::Name(token) = prefix_var
                     && let TokenKind::Identifier(_) = &token.kind
                 {
                     self.field_write_prefix_positions.push(token.span.start);

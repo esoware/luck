@@ -17,7 +17,7 @@ pub enum Expression {
     StringLiteral(Literal),
     VarArg(Span),
     FunctionDef(Box<FunctionDef>),
-    Var(Box<Var>),
+    Var(Var),
     FunctionCall(Box<FunctionCall>),
     Parenthesized(Box<ParenExpression>),
     TableConstructor(Box<TableConstructor>),

@@ -206,7 +206,7 @@ fn assign_nested_field_access() {
         if let Var::FieldAccess(outer) = target {
             if let Expression::Var(inner_var) = &outer.prefix {
                 assert!(
-                    matches!(inner_var.as_ref(), Var::FieldAccess(_)),
+                    matches!(inner_var, Var::FieldAccess(_)),
                     "expected nested FieldAccess, got {:?}",
                     inner_var
                 );
@@ -607,7 +607,7 @@ fn chained_field_access() {
         let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::Var(v) = expr {
-            assert!(matches!(&**v, Var::FieldAccess(_)));
+            assert!(matches!(v, Var::FieldAccess(_)));
         } else {
             panic!("expected Var, got {:?}", expr);
         }
@@ -624,7 +624,7 @@ fn chained_index() {
         let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::Var(v) = expr {
-            assert!(matches!(&**v, Var::Index(_)));
+            assert!(matches!(v, Var::Index(_)));
         } else {
             panic!("expected Var, got {:?}", expr);
         }

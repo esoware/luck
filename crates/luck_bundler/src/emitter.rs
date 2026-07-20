@@ -64,7 +64,7 @@ pub fn emit_with_line_map(
 
     // Numeric ids in topo order (dependencies first - cosmetic only; the
     // loader is order-independent). Entry never registers: it inlines.
-    let mut path_to_slot: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut path_to_slot: rustc_hash::FxHashMap<&str, usize> = rustc_hash::FxHashMap::default();
     let mut slot = 0usize;
     for id in topo_order {
         if *id == entry_id {
@@ -193,12 +193,12 @@ pub fn emit_with_line_map(
 /// can never be silently left behind in the output.
 fn collect_require_replacements(
     block: &Block,
-    path_to_slot: &std::collections::HashMap<&str, usize>,
+    path_to_slot: &rustc_hash::FxHashMap<&str, usize>,
     dependencies: &[(String, String, String, std::ops::Range<usize>)],
 ) -> Vec<(usize, usize, String)> {
     // require string -> loader slot
-    let mut require_to_slot: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut require_to_slot: rustc_hash::FxHashMap<String, usize> =
+        rustc_hash::FxHashMap::default();
     for (_local_name, require_string, resolved_path, _) in dependencies {
         if let Some(&slot) = path_to_slot.get(resolved_path.as_str()) {
             require_to_slot.insert(require_string.clone(), slot);
@@ -215,7 +215,7 @@ fn collect_require_replacements(
 }
 
 struct RequireCallFinder<'a> {
-    require_to_slot: &'a std::collections::HashMap<String, usize>,
+    require_to_slot: &'a rustc_hash::FxHashMap<String, usize>,
     replacements: Vec<(usize, usize, String)>,
 }
 
@@ -255,7 +255,7 @@ impl<'ast> Visitor<'ast> for RequireCallFinder<'_> {
 fn transform_module_body(
     source: &str,
     dependencies: &[(String, String, String, std::ops::Range<usize>)],
-    path_to_slot: &std::collections::HashMap<&str, usize>,
+    path_to_slot: &rustc_hash::FxHashMap<&str, usize>,
     version: luck_token::LuaVersion,
     cached_block: Option<&Block>,
 ) -> String {

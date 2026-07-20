@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use luck_token::CompactString;
+use rustc_hash::FxHashSet;
 
 const FIRST_CHARS: &[u8] = b"luckLUCKabdefghijmnopqrstvwxyzABDEFGHIJMNOPQRSTVWXYZ_";
 const REST_CHARS: &[u8] = b"luckLUCKabdefghijmnopqrstvwxyz_ABDEFGHIJMNOPQRSTVWXYZ0123456789";
@@ -6,8 +7,8 @@ const REST_CHARS: &[u8] = b"luckLUCKabdefghijmnopqrstvwxyz_ABDEFGHIJMNOPQRSTVWXY
 /// Generates short, unique variable names for the rename pass.
 pub struct NameGenerator {
     counter: usize,
-    used_names: HashSet<String>,
-    keywords: HashSet<&'static str>,
+    used_names: FxHashSet<CompactString>,
+    keywords: FxHashSet<&'static str>,
 }
 
 #[allow(dead_code)]
@@ -15,13 +16,13 @@ impl NameGenerator {
     pub fn new(keywords: &[&'static str]) -> Self {
         Self {
             counter: 0,
-            used_names: HashSet::new(),
+            used_names: FxHashSet::default(),
             keywords: keywords.iter().copied().collect(),
         }
     }
 
     /// Generate the next shortest available name.
-    pub fn generate(&mut self) -> String {
+    pub fn generate(&mut self) -> CompactString {
         loop {
             let name = self.index_to_name(self.counter);
             self.counter += 1;
@@ -37,12 +38,14 @@ impl NameGenerator {
     /// each subsequent character draws from `REST_CHARS` (base 63, includes
     /// digits). Single-char names are indices 0..52, two-char names fill
     /// the next 53*63 slots, three-char the next 53*63^2, and so on.
-    pub fn index_to_name(&self, idx: usize) -> String {
+    pub fn index_to_name(&self, idx: usize) -> CompactString {
         let first_base = FIRST_CHARS.len();
         let rest_base = REST_CHARS.len();
 
         if idx < first_base {
-            return (FIRST_CHARS[idx] as char).to_string();
+            let mut name = CompactString::with_capacity(1);
+            name.push(FIRST_CHARS[idx] as char);
+            return name;
         }
 
         let mut remaining = idx - first_base;
@@ -57,7 +60,7 @@ impl NameGenerator {
             length += 1;
         }
 
-        let mut result = String::with_capacity(length);
+        let mut result = CompactString::with_capacity(length);
         let first_idx = remaining / rest_base.pow(length as u32 - 1);
         result.push(FIRST_CHARS[first_idx] as char);
         remaining %= rest_base.pow(length as u32 - 1);
@@ -73,7 +76,7 @@ impl NameGenerator {
     }
 
     pub fn mark_used(&mut self, name: &str) {
-        self.used_names.insert(name.to_string());
+        self.used_names.insert(name.into());
     }
 }
 

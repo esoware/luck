@@ -311,7 +311,7 @@ fn call_is_error(call: &FunctionCall) -> bool {
     let Expression::Var(var) = &call.callee else {
         return false;
     };
-    let Var::Name(token) = var.as_ref() else {
+    let Var::Name(token) = var else {
         return false;
     };
     matches!(&token.kind, TokenKind::Identifier(name) if name.as_str() == "error")

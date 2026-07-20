@@ -1,6 +1,6 @@
 use luck_core::config::parse_luaurc;
 use luck_core::diagnostics::{Diagnostic, errors};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 
 use crate::{ResolveResult, normalize_path};
@@ -236,9 +236,9 @@ fn probe_luau_path(
 /// Returns `(directory, aliases)` pairs ordered from closest to farthest ancestor.
 fn discover_luaurc_chain(
     start_dir: &Path,
-    cache: &mut HashMap<PathBuf, Option<HashMap<String, String>>>,
-) -> Vec<(PathBuf, HashMap<String, String>)> {
-    let mut stack: Vec<(PathBuf, HashMap<String, String>)> = Vec::new();
+    cache: &mut FxHashMap<PathBuf, Option<FxHashMap<String, String>>>,
+) -> Vec<(PathBuf, FxHashMap<String, String>)> {
+    let mut stack: Vec<(PathBuf, FxHashMap<String, String>)> = Vec::new();
     let mut dir = start_dir.to_path_buf();
 
     loop {
@@ -251,7 +251,7 @@ fn discover_luaurc_chain(
                     && let Ok(rc) = parse_luaurc(&contents)
                     && let Some(aliases) = rc.aliases
                 {
-                    Some(aliases)
+                    Some(aliases.into_iter().collect())
                 } else {
                     None
                 }
@@ -271,8 +271,8 @@ fn discover_luaurc_chain(
 
 // Thread-local cache for .luaurc alias discovery, shared across calls within the same thread.
 thread_local! {
-    static LUAURC_CACHE: std::cell::RefCell<HashMap<PathBuf, Option<HashMap<String, String>>>> =
-        std::cell::RefCell::new(HashMap::new());
+    static LUAURC_CACHE: std::cell::RefCell<FxHashMap<PathBuf, Option<FxHashMap<String, String>>>> =
+        std::cell::RefCell::new(FxHashMap::default());
 }
 
 /// Drop all cached `.luaurc` data. Long-lived processes that rebuild
@@ -282,13 +282,13 @@ pub fn clear_luaurc_cache() {
     LUAURC_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
-fn discover_luaurc_aliases_raw(start_dir: &Path) -> HashMap<String, String> {
+fn discover_luaurc_aliases_raw(start_dir: &Path) -> FxHashMap<String, String> {
     LUAURC_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let stack = discover_luaurc_chain(start_dir, &mut cache);
 
         // Merge from farthest to closest (closest wins)
-        let mut merged: HashMap<String, String> = HashMap::new();
+        let mut merged: FxHashMap<String, String> = FxHashMap::default();
         for (_, aliases) in stack.iter().rev() {
             for (name, path) in aliases {
                 merged.insert(name.to_lowercase(), path.clone());
@@ -298,13 +298,13 @@ fn discover_luaurc_aliases_raw(start_dir: &Path) -> HashMap<String, String> {
     })
 }
 
-fn discover_luaurc_aliases_resolved(start_dir: &Path) -> HashMap<String, PathBuf> {
+fn discover_luaurc_aliases_resolved(start_dir: &Path) -> FxHashMap<String, PathBuf> {
     LUAURC_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let stack = discover_luaurc_chain(start_dir, &mut cache);
 
         // Closest .luaurc wins; paths resolved relative to their .luaurc directory
-        let mut merged: HashMap<String, PathBuf> = HashMap::new();
+        let mut merged: FxHashMap<String, PathBuf> = FxHashMap::default();
         for (rc_dir, aliases) in stack.iter().rev() {
             for (name, path_str) in aliases {
                 let normalized = path_str.replace('\\', "/");

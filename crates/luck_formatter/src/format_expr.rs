@@ -132,7 +132,7 @@ pub(crate) fn starts_with_bracket(expr: &Expression) -> bool {
         Expression::BinaryOp(binop) => starts_with_bracket(&binop.left),
         Expression::TypeCast(cast) => starts_with_bracket(&cast.expr),
         Expression::FunctionCall(call) => starts_with_bracket(&call.callee),
-        Expression::Var(var) => match var.as_ref() {
+        Expression::Var(var) => match var {
             Var::Name(_) => false,
             Var::Index(index) => starts_with_bracket(&index.prefix),
             Var::FieldAccess(access) => starts_with_bracket(&access.prefix),
@@ -158,7 +158,7 @@ fn collect_access_chain(access: &FieldAccess) -> (&Expression, Vec<&Token>) {
     let mut names = vec![&access.name];
     let mut current = &access.prefix;
     while let Expression::Var(var) = current {
-        match var.as_ref() {
+        match var {
             Var::FieldAccess(inner) => {
                 names.push(&inner.name);
                 current = &inner.prefix;

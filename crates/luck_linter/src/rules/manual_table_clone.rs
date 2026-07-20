@@ -268,13 +268,9 @@ fn is_index_copy_assignment(
     match src_for_index {
         None => is_named_var(values[0], val_name),
         Some(src) => match values[0] {
-            Expression::Var(var) => match var.as_ref() {
-                Var::Index(rhs_index) => {
-                    is_named_prefix(&rhs_index.prefix, src)
-                        && is_named_var(&rhs_index.index, key_name)
-                }
-                _ => false,
-            },
+            Expression::Var(Var::Index(rhs_index)) => {
+                is_named_prefix(&rhs_index.prefix, src) && is_named_var(&rhs_index.index, key_name)
+            }
             _ => false,
         },
     }
@@ -291,7 +287,7 @@ fn is_pairs_call(expr: &Expression, semantic: &SemanticAnalysis) -> bool {
     let Expression::Var(var) = &call.callee else {
         return false;
     };
-    let Var::Name(token) = var.as_ref() else {
+    let Var::Name(token) = var else {
         return false;
     };
     let TokenKind::Identifier(name) = &token.kind else {
@@ -313,7 +309,7 @@ fn length_of_identifier(expr: &Expression) -> Option<&str> {
     let Expression::Var(var) = &unop.operand else {
         return None;
     };
-    let Var::Name(token) = var.as_ref() else {
+    let Var::Name(token) = var else {
         return None;
     };
     let TokenKind::Identifier(name) = &token.kind else {
@@ -341,7 +337,7 @@ fn is_named_var(expr: &Expression, name: &str) -> bool {
     let Expression::Var(var) = expr else {
         return false;
     };
-    let Var::Name(token) = var.as_ref() else {
+    let Var::Name(token) = var else {
         return false;
     };
     let TokenKind::Identifier(token_name) = &token.kind else {

@@ -33,8 +33,10 @@ use luck_core::TransformConfig;
 use luck_core::diagnostics::{Diagnostic, errors};
 use luck_core::types::LuaTarget;
 
-/// Convergence cap for the pipeline loop. Real programs converge in 2-3
-/// rounds; the cap only bounds pathological oscillation.
+/// Convergence cap for the outer pipeline loop and the tail's inner
+/// loop. Measured corpora converge in two outer rounds now that the
+/// tail fixpoints internally; the cap only bounds pathological
+/// oscillation.
 const MAX_PIPELINE_ROUNDS: usize = 8;
 
 /// Run the full minification pipeline on Lua source code.
@@ -87,11 +89,12 @@ pub fn minify(
     };
     let mut block = result.block;
 
-    // One flat fixpoint loop. Both a nested core-only inner loop (with
-    // Block-equality via clone) and a compact-probe variant BENCHMARKED
-    // SLOWER than simply re-running the full chain until the output
-    // stabilizes - real programs converge in 2-3 rounds either way, and
-    // the flat loop does the least redundant work per round.
+    // Outer fixpoint over the full chain. The tail iterates to its own
+    // fixpoint inside apply_tail_transforms (rename/lift/merge unblock
+    // each other over several steps), so on measured corpora the outer
+    // loop converges in two rounds: one that does the work and one that
+    // proves it stable. The core passes find nothing after round one -
+    // the extra outer rounds only guard cross-stage interactions.
     //
     // Each improving round re-parses its own output before the next one.
     // Transform-built nodes are not always shaped like their parsed
@@ -199,36 +202,78 @@ fn apply_core_transforms(
 }
 
 /// The expensive ordering-sensitive tail: explicit_self feeds the
-/// renamer (full semantic analysis), lift reshapes declarations, and a
-/// final merge fuses what lifting split.
+/// renamer, lift reshapes declarations, and merge fuses what lifting
+/// split. Lift decides by name while rename's slot reuse makes distinct
+/// bindings share names, so each lift+merge reshape can redistribute
+/// names and unblock further lifts; the inner loop runs that cascade to
+/// its own fixpoint (judged on emitted text) so the outer loop never
+/// pays a core re-run or reparse for tail-only work.
 fn apply_tail_transforms(
     block: luck_ast::shared::Block,
     config: &TransformConfig,
     target: LuaTarget,
 ) -> luck_ast::shared::Block {
+    if !config.rename_locals && !config.lift_locals {
+        return block;
+    }
+
     // explicit self before rename so the renamer can shorten the parameter
-    let block = if config.rename_locals {
+    let mut block = if config.rename_locals {
         transforms::explicit_self::rewrite(block)
     } else {
         block
     };
 
-    let block = if config.rename_locals {
-        transforms::rename_locals::rename(block, target, config.rename_globals)
-    } else {
-        block
-    };
+    // The loop can wander between name/lift configurations instead of
+    // improving monotonically; judging by equality alone would then
+    // return whatever iteration the cap lands on. Tracking the smallest
+    // emit seen makes the result the best configuration visited, not the
+    // last - and since the common trajectory ends on its best iteration,
+    // the recovery reparse below almost never runs.
+    let mut previous_output = luck_codegen::compact(&block, "");
+    let mut last_output = String::new();
+    let mut best_output = String::new();
+    let mut best_len = usize::MAX;
+    for _ in 0..MAX_PIPELINE_ROUNDS {
+        block = if config.rename_locals {
+            transforms::rename_locals::rename(block, target, config.rename_globals)
+        } else {
+            block
+        };
 
-    let block = if config.lift_locals {
-        transforms::lift_locals::lift(block)
-    } else {
-        block
-    };
+        block = if config.lift_locals {
+            transforms::lift_locals::lift(block)
+        } else {
+            block
+        };
 
-    // fuse `local X\nX=Y` back into `local X=Y` after lifting
-    if config.rename_locals && config.merge_locals {
-        transforms::merge_locals::merge(block)
+        // fuse `local X\nX=Y` back into `local X=Y` after lifting
+        block = if config.rename_locals && config.merge_locals {
+            transforms::merge_locals::merge(block)
+        } else {
+            block
+        };
+
+        let output = luck_codegen::compact(&block, "");
+        if output.len() < best_len {
+            best_len = output.len();
+            best_output.clone_from(&output);
+        }
+        if output == previous_output {
+            last_output = output;
+            break;
+        }
+        previous_output.clone_from(&output);
+        last_output = output;
+    }
+    if last_output.len() <= best_len {
+        return block;
+    }
+    let reparsed = luck_parser::parse(&best_output, target.lua_version());
+    if reparsed.errors.is_empty() {
+        reparsed.block
     } else {
+        debug_assert!(false, "tail best output failed to reparse: {best_output}");
         block
     }
 }

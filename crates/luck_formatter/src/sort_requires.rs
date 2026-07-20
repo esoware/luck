@@ -268,8 +268,7 @@ fn is_pure_require_call(source: &str, expr: &Expression) -> bool {
 
     // Plain `require(...)`
     if call.method.is_none()
-        && let Expression::Var(var) = &call.callee
-        && let Var::Name(token) = var.as_ref()
+        && let Expression::Var(Var::Name(token)) = &call.callee
     {
         let name = &source[token.span.start as usize..token.span.end as usize];
         return name == "require";
@@ -277,8 +276,7 @@ fn is_pure_require_call(source: &str, expr: &Expression) -> bool {
 
     // `game:GetService("Foo")` - method call on a Name var.
     if let Some(method_name) = &call.method
-        && let Expression::Var(var) = &call.callee
-        && let Var::Name(_) = var.as_ref()
+        && let Expression::Var(Var::Name(_)) = &call.callee
     {
         let method = &source[method_name.span.start as usize..method_name.span.end as usize];
         return method == "GetService";

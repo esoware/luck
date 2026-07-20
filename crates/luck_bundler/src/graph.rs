@@ -8,7 +8,7 @@ use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::depth_first_search;
 use petgraph::visit::{Control, DfsEvent};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::path::Path;
 
 type QueueItem = String;
@@ -44,7 +44,7 @@ pub fn build_graph(
 
     let lua_version = target.lua_version();
     let mut modules: Vec<ModuleInfo> = Vec::new();
-    let mut path_to_id: HashMap<String, ModuleId> = HashMap::new();
+    let mut path_to_id: FxHashMap<String, ModuleId> = FxHashMap::default();
     let mut graph: DiGraph<ModuleId, ()> = DiGraph::new();
     let mut node_indices: Vec<NodeIndex> = Vec::new();
     let mut errors: Vec<Diagnostic> = Vec::new();
@@ -160,7 +160,7 @@ fn process_module(
     search_paths: &[String],
     rc_dir: &Path,
     modules: &mut Vec<ModuleInfo>,
-    path_to_id: &mut HashMap<String, ModuleId>,
+    path_to_id: &mut FxHashMap<String, ModuleId>,
     graph: &mut DiGraph<ModuleId, ()>,
     node_indices: &mut Vec<NodeIndex>,
     queue: &mut Vec<QueueItem>,
@@ -250,7 +250,7 @@ fn process_module(
 /// Finds the call_span of the require statement in `from_path` that resolves to `to_path`.
 fn find_require_span(
     modules: &[ModuleInfo],
-    path_to_id: &HashMap<String, ModuleId>,
+    path_to_id: &FxHashMap<String, ModuleId>,
     from_path: &str,
     to_path: &str,
 ) -> Option<std::ops::Range<usize>> {

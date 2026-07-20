@@ -265,7 +265,7 @@ impl Synth {
 
     #[must_use]
     pub fn var_expr(&self, var: Var) -> Expression {
-        Expression::Var(Box::new(var))
+        Expression::Var(var)
     }
 
     #[must_use]
@@ -1710,20 +1710,14 @@ mod tests {
 
         // ({}).x - a table prefix must be parenthesized.
         let accessed = synth.field(synth.table(vec![]), "x");
-        let Expression::Var(var) = &accessed else {
-            panic!("expected var");
-        };
-        let Var::FieldAccess(access) = var.as_ref() else {
+        let Expression::Var(Var::FieldAccess(access)) = &accessed else {
             panic!("expected field access");
         };
         assert!(matches!(access.prefix, Expression::Parenthesized(_)));
 
         // f().x - a call prefix stays bare.
         let chained = synth.field(synth.call(synth.name_expr("f"), vec![]), "x");
-        let Expression::Var(var) = &chained else {
-            panic!("expected var");
-        };
-        let Var::FieldAccess(access) = var.as_ref() else {
+        let Expression::Var(Var::FieldAccess(access)) = &chained else {
             panic!("expected field access");
         };
         assert!(matches!(access.prefix, Expression::FunctionCall(_)));
@@ -1735,14 +1729,14 @@ mod tests {
         let table = synth.name_expr("t");
         assert!(matches!(
             synth.field_or_index(table, "valid_name"),
-            Expression::Var(var) if matches!(*var, Var::FieldAccess(_))
+            Expression::Var(Var::FieldAccess(_))
         ));
         for bad in ["not an ident", "1st", "", "end", "goto"] {
             let table = synth.name_expr("t");
             assert!(
                 matches!(
                     synth.field_or_index(table, bad),
-                    Expression::Var(var) if matches!(*var, Var::Index(_))
+                    Expression::Var(Var::Index(_))
                 ),
                 "{bad:?} should use the bracketed form"
             );

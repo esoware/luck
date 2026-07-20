@@ -102,7 +102,7 @@ fn is_global_assert(call: &FunctionCall, ctx: &LintContext) -> bool {
     let Expression::Var(var) = &call.callee else {
         return false;
     };
-    let Var::Name(token) = var.as_ref() else {
+    let Var::Name(token) = var else {
         return false;
     };
     let TokenKind::Identifier(name) = &token.kind else {

@@ -45,7 +45,7 @@ impl<'src> RestrictedChecker<'src, '_> {
         let Expression::Var(var) = &call.callee else {
             return;
         };
-        let Var::Name(token) = var.as_ref() else {
+        let Var::Name(token) = var else {
             return;
         };
         let TokenKind::Identifier(name) = &token.kind else {

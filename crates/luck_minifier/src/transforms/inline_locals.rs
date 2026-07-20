@@ -1,12 +1,13 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
-use crate::expr::ident_name_string;
+use crate::expr::ident_name;
 use crate::tokens::default_span as sp;
 use luck_ast::expr::*;
 use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_ast::visitor::Visitor;
+use luck_token::CompactString;
 use luck_token::token::TokenKind;
 
 /// Inline single-use local variables whose initializer is a CLOSED
@@ -57,18 +58,18 @@ fn is_closed_literal_expr(expr: &Expression) -> bool {
     }
 }
 
-fn find_inline_candidates(block: &Block) -> HashMap<String, InlineCandidate> {
+fn find_inline_candidates(block: &Block) -> FxHashMap<CompactString, InlineCandidate> {
     // One walk gathers everything the candidate filter needs:
     // declarations, disqualifying binders, and reference counts.
     let mut scanner = CandidateScanner {
-        declarations: HashMap::new(),
-        declared_names: std::collections::HashSet::new(),
-        shadowed: std::collections::HashSet::new(),
-        ref_counts: HashMap::new(),
+        declarations: FxHashMap::default(),
+        declared_names: rustc_hash::FxHashSet::default(),
+        shadowed: rustc_hash::FxHashSet::default(),
+        ref_counts: FxHashMap::default(),
     };
     scanner.visit_block(block);
 
-    let mut candidates = HashMap::new();
+    let mut candidates = FxHashMap::default();
     for (name, expr) in scanner.declarations {
         if scanner.shadowed.contains(&name) {
             continue;
@@ -89,13 +90,13 @@ fn find_inline_candidates(block: &Block) -> HashMap<String, InlineCandidate> {
 /// the candidate's value at its use sites - Lua 5.5 `global function`
 /// bodies included), and per-name reference counts.
 struct CandidateScanner {
-    declarations: HashMap<String, Expression>,
+    declarations: FxHashMap<CompactString, Expression>,
     // Every declared single-name local, literal or not: a SECOND
     // declaration of a name disqualifies it even when only one of the
     // two initializers is a literal.
-    declared_names: std::collections::HashSet<String>,
-    shadowed: std::collections::HashSet<String>,
-    ref_counts: HashMap<String, usize>,
+    declared_names: rustc_hash::FxHashSet<CompactString>,
+    shadowed: rustc_hash::FxHashSet<CompactString>,
+    ref_counts: FxHashMap<CompactString, usize>,
 }
 
 impl<'ast> Visitor<'ast> for CandidateScanner {
@@ -110,15 +111,15 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
                     let exprs = local.exprs.as_ref().expect("checked above");
                     let name_token = local.names.iter().next().expect("len checked above");
                     let expr = exprs.iter().next().expect("len checked above");
-                    let name = ident_name_string(&name_token.name);
-                    if self.declared_names.contains(&name) {
-                        self.shadowed.insert(name);
+                    let name = ident_name(&name_token.name);
+                    if self.declared_names.contains(name) {
+                        self.shadowed.insert(name.into());
                     } else {
-                        self.declared_names.insert(name.clone());
+                        self.declared_names.insert(name.into());
                         // Only closed literals can ever inline - skip the
                         // clone for everything else.
                         if is_closed_literal_expr(expr) {
-                            self.declarations.insert(name, expr.clone());
+                            self.declarations.insert(name.into(), expr.clone());
                         }
                     }
                 } else {
@@ -126,19 +127,19 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
                     // reference between `local x` and a later `local x = 1`
                     // resolves to THIS binding, so the name can't inline.
                     for attributed in local.names.iter() {
-                        self.shadowed.insert(ident_name_string(&attributed.name));
+                        self.shadowed.insert(ident_name(&attributed.name).into());
                     }
                 }
             }
             Statement::LocalFunction(func) => {
-                self.shadowed.insert(ident_name_string(&func.name));
+                self.shadowed.insert(ident_name(&func.name).into());
             }
             Statement::NumericFor(numeric_for) => {
-                self.shadowed.insert(ident_name_string(&numeric_for.name));
+                self.shadowed.insert(ident_name(&numeric_for.name).into());
             }
             Statement::GenericFor(generic_for) => {
                 for binding in generic_for.names.iter() {
-                    self.shadowed.insert(ident_name_string(&binding.name));
+                    self.shadowed.insert(ident_name(&binding.name).into());
                 }
             }
             // No declaration and no binder at this statement itself; the
@@ -167,7 +168,7 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
     fn visit_function_body(&mut self, body: &'ast FunctionBody) {
         for param in body.params.iter() {
             if let TokenKind::Identifier(name) = &param.name.kind {
-                self.shadowed.insert(name.to_string());
+                self.shadowed.insert(name.clone());
             }
         }
         self.walk_function_body(body);
@@ -175,14 +176,18 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
 
     fn visit_var(&mut self, var: &'ast Var) {
         if let Var::Name(name) = var {
-            *self.ref_counts.entry(ident_name_string(name)).or_insert(0) += 1;
+            if let Some(count) = self.ref_counts.get_mut(ident_name(name)) {
+                *count += 1;
+            } else {
+                self.ref_counts.insert(ident_name(name).into(), 1);
+            }
         }
         self.walk_var(var);
     }
 }
 
 struct Inliner {
-    candidates: HashMap<String, InlineCandidate>,
+    candidates: FxHashMap<CompactString, InlineCandidate>,
 }
 
 impl AstTransform for Inliner {
@@ -242,11 +247,9 @@ impl AstTransform for Inliner {
             call.callee = ensure_prefix(call.callee);
             return Expression::FunctionCall(call);
         }
-        if let Expression::Var(ref var) = expr
-            && let Var::Name(ref name) = **var
-        {
-            let var_name = ident_name_string(name);
-            if let Some(candidate) = self.candidates.get(&var_name) {
+        if let Expression::Var(Var::Name(ref name)) = expr {
+            let var_name = ident_name(name);
+            if let Some(candidate) = self.candidates.get(var_name) {
                 let replacement = candidate.expr.clone();
                 // Bare FunctionDef can't be a call prefix without parens:
                 // function() end() is invalid, needs (function() end)()
@@ -282,8 +285,7 @@ impl Inliner {
         if let Statement::LocalAssignment(local) = stmt {
             let names: Vec<_> = local.names.iter().collect();
             if names.len() == 1 {
-                let name = ident_name_string(&names[0].name);
-                return self.candidates.contains_key(&name);
+                return self.candidates.contains_key(ident_name(&names[0].name));
             }
         }
         false

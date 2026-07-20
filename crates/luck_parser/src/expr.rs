@@ -157,7 +157,7 @@ impl Parser<'_> {
             TokenKind::InterpBegin(_) => self.parse_interpolated_string(),
             TokenKind::Identifier(_) => {
                 let name_token = self.advance();
-                let var_expr = Expression::Var(Box::new(Var::Name(name_token)));
+                let var_expr = Expression::Var(Var::Name(name_token));
                 self.parse_suffixes(var_expr)
             }
             _ => {
@@ -196,11 +196,11 @@ impl Parser<'_> {
                         )
                     });
                     let span = expr.span().merge(name.span);
-                    expr = Expression::Var(Box::new(Var::FieldAccess(Box::new(FieldAccess {
+                    expr = Expression::Var(Var::FieldAccess(Box::new(FieldAccess {
                         span,
                         prefix: expr,
                         name,
-                    }))));
+                    })));
                 }
                 TokenKind::LeftBracket => {
                     self.advance_span();
@@ -212,11 +212,11 @@ impl Parser<'_> {
                             self.current_span()
                         });
                     let span = expr.span().merge(close);
-                    expr = Expression::Var(Box::new(Var::Index(Box::new(IndexExpression {
+                    expr = Expression::Var(Var::Index(Box::new(IndexExpression {
                         span,
                         prefix: expr,
                         index,
-                    }))));
+                    })));
                 }
                 TokenKind::Colon => {
                     self.advance_span();

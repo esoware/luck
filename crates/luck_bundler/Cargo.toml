@@ -18,6 +18,7 @@ luck_resolver.workspace = true
 luck_parser.workspace = true
 luck_token.workspace = true
 petgraph.workspace = true
+rustc-hash.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

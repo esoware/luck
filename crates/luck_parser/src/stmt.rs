@@ -1083,7 +1083,7 @@ impl Parser<'_> {
 /// record an error and return a synthetic Var::Name.
 fn expression_to_var(expr: Expression, parser: &mut Parser) -> Var {
     match expr {
-        Expression::Var(var) => *var,
+        Expression::Var(var) => var,
         _ => {
             let span = expr.span();
             parser.error(span, "invalid assignment target".to_string());

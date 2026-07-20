@@ -34,7 +34,7 @@ pub fn extract_requires(block: &Block, file_path: &str) -> ExtractResult {
         file_path,
         requires: Vec::new(),
         diagnostics: Vec::new(),
-        seen_require_strings: std::collections::HashSet::new(),
+        seen_require_strings: rustc_hash::FxHashSet::default(),
     };
     finder.visit_block(block);
 
@@ -57,7 +57,7 @@ struct RequireFinder<'a> {
     file_path: &'a str,
     requires: Vec<RequireInfo>,
     diagnostics: Vec<Diagnostic>,
-    seen_require_strings: std::collections::HashSet<String>,
+    seen_require_strings: rustc_hash::FxHashSet<String>,
 }
 
 impl RequireFinder<'_> {
@@ -114,10 +114,8 @@ fn is_require_call(func_call: &FunctionCall) -> bool {
     func_call.method.is_none()
         && matches!(
             &func_call.callee,
-            Expression::Var(var) if matches!(
-                var.as_ref(),
-                Var::Name(token) if matches!(&token.kind, TokenKind::Identifier(name) if name == "require")
-            )
+            Expression::Var(Var::Name(token))
+                if matches!(&token.kind, TokenKind::Identifier(name) if name == "require")
         )
 }
 
@@ -200,12 +198,12 @@ fn check_package_loaded(block: &Block, file_path: &str, diagnostics: &mut Vec<Di
 
 fn is_package_loaded_access(var: &Var) -> bool {
     // Handles all AST shapes: `package.loaded.x`, `package.loaded["x"]`, `package["loaded"].x`
-    expr_contains_package_loaded(&Expression::Var(Box::new(var.clone())))
+    expr_contains_package_loaded(&Expression::Var(var.clone()))
 }
 
 fn expr_contains_package_loaded(expr: &Expression) -> bool {
     match expr {
-        Expression::Var(var) => match var.as_ref() {
+        Expression::Var(var) => match var {
             Var::FieldAccess(field_access) => {
                 if matches!(&field_access.name.kind, TokenKind::Identifier(name) if name == "loaded")
                     && is_package_name_expr(&field_access.prefix)
@@ -231,10 +229,8 @@ fn expr_contains_package_loaded(expr: &Expression) -> bool {
 fn is_package_name_expr(expr: &Expression) -> bool {
     matches!(
         expr,
-        Expression::Var(var) if matches!(
-            var.as_ref(),
-            Var::Name(token) if matches!(&token.kind, TokenKind::Identifier(name) if name == "package")
-        )
+        Expression::Var(Var::Name(token))
+            if matches!(&token.kind, TokenKind::Identifier(name) if name == "package")
     )
 }
 

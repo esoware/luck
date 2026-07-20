@@ -175,13 +175,13 @@ impl<'src> FormatChecker<'src, '_> {
         let Expression::Var(var) = &call.callee else {
             return None;
         };
-        let Var::FieldAccess(field) = var.as_ref() else {
+        let Var::FieldAccess(field) = var else {
             return None;
         };
         let Expression::Var(prefix_var) = &field.prefix else {
             return None;
         };
-        let Var::Name(prefix_token) = prefix_var.as_ref() else {
+        let Var::Name(prefix_token) = prefix_var else {
             return None;
         };
         let TokenKind::Identifier(prefix_name) = &prefix_token.kind else {

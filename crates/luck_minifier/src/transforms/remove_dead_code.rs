@@ -1,13 +1,13 @@
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use luck_ast::expr::*;
 use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_ast::visitor::Visitor;
-use luck_token::{BinOp, UnOp};
+use luck_token::{BinOp, CompactString, UnOp};
 
-use crate::expr::{extract_boolean, ident_name_string, is_nil, is_pure_expression};
+use crate::expr::{extract_boolean, ident_name, is_nil, is_pure_expression};
 use crate::tokens::default_span as sp;
 
 /// Remove unused locals, dead branches, and trivial statements, looping until fixed-point.
@@ -82,22 +82,22 @@ fn stmt_has_loop_exit(stmt: &Statement) -> bool {
     }
 }
 
-fn collect_all_references(block: &Block) -> HashSet<String> {
+fn collect_all_references(block: &Block) -> FxHashSet<CompactString> {
     let mut collector = ReferenceCollector {
-        references: HashSet::new(),
+        references: FxHashSet::default(),
     };
     collector.visit_block(block);
     collector.references
 }
 
 struct ReferenceCollector {
-    references: HashSet<String>,
+    references: FxHashSet<CompactString>,
 }
 
 impl<'ast> Visitor<'ast> for ReferenceCollector {
     fn visit_var(&mut self, var: &'ast Var) {
         if let Var::Name(name) = var {
-            self.references.insert(ident_name_string(name));
+            self.references.insert(ident_name(name).into());
         }
         self.walk_var(var);
     }
@@ -114,7 +114,7 @@ impl<'ast> Visitor<'ast> for ReferenceCollector {
 /// the pipeline's outer loop run to fixpoint, so interleaving them
 /// reaches the same result in half the traversals.
 struct DeadCodeTransform {
-    referenced: HashSet<String>,
+    referenced: FxHashSet<CompactString>,
     changed: bool,
 }
 
@@ -224,51 +224,50 @@ impl AstTransform for DeadCodeTransform {
 
     fn transform_statement(&mut self, stmt: Statement) -> Statement {
         match stmt {
-            Statement::IfStatement(ref if_stmt) => {
+            Statement::IfStatement(mut if_stmt) => {
                 if let Some(truthy) = is_const_truthy(&if_stmt.condition) {
                     if truthy {
                         self.changed = true;
-                        let new_block = self.transform_block(if_stmt.block.clone());
+                        let new_block = self.transform_block(if_stmt.block);
                         return Statement::DoBlock(Box::new(DoBlock {
                             span: sp(),
                             block: new_block,
                         }));
-                    } else {
-                        if let Some(else_clause) = &if_stmt.else_clause {
-                            self.changed = true;
-                            let new_block = self.transform_block(else_clause.block.clone());
-                            return Statement::DoBlock(Box::new(DoBlock {
-                                span: sp(),
-                                block: new_block,
-                            }));
-                        } else if let Some(first_elseif) = if_stmt.elseif_clauses.first() {
-                            self.changed = true;
-                            let new_cond =
-                                self.transform_expression(first_elseif.condition.clone());
-                            let new_block = self.transform_block(first_elseif.block.clone());
-                            let remaining: Vec<_> =
-                                if_stmt.elseif_clauses.iter().skip(1).cloned().collect();
-                            let new_if = IfStatement {
-                                span: sp(),
-                                condition: new_cond,
-                                block: new_block,
-                                elseif_clauses: remaining,
-                                else_clause: if_stmt.else_clause.clone(),
-                            };
-                            return self
-                                .transform_statement(Statement::IfStatement(Box::new(new_if)));
-                        }
+                    } else if !if_stmt.elseif_clauses.is_empty() {
+                        // Elseif arms must be promoted before the else is
+                        // considered: taking the else first would drop them.
+                        self.changed = true;
+                        let else_clause = if_stmt.else_clause.take();
+                        let mut clauses = if_stmt.elseif_clauses.into_iter();
+                        let first_elseif = clauses.next().expect("checked non-empty above");
+                        let new_cond = self.transform_expression(first_elseif.condition);
+                        let new_block = self.transform_block(first_elseif.block);
+                        let new_if = IfStatement {
+                            span: sp(),
+                            condition: new_cond,
+                            block: new_block,
+                            elseif_clauses: clauses.collect(),
+                            else_clause,
+                        };
+                        return self.transform_statement(Statement::IfStatement(Box::new(new_if)));
+                    } else if let Some(else_clause) = if_stmt.else_clause.take() {
+                        self.changed = true;
+                        let new_block = self.transform_block(else_clause.block);
+                        return Statement::DoBlock(Box::new(DoBlock {
+                            span: sp(),
+                            block: new_block,
+                        }));
                     }
                 }
 
                 if if_stmt.block.stmts.is_empty()
                     && if_stmt.block.last_stmt.is_none()
                     && if_stmt.elseif_clauses.is_empty()
-                    && let Some(else_clause) = if_stmt.else_clause.as_ref()
+                    && let Some(else_clause) = if_stmt.else_clause.take()
                 {
                     self.changed = true;
-                    let negated = negate_expression(if_stmt.condition.clone());
-                    let new_block = self.transform_block(else_clause.block.clone());
+                    let negated = negate_expression(if_stmt.condition);
+                    let new_block = self.transform_block(else_clause.block);
                     let new_if = IfStatement {
                         span: sp(),
                         condition: negated,
@@ -279,76 +278,69 @@ impl AstTransform for DeadCodeTransform {
                     return Statement::IfStatement(Box::new(new_if));
                 }
 
-                if let Expression::UnaryOp(unop) = &if_stmt.condition
-                    && matches!(unop.op, UnOp::Not)
-                    && if_stmt.else_clause.is_some()
+                if matches!(&if_stmt.condition, Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Not))
                     && if_stmt.elseif_clauses.is_empty()
+                    && let Some(else_clause) = if_stmt.else_clause.take()
                 {
                     self.changed = true;
-                    let else_clause = if_stmt.else_clause.as_ref().expect("checked is_some above");
+                    let Expression::UnaryOp(unop) = if_stmt.condition else {
+                        unreachable!("condition matched UnaryOp above")
+                    };
                     let new_if = IfStatement {
                         span: sp(),
-                        condition: unop.operand.clone(),
-                        block: self.transform_block(else_clause.block.clone()),
+                        condition: unop.operand,
+                        block: self.transform_block(else_clause.block),
                         elseif_clauses: Vec::new(),
                         else_clause: Some(ElseClause {
                             span: sp(),
-                            block: self.transform_block(if_stmt.block.clone()),
+                            block: self.transform_block(if_stmt.block),
                         }),
                     };
                     return Statement::IfStatement(Box::new(new_if));
                 }
 
-                self.walk_statement(stmt)
+                self.walk_statement(Statement::IfStatement(if_stmt))
             }
             // A body-level break/continue binds to THIS repeat; in a
             // do-block it would rebind to an outer loop (or be invalid),
             // so the rewrite only fires when none exists.
-            Statement::RepeatLoop(ref repeat_loop)
+            Statement::RepeatLoop(repeat_loop)
                 if is_const_truthy(&repeat_loop.condition) == Some(true)
                     && !has_loop_exit(&repeat_loop.block) =>
             {
                 self.changed = true;
-                let new_block = self.transform_block(repeat_loop.block.clone());
+                let new_block = self.transform_block(repeat_loop.block);
                 Statement::DoBlock(Box::new(DoBlock {
                     span: sp(),
                     block: new_block,
                 }))
             }
             // step=1 is the default; stripping it saves bytes
-            Statement::NumericFor(ref numeric_for) => {
+            Statement::NumericFor(mut numeric_for) => {
                 if let Some(step) = &numeric_for.step
                     && let Expression::Number(literal) = step
                     && literal.text == "1"
                 {
                     self.changed = true;
-                    let mut new_nf = numeric_for.clone();
-                    new_nf.step = None;
-                    return self.walk_statement(Statement::NumericFor(Box::new(*new_nf)));
+                    numeric_for.step = None;
                 }
-                self.walk_statement(stmt)
+                self.walk_statement(Statement::NumericFor(numeric_for))
             }
             // `local x = nil` -> `local x` (nil is the default)
-            Statement::LocalAssignment(ref local) => {
-                if let Some(exprs) = &local.exprs {
-                    let names: Vec<_> = local.names.iter().collect();
-                    let expr_list: Vec<_> = exprs.iter().collect();
-                    // Const declarations keep their mandatory initializer.
-                    if names.len() == 1
-                        && expr_list.len() == 1
-                        && is_nil(expr_list[0])
-                        && !local.is_const
-                    {
-                        self.changed = true;
-                        return Statement::LocalAssignment(Box::new(LocalAssignment {
-                            span: sp(),
-                            names: local.names.clone(),
-                            exprs: None,
-                            is_const: false,
-                        }));
-                    }
+            Statement::LocalAssignment(mut local) => {
+                // Const declarations keep their mandatory initializer.
+                let single_nil = !local.is_const
+                    && local.names.len() == 1
+                    && local.exprs.as_ref().is_some_and(|exprs| {
+                        exprs.len() == 1 && is_nil(exprs.first().expect("len checked above"))
+                    });
+                if single_nil {
+                    self.changed = true;
+                    local.span = sp();
+                    local.exprs = None;
+                    return Statement::LocalAssignment(local);
                 }
-                self.walk_statement(stmt)
+                self.walk_statement(Statement::LocalAssignment(local))
             }
             other => self.walk_statement(other),
         }
@@ -368,7 +360,10 @@ impl AstTransform for DeadCodeTransform {
             && is_pure_expression(&outer.right, true)
         {
             self.changed = true;
-            return outer.right.clone();
+            let Expression::BinaryOp(outer) = expr else {
+                unreachable!("matched BinaryOp above")
+            };
+            return outer.right;
         }
         expr
     }
@@ -390,7 +385,7 @@ enum DeadLocalAction {
     ExtractCalls,
 }
 
-fn classify_dead_local(stmt: &Statement, referenced: &HashSet<String>) -> DeadLocalAction {
+fn classify_dead_local(stmt: &Statement, referenced: &FxHashSet<CompactString>) -> DeadLocalAction {
     match stmt {
         Statement::LocalAssignment(local) => {
             // `<close>` runs __close at scope exit and `<const>` affects
@@ -405,7 +400,7 @@ fn classify_dead_local(stmt: &Statement, referenced: &HashSet<String>) -> DeadLo
             let all_unused = local
                 .names
                 .iter()
-                .all(|n| !referenced.contains(&ident_name_string(&n.name)));
+                .all(|n| !referenced.contains(ident_name(&n.name)));
             if !all_unused {
                 return DeadLocalAction::Keep;
             }
@@ -427,8 +422,8 @@ fn classify_dead_local(stmt: &Statement, referenced: &HashSet<String>) -> DeadLo
             }
         }
         Statement::LocalFunction(local_func) => {
-            let name = ident_name_string(&local_func.name);
-            if referenced.contains(&name) {
+            let name = ident_name(&local_func.name);
+            if referenced.contains(name) {
                 DeadLocalAction::Keep
             } else {
                 DeadLocalAction::Remove
@@ -446,7 +441,10 @@ fn classify_dead_local(stmt: &Statement, referenced: &HashSet<String>) -> DeadLo
 }
 
 /// Returns None to remove the statement, Some(stmts) to replace it.
-fn simplify_dead_local(stmt: Statement, referenced: &HashSet<String>) -> Option<Vec<Statement>> {
+fn simplify_dead_local(
+    stmt: Statement,
+    referenced: &FxHashSet<CompactString>,
+) -> Option<Vec<Statement>> {
     match classify_dead_local(&stmt, referenced) {
         DeadLocalAction::Keep => Some(vec![stmt]),
         DeadLocalAction::Remove => None,
@@ -454,12 +452,13 @@ fn simplify_dead_local(stmt: Statement, referenced: &HashSet<String>) -> Option<
             if let Statement::LocalAssignment(local) = stmt {
                 if let Some(exprs) = local.exprs {
                     let kept: Vec<_> = exprs
-                        .iter()
+                        .into_items()
+                        .into_iter()
                         .filter_map(|expr| {
                             if let Expression::FunctionCall(call) = expr {
                                 Some(Statement::FunctionCall(Box::new(FunctionCallStmt {
                                     span: call.span,
-                                    call: *call.clone(),
+                                    call: *call,
                                 })))
                             } else {
                                 None
@@ -505,6 +504,23 @@ mod tests {
     fn removes_if_false() {
         let r = apply("if false then print(1) end\n");
         assert!(!r.contains("print"), "if false branch not removed: {r}");
+    }
+
+    #[test]
+    fn if_false_promotes_elseif_and_keeps_else() {
+        let r = apply("if false then print(1) elseif x then print(2) else print(3) end\n");
+        assert!(!r.contains("print(1)"), "dead branch must go: {r}");
+        assert!(r.contains("print(2)"), "elseif branch must survive: {r}");
+        assert!(r.contains("print(3)"), "else branch must survive: {r}");
+        assert!(r.contains("if x"), "elseif must be promoted to if: {r}");
+    }
+
+    #[test]
+    fn if_false_chained_elseifs_collapse_to_else() {
+        let r = apply("if false then print(1) elseif false then print(2) else print(3) end\n");
+        assert!(!r.contains("print(1)"), "dead branch must go: {r}");
+        assert!(!r.contains("print(2)"), "dead elseif must go: {r}");
+        assert!(r.contains("print(3)"), "else branch must survive: {r}");
     }
 
     #[test]

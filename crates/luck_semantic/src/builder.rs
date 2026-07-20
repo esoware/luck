@@ -20,7 +20,7 @@ pub struct ScopeTreeBuilder {
     /// benchmarked quadratic on files with hundreds of live module-level
     /// locals, and per-scope maps cost an allocation per block - this keeps
     /// one map whose per-name stacks (and their capacity) are reused.
-    bindings: std::collections::HashMap<CompactString, Vec<SymbolId>>,
+    bindings: rustc_hash::FxHashMap<CompactString, Vec<SymbolId>>,
     /// Undo log: names declared since each scope entry, popped on exit.
     declared_names: Vec<CompactString>,
     /// `declared_names` length at each scope entry.
@@ -35,7 +35,7 @@ impl ScopeTreeBuilder {
             // always the first scope and therefore index 0.
             current_scope: ScopeId::from_index(0),
             outer_scopes: Vec::new(),
-            bindings: std::collections::HashMap::new(),
+            bindings: rustc_hash::FxHashMap::default(),
             declared_names: Vec::new(),
             binding_marks: Vec::new(),
         }

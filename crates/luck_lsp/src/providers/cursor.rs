@@ -114,7 +114,7 @@ impl TargetFinder {
         let mut cursor: &Expression = &fa.prefix;
         loop {
             match cursor {
-                Expression::Var(var) => match var.as_ref() {
+                Expression::Var(var) => match var {
                     Var::Name(token) => {
                         if let Some(name) = Self::token_name(token) {
                             segments.push(name);
@@ -178,7 +178,7 @@ impl TargetFinder {
         let mut path = Vec::new();
         let is_method = call.method.is_some();
         if let Expression::Var(var) = &call.callee {
-            match var.as_ref() {
+            match var {
                 Var::Name(token) => {
                     if let Some(name) = Self::token_name(token) {
                         path.push(name);
@@ -193,7 +193,7 @@ impl TargetFinder {
                     let mut cursor: &Expression = &fa.prefix;
                     loop {
                         match cursor {
-                            Expression::Var(inner_var) => match inner_var.as_ref() {
+                            Expression::Var(inner_var) => match inner_var {
                                 Var::Name(token) => {
                                     if let Some(name) = Self::token_name(token) {
                                         segments.push(name);
@@ -308,7 +308,7 @@ impl CallSiteFinder<'_> {
 fn call_path(call: &FunctionCall) -> Vec<String> {
     let mut path = Vec::new();
     if let Expression::Var(var) = &call.callee {
-        match var.as_ref() {
+        match var {
             Var::Name(token) => {
                 if let TokenKind::Identifier(name) = &token.kind {
                     path.push(name.to_string());
@@ -322,7 +322,7 @@ fn call_path(call: &FunctionCall) -> Vec<String> {
                 let mut cursor: &Expression = &fa.prefix;
                 loop {
                     match cursor {
-                        Expression::Var(inner_var) => match inner_var.as_ref() {
+                        Expression::Var(inner_var) => match inner_var {
                             Var::Name(token) => {
                                 if let TokenKind::Identifier(name) = &token.kind {
                                     segments.push(name.to_string());

@@ -132,13 +132,13 @@ fn table_stdlib_function<'a>(call: &'a FunctionCall, ctx: &LintContext) -> Optio
     let Expression::Var(var) = &call.callee else {
         return None;
     };
-    let Var::FieldAccess(fa) = var.as_ref() else {
+    let Var::FieldAccess(fa) = var else {
         return None;
     };
     let Expression::Var(prefix_var) = &fa.prefix else {
         return None;
     };
-    let Var::Name(prefix_token) = prefix_var.as_ref() else {
+    let Var::Name(prefix_token) = prefix_var else {
         return None;
     };
     let TokenKind::Identifier(prefix_name) = &prefix_token.kind else {
@@ -202,7 +202,7 @@ fn same_target(a: &Expression, b: &Expression) -> bool {
     let (Expression::Var(a), Expression::Var(b)) = (a, b) else {
         return false;
     };
-    match (a.as_ref(), b.as_ref()) {
+    match (a, b) {
         (Var::Name(a), Var::Name(b)) => match (&a.kind, &b.kind) {
             (TokenKind::Identifier(a_name), TokenKind::Identifier(b_name)) => a_name == b_name,
             _ => false,

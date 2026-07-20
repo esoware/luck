@@ -72,7 +72,7 @@ fn diagnostic(name: &str, span: Span) -> LintDiagnostic {
 
 fn expr_base_ident(expr: &Expression) -> Option<(&str, Span)> {
     match expr {
-        Expression::Var(var) => match var.as_ref() {
+        Expression::Var(var) => match var {
             Var::Name(token) => match &token.kind {
                 TokenKind::Identifier(name) => Some((name.as_str(), token.span)),
                 _ => None,

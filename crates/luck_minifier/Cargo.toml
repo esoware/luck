@@ -14,8 +14,8 @@ rust-version.workspace = true
 [dependencies]
 itoa.workspace = true
 ryu.workspace = true
+rustc-hash.workspace = true
 luck_core.workspace = true
-luck_semantic.workspace = true
 luck_token.workspace = true
 luck_ast.workspace = true
 luck_parser.workspace = true
@@ -23,5 +23,4 @@ luck_codegen.workspace = true
 
 [dev-dependencies]
 luck_core.workspace = true
-luck_semantic.workspace = true
 luck_parser.workspace = true

@@ -63,7 +63,7 @@ fn is_length_of_identifier(expr: &Expression) -> bool {
         && unop.op == UnOp::Len
         && let Expression::Var(var) = &unop.operand
     {
-        return matches!(&**var, luck_ast::expr::Var::Name(_));
+        return matches!(var, luck_ast::expr::Var::Name(_));
     }
     false
 }

@@ -38,7 +38,7 @@ fn is_udim2_new_call(call: &FunctionCall, ctx: &LintContext) -> bool {
     let Expression::Var(var) = &call.callee else {
         return false;
     };
-    let Var::FieldAccess(field) = var.as_ref() else {
+    let Var::FieldAccess(field) = var else {
         return false;
     };
     if !matches!(&field.name.kind, TokenKind::Identifier(name) if name == "new") {
@@ -47,7 +47,7 @@ fn is_udim2_new_call(call: &FunctionCall, ctx: &LintContext) -> bool {
     let Expression::Var(prefix_var) = &field.prefix else {
         return false;
     };
-    let Var::Name(token) = prefix_var.as_ref() else {
+    let Var::Name(token) = prefix_var else {
         return false;
     };
     matches!(&token.kind, TokenKind::Identifier(name) if name == "UDim2")

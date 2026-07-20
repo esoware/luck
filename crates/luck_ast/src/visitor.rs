@@ -371,9 +371,7 @@ mod tests {
     }
 
     fn name_expr(name: &str) -> Expression {
-        Expression::Var(Box::new(Var::Name(token(TokenKind::Identifier(
-            name.into(),
-        )))))
+        Expression::Var(Var::Name(token(TokenKind::Identifier(name.into()))))
     }
 
     fn nil_expr() -> Expression {

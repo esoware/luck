@@ -79,7 +79,7 @@ pub fn is_pure_expression(expr: &Expression, allow_var_reads: bool) -> bool {
         }),
         Expression::Var(var) => {
             allow_var_reads
-                && match var.as_ref() {
+                && match var {
                     Var::Name(_) => true,
                     // Field access can raise (nil prefix) or fire __index -
                     // exactly as impure as Var::Index (hard invariant 6).
@@ -157,11 +157,11 @@ pub fn is_valid_identifier(s: &str) -> bool {
     !LUA_KEYWORDS.contains(&s)
 }
 
-pub fn ident_name_string(token: &luck_token::Token) -> String {
+pub fn ident_name(token: &luck_token::Token) -> &str {
     if let TokenKind::Identifier(ref name) = token.kind {
-        name.to_string()
+        name
     } else {
-        String::new()
+        ""
     }
 }
 

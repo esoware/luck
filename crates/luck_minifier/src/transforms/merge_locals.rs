@@ -1,13 +1,13 @@
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use luck_ast::expr::*;
 use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_ast::visitor::Visitor;
-use luck_token::Token;
+use luck_token::{CompactString, Token};
 
-use crate::expr::{ident_name_string, is_pure_expression};
+use crate::expr::{ident_name, is_pure_expression};
 use crate::tokens::default_span as sp;
 
 /// Merge consecutive single-assignment locals (or globals) into multi-assignment statements.
@@ -63,9 +63,9 @@ impl AstTransform for LocalMerger {
         // and `next` moves the statement into the group.
         while let Some(first_stmt) = iter.next() {
             let first_parts = extract_single_assignment_parts(&first_stmt)
-                .map(|(name, _, is_local)| (ident_name_string(name), is_local));
+                .map(|(name, _, is_local)| (CompactString::from(ident_name(name)), is_local));
             if let Some((first_name, is_local)) = first_parts {
-                let mut declared: HashSet<String> = HashSet::new();
+                let mut declared: FxHashSet<CompactString> = FxHashSet::default();
                 declared.insert(first_name);
                 let mut group: Vec<Statement> = vec![first_stmt];
 
@@ -81,7 +81,7 @@ impl AstTransform for LocalMerger {
                                 {
                                     false
                                 } else {
-                                    declared.insert(ident_name_string(name));
+                                    declared.insert(ident_name(name).into());
                                     true
                                 }
                             }
@@ -214,22 +214,22 @@ fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
         if let Statement::LocalAssignment(ref local) = stmt
             && local.exprs.is_none()
         {
-            let local_names: Vec<String> = local
+            let local_names: Vec<CompactString> = local
                 .names
                 .iter()
-                .map(|attributed| ident_name_string(&attributed.name))
+                .map(|attributed| ident_name(&attributed.name).into())
                 .collect();
             if let Some(Statement::Assignment(assign)) = iter.peek() {
                 // EVERY target must be a bare name - filtering out field
                 // targets and then comparing silently deleted `t.x = ...`
                 // from `a, t.x = 1, 2`.
                 let target_count = assign.targets.iter().count();
-                let assign_names: Vec<String> = assign
+                let assign_names: Vec<CompactString> = assign
                     .targets
                     .iter()
                     .filter_map(|v| {
                         if let Var::Name(n) = v {
-                            Some(ident_name_string(n))
+                            Some(ident_name(n).into())
                         } else {
                             None
                         }
@@ -239,7 +239,7 @@ fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
                 // `local f; f = function() f() end` the body's `f` is the
                 // NEW binding; fused into `local f = function() ... end`
                 // it would resolve to the outer scope.
-                let name_set: HashSet<String> = local_names.iter().cloned().collect();
+                let name_set: FxHashSet<CompactString> = local_names.iter().cloned().collect();
                 let rhs_uses_names = assign
                     .values
                     .iter()
@@ -275,7 +275,7 @@ fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
 /// since assignment targets and compound-assignment vars are `Var::Name` nodes
 /// that `walk_statement` routes through `visit_var`.
 struct ReferenceFinder<'a> {
-    names: &'a HashSet<String>,
+    names: &'a FxHashSet<CompactString>,
     found: bool,
 }
 
@@ -285,7 +285,7 @@ impl<'ast> Visitor<'ast> for ReferenceFinder<'_> {
             return;
         }
         if let Var::Name(name) = var
-            && self.names.contains(&ident_name_string(name))
+            && self.names.contains(ident_name(name))
         {
             self.found = true;
             return;
@@ -308,7 +308,7 @@ impl<'ast> Visitor<'ast> for ReferenceFinder<'_> {
     }
 }
 
-fn references_any_in_expr(expr: &Expression, names: &HashSet<String>) -> bool {
+fn references_any_in_expr(expr: &Expression, names: &FxHashSet<CompactString>) -> bool {
     let mut finder = ReferenceFinder {
         names,
         found: false,
@@ -318,7 +318,7 @@ fn references_any_in_expr(expr: &Expression, names: &HashSet<String>) -> bool {
 }
 
 #[cfg(test)]
-fn references_any_in_block(block: &Block, names: &HashSet<String>) -> bool {
+fn references_any_in_block(block: &Block, names: &FxHashSet<CompactString>) -> bool {
     let mut finder = ReferenceFinder {
         names,
         found: false,
@@ -380,8 +380,8 @@ mod tests {
         assert_eq!(equal_count, 1, "Global assignments should merge, got: {r}");
     }
 
-    fn names_of(items: &[&str]) -> HashSet<String> {
-        items.iter().map(|s| s.to_string()).collect()
+    fn names_of(items: &[&str]) -> FxHashSet<CompactString> {
+        items.iter().map(|s| CompactString::from(*s)).collect()
     }
 
     fn parse_block(source: &str) -> Block {

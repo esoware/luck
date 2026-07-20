@@ -170,10 +170,7 @@ pub trait AstTransform {
                 func_def.body = self.walk_function_body(func_def.body);
                 Expression::FunctionDef(func_def)
             }
-            Expression::Var(var) => {
-                let var = self.transform_var(*var);
-                Expression::Var(Box::new(var))
-            }
+            Expression::Var(var) => Expression::Var(self.transform_var(var)),
             Expression::FunctionCall(call) => {
                 let call = self.walk_function_call(*call);
                 Expression::FunctionCall(Box::new(call))
