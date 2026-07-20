@@ -1,8 +1,6 @@
-use luck_ast::Expression;
 use luck_ast::expr::FunctionCall;
 use luck_semantic::SemanticAnalysis;
-use luck_semantic::stdlib_model::{EntryKind, StdlibEntry};
-use luck_token::Span;
+use luck_semantic::stdlib_model::StdlibEntry;
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -32,62 +30,14 @@ impl Rule for MustUse {
     }
 }
 
-struct MustUseChecker<'a> {
-    source: &'a str,
-    semantic: &'a SemanticAnalysis,
-}
-
-impl<'src> MustUseChecker<'src> {
-    fn must_use_name(&self, call: &FunctionCall) -> Option<String> {
-        // Method calls hit instance metatables - out of scope.
-        if call.method.is_some() {
-            return None;
-        }
-        let (path, display_name) = self.resolve_callee_path(&call.callee)?;
-        let entry: &StdlibEntry = self.semantic.lookup_stdlib_str(&path)?;
-        if let EntryKind::Function(func) = &entry.kind
-            && func.must_use
-        {
-            Some(display_name)
-        } else {
-            None
-        }
-    }
-
-    fn resolve_callee_path(&self, expr: &Expression) -> Option<(Vec<&'src str>, String)> {
-        let Expression::Var(var) = expr else {
-            return None;
-        };
-        match var {
-            luck_ast::expr::Var::Name(token) => {
-                let name = self.slice(token.span);
-                // Shadowed base names are user values, not the stdlib.
-                if self.semantic.resolves_to_local(name, token.span) {
-                    return None;
-                }
-                Some((vec![name], name.to_string()))
-            }
-            luck_ast::expr::Var::FieldAccess(fa) => {
-                let Expression::Var(prefix_var) = &fa.prefix else {
-                    return None;
-                };
-                let luck_ast::expr::Var::Name(prefix_token) = prefix_var else {
-                    return None;
-                };
-                let prefix = self.slice(prefix_token.span);
-                // Shadowed base names are user values, not the stdlib.
-                if self.semantic.resolves_to_local(prefix, prefix_token.span) {
-                    return None;
-                }
-                let field = self.slice(fa.name.span);
-                Some((vec![prefix, field], format!("{prefix}.{field}")))
-            }
-            _ => None,
-        }
-    }
-
-    fn slice(&self, span: Span) -> &'src str {
-        &self.source[span.start as usize..span.end as usize]
+fn must_use_name(semantic: &SemanticAnalysis, call: &FunctionCall) -> Option<String> {
+    let (display_name, resolved) = semantic.resolve_callee(call)?;
+    if let StdlibEntry::Function(func) = resolved.entry
+        && func.must_use
+    {
+        Some(display_name)
+    } else {
+        None
     }
 }
 
@@ -105,11 +55,7 @@ impl NodeRule for MustUse {
         out: &mut Vec<LintDiagnostic>,
     ) {
         if let luck_ast::Statement::FunctionCall(call_stmt) = stmt
-            && let Some(name) = (MustUseChecker {
-                source: ctx.source,
-                semantic: ctx.semantic,
-            })
-            .must_use_name(&call_stmt.call)
+            && let Some(name) = must_use_name(ctx.semantic, &call_stmt.call)
         {
             out.push(
                 LintDiagnostic::new(
@@ -187,6 +133,23 @@ mod tests {
     #[test]
     fn ignores_method_call() {
         let messages = warnings("obj:tostring()", LuaVersion::Lua54);
+        assert!(messages.is_empty(), "{messages:?}");
+    }
+
+    #[test]
+    fn flags_discarded_string_method() {
+        let messages = warnings("local s = 'x'\ns:upper()", LuaVersion::Lua54);
+        assert!(
+            messages.iter().any(|m| m.contains("s:upper")),
+            "{messages:?}"
+        );
+    }
+
+    // A bare f:seek('set') rewind is idiomatic; seek is deliberately
+    // not must_use.
+    #[test]
+    fn ignores_discarded_file_seek() {
+        let messages = warnings("local f = io.open('x')\nf:seek('set')", LuaVersion::Lua54);
         assert!(messages.is_empty(), "{messages:?}");
     }
 }

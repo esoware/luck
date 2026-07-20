@@ -21,3 +21,7 @@ toml = { workspace = true }
 
 [dev-dependencies]
 luck_parser = { workspace = true }
+# Used only by the ignored regenerate_roblox_api test to fetch the live
+# Roblox API dump.
+ureq = { workspace = true }
+serde_json = { workspace = true }

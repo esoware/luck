@@ -44,6 +44,7 @@ pub mod reversed_for_loop;
 pub mod roblox_incorrect_color3_new_bounds;
 pub mod roblox_manual_fromscale_or_fromoffset;
 pub mod roblox_suspicious_udim2_new;
+pub mod roblox_unknown_enum_member;
 pub mod set_but_never_read;
 pub mod setting_global;
 pub mod shadowing;
@@ -217,6 +218,10 @@ pub static RULES: &[RuleEntry] = &[
         &roblox_manual_fromscale_or_fromoffset::RobloxManualFromScaleOrFromOffset,
         &roblox_manual_fromscale_or_fromoffset::RobloxManualFromScaleOrFromOffset,
     ),
+    RuleEntry::Node(
+        &roblox_unknown_enum_member::RobloxUnknownEnumMember,
+        &roblox_unknown_enum_member::RobloxUnknownEnumMember,
+    ),
 ];
 
 pub fn all_rules() -> Vec<&'static dyn Rule> {
@@ -272,7 +277,7 @@ mod tests {
     fn rule_count_locked() {
         // If this changes, update the rule count in README.md,
         // crates/luck_linter/README.md, and CLAUDE.md.
-        assert_eq!(all_rules().len(), 63);
+        assert_eq!(all_rules().len(), 64);
     }
 
     #[test]

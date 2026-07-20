@@ -1,12 +1,13 @@
 use luck_ast::Expression;
-use luck_ast::expr::{FunctionArgs, FunctionCall};
+use luck_ast::expr::{FunctionArgs, FunctionCall, Var};
 use luck_ast::node::{AstTypesBitset, NodeType};
 use luck_semantic::SemanticAnalysis;
 use luck_semantic::stdlib_model::{
-    EntryKind, StdlibDeprecation, StdlibEntry, expand_replace_template,
+    StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, expand_replace_template,
 };
 use luck_token::Span;
 
+use super::incorrect_stdlib_use::string_literal_value;
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
 
@@ -39,65 +40,125 @@ struct DeprecatedChecker<'src, 'out> {
 
 impl<'src> DeprecatedChecker<'src, '_> {
     fn check_call(&mut self, call: &FunctionCall, is_statement: bool) {
-        // Method calls (`obj:method(...)`) hit instance metatables, not
-        // stdlib paths - we can't resolve them with confidence.
-        if call.method.is_some() {
+        let Some((display_name, resolved)) = self.semantic.resolve_callee(call) else {
+            return;
+        };
+
+        if let Some(deprecation) = resolved.entry.deprecation() {
+            let fix = self.build_fix(call, deprecation, &display_name, is_statement);
+            self.out.push(
+                LintDiagnostic::new(
+                    "deprecated",
+                    format!("'{display_name}' is deprecated"),
+                    call.span,
+                )
+                .with_help(deprecation.message.to_string())
+                .with_fix_opt(fix),
+            );
             return;
         }
 
-        let Some((segments, display_name)) = self.resolve_callee_path(&call.callee) else {
-            return;
-        };
-
-        let Some(entry) = self.semantic.lookup_stdlib_str(&segments) else {
-            return;
-        };
-
-        let Some(deprecation) = function_deprecation(entry) else {
-            return;
-        };
-
-        let fix = self.build_fix(call, deprecation, &display_name, is_statement);
-        self.out.push(
-            LintDiagnostic::new(
-                "deprecated",
-                format!("'{display_name}' is deprecated"),
-                call.span,
-            )
-            .with_help(deprecation.message.to_string())
-            .with_fix_opt(fix),
-        );
+        if let StdlibEntry::Function(func) = resolved.entry {
+            self.check_deprecated_constants(call, &display_name, func);
+            self.check_deprecated_params(call, &display_name, func);
+        }
     }
 
-    fn resolve_callee_path(&self, expr: &Expression) -> Option<(Vec<&'src str>, String)> {
-        let Expression::Var(var) = expr else {
-            return None;
+    /// A live function called with an argument in a position every
+    /// arity-matching signature marks deprecated (e.g. the `parent`
+    /// arg of `Instance.new`). Fires on any expression, not just
+    /// literals - passing the position at all is the problem.
+    fn check_deprecated_params(
+        &mut self,
+        call: &FunctionCall,
+        display_name: &str,
+        func: &StdlibFunction,
+    ) {
+        let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+            return;
         };
-        match var {
-            luck_ast::expr::Var::Name(token) => {
-                let name = self.slice(token.span);
-                // Shadowed base names are user values, not the stdlib.
-                if self.semantic.resolves_to_local(name, token.span) {
-                    return None;
+        let arg_count = args.len();
+        for (idx, expr) in args.iter().enumerate() {
+            let mut deprecation: Option<&StdlibDeprecation> = None;
+            let mut live = false;
+            for sig in func.matching_signatures(arg_count) {
+                match sig
+                    .params
+                    .get(idx)
+                    .and_then(|param| param.deprecated.as_ref())
+                {
+                    Some(dep) => deprecation = deprecation.or(Some(dep)),
+                    None => live = true,
                 }
-                Some((vec![name], name.to_string()))
             }
-            luck_ast::expr::Var::FieldAccess(field_access) => {
-                let Expression::Var(prefix_var) = &field_access.prefix else {
-                    return None;
-                };
-                let luck_ast::expr::Var::Name(prefix_token) = prefix_var else {
-                    return None;
-                };
-                let prefix = self.slice(prefix_token.span);
-                // Shadowed base names are user values, not the stdlib.
-                if self.semantic.resolves_to_local(prefix, prefix_token.span) {
-                    return None;
+            if live {
+                continue;
+            }
+            if let Some(deprecation) = deprecation {
+                self.out.push(
+                    LintDiagnostic::new(
+                        "deprecated",
+                        format!("argument {} of '{display_name}' is deprecated", idx + 1),
+                        expr.span(),
+                    )
+                    .with_help(deprecation.message.to_string()),
+                );
+            }
+        }
+    }
+
+    /// A live function called with a deprecated constant value (e.g. a
+    /// dead service name in `game:GetService(...)`, or
+    /// `collectgarbage("setpause")` in 5.4). Same matching discipline
+    /// as the constant-set arity check: only literal strings, only
+    /// positions constrained in every signature accepting this arity.
+    fn check_deprecated_constants(
+        &mut self,
+        call: &FunctionCall,
+        display_name: &str,
+        func: &StdlibFunction,
+    ) {
+        let positional_args: Vec<&Expression> = match &call.args {
+            FunctionArgs::Parenthesized { args, .. } => args.iter().collect(),
+            FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => Vec::new(),
+        };
+        let arg_count = match &call.args {
+            FunctionArgs::Parenthesized { args, .. } => args.len(),
+            FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => 1,
+        };
+        for (idx, expr) in positional_args.iter().enumerate() {
+            let Some((value, span)) = string_literal_value(expr, self.source) else {
+                continue;
+            };
+            let mut deprecation: Option<&StdlibDeprecation> = None;
+            let mut constrained = false;
+            let mut unconstrained = false;
+            for sig in func.matching_signatures(arg_count) {
+                match sig.params.get(idx).map(|param| &param.kind) {
+                    Some(StdlibArgKind::Constant(values)) => {
+                        constrained = true;
+                        if let Some(constant) =
+                            values.iter().find(|constant| constant.value == value)
+                        {
+                            deprecation = deprecation.or(constant.deprecated.as_ref());
+                        }
+                    }
+                    _ => unconstrained = true,
                 }
-                let field = self.slice(field_access.name.span);
-                Some((vec![prefix, field], format!("{prefix}.{field}")))
             }
-            _ => None,
+            if !constrained || unconstrained {
+                continue;
+            }
+            if let Some(deprecation) = deprecation {
+                self.out.push(
+                    LintDiagnostic::new(
+                        "deprecated",
+                        format!("'{value}' is a deprecated argument of '{display_name}'"),
+                        span,
+                    )
+                    .with_help(deprecation.message.to_string()),
+                );
+            }
         }
     }
 
@@ -151,18 +212,83 @@ impl<'src> DeprecatedChecker<'src, '_> {
     }
 }
 
-fn function_deprecation(entry: &StdlibEntry) -> Option<&StdlibDeprecation> {
-    match &entry.kind {
-        EntryKind::Function(func) => func.deprecated.as_ref(),
-        EntryKind::Constant(value) | EntryKind::Property(value) => value.deprecated.as_ref(),
-        EntryKind::Namespace(_) => None,
+impl DeprecatedChecker<'_, '_> {
+    /// Deprecated value READS: a dotted access resolving to a
+    /// deprecated constant, property, or namespace (deprecated Roblox
+    /// enum items and types). Functions are excluded here - their use
+    /// site is the call, which `check_call` already reports.
+    fn check_field_access(&mut self, expr: &Expression) {
+        let Expression::Var(Var::FieldAccess(_)) = expr else {
+            return;
+        };
+        let Some((segments, spans)) = dotted_path(expr) else {
+            return;
+        };
+        if self.semantic.resolves_to_local(segments[0], spans[0]) {
+            return;
+        }
+        let Some(entry) = self.semantic.stdlib().lookup_str(&segments) else {
+            return;
+        };
+        if matches!(entry, StdlibEntry::Function(_)) {
+            return;
+        }
+        // Only this node's own entry: a deprecated prefix is reported
+        // by the inner access node, so chains warn exactly once.
+        let Some(deprecation) = entry.deprecation() else {
+            return;
+        };
+        let display_name = segments.join(".");
+        self.out.push(
+            LintDiagnostic::new(
+                "deprecated",
+                format!("'{display_name}' is deprecated"),
+                *spans.last().expect("span per segment"),
+            )
+            .with_help(deprecation.message.to_string()),
+        );
+    }
+}
+
+/// Unwind a `Name(.Name)*` chain into segments and per-segment spans.
+fn dotted_path(expr: &Expression) -> Option<(Vec<&str>, Vec<Span>)> {
+    let mut segments: Vec<&str> = Vec::new();
+    let mut spans: Vec<Span> = Vec::new();
+    let mut cursor = expr;
+    loop {
+        match cursor {
+            Expression::Var(Var::Name(token)) => {
+                segments.push(identifier(token)?);
+                spans.push(token.span);
+                break;
+            }
+            Expression::Var(Var::FieldAccess(field_access)) => {
+                segments.push(identifier(&field_access.name)?);
+                spans.push(field_access.name.span);
+                cursor = &field_access.prefix;
+            }
+            _ => return None,
+        }
+    }
+    segments.reverse();
+    spans.reverse();
+    Some((segments, spans))
+}
+
+fn identifier(token: &luck_token::Token) -> Option<&str> {
+    match &token.kind {
+        luck_token::TokenKind::Identifier(name) => Some(name.as_str()),
+        _ => None,
     }
 }
 
 impl NodeRule for Deprecated {
     fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset =
-            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
+        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[
+            NodeType::FunctionCallStmt,
+            NodeType::FunctionCallExpr,
+            NodeType::Var,
+        ]);
         Some(&TYPES)
     }
     fn on_statement(
@@ -181,13 +307,15 @@ impl NodeRule for Deprecated {
         }
     }
     fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if let Expression::FunctionCall(call) = expr {
-            DeprecatedChecker {
-                source: ctx.source,
-                semantic: ctx.semantic,
-                out,
-            }
-            .check_call(call, false);
+        let mut checker = DeprecatedChecker {
+            source: ctx.source,
+            semantic: ctx.semantic,
+            out,
+        };
+        match expr {
+            Expression::FunctionCall(call) => checker.check_call(call, false),
+            Expression::Var(_) => checker.check_field_access(expr),
+            _ => {}
         }
     }
 }
@@ -284,5 +412,80 @@ mod tests {
         // what type `obj` is, so no diagnostic.
         let diags = crate::test_support::run_rule(&Deprecated, "obj:getn()", LuaVersion::Lua54);
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_deprecated_string_method_on_literal() {
+        // The derived string receiver keeps entry deprecation, so the
+        // colon form of gfind warns like the dotted one.
+        let diags = crate::test_support::run_rule(
+            &Deprecated,
+            "local it = ('x'):gfind('a')",
+            LuaVersion::Lua51,
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("gfind")),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_dead_service_name() {
+        let diags = crate::test_support::run_rule_roblox(
+            &Deprecated,
+            "local p = game:GetService('PointsService')",
+        );
+        assert!(
+            diags.iter().any(|d| d
+                .message
+                .contains("'PointsService' is a deprecated argument")),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_live_service_name() {
+        let diags = crate::test_support::run_rule_roblox(
+            &Deprecated,
+            "local p = game:GetService('Players')",
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_deprecated_instance_new_parent_arg() {
+        let diags = crate::test_support::run_rule_roblox(
+            &Deprecated,
+            "local p = Instance.new('Part', workspace)",
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("argument 2 of 'Instance.new'")),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_instance_new_without_parent_arg() {
+        let diags =
+            crate::test_support::run_rule_roblox(&Deprecated, "local p = Instance.new('Part')");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_deprecated_collectgarbage_option() {
+        // Per-constant deprecation from the 5.4 GC rework.
+        let diags = crate::test_support::run_rule(
+            &Deprecated,
+            "collectgarbage('setpause', 100)",
+            LuaVersion::Lua54,
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("'setpause' is a deprecated argument")),
+            "{diags:?}"
+        );
     }
 }

@@ -1,12 +1,14 @@
-# Lua 5.2 standard library descriptors. Selene base + 5.2 changes:
-#   - getfenv, setfenv, loadstring, module, newproxy removed
-#   - unpack, math.log10, math.mod, math.pow, string.gfind, table.getn,
-#     table.foreach, table.foreachi marked deprecated with templates
-#   - rawlen, bit32, table.pack, table.unpack added
-#   - math.log gains optional second arg
-#   - os.exit gains optional bool arg
-
-# ---- bare-word globals ----
+# Lua 5.2 standard library, verified against the 5.2 reference manual
+# (https://www.lua.org/manual/5.2/). Notable vs 5.1:
+#   - getfenv, setfenv, module, newproxy gone; loadstring kept as a
+#     deprecated compat alias for load
+#   - unpack, math.log10, math.mod, string.gfind, table.getn,
+#     table.foreach, table.foreachi kept as deprecated compat entries
+#     (their replacements exist in 5.2 itself)
+#   - rawlen, bit32, table.pack, table.unpack, the debug uservalue and
+#     upvalue functions added
+#   - load/loadfile/xpcall/os.exit/io.lines/string.rep/math.log grow
+#     new parameters; pairs/ipairs accept any __pairs/__ipairs subject
 
 [globals._G]
 kind = "property"
@@ -22,6 +24,7 @@ max_args = -1
 params = [
   { kind = "any" },
   { kind = "string", required = false },
+  { kind = "vararg", required = false },
 ]
 
 [globals.collectgarbage]
@@ -29,7 +32,7 @@ kind = "function"
 min_args = 0
 max_args = 2
 params = [
-  { kind = "constant", values = ["collect", "count", "restart", "setpause", "setstepmul", "step", "stop"], required = false },
+  { kind = "constant", values = ["collect", "count", "generational", "incremental", "isrunning", "restart", "setpause", "setstepmul", "step", "stop"], required = false },
   { kind = "number", required = false },
 ]
 
@@ -61,7 +64,7 @@ min_args = 1
 max_args = 1
 is_pure = true
 must_use = true
-params = [{ kind = "table" }]
+params = [{ kind = "any" }]
 
 [globals.load]
 kind = "function"
@@ -111,7 +114,7 @@ min_args = 1
 max_args = 1
 is_pure = true
 must_use = true
-params = [{ kind = "table" }]
+params = [{ kind = "any" }]
 
 [globals.pcall]
 kind = "function"
@@ -181,7 +184,7 @@ min_args = 2
 max_args = 2
 params = [
   { kind = "table" },
-  { kind = "table", required = false, accepts_nil = true },
+  { kind = "table", accepts_nil = true },
 ]
 
 [globals.tonumber]
@@ -259,7 +262,7 @@ max_args = -1
 is_pure = true
 must_use = true
 params = [
-  { kind = "number" },
+  { kind = "number", required = false },
   { kind = "vararg", required = false },
 ]
 
@@ -511,12 +514,11 @@ params = [{ kind = "number" }]
 [globals.math.members.atan]
 kind = "function"
 min_args = 1
-max_args = 2
+max_args = 1
 is_pure = true
 must_use = true
 params = [
   { kind = "number" },
-  { kind = "number", required = false },
 ]
 
 [globals.math.members.atan2]
@@ -525,7 +527,6 @@ min_args = 2
 max_args = 2
 is_pure = true
 must_use = true
-deprecated = { message = "merged into math.atan in Lua 5.3; pass second arg to math.atan", replace_template = "math.atan(%1, %2)" }
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.ceil]
@@ -550,7 +551,6 @@ min_args = 1
 max_args = 1
 is_pure = true
 must_use = true
-deprecated = { message = "deprecated in Lua 5.3; compute via math.exp instead" }
 params = [{ kind = "number" }]
 
 [globals.math.members.deg]
@@ -591,7 +591,6 @@ min_args = 1
 max_args = 1
 is_pure = true
 must_use = true
-deprecated = { message = "removed in Lua 5.3; use math.modf and bit ops" }
 params = [{ kind = "number" }]
 
 [globals.math.members.huge]
@@ -603,7 +602,6 @@ min_args = 2
 max_args = 2
 is_pure = true
 must_use = true
-deprecated = { message = "removed in Lua 5.3; use x * 2^exp instead", replace_template = "(%1 * 2 ^ %2)" }
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.log]
@@ -648,6 +646,16 @@ params = [
   { kind = "vararg", required = false },
 ]
 
+# 5.0 relic kept by LUA_COMPAT_MOD builds; '%' replaced it.
+[globals.math.members.mod]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+deprecated = { message = "use the '%' operator instead" }
+params = [{ kind = "number" }, { kind = "number" }]
+
 [globals.math.members.modf]
 kind = "function"
 min_args = 1
@@ -665,7 +673,6 @@ min_args = 2
 max_args = 2
 is_pure = true
 must_use = true
-deprecated = { message = "deprecated in Lua 5.3; use '^' operator instead", replace_template = "(%1 ^ %2)" }
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.rad]
@@ -688,9 +695,9 @@ params = [
 
 [globals.math.members.randomseed]
 kind = "function"
-min_args = 0
+min_args = 1
 max_args = 1
-params = [{ kind = "number", required = false }]
+params = [{ kind = "number" }]
 
 [globals.math.members.sin]
 kind = "function"
@@ -706,7 +713,6 @@ min_args = 1
 max_args = 1
 is_pure = true
 must_use = true
-deprecated = { message = "deprecated in Lua 5.3; compute via math.exp instead" }
 params = [{ kind = "number" }]
 
 [globals.math.members.sqrt]
@@ -731,7 +737,6 @@ min_args = 1
 max_args = 1
 is_pure = true
 must_use = true
-deprecated = { message = "deprecated in Lua 5.3; compute via math.exp instead" }
 params = [{ kind = "number" }]
 
 # ---- bit32 namespace (5.2+) ----
@@ -860,11 +865,15 @@ kind = "function"
 min_args = 0
 max_args = 0
 
+# With an argument this sets the default input file rather than only
+# returning one; a single entry cannot express both, so the return shape
+# reflects the getter form (the setter also returns the handle in PUC).
 [globals.io.members.input]
 kind = "function"
 min_args = 0
 max_args = 1
 params = [{ kind = "display", display = "file", required = false }]
+returns = "file"
 
 [globals.io.members.lines]
 kind = "function"
@@ -881,14 +890,16 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "string" },
-  { kind = "constant", values = ["r", "rb", "w", "wb", "a", "ab", "r+", "rb+", "w+", "wb+", "a+", "ab+"], required = false },
+  { kind = "constant", values = ["r", "rb", "w", "wb", "a", "ab", "r+", "rb+", "r+b", "w+", "wb+", "w+b", "a+", "ab+", "a+b"], required = false },
 ]
+returns = "file"
 
 [globals.io.members.output]
 kind = "function"
 min_args = 0
 max_args = 1
 params = [{ kind = "display", display = "file", required = false }]
+returns = "file"
 
 [globals.io.members.popen]
 kind = "function"
@@ -896,8 +907,9 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "string" },
-  { kind = "constant", values = ["r", "rb", "w", "wb", "a", "ab", "r+", "rb+", "w+", "wb+", "a+", "ab+"], required = false },
+  { kind = "constant", values = ["r", "w"], required = false },
 ]
+returns = "file"
 
 [globals.io.members.read]
 kind = "function"
@@ -907,17 +919,21 @@ params = [{ kind = "vararg", required = false }]
 
 [globals.io.members.stderr]
 kind = "property"
+shape = "file"
 
 [globals.io.members.stdin]
 kind = "property"
+shape = "file"
 
 [globals.io.members.stdout]
 kind = "property"
+shape = "file"
 
 [globals.io.members.tmpfile]
 kind = "function"
 min_args = 0
 max_args = 0
+returns = "file"
 
 [globals.io.members.type]
 kind = "function"
@@ -931,6 +947,68 @@ kind = "function"
 min_args = 0
 max_args = -1
 params = [{ kind = "vararg", required = false }]
+returns = "file"
+
+# ---- file handle shape (io.open and friends) ----
+
+# Read formats ("*l", "*L", "*n", "*a", or a byte count) are variadic
+# and mix string constants with numbers, so they stay a plain vararg - a
+# constant set would reject numeric counts.
+[shapes.file.members.read]
+kind = "function"
+method = true
+min_args = 0
+max_args = -1
+params = [{ kind = "vararg", required = false }]
+
+[shapes.file.members.lines]
+kind = "function"
+method = true
+must_use = true
+min_args = 0
+max_args = -1
+params = [{ kind = "vararg", required = false }]
+
+# Returns the file itself, so writes chain.
+[shapes.file.members.write]
+kind = "function"
+method = true
+min_args = 0
+max_args = -1
+params = [{ kind = "vararg", required = false }]
+returns = "file"
+
+[shapes.file.members.seek]
+kind = "function"
+method = true
+min_args = 0
+max_args = 2
+params = [
+  { kind = "constant", values = ["set", "cur", "end"], required = false },
+  { kind = "number", required = false },
+]
+
+[shapes.file.members.setvbuf]
+kind = "function"
+method = true
+min_args = 1
+max_args = 2
+params = [
+  { kind = "constant", values = ["no", "full", "line"] },
+  { kind = "number", required = false },
+]
+
+[shapes.file.members.close]
+kind = "function"
+method = true
+min_args = 0
+max_args = 0
+
+[shapes.file.members.flush]
+kind = "function"
+method = true
+min_args = 0
+max_args = 0
 
 [globals.os]
 kind = "namespace"
@@ -965,12 +1043,13 @@ min_args = 0
 max_args = 1
 params = [{ kind = "string", required = false }]
 
+# The code may be a number or a boolean (true = EXIT_SUCCESS).
 [globals.os.members.exit]
 kind = "function"
 min_args = 0
 max_args = 2
 params = [
-  { kind = "number", required = false },
+  { kind = "any", required = false },
   { kind = "bool", required = false },
 ]
 
@@ -1117,6 +1196,13 @@ max_args = 2
 must_use = true
 params = [{ kind = "function" }, { kind = "number" }]
 
+[globals.debug.members.getuservalue]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+params = [{ kind = "any" }]
+
 [globals.debug.members.sethook]
 kind = "function"
 min_args = 0
@@ -1151,6 +1237,12 @@ min_args = 3
 max_args = 3
 params = [{ kind = "function" }, { kind = "number" }, { kind = "string" }]
 
+[globals.debug.members.setuservalue]
+kind = "function"
+min_args = 2
+max_args = 2
+params = [{ kind = "any" }, { kind = "any" }]
+
 [globals.debug.members.traceback]
 kind = "function"
 min_args = 0
@@ -1161,6 +1253,19 @@ params = [
   { kind = "any", required = false },
   { kind = "any", required = false },
 ]
+
+[globals.debug.members.upvalueid]
+kind = "function"
+min_args = 2
+max_args = 2
+must_use = true
+params = [{ kind = "function" }, { kind = "number" }]
+
+[globals.debug.members.upvaluejoin]
+kind = "function"
+min_args = 4
+max_args = 4
+params = [{ kind = "function" }, { kind = "number" }, { kind = "function" }, { kind = "number" }]
 
 [globals.package]
 kind = "namespace"
@@ -1210,5 +1315,10 @@ params = [
 # The environment table (Lua 5.2+). Assignable: `local _ENV = ...` is the
 # sanctioned sandboxing idiom.
 [globals._ENV]
+kind = "property"
+read_only = false
+
+# Script argument vector populated by the standalone lua interpreter.
+[globals.arg]
 kind = "property"
 read_only = false

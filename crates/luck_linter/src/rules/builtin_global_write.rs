@@ -55,9 +55,13 @@ impl Rule for BuiltinGlobalWrite {
 }
 
 /// Extra-globals from config are user-declared names, so overwriting them
-/// is intentional even when they collide with a stdlib name.
+/// is intentional even when they collide with a stdlib name. Globals the
+/// model marks writable (`_G`, `shared` on Roblox, `_PROMPT`) are the
+/// documented set-me idiom, not an overwrite.
 fn is_overwritable_builtin(semantic: &SemanticAnalysis, name: &str) -> bool {
-    semantic.is_known_global(name) && !semantic.extra_globals.contains(name)
+    semantic.is_known_global(name)
+        && semantic.is_read_only_global(name)
+        && !semantic.extra_globals.contains(name)
 }
 
 fn diagnostic(name: &str, span: Span) -> LintDiagnostic {
@@ -81,6 +85,29 @@ fn expr_base_ident(expr: &Expression) -> Option<(&str, Span)> {
             Var::Index(index) => expr_base_ident(&index.prefix),
         },
         _ => None,
+    }
+}
+
+fn var_dotted_segments(var: &Var) -> Option<Vec<String>> {
+    match var {
+        Var::Name(token) => match &token.kind {
+            TokenKind::Identifier(name) => Some(vec![name.to_string()]),
+            _ => None,
+        },
+        Var::FieldAccess(field_access) => {
+            let Expression::Var(inner) = &field_access.prefix else {
+                return None;
+            };
+            let mut segments = var_dotted_segments(inner)?;
+            match &field_access.name.kind {
+                TokenKind::Identifier(name) => {
+                    segments.push(name.to_string());
+                    Some(segments)
+                }
+                _ => None,
+            }
+        }
+        Var::Index(_) => None,
     }
 }
 
@@ -122,14 +149,21 @@ impl FieldWriteChecker<'_> {
         let Some((name, name_span)) = base else {
             return;
         };
-        // Writing _G fields is the deliberate global-set idiom.
-        if name == "_G" {
-            return;
-        }
         if self.semantic.resolves_to_local(name, name_span) {
             return;
         }
+        // A writable base (`_G.x = 1`, `shared.score = 1` on Roblox) is
+        // the deliberate global-set idiom, and so is assigning a leaf
+        // the model marks writable (`package.path = ...`).
         if !is_overwritable_builtin(self.semantic, name) {
+            return;
+        }
+        if let Some(segments) = var_dotted_segments(var)
+            && let Some(entry) = self
+                .semantic
+                .lookup_stdlib_str(&segments.iter().map(String::as_str).collect::<Vec<_>>())
+            && !entry.is_read_only()
+        {
             return;
         }
         let display = var_dotted_path(var).unwrap_or_else(|| name.to_string());
@@ -147,9 +181,6 @@ impl FieldWriteChecker<'_> {
         let TokenKind::Identifier(name) = &first.kind else {
             return;
         };
-        if name == "_G" {
-            return;
-        }
         if self.semantic.resolves_to_local(name, first.span) {
             return;
         }
@@ -269,6 +300,36 @@ mod tests {
     fn ignores_g_field_writes() {
         let diags = run("_G.foo = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_writable_leaf_property() {
+        // The model marks package.path read-write; assigning it is the
+        // documented configuration idiom, not an overwrite.
+        let diags = run("package.path = package.path .. ';./?.lua'");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_writable_global_assignment() {
+        // _PROMPT is a read-write interpreter property; setting it is
+        // its entire purpose.
+        let diags = run("_PROMPT = '> '");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_shared_field_write_on_roblox() {
+        let diags = crate::test_support::run_rule_roblox(&BuiltinGlobalWrite, "shared.score = 1");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_readonly_leaf_beside_writable_sibling() {
+        // package.path is writable but math.huge is not; only
+        // model-writable targets are exempt.
+        let diags = run("math.huge = 1");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
     #[test]

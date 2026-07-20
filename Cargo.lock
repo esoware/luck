@@ -1247,7 +1247,9 @@ dependencies = [
  "luck_token",
  "rustc-hash",
  "serde",
+ "serde_json",
  "toml",
+ "ureq",
 ]
 
 [[package]]

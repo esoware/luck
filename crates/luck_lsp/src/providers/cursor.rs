@@ -23,6 +23,9 @@ pub enum CursorTarget {
     /// A function call expression. Path is empty for indirect callees.
     Call {
         path: Vec<String>,
+        /// Span of the root `Name` token, when the callee is a plain
+        /// dotted chain - lets consumers resolve shaped/shadowed roots.
+        base_span: Option<Span>,
         full_span: Span,
         call_span: Span,
         is_method: bool,
@@ -176,12 +179,14 @@ impl<'ast> Visitor<'ast> for TargetFinder {
 impl TargetFinder {
     fn record_call(&mut self, call: &FunctionCall) {
         let mut path = Vec::new();
+        let mut base_span: Option<Span> = None;
         let is_method = call.method.is_some();
         if let Expression::Var(var) = &call.callee {
             match var {
                 Var::Name(token) => {
                     if let Some(name) = Self::token_name(token) {
                         path.push(name);
+                        base_span = Some(token.span);
                     }
                 }
                 Var::FieldAccess(fa) => {
@@ -197,6 +202,7 @@ impl TargetFinder {
                                 Var::Name(token) => {
                                     if let Some(name) = Self::token_name(token) {
                                         segments.push(name);
+                                        base_span = Some(token.span);
                                     }
                                     break;
                                 }
@@ -219,9 +225,21 @@ impl TargetFinder {
                 Var::Index(_) => {}
             }
         }
+        // The method name is a path segment too: `game:GetService(...)`
+        // resolves as ["game", "GetService"] through shaped lookup.
+        if let Some(method_token) = &call.method {
+            match Self::token_name(method_token) {
+                Some(name) if !path.is_empty() => path.push(name),
+                _ => {
+                    path.clear();
+                    base_span = None;
+                }
+            }
+        }
 
         self.try_set(CursorTarget::Call {
             path,
+            base_span,
             full_span: call.span,
             call_span: call.span,
             is_method,
@@ -232,14 +250,21 @@ impl TargetFinder {
 /// Find an enclosing call expression for `offset` plus the index of the
 /// argument the cursor is inside (counting commas). Used by signature help.
 #[derive(Debug, Clone)]
-pub struct CallSite {
+pub struct CallSite<'ast> {
+    /// The call node itself, so consumers can resolve the callee
+    /// semantically (shaped locals, shadow checks) instead of by text.
+    pub call: &'ast FunctionCall,
     pub path: Vec<String>,
     pub active_param: u32,
     pub paren_span: Span,
 }
 
 #[must_use]
-pub fn find_call_site_at(block: &Block, source: &str, offset: u32) -> Option<CallSite> {
+pub fn find_call_site_at<'ast>(
+    block: &'ast Block,
+    source: &str,
+    offset: u32,
+) -> Option<CallSite<'ast>> {
     let mut finder = CallSiteFinder {
         offset,
         source,
@@ -249,23 +274,32 @@ pub fn find_call_site_at(block: &Block, source: &str, offset: u32) -> Option<Cal
     finder.result
 }
 
-struct CallSiteFinder<'src> {
+struct CallSiteFinder<'src, 'ast> {
     offset: u32,
     source: &'src str,
-    result: Option<CallSite>,
+    result: Option<CallSite<'ast>>,
 }
 
-impl<'ast> Visitor<'ast> for CallSiteFinder<'_> {
+impl<'ast> Visitor<'ast> for CallSiteFinder<'_, 'ast> {
     fn visit_expression(&mut self, expr: &'ast Expression) {
         if let Expression::FunctionCall(call) = expr {
             self.try_record(call);
         }
         self.walk_expression(expr);
     }
+
+    // Statement-position calls dispatch to walk_function_call without
+    // an expression visit, so hook them here too.
+    fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
+        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
+            self.try_record(&call_stmt.call);
+        }
+        self.walk_statement(stmt);
+    }
 }
 
-impl CallSiteFinder<'_> {
-    fn try_record(&mut self, call: &FunctionCall) {
+impl<'ast> CallSiteFinder<'_, 'ast> {
+    fn try_record(&mut self, call: &'ast FunctionCall) {
         let span = call.span;
         if self.offset < span.start || self.offset > span.end {
             return;
@@ -298,6 +332,7 @@ impl CallSiteFinder<'_> {
         };
         let path = call_path(call);
         self.result = Some(CallSite {
+            call,
             path,
             active_param: commas,
             paren_span: Span::new(paren_open, span.end),
@@ -306,6 +341,19 @@ impl CallSiteFinder<'_> {
 }
 
 fn call_path(call: &FunctionCall) -> Vec<String> {
+    let mut path = collect_callee_path(call);
+    // The method name is a path segment too, so signature help resolves
+    // `game:GetService(` through shaped lookup.
+    if let Some(method_token) = &call.method {
+        match &method_token.kind {
+            TokenKind::Identifier(name) if !path.is_empty() => path.push(name.to_string()),
+            _ => path.clear(),
+        }
+    }
+    path
+}
+
+fn collect_callee_path(call: &FunctionCall) -> Vec<String> {
     let mut path = Vec::new();
     if let Expression::Var(var) = &call.callee {
         match var {
@@ -349,6 +397,85 @@ fn call_path(call: &FunctionCall) -> Vec<String> {
         }
     }
     path
+}
+
+/// A string-literal argument enclosing the cursor: the call it belongs
+/// to, its positional index, and the literal's token span. Used by
+/// completion to offer constant-set values inside the quotes.
+#[derive(Debug, Clone, Copy)]
+pub struct StringArgSite<'ast> {
+    pub call: &'ast FunctionCall,
+    pub arg_index: usize,
+    pub literal_span: Span,
+}
+
+/// Find the innermost call whose argument list contains a string
+/// literal enclosing `offset` (cursor strictly inside the quotes).
+#[must_use]
+pub fn find_string_arg_at(block: &Block, offset: u32) -> Option<StringArgSite<'_>> {
+    let mut finder = StringArgFinder {
+        offset,
+        result: None,
+    };
+    finder.visit_block(block);
+    finder.result
+}
+
+struct StringArgFinder<'ast> {
+    offset: u32,
+    result: Option<StringArgSite<'ast>>,
+}
+
+impl<'ast> Visitor<'ast> for StringArgFinder<'ast> {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
+        if let Expression::FunctionCall(call) = expr {
+            self.try_record(call);
+        }
+        self.walk_expression(expr);
+    }
+
+    // Statement-position calls dispatch to walk_function_call without
+    // an expression visit, so hook them here too.
+    fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
+        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
+            self.try_record(&call_stmt.call);
+        }
+        self.walk_statement(stmt);
+    }
+}
+
+impl<'ast> StringArgFinder<'ast> {
+    /// Strictly inside the quotes so a cursor next to the literal does
+    /// not trigger value completion.
+    fn contains(&self, span: Span) -> bool {
+        self.offset > span.start && self.offset < span.end
+    }
+
+    fn try_record(&mut self, call: &'ast FunctionCall) {
+        let literal = match &call.args {
+            luck_ast::expr::FunctionArgs::Parenthesized { args, .. } => {
+                args.iter().enumerate().find_map(|(idx, arg)| match arg {
+                    Expression::StringLiteral(token) if self.contains(token.span) => {
+                        Some((idx, token.span))
+                    }
+                    _ => None,
+                })
+            }
+            luck_ast::expr::FunctionArgs::StringLiteral(token) if self.contains(token.span) => {
+                Some((0, token.span))
+            }
+            _ => None,
+        };
+        let Some((arg_index, span)) = literal else {
+            return;
+        };
+        // Nested calls visit outer-first; the innermost match wins.
+        self.result = Some(StringArgSite {
+            call,
+            arg_index,
+            literal_span: span,
+        });
+    }
 }
 
 /// Resolve the local symbol at a byte offset: a reference to it or its

@@ -1,0 +1,5892 @@
+# GENERATED FILE - do not hand-edit.
+# Regenerate: cargo test -p luck_semantic regenerate_roblox_api -- --ignored
+# Source: Roblox API dump, MaximumADHD/Roblox-Client-Tracker (roblox branch).
+# Spliced into the luau_roblox library: each [enums.<Type>] becomes an
+# Enum-shaped member namespace of the Enum global, each item an
+# EnumItem-shaped read-only constant (see stdlib_model.rs splice_enums).
+
+[enums.AccessModifierType]
+items = [
+  "Allow",
+  "Deny",
+]
+
+[enums.AccessoryType]
+items = [
+  "Back",
+  "DressSkirt",
+  "Eyebrow",
+  "Eyelash",
+  "Face",
+  "Front",
+  "Hair",
+  "Hat",
+  "Jacket",
+  "LeftShoe",
+  "Neck",
+  "Pants",
+  "RightShoe",
+  "Shirt",
+  "Shorts",
+  "Shoulder",
+  "Sweater",
+  "TShirt",
+  "Unknown",
+  "Waist",
+]
+
+[enums.ActionOnAutoResumeSync]
+items = [
+  "DontResume",
+  "KeepLocal",
+  "KeepStudio",
+]
+
+[enums.ActionOnStopSync]
+items = [
+  "AlwaysAsk",
+  "DeleteLocalFiles",
+  "KeepLocalFiles",
+]
+
+[enums.ActionType]
+items = [
+  "Draw",
+  "Lose",
+  "Nothing",
+  "Pause",
+  "Win",
+]
+
+[enums.ActivePayerStatus]
+items = [
+  "Casual50Percent",
+  "Intermediate35Percent",
+  "Lapsed",
+  "Never",
+  "Top15Percent",
+  "Unknown",
+]
+
+[enums.ActuatorRelativeTo]
+items = [
+  "Attachment0",
+  "Attachment1",
+  "World",
+]
+
+[enums.ActuatorType]
+items = [
+  "Motor",
+  "None",
+  "Servo",
+]
+
+[enums.AdAvailabilityResult]
+items = [
+  "DeviceIneligible",
+  "ExperienceIneligible",
+  "InternalError",
+  "IsAvailable",
+  "NoFill",
+  "PlayerIneligible",
+  "PublisherIneligible",
+]
+
+[enums.AdEventType]
+items = [
+  "RewardedAdGrant",
+  "RewardedAdLoaded",
+  "RewardedAdUnloaded",
+  { value = "UserCompletedVideo", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "VideoLoaded", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "VideoRemoved", deprecated = { message = "deprecated Roblox enum item" } },
+]
+
+[enums.AdFormat]
+items = [
+  "RewardedVideo",
+]
+
+[enums.AdShape]
+items = [
+  "HorizontalRectangle",
+]
+
+[enums.AdTeleportMethod]
+items = [
+  "InGameMenuBackButton",
+  "PortalForward",
+  "UIBackButton",
+  "Undefined",
+]
+
+[enums.AdUIEventType]
+items = [
+  "AdLabelClicked",
+  "CloseButtonClicked",
+  "FullscreenButtonClicked",
+  "PauseButtonClicked",
+  "PauseEventTriggered",
+  "PlayButtonClicked",
+  "PlayEventTriggered",
+  "VolumeButtonClicked",
+  "WhyThisAdClicked",
+]
+
+[enums.AdUIType]
+items = [
+  "Image",
+  "None",
+  "Video",
+]
+
+[enums.AdUnitStatus]
+items = [
+  "Active",
+  "Inactive",
+]
+
+[enums.AdornCullingMode]
+items = [
+  "Automatic",
+  "Never",
+]
+
+[enums.AdornShading]
+items = [
+  "AlwaysOnTop",
+  "Default",
+  "Shaded",
+  "XRay",
+  "XRayShaded",
+]
+
+[enums.AgeCheckStatus]
+items = [
+  "Checked",
+  "Unchecked",
+]
+
+[enums.AlignType]
+items = [
+  "AllAxes",
+  { value = "Parallel", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Perpendicular", deprecated = { message = "deprecated Roblox enum item" } },
+  "PrimaryAxisLookAt",
+  "PrimaryAxisParallel",
+  "PrimaryAxisPerpendicular",
+]
+
+[enums.AlphaMode]
+items = [
+  "Opaque",
+  "Overlay",
+  "TintMask",
+  "Transparency",
+]
+
+[enums.AnalyticsCustomFieldKeys]
+items = [
+  "CustomField01",
+  "CustomField02",
+  "CustomField03",
+]
+
+[enums.AnalyticsEconomyAction]
+items = [
+  "Acquire",
+  "Default",
+  "Spend",
+]
+
+[enums.AnalyticsEconomyFlowType]
+items = [
+  "Sink",
+  "Source",
+]
+
+[enums.AnalyticsEconomyTransactionType]
+items = [
+  "ContextualPurchase",
+  "Gameplay",
+  "IAP",
+  "Onboarding",
+  "Shop",
+  "TimedReward",
+]
+
+[enums.AnalyticsLogLevel]
+items = [
+  "Debug",
+  "Error",
+  "Fatal",
+  "Information",
+  "Trace",
+  "Warning",
+]
+
+[enums.AnalyticsProgressionStatus]
+items = [
+  "Abandon",
+  "Begin",
+  "Complete",
+  "Default",
+  "Fail",
+]
+
+[enums.AnalyticsProgressionType]
+items = [
+  "Complete",
+  "Custom",
+  "Fail",
+  "Start",
+]
+
+[enums.AnimationClipFromVideoStatus]
+items = [
+  "Cancelled",
+  "ErrorGeneric",
+  "ErrorMultiplePeople",
+  "ErrorNoPersonDetected",
+  "ErrorUploadingVideo",
+  "ErrorVideoTooLong",
+  "ErrorVideoUnstable",
+  "Initializing",
+  "Pending",
+  "Processing",
+  "Success",
+  "Timeout",
+]
+
+[enums.AnimationNodeBlend2DInputMode]
+items = [
+  "Cartesian",
+  "Polar",
+]
+
+[enums.AnimationNodeInterruptible]
+items = [
+  "Always",
+  "Finished",
+  "Trigger",
+]
+
+[enums.AnimationNodePhaseSync]
+items = [
+  "Synced",
+  "Unsynced",
+]
+
+[enums.AnimationNodePlayMode]
+items = [
+  "Loop",
+  "OnceAndHold",
+  "OnceAndReset",
+  "PingPong",
+]
+
+[enums.AnimationNodeTransitionType]
+items = [
+  "CrossFade",
+  "DeadBlend",
+  "InertialBlend",
+]
+
+[enums.AnimationNodeType]
+items = [
+  "AddNode",
+  "Blend1DNode",
+  "Blend2DNode",
+  "ClipNode",
+  "GraphOutput",
+  "InvalidNode",
+  "MaskNode",
+  "OverNode",
+  "PrioritySelectNode",
+  "RandomSequenceNode",
+  "SelectNode",
+  "SequenceNode",
+  "SpeedNode",
+  "SubtractNode",
+]
+
+[enums.AnimationNodeWaitFor]
+items = [
+  "Finished",
+  "Trigger",
+]
+
+[enums.AnimationPriority]
+items = [
+  "Action",
+  "Action2",
+  "Action3",
+  "Action4",
+  "Core",
+  "Idle",
+  "Movement",
+]
+
+[enums.AnimatorRetargetingMode]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.AnnotationChannelContentPreference]
+items = [
+  "All",
+  "None",
+  "Unknown",
+]
+
+[enums.AnnotationEditingMode]
+items = [
+  "None",
+  "PlacingNew",
+  "WritingNew",
+]
+
+[enums.AnnotationPlaceContentPreference]
+items = [
+  "All",
+  "MentionsAndReplies",
+  "None",
+  "Unknown",
+]
+
+[enums.AnnotationRequestStatus]
+items = [
+  "ErrorInternalFailure",
+  "ErrorModerated",
+  "ErrorNotFound",
+  "Loading",
+  "Success",
+]
+
+[enums.AnnotationRequestType]
+items = [
+  "Create",
+  "Delete",
+  "Edit",
+  "Resolve",
+  "Unknown",
+]
+
+[enums.AntiAliasing]
+items = [
+  "Disabled",
+  "Enabled",
+]
+
+[enums.AppLifecycleManagerState]
+items = [
+  "Active",
+  "Detached",
+  "Hidden",
+  "Inactive",
+]
+
+[enums.AppShellActionType]
+items = [
+  "AvatarEditorPageLoaded",
+  "GamePageLoaded",
+  "HomePageInteractive",
+  "HomePageLoaded",
+  "None",
+  "OpenApp",
+  "ReadConversation",
+  "TapAvatarTab",
+  "TapChatTab",
+  "TapConversationEntry",
+  "TapGamePageTab",
+  "TapHomePageTab",
+]
+
+[enums.AppShellFeature]
+items = [
+  "AvatarEditor",
+  "Chat",
+  "GamePage",
+  "HomePage",
+  "Landing",
+  "More",
+  "None",
+  "WatchPage",
+]
+
+[enums.AppUpdateStatus]
+items = [
+  "Available",
+  "AvailableBetaProgram",
+  "AvailableBoundChannel",
+  "Failed",
+  "NotAvailable",
+  "NotSupported",
+  "Unknown",
+]
+
+[enums.ApplyStrokeMode]
+items = [
+  "Border",
+  "Contextual",
+]
+
+[enums.AspectType]
+items = [
+  "FitWithinMaxSize",
+  "ScaleWithParentSize",
+]
+
+[enums.AssetCreatorType]
+items = [
+  "Group",
+  "User",
+]
+
+[enums.AssetFetchStatus]
+items = [
+  "Failure",
+  "Loading",
+  "None",
+  "Success",
+  "TimedOut",
+]
+
+[enums.AssetRepresentation]
+items = [
+  "FullLength",
+  "ShortPreview",
+]
+
+[enums.AssetType]
+items = [
+  "Animation",
+  "Audio",
+  "AvatarBackground",
+  "BackAccessory",
+  "Badge",
+  "ClimbAnimation",
+  "DeathAnimation",
+  "Decal",
+  "DressSkirtAccessory",
+  "DynamicHead",
+  "EarAccessory",
+  "EmoteAnimation",
+  "EyeAccessory",
+  "EyeMakeup",
+  "EyebrowAccessory",
+  "EyelashAccessory",
+  "Face",
+  "FaceAccessory",
+  "FaceMakeup",
+  "FallAnimation",
+  "FontFamily",
+  "FrontAccessory",
+  "GamePass",
+  "Gear",
+  "HairAccessory",
+  "Hat",
+  "Head",
+  "IdleAnimation",
+  "Image",
+  "JacketAccessory",
+  "JumpAnimation",
+  "LeftArm",
+  "LeftLeg",
+  "LeftShoeAccessory",
+  "LipMakeup",
+  "Lua",
+  "Mesh",
+  "MeshPart",
+  "Model",
+  "MoodAnimation",
+  "NeckAccessory",
+  "Package",
+  "Pants",
+  "PantsAccessory",
+  "Place",
+  "Plugin",
+  "PoseAnimation",
+  "RightArm",
+  "RightLeg",
+  "RightShoeAccessory",
+  "RunAnimation",
+  "Shirt",
+  "ShirtAccessory",
+  "ShortsAccessory",
+  "ShoulderAccessory",
+  "SweaterAccessory",
+  "SwimAnimation",
+  "TShirt",
+  "TShirtAccessory",
+  "TextDocument",
+  "Torso",
+  "Video",
+  "VoxelFragment",
+  "WaistAccessory",
+  "WalkAnimation",
+]
+
+[enums.AssetTypeVerification]
+items = [
+  "Always",
+  "ClientOnly",
+  "Default",
+]
+
+[enums.AudioApiRollout]
+items = [
+  "Automatic",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.AudioCaptureMode]
+items = [
+]
+
+[enums.AudioChannelLayout]
+items = [
+  "Mono",
+  "Quad",
+  "Stereo",
+  "Surround_5",
+  "Surround_5_1",
+  "Surround_7_1",
+  "Surround_7_1_4",
+]
+
+[enums.AudioFilterType]
+items = [
+  "Bandpass",
+  "HighShelf",
+  "Highpass12dB",
+  "Highpass24dB",
+  "Highpass48dB",
+  "LowShelf",
+  "Lowpass12dB",
+  "Lowpass24dB",
+  "Lowpass48dB",
+  "Lowpass6dB",
+  "Notch",
+  "Peak",
+]
+
+[enums.AudioSimulationFidelity]
+items = [
+  "Automatic",
+  "None",
+]
+
+[enums.AudioSubType]
+items = [
+  "Music",
+  "SoundEffect",
+]
+
+[enums.AudioWindowSize]
+items = [
+  "Large",
+  "Medium",
+  "Small",
+]
+
+[enums.AuthorityMode]
+items = [
+  "Automatic",
+  "Server",
+]
+
+[enums.AutoIndentRule]
+items = [
+  "Absolute",
+  "Off",
+  "Relative",
+]
+
+[enums.AutomaticSize]
+items = [
+  "None",
+  "X",
+  "XY",
+  "Y",
+]
+
+[enums.AvatarAssetType]
+items = [
+  "AvatarBackground",
+  "BackAccessory",
+  "ClimbAnimation",
+  "DressSkirtAccessory",
+  "DynamicHead",
+  "EmoteAnimation",
+  "EyeMakeup",
+  "EyebrowAccessory",
+  "EyelashAccessory",
+  "Face",
+  "FaceAccessory",
+  "FaceMakeup",
+  "FallAnimation",
+  "FrontAccessory",
+  "Gear",
+  "HairAccessory",
+  "Hat",
+  "Head",
+  "IdleAnimation",
+  "JacketAccessory",
+  "JumpAnimation",
+  "LeftArm",
+  "LeftLeg",
+  "LeftShoeAccessory",
+  "LipMakeup",
+  "MoodAnimation",
+  "NeckAccessory",
+  "Pants",
+  "PantsAccessory",
+  "RightArm",
+  "RightLeg",
+  "RightShoeAccessory",
+  "RunAnimation",
+  "Shirt",
+  "ShirtAccessory",
+  "ShortsAccessory",
+  "ShoulderAccessory",
+  "SweaterAccessory",
+  "SwimAnimation",
+  "TShirt",
+  "TShirtAccessory",
+  "Torso",
+  "WaistAccessory",
+  "WalkAnimation",
+]
+
+[enums.AvatarChatServiceFeature]
+items = [
+  "None",
+  "PlaceAudio",
+  "PlaceVideo",
+  "UniverseAudio",
+  "UniverseVideo",
+  "UserAudio",
+  "UserAudioEligible",
+  "UserBanned",
+  "UserVerifiedForVoice",
+  "UserVideo",
+  "UserVideoEligible",
+]
+
+[enums.AvatarContextMenuOption]
+items = [
+  "Chat",
+  "Emote",
+  "Friend",
+  "InspectMenu",
+]
+
+[enums.AvatarGenerationError]
+items = [
+  "Canceled",
+  "DownloadFailed",
+  "JobNotFound",
+  "None",
+  "Offensive",
+  "Timeout",
+  "Unknown",
+]
+
+[enums.AvatarItemType]
+items = [
+  "Asset",
+  "Bundle",
+]
+
+[enums.AvatarPromptResult]
+items = [
+  "Failed",
+  "PermissionDenied",
+  "Success",
+]
+
+[enums.AvatarSettingsAccessoryLimitMethod]
+items = [
+  "PreviewRemove",
+  "PreviewScale",
+  "Remove",
+  "Scale",
+]
+
+[enums.AvatarSettingsAccessoryMode]
+items = [
+  "CustomLimit",
+  "PlayerChoice",
+]
+
+[enums.AvatarSettingsAnimationClipsMode]
+items = [
+  "CustomClips",
+  "PlayerChoice",
+]
+
+[enums.AvatarSettingsAnimationPacksMode]
+items = [
+  "PlayerChoice",
+  "StandardR15",
+  "StandardR6",
+]
+
+[enums.AvatarSettingsAppearanceMode]
+items = [
+  "CustomBody",
+  "CustomParts",
+  "PlayerChoice",
+]
+
+[enums.AvatarSettingsBuildMode]
+items = [
+  "CustomBuild",
+  "PlayerChoice",
+]
+
+[enums.AvatarSettingsCharacterControllerMode]
+items = [
+  "LegacyHumanoid",
+  "LuaCharacterController",
+]
+
+[enums.AvatarSettingsClothingMode]
+items = [
+  "CustomLimit",
+  "PlayerChoice",
+]
+
+[enums.AvatarSettingsCollisionMode]
+items = [
+  "Default",
+  "Legacy",
+  "SingleCollider",
+]
+
+[enums.AvatarSettingsCustomAccessoryMode]
+items = [
+  "CustomAccessories",
+  "PlayerChoice",
+]
+
+[enums.AvatarSettingsCustomBodyType]
+items = [
+  "AvatarReference",
+  "BundleId",
+]
+
+[enums.AvatarSettingsCustomClothingMode]
+items = [
+  "CustomClothing",
+  "PlayerChoice",
+]
+
+[enums.AvatarSettingsHitAndTouchDetectionMode]
+items = [
+  "UseCollider",
+  "UseParts",
+]
+
+[enums.AvatarSettingsJumpMode]
+items = [
+  "JumpHeight",
+  "JumpPower",
+]
+
+[enums.AvatarSettingsLegacyCollisionMode]
+items = [
+  "InnerBoxColliders",
+  "R6Colliders",
+]
+
+[enums.AvatarSettingsScaleMode]
+items = [
+  "CustomScale",
+  "PlayerChoice",
+]
+
+[enums.AvatarThumbnailCustomizationType]
+items = [
+  "Closeup",
+  "FullBody",
+]
+
+[enums.AvatarUnificationMode]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.Axis]
+items = [
+  "X",
+  "Y",
+  "Z",
+]
+
+[enums.BenefitType]
+items = [
+  "AvatarAsset",
+  "AvatarBundle",
+  "DeveloperProduct",
+]
+
+[enums.BinType]
+items = [
+  "Clone",
+  "GameTool",
+  "Grab",
+  "Hammer",
+  "Script",
+]
+
+[enums.BodyPart]
+items = [
+  "Head",
+  "LeftArm",
+  "LeftLeg",
+  "RightArm",
+  "RightLeg",
+  "Torso",
+]
+
+[enums.BodyPartR15]
+items = [
+  "Head",
+  "LeftFoot",
+  "LeftHand",
+  "LeftLowerArm",
+  "LeftLowerLeg",
+  "LeftUpperArm",
+  "LeftUpperLeg",
+  "LowerTorso",
+  "RightFoot",
+  "RightHand",
+  "RightLowerArm",
+  "RightLowerLeg",
+  "RightUpperArm",
+  "RightUpperLeg",
+  "RootPart",
+  "Unknown",
+  "UpperTorso",
+]
+
+[enums.BorderMode]
+items = [
+  "Inset",
+  "Middle",
+  "Outline",
+]
+
+[enums.BorderStrokePosition]
+items = [
+  "Center",
+  "Inner",
+  "Outer",
+]
+
+[enums.BreakReason]
+items = [
+  "Error",
+  "Other",
+  "SpecialBreakpoint",
+  "UserBreakpoint",
+]
+
+[enums.BreakpointRemoveReason]
+items = [
+  "Requested",
+  "ScriptChanged",
+  "ScriptRemoved",
+]
+
+[enums.BulkMoveMode]
+items = [
+  "FireAllEvents",
+  "FireCFrameChanged",
+]
+
+[enums.BundleType]
+items = [
+  "Animations",
+  "BodyParts",
+  "DynamicHead",
+  "DynamicHeadAvatar",
+  "Shoes",
+]
+
+[enums.Button]
+items = [
+  "Dismount",
+  "Jump",
+]
+
+[enums.ButtonStyle]
+items = [
+  "Custom",
+  "RobloxButton",
+  "RobloxButtonDefault",
+  "RobloxRoundButton",
+  "RobloxRoundDefaultButton",
+  "RobloxRoundDropdownButton",
+]
+
+[enums.CageType]
+items = [
+  "Inner",
+  "Outer",
+]
+
+[enums.CameraMode]
+items = [
+  "Classic",
+  "LockFirstPerson",
+]
+
+[enums.CameraNavigationModel]
+items = [
+  "IndustryCompatible",
+  "Roblox",
+]
+
+[enums.CameraPanMode]
+items = [
+  "Classic",
+  "EdgeBump",
+]
+
+[enums.CameraSpeedAdjustBinding]
+items = [
+  "AltScroll",
+  "None",
+  "RmbScroll",
+]
+
+[enums.CameraType]
+items = [
+  "Attach",
+  "Custom",
+  "Fixed",
+  "Follow",
+  "Orbital",
+  "Scriptable",
+  "Track",
+  "Watch",
+]
+
+[enums.CanCollaborateError]
+items = [
+  "AgeVerificationCountryBlocked",
+  "Invalid",
+  "None",
+  "NotAgeVerified",
+  "NotAuthorized",
+  "NotFound",
+  "OtherCollaboratorSettingsPreventTrust",
+  "OtherUserCannotCollaborate",
+  "OutsideAgeBucket",
+  "OutsideAgeBucketTcPc",
+  "OutsideOwnerAgeBucket",
+  "PCBlock",
+  "TooManyCollaborators",
+]
+
+[enums.CaptureGalleryPermission]
+items = [
+  "ReadAndUpload",
+]
+
+[enums.CaptureType]
+items = [
+  "Screenshot",
+  "Video",
+]
+
+[enums.CatalogCategoryFilter]
+items = [
+  { value = "Collectibles", deprecated = { message = "deprecated Roblox enum item" } },
+  "CommunityCreations",
+  "Featured",
+  "None",
+  "Premium",
+  "Recommended",
+]
+
+[enums.CatalogSortAggregation]
+items = [
+  "AllTime",
+  "Past12Hours",
+  "Past3Days",
+  "PastDay",
+  "PastMonth",
+  "PastWeek",
+]
+
+[enums.CatalogSortType]
+items = [
+  "Bestselling",
+  "MostFavorited",
+  "PriceHighToLow",
+  "PriceLowToHigh",
+  "RecentlyCreated",
+  "Relevance",
+]
+
+[enums.CellBlock]
+items = [
+  "CornerWedge",
+  "HorizontalWedge",
+  "InverseCornerWedge",
+  "Solid",
+  "VerticalWedge",
+]
+
+[enums.CellMaterial]
+items = [
+  "Aluminum",
+  "Asphalt",
+  "BluePlastic",
+  "Brick",
+  "Cement",
+  "CinderBlock",
+  "Empty",
+  "Gold",
+  "Granite",
+  "Grass",
+  "Gravel",
+  "Iron",
+  "MossyStone",
+  "RedPlastic",
+  "Sand",
+  "Water",
+  "WoodLog",
+  "WoodPlank",
+]
+
+[enums.CellOrientation]
+items = [
+  "NegX",
+  "NegZ",
+  "X",
+  "Z",
+]
+
+[enums.CenterDialogType]
+items = [
+  "ModalDialog",
+  "PlayerInitiatedDialog",
+  "QuitDialog",
+  "UnsolicitedDialog",
+]
+
+[enums.CharacterControlMode]
+items = [
+  "Default",
+  "Legacy",
+  "LuaCharacterController",
+  "NoCharacterController",
+]
+
+[enums.ChatCallbackType]
+items = [
+  "OnClientFormattingMessage",
+  "OnClientSendingMessage",
+  "OnCreatingChatWindow",
+  "OnServerReceivingMessage",
+]
+
+[enums.ChatColor]
+items = [
+  "Blue",
+  "Green",
+  "Red",
+  "White",
+]
+
+[enums.ChatMode]
+items = [
+  "Menu",
+  "TextAndMenu",
+]
+
+[enums.ChatPrivacyMode]
+items = [
+  "AllUsers",
+  "Friends",
+  "NoOne",
+]
+
+[enums.ChatRestrictionStatus]
+items = [
+  "NotRestricted",
+  "Restricted",
+  "Unknown",
+]
+
+[enums.ChatStyle]
+items = [
+  "Bubble",
+  "Classic",
+  "ClassicAndBubble",
+]
+
+[enums.ChatVersion]
+items = [
+  "LegacyChatService",
+  "TextChatService",
+]
+
+[enums.ClientAnimatorThrottlingMode]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.CloseReason]
+items = [
+  "DeveloperShutdown",
+  "DeveloperUpdate",
+  "Moderation",
+  "OutOfMemory",
+  "RobloxMaintenance",
+  "ServerEmpty",
+  "Unknown",
+]
+
+[enums.CollaboratorStatus]
+items = [
+  "Editing3D",
+  "None",
+  "PrivateScripting",
+  "Scripting",
+]
+
+[enums.CollisionFidelity]
+items = [
+  "Box",
+  "Default",
+  "Hull",
+  "PreciseConvexDecomposition",
+  "Scalable",
+]
+
+[enums.CommandPermission]
+items = [
+  "LocalUser",
+  "Plugin",
+]
+
+[enums.CompileTarget]
+items = [
+  "Client",
+  "CoreScript",
+  "CoreScriptRaw",
+  "Studio",
+]
+
+[enums.CompletionAcceptanceBehavior]
+items = [
+  "Insert",
+  "InsertOnEnterReplaceOnTab",
+  "Replace",
+  "ReplaceOnEnterInsertOnTab",
+]
+
+[enums.CompletionItemKind]
+items = [
+  "Class",
+  "Color",
+  "Constant",
+  "Constructor",
+  "Enum",
+  "EnumMember",
+  "Event",
+  "Field",
+  "File",
+  "Folder",
+  "Function",
+  "Interface",
+  "Keyword",
+  "Method",
+  "Module",
+  "Operator",
+  "Property",
+  "Reference",
+  "Snippet",
+  "Struct",
+  "Text",
+  "TypeParameter",
+  "Unit",
+  "Value",
+  "Variable",
+]
+
+[enums.CompletionItemTag]
+items = [
+  "AddParens",
+  "ClientServerBoundaryViolation",
+  "CommandLinePermissions",
+  "Deprecated",
+  "IncorrectIndexType",
+  "Invalidated",
+  "PluginPermissions",
+  "PutCursorBeforeEnd",
+  "PutCursorInParens",
+  "RobloxPermissions",
+  "TypeCorrect",
+]
+
+[enums.CompletionTriggerKind]
+items = [
+  "Invoked",
+  "TriggerCharacter",
+  "TriggerForIncompleteCompletions",
+]
+
+[enums.CompositeValueCurveType]
+items = [
+  "ColorHSV",
+  "ColorRGB",
+  "NumberRange",
+  "Rect",
+  "UDim",
+  "UDim2",
+  "Vector2",
+  "Vector3",
+]
+
+[enums.CompressionAlgorithm]
+items = [
+  "Zstd",
+]
+
+[enums.ComputerCameraMovementMode]
+items = [
+  "CameraToggle",
+  "Classic",
+  "Default",
+  "Follow",
+  "Orbital",
+]
+
+[enums.ComputerMovementMode]
+items = [
+  "ClickToMove",
+  "Default",
+  "KeyboardMouse",
+]
+
+[enums.ConfigSnapshotErrorState]
+items = [
+  "LoadFailed",
+  "None",
+]
+
+[enums.ConnectionError]
+items = [
+  "AlreadyConnected",
+  "AndroidAnticheatKick",
+  "AndroidEmulatorKick",
+  "AndroidRootedKick",
+  "ConnectErrors",
+  "ConnectionBanned",
+  "DisconnectBadhash",
+  "DisconnectBlockedIP",
+  "DisconnectBySecurityPolicy",
+  "DisconnectClientFailure",
+  "DisconnectClientRequest",
+  "DisconnectCloudEditKick",
+  "DisconnectCollaboratorNotAgeVerified",
+  "DisconnectCollaboratorOwnerActionRequired",
+  "DisconnectCollaboratorPermissionRevoked",
+  "DisconnectCollaboratorRequestedEviction",
+  "DisconnectCollaboratorTooManyCollaborators",
+  "DisconnectCollaboratorTrustedConnectionsRequired",
+  "DisconnectCollaboratorTrustedConnectionsRequiredPC",
+  "DisconnectCollaboratorUnderage",
+  "DisconnectCollaboratorUnknownError",
+  "DisconnectConnectionLost",
+  "DisconnectDevMaintenance",
+  "DisconnectDuplicatePlayer",
+  "DisconnectDuplicateTicket",
+  "DisconnectErrors",
+  "DisconnectEvicted",
+  "DisconnectHashTimeout",
+  "DisconnectIdle",
+  "DisconnectIllegalTeleport",
+  "DisconnectLuaKick",
+  "DisconnectModeratedGame",
+  "DisconnectNewSecurityKeyMismatch",
+  "DisconnectOnRemoteSysStats",
+  "DisconnectOutOfMemoryKeepPlayingLeave",
+  "DisconnectPlayerless",
+  "DisconnectPrivateServerKickout",
+  "DisconnectProtocolMismatch",
+  "DisconnectRaknetErrors",
+  "DisconnectReceivePacketError",
+  "DisconnectReceivePacketStreamError",
+  "DisconnectRejoin",
+  "DisconnectRemoteAttestationBootValidationFailure",
+  "DisconnectRemoteAttestationGeneralFailure",
+  "DisconnectRemoteAttestationOSOutOfDate",
+  "DisconnectRemoteAttestationTimeout",
+  "DisconnectRemoteAttestationUnsupported",
+  "DisconnectRobloxMaintenance",
+  "DisconnectRomarkEndOfTest",
+  "DisconnectSecurityKeyMismatch",
+  "DisconnectSendPacketError",
+  "DisconnectTimeout",
+  "DisconnectVerboselyModeratedGame",
+  "DisconnectWrongVersion",
+  "DisconnectionNotification",
+  "IPRecentlyConnected",
+  "IncompatibleProtocolVersion",
+  "InvalidPassword",
+  "NetworkInternal",
+  "NetworkMisbehavior",
+  "NetworkSecurity",
+  "NetworkSend",
+  "NetworkTimeout",
+  "NoFreeIncomingConnections",
+  "OK",
+  "OurSystemRequiresSecurity",
+  "PhantomFreeze",
+  "PlacelaunchAgeVerificationRequired",
+  "PlacelaunchCollaborationCoreGated",
+  "PlacelaunchCoreGated",
+  "PlacelaunchCreatorBan",
+  "PlacelaunchCustomMessage",
+  "PlacelaunchDeviceBlock",
+  "PlacelaunchDisabled",
+  "PlacelaunchError",
+  "PlacelaunchErrors",
+  "PlacelaunchFlooded",
+  "PlacelaunchGameEnded",
+  "PlacelaunchGameFull",
+  "PlacelaunchHashException",
+  "PlacelaunchHashExpired",
+  "PlacelaunchHttpError",
+  "PlacelaunchOtherError",
+  "PlacelaunchParentalApprovalRequired",
+  "PlacelaunchPartyCannotFit",
+  "PlacelaunchRestricted",
+  "PlacelaunchUnauthorized",
+  "PlacelaunchUserLeft",
+  "PlacelaunchUserPrivacyUnauthorized",
+  "PlacelaunchVipOwnerNotPresent",
+  "PlayerRemoved",
+  "ReplacementReady",
+  "ReplicatorTimeout",
+  "ScreentimeLockoutKick",
+  "SecurityKeyMismatch",
+  "ServerEmpty",
+  "ServerShutdown",
+  "TeleportErrors",
+  "TeleportFailure",
+  "TeleportFlooded",
+  "TeleportGameEnded",
+  "TeleportGameFull",
+  "TeleportGameNotFound",
+  "TeleportIsTeleporting",
+  "TeleportUnauthorized",
+  "Unknown",
+]
+
+[enums.ConnectionState]
+items = [
+  "Connected",
+  "Disconnected",
+]
+
+[enums.ContentSourceType]
+items = [
+  "None",
+  "Object",
+  "Opaque",
+  "Uri",
+]
+
+[enums.ContextActionPriority]
+items = [
+  "High",
+  "Low",
+  "Medium",
+]
+
+[enums.ContextActionResult]
+items = [
+  "Pass",
+  "Sink",
+]
+
+[enums.ControlMode]
+items = [
+  "Classic",
+  "MouseLockSwitch",
+]
+
+[enums.CoreGuiType]
+items = [
+  "All",
+  "AvatarSwitcher",
+  "Backpack",
+  "Captures",
+  "Chat",
+  "EmotesMenu",
+  "ExperienceShop",
+  "Health",
+  "PlayerList",
+  "SelfView",
+]
+
+[enums.CreateAssetResult]
+items = [
+  "PermissionDenied",
+  "Success",
+  "Unknown",
+  "UploadFailed",
+]
+
+[enums.CreateContentResult]
+items = [
+  "PermissionDenied",
+  "StorageLimitExceeded",
+  "Success",
+  "Unknown",
+  "UploadFailed",
+]
+
+[enums.CreateOutfitFailure]
+items = [
+  "InvalidName",
+  "Other",
+  "OutfitLimitReached",
+]
+
+[enums.CreatorType]
+items = [
+  "Group",
+  "User",
+]
+
+[enums.CreatorTypeFilter]
+items = [
+  "All",
+  "Group",
+  "User",
+]
+
+[enums.CurrencyType]
+items = [
+  "Default",
+  "Robux",
+  "Tix",
+]
+
+[enums.CustomCameraMode]
+items = [
+  "Classic",
+  "Default",
+  "Follow",
+]
+
+[enums.DataModelExtractorFileType]
+items = [
+  "FirstSlice",
+  "NonFirstSlice",
+  "PlaceFile",
+]
+
+[enums.DataStoreRequestType]
+items = [
+  "GetAsync",
+  "GetSortedAsync",
+  "GetVersionAsync",
+  "ListAsync",
+  "OnUpdate",
+  "OrderedList",
+  "OrderedRead",
+  "OrderedRemove",
+  "OrderedWrite",
+  "RemoveVersionAsync",
+  "SetIncrementAsync",
+  "SetIncrementSortedAsync",
+  "StandardList",
+  "StandardRead",
+  "StandardRemove",
+  "StandardWrite",
+  "UpdateAsync",
+]
+
+[enums.DebugBreakModeType]
+items = [
+  "Always",
+  "Never",
+  "Unhandled",
+]
+
+[enums.DebuggerEndReason]
+items = [
+  "ClientRequest",
+  "ConfigurationFailed",
+  "Disconnected",
+  "InvalidHost",
+  "RpcError",
+  "ServerProtocolMismatch",
+  "ServerShutdown",
+  "Timeout",
+]
+
+[enums.DebuggerExceptionBreakMode]
+items = [
+  "Always",
+  "Never",
+  "Unhandled",
+]
+
+[enums.DebuggerFrameType]
+items = [
+  "C",
+  "Lua",
+]
+
+[enums.DebuggerPauseReason]
+items = [
+  "Breakpoint",
+  "Entrypoint",
+  "Exception",
+  "Requested",
+  "SingleStep",
+  "Unknown",
+]
+
+[enums.DebuggerResumeType]
+items = [
+  "Resume",
+  "StepInto",
+  "StepOut",
+  "StepOver",
+]
+
+[enums.DebuggerStatus]
+items = [
+  "ConnectionClosed",
+  "ConnectionLost",
+  "InternalError",
+  "InvalidArgument",
+  "InvalidResponse",
+  "InvalidState",
+  "RpcError",
+  "Success",
+  "Timeout",
+]
+
+[enums.DefaultScriptSyncFileType]
+items = [
+  "Lua",
+  "Luau",
+]
+
+[enums.DevCameraOcclusionMode]
+items = [
+  "Invisicam",
+  "Zoom",
+]
+
+[enums.DevComputerCameraMovementMode]
+items = [
+  "CameraToggle",
+  "Classic",
+  "Follow",
+  "Orbital",
+  "UserChoice",
+]
+
+[enums.DevComputerMovementMode]
+items = [
+  "ClickToMove",
+  "KeyboardMouse",
+  "Scriptable",
+  "UserChoice",
+]
+
+[enums.DevTouchCameraMovementMode]
+items = [
+  "Classic",
+  "Follow",
+  "Orbital",
+  "UserChoice",
+]
+
+[enums.DevTouchMovementMode]
+items = [
+  "ClickToMove",
+  "DPad",
+  "DynamicThumbstick",
+  "Scriptable",
+  "Thumbpad",
+  "Thumbstick",
+  "UserChoice",
+]
+
+[enums.DeveloperMemoryTag]
+items = [
+  "Animation",
+  "BaseParts",
+  "GeometryCSG",
+  "GraphicsMeshParts",
+  "GraphicsParticles",
+  "GraphicsParts",
+  "GraphicsSlimModels",
+  "GraphicsSolidModels",
+  "GraphicsSpatialHash",
+  "GraphicsTerrain",
+  "GraphicsTexture",
+  "GraphicsTextureCharacter",
+  "Gui",
+  "HttpCache",
+  "Instances",
+  "Internal",
+  "LuaHeap",
+  "Navigation",
+  "PhysicsCollision",
+  "Script",
+  "Signals",
+  "Sounds",
+  "StreamingSounds",
+  "TerrainVoxels",
+]
+
+[enums.DeviceFeatureType]
+items = [
+  "DeviceCapture",
+  "InExperienceFAE",
+]
+
+[enums.DeviceForm]
+items = [
+  "Console",
+  "Desktop",
+  "Phone",
+  "Tablet",
+  "VR",
+]
+
+[enums.DeviceLevel]
+items = [
+  "High",
+  "Low",
+  "Medium",
+]
+
+[enums.DeviceSimulatorScalingMode]
+items = [
+  "ActualResolution",
+  "FitToWindow",
+  "ScaleToPhysicalSize",
+]
+
+[enums.DeviceType]
+items = [
+  "Desktop",
+  "Phone",
+  "TV",
+  "Tablet",
+  "Unknown",
+]
+
+[enums.DialogBehaviorType]
+items = [
+  "MultiplePlayers",
+  "SinglePlayer",
+]
+
+[enums.DialogPurpose]
+items = [
+  "Help",
+  "Quest",
+  "Shop",
+]
+
+[enums.DialogTone]
+items = [
+  "Enemy",
+  "Friendly",
+  "Neutral",
+]
+
+[enums.DigitsRigDescriptionSide]
+items = [
+  "Left",
+  "None",
+  "Right",
+]
+
+[enums.DiscountType]
+items = [
+  "Uncategorized",
+]
+
+[enums.DisplayScalingMode]
+items = [
+  "Default",
+  "Legacy",
+  "Responsive",
+]
+
+[enums.DisplaySize]
+items = [
+  "Large",
+  "Medium",
+  "Small",
+]
+
+[enums.DomainType]
+items = [
+  "EXPERIENCE",
+  "OAUTH",
+]
+
+[enums.DominantAxis]
+items = [
+  "Height",
+  "Width",
+]
+
+[enums.DraftStatusCode]
+items = [
+  "DraftCommitted",
+  "DraftOutdated",
+  "OK",
+  "ScriptRemoved",
+]
+
+[enums.DragDetectorDragStyle]
+items = [
+  "BestForDevice",
+  "RotateAxis",
+  "RotateTrackball",
+  "Scriptable",
+  "TranslateLine",
+  "TranslateLineOrPlane",
+  "TranslatePlane",
+  "TranslatePlaneOrLine",
+  "TranslateViewPlane",
+]
+
+[enums.DragDetectorPermissionPolicy]
+items = [
+  "Everybody",
+  "Nobody",
+  "Scriptable",
+]
+
+[enums.DragDetectorResponseStyle]
+items = [
+  "Custom",
+  "Geometric",
+  "Physical",
+]
+
+[enums.DraggerCoordinateSpace]
+items = [
+  "Object",
+  "World",
+]
+
+[enums.DraggerMovementMode]
+items = [
+  "Geometric",
+  "Physical",
+]
+
+[enums.DraggingScrollBar]
+items = [
+  "Horizontal",
+  "None",
+  "Vertical",
+]
+
+[enums.EasingDirection]
+items = [
+  "In",
+  "InOut",
+  "Out",
+]
+
+[enums.EasingStyle]
+items = [
+  "Back",
+  "Bounce",
+  "Circular",
+  "Cubic",
+  "Elastic",
+  "Exponential",
+  "Linear",
+  "Quad",
+  "Quart",
+  "Quint",
+  "Sine",
+]
+
+[enums.EditableStatus]
+items = [
+  "Allowed",
+  "Disallowed",
+  "Unknown",
+]
+
+[enums.ElasticBehavior]
+items = [
+  "Always",
+  "Never",
+  "WhenScrollable",
+]
+
+[enums.EmitterPositionType]
+items = [
+  "Instance",
+  "Parent",
+]
+
+[enums.EngagementLevel]
+items = [
+  "High",
+  "Inactive",
+  "Low",
+  "Medium",
+  "Unknown",
+]
+
+[enums.EngineFolder]
+items = [
+  "Logs",
+  "Screenshots",
+  "Videos",
+]
+
+[enums.EnviromentalPhysicsThrottle]
+items = [
+  "Always",
+  "DefaultAuto",
+  "Disabled",
+  "Skip16",
+  "Skip2",
+  "Skip4",
+  "Skip8",
+]
+
+[enums.ExperienceActivationStatus]
+items = [
+  "Active",
+  "Lapsed",
+  "New",
+  "Reactivated",
+  "Unknown",
+]
+
+[enums.ExperienceAuthScope]
+items = [
+  "CreatorAssetsCreate",
+  "DefaultScope",
+]
+
+[enums.ExperienceEventStatus]
+items = [
+  "Active",
+  "Cancelled",
+  "Moderated",
+  "Unknown",
+  "Unpublished",
+]
+
+[enums.ExperienceStateCaptureSelectionMode]
+items = [
+  "Default",
+  "SafetyHighlightMode",
+]
+
+[enums.ExperienceStateRecordingLoadMode]
+items = [
+  "ContiguousSlice",
+  "NewReplay",
+  "NoncontiguousSlice",
+]
+
+[enums.ExperienceStateRecordingLoadSourceType]
+items = [
+  "File",
+  "S3Url",
+]
+
+[enums.ExperienceStateRecordingPlaybackMode]
+items = [
+  "Playing",
+  "Rewinding",
+  "Stopped",
+  "Undefined",
+]
+
+[enums.ExplosionType]
+items = [
+  "Craters",
+  "NoCraters",
+]
+
+[enums.ExternalEditorMode]
+items = [
+  "SystemDefault",
+  "UserSelectedEditor",
+]
+
+[enums.FACSDataLod]
+items = [
+  "LOD0",
+  "LOD1",
+  "LODCount",
+]
+
+[enums.FacialAgeEstimationResultType]
+items = [
+  "Cancel",
+  "Complete",
+  "Error",
+]
+
+[enums.FacialAnimationStreamingState]
+items = [
+  "Audio",
+  "None",
+  "Place",
+  "Server",
+  "Video",
+]
+
+[enums.FacsActionUnit]
+items = [
+  "ChinRaiser",
+  "ChinRaiserUpperLip",
+  "Corrugator",
+  "EyesLookDown",
+  "EyesLookLeft",
+  "EyesLookRight",
+  "EyesLookUp",
+  "FlatPucker",
+  "Funneler",
+  "JawDrop",
+  "JawLeft",
+  "JawRight",
+  "LeftBrowLowerer",
+  "LeftCheekPuff",
+  "LeftCheekRaiser",
+  "LeftDimpler",
+  "LeftEyeClosed",
+  "LeftEyeUpperLidRaiser",
+  "LeftInnerBrowRaiser",
+  "LeftLipCornerDown",
+  "LeftLipCornerPuller",
+  "LeftLipStretcher",
+  "LeftLowerLipDepressor",
+  "LeftNoseWrinkler",
+  "LeftOuterBrowRaiser",
+  "LeftUpperLipRaiser",
+  "LipPresser",
+  "LipsTogether",
+  "LowerLipSuck",
+  "MouthLeft",
+  "MouthRight",
+  "Pucker",
+  "RightBrowLowerer",
+  "RightCheekPuff",
+  "RightCheekRaiser",
+  "RightDimpler",
+  "RightEyeClosed",
+  "RightEyeUpperLidRaiser",
+  "RightInnerBrowRaiser",
+  "RightLipCornerDown",
+  "RightLipCornerPuller",
+  "RightLipStretcher",
+  "RightLowerLipDepressor",
+  "RightNoseWrinkler",
+  "RightOuterBrowRaiser",
+  "RightUpperLipRaiser",
+  "TongueDown",
+  "TongueOut",
+  "TongueUp",
+  "UpperLipSuck",
+]
+
+[enums.FeatureRestrictionAbuseVector]
+items = [
+  "Communication",
+  "ExperienceChat",
+]
+
+[enums.FeedbackType]
+items = [
+  "Feedback",
+  "PlayerSupport",
+]
+
+[enums.FieldOfViewMode]
+items = [
+  "Diagonal",
+  "MaxAxis",
+  "Vertical",
+]
+
+[enums.FillDirection]
+items = [
+  "Horizontal",
+  "Vertical",
+]
+
+[enums.FilterErrorType]
+items = [
+  "BackslashNotEscapingAnything",
+  "BadBespokeFilter",
+  "BadName",
+  "IncompleteOr",
+  "IncompleteParenthesis",
+  "InvalidDoubleStar",
+  "InvalidTilde",
+  "PropertyBadOperator",
+  "PropertyDoesNotExist",
+  "PropertyInvalidField",
+  "PropertyInvalidValue",
+  "PropertyUnsupportedFields",
+  "PropertyUnsupportedProperty",
+  "UnexpectedNameIndex",
+  "UnexpectedToken",
+  "UnfinishedBinaryOperator",
+  "UnfinishedQuote",
+  "UnknownBespokeFilter",
+  "WildcardInProperty",
+]
+
+[enums.FilterResult]
+items = [
+  "Accepted",
+  "Rejected",
+]
+
+[enums.FilterType]
+items = [
+  "Exclude",
+  "Include",
+]
+
+[enums.FinishRecordingOperation]
+items = [
+  "Append",
+  "Cancel",
+  "Commit",
+]
+
+[enums.FluidFidelity]
+items = [
+  "Automatic",
+  "UseCollisionGeometry",
+  "UsePreciseGeometry",
+]
+
+[enums.FluidForces]
+items = [
+  "Default",
+  "Experimental",
+]
+
+[enums.Font]
+items = [
+  "AmaticSC",
+  "Antique",
+  "Arcade",
+  "Arial",
+  "ArialBold",
+  "Arimo",
+  "ArimoBold",
+  "Bangers",
+  "Bodoni",
+  "BuilderSans",
+  "BuilderSansBold",
+  "BuilderSansExtraBold",
+  "BuilderSansMedium",
+  "Cartoon",
+  "Code",
+  "Creepster",
+  "DenkOne",
+  "Fantasy",
+  "Fondamento",
+  "FredokaOne",
+  "Garamond",
+  "Gotham",
+  "GothamBlack",
+  "GothamBold",
+  "GothamMedium",
+  "GrenzeGotisch",
+  "Highway",
+  "IndieFlower",
+  "JosefinSans",
+  "Jura",
+  "Kalam",
+  "Legacy",
+  "LuckiestGuy",
+  "Merriweather",
+  "Michroma",
+  "Nunito",
+  "Oswald",
+  "PatrickHand",
+  "PermanentMarker",
+  "Roboto",
+  "RobotoCondensed",
+  "RobotoMono",
+  "Sarpanch",
+  "SciFi",
+  "SourceSans",
+  "SourceSansBold",
+  "SourceSansItalic",
+  "SourceSansLight",
+  "SourceSansSemibold",
+  "SpecialElite",
+  "TitilliumWeb",
+  "Ubuntu",
+  "Unknown",
+]
+
+[enums.FontSize]
+items = [
+  "Size10",
+  "Size11",
+  "Size12",
+  "Size14",
+  "Size18",
+  "Size24",
+  "Size28",
+  "Size32",
+  "Size36",
+  "Size42",
+  "Size48",
+  "Size60",
+  "Size8",
+  "Size9",
+  "Size96",
+]
+
+[enums.FontStyle]
+items = [
+  "Italic",
+  "Normal",
+]
+
+[enums.FontWeight]
+items = [
+  "Bold",
+  "ExtraBold",
+  "ExtraLight",
+  "Heavy",
+  "Light",
+  "Medium",
+  "Regular",
+  "SemiBold",
+  "Thin",
+]
+
+[enums.ForceLimitMode]
+items = [
+  "Magnitude",
+  "PerAxis",
+]
+
+[enums.FormFactor]
+items = [
+  "Brick",
+  "Custom",
+  "Plate",
+  "Symmetric",
+]
+
+[enums.FrameStyle]
+items = [
+  "ChatBlue",
+  "ChatGreen",
+  "ChatRed",
+  "Custom",
+  "DropShadow",
+  "RobloxRound",
+  "RobloxSquare",
+]
+
+[enums.FramerateManagerMode]
+items = [
+  "Automatic",
+  "Off",
+  "On",
+]
+
+[enums.FriendRequestEvent]
+items = [
+  "Accept",
+  "Deny",
+  "Issue",
+  "Revoke",
+]
+
+[enums.FriendStatus]
+items = [
+  "Friend",
+  "FriendRequestReceived",
+  "FriendRequestSent",
+  "NotFriend",
+  "Unknown",
+]
+
+[enums.FunctionalTestResult]
+items = [
+  "Error",
+  "Passed",
+  "Warning",
+]
+
+[enums.GameAvatarType]
+items = [
+  "PlayerChoice",
+  "R15",
+  "R6",
+]
+
+[enums.GamepadType]
+items = [
+  "PS4",
+  "PS5",
+  "Unknown",
+  "XboxOne",
+]
+
+[enums.GearGenreSetting]
+deprecated = { message = "deprecated Roblox enum" }
+items = [
+  { value = "AllGenres", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "MatchingGenreOnly", deprecated = { message = "deprecated Roblox enum item" } },
+]
+
+[enums.GearType]
+deprecated = { message = "deprecated Roblox enum" }
+items = [
+  { value = "BuildingTools", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Explosives", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "MeleeWeapons", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "MusicalInstruments", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "NavigationEnhancers", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "PowerUps", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "RangedWeapons", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "SocialItems", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Transport", deprecated = { message = "deprecated Roblox enum item" } },
+]
+
+[enums.Genre]
+deprecated = { message = "deprecated Roblox enum" }
+items = [
+  "Adventure",
+  "All",
+  "Fantasy",
+  "Funny",
+  "Ninja",
+  "Pirate",
+  "Scary",
+  "SciFi",
+  "SkatePark",
+  "Sports",
+  "TownAndCity",
+  "Tutorial",
+  "War",
+  "WildWest",
+]
+
+[enums.GradientTileMode]
+items = [
+  "Clamp",
+  "Mirror",
+  "Repeat",
+]
+
+[enums.GradientType]
+items = [
+  "Conical",
+  "Linear",
+  "Radial",
+]
+
+[enums.GraphicsMode]
+items = [
+  "Automatic",
+  "Direct3D11",
+  "Metal",
+  "NoGraphics",
+  "OpenGL",
+  "Vulkan",
+]
+
+[enums.GraphicsOptimizationMode]
+items = [
+  "Balanced",
+  "Performance",
+  "Quality",
+]
+
+[enums.GroupMembershipStatus]
+items = [
+  "AlreadyMember",
+  "JoinRequestPending",
+  "Joined",
+  "None",
+]
+
+[enums.GuiState]
+items = [
+  "Hover",
+  "Idle",
+  "NonInteractable",
+  "Press",
+]
+
+[enums.GuiType]
+items = [
+  "Core",
+  "CoreBillboards",
+  "Custom",
+  "CustomBillboards",
+  "PlayerNameplates",
+]
+
+[enums.HandlesStyle]
+items = [
+  "Movement",
+  "Resize",
+]
+
+[enums.HapticEffectType]
+items = [
+  "Custom",
+  "GameplayCollision",
+  "GameplayExplosion",
+  "UIClick",
+  "UIHover",
+  "UINotification",
+]
+
+[enums.HashAlgorithm]
+items = [
+  "Blake2b",
+  "Blake3",
+  "Md5",
+  "Sha1",
+  "Sha256",
+]
+
+[enums.HighlightDepthMode]
+items = [
+  "AlwaysOnTop",
+  "Occluded",
+]
+
+[enums.HorizontalAlignment]
+items = [
+  "Center",
+  "Left",
+  "Right",
+]
+
+[enums.HoverAnimateSpeed]
+items = [
+  "Fast",
+  "Medium",
+  "Slow",
+  "VeryFast",
+  "VerySlow",
+]
+
+[enums.HttpCachePolicy]
+items = [
+  "DataOnly",
+  "Default",
+  "Full",
+  "InternalRedirectRefresh",
+  "None",
+]
+
+[enums.HttpCompression]
+items = [
+  "Gzip",
+  "None",
+]
+
+[enums.HttpContentType]
+items = [
+  "ApplicationJson",
+  "ApplicationUrlEncoded",
+  "ApplicationXml",
+  "TextPlain",
+  "TextXml",
+]
+
+[enums.HttpError]
+items = [
+  "Aborted",
+  "ConnectFail",
+  "ConnectionClosed",
+  "CreatorEnvironmentsNotSupportedByService",
+  "DnsResolve",
+  "InactivityTimeout",
+  "InvalidRangeResponse",
+  "InvalidRedirect",
+  "InvalidUrl",
+  "NetFail",
+  "OK",
+  "OutOfMemory",
+  "ServerProtocolError",
+  "SslConnectFail",
+  "SslVerificationFail",
+  "TimedOut",
+  "TooManyOutstandingRequests",
+  "TooManyRedirects",
+  "Unknown",
+]
+
+[enums.HttpRequestType]
+items = [
+  "Analytics",
+  "Avatar",
+  "Chat",
+  "Default",
+  "Localization",
+  "MarketplaceService",
+  "Players",
+]
+
+[enums.HumanoidCollisionType]
+items = [
+  "InnerBox",
+  "OuterBox",
+]
+
+[enums.HumanoidDisplayDistanceType]
+items = [
+  "None",
+  "Subject",
+  "Viewer",
+]
+
+[enums.HumanoidHealthDisplayType]
+items = [
+  "AlwaysOff",
+  "AlwaysOn",
+  "DisplayWhenDamaged",
+]
+
+[enums.HumanoidRigType]
+items = [
+  "R15",
+  "R6",
+]
+
+[enums.HumanoidStateType]
+items = [
+  "Climbing",
+  "Dead",
+  "FallingDown",
+  "Flying",
+  "Freefall",
+  "GettingUp",
+  "Jumping",
+  "Landed",
+  "None",
+  "Physics",
+  "PlatformStanding",
+  "Ragdoll",
+  "Running",
+  "RunningNoPhysics",
+  "Seated",
+  "StrafingNoPhysics",
+  "Swimming",
+]
+
+[enums.IKCollisionsMode]
+items = [
+  "IncludeContactedMechanisms",
+  "NoCollisions",
+  "OtherMechanismsAnchored",
+]
+
+[enums.IKControlConstraintSupport]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.IKControlType]
+items = [
+  "LookAt",
+  "Position",
+  "Rotation",
+  "Transform",
+]
+
+[enums.IXPLoadingStatus]
+items = [
+  "ErrorConnection",
+  "ErrorInvalidUser",
+  "ErrorJsonParse",
+  "ErrorTimedOut",
+  "Initialized",
+  "None",
+  "Pending",
+]
+
+[enums.ImageAlphaType]
+items = [
+  "Default",
+  "LockCanvasAlpha",
+  "LockCanvasColor",
+]
+
+[enums.ImageCombineType]
+items = [
+  "Add",
+  "AlphaBlend",
+  "BlendSourceOver",
+  "Multiply",
+  "NormalMapBlend",
+  "Overwrite",
+]
+
+[enums.InOut]
+items = [
+  "Center",
+  "Edge",
+  "Inset",
+]
+
+[enums.InfoType]
+items = [
+  "Asset",
+  "Bundle",
+  "GamePass",
+  "Product",
+  "Subscription",
+]
+
+[enums.InitialDockState]
+items = [
+  "Bottom",
+  "Float",
+  "Left",
+  "Right",
+  "Top",
+]
+
+[enums.InputActionType]
+items = [
+  "Bool",
+  "Direction1D",
+  "Direction2D",
+  "Direction3D",
+  "ViewportPosition",
+]
+
+[enums.InputBindingType]
+items = [
+  "Automatic",
+  "Scriptable",
+]
+
+[enums.InputSink]
+items = [
+  "Activate",
+  "All",
+  "None",
+]
+
+[enums.InputType]
+items = [
+  "Constant",
+  "NoInput",
+  "Sin",
+]
+
+[enums.InstanceFileSyncStatus]
+items = [
+  "AncestorErrored",
+  "Errored",
+  "NotSynced",
+  "SyncedAsDescendant",
+  "SyncedAsRoot",
+]
+
+[enums.IntermediateMeshGenerationResult]
+items = [
+  "HighQualityMesh",
+]
+
+[enums.InternalVideoUsage]
+items = [
+  "Default",
+  "HomeCarousel",
+  "WatchPage",
+]
+
+[enums.InterpolationThrottlingMode]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.InviteState]
+items = [
+  "Accepted",
+  "Declined",
+  "Missed",
+  "Placed",
+]
+
+[enums.ItemLineAlignment]
+items = [
+  "Automatic",
+  "Center",
+  "End",
+  "Start",
+  "Stretch",
+]
+
+[enums.JoinSource]
+items = [
+  "CreatedItemAttribution",
+]
+
+[enums.JointCreationMode]
+items = [
+  "All",
+  "None",
+  "Surface",
+]
+
+[enums.KeyCode]
+items = [
+  "A",
+  "Ampersand",
+  "Asterisk",
+  "At",
+  "B",
+  "BackSlash",
+  "Backquote",
+  "Backspace",
+  "Break",
+  "ButtonA",
+  "ButtonB",
+  "ButtonL1",
+  "ButtonL2",
+  "ButtonL3",
+  "ButtonR1",
+  "ButtonR2",
+  "ButtonR3",
+  "ButtonSelect",
+  "ButtonStart",
+  "ButtonX",
+  "ButtonY",
+  "C",
+  "CapsLock",
+  "Caret",
+  "Clear",
+  "Colon",
+  "Comma",
+  "Compose",
+  "D",
+  "DPadDown",
+  "DPadLeft",
+  "DPadRight",
+  "DPadUp",
+  "Delete",
+  "Dollar",
+  "Down",
+  "E",
+  "Eight",
+  "End",
+  "Equals",
+  "Escape",
+  "Euro",
+  "F",
+  "F1",
+  "F10",
+  "F11",
+  "F12",
+  "F13",
+  "F14",
+  "F15",
+  "F2",
+  "F3",
+  "F4",
+  "F5",
+  "F6",
+  "F7",
+  "F8",
+  "F9",
+  "Five",
+  "Four",
+  "G",
+  "GreaterThan",
+  "H",
+  "Hash",
+  "Help",
+  "Home",
+  "I",
+  "Insert",
+  "J",
+  "K",
+  "KeypadDivide",
+  "KeypadEight",
+  "KeypadEnter",
+  "KeypadEquals",
+  "KeypadFive",
+  "KeypadFour",
+  "KeypadMinus",
+  "KeypadMultiply",
+  "KeypadNine",
+  "KeypadOne",
+  "KeypadPeriod",
+  "KeypadPlus",
+  "KeypadSeven",
+  "KeypadSix",
+  "KeypadThree",
+  "KeypadTwo",
+  "KeypadZero",
+  "L",
+  "Left",
+  "LeftAlt",
+  "LeftBracket",
+  "LeftControl",
+  "LeftCurly",
+  "LeftMeta",
+  "LeftParenthesis",
+  "LeftShift",
+  "LeftSuper",
+  "LessThan",
+  "M",
+  "Menu",
+  "Minus",
+  "Mode",
+  { value = "MouseBackButton", deprecated = { message = "deprecated Roblox enum item" } },
+  "MouseDelta",
+  "MouseLeftButton",
+  "MouseMiddleButton",
+  { value = "MouseNoButton", deprecated = { message = "deprecated Roblox enum item" } },
+  "MousePosition",
+  "MouseRightButton",
+  "MouseWheel",
+  { value = "MouseX", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "MouseY", deprecated = { message = "deprecated Roblox enum item" } },
+  "N",
+  "Nine",
+  "NumLock",
+  "O",
+  "One",
+  "P",
+  "PageDown",
+  "PageUp",
+  "Pause",
+  "Percent",
+  "Period",
+  "Pipe",
+  "Plus",
+  "Power",
+  "Print",
+  "Q",
+  "Question",
+  "Quote",
+  "QuotedDouble",
+  "R",
+  "Return",
+  "Right",
+  "RightAlt",
+  "RightBracket",
+  "RightControl",
+  "RightCurly",
+  "RightMeta",
+  "RightParenthesis",
+  "RightShift",
+  "RightSuper",
+  "S",
+  "ScrollLock",
+  "Semicolon",
+  "Seven",
+  "Six",
+  "Slash",
+  "Space",
+  "SysReq",
+  "T",
+  "Tab",
+  "Three",
+  "Thumbstick1",
+  "Thumbstick1Down",
+  "Thumbstick1Left",
+  "Thumbstick1Right",
+  "Thumbstick1Up",
+  "Thumbstick2",
+  "Thumbstick2Down",
+  "Thumbstick2Left",
+  "Thumbstick2Right",
+  "Thumbstick2Up",
+  "Tilde",
+  "TouchDelta",
+  "TouchPinch",
+  "TouchPosition",
+  "TrackpadPan",
+  "TrackpadPinch",
+  "Two",
+  "U",
+  "Underscore",
+  "Undo",
+  "Unknown",
+  "Up",
+  "V",
+  "W",
+  { value = "World0", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World1", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World10", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World11", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World12", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World13", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World14", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World15", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World16", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World17", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World18", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World19", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World2", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World20", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World21", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World22", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World23", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World24", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World25", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World26", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World27", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World28", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World29", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World3", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World30", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World31", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World32", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World33", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World34", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World35", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World36", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World37", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World38", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World39", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World4", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World40", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World41", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World42", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World43", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World44", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World45", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World46", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World47", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World48", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World49", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World5", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World50", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World51", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World52", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World53", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World54", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World55", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World56", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World57", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World58", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World59", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World6", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World60", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World61", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World62", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World63", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World64", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World65", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World66", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World67", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World68", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World69", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World7", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World70", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World71", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World72", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World73", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World74", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World75", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World76", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World77", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World78", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World79", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World8", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World80", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World81", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World82", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World83", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World84", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World85", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World86", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World87", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World88", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World89", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World9", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World90", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World91", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World92", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World93", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World94", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "World95", deprecated = { message = "deprecated Roblox enum item" } },
+  "X",
+  "Y",
+  "Z",
+  "Zero",
+]
+
+[enums.KeyCodeStringFormat]
+items = [
+  "Abbreviated",
+  "Default",
+]
+
+[enums.KeyInterpolationMode]
+items = [
+  "Constant",
+  "Cubic",
+  "Linear",
+]
+
+[enums.KeywordFilterType]
+items = [
+  "Exclude",
+  "Include",
+]
+
+[enums.Language]
+items = [
+  "Default",
+]
+
+[enums.LeftRight]
+items = [
+  "Center",
+  "Left",
+  "Right",
+]
+
+[enums.LexemeType]
+items = [
+  "And",
+  "Colon",
+  "Dot",
+  "DoubleStar",
+  "Eof",
+  "Equal",
+  "GreaterThan",
+  "GreaterThanEqual",
+  "LeftParenthesis",
+  "LessThan",
+  "LessThanEqual",
+  "Name",
+  "Number",
+  "Or",
+  "QuotedString",
+  "ReservedSpecial",
+  "RightParenthesis",
+  "Star",
+  "TildeEqual",
+]
+
+[enums.LightingStyle]
+items = [
+  "Realistic",
+  "Soft",
+]
+
+[enums.Limb]
+items = [
+  "Head",
+  "LeftArm",
+  "LeftLeg",
+  "RightArm",
+  "RightLeg",
+  "Torso",
+  "Unknown",
+]
+
+[enums.LineJoinMode]
+items = [
+  "Bevel",
+  "Miter",
+  "Round",
+]
+
+[enums.ListDisplayMode]
+items = [
+  "Horizontal",
+  "Vertical",
+]
+
+[enums.ListenerLocation]
+items = [
+  "Camera",
+  "Character",
+  "Default",
+  "None",
+]
+
+[enums.ListenerPositionType]
+items = [
+  "Instance",
+  "Parent",
+]
+
+[enums.ListenerType]
+items = [
+  "CFrame",
+  "Camera",
+  "ObjectCFrame",
+  "ObjectPosition",
+]
+
+[enums.LiveEditingAtomicUpdateResponse]
+items = [
+  "FailureGuidNotFound",
+  "FailureHashMismatch",
+  "FailureOperationIllegal",
+  "Success",
+]
+
+[enums.LiveEditingBroadcastMessageType]
+items = [
+  "Error",
+  "Normal",
+  "Warning",
+]
+
+[enums.LoadCharacterLayeredClothing]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.LoadDynamicHeads]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.LocationType]
+items = [
+  "Camera",
+  "Character",
+  "ObjectPosition",
+]
+
+[enums.LuauTypeCheckMode]
+items = [
+  "Default",
+  "NoCheck",
+  "Nonstrict",
+  "Strict",
+]
+
+[enums.MakeupType]
+items = [
+  "Eye",
+  "Face",
+  "Lip",
+]
+
+[enums.MarketplaceBulkPurchasePromptStatus]
+items = [
+  "Aborted",
+  "Completed",
+  "Error",
+]
+
+[enums.MarketplaceItemPurchaseStatus]
+items = [
+  "AlreadyOwned",
+  "InsufficientMembership",
+  "InsufficientRobux",
+  "NotAvailableForPurchaser",
+  "NotForSale",
+  "PlaceInvalid",
+  "PriceMismatch",
+  "PurchaserIsSeller",
+  "QuantityLimitExceeded",
+  "QuotaExceeded",
+  "SoldOut",
+  "Success",
+  "SystemError",
+]
+
+[enums.MarketplaceProductType]
+items = [
+  "AvatarAsset",
+  "AvatarBundle",
+]
+
+[enums.MarkupKind]
+items = [
+  "Markdown",
+  "PlainText",
+]
+
+[enums.MatchmakingType]
+items = [
+  "Default",
+  "PlayStationOnly",
+  "XboxOnly",
+]
+
+[enums.Material]
+items = [
+  "Air",
+  "Asphalt",
+  "Basalt",
+  "Brick",
+  "Cardboard",
+  "Carpet",
+  "CeramicTiles",
+  "ClayRoofTiles",
+  "Cobblestone",
+  "Concrete",
+  "CorrodedMetal",
+  "CrackedLava",
+  "DiamondPlate",
+  "Fabric",
+  "Foil",
+  "ForceField",
+  "Glacier",
+  "Glass",
+  "Granite",
+  "Grass",
+  "Ground",
+  "Ice",
+  "LeafyGrass",
+  "Leather",
+  "Limestone",
+  "Marble",
+  "Metal",
+  "Mud",
+  "Neon",
+  "Pavement",
+  "Pebble",
+  "Plaster",
+  "Plastic",
+  "Rock",
+  "RoofShingles",
+  "Rubber",
+  "Salt",
+  "Sand",
+  "Sandstone",
+  "Slate",
+  "SmoothPlastic",
+  "Snow",
+  "Water",
+  "Wood",
+  "WoodPlanks",
+]
+
+[enums.MaterialPattern]
+items = [
+  "Organic",
+  "Regular",
+]
+
+[enums.MembershipType]
+items = [
+  "BuildersClub",
+  "None",
+  "OutrageousBuildersClub",
+  "Premium",
+  "TurboBuildersClub",
+]
+
+[enums.MeshPartDetailLevel]
+items = [
+  "DistanceBased",
+  "Level00",
+  "Level01",
+  "Level02",
+  "Level03",
+  "Level04",
+  "Level05",
+  "Level06",
+  "Level07",
+  "Level08",
+  "Level09",
+]
+
+[enums.MeshPartHeadsAndAccessories]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.MeshScaleUnit]
+items = [
+  "CM",
+  "Foot",
+  "Inch",
+  "MM",
+  "Meter",
+  "Stud",
+]
+
+[enums.MeshType]
+items = [
+  "Brick",
+  { value = "CornerWedge", deprecated = { message = "deprecated Roblox enum item" } },
+  "Cylinder",
+  "FileMesh",
+  "Head",
+  { value = "ParallelRamp", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Prism", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Pyramid", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "RightAngleRamp", deprecated = { message = "deprecated Roblox enum item" } },
+  "Sphere",
+  "Torso",
+  "Wedge",
+]
+
+[enums.MessageType]
+items = [
+  "MessageError",
+  "MessageInfo",
+  "MessageOutput",
+  "MessageWarning",
+]
+
+[enums.ModelLevelOfDetail]
+items = [
+  "Automatic",
+  "Disabled",
+  "SLIM",
+  "StreamingMesh",
+]
+
+[enums.ModelStreamingBehavior]
+items = [
+  "Default",
+  "Improved",
+  "Legacy",
+]
+
+[enums.ModelStreamingMode]
+items = [
+  "Atomic",
+  "Default",
+  "Nonatomic",
+  "Persistent",
+  "PersistentPerPlayer",
+]
+
+[enums.ModerationResultCategory]
+items = [
+  "Borderline",
+  "NoViolationDetected",
+  "ViolationDetected",
+]
+
+[enums.ModerationResultLabel]
+items = [
+  "ChildExploitation",
+  "DiscriminationSlursAndHateSpeech",
+  "IllegalAndRegulatedGoodsAndActivities",
+  "Other",
+  "Profanity",
+  "RealWorldSensitiveEvents",
+  "RomanticAndSexualContent",
+  "SuicideSelfInjuryAndHarmfulBehavior",
+  "TerrorismAndViolentExtremism",
+  "ThreatsBullyingAndHarassment",
+  "ViolentContentAndGore",
+]
+
+[enums.ModerationStatus]
+items = [
+  "Invalid",
+  "NotApplicable",
+  "NotReviewed",
+  "ReviewedApproved",
+  "ReviewedRejected",
+]
+
+[enums.ModifierKey]
+items = [
+  "Alt",
+  "Ctrl",
+  "Meta",
+  "Shift",
+]
+
+[enums.MouseBehavior]
+items = [
+  "Default",
+  "LockCenter",
+  "LockCurrentPosition",
+]
+
+[enums.MoveState]
+items = [
+  "AirFree",
+  "Coasting",
+  "Pushing",
+  "Stopped",
+  "Stopping",
+]
+
+[enums.MuteState]
+items = [
+  "Muted",
+  "Unmuted",
+]
+
+[enums.NameOcclusion]
+items = [
+  "EnemyOcclusion",
+  "NoOcclusion",
+  "OccludeAll",
+]
+
+[enums.NegateOperationHiddenHistory]
+items = [
+  "NegatedIntersection",
+  "NegatedUnion",
+  "None",
+]
+
+[enums.NetworkOwnership]
+items = [
+  "Automatic",
+  "Manual",
+  "OnContact",
+]
+
+[enums.NetworkStatus]
+items = [
+  "Connected",
+  "Disconnected",
+  "Unknown",
+]
+
+[enums.NoiseType]
+items = [
+  "SimplexGabor",
+]
+
+[enums.NormalId]
+items = [
+  "Back",
+  "Bottom",
+  "Front",
+  "Left",
+  "Right",
+  "Top",
+]
+
+[enums.NotificationButtonType]
+items = [
+  "Primary",
+  "Secondary",
+]
+
+[enums.OperationType]
+items = [
+  "Intersection",
+  "Null",
+  "Primitive",
+  "Subtraction",
+  "Union",
+]
+
+[enums.OrientationAlignmentMode]
+items = [
+  "OneAttachment",
+  "TwoAttachment",
+]
+
+[enums.OutfitSource]
+items = [
+  "All",
+  "Created",
+  "Purchased",
+]
+
+[enums.OutfitType]
+items = [
+  "All",
+  "Avatar",
+  "DynamicHead",
+  "Makeup",
+  "Shoes",
+]
+
+[enums.OutputLayoutMode]
+items = [
+  "Horizontal",
+  "Vertical",
+]
+
+[enums.OverrideMouseIconBehavior]
+items = [
+  "ForceHide",
+  "ForceShow",
+  "None",
+]
+
+[enums.PackagePermission]
+items = [
+  "Edit",
+  "NoAccess",
+  "None",
+  "Own",
+  "Revoked",
+  "UseView",
+]
+
+[enums.PartType]
+items = [
+  "Ball",
+  "Block",
+  "CornerWedge",
+  "Cylinder",
+  "Wedge",
+]
+
+[enums.ParticleEmitterShape]
+items = [
+  "Box",
+  "Cylinder",
+  "Disc",
+  "Sphere",
+]
+
+[enums.ParticleEmitterShapeInOut]
+items = [
+  "InAndOut",
+  "Inward",
+  "Outward",
+]
+
+[enums.ParticleEmitterShapeStyle]
+items = [
+  "Surface",
+  "Volume",
+]
+
+[enums.ParticleFlipbookLayout]
+items = [
+  "Custom",
+  "Grid2x2",
+  "Grid4x4",
+  "Grid8x8",
+  "None",
+]
+
+[enums.ParticleFlipbookMode]
+items = [
+  "Loop",
+  "OneShot",
+  "PingPong",
+  "Random",
+]
+
+[enums.ParticleFlipbookTextureCompatible]
+items = [
+  "Compatible",
+  "NotCompatible",
+  "Unknown",
+]
+
+[enums.ParticleOrientation]
+items = [
+  "FacingCamera",
+  "FacingCameraWorldUp",
+  "VelocityParallel",
+  "VelocityPerpendicular",
+]
+
+[enums.PathStatus]
+items = [
+  { value = "ClosestNoPath", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "ClosestOutOfRange", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "FailFinishNotEmpty", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "FailStartNotEmpty", deprecated = { message = "deprecated Roblox enum item" } },
+  "NoPath",
+  "Success",
+]
+
+[enums.PathWaypointAction]
+items = [
+  "Custom",
+  "Jump",
+  "Walk",
+]
+
+[enums.PathfindingUseImprovedSearch]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.PeoplePageLayout]
+items = [
+  "Card",
+  "List",
+]
+
+[enums.PerformanceOverlayMode]
+items = [
+  "Decals",
+  "Lights",
+  "Overdraw",
+  "Transparent",
+]
+
+[enums.PermissionLevelShown]
+items = [
+  "Game",
+  "Roblox",
+  "RobloxGame",
+  "RobloxScript",
+  "Studio",
+]
+
+[enums.PhysicalConstraintType]
+items = [
+  "AnimationConstraint",
+  "Motor6D",
+]
+
+[enums.PhysicsSimulationRate]
+items = [
+  "Fixed120Hz",
+  "Fixed240Hz",
+  "Fixed60Hz",
+]
+
+[enums.PhysicsSteppingMethod]
+items = [
+  "Adaptive",
+  "Default",
+  "Fixed",
+]
+
+[enums.PlaceContentPreference]
+items = [
+  "All",
+  "MentionsAndReplies",
+  "None",
+  "Unknown",
+]
+
+[enums.PlacePublishType]
+items = [
+  "None",
+  "Publish",
+  "Save",
+]
+
+[enums.Platform]
+items = [
+  "Android",
+  "AndroidTV",
+  "BeOS",
+  "Chromecast",
+  "DOS",
+  "IOS",
+  "Linux",
+  "MetaOS",
+  "NX",
+  "None",
+  "OSX",
+  "Ouya",
+  "PS3",
+  "PS4",
+  "PS5",
+  "SteamOS",
+  "UWP",
+  "Web",
+  "WebOS",
+  "WiiU",
+  "Windows",
+  "XBox360",
+  "XBoxOne",
+]
+
+[enums.PlaybackState]
+items = [
+  "Begin",
+  "Cancelled",
+  "Completed",
+  "Delayed",
+  "Paused",
+  "Playing",
+]
+
+[enums.PlayerActions]
+items = [
+  "CharacterBackward",
+  "CharacterForward",
+  "CharacterJump",
+  "CharacterLeft",
+  "CharacterRight",
+]
+
+[enums.PlayerCharacterDestroyBehavior]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.PlayerChatType]
+items = [
+  "All",
+  "Team",
+  "Whisper",
+]
+
+[enums.PlayerDataErrorState]
+items = [
+  "FlushFailed",
+  "LoadFailed",
+  "None",
+  "ReleaseFailed",
+]
+
+[enums.PlayerDataLoadFailureBehavior]
+items = [
+  "Failure",
+  "FallbackToDefault",
+  "Kick",
+]
+
+[enums.PlayerExitReason]
+items = [
+  "CreatorKick",
+  "PlatformKick",
+  "Unknown",
+]
+
+[enums.PlayerPlatformActivationStatus]
+items = [
+  "Active",
+  "Lapsed",
+  "New",
+  "Reactivated",
+  "Unknown",
+]
+
+[enums.PlayerPlatformSpenderStatus]
+items = [
+  "Active",
+  "OtherPayer",
+  "Unknown",
+]
+
+[enums.PluginConnectionTargetType]
+items = [
+  "Edit",
+  "Test",
+]
+
+[enums.PoseEasingDirection]
+items = [
+  "In",
+  "InOut",
+  "Out",
+]
+
+[enums.PoseEasingStyle]
+items = [
+  "Bounce",
+  "Constant",
+  "Cubic",
+  "CubicV2",
+  "Elastic",
+  "Linear",
+]
+
+[enums.PositionAlignmentMode]
+items = [
+  "OneAttachment",
+  "TwoAttachment",
+]
+
+[enums.PredictionMode]
+items = [
+  "Automatic",
+  "Off",
+  "On",
+]
+
+[enums.PredictionStatus]
+items = [
+  "Authoritative",
+  "None",
+  "Predicted",
+]
+
+[enums.PredictiveStreamingMode]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.PreferredInput]
+items = [
+  "Gamepad",
+  "KeyboardAndMouse",
+  "Touch",
+]
+
+[enums.PreferredTextSize]
+items = [
+  "Large",
+  "Larger",
+  "Largest",
+  "Medium",
+]
+
+[enums.PrefetchDownloadStatus]
+items = [
+  "Completed",
+  "Failed",
+  "InProgress",
+  "NotStarted",
+]
+
+[enums.PrimalPhysicsSolver]
+items = [
+  "Default",
+  "Disabled",
+  "Experimental",
+]
+
+[enums.PrimitiveType]
+items = [
+  "Ball",
+  "Block",
+  "CornerWedge",
+  "Cylinder",
+  "Null",
+  "Wedge",
+]
+
+[enums.PrivilegeType]
+deprecated = { message = "deprecated Roblox enum" }
+items = [
+  "Admin",
+  "Banned",
+  "Member",
+  "Owner",
+  "Visitor",
+]
+
+[enums.ProductLocationRestriction]
+items = [
+  "AllGames",
+  "AllowedGames",
+  "AvatarShop",
+]
+
+[enums.ProductPurchaseChannel]
+items = [
+  "AdReward",
+  "CommerceProduct",
+  "ExperienceDetailsPage",
+  "InExperience",
+]
+
+[enums.ProductPurchaseDecision]
+items = [
+  "NotProcessedYet",
+  "PurchaseGranted",
+]
+
+[enums.PromptCreateAssetResult]
+items = [
+  "ModeratedName",
+  "NoUserInput",
+  "PermissionDenied",
+  "PurchaseFailure",
+  "Success",
+  "Timeout",
+  "TokenInvalid",
+  "UGCValidationFailed",
+  "UnknownFailure",
+  "UploadFailed",
+]
+
+[enums.PromptCreateAvatarResult]
+items = [
+  "InvalidHumanoidDescription",
+  "MaxOutfits",
+  "ModeratedName",
+  "NoUserInput",
+  "PermissionDenied",
+  "PurchaseFailure",
+  "Success",
+  "Timeout",
+  "TokenInvalid",
+  "UGCValidationFailed",
+  "UnknownFailure",
+  "UploadFailed",
+]
+
+[enums.PromptCreateOutfitResult]
+items = [
+  "CreationFailure",
+  "NoUserInput",
+  "PartialSuccess",
+  "PermissionDenied",
+  "Success",
+  "Timeout",
+  "UnknownFailure",
+]
+
+[enums.PromptExperienceDetailsResult]
+items = [
+  "PromptClosed",
+  "TeleportAttempted",
+]
+
+[enums.PromptLinkSharingResult]
+items = [
+  "InvalidLaunchData",
+  "PlayerLeft",
+  "Success",
+]
+
+[enums.PromptPublishAssetResult]
+items = [
+  "NoUserInput",
+  "PermissionDenied",
+  "Success",
+  "Timeout",
+  "UnknownFailure",
+  "UploadFailed",
+]
+
+[enums.PropertyStatus]
+items = [
+  "Error",
+  "Ok",
+  "Warning",
+]
+
+[enums.ProximityPromptExclusivity]
+items = [
+  "AlwaysShow",
+  "OneGlobally",
+  "OnePerButton",
+]
+
+[enums.ProximityPromptInputType]
+items = [
+  "Gamepad",
+  "Keyboard",
+  "Touch",
+]
+
+[enums.ProximityPromptStyle]
+items = [
+  "Custom",
+  "Default",
+]
+
+[enums.PurchaseOption]
+items = [
+  "Permanent",
+  "TimedOption",
+]
+
+[enums.QualityLevel]
+items = [
+  "Automatic",
+  "Level01",
+  "Level02",
+  "Level03",
+  "Level04",
+  "Level05",
+  "Level06",
+  "Level07",
+  "Level08",
+  "Level09",
+  "Level10",
+  "Level11",
+  "Level12",
+  "Level13",
+  "Level14",
+  "Level15",
+  "Level16",
+  "Level17",
+  "Level18",
+  "Level19",
+  "Level20",
+  "Level21",
+]
+
+[enums.R15CollisionType]
+items = [
+  "InnerBox",
+  "OuterBox",
+]
+
+[enums.RaycastFilterType]
+items = [
+  "Exclude",
+  "Include",
+]
+
+[enums.ReadCapturesFromGalleryResult]
+items = [
+  "NeedPermission",
+  "Success",
+]
+
+[enums.ReceiptDecision]
+items = [
+  "NotProcessedYet",
+  "Processed",
+]
+
+[enums.ReceiptType]
+items = [
+  "DeveloperProduct",
+  "RobuxTransferReceiver",
+  "RobuxTransferSender",
+]
+
+[enums.RecommendationActionType]
+items = [
+  "AddReaction",
+  "Comment",
+  "Play",
+  "Purchase",
+  "RemoveReaction",
+  "Report",
+  "Share",
+]
+
+[enums.RecommendationDepartureIntent]
+items = [
+  "Negative",
+  "Neutral",
+  "Positive",
+]
+
+[enums.RecommendationImpressionType]
+items = [
+  "NotViewable",
+  "View",
+]
+
+[enums.RecommendationItemContentType]
+items = [
+  "Dynamic",
+  "Interactive",
+  "Static",
+]
+
+[enums.RecommendationItemVisibility]
+items = [
+  "Private",
+  "Public",
+]
+
+[enums.RecommendationPreferenceTargetType]
+items = [
+  "CustomTag",
+  "Universe",
+  "User",
+]
+
+[enums.RecommendationPreferenceType]
+items = [
+  "AddFollow",
+  "AddMute",
+  "RemoveFollow",
+  "RemoveMute",
+]
+
+[enums.RejectCharacterDeletions]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.RenderFidelity]
+items = [
+  "Automatic",
+  "Performance",
+  "Precise",
+]
+
+[enums.RenderPriority]
+items = [
+  "Camera",
+  "Character",
+  "First",
+  "Input",
+  "Last",
+]
+
+[enums.RenderingCacheOptimizationMode]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.RenderingTestComparisonMethod]
+items = [
+  "diff",
+  "psnr",
+]
+
+[enums.ReplicateInstanceDestroySetting]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.ResamplerMode]
+items = [
+  "Default",
+  "Pixelated",
+]
+
+[enums.ReservedHighlightId]
+items = [
+  "Active",
+  "Hover",
+  "NegatedPart",
+  "Selection",
+  "Standard",
+]
+
+[enums.RestPose]
+items = [
+  "Custom",
+  "Default",
+  "RotationsReset",
+]
+
+[enums.RestPoseModel]
+items = [
+  "FromCustomClip",
+  "FromRigInACE",
+  "FromRigInFile",
+  "FromRigInFileZeroedRotations",
+]
+
+[enums.ReturnKeyType]
+items = [
+  "Default",
+  "Done",
+  "Go",
+  "Next",
+  "Search",
+  "Send",
+]
+
+[enums.ReverbType]
+items = [
+  "Alley",
+  "Arena",
+  "Auditorium",
+  "Bathroom",
+  "CarpettedHallway",
+  "Cave",
+  "City",
+  "ConcertHall",
+  "Forest",
+  "GenericReverb",
+  "Hallway",
+  "Hangar",
+  "LivingRoom",
+  "Mountains",
+  "NoReverb",
+  "PaddedCell",
+  "ParkingLot",
+  "Plain",
+  "Quarry",
+  "Room",
+  "SewerPipe",
+  "StoneCorridor",
+  "StoneRoom",
+  "UnderWater",
+]
+
+[enums.ReviewableContentState]
+items = [
+  "Completed",
+  "Failed",
+  "Pending",
+]
+
+[enums.RibbonTool]
+items = [
+  "ColorPicker",
+  "Group",
+  "MaterialPicker",
+  "Move",
+  "None",
+  "PivotEditor",
+  "Rotate",
+  "Scale",
+  "Select",
+  "Transform",
+  "Ungroup",
+]
+
+[enums.RigLabel]
+items = [
+  "Chest",
+  "HeadBase",
+  "Index1",
+  "Index2",
+  "Index3",
+  "Invalid",
+  "LeftAnkle",
+  "LeftClavicle",
+  "LeftElbow",
+  "LeftHip",
+  "LeftKnee",
+  "LeftShoulder",
+  "LeftToeBase",
+  "LeftWrist",
+  "Middle1",
+  "Middle2",
+  "Middle3",
+  "Neck",
+  "Pinky1",
+  "Pinky2",
+  "Pinky3",
+  "RightAnkle",
+  "RightClavicle",
+  "RightElbow",
+  "RightHip",
+  "RightKnee",
+  "RightShoulder",
+  "RightToeBase",
+  "RightWrist",
+  "Ring1",
+  "Ring2",
+  "Ring3",
+  "Root",
+  "Spine",
+  "Thumb1",
+  "Thumb2",
+  "Thumb3",
+  "Waist",
+]
+
+[enums.RigScale]
+items = [
+  "Default",
+  "Rthro",
+  "RthroNarrow",
+]
+
+[enums.RigType]
+items = [
+  "Custom",
+  "CustomHumanoid",
+  "None",
+  "R15",
+]
+
+[enums.RollOffMode]
+items = [
+  "Inverse",
+  "InverseTapered",
+  "Linear",
+  "LinearSquare",
+]
+
+[enums.RolloutState]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.RotationOrder]
+items = [
+  "XYZ",
+  "XZY",
+  "YXZ",
+  "YZX",
+  "ZXY",
+  "ZYX",
+]
+
+[enums.RotationType]
+items = [
+  "CameraRelative",
+  "MovementRelative",
+]
+
+[enums.RsvpStatus]
+items = [
+  "Going",
+  "None",
+  "NotGoing",
+]
+
+[enums.RtlTextSupport]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.RunContext]
+items = [
+  "Client",
+  "Legacy",
+  "Plugin",
+  "Server",
+]
+
+[enums.RunState]
+items = [
+  "Paused",
+  "Running",
+  "Stopped",
+]
+
+[enums.RuntimeUndoBehavior]
+items = [
+  "Aggregate",
+  "Hybrid",
+  "Snapshot",
+]
+
+[enums.SafeAreaCompatibility]
+items = [
+  "FullscreenExtension",
+  "None",
+]
+
+[enums.SalesTypeFilter]
+items = [
+  "All",
+  "Collectibles",
+  "Premium",
+  "TimedOptions",
+]
+
+[enums.SandboxedInstanceMode]
+items = [
+  "Default",
+  "Experimental",
+]
+
+[enums.SaveAvatarThumbnailCustomizationFailure]
+items = [
+  "BadDistanceScale",
+  "BadFieldOfViewDeg",
+  "BadThumbnailType",
+  "BadYRotDeg",
+  "Other",
+  "Throttled",
+]
+
+[enums.SaveFilter]
+deprecated = { message = "deprecated Roblox enum" }
+items = [
+  "SaveAll",
+  "SaveGame",
+  "SaveWorld",
+]
+
+[enums.SavedQualitySetting]
+items = [
+  "Automatic",
+  "QualityLevel1",
+  "QualityLevel10",
+  "QualityLevel2",
+  "QualityLevel3",
+  "QualityLevel4",
+  "QualityLevel5",
+  "QualityLevel6",
+  "QualityLevel7",
+  "QualityLevel8",
+  "QualityLevel9",
+]
+
+[enums.ScaleType]
+items = [
+  "Crop",
+  "Fit",
+  "Slice",
+  "Stretch",
+  "Tile",
+]
+
+[enums.ScopeCheckResult]
+items = [
+  "BackendError",
+  "ConsentAccepted",
+  "ConsentDenied",
+  "InvalidArgument",
+  "InvalidScopes",
+  "NoUserInput",
+  "Timeout",
+  "UnexpectedError",
+]
+
+[enums.ScreenInsets]
+items = [
+  "CoreUISafeInsets",
+  "DeviceSafeInsets",
+  "None",
+  "TopbarSafeInsets",
+]
+
+[enums.ScreenOrientation]
+items = [
+  "LandscapeLeft",
+  "LandscapeRight",
+  "LandscapeSensor",
+  "Portrait",
+  "Sensor",
+]
+
+[enums.ScreenshotCaptureResult]
+items = [
+  "NoDeviceSupport",
+  "NoSpaceOnDevice",
+  "OtherError",
+  "Success",
+]
+
+[enums.ScriptStoppedReason]
+items = [
+  "Breakpoint",
+  "Entry",
+  "Exception",
+  "Pause",
+  "Step",
+]
+
+[enums.ScriptVariableScope]
+items = [
+  "Global",
+  "Local",
+  "Upvalue",
+]
+
+[enums.ScrollBarInset]
+items = [
+  "Always",
+  "None",
+  "ScrollBar",
+]
+
+[enums.ScrollingDirection]
+items = [
+  "X",
+  "XY",
+  "Y",
+]
+
+[enums.SecurityCapability]
+items = [
+  "AccessOutsideWrite",
+  "Animation",
+  "AssetCreateUpdate",
+  "AssetManagement",
+  "AssetRead",
+  { value = "AssetRequire", deprecated = { message = "deprecated Roblox enum item" } },
+  "Assistant",
+  "Audio",
+  { value = "Avatar", deprecated = { message = "deprecated Roblox enum item" } },
+  "AvatarAppearance",
+  "AvatarBehavior",
+  "Basic",
+  "CSG",
+  "CapabilityControl",
+  "Capture",
+  "Chat",
+  "Consequences",
+  "CreateInstances",
+  "DataStore",
+  "DynamicGeneration",
+  "Environment",
+  "Groups",
+  "Input",
+  "InternalTest",
+  "LegacySound",
+  "LoadOwnedAsset",
+  "LoadString",
+  "LoadUnownedAsset",
+  "LocalUser",
+  "Logging",
+  "Material",
+  "Monetization",
+  "Network",
+  "Physics",
+  "PlatformAvatarEditing",
+  "Players",
+  "Plugin",
+  "PluginOrOpenCloud",
+  "PromptExternalPurchase",
+  "RemoteCommand",
+  "RemoteEvent",
+  "RobloxEngine",
+  "RobloxScript",
+  "RunClientScript",
+  "RunServerScript",
+  "ScriptGlobals",
+  "SensitiveInput",
+  "ServerCommunication",
+  "Social",
+  "Teleport",
+  "UI",
+  "Unassigned",
+  "WritePlayer",
+]
+
+[enums.SelectionBehavior]
+items = [
+  "Escape",
+  "Stop",
+]
+
+[enums.SelectionRenderMode]
+items = [
+  "Both",
+  "BoundingBoxes",
+  "Outlines",
+]
+
+[enums.SelfViewPosition]
+items = [
+  "BottomLeft",
+  "BottomRight",
+  "LastPosition",
+  "TopLeft",
+  "TopRight",
+]
+
+[enums.SensorMode]
+items = [
+  "ClassicFloor",
+  "ClassicLadder",
+  "Floor",
+  "Ladder",
+]
+
+[enums.SensorUpdateType]
+items = [
+  "Manual",
+  "OnRead",
+]
+
+[enums.ServerLiveEditingMode]
+items = [
+  "Disabled",
+  "Enabled",
+  "Uninitialized",
+]
+
+[enums.ServiceVisibility]
+items = [
+  "Always",
+  "Off",
+  "WithChildren",
+]
+
+[enums.Severity]
+items = [
+  "Error",
+  "Hint",
+  "Information",
+  "Warning",
+]
+
+[enums.ShowAdResult]
+items = [
+  "AdAlreadyShowing",
+  "AdNotReady",
+  "InsufficientMemory",
+  "InternalError",
+  "ShowCompleted",
+  "ShowInterrupted",
+]
+
+[enums.SignalBehavior]
+items = [
+  "AncestryDeferred",
+  "Default",
+  "Deferred",
+  "Immediate",
+]
+
+[enums.SimulationMode]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.SizeConstraint]
+items = [
+  "RelativeXX",
+  "RelativeXY",
+  "RelativeYY",
+]
+
+[enums.SlimTintMode]
+items = [
+  "LOD",
+  "Meshes",
+  "None",
+  "Zone",
+]
+
+[enums.SolidPrimitiveType]
+items = [
+  "Capsule",
+  "Cone",
+  "RoundedBox",
+]
+
+[enums.SolverConvergenceMetricType]
+items = [
+  "AlgorithmAgnostic",
+  "IterationBased",
+]
+
+[enums.SolverConvergenceVisualizationMode]
+items = [
+  "Disabled",
+  "PerEdge",
+  "PerIsland",
+]
+
+[enums.SortDirection]
+items = [
+  "Ascending",
+  "Descending",
+]
+
+[enums.SortOrder]
+items = [
+  { value = "Custom", deprecated = { message = "deprecated Roblox enum item" } },
+  "LayoutOrder",
+  "Name",
+]
+
+[enums.SpecialKey]
+items = [
+  "ChatHotkey",
+  "End",
+  "Home",
+  "Insert",
+  "PageDown",
+  "PageUp",
+]
+
+[enums.StartCorner]
+items = [
+  "BottomLeft",
+  "BottomRight",
+  "TopLeft",
+  "TopRight",
+]
+
+[enums.StateObjectFieldType]
+items = [
+  { value = "Boolean", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "CFrame", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Color3", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Float", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "INVALID", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Instance", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Random", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Vector2", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Vector3", deprecated = { message = "deprecated Roblox enum item" } },
+]
+
+[enums.Status]
+deprecated = { message = "deprecated Roblox enum" }
+items = [
+  { value = "Confusion", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Poison", deprecated = { message = "deprecated Roblox enum item" } },
+]
+
+[enums.StepFrequency]
+items = [
+  "Hz1",
+  "Hz10",
+  "Hz15",
+  "Hz30",
+  "Hz5",
+  "Hz60",
+]
+
+[enums.StreamOutBehavior]
+items = [
+  "Default",
+  "LowMemory",
+  "Opportunistic",
+]
+
+[enums.StreamingIntegrityMode]
+items = [
+  "Default",
+  "Disabled",
+  "MinimumRadiusPause",
+  "PauseOutsideLoadedArea",
+]
+
+[enums.StreamingPauseMode]
+items = [
+  { value = "ClientPhysicsPause", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Default", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Disabled", deprecated = { message = "deprecated Roblox enum item" } },
+]
+
+[enums.StrokeSizingMode]
+items = [
+  "FixedSize",
+  "ScaledSize",
+]
+
+[enums.StudioAction]
+items = [
+  "ClearSelection",
+  "Copy",
+  "Cut",
+  "DeleteSelected",
+  "DuplicateSelection",
+  "Paste",
+  "Redo",
+  "SelectAll",
+  "Undo",
+  "ZoomExtents",
+]
+
+[enums.StudioCaptureBufferStatus]
+items = [
+  "Error",
+  "NotStarted",
+  "Pending",
+  "Ready",
+]
+
+[enums.StudioCaptureScreenshotFormat]
+items = [
+  "PNG",
+  "RGBA8",
+]
+
+[enums.StudioCloseMode]
+items = [
+  "CloseDoc",
+  "CloseStudio",
+  "LogOut",
+  "None",
+]
+
+[enums.StudioDataModelType]
+items = [
+  "Edit",
+  "None",
+  "PlayClient",
+  "PlayServer",
+  "Standalone",
+]
+
+[enums.StudioPlaceUpdateFailureReason]
+items = [
+  "Other",
+  "TeamCreateConflict",
+]
+
+[enums.StudioScriptEditorColorCategories]
+items = [
+  "AICOOverlayButtonBackground",
+  "AICOOverlayButtonBackgroundHover",
+  "AICOOverlayButtonBackgroundPressed",
+  "AICOOverlayText",
+  "ActiveLine",
+  "Background",
+  "Bool",
+  "Bracket",
+  "Builtin",
+  "Comment",
+  "DebuggerCurrentLine",
+  "DebuggerErrorLine",
+  "Default",
+  "DocViewCodeBackground",
+  "Error",
+  "FindSelectionBackground",
+  "Function",
+  "FunctionName",
+  "Hint",
+  "IndentationRuler",
+  "Info",
+  "Keyword",
+  "Local",
+  "LuauKeyword",
+  "MatchingWordBackground",
+  "MenuBackground",
+  "MenuBorder",
+  "MenuPrimaryText",
+  "MenuScrollbarBackground",
+  "MenuScrollbarHandle",
+  "MenuSecondaryText",
+  "MenuSelectedBackground",
+  "MenuSelectedText",
+  "Method",
+  "Nil",
+  "Number",
+  "Operator",
+  "Property",
+  "Ruler",
+  "SelectionBackground",
+  "SelectionText",
+  "Self",
+  "String",
+  "TODO",
+  "Type",
+  "Warning",
+  "Whitespace",
+]
+
+[enums.StudioScriptEditorColorPresets]
+items = [
+  "Custom",
+  "Extra1",
+  "Extra2",
+  "RobloxDefault",
+]
+
+[enums.StudioStyleGuideColor]
+items = [
+  "AICOOverlayButtonBackground",
+  "AICOOverlayButtonBackgroundHover",
+  "AICOOverlayButtonBackgroundPressed",
+  "AICOOverlayText",
+  "AttributeCog",
+  "Border",
+  "BreakpointMarker",
+  "BrightText",
+  "Button",
+  "ButtonBorder",
+  "ButtonText",
+  "CategoryItem",
+  "ChatIncomingBgColor",
+  "ChatIncomingTextColor",
+  "ChatModeratedMessageColor",
+  "ChatOutgoingBgColor",
+  "ChatOutgoingTextColor",
+  "CheckedFieldBackground",
+  "CheckedFieldBorder",
+  "CheckedFieldIndicator",
+  "ColorPickerFrame",
+  "CurrentMarker",
+  "Dark",
+  "DebuggerCurrentLine",
+  "DebuggerErrorLine",
+  "DialogButton",
+  "DialogButtonBorder",
+  "DialogButtonText",
+  "DialogMainButton",
+  "DialogMainButtonText",
+  "DiffFilePathBackground",
+  "DiffFilePathBorder",
+  "DiffFilePathText",
+  "DiffLineNum",
+  "DiffLineNumAdditionBackground",
+  "DiffLineNumDeletionBackground",
+  "DiffLineNumHover",
+  "DiffLineNumNoChangeBackground",
+  "DiffLineNumSeparatorBackground",
+  "DiffLineNumSeparatorBackgroundHover",
+  "DiffTextAddition",
+  "DiffTextAdditionBackground",
+  "DiffTextDeletion",
+  "DiffTextDeletionBackground",
+  "DiffTextHunkInfo",
+  "DiffTextNoChange",
+  "DiffTextNoChangeBackground",
+  "DiffTextSeparatorBackground",
+  "DimmedText",
+  "DocViewCodeBackground",
+  "DropShadow",
+  "Dropdown",
+  "EmulatorBar",
+  "EmulatorDropDown",
+  "ErrorText",
+  "FilterButtonAccent",
+  "FilterButtonBorder",
+  "FilterButtonBorderAlt",
+  "FilterButtonChecked",
+  "FilterButtonDefault",
+  "FilterButtonHover",
+  "GameSettingsTableItem",
+  "GameSettingsTooltip",
+  "HeaderSection",
+  "InfoBarWarningBackground",
+  "InfoBarWarningText",
+  "InfoText",
+  "InputFieldBackground",
+  "InputFieldBorder",
+  "Item",
+  "Light",
+  "LinkText",
+  "MainBackground",
+  "MainButton",
+  "MainText",
+  "Mid",
+  "Midlight",
+  "Notification",
+  "OnboardingCover",
+  "OnboardingHighlight",
+  "OnboardingShadow",
+  "RibbonButton",
+  "RibbonTab",
+  "RibbonTabTopBar",
+  "ScriptBackground",
+  "ScriptBool",
+  "ScriptBracket",
+  "ScriptBuiltInFunction",
+  "ScriptComment",
+  "ScriptEditorCurrentLine",
+  "ScriptError",
+  "ScriptFindSelectionBackground",
+  "ScriptFunction",
+  "ScriptFunctionName",
+  "ScriptHint",
+  "ScriptInformation",
+  "ScriptKeyword",
+  "ScriptLocal",
+  "ScriptLuauKeyword",
+  "ScriptMatchingWordSelectionBackground",
+  "ScriptMethod",
+  "ScriptNil",
+  "ScriptNumber",
+  "ScriptOperator",
+  "ScriptProperty",
+  "ScriptRuler",
+  "ScriptSelectionBackground",
+  "ScriptSelectionText",
+  "ScriptSelf",
+  "ScriptSideWidget",
+  "ScriptString",
+  "ScriptText",
+  "ScriptTodo",
+  "ScriptWarning",
+  "ScriptWhitespace",
+  "ScrollBar",
+  "ScrollBarBackground",
+  "SensitiveText",
+  "Separator",
+  "Shadow",
+  "StatusBar",
+  "SubText",
+  "Tab",
+  "TabBar",
+  "TableItem",
+  "Titlebar",
+  "TitlebarText",
+  "Tooltip",
+  "ViewPortBackground",
+  "WarningText",
+]
+
+[enums.StudioStyleGuideModifier]
+items = [
+  "Default",
+  "Disabled",
+  "Hover",
+  "Pressed",
+  "Selected",
+]
+
+[enums.Style]
+items = [
+  "AlternatingSupports",
+  "BridgeStyleSupports",
+  "NoSupports",
+]
+
+[enums.SubscriptionExpirationReason]
+items = [
+  "Lapsed",
+  "ProductDeleted",
+  "ProductInactive",
+  "SubscriberCancelled",
+  "SubscriberRefunded",
+]
+
+[enums.SubscriptionPaymentStatus]
+items = [
+  "Paid",
+  "Refunded",
+]
+
+[enums.SubscriptionPeriod]
+items = [
+  "Month",
+]
+
+[enums.SubscriptionState]
+items = [
+  "Expired",
+  "NeverSubscribed",
+  "SubscribedRenewalPaymentPending",
+  "SubscribedWillNotRenew",
+  "SubscribedWillRenew",
+]
+
+[enums.SurfaceConstraint]
+items = [
+  "Hinge",
+  "Motor",
+  "None",
+  "SteppingMotor",
+]
+
+[enums.SurfaceGuiShape]
+items = [
+  "CurvedHorizontally",
+  "Flat",
+]
+
+[enums.SurfaceGuiSizingMode]
+items = [
+  "FixedSize",
+  "PixelsPerStud",
+]
+
+[enums.SurfaceType]
+items = [
+  "Glue",
+  "Hinge",
+  "Inlet",
+  "Motor",
+  "Smooth",
+  "SmoothNoOutlines",
+  "SteppingMotor",
+  "Studs",
+  "Universal",
+  "Weld",
+]
+
+[enums.SwipeDirection]
+items = [
+  "Down",
+  "Left",
+  "None",
+  "Right",
+  "Up",
+]
+
+[enums.SystemThemeValue]
+items = [
+  "dark",
+  "error",
+  "light",
+  "systemDark",
+  "systemLight",
+]
+
+[enums.TableMajorAxis]
+items = [
+  "ColumnMajor",
+  "RowMajor",
+]
+
+[enums.TagReplicability]
+items = [
+]
+
+[enums.TeamCreateErrorState]
+items = [
+  "NoError",
+  "PlaceSizeApproachingLimit",
+  "PlaceSizeTooLarge",
+  "PlaceUploadFailing",
+]
+
+[enums.Technology]
+items = [
+  "Compatibility",
+  "Future",
+  { value = "Legacy", deprecated = { message = "deprecated Roblox enum item" } },
+  "ShadowMap",
+  { value = "Unified", deprecated = { message = "deprecated Roblox enum item" } },
+  "Voxel",
+]
+
+[enums.TelemetryBackend]
+items = [
+  "Counter",
+  "EphemeralCounter",
+  "EphemeralStat",
+  "EventIngest",
+  "Points",
+  "Stat",
+  "Teletune",
+  "UNSPECIFIED",
+]
+
+[enums.TelemetryStandardizedField]
+items = [
+  "AddArchitectureInfo",
+  "AddCpuInfo",
+  "AddCurrentContextName",
+  "AddDatacenterId",
+  "AddMemoryInfo",
+  "AddOsInfo",
+  "AddPlaceId",
+  "AddPlaceInstanceId",
+  "AddPlaySessionId",
+  "AddSessionInfo",
+  "AddUniverseId",
+]
+
+[enums.TeleportMethod]
+items = [
+  "TeleportPartyAsync",
+  "TeleportToInstanceBack",
+  "TeleportToPlaceInstance",
+  "TeleportToPrivateServer",
+  "TeleportToSpawnByName",
+  "TeleportToVIPServer",
+  "TeleportUnknown",
+]
+
+[enums.TeleportResult]
+items = [
+  "Failure",
+  "Flooded",
+  "GameEnded",
+  "GameFull",
+  "GameNotFound",
+  "IsTeleporting",
+  "Success",
+  "Unauthorized",
+]
+
+[enums.TeleportState]
+items = [
+  "Failed",
+  "InProgress",
+  "RequestedFromServer",
+  "Started",
+  "WaitingForServer",
+]
+
+[enums.TeleportType]
+items = [
+  "ToInstance",
+  "ToInstanceBack",
+  "ToPlace",
+  "ToReservedServer",
+  "ToVIPServer",
+]
+
+[enums.TerrainAcquisitionMethod]
+items = [
+  "Convert",
+  "EditAddTool",
+  "EditReplaceTool",
+  "EditSeaLevelTool",
+  "Generate",
+  "Import",
+  "Legacy",
+  "None",
+  "Other",
+  "RegionFillTool",
+  "RegionPasteTool",
+  "Template",
+]
+
+[enums.TerrainFace]
+items = [
+  "Bottom",
+  "Side",
+  "Top",
+]
+
+[enums.TerrainLiquidMergeOperation]
+items = [
+  "Difference",
+  "Intersect",
+  "None",
+  "Source",
+  "Union",
+]
+
+[enums.TerrainSolidMergeOperation]
+items = [
+  "Cut",
+  "Difference",
+  "Dig",
+  "Intersect",
+  "None",
+  "Paint",
+  "Place",
+  "Source",
+  "Union",
+]
+
+[enums.TextChatMessageStatus]
+items = [
+  "Floodchecked",
+  "InvalidPrivacySettings",
+  "InvalidTextChannelPermissions",
+  "MessageTooLong",
+  "ModerationTimeout",
+  "Sending",
+  "Success",
+  "TextFilterFailed",
+  "Unknown",
+]
+
+[enums.TextDirection]
+items = [
+  "Auto",
+  "LeftToRight",
+  "RightToLeft",
+]
+
+[enums.TextFilterContext]
+items = [
+  "PrivateChat",
+  "PublicChat",
+]
+
+[enums.TextInputType]
+items = [
+  "Default",
+  "Email",
+  "NewPassword",
+  "NewPasswordShown",
+  "NoSuggestions",
+  "Number",
+  "OneTimePassword",
+  "Password",
+  "PasswordShown",
+  "Phone",
+  "Username",
+]
+
+[enums.TextTruncate]
+items = [
+  "AtEnd",
+  "None",
+  "SplitWord",
+]
+
+[enums.TextXAlignment]
+items = [
+  "Center",
+  "Left",
+  "Right",
+]
+
+[enums.TextYAlignment]
+items = [
+  "Bottom",
+  "Center",
+  "Top",
+]
+
+[enums.TextureMode]
+items = [
+  "Static",
+  "Stretch",
+  "Wrap",
+]
+
+[enums.TextureQueryType]
+items = [
+  "Humanoid",
+  "HumanoidOrphaned",
+  "NonHumanoid",
+  "NonHumanoidOrphaned",
+]
+
+[enums.ThreadPoolConfig]
+items = [
+  "Auto",
+  "PerCore1",
+  "PerCore2",
+  "PerCore3",
+  "PerCore4",
+  "Threads1",
+  "Threads16",
+  "Threads2",
+  "Threads3",
+  "Threads4",
+  "Threads8",
+]
+
+[enums.ThrottlingPriority]
+items = [
+  "Default",
+  "ElevatedOnServer",
+  "Extreme",
+]
+
+[enums.ThumbnailSize]
+items = [
+  "Size100x100",
+  "Size150x150",
+  "Size180x180",
+  "Size352x352",
+  "Size420x420",
+  "Size48x48",
+  "Size60x60",
+]
+
+[enums.ThumbnailType]
+items = [
+  "AvatarBust",
+  "AvatarThumbnail",
+  "HeadShot",
+]
+
+[enums.TickCountSampleMethod]
+items = [
+  "Benchmark",
+  "Fast",
+  "Precise",
+]
+
+[enums.TonemapperPreset]
+items = [
+  "Default",
+  "Retro",
+]
+
+[enums.TopBottom]
+items = [
+  "Bottom",
+  "Center",
+  "Top",
+]
+
+[enums.TouchCameraMovementMode]
+items = [
+  "Classic",
+  "Default",
+  "Follow",
+  "Orbital",
+]
+
+[enums.TouchMovementMode]
+items = [
+  "ClickToMove",
+  "DPad",
+  "Default",
+  "DynamicThumbstick",
+  "Thumbpad",
+  "Thumbstick",
+]
+
+[enums.TrackerError]
+items = [
+  "AudioError",
+  "AudioNoPermission",
+  "InitFailed",
+  "NoAudio",
+  "NoService",
+  "NoVideo",
+  "Ok",
+  "UnsupportedDevice",
+  "VideoError",
+  "VideoNoPermission",
+  "VideoUnsupported",
+]
+
+[enums.TrackerExtrapolationFlagMode]
+items = [
+  "Auto",
+  "ExtrapolateFacsAndPose",
+  "ExtrapolateFacsOnly",
+  "ForceDisabled",
+]
+
+[enums.TrackerFaceTrackingStatus]
+items = [
+  "FaceTrackingHasTrackingError",
+  "FaceTrackingIsOccluded",
+  "FaceTrackingLost",
+  "FaceTrackingNoFaceFound",
+  "FaceTrackingSuccess",
+  "FaceTrackingUninitialized",
+  "FaceTrackingUnknown",
+]
+
+[enums.TrackerLodFlagMode]
+items = [
+  "Auto",
+  "ForceFalse",
+  "ForceTrue",
+]
+
+[enums.TrackerLodValueMode]
+items = [
+  "Auto",
+  "Force0",
+  "Force1",
+]
+
+[enums.TrackerMode]
+items = [
+  "Audio",
+  "AudioVideo",
+  "None",
+  "Video",
+]
+
+[enums.TrackerPromptEvent]
+items = [
+  "LODCameraRecommendDisable",
+]
+
+[enums.TrackerType]
+items = [
+  "Face",
+  "None",
+  "UpperBody",
+]
+
+[enums.TriStateBoolean]
+items = [
+  "False",
+  "True",
+  "Unknown",
+]
+
+[enums.TweenStatus]
+items = [
+  "Canceled",
+  "Completed",
+]
+
+[enums.UICaptureMode]
+items = [
+  "All",
+  "None",
+]
+
+[enums.UIDragDetectorBoundingBehavior]
+items = [
+  "Automatic",
+  "EntireObject",
+  "HitPoint",
+]
+
+[enums.UIDragDetectorDragRelativity]
+items = [
+  "Absolute",
+  "Relative",
+]
+
+[enums.UIDragDetectorDragSpace]
+items = [
+  "LayerCollector",
+  "Parent",
+  "Reference",
+]
+
+[enums.UIDragDetectorDragStyle]
+items = [
+  "Rotate",
+  "Scriptable",
+  "TranslateLine",
+  "TranslatePlane",
+]
+
+[enums.UIDragDetectorResponseStyle]
+items = [
+  "CustomOffset",
+  "CustomScale",
+  "Offset",
+  "Scale",
+]
+
+[enums.UIDragSpeedAxisMapping]
+items = [
+  "XX",
+  "XY",
+  "YY",
+]
+
+[enums.UIFlexAlignment]
+items = [
+  "Fill",
+  "None",
+  "SpaceAround",
+  "SpaceBetween",
+  "SpaceEvenly",
+]
+
+[enums.UIFlexMode]
+items = [
+  "Custom",
+  "Fill",
+  "Grow",
+  "None",
+  "Shrink",
+]
+
+[enums.UITheme]
+items = [
+  { value = "Dark", deprecated = { message = "deprecated Roblox enum item" } },
+  { value = "Light", deprecated = { message = "deprecated Roblox enum item" } },
+]
+
+[enums.UiMessageType]
+items = [
+  "UiMessageError",
+  "UiMessageInfo",
+]
+
+[enums.UpdateState]
+items = [
+  "UpdateAvailable",
+  "UpdateFailed",
+  "UpdateInProgress",
+  "UpdateNotAvailable",
+  "UpdateReady",
+]
+
+[enums.UploadCaptureResult]
+items = [
+  "CaptureModerated",
+  "CaptureNotInGallery",
+  "IneligibleCapture",
+  "NeedPermission",
+  "Success",
+  "UploadFailed",
+  "UploadPending",
+  "UploadQuotaReached",
+]
+
+[enums.UsageContext]
+items = [
+  "Default",
+  "Preview",
+]
+
+[enums.UserCFrame]
+items = [
+  "Floor",
+  "Head",
+  "LeftHand",
+  "RightHand",
+]
+
+[enums.UserInputState]
+items = [
+  "Begin",
+  "Cancel",
+  "Change",
+  "End",
+  "None",
+]
+
+[enums.UserInputType]
+items = [
+  "Accelerometer",
+  "Focus",
+  "Gamepad1",
+  "Gamepad2",
+  "Gamepad3",
+  "Gamepad4",
+  "Gamepad5",
+  "Gamepad6",
+  "Gamepad7",
+  "Gamepad8",
+  "Gyro",
+  "InputMethod",
+  "Keyboard",
+  "MouseButton1",
+  "MouseButton2",
+  "MouseButton3",
+  "MouseMovement",
+  "MouseWheel",
+  "None",
+  "TextInput",
+  "Touch",
+]
+
+[enums.VRComfortSetting]
+items = [
+  "Comfort",
+  "Custom",
+  "Expert",
+  "Normal",
+]
+
+[enums.VRControllerModelMode]
+items = [
+  "Disabled",
+  "Transparent",
+]
+
+[enums.VRDeviceType]
+items = [
+  "HTCVive",
+  "OculusQuest",
+  "OculusRift",
+  "Unknown",
+  "ValveIndex",
+]
+
+[enums.VRLaserPointerMode]
+items = [
+  "Disabled",
+  "DualPointer",
+  "Pointer",
+]
+
+[enums.VRSafetyBubbleMode]
+items = [
+  "Anyone",
+  "NoOne",
+  "OnlyFriends",
+]
+
+[enums.VRScaling]
+items = [
+  "Off",
+  "World",
+]
+
+[enums.VRSessionState]
+items = [
+  "Focused",
+  "Idle",
+  "Stopping",
+  "Undefined",
+  "Visible",
+]
+
+[enums.VRTouchpad]
+items = [
+  "Left",
+  "Right",
+]
+
+[enums.VRTouchpadMode]
+items = [
+  "ABXY",
+  "Touch",
+  "VirtualThumbstick",
+]
+
+[enums.VelocityConstraintMode]
+items = [
+  "Line",
+  "Plane",
+  "Vector",
+]
+
+[enums.VerticalAlignment]
+items = [
+  "Bottom",
+  "Center",
+  "Top",
+]
+
+[enums.VerticalScrollBarPosition]
+items = [
+  "Left",
+  "Right",
+]
+
+[enums.VibrationMotor]
+items = [
+  "Large",
+  "LeftHand",
+  "LeftTrigger",
+  "RightHand",
+  "RightTrigger",
+  "Small",
+]
+
+[enums.VideoCaptureResult]
+items = [
+  "OtherError",
+  "ScreenSizeChanged",
+  "Success",
+  "TimeLimitReached",
+]
+
+[enums.VideoCaptureStartedResult]
+items = [
+  "CapturingAlready",
+  "NoDeviceSupport",
+  "NoSpaceOnDevice",
+  "OtherError",
+  "Success",
+]
+
+[enums.VideoDeviceCaptureQuality]
+items = [
+  "Default",
+  "High",
+  "Low",
+  "Medium",
+]
+
+[enums.VideoError]
+items = [
+  "AllocFailed",
+  "BadParameter",
+  "CodecCloseFailed",
+  "CodecInitFailed",
+  "CreateFailed",
+  "DecodeFailed",
+  "DownloadFailed",
+  "EAgain",
+  "EncodeFailed",
+  "Eof",
+  "Generic",
+  "NoPermission",
+  "NoService",
+  "Ok",
+  "ParsingFailed",
+  "ReleaseFailed",
+  "StreamNotFound",
+  "Unknown",
+  "Unsupported",
+]
+
+[enums.VideoSampleSize]
+items = [
+  "Full",
+  "Large",
+  "Medium",
+  "Small",
+]
+
+[enums.ViewMode]
+items = [
+  "Decal",
+  "GeometryComplexity",
+  "None",
+  "Transparent",
+]
+
+[enums.VirtualCursorMode]
+items = [
+  "Default",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.VirtualInputMode]
+items = [
+  "None",
+  "Playing",
+  "Recording",
+]
+
+[enums.VoiceChatDistanceAttenuationType]
+items = [
+  "Inverse",
+  "Legacy",
+]
+
+[enums.VoiceChatState]
+items = [
+  "Ended",
+  "Failed",
+  "Idle",
+  "Joined",
+  "Joining",
+  "JoiningRetry",
+  "Leaving",
+]
+
+[enums.VoiceClientLeaveReasons]
+items = [
+  "ClientNetworkDisconnected",
+  "ClientShutdown",
+  "ImguiDebugLeave",
+  "LuaInitiated",
+  "PlayerLeft",
+  "PublishFailed",
+  "RejoinReceived",
+  "Unknown",
+  "VoiceReboot",
+]
+
+[enums.VoiceControlPath]
+items = [
+  "Join",
+  "Publish",
+  "Subscribe",
+]
+
+[enums.VoiceRccReconnectReason]
+items = [
+  "BlockListChanged",
+  "CloseRoom",
+  "FAEUpdate",
+  "Migration",
+  "Unknown",
+]
+
+[enums.VolumetricAudio]
+items = [
+  "Automatic",
+  "Disabled",
+  "Enabled",
+]
+
+[enums.WaterDirection]
+items = [
+  "NegX",
+  "NegY",
+  "NegZ",
+  "X",
+  "Y",
+  "Z",
+]
+
+[enums.WaterForce]
+items = [
+  "Max",
+  "Medium",
+  "None",
+  "Small",
+  "Strong",
+]
+
+[enums.WebSocketState]
+items = [
+  "Closed",
+  "Closing",
+  "Connecting",
+  "Open",
+]
+
+[enums.WebStreamClientState]
+items = [
+  "Closed",
+  "Connecting",
+  "Error",
+  "Open",
+]
+
+[enums.WebStreamClientType]
+items = [
+  "RawStream",
+  "SSE",
+  "WebSocket",
+]
+
+[enums.WeldConstraintPreserve]
+items = [
+  "All",
+  "None",
+  "Touching",
+]
+
+[enums.WhenUserFirstPlayed]
+items = [
+  "Days0To30",
+  "Days181To365",
+  "Days31To90",
+  "Days366Plus",
+  "Days91To180",
+  "Unknown",
+]
+
+[enums.WhisperChatPrivacyMode]
+items = [
+  "AllUsers",
+  "NoOne",
+]
+
+[enums.WrapLayerAutoSkin]
+items = [
+  "Disabled",
+  "EnabledOverride",
+  "EnabledPreserve",
+]
+
+[enums.WrapLayerDebugMode]
+items = [
+  "BoundCage",
+  "BoundCageAndLinks",
+  "HSRInner",
+  "HSRInnerReverse",
+  "HSROuter",
+  "HSROuterDetail",
+  "LayerCage",
+  "LayerCageFittedToBase",
+  "LayerCageFittedToPrev",
+  "None",
+  "OuterCage",
+  "PreWrapDeformerOuterCage",
+  "Rbf",
+  "Reference",
+  "ReferenceMeshAfterMorph",
+  "SkinningTransfer",
+]
+
+[enums.WrapTargetDebugMode]
+items = [
+  "None",
+  "OuterCageDetail",
+  "PreWrapDeformerCage",
+  "Rbf",
+  "TargetCageCompressed",
+  "TargetCageInterface",
+  "TargetCageOriginal",
+  "TargetLayerCageCompressed",
+  "TargetLayerCageOriginal",
+  "TargetLayerInterface",
+]
+
+[enums.ZIndexBehavior]
+items = [
+  "Global",
+  "Sibling",
+]

@@ -1,0 +1,3342 @@
+# Roblox Luau standard library: the complete global surface of the Roblox
+# scripting runtime - core Luau libraries as Roblox ships them, plus
+# Roblox globals, the task library, and constructible datatypes.
+# Standalone Luau lives in luau.toml as a fully independent file - the
+# two are deliberately split, not layered, because the environments
+# diverge in both directions. Shared entries are duplicated on purpose;
+# drift guards keep them honest. Generated data (services, enums) is
+# spliced in at load from separate files.
+#
+# Format: see stdlib_model.rs. kind = "function" | "constant" |
+# "property" | "namespace"; functions carry either a flat signature
+# (min_args/max_args/params) or an overloads array; max_args = -1 means
+# unbounded.
+
+# Coverage notes vs upstream Lua:
+#   - absent from the Luau VM: dofile, loadfile, load, module, io,
+#     package (os keeps its sandboxed clock/date/difftime/time subset)
+#   - kept from Lua 5.1: getfenv, setfenv, newproxy (Luau uses
+#     getfenv/setfenv instead of _ENV)
+
+# ---- bare-word globals ----
+
+[globals._G]
+kind = "property"
+read_only = false
+
+[globals._VERSION]
+kind = "property"
+
+[globals.assert]
+kind = "function"
+min_args = 1
+max_args = -1
+params = [
+  { kind = "any" },
+  { kind = "string", required = false },
+  { kind = "vararg", required = false },
+]
+
+# Roblox only supports the "count" operation; gcinfo() is the supported
+# equivalent.
+[globals.collectgarbage]
+kind = "function"
+min_args = 0
+max_args = 1
+must_use = true
+deprecated = { message = "deprecated on Roblox; use gcinfo() instead", replace_template = "gcinfo()" }
+params = [
+  { kind = "constant", values = ["count"], required = false },
+]
+
+[globals.error]
+kind = "function"
+min_args = 1
+max_args = 2
+params = [
+  { kind = "any" },
+  { kind = "number", required = false },
+]
+
+[globals.gcinfo]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+
+# Luau retains 5.1's environment model (getfenv/setfenv) instead of _ENV.
+# Roblox marks both deprecated: touching an environment turns off Luau
+# optimizations for the affected functions.
+[globals.getfenv]
+kind = "function"
+min_args = 0
+max_args = 1
+must_use = true
+deprecated = { message = "deprecated on Roblox; environment manipulation disables Luau optimizations" }
+params = [{ kind = "any", required = false }]
+
+[globals.getmetatable]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+params = [{ kind = "any" }]
+
+[globals.ipairs]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "table" }]
+
+# Server-side only, and only when ServerScriptService.LoadStringEnabled
+# is set; still a real global that resolves everywhere.
+[globals.loadstring]
+kind = "function"
+min_args = 1
+max_args = 2
+params = [{ kind = "string" }, { kind = "string", required = false }]
+
+[globals.newproxy]
+kind = "function"
+min_args = 0
+max_args = 1
+must_use = true
+params = [{ kind = "bool", required = false }]
+
+[globals.next]
+kind = "function"
+min_args = 1
+max_args = 2
+params = [
+  { kind = "table" },
+  { kind = "any", required = false },
+]
+
+[globals.pairs]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "table" }]
+
+[globals.pcall]
+kind = "function"
+min_args = 1
+max_args = -1
+must_use = true
+params = [
+  { kind = "function" },
+  { kind = "vararg", required = false },
+]
+
+[globals.print]
+kind = "function"
+min_args = 0
+max_args = -1
+params = [{ kind = "vararg", required = false }]
+
+[globals.rawequal]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "any" }, { kind = "any" }]
+
+[globals.rawget]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "any" }, { kind = "any" }]
+
+[globals.rawlen]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "table" }]
+
+[globals.rawset]
+kind = "function"
+min_args = 3
+max_args = 3
+params = [{ kind = "any" }, { kind = "any" }, { kind = "any" }]
+
+[globals.require]
+kind = "function"
+min_args = 1
+max_args = 1
+params = [{ kind = "any" }]
+
+[globals.select]
+kind = "function"
+min_args = 1
+max_args = -1
+must_use = true
+params = [
+  { kind = "any" },
+  { kind = "vararg", required = false },
+]
+
+[globals.setfenv]
+kind = "function"
+min_args = 2
+max_args = 2
+deprecated = { message = "deprecated on Roblox; environment manipulation disables Luau optimizations" }
+params = [{ kind = "any" }, { kind = "table" }]
+
+[globals.setmetatable]
+kind = "function"
+min_args = 2
+max_args = 2
+params = [
+  { kind = "table" },
+  { kind = "table", accepts_nil = true },
+]
+
+[globals.tonumber]
+kind = "function"
+min_args = 1
+max_args = 2
+is_pure = true
+must_use = true
+params = [
+  { kind = "any" },
+  { kind = "number", required = false },
+]
+
+[globals.tostring]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "any" }]
+
+[globals.type]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "any" }]
+
+[globals.typeof]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "any" }]
+
+[globals.unpack]
+kind = "function"
+min_args = 1
+max_args = 3
+must_use = true
+deprecated = { message = "use 'table.unpack' instead", replace_template = "table.unpack(%1)" }
+params = [
+  { kind = "table" },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+# warn is a Roblox runtime addition; the standard Luau VM does not
+# register it in base_funcs.
+[globals.warn]
+kind = "function"
+min_args = 0
+max_args = -1
+params = [{ kind = "vararg", required = false }]
+
+[globals.xpcall]
+kind = "function"
+min_args = 2
+max_args = -1
+must_use = true
+params = [
+  { kind = "function" },
+  { kind = "function" },
+  { kind = "vararg", required = false },
+]
+
+# ---- string namespace ----
+
+[globals.string]
+kind = "namespace"
+
+[globals.string.members.byte]
+kind = "function"
+min_args = 1
+max_args = 3
+is_pure = true
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.string.members.char]
+kind = "function"
+min_args = 0
+max_args = -1
+is_pure = true
+must_use = true
+params = [
+  { kind = "number", required = false },
+  { kind = "vararg", required = false },
+]
+
+[globals.string.members.find]
+kind = "function"
+min_args = 2
+max_args = 4
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "string" },
+  { kind = "number", required = false },
+  { kind = "bool", required = false },
+]
+
+[globals.string.members.format]
+kind = "function"
+min_args = 1
+max_args = -1
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "vararg", required = false },
+]
+
+[globals.string.members.gmatch]
+kind = "function"
+min_args = 2
+max_args = 2
+must_use = true
+params = [{ kind = "string" }, { kind = "string" }]
+
+[globals.string.members.gsub]
+kind = "function"
+min_args = 3
+max_args = 4
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "string" },
+  { kind = "any" },
+  { kind = "number", required = false },
+]
+
+[globals.string.members.len]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "string" }]
+
+[globals.string.members.lower]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "string" }]
+
+[globals.string.members.match]
+kind = "function"
+min_args = 2
+max_args = 3
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "string" },
+  { kind = "number", required = false },
+]
+
+[globals.string.members.pack]
+kind = "function"
+min_args = 1
+max_args = -1
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "vararg", required = false },
+]
+
+[globals.string.members.packsize]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "string" }]
+
+# Unlike Lua 5.2+, Luau's rep has no separator argument.
+[globals.string.members.rep]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "number" },
+]
+
+[globals.string.members.reverse]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "string" }]
+
+[globals.string.members.split]
+kind = "function"
+min_args = 1
+max_args = 2
+is_pure = true
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "string", required = false },
+]
+
+[globals.string.members.sub]
+kind = "function"
+min_args = 2
+max_args = 3
+is_pure = true
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "number" },
+  { kind = "number", required = false },
+]
+
+[globals.string.members.unpack]
+kind = "function"
+min_args = 2
+max_args = 3
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "string" },
+  { kind = "number", required = false },
+]
+
+[globals.string.members.upper]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "string" }]
+
+# ---- table namespace ----
+
+[globals.table]
+kind = "namespace"
+
+[globals.table.members.clear]
+kind = "function"
+min_args = 1
+max_args = 1
+params = [{ kind = "table" }]
+
+[globals.table.members.clone]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+params = [{ kind = "table" }]
+
+[globals.table.members.concat]
+kind = "function"
+min_args = 1
+max_args = 4
+must_use = true
+params = [
+  { kind = "table" },
+  { kind = "string", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.table.members.create]
+kind = "function"
+min_args = 1
+max_args = 2
+must_use = true
+params = [
+  { kind = "number" },
+  { kind = "any", required = false },
+]
+
+[globals.table.members.find]
+kind = "function"
+min_args = 2
+max_args = 3
+must_use = true
+params = [
+  { kind = "table" },
+  { kind = "any" },
+  { kind = "number", required = false },
+]
+
+[globals.table.members.foreach]
+kind = "function"
+min_args = 2
+max_args = 2
+deprecated = { message = "use a 'for' loop with 'pairs()' instead" }
+params = [{ kind = "table" }, { kind = "function" }]
+
+[globals.table.members.foreachi]
+kind = "function"
+min_args = 2
+max_args = 2
+deprecated = { message = "use a 'for' loop with 'ipairs()' instead" }
+params = [{ kind = "table" }, { kind = "function" }]
+
+[globals.table.members.freeze]
+kind = "function"
+min_args = 1
+max_args = 1
+params = [{ kind = "table" }]
+
+[globals.table.members.getn]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+deprecated = { message = "use the '#' length operator instead", replace_template = "#%1" }
+params = [{ kind = "table" }]
+
+[globals.table.members.insert]
+kind = "function"
+min_args = 2
+max_args = 3
+params = [
+  { kind = "table" },
+  { kind = "any" },
+  { kind = "any", required = false },
+]
+
+[globals.table.members.isfrozen]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "table" }]
+
+[globals.table.members.maxn]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+params = [{ kind = "table" }]
+
+[globals.table.members.move]
+kind = "function"
+min_args = 4
+max_args = 5
+params = [
+  { kind = "table" },
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "table", required = false },
+]
+
+[globals.table.members.pack]
+kind = "function"
+min_args = 0
+max_args = -1
+must_use = true
+params = [{ kind = "vararg", required = false }]
+
+[globals.table.members.remove]
+kind = "function"
+min_args = 1
+max_args = 2
+params = [
+  { kind = "table" },
+  { kind = "number", required = false },
+]
+
+[globals.table.members.sort]
+kind = "function"
+min_args = 1
+max_args = 2
+params = [
+  { kind = "table" },
+  { kind = "function", required = false },
+]
+
+[globals.table.members.unpack]
+kind = "function"
+min_args = 1
+max_args = 3
+must_use = true
+params = [
+  { kind = "table" },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+# ---- math namespace ----
+
+[globals.math]
+kind = "namespace"
+
+[globals.math.members.abs]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.acos]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.asin]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.atan]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.atan2]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.math.members.ceil]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.clamp]
+kind = "function"
+min_args = 3
+max_args = 3
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
+
+[globals.math.members.cos]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.cosh]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.deg]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.exp]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.floor]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.fmod]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.math.members.frexp]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.huge]
+kind = "constant"
+
+[globals.math.members.ldexp]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.math.members.lerp]
+kind = "function"
+min_args = 3
+max_args = 3
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
+
+[globals.math.members.log]
+kind = "function"
+min_args = 1
+max_args = 2
+is_pure = true
+must_use = true
+params = [
+  { kind = "number" },
+  { kind = "number", required = false },
+]
+
+[globals.math.members.log10]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.map]
+kind = "function"
+min_args = 5
+max_args = 5
+is_pure = true
+must_use = true
+params = [
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "number" },
+]
+
+[globals.math.members.max]
+kind = "function"
+min_args = 1
+max_args = -1
+is_pure = true
+must_use = true
+params = [
+  { kind = "number" },
+  { kind = "vararg", required = false },
+]
+
+[globals.math.members.min]
+kind = "function"
+min_args = 1
+max_args = -1
+is_pure = true
+must_use = true
+params = [
+  { kind = "number" },
+  { kind = "vararg", required = false },
+]
+
+[globals.math.members.modf]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.noise]
+kind = "function"
+min_args = 1
+max_args = 3
+is_pure = true
+must_use = true
+params = [
+  { kind = "number" },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.math.members.pi]
+kind = "constant"
+
+[globals.math.members.pow]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.math.members.rad]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.random]
+kind = "function"
+min_args = 0
+max_args = 2
+must_use = true
+params = [
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.math.members.randomseed]
+kind = "function"
+min_args = 0
+max_args = 1
+params = [{ kind = "number", required = false }]
+
+[globals.math.members.round]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.sign]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.sin]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.sinh]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.sqrt]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.tan]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.tanh]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+# ---- bit32 namespace (Luau retains bit32) ----
+
+[globals.bit32]
+kind = "namespace"
+
+[globals.bit32.members.arshift]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.bit32.members.band]
+kind = "function"
+min_args = 0
+max_args = -1
+is_pure = true
+must_use = true
+params = [{ kind = "vararg", required = false }]
+
+[globals.bit32.members.bnot]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.bit32.members.bor]
+kind = "function"
+min_args = 0
+max_args = -1
+is_pure = true
+must_use = true
+params = [{ kind = "vararg", required = false }]
+
+[globals.bit32.members.btest]
+kind = "function"
+min_args = 0
+max_args = -1
+is_pure = true
+must_use = true
+params = [{ kind = "vararg", required = false }]
+
+[globals.bit32.members.bxor]
+kind = "function"
+min_args = 0
+max_args = -1
+is_pure = true
+must_use = true
+params = [{ kind = "vararg", required = false }]
+
+[globals.bit32.members.byteswap]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.bit32.members.countlz]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.bit32.members.countrz]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.bit32.members.extract]
+kind = "function"
+min_args = 2
+max_args = 3
+is_pure = true
+must_use = true
+params = [
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "number", required = false },
+]
+
+[globals.bit32.members.lrotate]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.bit32.members.lshift]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.bit32.members.replace]
+kind = "function"
+min_args = 3
+max_args = 4
+is_pure = true
+must_use = true
+params = [
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "number", required = false },
+]
+
+[globals.bit32.members.rrotate]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.bit32.members.rshift]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+# ---- utf8 namespace ----
+
+[globals.utf8]
+kind = "namespace"
+
+[globals.utf8.members.char]
+kind = "function"
+min_args = 0
+max_args = -1
+is_pure = true
+must_use = true
+params = [
+  { kind = "number", required = false },
+  { kind = "vararg", required = false },
+]
+
+[globals.utf8.members.charpattern]
+kind = "constant"
+
+[globals.utf8.members.codepoint]
+kind = "function"
+min_args = 1
+max_args = 3
+is_pure = true
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.utf8.members.codes]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+params = [{ kind = "string" }]
+
+# Roblox runtime addition; not part of the open-source Luau utf8 library.
+[globals.utf8.members.graphemes]
+kind = "function"
+min_args = 1
+max_args = 3
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.utf8.members.len]
+kind = "function"
+min_args = 1
+max_args = 3
+is_pure = true
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+# Roblox runtime additions; not part of the open-source Luau utf8 library.
+[globals.utf8.members.nfcnormalize]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+params = [{ kind = "string" }]
+
+[globals.utf8.members.nfdnormalize]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+params = [{ kind = "string" }]
+
+[globals.utf8.members.offset]
+kind = "function"
+min_args = 2
+max_args = 3
+is_pure = true
+must_use = true
+params = [
+  { kind = "string" },
+  { kind = "number" },
+  { kind = "number", required = false },
+]
+
+# ---- coroutine namespace ----
+
+[globals.coroutine]
+kind = "namespace"
+
+[globals.coroutine.members.close]
+kind = "function"
+min_args = 1
+max_args = 1
+params = [{ kind = "display", display = "thread" }]
+
+[globals.coroutine.members.create]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+params = [{ kind = "function" }]
+
+[globals.coroutine.members.isyieldable]
+kind = "function"
+min_args = 0
+max_args = 0
+
+[globals.coroutine.members.resume]
+kind = "function"
+min_args = 1
+max_args = -1
+params = [
+  { kind = "display", display = "coroutine" },
+  { kind = "vararg", required = false },
+]
+
+[globals.coroutine.members.running]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+
+[globals.coroutine.members.status]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+params = [{ kind = "display", display = "coroutine" }]
+
+[globals.coroutine.members.wrap]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+params = [{ kind = "function" }]
+
+[globals.coroutine.members.yield]
+kind = "function"
+min_args = 0
+max_args = -1
+params = [{ kind = "vararg", required = false }]
+
+# ---- debug namespace (Luau-trimmed) ----
+
+[globals.debug]
+kind = "namespace"
+
+# dumpcodesize through setmemorycategory are Roblox runtime additions
+# (MicroProfiler and memory tooling); the open-source Luau VM has only
+# info and traceback.
+[globals.debug.members.dumpcodesize]
+kind = "function"
+min_args = 0
+max_args = 0
+params = []
+
+[globals.debug.members.getmemorycategory]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+params = []
+
+[globals.debug.members.info]
+kind = "function"
+min_args = 2
+max_args = 3
+must_use = true
+params = [
+  { kind = "any" },
+  { kind = "any" },
+  { kind = "string", required = false },
+]
+
+[globals.debug.members.profilebegin]
+kind = "function"
+min_args = 1
+max_args = 1
+params = [{ kind = "string" }]
+
+[globals.debug.members.profileend]
+kind = "function"
+min_args = 0
+max_args = 0
+params = []
+
+[globals.debug.members.resetmemorycategory]
+kind = "function"
+min_args = 0
+max_args = 0
+params = []
+
+[globals.debug.members.setmemorycategory]
+kind = "function"
+min_args = 1
+max_args = 1
+params = [{ kind = "string" }]
+
+[globals.debug.members.traceback]
+kind = "function"
+min_args = 0
+max_args = 3
+must_use = true
+params = [
+  { kind = "any", required = false },
+  { kind = "any", required = false },
+  { kind = "any", required = false },
+]
+
+# ---- buffer namespace ----
+
+[globals.buffer]
+kind = "namespace"
+
+[globals.buffer.members.copy]
+kind = "function"
+min_args = 3
+max_args = 5
+params = [
+  { kind = "display", display = "buffer" },
+  { kind = "number" },
+  { kind = "display", display = "buffer" },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.buffer.members.create]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.buffer.members.fill]
+kind = "function"
+min_args = 3
+max_args = 4
+params = [
+  { kind = "display", display = "buffer" },
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "number", required = false },
+]
+
+[globals.buffer.members.fromstring]
+kind = "function"
+min_args = 1
+max_args = 1
+must_use = true
+params = [{ kind = "string" }]
+
+[globals.buffer.members.len]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "buffer" }]
+
+[globals.buffer.members.readbits]
+kind = "function"
+min_args = 3
+max_args = 3
+must_use = true
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
+
+[globals.buffer.members.readf32]
+kind = "function"
+min_args = 2
+max_args = 2
+must_use = true
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
+
+[globals.buffer.members.readf64]
+kind = "function"
+min_args = 2
+max_args = 2
+must_use = true
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
+
+[globals.buffer.members.readi8]
+kind = "function"
+min_args = 2
+max_args = 2
+must_use = true
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
+
+[globals.buffer.members.readi16]
+kind = "function"
+min_args = 2
+max_args = 2
+must_use = true
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
+
+[globals.buffer.members.readi32]
+kind = "function"
+min_args = 2
+max_args = 2
+must_use = true
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
+
+[globals.buffer.members.readstring]
+kind = "function"
+min_args = 3
+max_args = 3
+must_use = true
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
+
+[globals.buffer.members.readu8]
+kind = "function"
+min_args = 2
+max_args = 2
+must_use = true
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
+
+[globals.buffer.members.readu16]
+kind = "function"
+min_args = 2
+max_args = 2
+must_use = true
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
+
+[globals.buffer.members.readu32]
+kind = "function"
+min_args = 2
+max_args = 2
+must_use = true
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
+
+[globals.buffer.members.tostring]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "buffer" }]
+
+[globals.buffer.members.writebits]
+kind = "function"
+min_args = 4
+max_args = 4
+params = [
+  { kind = "display", display = "buffer" },
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "number" },
+]
+
+[globals.buffer.members.writef32]
+kind = "function"
+min_args = 3
+max_args = 3
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
+
+[globals.buffer.members.writef64]
+kind = "function"
+min_args = 3
+max_args = 3
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
+
+[globals.buffer.members.writei8]
+kind = "function"
+min_args = 3
+max_args = 3
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
+
+[globals.buffer.members.writei16]
+kind = "function"
+min_args = 3
+max_args = 3
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
+
+[globals.buffer.members.writei32]
+kind = "function"
+min_args = 3
+max_args = 3
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
+
+[globals.buffer.members.writestring]
+kind = "function"
+min_args = 3
+max_args = 4
+params = [
+  { kind = "display", display = "buffer" },
+  { kind = "number" },
+  { kind = "string" },
+  { kind = "number", required = false },
+]
+
+[globals.buffer.members.writeu8]
+kind = "function"
+min_args = 3
+max_args = 3
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
+
+[globals.buffer.members.writeu16]
+kind = "function"
+min_args = 3
+max_args = 3
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
+
+[globals.buffer.members.writeu32]
+kind = "function"
+min_args = 3
+max_args = 3
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
+
+# ---- vector namespace ----
+
+[globals.vector]
+kind = "namespace"
+
+[globals.vector.members.abs]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "vector" }]
+
+[globals.vector.members.angle]
+kind = "function"
+min_args = 2
+max_args = 3
+is_pure = true
+must_use = true
+params = [
+  { kind = "display", display = "vector" },
+  { kind = "display", display = "vector" },
+  { kind = "display", display = "vector", required = false },
+]
+
+[globals.vector.members.ceil]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "vector" }]
+
+[globals.vector.members.clamp]
+kind = "function"
+min_args = 3
+max_args = 3
+is_pure = true
+must_use = true
+params = [
+  { kind = "display", display = "vector" },
+  { kind = "display", display = "vector" },
+  { kind = "display", display = "vector" },
+]
+
+[globals.vector.members.create]
+kind = "function"
+min_args = 3
+max_args = 3
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
+
+[globals.vector.members.cross]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "vector" }, { kind = "display", display = "vector" }]
+
+[globals.vector.members.dot]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "vector" }, { kind = "display", display = "vector" }]
+
+[globals.vector.members.floor]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "vector" }]
+
+[globals.vector.members.magnitude]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "vector" }]
+
+[globals.vector.members.max]
+kind = "function"
+min_args = 1
+max_args = -1
+is_pure = true
+must_use = true
+params = [
+  { kind = "display", display = "vector" },
+  { kind = "vararg", required = false },
+]
+
+[globals.vector.members.min]
+kind = "function"
+min_args = 1
+max_args = -1
+is_pure = true
+must_use = true
+params = [
+  { kind = "display", display = "vector" },
+  { kind = "vararg", required = false },
+]
+
+[globals.vector.members.normalize]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "vector" }]
+
+[globals.vector.members.one]
+kind = "constant"
+
+[globals.vector.members.sign]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "vector" }]
+
+[globals.vector.members.zero]
+kind = "constant"
+
+# ---- task (Roblox scheduler; not in the standard Luau VM) ----
+
+[globals.task]
+kind = "namespace"
+
+[globals.task.members.cancel]
+kind = "function"
+min_args = 1
+max_args = 1
+params = [{ kind = "display", display = "thread" }]
+
+[globals.task.members.defer]
+kind = "function"
+min_args = 1
+max_args = -1
+params = [
+  { kind = "any" },
+  { kind = "vararg", required = false },
+]
+
+[globals.task.members.delay]
+kind = "function"
+min_args = 2
+max_args = -1
+params = [
+  { kind = "number" },
+  { kind = "any" },
+  { kind = "vararg", required = false },
+]
+
+[globals.task.members.desynchronize]
+kind = "function"
+min_args = 0
+max_args = 0
+params = []
+
+[globals.task.members.spawn]
+kind = "function"
+min_args = 1
+max_args = -1
+params = [
+  { kind = "any" },
+  { kind = "vararg", required = false },
+]
+
+[globals.task.members.synchronize]
+kind = "function"
+min_args = 0
+max_args = 0
+params = []
+
+[globals.task.members.wait]
+kind = "function"
+min_args = 0
+max_args = 1
+params = [{ kind = "number", required = false }]
+
+# ---- Roblox runtime globals (DataModel + scheduler legacy) ----
+# Present only under the Roblox flavor; the standalone Luau VM does not
+# register any of these.
+
+[globals.game]
+kind = "property"
+shape = "DataModel"
+
+[globals.workspace]
+kind = "property"
+shape = "Workspace"
+
+[globals.script]
+kind = "property"
+shape = "Instance"
+
+[globals.plugin]
+kind = "property"
+
+[globals.shared]
+kind = "property"
+read_only = false
+
+# The enum tree itself (each type and its items) is generated from the
+# API dump into roblox_enums.toml via the [enums] section; the loader
+# splices the types in as Enum-shaped member namespaces with
+# EnumItem-shaped constants.
+[globals.Enum]
+kind = "namespace"
+shape = "Enums"
+
+[globals.tick]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+deprecated = { message = "use os.clock() for benchmarking, or time()/DateTime.now() for wall-clock time" }
+params = []
+
+[globals.time]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+params = []
+
+[globals.elapsedTime]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+deprecated = { message = "use time() instead", replace_template = "time()" }
+params = []
+
+[globals.settings]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+params = []
+returns = "GlobalSettings"
+
+[globals.version]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+deprecated = { message = "deprecated on Roblox" }
+params = []
+
+[globals.UserSettings]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+params = []
+returns = "UserSettings"
+
+# Plugin/Studio context only, but registered as a global everywhere.
+[globals.PluginManager]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+params = []
+
+[globals.stats]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+deprecated = { message = "use game:GetService(\"Stats\") instead", replace_template = "game:GetService(\"Stats\")" }
+params = []
+
+[globals.printidentity]
+kind = "function"
+min_args = 0
+max_args = 1
+deprecated = { message = "deprecated on Roblox; identity levels are not observable from scripts" }
+params = [{ kind = "string", required = false }]
+
+[globals.DebuggerManager]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+deprecated = { message = "deprecated on Roblox" }
+params = []
+
+[globals.ypcall]
+kind = "function"
+min_args = 1
+max_args = -1
+must_use = true
+deprecated = { message = "pcall has supported yielding since 2014; use it directly", replace_template = "pcall(%1)" }
+params = [
+  { kind = "function" },
+  { kind = "vararg", required = false },
+]
+
+# Legacy global scheduler functions; deprecated in favor of task.*.
+
+[globals.wait]
+kind = "function"
+min_args = 0
+max_args = 1
+params = [{ kind = "number", required = false }]
+deprecated = { message = "use task.wait", replace_template = "task.wait(%1)" }
+
+[globals.spawn]
+kind = "function"
+min_args = 1
+max_args = -1
+params = [
+  { kind = "any" },
+  { kind = "vararg", required = false },
+]
+deprecated = { message = "use task.spawn", replace_template = "task.spawn(%1)" }
+
+[globals.delay]
+kind = "function"
+min_args = 2
+max_args = -1
+params = [
+  { kind = "number" },
+  { kind = "any" },
+  { kind = "vararg", required = false },
+]
+deprecated = { message = "use task.delay", replace_template = "task.delay(%1, %2)" }
+
+# ---- Roblox datatype constructors ----
+# Each is a namespace covering the type's documented constructors and
+# static members (create.roblox.com/docs/reference/engine/datatypes).
+
+[globals.Vector3]
+kind = "namespace"
+[globals.Vector3.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 3
+params = [
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+[globals.Vector3.members.FromNormalId]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "display", display = "Enum.NormalId" }]
+[globals.Vector3.members.FromAxis]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "display", display = "Enum.Axis" }]
+[globals.Vector3.members.zero]
+kind = "property"
+[globals.Vector3.members.one]
+kind = "property"
+[globals.Vector3.members.xAxis]
+kind = "property"
+[globals.Vector3.members.yAxis]
+kind = "property"
+[globals.Vector3.members.zAxis]
+kind = "property"
+
+[globals.Vector2]
+kind = "namespace"
+[globals.Vector2.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 2
+params = [
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+[globals.Vector2.members.zero]
+kind = "property"
+[globals.Vector2.members.one]
+kind = "property"
+[globals.Vector2.members.xAxis]
+kind = "property"
+[globals.Vector2.members.yAxis]
+kind = "property"
+
+[globals.Vector3int16]
+kind = "namespace"
+[globals.Vector3int16.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 3
+params = [
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.Vector2int16]
+kind = "namespace"
+[globals.Vector2int16.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 2
+params = [
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.CFrame]
+kind = "namespace"
+[globals.CFrame.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+overloads = [
+  { min_args = 0, max_args = 0, params = [] },
+  { min_args = 1, max_args = 1, params = [{ kind = "display", display = "Vector3" }] },
+  { min_args = 2, max_args = 2, params = [
+    { kind = "display", display = "Vector3" },
+    { kind = "display", display = "Vector3" },
+  ] },
+  { min_args = 3, max_args = 3, params = [
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+  ] },
+  { min_args = 7, max_args = 7, params = [
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+  ] },
+  { min_args = 12, max_args = 12, params = [
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+  ] },
+]
+[globals.CFrame.members.identity]
+kind = "property"
+[globals.CFrame.members.lookAt]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 2
+max_args = 3
+params = [
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "Vector3", required = false },
+]
+[globals.CFrame.members.lookAlong]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 2
+max_args = 3
+params = [
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "Vector3", required = false },
+]
+[globals.CFrame.members.fromRotationBetweenVectors]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 2
+max_args = 2
+params = [
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "Vector3" },
+]
+[globals.CFrame.members.fromEulerAngles]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 3
+max_args = 4
+params = [
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "display", display = "Enum.RotationOrder", required = false },
+]
+[globals.CFrame.members.fromEulerAnglesXYZ]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 3
+max_args = 3
+params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
+[globals.CFrame.members.fromEulerAnglesYXZ]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 3
+max_args = 3
+params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
+[globals.CFrame.members.fromOrientation]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 3
+max_args = 3
+params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
+[globals.CFrame.members.fromAxisAngle]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 2
+max_args = 2
+params = [
+  { kind = "display", display = "Vector3" },
+  { kind = "number" },
+]
+# vZ may be omitted; the engine derives it from the cross product.
+[globals.CFrame.members.fromMatrix]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 3
+max_args = 4
+params = [
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "Vector3", required = false },
+]
+[globals.CFrame.members.Angles]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 3
+max_args = 3
+params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
+
+[globals.Color3]
+kind = "namespace"
+[globals.Color3.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 3
+params = [
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+[globals.Color3.members.fromRGB]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 3
+params = [
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+[globals.Color3.members.fromHSV]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 3
+max_args = 3
+params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
+[globals.Color3.members.fromHex]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "string" }]
+
+[globals.BrickColor]
+kind = "namespace"
+# The 1-arg form takes a palette value (number), a Color3, or a color
+# name; the constant set validates the name case only (non-string args
+# skip constant checks).
+[globals.BrickColor.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+overloads = [
+  { min_args = 1, max_args = 1, params = [{ kind = "constant", set = "brickcolor_names" }] },
+  { min_args = 3, max_args = 3, params = [
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+  ] },
+]
+[globals.BrickColor.members.palette]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "number" }]
+[globals.BrickColor.members.random]
+kind = "function"
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+[globals.BrickColor.members.White]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+[globals.BrickColor.members.Gray]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+[globals.BrickColor.members.DarkGray]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+[globals.BrickColor.members.Black]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+[globals.BrickColor.members.Red]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+[globals.BrickColor.members.Yellow]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+[globals.BrickColor.members.Green]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+[globals.BrickColor.members.Blue]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+
+[globals.UDim]
+kind = "namespace"
+[globals.UDim.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 2
+params = [
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.UDim2]
+kind = "namespace"
+[globals.UDim2.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+overloads = [
+  { min_args = 0, max_args = 4, params = [
+    { kind = "number", required = false },
+    { kind = "number", required = false },
+    { kind = "number", required = false },
+    { kind = "number", required = false },
+  ] },
+  { min_args = 2, max_args = 2, params = [
+    { kind = "display", display = "UDim" },
+    { kind = "display", display = "UDim" },
+  ] },
+]
+[globals.UDim2.members.fromScale]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 2
+max_args = 2
+params = [{ kind = "number" }, { kind = "number" }]
+[globals.UDim2.members.fromOffset]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 2
+max_args = 2
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.Rect]
+kind = "namespace"
+[globals.Rect.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+overloads = [
+  { min_args = 0, max_args = 0, params = [] },
+  { min_args = 2, max_args = 2, params = [
+    { kind = "display", display = "Vector2" },
+    { kind = "display", display = "Vector2" },
+  ] },
+  { min_args = 4, max_args = 4, params = [
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+  ] },
+]
+
+[globals.Region3]
+kind = "namespace"
+[globals.Region3.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 2
+max_args = 2
+params = [
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "Vector3" },
+]
+
+[globals.Region3int16]
+kind = "namespace"
+[globals.Region3int16.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 2
+max_args = 2
+params = [
+  { kind = "display", display = "Vector3int16" },
+  { kind = "display", display = "Vector3int16" },
+]
+
+[globals.Ray]
+kind = "namespace"
+[globals.Ray.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 2
+max_args = 2
+params = [{ kind = "any" }, { kind = "any" }]
+
+[globals.NumberRange]
+kind = "namespace"
+[globals.NumberRange.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 1
+max_args = 2
+params = [
+  { kind = "number" },
+  { kind = "number", required = false },
+]
+
+[globals.NumberSequence]
+kind = "namespace"
+[globals.NumberSequence.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+overloads = [
+  { min_args = 1, max_args = 1, params = [{ kind = "any" }] },
+  { min_args = 2, max_args = 2, params = [
+    { kind = "number" },
+    { kind = "number" },
+  ] },
+]
+
+[globals.NumberSequenceKeypoint]
+kind = "namespace"
+[globals.NumberSequenceKeypoint.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 2
+max_args = 3
+params = [
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "number", required = false },
+]
+
+[globals.ColorSequence]
+kind = "namespace"
+[globals.ColorSequence.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+overloads = [
+  { min_args = 1, max_args = 1, params = [{ kind = "any" }] },
+  { min_args = 2, max_args = 2, params = [
+    { kind = "display", display = "Color3" },
+    { kind = "display", display = "Color3" },
+  ] },
+]
+
+[globals.ColorSequenceKeypoint]
+kind = "namespace"
+[globals.ColorSequenceKeypoint.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 2
+max_args = 2
+params = [
+  { kind = "number" },
+  { kind = "display", display = "Color3" },
+]
+
+[globals.TweenInfo]
+kind = "namespace"
+[globals.TweenInfo.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = 6
+params = [
+  { kind = "number", required = false },
+  { kind = "any", required = false },
+  { kind = "any", required = false },
+  { kind = "number", required = false },
+  { kind = "bool", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.PhysicalProperties]
+kind = "namespace"
+[globals.PhysicalProperties.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+overloads = [
+  { min_args = 1, max_args = 1, params = [{ kind = "display", display = "Enum.Material" }] },
+  { min_args = 3, max_args = 3, params = [
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+  ] },
+  { min_args = 5, max_args = 6, params = [
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number" },
+    { kind = "number", required = false },
+  ] },
+]
+
+[globals.Random]
+kind = "namespace"
+[globals.Random.members.new]
+kind = "function"
+must_use = true
+min_args = 0
+max_args = 1
+params = [{ kind = "number", required = false }]
+
+[globals.DateTime]
+kind = "namespace"
+[globals.DateTime.members.now]
+kind = "function"
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+[globals.DateTime.members.fromUnixTimestamp]
+kind = "function"
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "number" }]
+[globals.DateTime.members.fromUnixTimestampMillis]
+kind = "function"
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "number" }]
+[globals.DateTime.members.fromUniversalTime]
+kind = "function"
+must_use = true
+min_args = 0
+max_args = 7
+params = [
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+[globals.DateTime.members.fromLocalTime]
+kind = "function"
+must_use = true
+min_args = 0
+max_args = 7
+params = [
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+[globals.DateTime.members.fromIsoDate]
+kind = "function"
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "string" }]
+
+[globals.OverlapParams]
+kind = "namespace"
+[globals.OverlapParams.members.new]
+kind = "function"
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+
+[globals.RaycastParams]
+kind = "namespace"
+[globals.RaycastParams.members.new]
+kind = "function"
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+
+[globals.Font]
+kind = "namespace"
+[globals.Font.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 1
+max_args = 3
+params = [
+  { kind = "string" },
+  { kind = "display", display = "Enum.FontWeight", required = false },
+  { kind = "display", display = "Enum.FontStyle", required = false },
+]
+[globals.Font.members.fromEnum]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "display", display = "Enum.Font" }]
+[globals.Font.members.fromId]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 1
+max_args = 3
+params = [
+  { kind = "number" },
+  { kind = "display", display = "Enum.FontWeight", required = false },
+  { kind = "display", display = "Enum.FontStyle", required = false },
+]
+[globals.Font.members.fromName]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 1
+max_args = 3
+params = [
+  { kind = "string" },
+  { kind = "display", display = "Enum.FontWeight", required = false },
+  { kind = "display", display = "Enum.FontStyle", required = false },
+]
+
+[globals.Instance]
+kind = "namespace"
+[globals.Instance.members.new]
+kind = "function"
+must_use = true
+min_args = 1
+max_args = 2
+params = [
+  { kind = "constant", set = "roblox_creatable_classes" },
+  { kind = "any", required = false, deprecated = { message = "performance: set Parent after configuring the instance instead of passing it here" } },
+]
+returns = "Instance"
+[globals.Instance.members.fromExisting]
+kind = "function"
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "any" }]
+
+[globals.Axes]
+kind = "namespace"
+[globals.Axes.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = -1
+params = [{ kind = "vararg", required = false }]
+
+[globals.Faces]
+kind = "namespace"
+[globals.Faces.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = -1
+params = [{ kind = "vararg", required = false }]
+
+[globals.CatalogSearchParams]
+kind = "namespace"
+[globals.CatalogSearchParams.members.new]
+kind = "function"
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+
+[globals.Content]
+kind = "namespace"
+[globals.Content.members.fromUri]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "string" }]
+[globals.Content.members.fromAssetId]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "number" }]
+[globals.Content.members.fromObject]
+kind = "function"
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "display", display = "Object" }]
+[globals.Content.members.none]
+kind = "constant"
+
+[globals.DockWidgetPluginGuiInfo]
+kind = "namespace"
+[globals.DockWidgetPluginGuiInfo.members.new]
+kind = "function"
+must_use = true
+min_args = 0
+max_args = 7
+params = [
+  { kind = "display", display = "Enum.InitialDockState", required = false },
+  { kind = "bool", required = false },
+  { kind = "bool", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.FloatCurveKey]
+kind = "namespace"
+[globals.FloatCurveKey.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 3
+max_args = 3
+params = [
+  { kind = "number" },
+  { kind = "number" },
+  { kind = "display", display = "Enum.KeyInterpolationMode" },
+]
+
+[globals.RotationCurveKey]
+kind = "namespace"
+[globals.RotationCurveKey.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 3
+max_args = 3
+params = [
+  { kind = "number" },
+  { kind = "display", display = "CFrame" },
+  { kind = "display", display = "Enum.KeyInterpolationMode" },
+]
+
+# The docs table lists all three params without defaults, but the engine
+# accepts partial forms (action defaults to Walk, label to "").
+[globals.PathWaypoint]
+kind = "namespace"
+[globals.PathWaypoint.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 1
+max_args = 3
+params = [
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "Enum.PathWaypointAction", required = false },
+  { kind = "string", required = false },
+]
+
+[globals.Path2DControlPoint]
+kind = "namespace"
+[globals.Path2DControlPoint.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+overloads = [
+  { min_args = 0, max_args = 1, params = [
+    { kind = "display", display = "UDim2", required = false },
+  ] },
+  { min_args = 3, max_args = 3, params = [
+    { kind = "display", display = "UDim2" },
+    { kind = "display", display = "UDim2" },
+    { kind = "display", display = "UDim2" },
+  ] },
+]
+
+[globals.SecurityCapabilities]
+kind = "namespace"
+[globals.SecurityCapabilities.members.new]
+kind = "function"
+is_pure = true
+must_use = true
+min_args = 0
+max_args = -1
+params = [{ kind = "vararg", required = false }]
+[globals.SecurityCapabilities.members.fromCurrent]
+kind = "function"
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+
+[globals.SharedTable]
+kind = "namespace"
+[globals.SharedTable.members.new]
+kind = "function"
+must_use = true
+min_args = 0
+max_args = 1
+params = [{ kind = "table", required = false }]
+[globals.SharedTable.members.clear]
+kind = "function"
+min_args = 1
+max_args = 1
+params = [{ kind = "display", display = "SharedTable" }]
+[globals.SharedTable.members.clone]
+kind = "function"
+must_use = true
+min_args = 1
+max_args = 2
+params = [
+  { kind = "display", display = "SharedTable" },
+  { kind = "bool", required = false },
+]
+[globals.SharedTable.members.cloneAndFreeze]
+kind = "function"
+must_use = true
+min_args = 1
+max_args = 2
+params = [
+  { kind = "display", display = "SharedTable" },
+  { kind = "bool", required = false },
+]
+[globals.SharedTable.members.increment]
+kind = "function"
+min_args = 3
+max_args = 3
+params = [
+  { kind = "display", display = "SharedTable" },
+  { kind = "any" },
+  { kind = "number" },
+]
+[globals.SharedTable.members.isFrozen]
+kind = "function"
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "display", display = "SharedTable" }]
+[globals.SharedTable.members.size]
+kind = "function"
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "display", display = "SharedTable" }]
+[globals.SharedTable.members.update]
+kind = "function"
+min_args = 3
+max_args = 3
+params = [
+  { kind = "display", display = "SharedTable" },
+  { kind = "any" },
+  { kind = "function" },
+]
+
+# Luau exposes a sandboxed subset of the os library (clock/date/difftime/
+# time) in BOTH standalone and Roblox environments — its absence here made
+# `os.time()` an undefined-variable Error on every Luau target.
+[globals.os]
+kind = "namespace"
+
+[globals.os.members.clock]
+kind = "function"
+min_args = 0
+max_args = 0
+must_use = true
+
+[globals.os.members.date]
+kind = "function"
+min_args = 0
+max_args = 2
+must_use = true
+params = [
+  { kind = "string", required = false },
+  { kind = "number", required = false },
+]
+
+[globals.os.members.difftime]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.os.members.time]
+kind = "function"
+min_args = 0
+max_args = 1
+must_use = true
+params = [{ kind = "table", required = false }]
+
+# ---- hand-pinned constant sets ----
+
+# Full BrickColor palette name list (204 unique names; 4 palette entries
+# share a name with another). Pinned from rojo-rbx/rbx-dom
+# rbx_types/src/brick_color.rs - the palette is frozen, so this is not
+# part of the generated roblox_api.toml.
+[constant_sets.brickcolor_names]
+values = [
+  "White",
+  "Grey",
+  "Light yellow",
+  "Brick yellow",
+  "Light green (Mint)",
+  "Light reddish violet",
+  "Pastel Blue",
+  "Light orange brown",
+  "Nougat",
+  "Bright red",
+  "Med. reddish violet",
+  "Bright blue",
+  "Bright yellow",
+  "Earth orange",
+  "Black",
+  "Dark grey",
+  "Dark green",
+  "Medium green",
+  "Lig. Yellowich orange",
+  "Bright green",
+  "Dark orange",
+  "Light bluish violet",
+  "Transparent",
+  "Tr. Red",
+  "Tr. Lg blue",
+  "Tr. Blue",
+  "Tr. Yellow",
+  "Light blue",
+  "Tr. Flu. Reddish orange",
+  "Tr. Green",
+  "Tr. Flu. Green",
+  "Phosph. White",
+  "Light red",
+  "Medium red",
+  "Medium blue",
+  "Light grey",
+  "Bright violet",
+  "Br. yellowish orange",
+  "Bright orange",
+  "Bright bluish green",
+  "Earth yellow",
+  "Bright bluish violet",
+  "Tr. Brown",
+  "Medium bluish violet",
+  "Tr. Medi. reddish violet",
+  "Med. yellowish green",
+  "Med. bluish green",
+  "Light bluish green",
+  "Br. yellowish green",
+  "Lig. yellowish green",
+  "Med. yellowish orange",
+  "Br. reddish orange",
+  "Bright reddish violet",
+  "Light orange",
+  "Tr. Bright bluish violet",
+  "Gold",
+  "Dark nougat",
+  "Silver",
+  "Neon orange",
+  "Neon green",
+  "Sand blue",
+  "Sand violet",
+  "Medium orange",
+  "Sand yellow",
+  "Earth blue",
+  "Earth green",
+  "Tr. Flu. Blue",
+  "Sand blue metallic",
+  "Sand violet metallic",
+  "Sand yellow metallic",
+  "Dark grey metallic",
+  "Black metallic",
+  "Light grey metallic",
+  "Sand green",
+  "Sand red",
+  "Dark red",
+  "Tr. Flu. Yellow",
+  "Tr. Flu. Red",
+  "Gun metallic",
+  "Red flip/flop",
+  "Yellow flip/flop",
+  "Silver flip/flop",
+  "Curry",
+  "Fire Yellow",
+  "Flame yellowish orange",
+  "Reddish brown",
+  "Flame reddish orange",
+  "Medium stone grey",
+  "Royal blue",
+  "Dark Royal blue",
+  "Bright reddish lilac",
+  "Dark stone grey",
+  "Lemon metalic",
+  "Light stone grey",
+  "Dark Curry",
+  "Faded green",
+  "Turquoise",
+  "Light Royal blue",
+  "Medium Royal blue",
+  "Rust",
+  "Brown",
+  "Reddish lilac",
+  "Lilac",
+  "Light lilac",
+  "Bright purple",
+  "Light purple",
+  "Light pink",
+  "Light brick yellow",
+  "Warm yellowish orange",
+  "Cool yellow",
+  "Dove blue",
+  "Medium lilac",
+  "Slime green",
+  "Smoky grey",
+  "Dark blue",
+  "Parsley green",
+  "Steel blue",
+  "Storm blue",
+  "Lapis",
+  "Dark indigo",
+  "Sea green",
+  "Shamrock",
+  "Fossil",
+  "Mulberry",
+  "Forest green",
+  "Cadet blue",
+  "Electric blue",
+  "Eggplant",
+  "Moss",
+  "Artichoke",
+  "Sage green",
+  "Ghost grey",
+  "Plum",
+  "Olivine",
+  "Laurel green",
+  "Quill grey",
+  "Crimson",
+  "Mint",
+  "Baby blue",
+  "Carnation pink",
+  "Persimmon",
+  "Maroon",
+  "Daisy orange",
+  "Pearl",
+  "Fog",
+  "Salmon",
+  "Terra Cotta",
+  "Cocoa",
+  "Wheat",
+  "Buttermilk",
+  "Mauve",
+  "Sunrise",
+  "Tawny",
+  "Cashmere",
+  "Khaki",
+  "Lily white",
+  "Seashell",
+  "Burgundy",
+  "Cork",
+  "Burlap",
+  "Beige",
+  "Oyster",
+  "Pine Cone",
+  "Fawn brown",
+  "Hurricane grey",
+  "Cloudy grey",
+  "Linen",
+  "Copper",
+  "Dirt brown",
+  "Bronze",
+  "Flint",
+  "Dark taupe",
+  "Burnt Sienna",
+  "Institutional white",
+  "Mid gray",
+  "Really black",
+  "Really red",
+  "Deep orange",
+  "Alder",
+  "Dusty Rose",
+  "Olive",
+  "New Yeller",
+  "Really blue",
+  "Navy blue",
+  "Deep blue",
+  "Cyan",
+  "CGA brown",
+  "Magenta",
+  "Pink",
+  "Teal",
+  "Toothpaste",
+  "Lime green",
+  "Camo",
+  "Grime",
+  "Lavender",
+  "Pastel light blue",
+  "Pastel orange",
+  "Pastel violet",
+  "Pastel blue-green",
+  "Pastel green",
+  "Pastel yellow",
+  "Pastel brown",
+  "Royal purple",
+  "Hot pink",
+]
+
+# ---- value shapes ----
+# Instance covers the universally-used method surface shared by every
+# Roblox instance. Events (.Changed, :GetPropertyChangedSignal(...):
+# Connect) and per-class properties are out of scope: they would need
+# the full class hierarchy, which this model deliberately does not
+# carry. Only Name and Parent are modeled as properties - they exist on
+# every instance and drive the script.Parent idiom.
+
+[shapes.Instance.members.Name]
+kind = "property"
+read_only = false
+
+[shapes.Instance.members.Parent]
+kind = "property"
+read_only = false
+shape = "Instance"
+
+[shapes.Instance.members.Clone]
+kind = "function"
+method = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+returns = "Instance"
+
+[shapes.Instance.members.Destroy]
+kind = "function"
+method = true
+min_args = 0
+max_args = 0
+params = []
+
+[shapes.Instance.members.FindFirstAncestor]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "string" }]
+returns = "Instance"
+
+# OfClass/WhichIsA class-name sets use roblox_all_classes: the API dump
+# does not distinguish abstract classes, so exact-class lookups accept
+# the full list rather than reject valid concrete names.
+[shapes.Instance.members.FindFirstAncestorOfClass]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "constant", set = "roblox_all_classes" }]
+returns = "Instance"
+
+[shapes.Instance.members.FindFirstAncestorWhichIsA]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "constant", set = "roblox_all_classes" }]
+returns = "Instance"
+
+[shapes.Instance.members.FindFirstChild]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 2
+params = [
+  { kind = "string" },
+  { kind = "bool", required = false },
+]
+returns = "Instance"
+
+[shapes.Instance.members.FindFirstChildOfClass]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "constant", set = "roblox_all_classes" }]
+returns = "Instance"
+
+[shapes.Instance.members.FindFirstChildWhichIsA]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 2
+params = [
+  { kind = "constant", set = "roblox_all_classes" },
+  { kind = "bool", required = false },
+]
+returns = "Instance"
+
+[shapes.Instance.members.GetAttribute]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "string" }]
+
+[shapes.Instance.members.GetAttributes]
+kind = "function"
+method = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+
+[shapes.Instance.members.GetChildren]
+kind = "function"
+method = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+
+[shapes.Instance.members.GetDescendants]
+kind = "function"
+method = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+
+[shapes.Instance.members.GetFullName]
+kind = "function"
+method = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+
+[shapes.Instance.members.IsA]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "constant", set = "roblox_all_classes" }]
+
+[shapes.Instance.members.IsAncestorOf]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "display", display = "Instance" }]
+
+[shapes.Instance.members.IsDescendantOf]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "display", display = "Instance" }]
+
+[shapes.Instance.members.SetAttribute]
+kind = "function"
+method = true
+min_args = 2
+max_args = 2
+params = [{ kind = "string" }, { kind = "any" }]
+
+[shapes.Instance.members.WaitForChild]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 2
+params = [
+  { kind = "string" },
+  { kind = "number", required = false },
+]
+returns = "Instance"
+
+# The DataModel (game). GetService names come from the generated
+# roblox_api.toml set.
+
+[shapes.DataModel]
+extends = "Instance"
+
+[shapes.DataModel.members.BindToClose]
+kind = "function"
+method = true
+min_args = 1
+max_args = 1
+params = [{ kind = "function" }]
+
+[shapes.DataModel.members.FindService]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "constant", set = "roblox_services" }]
+returns = "Instance"
+
+[shapes.DataModel.members.GetService]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "constant", set = "roblox_services" }]
+returns = "Instance"
+
+[shapes.DataModel.members.IsLoaded]
+kind = "function"
+method = true
+must_use = true
+min_args = 0
+max_args = 0
+params = []
+
+[shapes.DataModel.members.Workspace]
+kind = "property"
+shape = "Workspace"
+
+# The workspace global's shape: spatial-query methods plus the three
+# properties everyone touches. Signatures from WorldRoot in the dump.
+
+[shapes.Workspace]
+extends = "Instance"
+
+[shapes.Workspace.members.Blockcast]
+kind = "function"
+method = true
+must_use = true
+min_args = 3
+max_args = 4
+params = [
+  { kind = "display", display = "CFrame" },
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "RaycastParams", required = false },
+]
+
+[shapes.Workspace.members.CurrentCamera]
+kind = "property"
+read_only = false
+shape = "Instance"
+
+[shapes.Workspace.members.GetPartBoundsInBox]
+kind = "function"
+method = true
+must_use = true
+min_args = 2
+max_args = 3
+params = [
+  { kind = "display", display = "CFrame" },
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "OverlapParams", required = false },
+]
+
+[shapes.Workspace.members.GetPartBoundsInRadius]
+kind = "function"
+method = true
+must_use = true
+min_args = 2
+max_args = 3
+params = [
+  { kind = "display", display = "Vector3" },
+  { kind = "number" },
+  { kind = "display", display = "OverlapParams", required = false },
+]
+
+[shapes.Workspace.members.GetPartsInPart]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 2
+params = [
+  { kind = "display", display = "BasePart" },
+  { kind = "display", display = "OverlapParams", required = false },
+]
+
+[shapes.Workspace.members.Gravity]
+kind = "property"
+read_only = false
+
+[shapes.Workspace.members.Raycast]
+kind = "function"
+method = true
+must_use = true
+min_args = 2
+max_args = 3
+params = [
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "RaycastParams", required = false },
+]
+
+[shapes.Workspace.members.Spherecast]
+kind = "function"
+method = true
+must_use = true
+min_args = 3
+max_args = 4
+params = [
+  { kind = "display", display = "Vector3" },
+  { kind = "number" },
+  { kind = "display", display = "Vector3" },
+  { kind = "display", display = "RaycastParams", required = false },
+]
+
+[shapes.Workspace.members.Terrain]
+kind = "property"
+shape = "Instance"
+
+# The two non-DataModel ServiceProviders, scoped to GetService: their
+# child sets are small and fixed (GenericSettings children from the API
+# dump). settings() and most of these classes are plugin/Studio context.
+
+[shapes.GlobalSettings.members.GetService]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "constant", values = [
+  "DebugSettings",
+  "GameSettings",
+  "LuaSettings",
+  "NetworkSettings",
+  "PhysicsSettings",
+  "RenderSettings",
+  "Studio",
+] }]
+returns = "Instance"
+
+[shapes.UserSettings.members.GetService]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "constant", values = ["UserGameSettings"] }]
+returns = "Instance"
+
+# ---- enum value shapes ----
+# Enums = the Enum global; Enum = one enum type (Enum.Material); EnumItem
+# = one item (Enum.Material.Grass). Shape names match the Roblox
+# datatype names.
+
+[shapes.Enums.members.GetEnums]
+kind = "function"
+method = true
+must_use = true
+min_args = 0
+max_args = 0
+
+[shapes.Enum.members.GetEnumItems]
+kind = "function"
+method = true
+must_use = true
+min_args = 0
+max_args = 0
+
+[shapes.Enum.members.FromName]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "string" }]
+returns = "EnumItem"
+
+[shapes.Enum.members.FromValue]
+kind = "function"
+method = true
+must_use = true
+min_args = 1
+max_args = 1
+params = [{ kind = "number" }]
+returns = "EnumItem"
+
+[shapes.EnumItem.members.Name]
+kind = "property"
+shape = "string"
+
+[shapes.EnumItem.members.Value]
+kind = "property"
+
+[shapes.EnumItem.members.EnumType]
+kind = "property"
+shape = "Enum"

@@ -20,6 +20,7 @@ cargo clippy --workspace --all-targets -- -D warnings  # must be zero warnings
 cargo insta accept                                     # accept snapshots (non-interactive; `review` is for humans)
 cargo bench -p luck_benchmark                          # criterion benches, one per stage (--bench lexer|parser|semantic|linter|codegen|formatter|minifier|bundler|synth)
 cargo test -p luck_core regenerate_luckrc_schema -- --ignored  # regen VS Code schema after config changes
+cargo test -p luck_semantic regenerate_roblox_api -- --ignored  # regen roblox_api.toml + roblox_enums.toml from the live Roblox API dump
 cargo test -p luck_benchmark --test metrics regenerate_minsize -- --ignored  # regen committed minsize.snap after minifier/corpus changes
 ```
 
@@ -47,8 +48,8 @@ and feeds `luck_bundler`. On top sit `luck` (facade re-exports),
 | `luck_bundler` | Require validation, dep graph (cycle detection), lazy memoizing loader emit + line maps, `ModuleId`/`ModuleInfo`, `insta` snapshots | `graph.rs`, `emitter.rs`, `module.rs` |
 | `luck_minifier` | 12-transform pipeline; passes gated by `TransformConfig` flags | `lib.rs` `minify()`, `transforms/` |
 | `luck_formatter` | Wadler-style engine: `Format` trait + combinator IR (`BestFitting`, group-id conditionals), AST-in `format_block` formats synthetic ASTs (no source needed), idempotency invariant | `ir.rs`, `printer.rs`, `format_*.rs`, `comments.rs` |
-| `luck_linter` | `Rule`/`NodeRule` traits + `LintContext`, 63 stateless rules in a static `RULES` registry, node-type-bucketed parallel bus (rules declare `node_types()`; debug builds verify bucketed == brute-force dispatch), suppressions, `--fix` | `rules/`, `rule.rs`, `bus.rs` |
-| `luck_semantic` | Scope tree, refs (R/W/RW), upvalues, version- & environment-aware stdlib; typed `NonZeroU32` ids (`ScopeId`/`SymbolId`/`ReferenceId`); flat node table with parent links + per-node scope | `builder.rs`, `stdlib_model.rs`, `nodes.rs` |
+| `luck_linter` | `Rule`/`NodeRule` traits + `LintContext`, 64 stateless rules in a static `RULES` registry, node-type-bucketed parallel bus (rules declare `node_types()`; debug builds verify bucketed == brute-force dispatch), suppressions, `--fix` | `rules/`, `rule.rs`, `bus.rs` |
+| `luck_semantic` | Scope tree, refs (R/W/RW), upvalues; typed `NonZeroU32` ids (`ScopeId`/`SymbolId`/`ReferenceId`); flat node table with parent links + per-node scope; stdlib catalog: seven independent per-environment TOMLs (5.1-5.5, luau, luau_roblox) with overloads, shapes (`file`/`string`/`Instance`/...), constant sets, per-param/per-constant deprecation; generated Roblox service/class/enum data (regen command above); drift guards in `tests/drift.rs`; conservative shape resolution in `resolve.rs` | `builder.rs`, `stdlib_model.rs`, `resolve.rs` |
 | `luck_lsp` | Library-only LSP backend (no binary); served via `luck lsp` | `backend.rs`, `serve.rs`, `providers/` |
 | `luck_cli` | Flat Clap commands (incl. `lsp`); rayon-parallel lint/fmt/check; ariadne diagnostic rendering; `ExitCode` 0/1/2; 16 MB-stack worker thread | `cli.rs`, `render.rs`, `main.rs` |
 | `luck` | Facade re-exports (no logic) | `lib.rs` |

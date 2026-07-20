@@ -8,7 +8,7 @@ Rule-based linter for Lua and Luau with scope-aware analysis.
 
 ## Key Features
 
-- **63 rules across 4 categories** — Correctness, Suspicious, Style, and Performance. Correctness rules are on by default; the rest are opt-in.
+- **64 rules across 4 categories** — Correctness, Suspicious, Style, and Performance. Correctness rules are on by default; the rest are opt-in.
 - **Auto-fix** — rules with a safe fix attach `TextEdit`s to their diagnostic, applied in a single pass with overlap detection.
 - **Suppression comments** — `-- luck: allow(rule_name)` on the preceding line suppresses the rule for the entire span of the following statement.
 - **Semantic-aware** — unused/undefined variable, incorrect stdlib usage, and similar rules query the `ScopeTree` rather than re-walking the AST.

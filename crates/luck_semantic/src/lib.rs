@@ -20,18 +20,19 @@
 
 pub mod builder;
 pub mod nodes;
+pub mod resolve;
 pub mod scope;
 pub mod stdlib_model;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use compact_str::CompactString;
 use luck_ast::shared::Block;
 use luck_token::{LuaVersion, StdlibEnvironment};
 
 use builder::ScopeTreeBuilder;
-use scope::ScopeTree;
-use stdlib_model::{EntryKind, StdlibDeprecation, StdlibEntry, StdlibLibrary, library_for};
+use scope::{ScopeTree, SymbolId};
+use stdlib_model::{StdlibDeprecation, StdlibEntry, StdlibLibrary, library_for};
 
 /// Complete semantic analysis result for a Lua chunk.
 #[derive(Debug)]
@@ -44,10 +45,13 @@ pub struct SemanticAnalysis {
     /// `stdlib()` directly.
     pub extra_globals: HashSet<String>,
     pub version: LuaVersion,
-    /// Selects the stdlib environment for visibility: `Roblox` exposes
-    /// Roblox-tier entries and hides standalone-only ones; `Standalone`
-    /// does the reverse.
+    /// Selects which stdlib library answers queries. Only meaningful
+    /// for Luau: `Roblox` selects the Roblox runtime library,
+    /// `Standalone` the open-source Luau one.
     pub environment: StdlibEnvironment,
+    /// Shapes of locals whose initializer had a statically known shape
+    /// (e.g. `local f = io.open(...)`), computed once per analysis.
+    pub symbol_shapes: HashMap<SymbolId, CompactString>,
 }
 
 /// Analyze a parsed Lua block, building the scope tree. Defaults to the
@@ -66,37 +70,37 @@ pub fn analyze_with_environment(
     environment: StdlibEnvironment,
 ) -> SemanticAnalysis {
     let scope_tree = ScopeTreeBuilder::new().build(block);
+    let symbol_shapes =
+        resolve::compute_symbol_shapes(&scope_tree, library_for(version, environment), block);
 
     SemanticAnalysis {
         scope_tree,
         extra_globals: HashSet::new(),
         version,
         environment,
+        symbol_shapes,
     }
 }
 
 impl SemanticAnalysis {
-    /// The rich, typed library for this analysis's Lua version.
+    /// The rich, typed library for this analysis's version and
+    /// environment.
     #[must_use]
     pub fn stdlib(&self) -> &'static StdlibLibrary {
-        library_for(self.version)
+        library_for(self.version, self.environment)
     }
 
     /// Look up a dotted path (e.g. `["table", "concat"]`) in the stdlib.
     #[must_use]
     pub fn lookup_stdlib(&self, path: &[CompactString]) -> Option<&'static StdlibEntry> {
-        self.stdlib()
-            .lookup(path)
-            .filter(|entry| entry.available_in_luau(self.environment))
+        self.stdlib().lookup(path)
     }
 
     /// Same as [`Self::lookup_stdlib`] but accepts borrowed `&str`
     /// segments. Preferred when callers already have raw source slices.
     #[must_use]
     pub fn lookup_stdlib_str(&self, path: &[&str]) -> Option<&'static StdlibEntry> {
-        self.stdlib()
-            .lookup_str(path)
-            .filter(|entry| entry.available_in_luau(self.environment))
+        self.stdlib().lookup_str(path)
     }
 
     /// True when the identifier occupying `span` resolves to a local
@@ -112,14 +116,10 @@ impl SemanticAnalysis {
     }
 
     /// Whether `name` is recognized as a global - either a stdlib entry
-    /// for this version, or an entry in `extra_globals`.
+    /// for this environment, or an entry in `extra_globals`.
     #[must_use]
     pub fn is_known_global(&self, name: &str) -> bool {
-        self.stdlib()
-            .globals
-            .get(name)
-            .is_some_and(|entry| entry.available_in_luau(self.environment))
-            || self.extra_globals.contains(name)
+        self.stdlib().globals.contains_key(name) || self.extra_globals.contains(name)
     }
 
     /// Whether the named call path is marked `must_use`. Path with a
@@ -128,42 +128,25 @@ impl SemanticAnalysis {
     #[must_use]
     pub fn is_must_use(&self, call_path: &[CompactString]) -> bool {
         match self.lookup_stdlib(call_path) {
-            Some(entry) => match &entry.kind {
-                EntryKind::Function(func) => func.must_use,
-                _ => false,
-            },
-            None => false,
+            Some(StdlibEntry::Function(func)) => func.must_use,
+            _ => false,
         }
     }
 
     /// Deprecation info attached to the entry at this path, if any.
     #[must_use]
     pub fn deprecation_info(&self, path: &[CompactString]) -> Option<&'static StdlibDeprecation> {
-        let entry = self.lookup_stdlib(path)?;
-        match &entry.kind {
-            EntryKind::Function(func) => func.deprecated.as_ref(),
-            EntryKind::Constant(value) | EntryKind::Property(value) => value.deprecated.as_ref(),
-            EntryKind::Namespace(_) => None,
-        }
+        self.lookup_stdlib(path)?.deprecation()
     }
 
     /// Whether a bare-word global is read-only (i.e. should not be
     /// reassigned). Namespaces and constants both qualify.
     #[must_use]
     pub fn is_read_only_global(&self, name: &str) -> bool {
-        let lib = self.stdlib();
-        match lib
+        self.stdlib()
             .globals
             .get(name)
-            .filter(|entry| entry.available_in_luau(self.environment))
-        {
-            Some(entry) => match &entry.kind {
-                EntryKind::Function(func) => func.read_only,
-                EntryKind::Constant(value) | EntryKind::Property(value) => value.read_only,
-                EntryKind::Namespace(_) => true,
-            },
-            None => false,
-        }
+            .is_some_and(StdlibEntry::is_read_only)
     }
 }
 

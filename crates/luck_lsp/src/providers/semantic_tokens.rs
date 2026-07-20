@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 
 use luck_semantic::scope::SymbolKind;
-use luck_semantic::stdlib_model::{EntryKind, StdlibEntry, StdlibLibrary, library_for};
-use luck_token::{Span, StdlibEnvironment, Token, TokenKind};
+use luck_semantic::stdlib_model::{StdlibEntry, StdlibLibrary, library_for};
+use luck_token::{Span, Token, TokenKind};
 use tower_lsp::lsp_types::{
     Position, Range, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
     SemanticTokensLegend, SemanticTokensRangeResult, SemanticTokensResult,
@@ -90,12 +90,7 @@ fn is_call_opener(kind: &TokenKind) -> bool {
     )
 }
 
-fn value_shape(
-    tokens: &[Token],
-    idx: usize,
-    lib: &StdlibLibrary,
-    environment: StdlibEnvironment,
-) -> ValueShape {
+fn value_shape(tokens: &[Token], idx: usize, lib: &StdlibLibrary) -> ValueShape {
     match tokens.get(idx + 1).map(|token| &token.kind) {
         Some(kind) if is_call_opener(kind) => ValueShape::Called,
         Some(TokenKind::Equal) => match tokens.get(idx + 2).map(|token| &token.kind) {
@@ -104,8 +99,7 @@ fn value_shape(
                 let is_stdlib_fn = lib
                     .globals
                     .get(rhs.as_str())
-                    .filter(|entry| entry.available_in_luau(environment))
-                    .is_some_and(|entry| matches!(entry.kind, EntryKind::Function(_)));
+                    .is_some_and(|entry| matches!(entry, StdlibEntry::Function(_)));
                 let extends = tokens.get(idx + 3).is_some_and(|token| {
                     is_call_opener(&token.kind)
                         | matches!(
@@ -135,8 +129,7 @@ fn is_screaming_case(name: &str) -> bool {
 fn encode_tokens(doc: &DocumentState, byte_range: Option<(u32, u32)>) -> SemanticTokens {
     let lex_result = luck_lexer::lex(&doc.text, doc.target.lua_version());
     let tokens = &lex_result.tokens;
-    let lib = library_for(doc.target.lua_version());
-    let environment = doc.target.stdlib_environment();
+    let lib = library_for(doc.target.lua_version(), doc.target.stdlib_environment());
     let tree = &doc.semantic.scope_tree;
 
     let mut ident_at_offset: HashMap<u32, usize> = HashMap::new();
@@ -162,7 +155,7 @@ fn encode_tokens(doc: &DocumentState, byte_range: Option<(u32, u32)>) -> Semanti
         let (mut ty, mut modifiers) = base;
         if ty == TY_VARIABLE {
             if let Some(&idx) = ident_at_offset.get(&span.start) {
-                match value_shape(tokens, idx, lib, environment) {
+                match value_shape(tokens, idx, lib) {
                     ValueShape::Called | ValueShape::AssignedFunction => ty = TY_FUNCTION,
                     ValueShape::AssignedStdlibFunction => {
                         ty = TY_FUNCTION;
@@ -206,11 +199,7 @@ fn encode_tokens(doc: &DocumentState, byte_range: Option<(u32, u32)>) -> Semanti
                 SymbolKind::FunctionName => (TY_FUNCTION, 0),
                 _ => (TY_VARIABLE, 0),
             },
-            None => match lib
-                .globals
-                .get(reference.name.as_str())
-                .filter(|entry| entry.available_in_luau(environment))
-            {
+            None => match lib.globals.get(reference.name.as_str()) {
                 Some(entry) => stdlib_classify(entry),
                 None => (TY_VARIABLE, 0),
             },
@@ -229,21 +218,35 @@ fn encode_tokens(doc: &DocumentState, byte_range: Option<(u32, u32)>) -> Semanti
         if !matches!(prev.kind, TokenKind::Dot | TokenKind::Colon) {
             continue;
         }
-        let stdlib_member = idx.checked_sub(2).and_then(|base_idx| {
-            let TokenKind::Identifier(base) = &tokens[base_idx].kind else {
-                return None;
+        // Walk the whole chain back to its root so nested paths classify
+        // too (`Enum.Material.Grass`, `game:GetService`, `f:read` on a
+        // shaped local - not just `math.floor`). The final separator may
+        // be `.` or `:`; the base chain is dots only.
+        let stdlib_member = {
+            let mut segments: Vec<&str> = vec![name.as_str()];
+            let mut sep_idx = idx - 1;
+            let root_idx = loop {
+                let Some(base_idx) = sep_idx.checked_sub(1) else {
+                    break None;
+                };
+                let TokenKind::Identifier(base) = &tokens[base_idx].kind else {
+                    break None;
+                };
+                segments.push(base.as_str());
+                match base_idx.checked_sub(1).map(|i| &tokens[i].kind) {
+                    Some(TokenKind::Dot) => sep_idx = base_idx - 1,
+                    _ => break Some(base_idx),
+                }
             };
-            if prev.kind != TokenKind::Dot
-                || doc.semantic.resolves_to_local(base, tokens[base_idx].span)
-            {
-                return None;
-            }
-            lib.lookup_str(&[base.as_str(), name.as_str()])
-                .filter(|entry| entry.available_in_luau(environment))
-                .map(member_classify)
-        });
+            root_idx.and_then(|root_idx| {
+                segments.reverse();
+                doc.semantic
+                    .resolve_stdlib_path(&segments, tokens[root_idx].span)
+                    .map(member_classify)
+            })
+        };
         let (ty, modifiers) =
-            stdlib_member.unwrap_or_else(|| match value_shape(tokens, idx, lib, environment) {
+            stdlib_member.unwrap_or_else(|| match value_shape(tokens, idx, lib) {
                 ValueShape::Called | ValueShape::AssignedFunction => (TY_METHOD, 0),
                 ValueShape::AssignedStdlibFunction => (TY_FUNCTION, MOD_DEFAULT_LIBRARY),
                 ValueShape::Plain => {
@@ -291,8 +294,8 @@ fn encode_tokens(doc: &DocumentState, byte_range: Option<(u32, u32)>) -> Semanti
 
 fn stdlib_classify(entry: &StdlibEntry) -> (u32, u32) {
     let mut modifiers = MOD_DEFAULT_LIBRARY;
-    let ty = match &entry.kind {
-        EntryKind::Function(f) => {
+    let ty = match entry {
+        StdlibEntry::Function(f) => {
             if f.deprecated.is_some() {
                 modifiers |= MOD_DEPRECATED;
             }
@@ -301,11 +304,11 @@ fn stdlib_classify(entry: &StdlibEntry) -> (u32, u32) {
             }
             TY_FUNCTION
         }
-        EntryKind::Namespace(_) => {
+        StdlibEntry::Namespace(_) => {
             modifiers |= MOD_READONLY;
             TY_NAMESPACE
         }
-        EntryKind::Constant(v) | EntryKind::Property(v) => {
+        StdlibEntry::Constant(v) | StdlibEntry::Property(v) => {
             if v.deprecated.is_some() {
                 modifiers |= MOD_DEPRECATED;
             }

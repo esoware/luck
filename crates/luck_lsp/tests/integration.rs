@@ -9,9 +9,9 @@ use std::str::FromStr;
 use luck_lsp::backend::{Backend, CapturedNotifier};
 use tower_lsp::LanguageServer;
 use tower_lsp::lsp_types::{
-    CodeActionContext, CodeActionOrCommand, CodeActionParams, CompletionParams, CompletionResponse,
-    DidChangeTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
-    DocumentHighlightKind, DocumentHighlightParams, DocumentLinkParams,
+    CodeActionContext, CodeActionOrCommand, CodeActionParams, CompletionItem, CompletionParams,
+    CompletionResponse, DidChangeTextDocumentParams, DidOpenTextDocumentParams,
+    DocumentFormattingParams, DocumentHighlightKind, DocumentHighlightParams, DocumentLinkParams,
     DocumentRangeFormattingParams, DocumentSymbolParams, DocumentSymbolResponse,
     FoldingRangeParams, FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse,
     HoverContents, HoverParams, InitializeParams, PartialResultParams, Position,
@@ -939,5 +939,459 @@ async fn did_change_applies_multi_change_batch_with_shifted_ranges() {
     assert_eq!(
         text, "local a = 10\nlocal aa = 11\nlocal b = 2\nlocal c = 30",
         "second edit must land on the line shifted by the first"
+    );
+}
+fn roblox_document(text: &str) -> luck_lsp::DocumentState {
+    let target = luck_core::LuaTarget::LuauRoblox;
+    let parsed = std::sync::Arc::new(luck_parser::parse(text, target.lua_version()));
+    let semantic = std::sync::Arc::new(luck_semantic::analyze_with_environment(
+        &parsed.block,
+        target.lua_version(),
+        target.stdlib_environment(),
+    ));
+    luck_lsp::DocumentState {
+        text: text.to_string(),
+        version: 1,
+        target,
+        line_index: luck_lsp::LineIndex::new(text),
+        parsed,
+        semantic,
+    }
+}
+
+fn completion_at(doc: &luck_lsp::DocumentState, line: u32, character: u32) -> Vec<CompletionItem> {
+    let params = CompletionParams {
+        text_document_position: position_params(&workspace_uri("direct.luau"), line, character),
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+        context: None,
+    };
+    match luck_lsp::providers::completion::completion(doc, &params) {
+        Some(CompletionResponse::Array(items)) => items,
+        other => panic!("expected array completion, got {other:?}"),
+    }
+}
+
+#[test]
+fn get_service_string_completes_services_ranked() {
+    let text = "local p = game:GetService('')";
+    let doc = roblox_document(text);
+    // Cursor between the quotes.
+    let character = (text.find("('").expect("literal") + 2) as u32;
+    let items = completion_at(&doc, 0, character);
+
+    let players = items
+        .iter()
+        .find(|item| item.label == "Players")
+        .expect("Players offered");
+    assert!(
+        players.sort_text.as_deref() == Some("0Players"),
+        "common services rank first: {:?}",
+        players.sort_text
+    );
+    let obscure = items
+        .iter()
+        .find(|item| item.label == "AccountService")
+        .expect("full service list offered");
+    assert!(obscure.sort_text.as_deref() == Some("1AccountService"));
+    let dead = items
+        .iter()
+        .find(|item| item.label == "PointsService")
+        .expect("dead services offered (tagged)");
+    assert!(dead.sort_text.as_deref() == Some("2PointsService"));
+    assert_eq!(dead.deprecated, Some(true));
+    // Constant-value mode replaces identifier completion entirely.
+    assert!(!items.iter().any(|item| item.label == "print"));
+}
+
+#[test]
+fn instance_new_string_completes_class_names() {
+    let text = "local f = Instance.new('Fol')";
+    let doc = roblox_document(text);
+    let character = (text.find("('").expect("literal") + 4) as u32;
+    let items = completion_at(&doc, 0, character);
+    assert!(items.iter().any(|item| item.label == "Folder"));
+    assert!(
+        !items.iter().any(|item| item.label == "BasePart"),
+        "abstract classes are not creatable"
+    );
+}
+
+#[test]
+fn enum_dot_completes_enum_types() {
+    let text = "local m = Enum.";
+    let doc = roblox_document(text);
+    let items = completion_at(&doc, 0, text.len() as u32);
+    assert!(
+        items.len() > 500,
+        "expected the full generated enum tree, got {} items",
+        items.len()
+    );
+    let material = items
+        .iter()
+        .find(|item| item.label == "Material")
+        .expect("Enum.Material offered");
+    assert_eq!(
+        material.kind,
+        Some(tower_lsp::lsp_types::CompletionItemKind::MODULE)
+    );
+}
+
+#[test]
+fn enum_type_dot_completes_items() {
+    let text = "local m = Enum.Material.";
+    let doc = roblox_document(text);
+    let items = completion_at(&doc, 0, text.len() as u32);
+    assert!(items.iter().any(|item| item.label == "Grass"));
+    assert!(
+        !items.iter().any(|item| item.label == "GetEnumItems"),
+        "methods complete after ':', not '.'"
+    );
+}
+
+#[test]
+fn enum_type_colon_completes_methods_only() {
+    let text = "local items = Enum.Material:";
+    let doc = roblox_document(text);
+    let items = completion_at(&doc, 0, text.len() as u32);
+    assert!(items.iter().any(|item| item.label == "GetEnumItems"));
+    assert!(items.iter().any(|item| item.label == "FromName"));
+    assert!(
+        !items.iter().any(|item| item.label == "Grass"),
+        "items are dot members, not methods"
+    );
+}
+
+#[test]
+fn deprecated_enum_item_completion_is_tagged() {
+    let text = "local a = Enum.AlignType.";
+    let doc = roblox_document(text);
+    let items = completion_at(&doc, 0, text.len() as u32);
+    let parallel = items
+        .iter()
+        .find(|item| item.label == "Parallel")
+        .expect("deprecated items still offered");
+    assert_eq!(parallel.deprecated, Some(true));
+}
+
+#[test]
+fn semantic_tokens_classify_nested_enum_item() {
+    let text = "local m = Enum.Material.Grass";
+    let doc = roblox_document(text);
+    let SemanticTokensResult::Tokens(tokens) =
+        luck_lsp::providers::semantic_tokens::semantic_tokens(&doc)
+    else {
+        panic!("expected full tokens");
+    };
+    // m, Enum, Material, Grass. The last token is `Grass`; it must be
+    // classified as a stdlib property (defaultLibrary | readonly = 6),
+    // not a plain property.
+    let grass = tokens.data.last().expect("tokens present");
+    assert_eq!(grass.length, "Grass".len() as u32);
+    assert_eq!(grass.token_type, 2, "property: {:?}", tokens.data);
+    assert_eq!(
+        grass.token_modifiers_bitset & (1 << 2),
+        1 << 2,
+        "defaultLibrary modifier expected: {:?}",
+        tokens.data
+    );
+}
+
+#[test]
+fn hover_on_enum_item_renders_constant() {
+    let text = "local m = Enum.Material.Grass";
+    let doc = roblox_document(text);
+    // Cursor on `Grass`.
+    let character = (text.find("Grass").expect("item") + 2) as u32;
+    let params = HoverParams {
+        text_document_position_params: position_params(&workspace_uri("direct.luau"), 0, character),
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    };
+    let hover = luck_lsp::providers::hover::hover(&doc, &params).expect("hover on enum item");
+    let HoverContents::Markup(markup) = hover.contents else {
+        panic!("hover should return markup contents");
+    };
+    assert!(
+        markup.value.contains("Enum.Material.Grass"),
+        "hover names the full path: {}",
+        markup.value
+    );
+}
+
+#[tokio::test]
+async fn collectgarbage_option_string_completes() {
+    let server = Backend::new(CapturedNotifier::default());
+    let uri = workspace_uri("gc.lua");
+    let text = "collectgarbage('c')";
+    open(&server, &uri, text).await;
+
+    let character = (text.find("('").expect("literal") + 2) as u32;
+    let response = server
+        .completion(CompletionParams {
+            text_document_position: position_params(&uri, 0, character),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: None,
+        })
+        .await
+        .expect("completion errored")
+        .expect("constant completion should return items");
+    let CompletionResponse::Array(items) = response else {
+        panic!("completion should return an array response");
+    };
+    assert!(items.iter().any(|item| item.label == "collect"));
+    assert!(items.iter().any(|item| item.label == "count"));
+    assert!(
+        !items.iter().any(|item| item.label == "print"),
+        "no identifier completion inside a constant string"
+    );
+}
+
+fn lua54_document(text: &str) -> luck_lsp::DocumentState {
+    let target = luck_core::LuaTarget::Lua54;
+    let parsed = std::sync::Arc::new(luck_parser::parse(text, target.lua_version()));
+    let semantic = std::sync::Arc::new(luck_semantic::analyze_with_environment(
+        &parsed.block,
+        target.lua_version(),
+        target.stdlib_environment(),
+    ));
+    luck_lsp::DocumentState {
+        text: text.to_string(),
+        version: 1,
+        target,
+        line_index: luck_lsp::LineIndex::new(text),
+        parsed,
+        semantic,
+    }
+}
+
+fn signature_help_at(
+    doc: &luck_lsp::DocumentState,
+    line: u32,
+    character: u32,
+) -> Option<tower_lsp::lsp_types::SignatureHelp> {
+    let params = SignatureHelpParams {
+        text_document_position_params: position_params(
+            &workspace_uri("direct.lua"),
+            line,
+            character,
+        ),
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        context: None,
+    };
+    luck_lsp::providers::signature_help::signature_help(doc, &params)
+}
+
+fn hover_at(doc: &luck_lsp::DocumentState, line: u32, character: u32) -> Option<String> {
+    let params = HoverParams {
+        text_document_position_params: position_params(
+            &workspace_uri("direct.lua"),
+            line,
+            character,
+        ),
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    };
+    let hover = luck_lsp::providers::hover::hover(doc, &params)?;
+    let HoverContents::Markup(markup) = hover.contents else {
+        panic!("hover should return markup contents");
+    };
+    Some(markup.value)
+}
+
+#[test]
+fn signature_help_resolves_shaped_local_method() {
+    let text = "local f = io.open('x')\nf:setvbuf('full', 512)";
+    let doc = lua54_document(text);
+    // Cursor inside the second argument.
+    let help = signature_help_at(&doc, 1, 18).expect("file method signature help");
+    let sig = &help.signatures[help.active_signature.unwrap_or(0) as usize];
+    assert!(
+        sig.label.starts_with("f:setvbuf("),
+        "method rendering: {}",
+        sig.label
+    );
+    assert_eq!(help.active_parameter, Some(1), "cursor is in arg 2");
+}
+
+#[test]
+fn signature_help_marks_method_active_param_excluding_self() {
+    let text = "local p = game:GetService('Players')";
+    let doc = roblox_document(text);
+    let character = (text.find("'Players'").expect("literal") + 3) as u32;
+    let help = signature_help_at(&doc, 0, character).expect("GetService signature help");
+    let sig = &help.signatures[help.active_signature.unwrap_or(0) as usize];
+    assert!(
+        sig.label.starts_with("game:GetService("),
+        "label: {}",
+        sig.label
+    );
+    // self is excluded: exactly one declared parameter, and the cursor
+    // in the first paren argument selects it.
+    assert_eq!(sig.parameters.as_ref().map(Vec::len), Some(1));
+    assert_eq!(help.active_parameter, Some(0));
+}
+
+#[test]
+fn signature_help_refuses_shadowed_base() {
+    let text = "local string = 1\nstring.format('x')";
+    let doc = lua54_document(text);
+    assert!(
+        signature_help_at(&doc, 1, 15).is_none(),
+        "shadowed base must not show stdlib signatures"
+    );
+}
+
+#[test]
+fn signature_help_works_at_statement_position() {
+    // Statement-position calls never pass through visit_expression;
+    // the statement hook must find them.
+    let text = "collectgarbage('collect')";
+    let doc = lua54_document(text);
+    let help = signature_help_at(&doc, 0, 16).expect("statement-position call");
+    assert!(
+        help.signatures
+            .iter()
+            .any(|sig| sig.label.starts_with("collectgarbage(")),
+        "{help:?}"
+    );
+}
+
+#[test]
+fn hover_on_shaped_local_method_renders_colon_form() {
+    let text = "local f = io.open('x')\nlocal n = f:seek('set')";
+    let doc = lua54_document(text);
+    let character = (text.find(":seek").expect("method") + 2) as u32;
+    let markup = hover_at(&doc, 1, character).expect("hover on shaped local method");
+    assert!(
+        markup.contains("f:seek("),
+        "colon rendering expected: {markup}"
+    );
+}
+
+#[test]
+fn hover_refuses_shadowed_namespace_member() {
+    let text = "local string = 1\nlocal x = string.format";
+    let doc = lua54_document(text);
+    let character = (text.find(".format").expect("member") + 3) as u32;
+    assert!(
+        hover_at(&doc, 1, character).is_none(),
+        "shadowed base must not hover stdlib docs"
+    );
+}
+
+#[test]
+fn hover_on_game_get_service_uses_colon_syntax() {
+    let text = "local p = game:GetService('RunService')";
+    let doc = roblox_document(text);
+    let character = (text.find("GetService").expect("method") + 4) as u32;
+    let markup = hover_at(&doc, 0, character).expect("hover on GetService");
+    assert!(
+        markup.contains("game:GetService("),
+        "colon rendering expected: {markup}"
+    );
+}
+
+#[test]
+fn completion_after_shaped_local_colon_offers_file_methods() {
+    let text = "local f = io.open('x')\nf:";
+    let doc = lua54_document(text);
+    let items = completion_at(&doc, 1, 2);
+    assert!(
+        items.iter().any(|item| item.label == "read"),
+        "file methods expected: {:?}",
+        items.iter().map(|i| &i.label).collect::<Vec<_>>()
+    );
+    assert!(items.iter().any(|item| item.label == "seek"));
+}
+
+#[test]
+fn completion_after_shaped_local_colon_offers_datamodel_methods() {
+    let text = "local g = game\ng:";
+    let doc = roblox_document(text);
+    let items = completion_at(&doc, 1, 2);
+    assert!(
+        items.iter().any(|item| item.label == "GetService"),
+        "DataModel methods expected on shaped local"
+    );
+    assert!(
+        items.iter().any(|item| item.label == "FindFirstChild"),
+        "extends-inherited Instance methods expected"
+    );
+}
+
+#[test]
+fn completion_after_game_colon_offers_methods() {
+    let text = "game:";
+    let doc = roblox_document(text);
+    let items = completion_at(&doc, 0, 5);
+    assert!(items.iter().any(|item| item.label == "GetService"));
+    assert!(
+        !items.iter().any(|item| item.label == "Workspace"),
+        "properties complete after '.', not ':'"
+    );
+}
+
+#[test]
+fn completion_ranks_deprecated_members_last() {
+    let text = "local x = math.";
+    let doc = lua54_document(text);
+    let items = completion_at(&doc, 0, text.len() as u32);
+    let floor = items
+        .iter()
+        .find(|item| item.label == "floor")
+        .expect("live member");
+    let pow = items
+        .iter()
+        .find(|item| item.label == "pow")
+        .expect("deprecated compat member");
+    assert_eq!(floor.sort_text.as_deref(), Some("1floor"));
+    assert_eq!(pow.sort_text.as_deref(), Some("2pow"));
+    assert_eq!(pow.deprecated, Some(true));
+}
+
+#[test]
+fn semantic_tokens_classify_shaped_method_calls() {
+    let text = "local f = io.open('x')\nlocal n = f:read('n')";
+    let doc = lua54_document(text);
+    let SemanticTokensResult::Tokens(tokens) =
+        luck_lsp::providers::semantic_tokens::semantic_tokens(&doc)
+    else {
+        panic!("expected full tokens");
+    };
+    // `read` is the only identifier classified as a method here; it
+    // must be METHOD (5) with defaultLibrary (1 << 2).
+    let read = tokens
+        .data
+        .iter()
+        .find(|token| token.length == 4 && token.token_type == 5)
+        .unwrap_or_else(|| panic!("method token for read: {:?}", tokens.data));
+    assert_eq!(
+        read.token_modifiers_bitset & (1 << 2),
+        1 << 2,
+        "defaultLibrary expected on shaped method: {:?}",
+        tokens.data
+    );
+}
+
+#[test]
+fn semantic_tokens_classify_get_service_method() {
+    let text = "local p = game:GetService('RunService')";
+    let doc = roblox_document(text);
+    let SemanticTokensResult::Tokens(tokens) =
+        luck_lsp::providers::semantic_tokens::semantic_tokens(&doc)
+    else {
+        panic!("expected full tokens");
+    };
+    let get_service = tokens
+        .data
+        .iter()
+        .find(|token| token.length == "GetService".len() as u32)
+        .expect("GetService token");
+    assert_eq!(get_service.token_type, 5, "method: {:?}", tokens.data);
+    assert_eq!(
+        get_service.token_modifiers_bitset & (1 << 2),
+        1 << 2,
+        "defaultLibrary expected: {:?}",
+        tokens.data
     );
 }

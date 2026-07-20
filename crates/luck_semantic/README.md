@@ -1,10 +1,10 @@
 # luck_semantic
 
-Scope analysis, symbol resolution, and version- and environment-aware standard library definitions for Lua and Luau.
+Scope analysis, symbol resolution, and per-environment standard library definitions for Lua and Luau.
 
 ## Overview
 
-`luck_semantic` builds a `ScopeTree` from a parsed AST, tracking variable declarations, references, shadowing, and upvalue captures across function boundaries. It also ships the version- and environment-aware stdlib catalog (Lua 5.x, standalone Luau, and Roblox Luau) the linter and LSP use to reason about built-in functions.
+`luck_semantic` builds a `ScopeTree` from a parsed AST, tracking variable declarations, references, shadowing, and upvalue captures across function boundaries. It also ships the stdlib catalog the linter and LSP use to reason about built-ins: one complete, independent library per environment (Lua 5.1-5.5, standalone Luau, Roblox Luau).
 
 ## Key Features
 
@@ -12,7 +12,8 @@ Scope analysis, symbol resolution, and version- and environment-aware standard l
 - **Reference classification** — every identifier use is recorded as Read, Write, or ReadWrite.
 - **Shadowing detection** — declarations that reuse a name from an outer scope are flagged.
 - **Upvalue tracking** — captures across function boundaries are recorded with source and destination scopes.
-- **Version-aware stdlib** — every standard library function carries an argument-count signature, a purity flag, and version-gated availability across Lua 5.1–5.5 and Luau.
+- **Per-environment stdlib** — typed signatures with overloads, deprecation metadata down to individual parameters and constant values, purity and must-use markers, and value shapes for method resolution.
+- **Conservative shape resolution** — `resolve.rs` maps `local f = io.open(...)` / `game:GetService("Players")` chains to stdlib entries without a type-inference engine.
 
 ## Architecture
 
@@ -35,11 +36,21 @@ Names not declared in any enclosing scope are unresolved — they reach the glob
 
 ### Standard Library
 
-`stdlib_model.rs` enumerates the built-in functions of each Lua version. Each entry includes:
+Each environment is one fully self-contained TOML file under `stdlib_data/`, selected by `(LuaVersion, StdlibEnvironment)`:
 
-- **`FunctionSignature`** — minimum and maximum argument counts.
-- **Purity** — whether the function is free of observable side effects, used by the minifier to know whether a call can be dropped or hoisted.
-- **Version gating** — entries are filtered by the active `LuaVersion`, so `string.pack` shows up for Lua 5.3+ but not 5.1.
+- `lua51.toml` … `lua55.toml` — one per numbered Lua version, verified against that version's reference manual.
+- `luau.toml` — standalone (open-source) Luau.
+- `luau_roblox.toml` — the Roblox runtime, plus two **generated** files spliced in at load: `roblox_api.toml` (service and class-name constant sets from the Roblox API dump) and `roblox_enums.toml` (the full `Enum` tree). Regenerate both with `cargo test -p luck_semantic regenerate_roblox_api -- --ignored`; never hand-edit them.
+
+The files are deliberately independent — no inheritance or tier layering. Shared entries are duplicated and kept honest by the drift-guard suite in `tests/drift.rs`, which cross-checks every surface shared between files against an explicit allowlist of manual-verified divergences.
+
+Entries model:
+
+- **Overloaded signatures** — typed parameters with per-signature arity (`CFrame.new`, `collectgarbage`).
+- **Shapes** — named member surfaces for non-global values (`file`, the derived `string` receiver, `Instance`, `DataModel`, `EnumItem`, …) with `extends` composition; entries declare the shape they return, so method chains resolve.
+- **Constant parameters** — closed string-value sets (`game:GetService` service names, `Instance.new` class names, `collectgarbage` options), shareable across parameters via named `constant_sets`.
+- **Deprecation** — at entry, parameter, and constant-value level, with `%n` replace templates for auto-fixes.
+- **Purity / must-use / read-only** markers.
 
 ### Module Layout
 
@@ -48,4 +59,6 @@ Names not declared in any enclosing scope are unresolved — they reach the glob
 | `lib.rs` | Public API and `analyze()` entry point |
 | `scope.rs` | Scope tree data structures |
 | `builder.rs` | AST visitor that constructs the scope tree |
-| `stdlib_model.rs` | Version-gated standard library definitions |
+| `stdlib_model.rs` | Stdlib data model and TOML loader |
+| `resolve.rs` | Conservative shape and callee resolution |
+| `stdlib_data/` | Per-environment library data (+ generated Roblox data) |
