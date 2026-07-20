@@ -29,49 +29,49 @@ fn run_bundle(
 }
 
 #[test]
-fn test_basic_bundle() {
+fn basic_bundle() {
     let output =
         run_bundle("lua54", "basic_bundle", LuaTarget::Lua54, "main.lua").expect("bundle failed");
     insta::assert_snapshot!("basic_bundle", output);
 }
 
 #[test]
-fn test_nested_deps() {
+fn nested_deps() {
     let output =
         run_bundle("lua54", "nested_deps", LuaTarget::Lua54, "main.lua").expect("bundle failed");
     insta::assert_snapshot!("nested_deps", output);
 }
 
 #[test]
-fn test_diamond_deps() {
+fn diamond_deps() {
     let output =
         run_bundle("lua54", "diamond_deps", LuaTarget::Lua54, "main.lua").expect("bundle failed");
     insta::assert_snapshot!("diamond_deps", output);
 }
 
 #[test]
-fn test_deep_chain() {
+fn deep_chain() {
     let output =
         run_bundle("lua54", "deep_chain", LuaTarget::Lua54, "main.lua").expect("bundle failed");
     insta::assert_snapshot!("deep_chain", output);
 }
 
 #[test]
-fn test_init_module() {
+fn init_module() {
     let output =
         run_bundle("lua54", "init_module", LuaTarget::Lua54, "main.lua").expect("bundle failed");
     insta::assert_snapshot!("init_module", output);
 }
 
 #[test]
-fn test_multiple_requires() {
+fn multiple_requires() {
     let output = run_bundle("lua54", "multiple_requires", LuaTarget::Lua54, "main.lua")
         .expect("bundle failed");
     insta::assert_snapshot!("multiple_requires", output);
 }
 
 #[test]
-fn test_module_required_by_many() {
+fn module_required_by_many() {
     let output = run_bundle(
         "lua54",
         "module_required_by_many",
@@ -83,21 +83,21 @@ fn test_module_required_by_many() {
 }
 
 #[test]
-fn test_nil_return() {
+fn nil_return() {
     let output =
         run_bundle("lua54", "nil_return", LuaTarget::Lua54, "main.lua").expect("bundle failed");
     insta::assert_snapshot!("nil_return", output);
 }
 
 #[test]
-fn test_no_deps() {
+fn no_deps() {
     let output =
         run_bundle("lua54", "no_deps", LuaTarget::Lua54, "main.lua").expect("bundle failed");
     insta::assert_snapshot!("no_deps", output);
 }
 
 #[test]
-fn test_circular_dep_bundles_with_warning() {
+fn circular_dep_bundles_with_warning() {
     // Cycles bundle now (lazy loader); a W003 warning flags the risk.
     let input_dir = fixture_dir("lua54", "errors/circular_dep");
     let entry = input_dir.join("a.lua");
@@ -117,7 +117,7 @@ fn test_circular_dep_bundles_with_warning() {
 }
 
 #[test]
-fn test_unresolved_module() {
+fn unresolved_module() {
     let result = run_bundle(
         "lua54",
         "errors/unresolved_module",
@@ -134,7 +134,7 @@ fn test_unresolved_module() {
 }
 
 #[test]
-fn test_non_literal_require() {
+fn non_literal_require() {
     let result = run_bundle(
         "lua54",
         "errors/non_literal_require",
@@ -151,7 +151,7 @@ fn test_non_literal_require() {
 }
 
 #[test]
-fn test_bare_require_bundles() {
+fn bare_require_bundles() {
     // Side-effect imports (`require("x")` as a statement) are legal now.
     let output = run_bundle("lua54", "errors/bare_require", LuaTarget::Lua54, "main.lua")
         .expect("bare require must bundle");
@@ -159,7 +159,7 @@ fn test_bare_require_bundles() {
 }
 
 #[test]
-fn test_require_after_code_bundles() {
+fn require_after_code_bundles() {
     // Requires are position-independent with the lazy loader.
     let output = run_bundle(
         "lua54",
@@ -172,7 +172,7 @@ fn test_require_after_code_bundles() {
 }
 
 #[test]
-fn test_package_loaded_manip() {
+fn package_loaded_manip() {
     let result = run_bundle(
         "lua54",
         "errors/package_loaded_manip",
@@ -189,21 +189,21 @@ fn test_package_loaded_manip() {
 }
 
 #[test]
-fn test_luau_relative_require() {
+fn luau_relative_require() {
     let output = run_bundle("luau", "relative_require", LuaTarget::Luau, "main.luau")
         .expect("bundle failed");
     insta::assert_snapshot!("luau_relative_require", output);
 }
 
 #[test]
-fn test_luau_alias_require() {
+fn luau_alias_require() {
     let output = run_bundle("luau", "alias_require", LuaTarget::Luau, "src/main.luau")
         .expect("bundle failed");
     insta::assert_snapshot!("luau_alias_require", output);
 }
 
 #[test]
-fn test_luau_luaurc_inheritance() {
+fn luau_luaurc_inheritance() {
     let output = run_bundle(
         "luau",
         "luaurc_inheritance",
@@ -215,28 +215,28 @@ fn test_luau_luaurc_inheritance() {
 }
 
 #[test]
-fn test_luau_init_luau() {
+fn luau_init_luau() {
     let output =
         run_bundle("luau", "init_luau", LuaTarget::Luau, "main.luau").expect("bundle failed");
     insta::assert_snapshot!("luau_init_luau", output);
 }
 
 #[test]
-fn test_luau_type_annotations() {
+fn luau_type_annotations() {
     let output = run_bundle("luau", "type_annotations", LuaTarget::Luau, "main.luau")
         .expect("bundle failed");
     insta::assert_snapshot!("luau_type_annotations", output);
 }
 
 #[test]
-fn test_luau_string_interpolation() {
+fn luau_string_interpolation() {
     let output = run_bundle("luau", "string_interpolation", LuaTarget::Luau, "main.luau")
         .expect("bundle failed");
     insta::assert_snapshot!("luau_string_interpolation", output);
 }
 
 #[test]
-fn test_luau_ambiguous_ext() {
+fn luau_ambiguous_ext() {
     let result = run_bundle(
         "luau",
         "errors/luau_ambiguous_ext",
@@ -253,28 +253,28 @@ fn test_luau_ambiguous_ext() {
 }
 
 #[test]
-fn test_lua52_goto_in_module() {
+fn lua52_goto_in_module() {
     let output =
         run_bundle("lua52", "goto_in_module", LuaTarget::Lua52, "main.lua").expect("bundle failed");
     insta::assert_snapshot!("lua52_goto_in_module", output);
 }
 
 #[test]
-fn test_lua53_bitwise_ops() {
+fn lua53_bitwise_ops() {
     let output =
         run_bundle("lua53", "bitwise_ops", LuaTarget::Lua53, "main.lua").expect("bundle failed");
     insta::assert_snapshot!("lua53_bitwise_ops", output);
 }
 
 #[test]
-fn test_lua54_const_close_attrs() {
+fn lua54_const_close_attrs() {
     let output = run_bundle("lua54", "const_close_attrs", LuaTarget::Lua54, "main.lua")
         .expect("bundle failed");
     insta::assert_snapshot!("lua54_const_close_attrs", output);
 }
 
 #[test]
-fn test_luau_hot_comments_hoisted() {
+fn luau_hot_comments_hoisted() {
     // Hot comments only apply before any code: the entry module's
     // leading run must reach the very top of the bundle.
     let output =
@@ -286,7 +286,7 @@ fn test_luau_hot_comments_hoisted() {
 }
 
 #[test]
-fn test_luau_export_type_stripped_in_thunks() {
+fn luau_export_type_stripped_in_thunks() {
     // `export type` is invalid below the top level; bundled module
     // bodies live inside loader functions, so the keyword is dropped
     // (the alias stays usable within its module).

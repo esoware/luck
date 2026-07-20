@@ -47,14 +47,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_all_enabled() {
+    fn default_all_enabled() {
         let config = TransformConfig::default();
         assert!(config.fold_constants);
         assert!(config.rename_locals);
     }
 
     #[test]
-    fn test_deserialize_partial() {
+    fn deserialize_partial() {
         let json = r#"{"fold_constants": false}"#;
         let config: TransformConfig = serde_json::from_str(json).expect("deserialize failed");
         assert!(!config.fold_constants);

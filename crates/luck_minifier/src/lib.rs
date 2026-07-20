@@ -604,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn test_idempotency() {
+    fn idempotency() {
         let src = "local function add(a, b)\n  return a + b\nend\nlocal x = add(1, 2)\nprint(x)\n";
         let first = minify_lua54(src);
         let second = minify_lua54(&first);
@@ -641,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_input() {
+    fn empty_input() {
         let result = minify_lua54("");
         assert!(
             result.is_empty() || result.trim().is_empty(),

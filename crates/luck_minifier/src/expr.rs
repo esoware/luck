@@ -202,7 +202,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_valid_identifier() {
+    fn validates_identifiers() {
         assert!(is_valid_identifier("foo"));
         assert!(is_valid_identifier("_bar"));
         assert!(is_valid_identifier("x1"));

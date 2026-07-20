@@ -171,7 +171,7 @@ mod tests {
     use luck_core::diagnostics::errors;
 
     #[test]
-    fn test_file_cache() {
+    fn file_cache() {
         use ariadne::Cache;
         let mut cache = FileCache::new();
         cache.add_file("test.lua".to_string(), "local x = 1".to_string());
@@ -180,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_diagnostic_does_not_panic() {
+    fn render_diagnostic_does_not_panic() {
         let mut cache = FileCache::new();
         cache.add_file(
             "test.lua".to_string(),
