@@ -237,6 +237,15 @@ mod tests {
         assert!(Lua55.has_global());
         assert!(!Luau.has_global());
 
+        // has_integer_subtype: 5.3-5.5 only (5.1, 5.2, and Luau keep a
+        // single f64 number type)
+        assert!(!Lua51.has_integer_subtype());
+        assert!(!Lua52.has_integer_subtype());
+        assert!(Lua53.has_integer_subtype());
+        assert!(Lua54.has_integer_subtype());
+        assert!(Lua55.has_integer_subtype());
+        assert!(!Luau.has_integer_subtype());
+
         // break_is_last_stat_only: 5.1 and Luau (laststat grammar)
         assert!(Lua51.break_is_last_stat_only());
         assert!(!Lua52.break_is_last_stat_only());

@@ -459,6 +459,29 @@ fn exponent_number_roundtrips() {
 }
 
 #[test]
+fn luau_pinned_numbers_roundtrip() {
+    // Pinned to Luau there is no float subtype to preserve, so integral
+    // values print as plain digits and i64::MIN as a negated decimal.
+    let synth = Synth::new().with_version(LuaVersion::Luau);
+    let values = vec![
+        synth.number_f64(100.0),
+        synth.number_f64(1.5),
+        synth.number_int(i64::MIN),
+    ];
+    let block = synth.block(vec![], Some(synth.return_(vec![synth.array(values)])));
+    let output = assert_roundtrips(&block);
+    assert!(output.contains("100,"), "plain integer form lost: {output}");
+    assert!(
+        !output.contains("1e2") && !output.contains("100.0"),
+        "float-subtype marker leaked: {output}"
+    );
+    assert!(
+        output.contains("-9223372036854775808"),
+        "i64::MIN decimal form lost: {output}"
+    );
+}
+
+#[test]
 fn single_value_truncation_roundtrips() {
     let synth = Synth::new();
     let truncated = synth.single_value(synth.call(synth.name_expr("f"), vec![]));

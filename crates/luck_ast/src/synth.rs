@@ -11,10 +11,12 @@
 //! Every synthesized node gets a fresh single-point span `Span::new(n, n)`
 //! with `n` strictly increasing. The spans do not index into any source -
 //! they exist only to keep nodes distinguishable for comment anchoring and
-//! diagnostics. Spans are unique only within one `Synth`; when several
-//! synthesizers feed one tree (parallel decompilation of function protos, or
-//! splicing synthetic nodes into a parsed AST), give each a disjoint range
-//! via [`Synth::starting_at`] or comment anchors will collide.
+//! diagnostics. Spans are unique within one `Synth` and within any family
+//! created from it with [`Synth::share`]; when several synthesizers feed one
+//! tree (parallel decompilation of function protos), share one counter and
+//! collisions become impossible. [`Synth::starting_at`] remains for splicing
+//! synthetic nodes into a parsed AST, where the synthetic range must sit
+//! above the source's byte offsets or comment anchors will collide.
 //!
 //! # What the constructors guarantee
 //!
@@ -38,6 +40,9 @@
 //!   (unary minus node), infinities (`1/0`), NaN (`0/0`), and `i64::MIN`
 //!   (hex, which wraps to the intended integer on Lua 5.3+). Magnitudes
 //!   whose plain decimal form is long render in exponent form (`1e300`).
+//!   Under a version pinned to a single-number dialect (5.1, 5.2, Luau),
+//!   integral floats render as plain digits (`100`, not `1e2` or `100.0`)
+//!   and `i64::MIN` as a negated decimal literal, both exact in f64.
 //! - **Loud failure on invalid names.** [`Synth::ident`] asserts (in release
 //!   builds too) that its argument is an identifier, so hostile input -
 //!   bytecode debug info, obfuscated names - fails fast instead of emitting
@@ -57,8 +62,11 @@
 //!   (bytecode debug info), route fields through [`Synth::field_or_index`]
 //!   and keys through [`Synth::record`], which fall back to bracketed
 //!   string form; every other name position (locals, params, labels,
-//!   function and method names) has no bracketed spelling, so pre-check
-//!   with [`is_valid_identifier`] / [`is_valid_identifier_in`] and rename.
+//!   function and method names) has no bracketed spelling, so rewrite the
+//!   name with [`sanitize_identifier`] / [`sanitize_identifier_in`] (or
+//!   pre-check with [`is_valid_identifier`] / [`is_valid_identifier_in`]
+//!   and rename). Sanitized names are deterministic but not
+//!   collision-free; deduplication stays with the caller.
 //!
 //! Formatting the result is `luck_formatter::format_block`, which accepts
 //! `Comments::synthetic` for [`SyntheticComment`] attachment; compact output
@@ -83,7 +91,8 @@
 //! assert_eq!(block.stmts.len(), 1);
 //! ```
 
-use std::cell::Cell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use luck_token::{
     Assoc, BinOp, CompactString, CompoundOp, LuaVersion, Span, Token, TokenKind, UNARY_PRECEDENCE,
@@ -99,7 +108,7 @@ use crate::types::*;
 /// calls nest: `synth.call(synth.name_expr("f"), vec![synth.nil()])`.
 #[derive(Debug, Default)]
 pub struct Synth {
-    next_offset: Cell<u32>,
+    next_offset: Arc<AtomicU32>,
     version: Option<LuaVersion>,
 }
 
@@ -182,6 +191,48 @@ pub fn is_valid_identifier_in(name: &str, version: LuaVersion) -> bool {
     is_identifier_shaped(name) && !is_keyword_in(name, version)
 }
 
+/// Deterministic valid-identifier form of `name`, safe in every supported
+/// dialect: each invalid byte becomes `_`, and a `_` prefix is added when
+/// the result would be empty, start with a digit, or be reserved in any
+/// dialect (including `goto` and `global`, keywords only in some). Names
+/// already valid everywhere pass through unchanged, so the function is
+/// idempotent. Distinct inputs may collide (`"a b"` and `"a-b"` both become
+/// `a_b`); deduplication stays with the caller. For a single-dialect form,
+/// use [`sanitize_identifier_in`].
+#[must_use]
+pub fn sanitize_identifier(name: &str) -> CompactString {
+    sanitize_with(name, |candidate| {
+        is_base_keyword(candidate) || matches!(candidate, "goto" | "global")
+    })
+}
+
+/// Deterministic form of `name` that is a valid identifier under `version`,
+/// with the same scheme and collision caveat as [`sanitize_identifier`].
+/// Words the dialect treats as identifiers pass through (`goto` on Luau).
+#[must_use]
+pub fn sanitize_identifier_in(name: &str, version: LuaVersion) -> CompactString {
+    sanitize_with(name, |candidate| is_keyword_in(candidate, version))
+}
+
+fn sanitize_with(name: &str, is_reserved: impl Fn(&str) -> bool) -> CompactString {
+    let mut sanitized = String::with_capacity(name.len() + 1);
+    for byte in name.bytes() {
+        if byte.is_ascii_alphanumeric() || byte == b'_' {
+            sanitized.push(byte as char);
+        } else {
+            sanitized.push('_');
+        }
+    }
+    let needs_prefix = match sanitized.as_bytes().first() {
+        None => true,
+        Some(first) => first.is_ascii_digit() || is_reserved(&sanitized),
+    };
+    if needs_prefix {
+        sanitized.insert(0, '_');
+    }
+    CompactString::from(sanitized)
+}
+
 fn is_identifier_shaped(name: &str) -> bool {
     let mut bytes = name.bytes();
     let Some(first) = bytes.next() else {
@@ -255,22 +306,37 @@ impl Synth {
         Self::default()
     }
 
-    /// A synthesizer whose spans start at `offset`. Use disjoint ranges when
-    /// several synthesizers contribute to one tree, or when synthetic nodes
-    /// are spliced into a parsed AST whose byte offsets they must not shadow.
+    /// A synthesizer whose spans start at `offset`. Use it when synthetic
+    /// nodes are spliced into a parsed AST whose byte offsets they must not
+    /// shadow; for several synthesizers feeding one tree, prefer
+    /// [`Synth::share`], which cannot collide.
     #[must_use]
     pub fn starting_at(offset: u32) -> Self {
         Self {
-            next_offset: Cell::new(offset),
+            next_offset: Arc::new(AtomicU32::new(offset)),
             version: None,
         }
     }
 
-    /// Pin name handling to one dialect: [`Synth::ident`] asserts validity
-    /// against that dialect's keyword set instead of the cross-dialect union,
-    /// and [`Synth::field_or_index`] / [`Synth::record`] use the dot/named
-    /// form for names that are identifiers there (`t.goto` on Luau) instead
-    /// of the everywhere-safe bracketed fallback. Construct availability is
+    /// A synthesizer drawing from this one's span counter, version pin
+    /// included. A shared family never produces colliding spans, so hand one
+    /// to each thread when synthesis is parallel (one per function proto)
+    /// instead of guessing disjoint ranges with [`Synth::starting_at`].
+    #[must_use]
+    pub fn share(&self) -> Self {
+        Self {
+            next_offset: Arc::clone(&self.next_offset),
+            version: self.version,
+        }
+    }
+
+    /// Pin name handling and number rendering to one dialect:
+    /// [`Synth::ident`] asserts validity against that dialect's keyword set
+    /// instead of the cross-dialect union, [`Synth::field_or_index`] /
+    /// [`Synth::record`] use the dot/named form for names that are
+    /// identifiers there (`t.goto` on Luau) instead of the everywhere-safe
+    /// bracketed fallback, and [`Synth::number_f64`] / [`Synth::number_int`]
+    /// render for that dialect's number model. Construct availability is
     /// deliberately not gated.
     #[must_use]
     pub fn with_version(mut self, version: LuaVersion) -> Self {
@@ -280,8 +346,9 @@ impl Synth {
 
     /// A fresh single-point span. Distinct per node; never slices source.
     fn next_span(&self) -> Span {
-        let offset = self.next_offset.get();
-        self.next_offset.set(offset + 1);
+        // Relaxed suffices: spans need only uniqueness, which the atomic
+        // increment alone provides; no cross-thread ordering is implied.
+        let offset = self.next_offset.fetch_add(1, Ordering::Relaxed);
         Span::new(offset, offset)
     }
 
@@ -294,7 +361,8 @@ impl Synth {
     /// untrusted names (bytecode debug info) fail loudly instead of emitting
     /// output that will not re-parse. For names that may not be identifiers,
     /// use [`Synth::field_or_index`] / [`Synth::record`] / [`Synth::string`]
-    /// instead of forcing them through here.
+    /// instead of forcing them through here, or rewrite them first with
+    /// [`sanitize_identifier`] / [`sanitize_identifier_in`].
     #[must_use]
     pub fn ident(&self, name: &str) -> Token {
         let is_valid = match self.version {
@@ -384,9 +452,11 @@ impl Synth {
     /// Any `f64` as an expression that evaluates back to exactly `value`.
     /// Finite integral values render with a `.0` suffix so the float subtype
     /// survives on Lua 5.3+ (use [`Synth::number_int`] where an integer is
-    /// meant); negatives become a unary-minus node, infinities `1/0`, NaN
-    /// `0/0`, and magnitudes whose plain decimal form is longer render in
-    /// exponent form (`1e300`, not a 300-digit literal).
+    /// meant); under a version pinned to a single-number dialect (5.1, 5.2,
+    /// Luau) the suffix marks nothing and they render as plain digits.
+    /// Negatives become a unary-minus node, infinities `1/0`, NaN `0/0`,
+    /// and magnitudes whose plain decimal form is longer render in exponent
+    /// form (`1e300`, not a 300-digit literal).
     #[must_use]
     pub fn number_f64(&self, value: f64) -> Expression {
         if value.is_nan() {
@@ -407,7 +477,8 @@ impl Synth {
         // Display never uses exponent notation, so it only ever yields
         // digits and a possible decimal point.
         let mut text = value.to_string();
-        if !text.contains('.') {
+        let should_mark_float_subtype = self.version.is_none_or(LuaVersion::has_integer_subtype);
+        if !text.contains('.') && should_mark_float_subtype {
             text.push_str(".0");
         }
         // Both forms carry shortest round-trip digits; an exponent implies
@@ -424,7 +495,16 @@ impl Synth {
     pub fn number_int(&self, value: i64) -> Expression {
         if value == i64::MIN {
             // The magnitude overflows a Lua 5.3+ integer literal and would
-            // silently become a float; the hex form wraps to the intended value.
+            // silently become a float; the hex form wraps to the intended
+            // value. On a pinned single-number dialect hex lexes as +2^63
+            // (wrong sign), while the decimal magnitude is exact as a
+            // float, so the negated literal is correct there.
+            if self
+                .version
+                .is_some_and(|version| !version.has_integer_subtype())
+            {
+                return self.unop(UnOp::Neg, self.number("9223372036854775808"));
+            }
             return self.number("0x8000000000000000");
         }
         if value < 0 {
@@ -2213,6 +2293,60 @@ mod tests {
     }
 
     #[test]
+    fn shared_synths_never_collide() {
+        let synth = Synth::new();
+        let shared = synth.share();
+        let spans = [
+            synth.nil().span().start,
+            shared.nil().span().start,
+            synth.nil().span().start,
+            shared.nil().span().start,
+        ];
+        let unique: std::collections::HashSet<u32> = spans.iter().copied().collect();
+        assert_eq!(unique.len(), spans.len(), "{spans:?}");
+    }
+
+    #[test]
+    fn shared_spans_unique_across_threads() {
+        let synth = Synth::new();
+        let mut all_spans: Vec<u32> = Vec::new();
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    let shared = synth.share();
+                    scope.spawn(move || {
+                        (0..250)
+                            .map(|_| shared.nil().span().start)
+                            .collect::<Vec<u32>>()
+                    })
+                })
+                .collect();
+            for handle in handles {
+                all_spans.extend(handle.join().unwrap());
+            }
+        });
+        let unique: std::collections::HashSet<u32> = all_spans.iter().copied().collect();
+        assert_eq!(unique.len(), all_spans.len());
+    }
+
+    #[test]
+    fn synth_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Synth>();
+    }
+
+    #[test]
+    fn share_preserves_version_pin() {
+        let shared = Synth::new().with_version(LuaVersion::Luau).share();
+        // `goto` is an identifier only under the pinned Luau dialect, so the
+        // dot form proves the pin carried over.
+        assert!(matches!(
+            shared.field_or_index(shared.name_expr("t"), "goto"),
+            Expression::Var(Var::FieldAccess(_))
+        ));
+    }
+
+    #[test]
     fn builds_variadic_function() {
         let synth = Synth::new();
         let sig = FnSig {
@@ -2510,6 +2644,96 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_always_yields_valid_identifiers() {
+        let versions = [
+            LuaVersion::Lua51,
+            LuaVersion::Lua52,
+            LuaVersion::Lua53,
+            LuaVersion::Lua54,
+            LuaVersion::Lua55,
+            LuaVersion::Luau,
+        ];
+        let hostile = [
+            "",
+            "1st",
+            "has space",
+            "a-b.c",
+            "\tx\n",
+            "end",
+            "and",
+            "goto",
+            "global",
+            "\u{dc}nicode",
+            "\u{1f600}",
+            "_",
+            "(*temporary)",
+        ];
+        for name in hostile {
+            let sanitized = sanitize_identifier(name);
+            assert!(
+                is_valid_identifier(&sanitized),
+                "{name:?} -> {sanitized:?} not valid cross-dialect"
+            );
+            for version in versions {
+                assert!(
+                    is_valid_identifier_in(&sanitized, version),
+                    "{name:?} -> {sanitized:?} not valid in {version:?}"
+                );
+                let pinned = sanitize_identifier_in(name, version);
+                assert!(
+                    is_valid_identifier_in(&pinned, version),
+                    "{name:?} -> {pinned:?} not valid in {version:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sanitize_keeps_valid_names_and_is_idempotent() {
+        for name in ["x", "_private", "snake_case2", "type", "continue"] {
+            assert_eq!(sanitize_identifier(name).as_str(), name);
+        }
+        for name in ["", "1st", "a b", "end", "goto", "\u{dc}nicode"] {
+            let once = sanitize_identifier(name);
+            assert_eq!(sanitize_identifier(&once), once);
+        }
+    }
+
+    #[test]
+    fn sanitize_forms() {
+        assert_eq!(sanitize_identifier("").as_str(), "_");
+        assert_eq!(sanitize_identifier("1st").as_str(), "_1st");
+        assert_eq!(sanitize_identifier("a b").as_str(), "a_b");
+        assert_eq!(sanitize_identifier("end").as_str(), "_end");
+        assert_eq!(sanitize_identifier("goto").as_str(), "_goto");
+    }
+
+    #[test]
+    fn sanitize_respects_pinned_version() {
+        assert_eq!(
+            sanitize_identifier_in("goto", LuaVersion::Luau).as_str(),
+            "goto"
+        );
+        assert_eq!(
+            sanitize_identifier_in("goto", LuaVersion::Lua54).as_str(),
+            "_goto"
+        );
+        assert_eq!(
+            sanitize_identifier_in("global", LuaVersion::Lua54).as_str(),
+            "global"
+        );
+        assert_eq!(
+            sanitize_identifier_in("global", LuaVersion::Lua55).as_str(),
+            "_global"
+        );
+
+        // The sanitized form feeds ident() without tripping its assert.
+        let synth = Synth::new().with_version(LuaVersion::Luau);
+        let token = synth.ident(&sanitize_identifier_in("goto", LuaVersion::Luau));
+        assert!(matches!(token.kind, TokenKind::Identifier(_)));
+    }
+
+    #[test]
     fn identifier_validity_per_version() {
         assert!(is_valid_identifier_in("goto", LuaVersion::Lua51));
         assert!(is_valid_identifier_in("goto", LuaVersion::Luau));
@@ -2653,6 +2877,45 @@ mod tests {
             panic!("expected number");
         };
         assert_eq!(literal.text.as_str(), "1.5");
+    }
+
+    #[test]
+    fn number_rendering_respects_pinned_number_model() {
+        // A single-number dialect needs no float-subtype markers: integral
+        // values stay plain digits, and 100 beats 1e2 on the length tie.
+        let synth = Synth::new().with_version(LuaVersion::Luau);
+        for (value, expected) in [(100.0, "100"), (3.0, "3"), (1.5, "1.5"), (1e300, "1e300")] {
+            let Expression::Number(literal) = synth.number_f64(value) else {
+                panic!("expected number for {value}");
+            };
+            assert_eq!(literal.text.as_str(), expected);
+        }
+        assert!(matches!(synth.number_f64(-0.0), Expression::UnaryOp(_)));
+
+        // Hex would lex as +2^63 on Luau; the decimal magnitude is exact
+        // as a float, so i64::MIN becomes its negation.
+        let Expression::UnaryOp(negated) = synth.number_int(i64::MIN) else {
+            panic!("expected unop");
+        };
+        let Expression::Number(literal) = &negated.operand else {
+            panic!("expected number operand");
+        };
+        assert_eq!(literal.text.as_str(), "9223372036854775808");
+
+        // The integer/float split keeps the markers on 5.3+.
+        let synth = Synth::new().with_version(LuaVersion::Lua54);
+        let Expression::Number(literal) = synth.number_f64(3.0) else {
+            panic!("expected number");
+        };
+        assert_eq!(literal.text.as_str(), "3.0");
+        let Expression::Number(literal) = synth.number_f64(100.0) else {
+            panic!("expected number");
+        };
+        assert_eq!(literal.text.as_str(), "1e2");
+        let Expression::Number(literal) = synth.number_int(i64::MIN) else {
+            panic!("expected number");
+        };
+        assert_eq!(literal.text.as_str(), "0x8000000000000000");
     }
 
     #[test]
