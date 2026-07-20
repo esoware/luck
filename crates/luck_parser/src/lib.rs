@@ -16,6 +16,7 @@
 //! assert!(result.errors.is_empty());
 //! ```
 
+mod attributes;
 mod expr;
 mod luau;
 mod parser;

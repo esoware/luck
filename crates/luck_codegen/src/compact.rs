@@ -2,7 +2,7 @@ use luck_ast::expr::{
     BinaryOp, Expression, FieldAccess, FunctionArgs, FunctionCall, FunctionDef, IfExpression,
     IndexExpression, InterpolatedString, ParenExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
-use luck_ast::shared::{Block, Field, FunctionBody, Punctuated};
+use luck_ast::shared::{Block, Field, FunctionBody, Parameter, Punctuated};
 use luck_ast::stmt::{
     Assignment, AttributedName, CompoundAssignment, DoBlock, FunctionCallStmt, FunctionDecl,
     GenericFor, GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfStatement,
@@ -17,7 +17,7 @@ use luck_ast::types::{
 use luck_token::code_buffer::CodeBuffer;
 use luck_token::token::{Token, TokenKind};
 
-use crate::separator::{PrevClass, classify_str, is_word_text, needs_space};
+use crate::separator::{PrevClass, classify_str, needs_space};
 
 /// Emits an AST as compact Lua code with minimal whitespace.
 pub struct CompactPrinter {
@@ -54,7 +54,8 @@ impl CompactPrinter {
 
     /// Emit a fixed-spelling piece (keyword, operator, punctuation).
     fn emit_str(&mut self, text: &'static str) {
-        self.emit_piece(text, is_word_text(text), classify_str(text));
+        let class = classify_str(text);
+        self.emit_piece(text, matches!(class, PrevClass::Word), class);
     }
 
     /// Emit a payload-carrying token (identifier, number, string literal).
@@ -199,16 +200,7 @@ impl CompactPrinter {
 
     fn emit_generic_for(&mut self, gen_for: &GenericFor) {
         self.emit_str("for");
-        for (idx, param) in gen_for.names.items.iter().enumerate() {
-            self.emit_token(&param.name);
-            if let Some(type_value) = &param.type_annotation {
-                self.emit_str(":");
-                self.emit_type(type_value);
-            }
-            if idx + 1 < gen_for.names.len() || gen_for.names.has_trailing_separator {
-                self.emit_str(",");
-            }
-        }
+        self.emit_separated(&gen_for.names, ",", Self::emit_param);
         self.emit_str("in");
         self.emit_punctuated_exprs(&gen_for.exprs);
         self.emit_str("do");
@@ -278,12 +270,7 @@ impl CompactPrinter {
     }
 
     fn emit_attributed_names(&mut self, names: &Punctuated<AttributedName>) {
-        for (idx, attributed) in names.items.iter().enumerate() {
-            self.emit_attributed_name(attributed);
-            if idx + 1 < names.len() || names.has_trailing_separator {
-                self.emit_str(",");
-            }
-        }
+        self.emit_separated(names, ",", Self::emit_attributed_name);
     }
 
     fn emit_attributed_name(&mut self, attributed: &AttributedName) {
@@ -560,11 +547,7 @@ impl CompactPrinter {
         // Params followed by a vararg keep the comma between them; the
         // parser records it as a trailing separator on the param list.
         for (idx, param) in body.params.items.iter().enumerate() {
-            self.emit_token(&param.name);
-            if let Some(type_value) = &param.type_annotation {
-                self.emit_str(":");
-                self.emit_type(type_value);
-            }
+            self.emit_param(param);
             if idx + 1 < body.params.len() || body.vararg.is_some() {
                 self.emit_str(",");
             }
@@ -588,22 +571,34 @@ impl CompactPrinter {
         self.emit_str("end");
     }
 
-    fn emit_punctuated_exprs(&mut self, punct: &Punctuated<Expression>) {
-        for (idx, expr) in punct.items.iter().enumerate() {
-            self.emit_expression(expr);
+    fn emit_separated<T>(
+        &mut self,
+        punct: &Punctuated<T>,
+        separator: &'static str,
+        mut emit_item: impl FnMut(&mut Self, &T),
+    ) {
+        for (idx, item) in punct.items.iter().enumerate() {
+            emit_item(self, item);
             if idx + 1 < punct.len() || punct.has_trailing_separator {
-                self.emit_str(",");
+                self.emit_str(separator);
             }
         }
     }
 
-    fn emit_punctuated_vars(&mut self, punct: &Punctuated<Var>) {
-        for (idx, var) in punct.items.iter().enumerate() {
-            self.emit_var(var);
-            if idx + 1 < punct.len() || punct.has_trailing_separator {
-                self.emit_str(",");
-            }
+    fn emit_param(&mut self, param: &Parameter) {
+        self.emit_token(&param.name);
+        if let Some(type_value) = &param.type_annotation {
+            self.emit_str(":");
+            self.emit_type(type_value);
         }
+    }
+
+    fn emit_punctuated_exprs(&mut self, punct: &Punctuated<Expression>) {
+        self.emit_separated(punct, ",", Self::emit_expression);
+    }
+
+    fn emit_punctuated_vars(&mut self, punct: &Punctuated<Var>) {
+        self.emit_separated(punct, ",", Self::emit_var);
     }
 
     fn emit_type(&mut self, ty: &Type) {
@@ -700,12 +695,7 @@ impl CompactPrinter {
             self.emit_generic_type_list(generics);
         }
         self.emit_str("(");
-        for (idx, param) in function.params.items.iter().enumerate() {
-            self.emit_function_type_param(param);
-            if idx + 1 < function.params.len() || function.params.has_trailing_separator {
-                self.emit_str(",");
-            }
-        }
+        self.emit_separated(&function.params, ",", Self::emit_function_type_param);
         self.emit_str(")");
         self.emit_str("->");
         self.emit_type(&function.return_type);
@@ -762,12 +752,7 @@ impl CompactPrinter {
 
     fn emit_generic_type_list(&mut self, generics: &GenericTypeList) {
         self.emit_str("<");
-        for (idx, param) in generics.params.items.iter().enumerate() {
-            self.emit_generic_type_param(param);
-            if idx + 1 < generics.params.len() || generics.params.has_trailing_separator {
-                self.emit_str(",");
-            }
-        }
+        self.emit_separated(&generics.params, ",", Self::emit_generic_type_param);
         self.emit_str(">");
     }
 
@@ -790,11 +775,6 @@ impl CompactPrinter {
     /// the owning node: `,` for packs and generic args, `|`/`&` for
     /// unions/intersections.
     fn emit_punctuated_types_with(&mut self, punct: &Punctuated<Type>, separator: &'static str) {
-        for (idx, ty) in punct.items.iter().enumerate() {
-            self.emit_type(ty);
-            if idx + 1 < punct.len() || punct.has_trailing_separator {
-                self.emit_str(separator);
-            }
-        }
+        self.emit_separated(punct, separator, Self::emit_type);
     }
 }

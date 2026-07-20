@@ -22,7 +22,7 @@ const MIXED_TYPE_MSG: &str =
 impl Parser<'_> {
     /// Parse `: T` if present. All annotation sites share this so the
     /// Luau gate lives in exactly one place.
-    pub fn try_parse_type_annotation(&mut self) -> Option<Type> {
+    pub(crate) fn try_parse_type_annotation(&mut self) -> Option<Type> {
         if self.version.is_luau() && matches!(self.peek(), TokenKind::Colon) {
             self.advance_span();
             Some(self.parse_type())
@@ -32,7 +32,7 @@ impl Parser<'_> {
     }
 
     /// Parse a complete type. Entry point for every annotation position.
-    pub fn parse_type(&mut self) -> Type {
+    pub(crate) fn parse_type(&mut self) -> Type {
         if let Err(err) = self.enter_depth() {
             self.errors.push(err);
             return Type::Error(self.current_span());
@@ -238,12 +238,7 @@ impl Parser<'_> {
         let typeof_token = self.advance_span();
         self.advance_span(); // `(` - guaranteed by the caller's lookahead
         let expr = self.parse_expression(0);
-        let close = self
-            .expect_span(&TokenKind::RightParen)
-            .unwrap_or_else(|err| {
-                self.errors.push(err);
-                self.current_span()
-            });
+        let close = self.expect(&TokenKind::RightParen);
         let span = typeof_token.merge(close);
         Type::Typeof(Box::new(TypeofType { span, expr }))
     }
@@ -251,13 +246,7 @@ impl Parser<'_> {
     fn parse_named_type(&mut self, first_name: Token) -> Type {
         let (prefix, name) = if matches!(self.peek(), TokenKind::Dot) {
             self.advance_span();
-            let name = self.expect_identifier().unwrap_or_else(|err| {
-                self.errors.push(err);
-                Token::new(
-                    TokenKind::Identifier(String::new().into()),
-                    self.current_span(),
-                )
-            });
+            let name = self.expect_identifier_recover();
             (Some(first_name), name)
         } else {
             (None, first_name)
@@ -316,7 +305,7 @@ impl Parser<'_> {
 
     /// Generic parameter list at a declaration site:
     /// `<T, U = string, V... = ...number>`.
-    pub fn parse_generic_type_list(&mut self, allow_defaults: bool) -> GenericTypeList {
+    pub(crate) fn parse_generic_type_list(&mut self, allow_defaults: bool) -> GenericTypeList {
         let open = self.advance_span(); // `<`
         let mut params = Punctuated::<GenericTypeParam>::empty();
         let mut seen_pack = false;
@@ -464,12 +453,7 @@ impl Parser<'_> {
             }
         }
 
-        let close = self
-            .expect_span(&TokenKind::RightBrace)
-            .unwrap_or_else(|err| {
-                self.errors.push(err);
-                self.current_span()
-            });
+        let close = self.expect(&TokenKind::RightBrace);
         Type::Table(Box::new(TableType {
             span: open.merge(close),
             fields,
@@ -497,12 +481,8 @@ impl Parser<'_> {
         if matches!(self.peek(), TokenKind::LeftBracket) {
             let open = self.advance_span();
             let key = self.parse_type();
-            if let Err(err) = self.expect_span(&TokenKind::RightBracket) {
-                self.errors.push(err);
-            }
-            if let Err(err) = self.expect_span(&TokenKind::Colon) {
-                self.errors.push(err);
-            }
+            self.expect(&TokenKind::RightBracket);
+            self.expect(&TokenKind::Colon);
             let value = self.parse_type();
             let start_span = access.as_ref().map(|token| token.span).unwrap_or(open);
             return TypeField::Indexer {
@@ -580,12 +560,7 @@ impl Parser<'_> {
             }
         }
 
-        let close = self
-            .expect_span(&TokenKind::RightParen)
-            .unwrap_or_else(|err| {
-                self.errors.push(err);
-                self.current_span()
-            });
+        let close = self.expect(&TokenKind::RightParen);
 
         if matches!(self.peek(), TokenKind::Arrow) {
             self.advance_span();

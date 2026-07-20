@@ -19,50 +19,31 @@ fn binding_param(name: Token, type_annotation: Option<luck_ast::Type>) -> Parame
     }
 }
 
-/// Attribute arguments are restricted to the grammar's `literal`
-/// production: nil, booleans, numbers, strings, and tables of literals
-/// with plain-name or positional fields.
-fn is_attribute_literal(expr: &Expression) -> bool {
-    match expr {
-        Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_)
-        | Expression::Number(_)
-        | Expression::StringLiteral(_) => true,
-        Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
-            Field::Named { value, .. } | Field::Positional { value, .. } => {
-                is_attribute_literal(value)
-            }
-            Field::Bracketed { .. } => false,
-        }),
-        _ => false,
-    }
-}
-
 impl Parser<'_> {
-    /// Parse a single statement. Returns None if error recovery consumed everything.
-    pub fn parse_statement(&mut self) -> Option<Statement> {
+    /// Parse a single statement. Malformed input still yields a
+    /// [`Statement::Error`] node after recovery, never nothing.
+    pub(crate) fn parse_statement(&mut self) -> Statement {
         match self.peek() {
-            TokenKind::If => Some(self.parse_if_statement()),
-            TokenKind::While => Some(self.parse_while_loop()),
-            TokenKind::Do => Some(self.parse_do_block()),
-            TokenKind::For => Some(self.parse_for_statement()),
-            TokenKind::Repeat => Some(self.parse_repeat_loop()),
-            TokenKind::Function => Some(self.parse_function_decl()),
-            TokenKind::Local => Some(self.parse_local_statement()),
+            TokenKind::If => self.parse_if_statement(),
+            TokenKind::While => self.parse_while_loop(),
+            TokenKind::Do => self.parse_do_block(),
+            TokenKind::For => self.parse_for_statement(),
+            TokenKind::Repeat => self.parse_repeat_loop(),
+            TokenKind::Function => self.parse_function_decl(),
+            TokenKind::Local => self.parse_local_statement(),
             TokenKind::Break if !self.version.break_is_last_stat_only() => {
                 // 5.2+: break can appear as a regular statement
                 let span = self.advance_span();
                 if self.loop_depth == 0 {
                     self.error(span, "break outside a loop".to_string());
                 }
-                Some(Statement::Break(span))
+                Statement::Break(span)
             }
-            TokenKind::Goto if self.version.has_goto() => Some(self.parse_goto_statement()),
-            TokenKind::DoubleColon if self.version.has_goto() => Some(self.parse_label_statement()),
-            TokenKind::Global if self.version.has_global() => Some(self.parse_global_statement()),
+            TokenKind::Goto if self.version.has_goto() => self.parse_goto_statement(),
+            TokenKind::DoubleColon if self.version.has_goto() => self.parse_label_statement(),
+            TokenKind::Global if self.version.has_global() => self.parse_global_statement(),
             // Luau `@` attribute on function declarations
-            TokenKind::At if self.version.is_luau() => Some(self.parse_attributed_function()),
+            TokenKind::At if self.version.is_luau() => self.parse_attributed_function(),
             TokenKind::Identifier(_) | TokenKind::LeftParen => {
                 // Luau context-sensitive keywords: `type`, `export`, `continue`
                 if self.version.is_luau()
@@ -75,7 +56,7 @@ impl Parser<'_> {
                                 self.peek_next(),
                                 TokenKind::Identifier(_) | TokenKind::Function
                             ) {
-                                return Some(self.parse_type_declaration(None));
+                                return self.parse_type_declaration(None);
                             }
                         }
                         "export" => {
@@ -83,7 +64,7 @@ impl Parser<'_> {
                             if let TokenKind::Identifier(next) = self.peek_next()
                                 && next == "type"
                             {
-                                return Some(self.parse_export_type_declaration());
+                                return self.parse_export_type_declaration();
                             }
                         }
                         "const" => {
@@ -94,13 +75,13 @@ impl Parser<'_> {
                                 self.peek_next(),
                                 TokenKind::Identifier(_) | TokenKind::Function
                             ) {
-                                return Some(self.parse_const_statement());
+                                return self.parse_const_statement();
                             }
                         }
                         _ => {}
                     }
                 }
-                Some(self.parse_assignment_or_call())
+                self.parse_assignment_or_call()
             }
             _ => {
                 let span = self.current_span();
@@ -117,12 +98,12 @@ impl Parser<'_> {
                 };
                 self.error(span, format!("unexpected token '{token}'{hint}"));
                 self.synchronize();
-                Some(Statement::Error(span))
+                Statement::Error(span)
             }
         }
     }
 
-    pub fn parse_return_statement(&mut self) -> LastStatement {
+    pub(crate) fn parse_return_statement(&mut self) -> LastStatement {
         let return_token = self.advance_span(); // `return`
         let start_span = return_token;
 
@@ -225,13 +206,7 @@ impl Parser<'_> {
     fn parse_for_statement(&mut self) -> Statement {
         let for_token = self.advance_span();
         self.push_context("for-loop", for_token);
-        let first_name = self.expect_identifier().unwrap_or_else(|err| {
-            self.errors.push(err);
-            Token::new(
-                TokenKind::Identifier(String::new().into()),
-                self.current_span(),
-            )
-        });
+        let first_name = self.expect_identifier_recover();
 
         // Luau: type annotation between name and `=`/`in`
         let first_annotation = self.try_parse_type_annotation();
@@ -289,13 +264,7 @@ impl Parser<'_> {
 
         while matches!(self.peek(), TokenKind::Comma) {
             self.advance_span();
-            let name = self.expect_identifier().unwrap_or_else(|err| {
-                self.errors.push(err);
-                Token::new(
-                    TokenKind::Identifier(String::new().into()),
-                    self.current_span(),
-                )
-            });
+            let name = self.expect_identifier_recover();
             // Luau: type annotation after each loop variable
             let type_annotation = self.try_parse_type_annotation();
             params.push(binding_param(name, type_annotation));
@@ -361,37 +330,19 @@ impl Parser<'_> {
     }
 
     fn parse_func_name(&mut self) -> FuncName {
-        let first = self.expect_identifier().unwrap_or_else(|err| {
-            self.errors.push(err);
-            Token::new(
-                TokenKind::Identifier(String::new().into()),
-                self.current_span(),
-            )
-        });
+        let first = self.expect_identifier_recover();
         let start_span = first.span;
         let mut names = vec![first];
 
         while matches!(self.peek(), TokenKind::Dot) {
             self.advance_span();
-            let name = self.expect_identifier().unwrap_or_else(|err| {
-                self.errors.push(err);
-                Token::new(
-                    TokenKind::Identifier(String::new().into()),
-                    self.current_span(),
-                )
-            });
+            let name = self.expect_identifier_recover();
             names.push(name);
         }
 
         let method = if matches!(self.peek(), TokenKind::Colon) {
             self.advance_span();
-            let method_name = self.expect_identifier().unwrap_or_else(|err| {
-                self.errors.push(err);
-                Token::new(
-                    TokenKind::Identifier(String::new().into()),
-                    self.current_span(),
-                )
-            });
+            let method_name = self.expect_identifier_recover();
             Some(method_name)
         } else {
             None
@@ -454,13 +405,7 @@ impl Parser<'_> {
     ) -> Statement {
         self.advance_span(); // `function`
         self.push_context("local function", local_token);
-        let name = self.expect_identifier().unwrap_or_else(|err| {
-            self.errors.push(err);
-            Token::new(
-                TokenKind::Identifier(String::new().into()),
-                self.current_span(),
-            )
-        });
+        let name = self.expect_identifier_recover();
         let body = self.parse_function_body();
         self.pop_context();
         let start_span = attributes.first().map_or(local_token, |attr| attr.span);
@@ -528,13 +473,7 @@ impl Parser<'_> {
     /// Parse `goto Name`.
     fn parse_goto_statement(&mut self) -> Statement {
         let goto_token = self.advance_span();
-        let name = self.expect_identifier().unwrap_or_else(|err| {
-            self.errors.push(err);
-            Token::new(
-                TokenKind::Identifier(String::new().into()),
-                self.current_span(),
-            )
-        });
+        let name = self.expect_identifier_recover();
         let span = goto_token.merge(name.span);
         Statement::Goto(Box::new(GotoStatement { span, name }))
     }
@@ -542,19 +481,8 @@ impl Parser<'_> {
     /// Parse `:: Name ::`.
     fn parse_label_statement(&mut self) -> Statement {
         let colons_open = self.advance_span();
-        let name = self.expect_identifier().unwrap_or_else(|err| {
-            self.errors.push(err);
-            Token::new(
-                TokenKind::Identifier(String::new().into()),
-                self.current_span(),
-            )
-        });
-        let colons_close = self
-            .expect_span(&TokenKind::DoubleColon)
-            .unwrap_or_else(|err| {
-                self.errors.push(err);
-                self.current_span()
-            });
+        let name = self.expect_identifier_recover();
+        let colons_close = self.expect(&TokenKind::DoubleColon);
         let span = colons_open.merge(colons_close);
         Statement::Label(Box::new(LabelStatement { span, name }))
     }
@@ -566,13 +494,7 @@ impl Parser<'_> {
         // `global function name(...) ... end`
         if matches!(self.peek(), TokenKind::Function) {
             self.advance_span(); // `function`
-            let name = self.expect_identifier().unwrap_or_else(|err| {
-                self.errors.push(err);
-                Token::new(
-                    TokenKind::Identifier(String::new().into()),
-                    self.current_span(),
-                )
-            });
+            let name = self.expect_identifier_recover();
             let body = self.parse_function_body();
             let span = global_token.merge(body.span);
             return Statement::GlobalFunction(Box::new(GlobalFunction { span, name, body }));
@@ -651,42 +573,6 @@ impl Parser<'_> {
         let span = global_token.merge(end_span);
 
         Statement::GlobalDeclaration(Box::new(GlobalDeclaration { span, names, exprs }))
-    }
-
-    /// Try to parse `< Name >` attribute if the version supports it and `<` is next.
-    fn try_parse_attribute(&mut self) -> Option<Attribute> {
-        if self.version.has_attributes() && matches!(self.peek(), TokenKind::Less) {
-            Some(self.parse_attribute())
-        } else {
-            None
-        }
-    }
-
-    /// Parse `< Name >` attribute (assumes `<` is current token).
-    fn parse_attribute(&mut self) -> Attribute {
-        let open = self.advance_span(); // `<`
-        let name = self.expect_identifier().unwrap_or_else(|err| {
-            self.errors.push(err);
-            Token::new(
-                TokenKind::Identifier(String::new().into()),
-                self.current_span(),
-            )
-        });
-        // 5.4 §3.3.7: "There are two possible attributes"; real Lua
-        // rejects anything else at parse time.
-        if let TokenKind::Identifier(attr_name) = &name.kind
-            && !attr_name.is_empty()
-            && attr_name != "const"
-            && attr_name != "close"
-        {
-            self.error(name.span, format!("unknown attribute '{attr_name}'"));
-        }
-        let close = self.expect_span(&TokenKind::Greater).unwrap_or_else(|err| {
-            self.errors.push(err);
-            self.current_span()
-        });
-        let span = open.merge(close);
-        Attribute { span, name }
     }
 
     /// Parse attnamelist: `[attrib] Name [attrib] { ',' Name [attrib] }`
@@ -800,10 +686,7 @@ impl Parser<'_> {
                 target_exprs.push(self.parse_expression(0));
             }
 
-            let equal = self.expect_span(&TokenKind::Equal).unwrap_or_else(|err| {
-                self.errors.push(err);
-                self.current_span()
-            });
+            let equal = self.expect(&TokenKind::Equal);
 
             let values = self.parse_expression_list();
 
@@ -849,13 +732,7 @@ impl Parser<'_> {
         // `type function Name funcbody` - no `=`; the body is ordinary Luau
         if matches!(self.peek(), TokenKind::Function) {
             self.advance_span(); // `function`
-            let name = self.expect_identifier().unwrap_or_else(|err| {
-                self.errors.push(err);
-                Token::new(
-                    TokenKind::Identifier(String::new().into()),
-                    self.current_span(),
-                )
-            });
+            let name = self.expect_identifier_recover();
             let body = self.parse_function_body();
             let span = start_span.merge(body.span);
             return Statement::TypeDeclaration(Box::new(TypeDeclaration {
@@ -867,13 +744,7 @@ impl Parser<'_> {
             }));
         }
 
-        let name = self.expect_identifier().unwrap_or_else(|err| {
-            self.errors.push(err);
-            Token::new(
-                TokenKind::Identifier(String::new().into()),
-                self.current_span(),
-            )
-        });
+        let name = self.expect_identifier_recover();
 
         let generics = if matches!(self.peek(), TokenKind::Less) {
             Some(Box::new(self.parse_generic_type_list(true)))
@@ -881,9 +752,7 @@ impl Parser<'_> {
             None
         };
 
-        if let Err(err) = self.expect_span(&TokenKind::Equal) {
-            self.errors.push(err);
-        }
+        self.expect(&TokenKind::Equal);
 
         let alias_type = self.parse_type();
         let span = start_span.merge(alias_type.span());
@@ -901,147 +770,6 @@ impl Parser<'_> {
     fn parse_export_type_declaration(&mut self) -> Statement {
         let export_token = self.advance_span(); // `export`
         self.parse_type_declaration(Some(export_token))
-    }
-
-    /// Parse `@native function ...` (Luau attributed function declaration).
-    /// `@native` and friends change runtime codegen, so the attributes are
-    /// kept on the AST and re-emitted - dropping them changes behavior.
-    /// Parse a run of Luau attributes covering both grammar forms:
-    /// `attribute ::= '@' NAME | '@[' parattr {',' parattr} ']'` with
-    /// `parattr ::= NAME [pars]` and literal-only arguments.
-    pub(crate) fn parse_function_attributes(&mut self) -> Vec<FunctionAttribute> {
-        let mut attributes = Vec::new();
-        while matches!(self.peek(), TokenKind::At) {
-            let at_token = self.advance_span(); // `@`
-            if matches!(self.peek(), TokenKind::LeftBracket) {
-                self.advance_span(); // `[`
-                loop {
-                    let name = self.expect_identifier().unwrap_or_else(|err| {
-                        self.errors.push(err);
-                        Token::new(
-                            TokenKind::Identifier(String::new().into()),
-                            self.current_span(),
-                        )
-                    });
-                    let args = self.parse_attribute_args();
-                    self.validate_function_attribute(&name, args.is_some(), &attributes);
-                    let end_span = args
-                        .as_ref()
-                        .and_then(punctuated_last_span)
-                        .unwrap_or(name.span);
-                    attributes.push(FunctionAttribute {
-                        span: at_token.merge(end_span),
-                        name,
-                        args,
-                    });
-                    if matches!(self.peek(), TokenKind::Comma) {
-                        self.advance_span();
-                    } else {
-                        break;
-                    }
-                }
-                if let Err(err) = self.expect_span(&TokenKind::RightBracket) {
-                    self.errors.push(err);
-                }
-            } else {
-                let name = self.expect_identifier().unwrap_or_else(|err| {
-                    self.errors.push(err);
-                    Token::new(
-                        TokenKind::Identifier(String::new().into()),
-                        self.current_span(),
-                    )
-                });
-                self.validate_function_attribute(&name, false, &attributes);
-                attributes.push(FunctionAttribute {
-                    span: at_token.merge(name.span),
-                    name,
-                    args: None,
-                });
-            }
-        }
-        attributes
-    }
-
-    /// Parse the optional `pars` of a parenthesized attribute:
-    /// `pars ::= '(' [litlist] ')' | littable | STRING`. The string and
-    /// table sugar canonicalize to a one-element argument list.
-    fn parse_attribute_args(&mut self) -> Option<Punctuated<Expression>> {
-        match self.peek() {
-            TokenKind::LeftParen => {
-                self.advance_span();
-                let args = if matches!(self.peek(), TokenKind::RightParen) {
-                    Punctuated::empty()
-                } else {
-                    self.parse_expression_list()
-                };
-                if let Err(err) = self.expect_span(&TokenKind::RightParen) {
-                    self.errors.push(err);
-                }
-                for expr in args.iter() {
-                    if !is_attribute_literal(expr) {
-                        self.error(
-                            expr.span(),
-                            "attribute arguments must be literals".to_string(),
-                        );
-                    }
-                }
-                Some(args)
-            }
-            TokenKind::StringLiteral(_) => {
-                let token = self.advance();
-                let TokenKind::StringLiteral(text) = token.kind else {
-                    unreachable!("peeked kind");
-                };
-                Some(Punctuated::from_item(Expression::StringLiteral(Literal {
-                    text,
-                    span: token.span,
-                })))
-            }
-            TokenKind::LeftBrace => {
-                let table = self.parse_table_constructor();
-                let expr = Expression::TableConstructor(Box::new(table));
-                if !is_attribute_literal(&expr) {
-                    self.error(
-                        expr.span(),
-                        "attribute arguments must be literals".to_string(),
-                    );
-                }
-                Some(Punctuated::from_item(expr))
-            }
-            _ => None,
-        }
-    }
-
-    /// Luau validates attributes at parse time: only
-    /// checked/native/deprecated exist, duplicates are errors, and only
-    /// `deprecated` accepts arguments.
-    fn validate_function_attribute(
-        &mut self,
-        name: &Token,
-        has_args: bool,
-        previous: &[FunctionAttribute],
-    ) {
-        let TokenKind::Identifier(attr_name) = &name.kind else {
-            return;
-        };
-        if attr_name.is_empty() {
-            return;
-        }
-        if !matches!(attr_name.as_str(), "checked" | "native" | "deprecated") {
-            self.error(name.span, format!("invalid attribute '@{attr_name}'"));
-            return;
-        }
-        if has_args && attr_name != "deprecated" {
-            self.error(
-                name.span,
-                format!("attribute '@{attr_name}' does not take arguments"),
-            );
-        }
-        if previous.iter().any(|prev| {
-            matches!(&prev.name.kind, TokenKind::Identifier(existing) if existing == attr_name)
-        }) {
-            self.error(name.span, format!("duplicate attribute '@{attr_name}'"));
-        }
     }
 
     fn parse_attributed_function(&mut self) -> Statement {
@@ -1104,7 +832,7 @@ fn is_block_end(kind: &TokenKind) -> bool {
 }
 
 /// Get the span of the last expression in a Punctuated list.
-fn punctuated_last_span(punct: &Punctuated<Expression>) -> Option<Span> {
+pub(crate) fn punctuated_last_span(punct: &Punctuated<Expression>) -> Option<Span> {
     punct.last_item().map(|e| e.span())
 }
 

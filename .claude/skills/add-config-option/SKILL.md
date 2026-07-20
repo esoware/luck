@@ -17,7 +17,9 @@ precedence or CLI plumbing fails silently.
 
 | Where | What |
 |---|---|
-| `crates/luck_core/src/config.rs` | `LuckConfig` + project shape (`extends`/`include`/`exclude`/`root`), discovery |
+| `crates/luck_core/src/config/schema.rs` | `LuckConfig`/`FormatConfig`/`LintConfig` types + project shape (`extends`/`include`/`exclude`/`root`) + merge semantics |
+| `crates/luck_core/src/config/load.rs` | JSON5 parsing, `extends` chain, discovery, `.luaurc` |
+| `crates/luck_core/src/config/resolve.rs` | `BuildConfig` resolution + profiles |
 | `crates/luck_core/src/format_options.rs` | `FormatOptions` + its enums |
 | `crates/luck_core/src/transform_config.rs` | `TransformConfig` - minifier pass flags |
 | `crates/luck_core/src/editorconfig.rs` | `.editorconfig` layer (format options only) |

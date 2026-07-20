@@ -21,7 +21,7 @@ impl Parser<'_> {
     /// Pratt expression parser. The left side grows iteratively; only the
     /// right-hand operand recurses, avoiding stack overflow on long chains.
     #[inline]
-    pub fn parse_expression(&mut self, min_precedence: u8) -> Expression {
+    pub(crate) fn parse_expression(&mut self, min_precedence: u8) -> Expression {
         let mut left = self.parse_prefix();
 
         while let Some(op) = BinOp::from_token_kind(self.peek()) {
@@ -140,12 +140,7 @@ impl Parser<'_> {
                 }
                 let expr = self.parse_expression(0);
                 self.exit_depth();
-                let close = self
-                    .expect_span(&TokenKind::RightParen)
-                    .unwrap_or_else(|err| {
-                        self.errors.push(err);
-                        self.current_span()
-                    });
+                let close = self.expect(&TokenKind::RightParen);
                 let span = open.merge(close);
                 let paren_expr =
                     Expression::Parenthesized(Box::new(ParenExpression { span, expr }));
@@ -188,13 +183,7 @@ impl Parser<'_> {
             match self.peek() {
                 TokenKind::Dot => {
                     self.advance_span();
-                    let name = self.expect_identifier().unwrap_or_else(|err| {
-                        self.errors.push(err);
-                        Token::new(
-                            TokenKind::Identifier(String::new().into()),
-                            self.current_span(),
-                        )
-                    });
+                    let name = self.expect_identifier_recover();
                     let span = expr.span().merge(name.span);
                     expr = Expression::Var(Var::FieldAccess(Box::new(FieldAccess {
                         span,
@@ -205,12 +194,7 @@ impl Parser<'_> {
                 TokenKind::LeftBracket => {
                     self.advance_span();
                     let index = self.parse_expression(0);
-                    let close = self
-                        .expect_span(&TokenKind::RightBracket)
-                        .unwrap_or_else(|err| {
-                            self.errors.push(err);
-                            self.current_span()
-                        });
+                    let close = self.expect(&TokenKind::RightBracket);
                     let span = expr.span().merge(close);
                     expr = Expression::Var(Var::Index(Box::new(IndexExpression {
                         span,
@@ -220,13 +204,7 @@ impl Parser<'_> {
                 }
                 TokenKind::Colon => {
                     self.advance_span();
-                    let method_name = self.expect_identifier().unwrap_or_else(|err| {
-                        self.errors.push(err);
-                        Token::new(
-                            TokenKind::Identifier(String::new().into()),
-                            self.current_span(),
-                        )
-                    });
+                    let method_name = self.expect_identifier_recover();
                     let args = self.parse_function_args();
                     let args_span = function_args_span(&args);
                     let span = expr.span().merge(args_span);
@@ -278,18 +256,14 @@ impl Parser<'_> {
             return Expression::Error(if_token);
         }
         let condition = self.parse_expression(0);
-        if let Err(err) = self.expect_span(&TokenKind::Then) {
-            self.errors.push(err);
-        }
+        self.expect(&TokenKind::Then);
         let then_expr = self.parse_expression(0);
 
         let mut elseif_clauses = Vec::new();
         while matches!(self.peek(), TokenKind::ElseIf) {
             let elseif_token = self.advance_span();
             let elseif_condition = self.parse_expression(0);
-            if let Err(err) = self.expect_span(&TokenKind::Then) {
-                self.errors.push(err);
-            }
+            self.expect(&TokenKind::Then);
             let elseif_expr = self.parse_expression(0);
             let span = elseif_token.merge(elseif_expr.span());
             elseif_clauses.push(ElseIfExprClause {
@@ -299,9 +273,7 @@ impl Parser<'_> {
             });
         }
 
-        if let Err(err) = self.expect_span(&TokenKind::Else) {
-            self.errors.push(err);
-        }
+        self.expect(&TokenKind::Else);
         let else_expr = self.parse_expression(0);
         self.exit_depth();
         let span = if_token.merge(else_expr.span());
@@ -409,12 +381,7 @@ impl Parser<'_> {
                 } else {
                     self.parse_expression_list()
                 };
-                let close = self
-                    .expect_span(&TokenKind::RightParen)
-                    .unwrap_or_else(|err| {
-                        self.errors.push(err);
-                        self.current_span()
-                    });
+                let close = self.expect(&TokenKind::RightParen);
                 FunctionArgs::Parenthesized {
                     span: open.merge(close),
                     args,
@@ -466,7 +433,7 @@ impl Parser<'_> {
     }
 
     /// Parse function body: `[<generics>] (params) block end`.
-    pub fn parse_function_body(&mut self) -> FunctionBody {
+    pub(crate) fn parse_function_body(&mut self) -> FunctionBody {
         // Luau: generic list before the parens - `function f<T>(x: T)`
         let generics = if self.version.is_luau() && matches!(self.peek(), TokenKind::Less) {
             Some(Box::new(self.parse_generic_type_list(false)))
@@ -474,12 +441,7 @@ impl Parser<'_> {
             None
         };
 
-        let open = self
-            .expect_span(&TokenKind::LeftParen)
-            .unwrap_or_else(|err| {
-                self.errors.push(err);
-                self.current_span()
-            });
+        let open = self.expect(&TokenKind::LeftParen);
         let start_span = generics.as_ref().map(|list| list.span).unwrap_or(open);
 
         if let Err(err) = self.enter_depth() {
@@ -525,13 +487,7 @@ impl Parser<'_> {
                         vararg = Some(self.parse_vararg_param());
                         break;
                     }
-                    let name = self.expect_identifier().unwrap_or_else(|err| {
-                        self.errors.push(err);
-                        Token::new(
-                            TokenKind::Identifier(String::new().into()),
-                            self.current_span(),
-                        )
-                    });
+                    let name = self.expect_identifier_recover();
                     let type_ann = self.try_parse_type_annotation();
                     params.push(Parameter {
                         span: name.span.merge(
@@ -547,9 +503,7 @@ impl Parser<'_> {
             }
         }
 
-        if let Err(err) = self.expect_span(&TokenKind::RightParen) {
-            self.errors.push(err);
-        }
+        self.expect(&TokenKind::RightParen);
 
         // Luau: optional return type annotation after `)`
         let return_type = self.try_parse_type_annotation();
@@ -563,10 +517,7 @@ impl Parser<'_> {
         self.loop_depth = saved_loop_depth;
         self.is_vararg_scope = saved_vararg_scope;
 
-        let end_token = self.expect_span(&TokenKind::End).unwrap_or_else(|err| {
-            self.errors.push(err);
-            self.current_span()
-        });
+        let end_token = self.expect(&TokenKind::End);
 
         self.exit_depth();
 
@@ -606,7 +557,7 @@ impl Parser<'_> {
     }
 
     /// Parse a table constructor: `{ [fieldlist] }`.
-    pub fn parse_table_constructor(&mut self) -> TableConstructor {
+    pub(crate) fn parse_table_constructor(&mut self) -> TableConstructor {
         let start_span = self.advance_span(); // `{`
 
         if let Err(err) = self.enter_depth() {
@@ -650,12 +601,7 @@ impl Parser<'_> {
 
         self.exit_depth();
 
-        let close = self
-            .expect_span(&TokenKind::RightBrace)
-            .unwrap_or_else(|err| {
-                self.errors.push(err);
-                self.current_span()
-            });
+        let close = self.expect(&TokenKind::RightBrace);
         let span = start_span.merge(close);
 
         TableConstructor { span, fields }
@@ -672,12 +618,8 @@ impl Parser<'_> {
         if matches!(self.peek(), TokenKind::LeftBracket) {
             let open = self.advance_span();
             let key = self.parse_expression(0);
-            if let Err(err) = self.expect_span(&TokenKind::RightBracket) {
-                self.errors.push(err);
-            }
-            if let Err(err) = self.expect_span(&TokenKind::Equal) {
-                self.errors.push(err);
-            }
+            self.expect(&TokenKind::RightBracket);
+            self.expect(&TokenKind::Equal);
             let value = self.parse_expression(0);
             let span = open.merge(value.span());
             return Field::Bracketed { span, key, value };

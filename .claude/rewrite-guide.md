@@ -28,6 +28,14 @@ that is mediocre should come out unrecognizable. Both outcomes are
 success. "No need to do anything for no reason" and "everything may change
 if there is a reason" are the same rule.
 
+Restraint has a failure mode too: do not leave a defect you have already
+identified unfixed out of churn-aversion. If you noticed it, named it, and
+the fix is safe and local (an out-of-order definition, a stutter name, a
+dead binding), fix it - "avoiding churn in an otherwise-untouched file" is
+not a reason when the diff is small and obviously right. Reserve
+"flagged but left alone" for changes that are genuinely risky, genuinely
+out of scope (another crate's redesign), or genuinely debatable.
+
 ### Fixed points (the only ones)
 
 1. **Observable behavior.** The tool's outputs - parse results, bundled
@@ -243,6 +251,17 @@ matter for this workspace. Sources are noted so you can weigh authority.
 - **Profile-first culture**: a perf-motivated change to a hot path lands
   with a bench number (`cargo bench -p luck_benchmark`), not a hunch; and
   conversely, cold code is optimized for clarity, full stop.
+- **Scale proof burden to regression plausibility.** A change with no
+  plausible mechanism for slowdown - a monomorphized generic helper
+  replacing hand-duplicated loops, code motion between files, renames,
+  visibility changes - does not need to prove itself beyond the bench
+  noise floor; demanding that makes all cleanup impossible in perf-gated
+  crates. When a change is genuinely suspect, judge it by same-session
+  A/B (bench the old and new code back-to-back), never against an
+  hours-old saved baseline - wall-clock baselines drift +/-2-4% with
+  machine state. CI runs the benches on CodSpeed, which measures
+  instruction counts and is immune to that drift; it is the final
+  arbiter for close calls.
 - **Structural wins over micro-wins**: dispatch shape (bucketed rule bus,
   fixpoint scheduling) is where this workspace gets its speed; keep new
   perf work in that register.

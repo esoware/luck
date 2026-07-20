@@ -280,15 +280,6 @@ pub mod errors {
         )
     }
 
-    pub fn w004(file_path: &str, span: Range<usize>) -> Diagnostic {
-        Diagnostic::warning(
-            "W004",
-            "alias \"self\" defined in .luaurc is shadowed by built-in @self".to_string(),
-            file_path.to_string(),
-            span,
-        )
-    }
-
     pub fn w003(file_path: &str, span: Range<usize>, cycle_path: &[String]) -> Diagnostic {
         let cycle_str = cycle_path.join(" -> ");
         Diagnostic::warning(
@@ -301,6 +292,15 @@ pub mod errors {
             "Cycle: {cycle_str}\nModules load lazily, so cycles deferred into function bodies work; \
              a cycle hit while a module is still loading raises at runtime."
         ))
+    }
+
+    pub fn w004(file_path: &str, span: Range<usize>) -> Diagnostic {
+        Diagnostic::warning(
+            "W004",
+            "alias \"self\" defined in .luaurc is shadowed by built-in @self".to_string(),
+            file_path.to_string(),
+            span,
+        )
     }
 }
 

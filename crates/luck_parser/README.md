@@ -19,7 +19,7 @@ The parser consumes a token stream from `luck_lexer` and produces an AST from `l
 
 ### Pipeline
 
-The parser walks the token stream produced by `luck_lexer`. `parser.rs` holds the cursor, the context stack, the depth counter, and the block-parsing loop. `expr.rs` implements the Pratt parser. `stmt.rs` implements the recursive-descent dispatch over statement keywords.
+The parser walks the token stream produced by `luck_lexer`. `parser.rs` holds the cursor, the context stack, the depth counter, the block-parsing loop, and the shared recovery primitives (`expect`/`expect_identifier_recover`, which record one error and hand back a placeholder span or token so parsing continues). `expr.rs` implements the Pratt parser. `stmt.rs` implements the recursive-descent dispatch over statement keywords. `attributes.rs` owns the attribute micro-grammar for both dialects — Lua `<const>`/`<close>` variable attributes and Luau `@native`/`@[deprecated(...)]` function attributes — including their parse-time validation. `validate.rs` holds the opt-in post-parse scope checks (const writes, goto/label resolution, Luau continue/until).
 
 ### Expression Parsing
 

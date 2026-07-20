@@ -22,13 +22,13 @@ fn is_continue_context(next: &TokenKind) -> bool {
 /// Lua needs exactly one token of lookahead, so the parser holds a
 /// two-slot `current`/`next` buffer instead of a materialized token
 /// stream.
-pub struct Parser<'src> {
+pub(crate) struct Parser<'src> {
     lexer: Lexer<'src>,
     source: &'src str,
     current: Token,
     next: Token,
     prev_span: Span,
-    pub version: LuaVersion,
+    pub(crate) version: LuaVersion,
     depth: u32,
     max_depth: u32,
     /// Nesting depth of enclosing loops; reset inside function bodies.
@@ -43,7 +43,7 @@ pub struct Parser<'src> {
 }
 
 impl<'src> Parser<'src> {
-    pub fn new(source: &'src str, version: LuaVersion) -> Self {
+    pub(crate) fn new(source: &'src str, version: LuaVersion) -> Self {
         let mut lexer = Lexer::new(source, version);
         let current = lexer.next_token();
         let next = lexer.next_token();
@@ -72,18 +72,18 @@ impl<'src> Parser<'src> {
     }
 
     #[inline]
-    pub fn peek(&self) -> &TokenKind {
+    pub(crate) fn peek(&self) -> &TokenKind {
         &self.current.kind
     }
 
     /// One token of lookahead - all the Lua grammar ever needs.
     #[inline]
-    pub fn peek_next(&self) -> &TokenKind {
+    pub(crate) fn peek_next(&self) -> &TokenKind {
         &self.next.kind
     }
 
     #[inline]
-    pub fn advance(&mut self) -> Token {
+    pub(crate) fn advance(&mut self) -> Token {
         self.prev_span = self.current.span;
         std::mem::replace(
             &mut self.current,
@@ -93,12 +93,13 @@ impl<'src> Parser<'src> {
 
     /// Consume the current token, keeping only its span.
     #[inline]
-    pub fn advance_span(&mut self) -> Span {
+    pub(crate) fn advance_span(&mut self) -> Span {
         self.advance().span
     }
 
     /// `expect` for fixed-spelling tokens: returns only the span.
-    pub fn expect_span(&mut self, kind: &TokenKind) -> Result<Span, ParseError> {
+    #[inline]
+    pub(crate) fn expect_span(&mut self, kind: &TokenKind) -> Result<Span, ParseError> {
         if std::mem::discriminant(self.peek()) == std::mem::discriminant(kind) {
             Ok(self.advance_span())
         } else {
@@ -108,11 +109,12 @@ impl<'src> Parser<'src> {
         }
     }
 
-    pub fn check_identifier(&self) -> bool {
+    pub(crate) fn check_identifier(&self) -> bool {
         matches!(self.peek(), TokenKind::Identifier(_))
     }
 
-    pub fn expect_identifier(&mut self) -> Result<Token, ParseError> {
+    #[inline]
+    pub(crate) fn expect_identifier(&mut self) -> Result<Token, ParseError> {
         if self.check_identifier() {
             Ok(self.advance())
         } else {
@@ -122,17 +124,41 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Expect `kind`; on mismatch record the default "expected X, found Y"
+    /// error and return the current span so parsing continues past the
+    /// missing token. The recovering counterpart to [`Self::expect_span`].
     #[inline]
-    pub fn at_eof(&self) -> bool {
+    pub(crate) fn expect(&mut self, kind: &TokenKind) -> Span {
+        self.expect_span(kind).unwrap_or_else(|err| {
+            self.errors.push(err);
+            self.current_span()
+        })
+    }
+
+    /// Expect an identifier; on mismatch record the error and return a
+    /// zero-width placeholder token so parsing continues.
+    #[inline]
+    pub(crate) fn expect_identifier_recover(&mut self) -> Token {
+        self.expect_identifier().unwrap_or_else(|err| {
+            self.errors.push(err);
+            Token::new(
+                TokenKind::Identifier(String::new().into()),
+                self.current_span(),
+            )
+        })
+    }
+
+    #[inline]
+    pub(crate) fn at_eof(&self) -> bool {
         matches!(self.peek(), TokenKind::Eof)
     }
 
     #[inline]
-    pub fn has_errors(&self) -> bool {
+    pub(crate) fn has_errors(&self) -> bool {
         !self.errors.is_empty()
     }
 
-    pub fn enter_depth(&mut self) -> Result<(), ParseError> {
+    pub(crate) fn enter_depth(&mut self) -> Result<(), ParseError> {
         self.depth += 1;
         if self.depth > self.max_depth {
             let span = self.current_span();
@@ -145,23 +171,23 @@ impl<'src> Parser<'src> {
         }
     }
 
-    pub fn exit_depth(&mut self) {
+    pub(crate) fn exit_depth(&mut self) {
         self.depth = self.depth.saturating_sub(1);
     }
 
     /// Push a parsing context for better error messages (e.g. "in if-statement").
     #[inline]
-    pub fn push_context(&mut self, context: &'static str, span: Span) {
+    pub(crate) fn push_context(&mut self, context: &'static str, span: Span) {
         self.context_stack.push((context, span));
     }
 
     #[inline]
-    pub fn pop_context(&mut self) {
+    pub(crate) fn pop_context(&mut self) {
         self.context_stack.pop();
     }
 
     #[cold]
-    pub fn error(&mut self, span: Span, message: String) {
+    pub(crate) fn error(&mut self, span: Span, message: String) {
         self.errors.push(ParseError { span, message });
     }
 
@@ -172,7 +198,7 @@ impl<'src> Parser<'src> {
 
     /// Skip tokens until we reach a statement boundary for error recovery.
     /// Always consumes at least one token to prevent infinite loops.
-    pub fn synchronize(&mut self) {
+    pub(crate) fn synchronize(&mut self) {
         self.advance();
         while !self.at_eof() {
             if self.peek().is_stat_start() {
@@ -196,7 +222,7 @@ impl<'src> Parser<'src> {
     /// Drain the lexer to EOF (comments and lex errors past the last
     /// parsed statement must still be collected), then yield the
     /// comments and all errors merged and sorted by position.
-    pub fn finish(mut self) -> (Vec<Comment>, Vec<ParseError>) {
+    pub(crate) fn finish(mut self) -> (Vec<Comment>, Vec<ParseError>) {
         while !matches!(self.lexer.next_token().kind, TokenKind::Eof) {}
         let (comments, lex_errors) = self.lexer.finish();
         let mut errors = lex_errors;
@@ -207,7 +233,7 @@ impl<'src> Parser<'src> {
 
     /// Parse a loop body: identical to `parse_block` but with
     /// `break`/`continue` made valid inside it.
-    pub fn parse_loop_block(&mut self) -> Block {
+    pub(crate) fn parse_loop_block(&mut self) -> Block {
         self.loop_depth += 1;
         let block = self.parse_block();
         self.loop_depth -= 1;
@@ -215,7 +241,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a block (statement list with optional trailing return/break/continue).
-    pub fn parse_block(&mut self) -> Block {
+    pub(crate) fn parse_block(&mut self) -> Block {
         let start_span = self.current_span();
 
         if let Err(err) = self.enter_depth() {
@@ -289,12 +315,7 @@ impl<'src> Parser<'src> {
                     break;
                 }
                 kind if kind.is_stat_start() => {
-                    match self.parse_statement() {
-                        Some(stmt) => stmts.push(stmt),
-                        None => {
-                            // parse_statement returned None - error recovery already happened
-                        }
-                    }
+                    stmts.push(self.parse_statement());
                     can_take_separator = true;
                 }
                 _ => {
@@ -326,7 +347,7 @@ impl<'src> Parser<'src> {
     }
 
     #[inline]
-    pub fn current_span(&self) -> Span {
+    pub(crate) fn current_span(&self) -> Span {
         self.current.span
     }
 
@@ -361,7 +382,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a comma-separated list of expressions.
-    pub fn parse_expression_list(&mut self) -> Punctuated<luck_ast::Expression> {
+    pub(crate) fn parse_expression_list(&mut self) -> Punctuated<luck_ast::Expression> {
         let mut exprs = vec![self.parse_expression(0)];
 
         while matches!(self.peek(), TokenKind::Comma) {

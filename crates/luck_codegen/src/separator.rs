@@ -27,7 +27,9 @@ pub enum PrevClass {
     Other,
 }
 
-/// Classify a fixed-spelling piece (keyword, operator, punctuation).
+/// Classify a fixed-spelling piece (keyword, operator, punctuation). A
+/// piece is word-like exactly when this returns [`PrevClass::Word`], so the
+/// caller derives word-likeness from the class rather than rescanning.
 pub fn classify_str(text: &str) -> PrevClass {
     match text {
         "-" => PrevClass::Minus,
@@ -43,11 +45,6 @@ pub fn classify_str(text: &str) -> PrevClass {
             _ => PrevClass::Other,
         },
     }
-}
-
-/// Whether a fixed-spelling piece is word-like (keywords are; symbols not).
-pub fn is_word_text(text: &str) -> bool {
-    matches!(text.as_bytes().first(), Some(first) if first.is_ascii_alphanumeric() || *first == b'_')
 }
 
 /// Whether a space must separate the previous piece from the next one.
@@ -82,7 +79,8 @@ mod tests {
     use super::*;
 
     fn sep_str(prev: &str, next: &str) -> bool {
-        needs_space(classify_str(prev), next.as_bytes()[0], is_word_text(next))
+        let next_is_wordlike = matches!(classify_str(next), PrevClass::Word);
+        needs_space(classify_str(prev), next.as_bytes()[0], next_is_wordlike)
     }
 
     fn sep_after_word(next_first: u8, next_is_wordlike: bool) -> bool {

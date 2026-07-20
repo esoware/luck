@@ -45,13 +45,10 @@ fn ident_text(token: &luck_token::Token) -> Option<&str> {
     }
 }
 
-// ---------------------------------------------------------------------
-// Writes to read-only bindings: 5.4/5.5 `<const>`/`<close>` locals,
-// Luau `const` bindings, and 5.5 for-loop control variables. Function
-// boundaries do NOT reset the scope stack - real Lua also rejects
-// upvalue writes to const bindings.
-// ---------------------------------------------------------------------
-
+/// Rejects writes to read-only bindings: 5.4/5.5 `<const>`/`<close>`
+/// locals, Luau `const` bindings, and 5.5 for-loop control variables.
+/// Function boundaries do NOT reset the scope stack - real Lua also
+/// rejects upvalue writes to const bindings.
 struct ConstWriteChecker<'a> {
     version: LuaVersion,
     /// One frame per block/function scope: (name, is_readonly).
@@ -333,14 +330,12 @@ impl ConstWriteChecker<'_> {
     }
 }
 
-// ---------------------------------------------------------------------
 // Goto/label resolution (5.2+). Each function body resolves its own
 // labels; gotos never cross function boundaries. Mirrors PUC rules:
 // duplicate visible labels error, an unresolved goto errors, and a
 // forward goto may not enter the scope of a local unless the target
 // label sits at the end of its block (followed only by labels/`;`,
 // and not directly before `until`).
-// ---------------------------------------------------------------------
 
 struct PendingGoto {
     name: String,
@@ -534,10 +529,8 @@ fn absorb(pending: &mut Vec<PendingGoto>, nested: Vec<PendingGoto>, locals_count
     }
 }
 
-// ---------------------------------------------------------------------
 // Luau: `continue` in repeat..until may not jump over the declaration
 // of a local that the until condition uses.
-// ---------------------------------------------------------------------
 
 struct ContinueUntilChecker<'a> {
     errors: &'a mut Vec<ParseError>,
