@@ -109,10 +109,10 @@ impl Comments {
                 if off_start.is_none() {
                     off_start = Some(entry.span_end);
                 }
-            } else if trimmed.starts_with("luck: format on") {
-                if let Some(start) = off_start.take() {
-                    disabled_ranges.push((start, entry.span_start));
-                }
+            } else if trimmed.starts_with("luck: format on")
+                && let Some(start) = off_start.take()
+            {
+                disabled_ranges.push((start, entry.span_start));
             }
         }
         if let Some(start) = off_start {

@@ -221,10 +221,10 @@ fn try_fold_binary(
         extract_lua_number(lhs, subtypes),
         extract_lua_number(rhs, subtypes),
     ) {
-        if let Some(value) = fold_numeric(l, op, r, version) {
-            if let Some(folded) = make_lua_number_expr(value, subtypes) {
-                return Some(folded);
-            }
+        if let Some(value) = fold_numeric(l, op, r, version)
+            && let Some(folded) = make_lua_number_expr(value, subtypes)
+        {
+            return Some(folded);
         }
         if let Some(value) = compare_numbers(l, op, r) {
             return Some(make_boolean_expr(value));

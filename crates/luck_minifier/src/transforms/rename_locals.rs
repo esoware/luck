@@ -748,10 +748,10 @@ impl<'globals> AstRenamer<'globals> {
     }
 
     fn resolve_name(&self, original: &str) -> CompactString {
-        if let Some(stack) = self.name_stack.get(original) {
-            if let Some(new_name) = stack.last() {
-                return new_name.clone();
-            }
+        if let Some(stack) = self.name_stack.get(original)
+            && let Some(new_name) = stack.last()
+        {
+            return new_name.clone();
         }
         original.into()
     }

@@ -80,13 +80,12 @@ fn shorten_number(text: &str, subtypes: NumberSubtypes) -> String {
         // Hex integers: the decimal spelling denotes the same integer
         // (both are integer-typed on 5.3+, both f64 elsewhere). Values
         // that wrap past i64::MAX have no positive decimal spelling.
-        if let Ok(value) = u64::from_str_radix(hex, 16) {
-            if value <= i64::MAX as u64 {
-                let decimal = itoa::Buffer::new().format(value).to_string();
-                if decimal.len() < text.len() && (int_subtype || roundtrips(&decimal, value as f64))
-                {
-                    return decimal;
-                }
+        if let Ok(value) = u64::from_str_radix(hex, 16)
+            && value <= i64::MAX as u64
+        {
+            let decimal = itoa::Buffer::new().format(value).to_string();
+            if decimal.len() < text.len() && (int_subtype || roundtrips(&decimal, value as f64)) {
+                return decimal;
             }
         }
         return text.to_string();

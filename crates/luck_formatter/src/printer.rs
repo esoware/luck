@@ -416,10 +416,10 @@ impl Printer {
                     FormatElement::LineSuffixBoundary => {}
                     // Measure by the most-flat variant
                     FormatElement::BestFitting(variants) => {
-                        if let Some(most_flat) = variants.first() {
-                            if !self.fits_slice_flat(most_flat, &mut budget) {
-                                return false;
-                            }
+                        if let Some(most_flat) = variants.first()
+                            && !self.fits_slice_flat(most_flat, &mut budget)
+                        {
+                            return false;
                         }
                     }
                     FormatElement::Tag(Tag::StartConditional { mode, group_id }) => {
@@ -472,10 +472,10 @@ impl Printer {
                 | FormatElement::ExpandParent => return false,
                 FormatElement::LineSuffixBoundary => {}
                 FormatElement::BestFitting(variants) => {
-                    if let Some(most_flat) = variants.first() {
-                        if !self.fits_slice_flat(most_flat, budget) {
-                            return false;
-                        }
+                    if let Some(most_flat) = variants.first()
+                        && !self.fits_slice_flat(most_flat, budget)
+                    {
+                        return false;
                     }
                 }
                 FormatElement::Tag(_) => {}

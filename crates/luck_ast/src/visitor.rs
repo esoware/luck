@@ -217,10 +217,10 @@ pub trait Visitor<'ast> {
                 self.visit_type(param_type);
             }
         }
-        if let Some(vararg) = &body.vararg {
-            if let Some(vararg_type) = &vararg.type_annotation {
-                self.visit_type(vararg_type);
-            }
+        if let Some(vararg) = &body.vararg
+            && let Some(vararg_type) = &vararg.type_annotation
+        {
+            self.visit_type(vararg_type);
         }
         if let Some(return_type) = &body.return_type {
             self.visit_type(return_type);

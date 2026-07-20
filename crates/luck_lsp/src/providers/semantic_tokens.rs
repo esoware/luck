@@ -141,10 +141,10 @@ fn encode_tokens(doc: &DocumentState, byte_range: Option<(u32, u32)>) -> Semanti
 
     let mut raw: Vec<(u32, u32, u32, u32, u32)> = Vec::new();
     let mut push = |span: Span, ty: u32, modifiers: u32| {
-        if let Some((start, end)) = byte_range {
-            if span.end < start || span.start > end {
-                return;
-            }
+        if let Some((start, end)) = byte_range
+            && (span.end < start || span.start > end)
+        {
+            return;
         }
         let pos = doc.line_index.position(&doc.text, span.start);
         let length = utf16_len(&doc.text, span.start, span.end);
@@ -153,18 +153,18 @@ fn encode_tokens(doc: &DocumentState, byte_range: Option<(u32, u32)>) -> Semanti
 
     let classify_bare = |name: &str, span: Span, base: (u32, u32)| -> (u32, u32) {
         let (mut ty, mut modifiers) = base;
-        if ty == TY_VARIABLE {
-            if let Some(&idx) = ident_at_offset.get(&span.start) {
-                match value_shape(tokens, idx, lib) {
-                    ValueShape::Called | ValueShape::AssignedFunction => ty = TY_FUNCTION,
-                    ValueShape::AssignedStdlibFunction => {
-                        ty = TY_FUNCTION;
-                        modifiers |= MOD_DEFAULT_LIBRARY;
-                    }
-                    ValueShape::Plain => {
-                        if is_screaming_case(name) {
-                            modifiers |= MOD_READONLY;
-                        }
+        if ty == TY_VARIABLE
+            && let Some(&idx) = ident_at_offset.get(&span.start)
+        {
+            match value_shape(tokens, idx, lib) {
+                ValueShape::Called | ValueShape::AssignedFunction => ty = TY_FUNCTION,
+                ValueShape::AssignedStdlibFunction => {
+                    ty = TY_FUNCTION;
+                    modifiers |= MOD_DEFAULT_LIBRARY;
+                }
+                ValueShape::Plain => {
+                    if is_screaming_case(name) {
+                        modifiers |= MOD_READONLY;
                     }
                 }
             }

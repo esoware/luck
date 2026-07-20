@@ -207,10 +207,10 @@ fn is_numeric_clone(loop_node: &NumericFor, dest: &str) -> bool {
         return false;
     };
     // Step (if present) must also be 1; we only model the simple case.
-    if let Some(step) = &loop_node.step {
-        if !is_number_one(step) {
-            return false;
-        }
+    if let Some(step) = &loop_node.step
+        && !is_number_one(step)
+    {
+        return false;
     }
 
     if loop_node.block.stmts.len() != 1 || loop_node.block.last_stmt.is_some() {

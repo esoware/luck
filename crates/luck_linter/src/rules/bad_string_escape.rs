@@ -122,11 +122,11 @@ fn scan_source(
             idx = scan_short_string(bytes, idx, version, diagnostics);
             continue;
         }
-        if byte == b'[' {
-            if let Some(skip_to) = skip_long_bracket(bytes, idx) {
-                idx = skip_to;
-                continue;
-            }
+        if byte == b'['
+            && let Some(skip_to) = skip_long_bracket(bytes, idx)
+        {
+            idx = skip_to;
+            continue;
         }
         idx += 1;
     }

@@ -21,21 +21,19 @@ impl Format for Block {
 
         let preserve_edge_blanks =
             f.options.block_newline_gaps == crate::BlockNewlineGaps::Preserve;
-        if preserve_edge_blanks {
-            if let Some(first_start) = first_item_start(self) {
-                // A leading comment moves the measurable gap to its own start
-                let anchor = f
-                    .comments
-                    .peek_next_start()
-                    .filter(|start| *start < first_start)
-                    .unwrap_or(first_start);
-                let has_blank = f
-                    .comments
-                    .source_text()
-                    .is_some_and(|source| has_leading_edge_blank(source, anchor));
-                if has_blank {
-                    crate::write!(f, [empty_line()]);
-                }
+        if preserve_edge_blanks && let Some(first_start) = first_item_start(self) {
+            // A leading comment moves the measurable gap to its own start
+            let anchor = f
+                .comments
+                .peek_next_start()
+                .filter(|start| *start < first_start)
+                .unwrap_or(first_start);
+            let has_blank = f
+                .comments
+                .source_text()
+                .is_some_and(|source| has_leading_edge_blank(source, anchor));
+            if has_blank {
+                crate::write!(f, [empty_line()]);
             }
         }
 
@@ -103,15 +101,13 @@ impl Format for Block {
             }
         }
 
-        if preserve_edge_blanks {
-            if let Some((last_end, _)) = previous {
-                let has_blank = f
-                    .comments
-                    .source_text()
-                    .is_some_and(|source| has_trailing_edge_blank(source, last_end));
-                if has_blank {
-                    crate::write!(f, [empty_line()]);
-                }
+        if preserve_edge_blanks && let Some((last_end, _)) = previous {
+            let has_blank = f
+                .comments
+                .source_text()
+                .is_some_and(|source| has_trailing_edge_blank(source, last_end));
+            if has_blank {
+                crate::write!(f, [empty_line()]);
             }
         }
     }

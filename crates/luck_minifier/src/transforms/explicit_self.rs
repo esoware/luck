@@ -27,10 +27,10 @@ struct SelfCounter(usize);
 
 impl<'ast> Visitor<'ast> for SelfCounter {
     fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(name) = var {
-            if ident_name(name) == "self" {
-                self.0 += 1;
-            }
+        if let Var::Name(name) = var
+            && ident_name(name) == "self"
+        {
+            self.0 += 1;
         }
         self.walk_var(var);
     }
