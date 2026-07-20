@@ -26,9 +26,13 @@ Umbrella crate re-exporting the luck toolchain as a single dependency.
 
 ## Usage
 
+The package publishes as `luck-lua` (the `luck` name on crates.io
+belongs to an unrelated project), but the library it ships is named
+`luck`, so imports are unaffected:
+
 ```toml
 [dependencies]
-luck = "0.1"
+luck-lua = "0.1"
 ```
 
 ```rust
