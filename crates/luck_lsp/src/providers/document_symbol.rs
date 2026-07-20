@@ -47,15 +47,15 @@ impl SymbolEmitter<'_> {
                 }
             }
             Statement::LocalFunction(local_fn) => {
-                if let TokenKind::Identifier(name) = &local_fn.name.kind {
-                    if let Some(symbol) = self.build_function_symbol(
+                if let TokenKind::Identifier(name) = &local_fn.name.kind
+                    && let Some(symbol) = self.build_function_symbol(
                         name.as_str(),
                         SymbolKind::FUNCTION,
                         &local_fn.body,
                         local_fn.span,
-                    ) {
-                        self.out.push(symbol);
-                    }
+                    )
+                {
+                    self.out.push(symbol);
                 }
             }
             Statement::LocalAssignment(local) => {
@@ -63,16 +63,16 @@ impl SymbolEmitter<'_> {
                     if let TokenKind::Identifier(name) = &name_token.name.kind {
                         let initializer =
                             local.exprs.as_ref().and_then(|exprs| exprs.iter().nth(idx));
-                        if let Some(Expression::FunctionDef(def)) = initializer {
-                            if let Some(symbol) = self.build_function_symbol(
+                        if let Some(Expression::FunctionDef(def)) = initializer
+                            && let Some(symbol) = self.build_function_symbol(
                                 name.as_str(),
                                 SymbolKind::FUNCTION,
                                 &def.body,
                                 local.span,
-                            ) {
-                                self.out.push(symbol);
-                                continue;
-                            }
+                            )
+                        {
+                            self.out.push(symbol);
+                            continue;
                         }
                         self.out.push(DocumentSymbol {
                             name: name.to_string(),

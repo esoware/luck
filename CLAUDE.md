@@ -4,7 +4,7 @@ Lua/Luau bundler, minifier, formatter, linter, and language server.
 Multi-file Lua in, single bundled file out. Supports Lua 5.1, 5.2, 5.3,
 5.4, 5.5, and Luau (standalone and Roblox).
 
-Rust workspace, edition 2024, MSRV 1.85. Parser, lexer, AST, codegen are
+Rust workspace, edition 2024, MSRV 1.88. Parser, lexer, AST, codegen are
 all hand-written - no external parser dependency.
 
 ## Commands

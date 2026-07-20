@@ -53,7 +53,7 @@ Luck is free and open-source software licensed under the [MIT License](LICENSE).
 [license-url]: LICENSE
 [lua-badge]: https://img.shields.io/badge/Lua-5.1%20--%205.5%20%7C%20Luau-2C2D72?logo=lua
 [lua-url]: https://www.lua.org
-[rust-badge]: https://img.shields.io/badge/Rust-1.85%2B-orange?logo=rust
+[rust-badge]: https://img.shields.io/badge/Rust-1.88%2B-orange?logo=rust
 [rust-url]: https://www.rust-lang.org
 [codspeed-badge]: https://img.shields.io/endpoint?url=https://codspeed.io/badge.json
 [codspeed-url]: https://app.codspeed.io/esoware/luck?utm_source=badge

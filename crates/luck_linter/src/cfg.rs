@@ -72,20 +72,18 @@ fn analyze_sequence(stmts: &[Statement], last: Option<&LastStatement>) -> Branch
         }
     }
 
-    if !terminated {
-        if let Some(last_stmt) = last {
-            summary.statement_count += 1;
-            let exit = match last_stmt {
-                LastStatement::Return(_) => Exit::Return,
-                LastStatement::Break(_) => Exit::Break,
-                LastStatement::Continue(_) => Exit::Continue,
-                LastStatement::Error(_) => Exit::Normal,
-            };
-            if matches!(exit, Exit::Return) {
-                summary.may_return = true;
-            }
-            summary.exit = exit;
+    if !terminated && let Some(last_stmt) = last {
+        summary.statement_count += 1;
+        let exit = match last_stmt {
+            LastStatement::Return(_) => Exit::Return,
+            LastStatement::Break(_) => Exit::Break,
+            LastStatement::Continue(_) => Exit::Continue,
+            LastStatement::Error(_) => Exit::Normal,
+        };
+        if matches!(exit, Exit::Return) {
+            summary.may_return = true;
         }
+        summary.exit = exit;
     }
 
     summary.always_returns = matches!(summary.exit, Exit::Return | Exit::Error);

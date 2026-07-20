@@ -186,13 +186,13 @@ impl<N: Notifier> Backend<N> {
         };
         let settings = self.project_settings_for(&uri);
         // Skip files outside the project's include/exclude set entirely.
-        if let Ok(path) = uri.to_file_path() {
-            if !settings.filter.is_included(&path) {
-                self.notifier
-                    .publish_diagnostics(uri, Vec::new(), Some(doc.version))
-                    .await;
-                return;
-            }
+        if let Ok(path) = uri.to_file_path()
+            && !settings.filter.is_included(&path)
+        {
+            self.notifier
+                .publish_diagnostics(uri, Vec::new(), Some(doc.version))
+                .await;
+            return;
         }
         // Opt-in: with no `lint` section, lint with all rules off so only
         // parse errors surface (luck_linter returns parse errors first).

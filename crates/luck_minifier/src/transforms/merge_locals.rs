@@ -247,17 +247,16 @@ fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
                 if assign_names.len() == target_count
                     && assign_names == local_names
                     && !rhs_uses_names
+                    && let Some(Statement::Assignment(assign)) = iter.next()
                 {
-                    if let Some(Statement::Assignment(assign)) = iter.next() {
-                        let fused = Statement::LocalAssignment(Box::new(LocalAssignment {
-                            span: local.span,
-                            names: local.names.clone(),
-                            exprs: Some(assign.values),
-                            is_const: false,
-                        }));
-                        result.push(fused);
-                        continue;
-                    }
+                    let fused = Statement::LocalAssignment(Box::new(LocalAssignment {
+                        span: local.span,
+                        names: local.names.clone(),
+                        exprs: Some(assign.values),
+                        is_const: false,
+                    }));
+                    result.push(fused);
+                    continue;
                 }
             }
         }

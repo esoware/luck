@@ -270,10 +270,10 @@ fn collect_statement_spans(nodes: &Nodes) -> Vec<(u32, u32)> {
 /// Decide whether a rule runs for this lint pass, applying both the
 /// per-rule override and the default-rule kill-switch.
 fn is_rule_enabled(rule: &dyn rule::Rule, config: &LintConfig) -> bool {
-    if let Some(setting) = config.rule_overrides.get(rule.name()) {
-        if let Some(enabled) = setting.enabled {
-            return enabled;
-        }
+    if let Some(setting) = config.rule_overrides.get(rule.name())
+        && let Some(enabled) = setting.enabled
+    {
+        return enabled;
     }
     if config.disable_default_rules {
         return false;

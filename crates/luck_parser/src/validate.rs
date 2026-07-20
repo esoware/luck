@@ -112,11 +112,11 @@ impl ConstWriteChecker<'_> {
         for stmt in &block.stmts {
             self.check_statement(stmt);
         }
-        if let Some(last) = &block.last_stmt {
-            if let LastStatement::Return(ret) = last.as_ref() {
-                for expr in ret.exprs.iter() {
-                    self.check_expression(expr);
-                }
+        if let Some(last) = &block.last_stmt
+            && let LastStatement::Return(ret) = last.as_ref()
+        {
+            for expr in ret.exprs.iter() {
+                self.check_expression(expr);
             }
         }
     }
@@ -538,32 +538,32 @@ struct ContinueUntilChecker<'a> {
 
 impl<'ast> Visitor<'ast> for ContinueUntilChecker<'_> {
     fn visit_statement(&mut self, stmt: &'ast Statement) {
-        if let Statement::RepeatLoop(repeat_loop) = stmt {
-            if let Some(continue_idx) = earliest_continue_stmt(&repeat_loop.block) {
-                let mut skipped: Vec<&str> = Vec::new();
-                for later in repeat_loop.block.stmts.iter().skip(continue_idx + 1) {
-                    match later {
-                        Statement::LocalAssignment(local) => {
-                            skipped.extend(local.names.iter().filter_map(|n| ident_text(&n.name)));
-                        }
-                        Statement::LocalFunction(func) => {
-                            skipped.extend(ident_text(&func.name));
-                        }
-                        _ => {}
+        if let Statement::RepeatLoop(repeat_loop) = stmt
+            && let Some(continue_idx) = earliest_continue_stmt(&repeat_loop.block)
+        {
+            let mut skipped: Vec<&str> = Vec::new();
+            for later in repeat_loop.block.stmts.iter().skip(continue_idx + 1) {
+                match later {
+                    Statement::LocalAssignment(local) => {
+                        skipped.extend(local.names.iter().filter_map(|n| ident_text(&n.name)));
                     }
+                    Statement::LocalFunction(func) => {
+                        skipped.extend(ident_text(&func.name));
+                    }
+                    _ => {}
                 }
-                if !skipped.is_empty() {
-                    let mut reads = ReadCollector { names: Vec::new() };
-                    reads.visit_expression(&repeat_loop.condition);
-                    for name in reads.names {
-                        if skipped.contains(&name.as_str()) {
-                            self.errors.push(ParseError {
+            }
+            if !skipped.is_empty() {
+                let mut reads = ReadCollector { names: Vec::new() };
+                reads.visit_expression(&repeat_loop.condition);
+                for name in reads.names {
+                    if skipped.contains(&name.as_str()) {
+                        self.errors.push(ParseError {
                                 span: repeat_loop.condition.span(),
                                 message: format!(
                                     "local '{name}' used in the until condition is declared after a continue statement"
                                 ),
                             });
-                        }
                     }
                 }
             }
