@@ -21,14 +21,10 @@ impl Rule for UnreachableCode {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let _semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut checker = UnreachableChecker {
             diagnostics: Vec::new(),
         };
-        checker.check_block(block);
+        checker.visit_block(ctx.block);
         checker.diagnostics
     }
 }
@@ -37,54 +33,22 @@ struct UnreachableChecker {
     diagnostics: Vec<LintDiagnostic>,
 }
 
-impl UnreachableChecker {
-    fn check_block(&mut self, block: &Block) {
-        let mut terminated = false;
-
-        for stmt in &block.stmts {
-            if terminated {
-                let span = stmt.span();
+impl<'ast> Visitor<'ast> for UnreachableChecker {
+    fn visit_block(&mut self, block: &'ast Block) {
+        // Break is ordinarily a LastStatement, but Lua 5.2+ also allows it as
+        // a regular Statement mid-block, leaving whatever follows it in the
+        // same block unreachable. Only the first such statement is reported.
+        for pair in block.stmts.windows(2) {
+            if matches!(pair[0], luck_ast::Statement::Break(_)) {
                 self.diagnostics.push(LintDiagnostic::new(
                     "unreachable_code",
                     "unreachable code".to_string(),
-                    span,
+                    pair[1].span(),
                 ));
-                // Only the first unreachable statement per block is reported.
                 break;
             }
-
-            // Break is ordinarily a LastStatement, but Lua 5.2+ also allows it as a
-            // regular Statement mid-block.
-            if matches!(stmt, luck_ast::Statement::Break(_)) {
-                terminated = true;
-            }
-
-            self.visit_statement(stmt);
         }
-    }
-}
-
-impl<'ast> Visitor<'ast> for UnreachableChecker {
-    fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
-        match stmt {
-            luck_ast::Statement::DoBlock(d) => self.check_block(&d.block),
-            luck_ast::Statement::WhileLoop(w) => self.check_block(&w.block),
-            luck_ast::Statement::RepeatLoop(r) => self.check_block(&r.block),
-            luck_ast::Statement::NumericFor(n) => self.check_block(&n.block),
-            luck_ast::Statement::GenericFor(g) => self.check_block(&g.block),
-            luck_ast::Statement::IfStatement(i) => {
-                self.check_block(&i.block);
-                for clause in &i.elseif_clauses {
-                    self.check_block(&clause.block);
-                }
-                if let Some(else_clause) = &i.else_clause {
-                    self.check_block(&else_clause.block);
-                }
-            }
-            luck_ast::Statement::FunctionDecl(f) => self.check_block(&f.body.block),
-            luck_ast::Statement::LocalFunction(f) => self.check_block(&f.body.block),
-            _ => {}
-        }
+        self.walk_block(block);
     }
 }
 

@@ -91,11 +91,11 @@ impl<'src> RestrictedChecker<'src, '_> {
                 self.out.push(
                     LintDiagnostic::new(
                         "restricted_module_paths",
-                        format!("require of restricted module '{literal_text}'"),
+                        format!("require of restricted module `{literal_text}`"),
                         literal_span,
                     )
                     .with_help(format!(
-                        "'{restricted}' is on the project's restricted list"
+                        "`{restricted}` is on the project's restricted list"
                     )),
                 );
                 return;

@@ -28,15 +28,10 @@ impl Rule for PlaceholderRead {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let _semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
         let mut checker = PlaceholderChecker {
             diagnostics: Vec::new(),
         };
-        checker.visit_block(block);
-        let _ = source;
+        checker.visit_block(ctx.block);
         checker.diagnostics
     }
 }

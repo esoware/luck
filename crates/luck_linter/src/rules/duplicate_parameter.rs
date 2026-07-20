@@ -23,7 +23,7 @@ impl Rule for DuplicateParameter {
     }
 
     fn description(&self) -> &'static str {
-        "Function declares two parameters with the same name."
+        "function declares two parameters with the same name"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
@@ -48,7 +48,7 @@ fn check_params(body: &FunctionBody, is_method: bool, out: &mut Vec<LintDiagnost
         if seen.iter().any(|prev| *prev == name.as_str()) {
             out.push(LintDiagnostic::new(
                 "duplicate_parameter",
-                format!("parameter '{name}' is already defined"),
+                format!("parameter `{name}` is already defined"),
                 param.name.span,
             ));
         } else {
@@ -99,7 +99,7 @@ mod tests {
         let source = "local function f(a, b, a) end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'a'"));
+        assert!(diags[0].message.contains("`a`"));
         // The SECOND occurrence is flagged.
         assert_eq!(diags[0].span.start as usize, source.rfind('a').unwrap());
     }
@@ -108,7 +108,7 @@ mod tests {
     fn flags_duplicate_in_function_expression() {
         let diags = run("local f = function(x, x) end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'x'"));
+        assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]
@@ -127,7 +127,7 @@ mod tests {
     fn flags_explicit_self_in_colon_method() {
         let diags = run("local t = {}\nfunction t:m(self) end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'self'"));
+        assert!(diags[0].message.contains("`self`"));
     }
 
     #[test]

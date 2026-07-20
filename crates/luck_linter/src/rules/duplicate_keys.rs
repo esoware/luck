@@ -51,14 +51,15 @@ impl NodeRule for DuplicateKeys {
                         }
                     }
                     Field::Bracketed { key, .. } => {
-                        if let luck_ast::Expression::StringLiteral(token) = key {
-                            let text =
-                                &ctx.source[token.span.start as usize..token.span.end as usize];
+                        if let luck_ast::Expression::StringLiteral(literal) = key {
                             // Compare decoded VALUES: `["\97"]` and `["a"]`
                             // are the same key; raw text says otherwise.
-                            luck_token::literal::decode_string_literal(text, ctx.semantic.version)
-                                .and_then(|bytes| String::from_utf8(bytes).ok())
-                                .map(|value| (value, token.span))
+                            luck_token::literal::decode_string_literal(
+                                &literal.text,
+                                ctx.semantic.version,
+                            )
+                            .and_then(|bytes| String::from_utf8(bytes).ok())
+                            .map(|value| (value, literal.span))
                         } else {
                             None
                         }
@@ -68,16 +69,14 @@ impl NodeRule for DuplicateKeys {
 
                 if let Some((name, span)) = key_name {
                     if let Some(prev_span) = seen.get(&name) {
+                        let (line, column) = luck_token::line_col(ctx.source, prev_span.start);
                         out.push(
                             LintDiagnostic::new(
                                 "duplicate_keys",
-                                format!("duplicate key '{name}' in table constructor"),
+                                format!("duplicate key `{name}` in table constructor"),
                                 span,
                             )
-                            .with_help(format!(
-                                "previous definition at offset {}",
-                                prev_span.start
-                            )),
+                            .with_help(format!("previous definition at {line}:{column}")),
                         );
                     } else {
                         seen.insert(name, span);

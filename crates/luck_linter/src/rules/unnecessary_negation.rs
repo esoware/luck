@@ -22,7 +22,7 @@ impl Rule for UnnecessaryNegation {
     }
 
     fn description(&self) -> &'static str {
-        "Negated comparison that could use the opposite operator."
+        "negated comparison that could use the opposite operator"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {

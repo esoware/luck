@@ -51,10 +51,10 @@ impl fmt::Display for PatternError {
                 write!(formatter, "truncated specifier at offset {offset}")
             }
             Self::UnknownSpecifier { offset, ch } => {
-                write!(formatter, "unknown specifier '%{ch}' at offset {offset}")
+                write!(formatter, "unknown specifier `%{ch}` at offset {offset}")
             }
             Self::BadFlag { offset, ch } => {
-                write!(formatter, "bad flag '{ch}' at offset {offset}")
+                write!(formatter, "bad flag `{ch}` at offset {offset}")
             }
             Self::BadWidth { offset } => write!(formatter, "bad width at offset {offset}"),
             Self::BadPrecision { offset } => {
@@ -65,7 +65,7 @@ impl fmt::Display for PatternError {
             }
             Self::EmptySet { offset } => write!(formatter, "empty set at offset {offset}"),
             Self::BadEscape { offset, ch } => {
-                write!(formatter, "bad escape '%{ch}' at offset {offset}")
+                write!(formatter, "bad escape `%{ch}` at offset {offset}")
             }
             Self::InvalidQuantifierTarget { offset } => {
                 write!(formatter, "quantifier has no target at offset {offset}")
@@ -74,7 +74,7 @@ impl fmt::Display for PatternError {
                 write!(formatter, "unmatched capture at offset {offset}")
             }
             Self::InvalidPackOption { offset, ch } => {
-                write!(formatter, "invalid pack option '{ch}' at offset {offset}")
+                write!(formatter, "invalid pack option `{ch}` at offset {offset}")
             }
             Self::TruncatedPackSize { offset } => {
                 write!(formatter, "truncated pack size at offset {offset}")
@@ -257,9 +257,7 @@ pub fn validate_lua_pattern(pattern: &str) -> Result<usize, PatternError> {
                                 ch: 'f',
                             });
                         }
-                        let set_start = idx;
                         idx = scan_set(bytes, idx)?;
-                        let _ = set_start;
                         prev_quantifiable = false;
                     }
                     // `%%` is a literal percent. Quantifiable.

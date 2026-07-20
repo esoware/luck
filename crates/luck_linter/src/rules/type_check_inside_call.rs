@@ -32,8 +32,9 @@ fn check_call(
     ctx: &LintContext,
     out: &mut Vec<LintDiagnostic>,
 ) {
-    let is_type_call = if let Expression::Var(luck_ast::expr::Var::Name(token)) = &call.callee {
-        let name = &ctx.source[token.span.start as usize..token.span.end as usize];
+    let is_type_call = if let Expression::Var(luck_ast::expr::Var::Name(token)) = &call.callee
+        && let luck_token::TokenKind::Identifier(name) = &token.kind
+    {
         // Shadowed `type` is a user function.
         (name == "type" || name == "typeof") && !ctx.semantic.resolves_to_local(name, token.span)
     } else {

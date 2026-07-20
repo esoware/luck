@@ -449,6 +449,29 @@ fn normalize_args(args: &FunctionArgs) -> NormalizedArgs<'_> {
     }
 }
 
+/// Attribute lists compare by name and argument values; dropping or
+/// reordering `@native`/`@[deprecated(...)]` changes runtime behavior.
+fn function_attributes_eq(
+    left: &[luck_ast::stmt::FunctionAttribute],
+    right: &[luck_ast::stmt::FunctionAttribute],
+    path: &str,
+) -> Result<(), AstDiff> {
+    if left.len() != right.len() {
+        return Err(AstDiff::new(path, "attribute count differs"));
+    }
+    for (i, (l, r)) in left.iter().zip(right).enumerate() {
+        token_text_eq(&l.name, &r.name, &child(path, &format!("attr[{i}]")))?;
+        match (&l.args, &r.args) {
+            (None, None) => {}
+            (Some(a), Some(b)) => {
+                punctuated_eq(a, b, &child(path, &format!("attr[{i}]/args")), expr_eq)?;
+            }
+            _ => return Err(AstDiff::new(path, "attribute args presence differs")),
+        }
+    }
+    Ok(())
+}
+
 fn function_body_eq(left: &FunctionBody, right: &FunctionBody, path: &str) -> Result<(), AstDiff> {
     generics_eq(
         left.generics.as_deref(),
@@ -941,29 +964,6 @@ fn singleton_eq(left: &Token, right: &Token) -> bool {
 
 /// Decode a raw Lua string literal (short quoted form or long bracket form)
 /// to its byte contents. Returns `None` for malformed input.
-/// Attribute lists compare by name and argument values; dropping or
-/// reordering `@native`/`@[deprecated(...)]` changes runtime behavior.
-fn function_attributes_eq(
-    left: &[luck_ast::stmt::FunctionAttribute],
-    right: &[luck_ast::stmt::FunctionAttribute],
-    path: &str,
-) -> Result<(), AstDiff> {
-    if left.len() != right.len() {
-        return Err(AstDiff::new(path, "attribute count differs"));
-    }
-    for (i, (l, r)) in left.iter().zip(right).enumerate() {
-        token_text_eq(&l.name, &r.name, &child(path, &format!("attr[{i}]")))?;
-        match (&l.args, &r.args) {
-            (None, None) => {}
-            (Some(a), Some(b)) => {
-                punctuated_eq(a, b, &child(path, &format!("attr[{i}]/args")), expr_eq)?;
-            }
-            _ => return Err(AstDiff::new(path, "attribute args presence differs")),
-        }
-    }
-    Ok(())
-}
-
 fn decode_string_literal(raw: &str) -> Option<Vec<u8>> {
     let bytes = raw.as_bytes();
     match bytes.first()? {

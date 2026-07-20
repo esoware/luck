@@ -8,7 +8,7 @@ use luck_core::types::LuaTarget;
 use luck_token::CompactString;
 
 use crate::expr::ident_name;
-use crate::name_gen::NameGenerator;
+use crate::name_gen::name_for_index;
 use crate::tokens::make_ident;
 
 pub fn rename(block: Block, target: LuaTarget, rename_globals: bool) -> Block {
@@ -645,7 +645,6 @@ impl Analyzer<'_> {
 /// slot scans candidates from index 0, so the generated names (and their
 /// keyword-ness) are computed once and shared.
 struct CandidatePool {
-    name_gen: NameGenerator,
     keyword_set: FxHashSet<&'static str>,
     candidates: Vec<CompactString>,
     is_keyword: Vec<bool>,
@@ -657,7 +656,6 @@ struct CandidatePool {
 impl CandidatePool {
     fn new(keywords: &[&'static str]) -> Self {
         Self {
-            name_gen: NameGenerator::new(keywords),
             keyword_set: keywords.iter().copied().collect(),
             candidates: Vec::new(),
             is_keyword: Vec::new(),
@@ -669,7 +667,7 @@ impl CandidatePool {
         let mut idx = 0;
         loop {
             if idx == self.candidates.len() {
-                let name = self.name_gen.index_to_name(idx);
+                let name = name_for_index(idx);
                 self.is_keyword
                     .push(self.keyword_set.contains(name.as_str()));
                 self.candidates.push(name);

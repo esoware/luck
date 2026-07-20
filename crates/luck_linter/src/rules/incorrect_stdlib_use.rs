@@ -65,7 +65,7 @@ impl StdlibChecker<'_, '_> {
         if arg_count < min && !has_multi_value_tail {
             self.out.push(LintDiagnostic::new(
                 "incorrect_stdlib_use",
-                format!("'{name}' requires at least {min} argument(s), got {arg_count}"),
+                format!("`{name}` requires at least {min} argument(s), got {arg_count}"),
                 call.span,
             ));
             return;
@@ -75,7 +75,7 @@ impl StdlibChecker<'_, '_> {
         {
             self.out.push(LintDiagnostic::new(
                 "incorrect_stdlib_use",
-                format!("'{name}' accepts at most {max} argument(s), got {arg_count}"),
+                format!("`{name}` accepts at most {max} argument(s), got {arg_count}"),
                 call.span,
             ));
             return;
@@ -86,7 +86,7 @@ impl StdlibChecker<'_, '_> {
         if !func.accepts_arg_count(arg_count) && !has_multi_value_tail {
             self.out.push(LintDiagnostic::new(
                 "incorrect_stdlib_use",
-                format!("no overload of '{name}' accepts {arg_count} argument(s)"),
+                format!("no overload of `{name}` accepts {arg_count} argument(s)"),
                 call.span,
             ));
             return;
@@ -133,7 +133,7 @@ impl StdlibChecker<'_, '_> {
                 let mut allowed_list = allowed
                     .iter()
                     .take(LIST_LIMIT)
-                    .map(|constant| format!("'{}'", constant.value))
+                    .map(|constant| format!("`{}`", constant.value))
                     .collect::<Vec<_>>()
                     .join(", ");
                 if allowed.len() > LIST_LIMIT {
@@ -143,7 +143,7 @@ impl StdlibChecker<'_, '_> {
                 self.out.push(LintDiagnostic::new(
                     "incorrect_stdlib_use",
                     format!(
-                        "'{name}' argument {position} must be one of {allowed_list}, got '{value}'",
+                        "`{name}` argument {position} must be one of {allowed_list}, got `{value}`",
                     ),
                     span,
                 ));

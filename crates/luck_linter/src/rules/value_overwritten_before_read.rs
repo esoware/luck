@@ -43,8 +43,6 @@ impl Rule for ValueOverwrittenBeforeRead {
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
         let block = ctx.block;
         let semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         // Determine which locals have an initializer (Init event at the
         // declaration site). The reference list does not include the
         // declaration itself, so we need an AST pass to find this.
@@ -75,7 +73,7 @@ impl Rule for ValueOverwrittenBeforeRead {
                 .reference_ids
                 .iter()
                 .map(|&ref_id| {
-                    let r = &semantic.scope_tree.references[ref_id.index()];
+                    let r = semantic.scope_tree.reference(ref_id);
                     let kind = if r.scope == symbol.scope {
                         r.kind
                     } else {
@@ -132,7 +130,7 @@ impl Rule for ValueOverwrittenBeforeRead {
 fn make_diagnostic(name: &str, span: Span) -> LintDiagnostic {
     LintDiagnostic::new(
         "value_overwritten_before_read",
-        format!("value assigned to '{name}' is overwritten before it is read"),
+        format!("value assigned to `{name}` is overwritten before it is read"),
         span,
     )
     .with_help("remove the earlier assignment or read it first")
@@ -183,7 +181,7 @@ mod tests {
     fn flags_init_then_overwrite() {
         let diags = run("local x = 1\nx = 2\nreturn x");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'x'"));
+        assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]

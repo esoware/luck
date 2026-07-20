@@ -1,80 +1,133 @@
 import * as vscode from "vscode";
-import {
-	LanguageClient,
-	LanguageClientOptions,
-	ServerOptions,
-	RevealOutputChannelOn,
-} from "vscode-languageclient/node";
+import type { LanguageClientOptions, ServerOptions } from "vscode-languageclient/node";
+import { LanguageClient, RevealOutputChannelOn } from "vscode-languageclient/node";
 import { discoverServer } from "./discover";
 import { serverOutput, traceOutput, logExtension } from "./output";
-import { StatusBar } from "./statusBar";
+import type { StatusBar } from "./status-bar";
+
+type State =
+	| { tag: "stopped" }
+	| { tag: "starting" }
+	| { tag: "running"; client: LanguageClient }
+	| { tag: "stopping" };
 
 export class LuckClient implements vscode.Disposable {
-	private client: LanguageClient | undefined;
-	private context: vscode.ExtensionContext;
-	private status: StatusBar;
+	private state: State = { tag: "stopped" };
+	private clientScope: vscode.Disposable[] = [];
+	private operation: Promise<void> = Promise.resolve();
+	private readonly context: vscode.ExtensionContext;
+	private readonly status: StatusBar;
 
-	constructor(context: vscode.ExtensionContext, status: StatusBar) {
+	public constructor(context: vscode.ExtensionContext, status: StatusBar) {
 		this.context = context;
 		this.status = status;
 	}
 
-	get languageClient(): LanguageClient | undefined {
-		return this.client;
+	public get languageClient(): LanguageClient | undefined {
+		return this.state.tag === "running" ? this.state.client : undefined;
 	}
 
-	async start(): Promise<void> {
-		if (this.client) {
-			logExtension("client.start: already running");
+	public start(): Promise<void> {
+		return this.enqueue(() => this.doStart());
+	}
+
+	public stop(): Promise<void> {
+		return this.enqueue(() => this.doStop());
+	}
+
+	public restart(): Promise<void> {
+		return this.enqueue(async () => {
+			await this.doStop();
+			await this.doStart();
+		});
+	}
+
+	public dispose(): void {
+		void this.stop();
+	}
+
+	// Lifecycle transitions run one at a time, so start/stop/restart can never
+	// Interleave and observe a half-built client.
+	private enqueue(task: () => Promise<void>): Promise<void> {
+		this.operation = this.operation.then(task, task);
+		return this.operation;
+	}
+
+	private async doStart(): Promise<void> {
+		if (this.state.tag !== "stopped") {
+			logExtension(`start ignored: state is ${this.state.tag}`);
 			return;
 		}
+		this.state = { tag: "starting" };
 		this.status.update({ state: "starting" });
+
 		const command = await discoverServer(this.context.extensionPath);
 		if (!command) {
-			this.status.update({
-				state: "error",
-				message: "luck binary not found",
-			});
-			vscode.window
-				.showErrorMessage(
-					"Luck language server binary not found.",
-					"Download Server",
-					"Open Settings",
-				)
-				.then((selection) => {
-					if (selection === "Download Server") {
-						vscode.commands.executeCommand("luck.downloadServer");
-					} else if (selection === "Open Settings") {
-						vscode.commands.executeCommand(
-							"workbench.action.openSettings",
-							"luck.server.path",
-						);
-					}
-				});
+			this.state = { tag: "stopped" };
+			this.status.update({ state: "error", message: "luck binary not found" });
+			this.promptMissingBinary();
 			return;
 		}
 
-		const config = vscode.workspace.getConfiguration("luck");
-		const extraEnv =
-			config.get<Record<string, string>>("server.extraEnv", {}) ?? {};
-		const extraArgs = config.get<string[]>("server.args", []) ?? [];
+		const client = this.buildClient(command);
+		try {
+			await client.start();
+		} catch (error) {
+			this.disposeClientScope();
+			this.state = { tag: "stopped" };
+			const message = error instanceof Error ? error.message : String(error);
+			this.status.update({ state: "error", message });
+			logExtension(`start failed: ${message}`);
+			this.reportStartFailure(message);
+			return;
+		}
 
-		const baseArgs = ["lsp", ...extraArgs];
+		const version = client.initializeResult?.serverInfo?.version ?? undefined;
+		this.state = { tag: "running", client };
+		this.status.update({ state: "ready", version });
+		logExtension(`start: ready (server ${version ?? "unknown"})`);
+	}
+
+	private async doStop(): Promise<void> {
+		if (this.state.tag !== "running") {
+			return;
+		}
+		const { client } = this.state;
+		this.state = { tag: "stopping" };
+		try {
+			await client.stop();
+		} catch (error) {
+			logExtension(`stop: ${error}`);
+		}
+		this.disposeClientScope();
+		this.state = { tag: "stopped" };
+		this.status.update({ state: "stopped" });
+	}
+
+	private buildClient(command: string): LanguageClient {
+		const config = vscode.workspace.getConfiguration("luck");
+		const extraEnv = config.get<Record<string, string>>("server.extraEnv", {}) ?? {};
+		const extraArgs = config.get<string[]>("server.args", []) ?? [];
+		const args = ["lsp", ...extraArgs];
+
 		// No `transport` here: vscode-languageclient appends `--stdio` to the
-		// args when TransportKind.stdio is declared, which `luck lsp` rejects.
+		// Args when TransportKind.stdio is declared, which `luck lsp` rejects.
 		// An Executable without a transport already talks over stdio pipes.
 		const serverOptions: ServerOptions = {
 			run: {
 				command,
-				args: baseArgs,
+				args,
 				options: { env: { ...process.env, ...extraEnv } },
 			},
 			debug: {
 				command,
-				args: baseArgs,
+				args,
 				options: { env: { ...process.env, ...extraEnv, RUST_LOG: "debug" } },
 			},
 		};
+
+		const watcher = vscode.workspace.createFileSystemWatcher("**/{luck.json,.luaurc}");
+		this.clientScope.push(watcher);
 
 		const clientOptions: LanguageClientOptions = {
 			documentSelector: [
@@ -83,57 +136,47 @@ export class LuckClient implements vscode.Disposable {
 				{ scheme: "untitled", language: "lua" },
 				{ scheme: "untitled", language: "luau" },
 			],
-			synchronize: {
-				fileEvents: [
-					vscode.workspace.createFileSystemWatcher(
-						"**/{luck.json,.luaurc}",
-					),
-				],
-			},
+			synchronize: { fileEvents: [watcher] },
 			outputChannel: serverOutput(),
 			traceOutputChannel: traceOutput(),
 			revealOutputChannelOn: RevealOutputChannelOn.Never,
 		};
 
-		this.client = new LanguageClient(
-			"luck",
-			"Luck Language Server",
-			serverOptions,
-			clientOptions,
-		);
+		return new LanguageClient("luck", "Luck Language Server", serverOptions, clientOptions);
+	}
 
-		try {
-			await this.client.start();
-			const version =
-				this.client.initializeResult?.serverInfo?.version ?? undefined;
-			this.status.update({ state: "ready", version });
-			logExtension(`client.start: ready (server ${version ?? "unknown"})`);
-		} catch (err) {
-			this.client = undefined;
-			const message = err instanceof Error ? err.message : String(err);
-			this.status.update({ state: "error", message });
-			logExtension(`client.start: failed: ${message}`);
-			vscode.window.showErrorMessage(`Luck: ${message}`);
+	private disposeClientScope(): void {
+		for (const disposable of this.clientScope) {
+			disposable.dispose();
 		}
+		this.clientScope = [];
 	}
 
-	async stop(): Promise<void> {
-		if (!this.client) return;
-		try {
-			await this.client.stop();
-		} catch (err) {
-			logExtension(`client.stop: ${err}`);
-		}
-		this.client = undefined;
-		this.status.update({ state: "stopped" });
+	private promptMissingBinary(): void {
+		void vscode.window
+			.showErrorMessage(
+				"Luck language server binary not found.",
+				"Download Server",
+				"Open Settings",
+			)
+			.then((selection) => {
+				if (selection === "Download Server") {
+					void vscode.commands.executeCommand("luck.downloadServer");
+				} else if (selection === "Open Settings") {
+					void vscode.commands.executeCommand("workbench.action.openSettings", "luck.server.path");
+				}
+			});
 	}
 
-	async restart(): Promise<void> {
-		await this.stop();
-		await this.start();
-	}
-
-	dispose(): void {
-		void this.stop();
+	private reportStartFailure(message: string): void {
+		void vscode.window
+			.showErrorMessage(`Luck failed to start: ${message}`, "Show Output", "Restart")
+			.then((selection) => {
+				if (selection === "Show Output") {
+					serverOutput().show(true);
+				} else if (selection === "Restart") {
+					void this.restart();
+				}
+			});
 	}
 }

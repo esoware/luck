@@ -20,8 +20,11 @@ mod cfg;
 pub mod diagnostic;
 pub mod fix;
 pub mod format_pattern;
+mod path;
+mod roblox;
 pub mod rule;
 pub mod rules;
+mod suggest;
 pub mod suppression;
 
 #[cfg(test)]
@@ -617,12 +620,12 @@ mod tests {
         assert!(
             diags
                 .iter()
-                .all(|d| !(d.rule == "unused_variable" && d.message.contains("'a'")))
+                .all(|d| !(d.rule == "unused_variable" && d.message.contains("`a`")))
         );
         assert!(
             diags
                 .iter()
-                .any(|d| d.rule == "unused_variable" && d.message.contains("'c'"))
+                .any(|d| d.rule == "unused_variable" && d.message.contains("`c`"))
         );
     }
 

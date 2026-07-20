@@ -2,11 +2,11 @@ use luck_ast::expr::*;
 use luck_ast::shared::Block;
 use luck_ast::transform::AstTransform;
 use luck_token::LuaVersion;
-use luck_token::{BinOp, UnOp};
+use luck_token::{BinOp, NumberSubtypes, UnOp};
 
 use crate::expr::{
     LuaNumber, decode_string_literal, encode_string_literal, extract_boolean, extract_lua_number,
-    is_nil,
+    is_nil, number_subtypes,
 };
 use crate::tokens::default_span as sp;
 
@@ -35,7 +35,7 @@ impl AstTransform for ConstFolder {
             }
             Expression::UnaryOp(unop) => {
                 if let Some(result) =
-                    try_fold_unary(unop.op, &unop.operand, self.version.has_integer_subtype())
+                    try_fold_unary(unop.op, &unop.operand, number_subtypes(self.version))
                 {
                     return result;
                 }
@@ -216,13 +216,13 @@ fn try_fold_binary(
     rhs: &Expression,
     version: LuaVersion,
 ) -> Option<Expression> {
-    let int_subtype = version.has_integer_subtype();
+    let subtypes = number_subtypes(version);
     if let (Some(l), Some(r)) = (
-        extract_lua_number(lhs, int_subtype),
-        extract_lua_number(rhs, int_subtype),
+        extract_lua_number(lhs, subtypes),
+        extract_lua_number(rhs, subtypes),
     ) {
         if let Some(value) = fold_numeric(l, op, r, version) {
-            if let Some(folded) = make_lua_number_expr(value, int_subtype) {
+            if let Some(folded) = make_lua_number_expr(value, subtypes) {
                 return Some(folded);
             }
         }
@@ -293,15 +293,15 @@ fn try_fold_binary(
     None
 }
 
-fn try_fold_unary(op: UnOp, expr: &Expression, int_subtype: bool) -> Option<Expression> {
+fn try_fold_unary(op: UnOp, expr: &Expression, subtypes: NumberSubtypes) -> Option<Expression> {
     match op {
         UnOp::Neg => {
-            if let Some(n) = extract_lua_number(expr, int_subtype) {
+            if let Some(n) = extract_lua_number(expr, subtypes) {
                 let negated = match n {
                     LuaNumber::Int(value) => LuaNumber::Int(value.wrapping_neg()),
                     LuaNumber::Float(value) => LuaNumber::Float(-value),
                 };
-                return make_lua_number_expr(negated, int_subtype);
+                return make_lua_number_expr(negated, subtypes);
             }
             // -(-x) -> x only when x is a number literal (metamethod/coercion safe)
             if let Expression::UnaryOp(inner) = expr
@@ -331,7 +331,8 @@ fn try_fold_unary(op: UnOp, expr: &Expression, int_subtype: bool) -> Option<Expr
 
 /// Emit a folded number, or None when no literal can represent the value
 /// exactly for the target's number model.
-fn make_lua_number_expr(value: LuaNumber, int_subtype: bool) -> Option<Expression> {
+fn make_lua_number_expr(value: LuaNumber, subtypes: NumberSubtypes) -> Option<Expression> {
+    let int_subtype = subtypes == NumberSubtypes::IntFloat;
     match value {
         LuaNumber::Int(int_value) => {
             // `-9223372036854775808` parses as unary minus on a literal

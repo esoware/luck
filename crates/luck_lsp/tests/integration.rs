@@ -220,8 +220,6 @@ async fn shutdown_succeeds() {
     server.shutdown().await.expect("shutdown errored");
 }
 
-// --- provider coverage ---------------------------------------------------
-
 #[tokio::test]
 async fn hover_renders_stdlib_signature() {
     let server = Backend::new(CapturedNotifier::default());
@@ -499,6 +497,74 @@ async fn document_link_resolves_require_path() {
     assert!(
         target.path().ends_with("foo.lua"),
         "link should resolve to foo.lua: {target}"
+    );
+}
+
+#[tokio::test]
+async fn document_link_resolves_luau_relative_import() {
+    // Luau relative imports were mishandled by the old ad-hoc resolver
+    // (dots-to-slashes mangled `./sibling`); the real resolver handles them.
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("sibling.luau"), "return {}\n").expect("write sibling.luau");
+    let main_path = dir.path().join("main.luau");
+    let source = "local s = require(\"./sibling\")\n";
+    std::fs::write(&main_path, source).expect("write main.luau");
+    let uri = Url::from_file_path(&main_path).expect("file path URI");
+
+    let server = Backend::new(CapturedNotifier::default());
+    open(&server, &uri, source).await;
+
+    let links = server
+        .document_link(DocumentLinkParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .await
+        .expect("document link errored")
+        .expect("relative require should produce a document link");
+    assert_eq!(links.len(), 1, "exactly one require link expected");
+    let target = links[0].target.as_ref().expect("link should have a target");
+    assert!(
+        target.path().ends_with("sibling.luau"),
+        "link should resolve to sibling.luau: {target}"
+    );
+}
+
+#[tokio::test]
+async fn document_link_resolves_luau_alias_import() {
+    // `@alias` imports were entirely unsupported by the old resolver.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared = dir.path().join("shared");
+    std::fs::create_dir_all(&shared).expect("mkdir shared");
+    std::fs::write(shared.join("common.luau"), "return {}\n").expect("write common.luau");
+    std::fs::write(
+        dir.path().join(".luaurc"),
+        serde_json::json!({ "aliases": { "shared": "./shared" } }).to_string(),
+    )
+    .expect("write .luaurc");
+    let main_path = dir.path().join("main.luau");
+    let source = "local c = require(\"@shared/common\")\n";
+    std::fs::write(&main_path, source).expect("write main.luau");
+    let uri = Url::from_file_path(&main_path).expect("file path URI");
+
+    let server = Backend::new(CapturedNotifier::default());
+    open(&server, &uri, source).await;
+
+    let links = server
+        .document_link(DocumentLinkParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .await
+        .expect("document link errored")
+        .expect("alias require should produce a document link");
+    assert_eq!(links.len(), 1, "exactly one require link expected");
+    let target = links[0].target.as_ref().expect("link should have a target");
+    assert!(
+        target.path().ends_with("shared/common.luau"),
+        "alias link should resolve to shared/common.luau: {target}"
     );
 }
 

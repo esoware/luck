@@ -34,7 +34,7 @@ pub struct SourceError {
 pub use comment::{Comment, CommentKind, CommentPosition};
 pub use compact_str::CompactString;
 pub use literal::{LuaNumber, NumberSubtypes};
-pub use span::Span;
+pub use span::{Span, line_col};
 pub use token::{Assoc, BinOp, CompoundOp, Token, TokenKind, UNARY_PRECEDENCE, UnOp};
 pub use version::{LuaVersion, StdlibEnvironment};
 

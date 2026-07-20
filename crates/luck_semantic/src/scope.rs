@@ -117,7 +117,7 @@ pub enum ReferenceKind {
 }
 
 impl ScopeTree {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             scopes: Vec::new(),
             symbols: Vec::new(),
@@ -140,7 +140,22 @@ impl ScopeTree {
         &self.references[id.index()]
     }
 
-    pub fn add_scope(&mut self, parent: Option<ScopeId>, kind: ScopeKind, span: Span) -> ScopeId {
+    /// The reference the builder recorded at `span` for `name`, if any.
+    /// Spans are unique source locations, so at most one matches. Used by
+    /// the shape/local-resolution queries that key off a source slice.
+    #[must_use]
+    pub fn reference_at(&self, name: &str, span: Span) -> Option<&Reference> {
+        self.references
+            .iter()
+            .find(|reference| reference.span == span && reference.name == name)
+    }
+
+    pub(crate) fn add_scope(
+        &mut self,
+        parent: Option<ScopeId>,
+        kind: ScopeKind,
+        span: Span,
+    ) -> ScopeId {
         let id = ScopeId::from_index(self.scopes.len());
         self.scopes.push(Scope {
             id,
@@ -158,7 +173,7 @@ impl ScopeTree {
 
     /// Record a declared symbol. Resolution happens at build time on the
     /// builder's flat binding stack, so `shadows` arrives pre-computed.
-    pub fn add_symbol(
+    pub(crate) fn add_symbol(
         &mut self,
         name: CompactString,
         scope: ScopeId,
@@ -184,7 +199,7 @@ impl ScopeTree {
 
     /// Record a reference whose binding was already resolved on the
     /// builder's binding stack (`None` = global).
-    pub fn add_reference(
+    pub(crate) fn add_reference(
         &mut self,
         name: CompactString,
         span: Span,

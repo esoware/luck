@@ -52,6 +52,10 @@ luck lsp [--socket <port>]                   # Run the language server over stdi
 | File | Purpose |
 |------|---------|
 | `main.rs` | Entry point; spawns the 16 MB-stack worker thread |
-| `cli.rs` | Clap command definitions and subcommand handlers |
+| `lib.rs` | Crate root: exit codes, `Verbosity`, module wiring, `run` re-export |
+| `args.rs` | Top-level `clap` model (`Cli`/`Command`) and dispatch |
+| `commands/` | One module per subcommand, each owning its `clap` args struct, its `run` handler, and its tests |
+| `project.rs` | Target/config resolution and file discovery shared by the path commands |
+| `output.rs` | Output, stdin, and diagnostic-cache plumbing |
+| `minify_flags.rs` | The `--no-<pass>` toggles shared by `bundle` and `minify` |
 | `render.rs` | `ariadne`-based diagnostic rendering and file cache |
-| `lib.rs` | Unit-testable CLI dispatch |

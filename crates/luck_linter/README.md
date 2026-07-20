@@ -76,4 +76,8 @@ A rule with an always-safe transformation attaches a `Fix` to its diagnostic. `F
 | `diagnostic.rs` | `LintDiagnostic`, `Severity`, `Category`, `Fix` |
 | `suppression.rs` | Comment-based suppression logic |
 | `fix.rs` | Auto-fix application via `TextEdit` |
+| `format_pattern.rs` | Validators for `string.format`/pattern/`string.pack` literals |
+| `path.rs` | Dotted `Name(.Name)*` path extraction shared by stdlib-resolving rules |
+| `roblox.rs` | Shared helpers for the Roblox `<Global>.new(...)` constructor rules |
+| `suggest.rs` | Levenshtein "did you mean" distance shared by the suggestion rules |
 | `rules/*.rs` | Individual rule implementations |

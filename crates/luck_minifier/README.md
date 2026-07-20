@@ -43,4 +43,4 @@ Every transform implements `AstTransform` from `luck_ast`, overriding `transform
 
 The renamer's scope analysis lives inside the `rename_locals` transform itself: which locals exist in each scope, which upvalues each function captures, and which names are safe to reuse in non-overlapping scopes. There is no separate `scope.rs`.
 
-`name_gen.rs` is the shortest-name generator: `a`, `b`, …, `z`, `aa`, `ab`, … skipping anything that would collide with a Lua keyword.
+`name_gen.rs` maps an index to the shortest candidate identifier (`a`, `b`, …, `z`, `aa`, `ab`, …) via a single `name_for_index` function; the renamer's `CandidatePool` walks that sequence, skipping keywords, in-use names, and names that would collide within a live scope.

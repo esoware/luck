@@ -22,7 +22,7 @@ impl Rule for UnnecessaryAssert {
     }
 
     fn description(&self) -> &'static str {
-        "assert on a constant value always passes or always errors."
+        "assert on a constant value always passes or always errors"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {

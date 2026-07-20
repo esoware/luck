@@ -2,12 +2,91 @@
 //! given byte offset by walking the AST. Used by hover, signature help,
 //! document highlight, and the code-action provider.
 
-#![allow(clippy::while_let_loop, clippy::needless_range_loop)]
-
 use luck_ast::expr::{Expression, FieldAccess, FunctionCall, Var};
 use luck_ast::shared::Block;
 use luck_ast::visitor::Visitor;
 use luck_token::{Span, Token, TokenKind};
+
+fn token_name(token: &Token) -> Option<&str> {
+    match &token.kind {
+        TokenKind::Identifier(name) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// The dotted name chain a callee/prefix resolves to, outermost segment
+/// first, with each segment's name span. A chain broken by an index
+/// expression, a call, or a non-name prefix yields only the trailing
+/// segments that are plain names.
+struct DottedChain {
+    segments: Vec<String>,
+    spans: Vec<Span>,
+}
+
+impl DottedChain {
+    /// Unwind a `Var::FieldAccess` (`a.b.c`) into its name chain.
+    fn from_field_access(access: &FieldAccess) -> Self {
+        let mut segments = Vec::new();
+        let mut spans = Vec::new();
+        if let Some(name) = token_name(&access.name) {
+            segments.push(name.to_string());
+            spans.push(access.name.span);
+        } else {
+            return Self { segments, spans };
+        }
+        let mut prefix: &Expression = &access.prefix;
+        loop {
+            match prefix {
+                Expression::Var(Var::Name(token)) => {
+                    if let Some(name) = token_name(token) {
+                        segments.push(name.to_string());
+                        spans.push(token.span);
+                    }
+                    break;
+                }
+                Expression::Var(Var::FieldAccess(inner)) => {
+                    let Some(name) = token_name(&inner.name) else {
+                        break;
+                    };
+                    segments.push(name.to_string());
+                    spans.push(inner.name.span);
+                    prefix = &inner.prefix;
+                }
+                _ => break,
+            }
+        }
+        segments.reverse();
+        spans.reverse();
+        Self { segments, spans }
+    }
+
+    /// The name chain a call's non-method callee resolves to, plus the span
+    /// of its root name (for shape/shadow resolution).
+    fn from_callee(callee: &Expression) -> Self {
+        match callee {
+            Expression::Var(Var::Name(token)) => {
+                let mut chain = Self {
+                    segments: Vec::new(),
+                    spans: Vec::new(),
+                };
+                if let Some(name) = token_name(token) {
+                    chain.segments.push(name.to_string());
+                    chain.spans.push(token.span);
+                }
+                chain
+            }
+            Expression::Var(Var::FieldAccess(access)) => Self::from_field_access(access),
+            _ => Self {
+                segments: Vec::new(),
+                spans: Vec::new(),
+            },
+        }
+    }
+
+    fn root_span(&self) -> Option<Span> {
+        self.spans.first().copied()
+    }
+}
 
 /// What we found at the cursor.
 #[derive(Debug, Clone)]
@@ -27,8 +106,6 @@ pub enum CursorTarget {
         /// dotted chain - lets consumers resolve shaped/shadowed roots.
         base_span: Option<Span>,
         full_span: Span,
-        call_span: Span,
-        is_method: bool,
     },
 }
 
@@ -78,13 +155,6 @@ impl TargetFinder {
         self.offset >= span.start && self.offset <= span.end
     }
 
-    fn token_name(token: &Token) -> Option<String> {
-        match &token.kind {
-            TokenKind::Identifier(name) => Some(name.to_string()),
-            _ => None,
-        }
-    }
-
     fn try_set(&mut self, target: CursorTarget) {
         let span = target.span();
         if !self.span_contains(span) {
@@ -103,48 +173,15 @@ impl TargetFinder {
         }
     }
 
-    fn record_field_access(&mut self, fa: &FieldAccess) {
-        // Collect the dotted path by unwinding the prefix chain. We stop
-        // at the first non-name prefix and record what we have.
-        let mut segments: Vec<String> = Vec::new();
-        let mut spans: Vec<Span> = Vec::new();
-        if let Some(name) = Self::token_name(&fa.name) {
-            segments.push(name);
-            spans.push(fa.name.span);
-        } else {
+    fn record_field_access(&mut self, access: &FieldAccess) {
+        let chain = DottedChain::from_field_access(access);
+        if chain.segments.is_empty() {
             return;
         }
-        let mut cursor: &Expression = &fa.prefix;
-        loop {
-            match cursor {
-                Expression::Var(var) => match var {
-                    Var::Name(token) => {
-                        if let Some(name) = Self::token_name(token) {
-                            segments.push(name);
-                            spans.push(token.span);
-                        }
-                        break;
-                    }
-                    Var::FieldAccess(inner) => {
-                        if let Some(name) = Self::token_name(&inner.name) {
-                            segments.push(name);
-                            spans.push(inner.name.span);
-                        } else {
-                            break;
-                        }
-                        cursor = &inner.prefix;
-                    }
-                    Var::Index(_) => break,
-                },
-                _ => break,
-            }
-        }
-        segments.reverse();
-        spans.reverse();
         self.try_set(CursorTarget::DottedPath {
-            segments,
-            spans,
-            full_span: fa.span,
+            segments: chain.segments,
+            spans: chain.spans,
+            full_span: access.span,
         });
     }
 }
@@ -178,58 +215,14 @@ impl<'ast> Visitor<'ast> for TargetFinder {
 
 impl TargetFinder {
     fn record_call(&mut self, call: &FunctionCall) {
-        let mut path = Vec::new();
-        let mut base_span: Option<Span> = None;
-        let is_method = call.method.is_some();
-        if let Expression::Var(var) = &call.callee {
-            match var {
-                Var::Name(token) => {
-                    if let Some(name) = Self::token_name(token) {
-                        path.push(name);
-                        base_span = Some(token.span);
-                    }
-                }
-                Var::FieldAccess(fa) => {
-                    // Unwind prefix chain into path segments.
-                    let mut segments: Vec<String> = Vec::new();
-                    if let Some(name) = Self::token_name(&fa.name) {
-                        segments.push(name);
-                    }
-                    let mut cursor: &Expression = &fa.prefix;
-                    loop {
-                        match cursor {
-                            Expression::Var(inner_var) => match inner_var {
-                                Var::Name(token) => {
-                                    if let Some(name) = Self::token_name(token) {
-                                        segments.push(name);
-                                        base_span = Some(token.span);
-                                    }
-                                    break;
-                                }
-                                Var::FieldAccess(inner_fa) => {
-                                    if let Some(name) = Self::token_name(&inner_fa.name) {
-                                        segments.push(name);
-                                    } else {
-                                        break;
-                                    }
-                                    cursor = &inner_fa.prefix;
-                                }
-                                Var::Index(_) => break,
-                            },
-                            _ => break,
-                        }
-                    }
-                    segments.reverse();
-                    path = segments;
-                }
-                Var::Index(_) => {}
-            }
-        }
+        let chain = DottedChain::from_callee(&call.callee);
+        let mut base_span = chain.root_span();
+        let mut path = chain.segments;
         // The method name is a path segment too: `game:GetService(...)`
         // resolves as ["game", "GetService"] through shaped lookup.
         if let Some(method_token) = &call.method {
-            match Self::token_name(method_token) {
-                Some(name) if !path.is_empty() => path.push(name),
+            match token_name(method_token) {
+                Some(name) if !path.is_empty() => path.push(name.to_string()),
                 _ => {
                     path.clear();
                     base_span = None;
@@ -241,8 +234,6 @@ impl TargetFinder {
             path,
             base_span,
             full_span: call.span,
-            call_span: call.span,
-            is_method,
         });
     }
 }
@@ -306,14 +297,15 @@ impl<'ast> CallSiteFinder<'_, 'ast> {
         }
         // Heuristic: treat the first '(' after the callee as the open paren.
         let bytes = self.source.as_bytes();
-        let mut paren_open: Option<u32> = None;
-        for i in (call.callee.span().end as usize)..(span.end as usize).min(bytes.len()) {
-            if bytes[i] == b'(' {
-                paren_open = Some(i as u32);
-                break;
-            }
-        }
-        let Some(paren_open) = paren_open else { return };
+        let scan_start = call.callee.span().end as usize;
+        let scan_end = (span.end as usize).min(bytes.len());
+        let Some(paren_offset) = bytes[scan_start..scan_end]
+            .iter()
+            .position(|&byte| byte == b'(')
+        else {
+            return;
+        };
+        let paren_open = (scan_start + paren_offset) as u32;
         if self.offset <= paren_open {
             return;
         }
@@ -341,59 +333,13 @@ impl<'ast> CallSiteFinder<'_, 'ast> {
 }
 
 fn call_path(call: &FunctionCall) -> Vec<String> {
-    let mut path = collect_callee_path(call);
+    let mut path = DottedChain::from_callee(&call.callee).segments;
     // The method name is a path segment too, so signature help resolves
     // `game:GetService(` through shaped lookup.
     if let Some(method_token) = &call.method {
-        match &method_token.kind {
-            TokenKind::Identifier(name) if !path.is_empty() => path.push(name.to_string()),
+        match token_name(method_token) {
+            Some(name) if !path.is_empty() => path.push(name.to_string()),
             _ => path.clear(),
-        }
-    }
-    path
-}
-
-fn collect_callee_path(call: &FunctionCall) -> Vec<String> {
-    let mut path = Vec::new();
-    if let Expression::Var(var) = &call.callee {
-        match var {
-            Var::Name(token) => {
-                if let TokenKind::Identifier(name) = &token.kind {
-                    path.push(name.to_string());
-                }
-            }
-            Var::FieldAccess(fa) => {
-                let mut segments: Vec<String> = Vec::new();
-                if let TokenKind::Identifier(name) = &fa.name.kind {
-                    segments.push(name.to_string());
-                }
-                let mut cursor: &Expression = &fa.prefix;
-                loop {
-                    match cursor {
-                        Expression::Var(inner_var) => match inner_var {
-                            Var::Name(token) => {
-                                if let TokenKind::Identifier(name) = &token.kind {
-                                    segments.push(name.to_string());
-                                }
-                                break;
-                            }
-                            Var::FieldAccess(inner_fa) => {
-                                if let TokenKind::Identifier(name) = &inner_fa.name.kind {
-                                    segments.push(name.to_string());
-                                } else {
-                                    break;
-                                }
-                                cursor = &inner_fa.prefix;
-                            }
-                            Var::Index(_) => break,
-                        },
-                        _ => break,
-                    }
-                }
-                segments.reverse();
-                path = segments;
-            }
-            Var::Index(_) => {}
         }
     }
     path

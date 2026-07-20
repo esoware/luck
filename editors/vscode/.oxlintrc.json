@@ -1,0 +1,41 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error",
+    "pedantic": "error",
+    "style": "error",
+    "restriction": "error",
+    "nursery": "off"
+  },
+  "rules": {
+    "oxc/no-optional-chaining": "off",
+    "oxc/no-async-await": "off",
+    "oxc/no-rest-spread-properties": "off",
+    "eslint/sort-keys": "off",
+    "eslint/sort-imports": "off",
+    "eslint/no-undefined": "off",
+    "eslint/no-void": "off",
+    "eslint/no-ternary": "off",
+    "eslint/no-magic-numbers": "off",
+    "eslint/class-methods-use-this": "off",
+    "eslint/max-lines-per-function": "off",
+    "eslint/max-statements": "off",
+    "eslint/id-length": "off",
+    "eslint/func-style": "off",
+    "eslint/no-duplicate-imports": "off",
+    "eslint/no-use-before-define": ["error", { "functions": false }],
+    "eslint/init-declarations": "off",
+    "eslint/no-continue": "off",
+    "eslint/default-case": "off",
+    "eslint/capitalized-comments": "off",
+    "typescript/explicit-function-return-type": "off",
+    "import/exports-last": "off",
+    "import/group-exports": "off",
+    "import/no-namespace": "off",
+    "import/prefer-default-export": "off",
+    "unicorn/no-null": "off"
+  },
+  "ignorePatterns": ["out/**", "dist/**", "node_modules/**", "server/**"]
+}

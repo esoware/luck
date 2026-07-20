@@ -35,8 +35,6 @@ impl Rule for MutatingUninitialized {
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
         let block = ctx.block;
         let semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut collector = MutationCollector::default();
         collector.visit_block(block);
 
@@ -59,7 +57,7 @@ impl Rule for MutatingUninitialized {
             let mut refs: Vec<_> = symbol
                 .reference_ids
                 .iter()
-                .map(|&ref_id| &semantic.scope_tree.references[ref_id.index()])
+                .map(|&ref_id| semantic.scope_tree.reference(ref_id))
                 .collect();
             refs.sort_by_key(|r| r.span.start);
 
@@ -83,7 +81,7 @@ impl Rule for MutatingUninitialized {
                 LintDiagnostic::new(
                     "mutating_uninitialized",
                     format!(
-                        "field/index assignment on uninitialized '{}' (value is nil)",
+                        "field/index assignment on uninitialized `{}` (value is nil)",
                         symbol.name
                     ),
                     first.span,
@@ -177,14 +175,14 @@ mod tests {
     fn flags_field_write_on_uninitialized() {
         let diags = run("local x\nx.foo = 1");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'x'"));
+        assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]
     fn flags_index_write_on_uninitialized() {
         let diags = run("local x\nx[1] = 2");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'x'"));
+        assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]

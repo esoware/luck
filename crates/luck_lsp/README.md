@@ -19,7 +19,9 @@ Text-document features:
 - document highlights (occurrences of the symbol under cursor)
 - folding ranges (block constructs)
 - selection ranges (smart-expand selection)
-- document links (clickable `require()` paths)
+- document links (clickable `require()` paths, resolved through
+  `luck_resolver` so Lua search paths, Luau relative / `@alias` imports, and
+  the `init` parent-parent rule all match the bundler)
 
 Custom requests:
 - `luck/syntaxTree` — debug AST dump for the requested document
@@ -29,9 +31,11 @@ Custom requests:
 ## Config
 
 The server reads `luck.json` from any parent directory of an
-opened file to pick up `target` and `format` settings. With no config it falls
-back to Lua 5.4 (or Luau if the file extension is `.luau`) and the formatter
-defaults.
+opened file to pick up `target`, `format`, `lint`, and `search_paths`
+settings. With no config it falls back to Lua 5.4 (or Luau if the file
+extension is `.luau`), the formatter defaults, linting off, and the default Lua
+search paths. Document-link resolution uses the config root as the Lua template
+base, or the requiring file's own directory when no config is found.
 
 ## Build
 

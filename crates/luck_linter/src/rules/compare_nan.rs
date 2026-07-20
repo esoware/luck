@@ -26,21 +26,17 @@ impl Rule for CompareNan {
     }
 }
 
-fn is_nan_expr(expr: &Expression, source: &str) -> bool {
+fn is_nan_expr(expr: &Expression) -> bool {
     if let Expression::BinaryOp(binop) = expr
         && binop.op == BinOp::Div
     {
-        return is_zero(&binop.left, source) && is_zero(&binop.right, source);
+        return is_zero(&binop.left) && is_zero(&binop.right);
     }
     false
 }
 
-fn is_zero(expr: &Expression, source: &str) -> bool {
-    if let Expression::Number(token) = expr {
-        let text = &source[token.span.start as usize..token.span.end as usize];
-        return text == "0";
-    }
-    false
+fn is_zero(expr: &Expression) -> bool {
+    matches!(expr, Expression::Number(literal) if literal.text == "0")
 }
 
 impl NodeRule for CompareNan {
@@ -48,10 +44,10 @@ impl NodeRule for CompareNan {
         static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::BinaryOp]);
         Some(&TYPES)
     }
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
+    fn on_expression(&self, expr: &Expression, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Expression::BinaryOp(binop) = expr
             && matches!(binop.op, BinOp::Eq | BinOp::Ne)
-            && (is_nan_expr(&binop.left, ctx.source) || is_nan_expr(&binop.right, ctx.source))
+            && (is_nan_expr(&binop.left) || is_nan_expr(&binop.right))
         {
             out.push(
                 LintDiagnostic::new(

@@ -32,7 +32,7 @@
 //!         span: Span::new(0, 3),
 //!     })
 //!     .unwrap();
-//! assert!(resolved.path.ends_with(".lua"));
+//! assert!(resolved.path.to_string_lossy().ends_with(".lua"));
 //! ```
 
 use luck_core::diagnostics::{Diagnostic, errors};
@@ -45,9 +45,13 @@ mod luau;
 
 /// A resolved module: its normalized filesystem path and any warnings raised
 /// during resolution.
+///
+/// `path` is forward-slash normalized (see [`normalize_path`]); callers that key
+/// a graph on it derive the string form with [`normalize_path_str`] or
+/// `path.to_string_lossy()`.
 #[derive(Debug)]
 pub struct ResolvedModule {
-    pub path: String,
+    pub path: PathBuf,
     pub warnings: Vec<Diagnostic>,
 }
 
@@ -83,10 +87,7 @@ impl Resolver {
         Self::default()
     }
 
-    pub fn resolve(
-        &mut self,
-        request: &ResolveRequest<'_>,
-    ) -> Result<ResolvedModule, Box<Diagnostic>> {
+    pub fn resolve(&mut self, request: &ResolveRequest<'_>) -> Result<ResolvedModule, Diagnostic> {
         if request.target.is_luau() {
             self.resolve_luau(request)
         } else {
@@ -95,7 +96,7 @@ impl Resolver {
     }
 }
 
-fn resolve_lua(request: &ResolveRequest<'_>) -> Result<ResolvedModule, Box<Diagnostic>> {
+fn resolve_lua(request: &ResolveRequest<'_>) -> Result<ResolvedModule, Diagnostic> {
     let transformed = request.module.replace('.', "/");
     let mut tried_paths = Vec::new();
 
@@ -113,15 +114,24 @@ fn resolve_lua(request: &ResolveRequest<'_>) -> Result<ResolvedModule, Box<Diagn
         tried_paths.push(relative_path);
     }
 
-    Err(Box::new(errors::e004(
+    Err(errors::e004(
         request.from_file,
         request.span.into(),
         request.module,
         &tried_paths,
-    )))
+    ))
 }
 
-pub fn normalize_path(path: &Path) -> String {
+/// Canonicalizes `path` and normalizes it to forward slashes, returned as a
+/// `PathBuf`. This is the resolver's Path-typed boundary; for the graph key or
+/// display form call [`normalize_path_str`].
+pub fn normalize_path(path: &Path) -> PathBuf {
+    PathBuf::from(normalize_path_str(path))
+}
+
+/// The forward-slash string form of [`normalize_path`], used as the bundler's
+/// canonical module key and for cross-platform-stable display.
+pub fn normalize_path_str(path: &Path) -> String {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let normalized = path.to_string_lossy().replace('\\', "/");
     // Windows extended-length prefixes after backslash replacement:
@@ -149,7 +159,7 @@ mod tests {
         from_file: &str,
         search_paths: &[String],
         project_root: &Path,
-    ) -> Result<ResolvedModule, Box<Diagnostic>> {
+    ) -> Result<ResolvedModule, Diagnostic> {
         Resolver::new().resolve(&ResolveRequest {
             module,
             from_file,
@@ -183,7 +193,7 @@ mod tests {
     fn resolves_module_from_first_template() {
         let dir = setup_lua_project();
         let search_paths = vec!["src/?.lua".to_string(), "src/?/init.lua".to_string()];
-        let current_file = normalize_path(&dir.path().join("src/main.lua"));
+        let current_file = normalize_path_str(&dir.path().join("src/main.lua"));
 
         let result = resolve_lua_module("utils", &current_file, &search_paths, dir.path())
             .expect("resolve failed");
@@ -198,7 +208,7 @@ mod tests {
         fs::write(nested.join("bar.lua"), "return {}").expect("failed to write file");
 
         let search_paths = vec!["src/?.lua".to_string()];
-        let current_file = normalize_path(&dir.path().join("src/main.lua"));
+        let current_file = normalize_path_str(&dir.path().join("src/main.lua"));
 
         let result = resolve_lua_module("foo.bar", &current_file, &search_paths, dir.path())
             .expect("resolve failed");
@@ -209,7 +219,7 @@ mod tests {
     fn resolves_directory_module_via_init_template() {
         let dir = setup_lua_project();
         let search_paths = vec!["src/?.lua".to_string(), "src/?/init.lua".to_string()];
-        let current_file = normalize_path(&dir.path().join("src/main.lua"));
+        let current_file = normalize_path_str(&dir.path().join("src/main.lua"));
 
         let result = resolve_lua_module("components", &current_file, &search_paths, dir.path())
             .expect("resolve failed");
@@ -220,7 +230,7 @@ mod tests {
     fn falls_back_to_later_template() {
         let dir = setup_lua_project();
         let search_paths = vec!["src/?.lua".to_string(), "lib/?.lua".to_string()];
-        let current_file = normalize_path(&dir.path().join("src/main.lua"));
+        let current_file = normalize_path_str(&dir.path().join("src/main.lua"));
 
         let result = resolve_lua_module("helper", &current_file, &search_paths, dir.path())
             .expect("resolve failed");
@@ -231,14 +241,13 @@ mod tests {
     fn reports_e004_with_searched_paths_when_missing() {
         let dir = setup_lua_project();
         let search_paths = vec!["src/?.lua".to_string()];
-        let current_file = normalize_path(&dir.path().join("src/main.lua"));
+        let current_file = normalize_path_str(&dir.path().join("src/main.lua"));
 
         let err = resolve_lua_module("nonexistent", &current_file, &search_paths, dir.path())
             .unwrap_err();
         assert_eq!(err.code, "E004");
         assert!(
-            err.help
-                .as_ref()
+            err.help()
                 .expect("e004 always sets help")
                 .contains("src/nonexistent.lua")
         );

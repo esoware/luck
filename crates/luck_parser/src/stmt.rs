@@ -815,10 +815,7 @@ fn expression_to_var(expr: Expression, parser: &mut Parser) -> Var {
         _ => {
             let span = expr.span();
             parser.error(span, "invalid assignment target".to_string());
-            Var::Name(Token::new(
-                TokenKind::Identifier(String::new().into()),
-                span,
-            ))
+            Var::Name(Parser::recovery_identifier(span))
         }
     }
 }
@@ -833,10 +830,10 @@ fn is_block_end(kind: &TokenKind) -> bool {
 
 /// Get the span of the last expression in a Punctuated list.
 pub(crate) fn punctuated_last_span(punct: &Punctuated<Expression>) -> Option<Span> {
-    punct.last_item().map(|e| e.span())
+    punct.last().map(|e| e.span())
 }
 
 /// Get the span of the last declared name in an attname list.
 fn punctuated_last_name_span(punct: &Punctuated<AttributedName>) -> Option<Span> {
-    punct.last_item().map(|attributed| attributed.name.span)
+    punct.last().map(|attributed| attributed.name.span)
 }

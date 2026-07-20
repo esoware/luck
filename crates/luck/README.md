@@ -28,7 +28,7 @@ Umbrella crate re-exporting the luck toolchain as a single dependency.
 
 ```toml
 [dependencies]
-luck = "2"
+luck = "0.1"
 ```
 
 ```rust

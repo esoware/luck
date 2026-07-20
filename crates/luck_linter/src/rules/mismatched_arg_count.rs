@@ -27,7 +27,7 @@ impl Rule for MismatchedArgCount {
     }
 
     fn description(&self) -> &'static str {
-        "Call passes more arguments than the called function accepts."
+        "call passes more arguments than the called function accepts"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
@@ -72,7 +72,7 @@ impl DefinitionCollector<'_> {
         let symbol = &tree.symbols[symbol_id.index()];
         let reassigned = symbol.reference_ids.iter().any(|&ref_id| {
             matches!(
-                tree.references[ref_id.index()].kind,
+                tree.reference(ref_id).kind,
                 ReferenceKind::Write | ReferenceKind::ReadWrite
             )
         });
@@ -173,7 +173,7 @@ impl CallChecker<'_> {
             LintDiagnostic::new(
                 "mismatched_arg_count",
                 format!(
-                    "call passes {guaranteed} arguments to function '{name}', which accepts only \
+                    "call passes {guaranteed} arguments to function `{name}`, which accepts only \
                      {} (defined on line {line})",
                     signature.param_count
                 ),

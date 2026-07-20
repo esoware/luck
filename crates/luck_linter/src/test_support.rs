@@ -11,10 +11,6 @@ pub(crate) fn run_rule(rule: &dyn Rule, source: &str, version: LuaVersion) -> Ve
     run_rule_with_config(rule, source, version, &LintConfig::default())
 }
 
-/// Like [`run_rule`] but with a caller-supplied config, for rules whose
-/// behavior is driven by config fields (thresholds, restricted paths,
-/// extra globals). Mirrors the driver by seeding `config.extra_globals`
-/// into the semantic model before checking.
 /// Like [`run_rule`] but parses as Luau and analyzes with the Roblox
 /// stdlib environment, for the Roblox-only rules.
 pub(crate) fn run_rule_roblox(rule: &dyn Rule, source: &str) -> Vec<LintDiagnostic> {
@@ -36,6 +32,10 @@ pub(crate) fn run_rule_roblox(rule: &dyn Rule, source: &str) -> Vec<LintDiagnost
     })
 }
 
+/// Like [`run_rule`] but with a caller-supplied config, for rules whose
+/// behavior is driven by config fields (thresholds, restricted paths,
+/// extra globals). Mirrors the driver by seeding `config.extra_globals`
+/// into the semantic model before checking.
 pub(crate) fn run_rule_with_config(
     rule: &dyn Rule,
     source: &str,

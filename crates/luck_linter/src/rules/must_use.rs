@@ -60,7 +60,7 @@ impl NodeRule for MustUse {
             out.push(
                 LintDiagnostic::new(
                     "must_use",
-                    format!("return value of '{name}' is discarded"),
+                    format!("return value of `{name}` is discarded"),
                     call_stmt.span,
                 )
                 .with_help("assign the result or remove the call".to_string()),

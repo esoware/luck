@@ -29,9 +29,7 @@ impl Rule for CyclomaticComplexity {
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
         let block = ctx.block;
-        let _semantic = ctx.semantic;
         let source = ctx.source;
-        let _comments = ctx.comments;
         let Some(threshold) = ctx.config.max_cyclomatic_complexity else {
             return Vec::new();
         };
@@ -61,7 +59,7 @@ impl<'src> ComplexityChecker<'src> {
             return;
         }
         let label = name
-            .map(|n| format!("'{n}'"))
+            .map(|n| format!("`{n}`"))
             .unwrap_or_else(|| "anonymous function".to_string());
         self.diagnostics.push(
             LintDiagnostic::new(
@@ -162,7 +160,7 @@ mod tests {
         let diags = run(source, Some(1));
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(
-            diags[0].message.contains("'my_func'"),
+            diags[0].message.contains("`my_func`"),
             "msg: {}",
             diags[0].message
         );

@@ -7,7 +7,7 @@ use std::alloc::{GlobalAlloc, Layout};
 
 use mimalloc_safe::MiMalloc;
 
-pub use criterion::*;
+pub use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 
 pub mod corpus;
 

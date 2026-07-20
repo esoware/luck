@@ -4,7 +4,7 @@
 //! give - there is no original text to lean on, only the AST.
 
 use luck_ast::Block;
-use luck_ast::synth::{FnSig, Synth, SynthField, SynthTypeField, TypeFieldAccess};
+use luck_ast::synth::{FnSig, Synth, SynthField, SynthInterpPart, SynthTypeField, TypeFieldAccess};
 use luck_token::{BinOp, LuaVersion, UnOp};
 
 use luck_formatter::{Comments, FormatOptions, blocks_equiv, format_block};
@@ -58,7 +58,7 @@ fn typed_function_roundtrips() {
         ..FnSig::default()
     };
     let ret = synth.return_(vec![synth.name_expr("n")]);
-    let func = synth.function_def_full(sig, synth.block(vec![], Some(ret)));
+    let func = synth.function_def_full(Vec::new(), sig, synth.block(vec![], Some(ret)));
     let local = synth.local(&["identity"], vec![func]);
     let block = synth.block(vec![local], None);
 
@@ -358,13 +358,133 @@ fn function_attributes_roundtrip() {
     let synth = Synth::new();
     let stmt = synth.local_function_full(
         "hot",
-        &["native"],
+        vec![synth.function_attribute("native", None)],
         FnSig::default(),
         synth.block(vec![], None),
     );
     let block = synth.block(vec![stmt], None);
     let output = assert_roundtrips(&block);
     assert!(output.contains("@native"), "attribute dropped: {output}");
+}
+
+#[test]
+fn attribute_args_roundtrip() {
+    let synth = Synth::new();
+    let attribute = synth.function_attribute("deprecated", Some(vec![synth.string("use y")]));
+    let stmt = synth.local_function_full(
+        "old",
+        vec![attribute],
+        FnSig::default(),
+        synth.block(vec![], None),
+    );
+    let block = synth.block(vec![stmt], None);
+    let output = assert_roundtrips(&block);
+    assert!(
+        output.contains("@[deprecated(\"use y\")]"),
+        "bracketed attribute lost: {output}"
+    );
+}
+
+#[test]
+fn cast_before_comparison_roundtrips() {
+    let synth = Synth::new();
+    // Bare `value :: number < limit` fails to parse: the type grammar reads
+    // `<` as generic arguments. The synthesized form must carry parens.
+    let cast = synth.type_cast(synth.name_expr("value"), synth.ty_named("number"));
+    let compared = synth.binop(cast, BinOp::Lt, synth.name_expr("limit"));
+    let block = synth.block(vec![], Some(synth.return_(vec![compared])));
+    let output = assert_roundtrips(&block);
+    assert!(
+        output.contains("(value :: number) < limit"),
+        "cast not parenthesized before <: {output}"
+    );
+}
+
+#[test]
+fn chained_cast_roundtrips() {
+    let synth = Synth::new();
+    let inner = synth.type_cast(synth.name_expr("x"), synth.ty_named("any"));
+    let outer = synth.type_cast(inner, synth.ty_named("number"));
+    let block = synth.block(vec![synth.local(&["narrowed"], vec![outer])], None);
+    let output = assert_roundtrips(&block);
+    assert!(
+        output.contains("(x :: any) :: number"),
+        "chained cast not parenthesized: {output}"
+    );
+}
+
+#[test]
+fn const_declarations_roundtrip() {
+    let synth = Synth::new();
+    let const_local = synth.const_local(
+        vec![synth.attributed_name("frozen", None, None)],
+        vec![synth.number_int(1)],
+    );
+    let const_function = synth.const_function(
+        "pinned",
+        Vec::new(),
+        FnSig::default(),
+        synth.block(vec![], None),
+    );
+    let block = synth.block(vec![const_local, const_function], None);
+    let output = assert_roundtrips(&block);
+    assert!(output.contains("const frozen = 1"), "got: {output}");
+    assert!(output.contains("const function pinned"), "got: {output}");
+}
+
+#[test]
+fn interpolated_parts_roundtrip() {
+    let synth = Synth::new();
+    let greeting = synth.interpolated_string(vec![
+        SynthInterpPart::Text("hi "),
+        SynthInterpPart::Expr(synth.name_expr("name")),
+        SynthInterpPart::Text("!"),
+    ]);
+    let plain = synth.interpolated_string(vec![SynthInterpPart::Text("no exprs")]);
+    let block = synth.block(vec![synth.local(&["s", "t"], vec![greeting, plain])], None);
+    let output = assert_roundtrips(&block);
+    assert!(output.contains("`hi {name}!`"), "got: {output}");
+    assert!(output.contains("`no exprs`"), "got: {output}");
+}
+
+#[test]
+fn exponent_number_roundtrips() {
+    let synth = Synth::new();
+    let block = synth.block(
+        vec![synth.local(&["huge"], vec![synth.number_f64(1e300)])],
+        None,
+    );
+    let output = assert_roundtrips(&block);
+    assert!(output.contains("1e300"), "exponent form lost: {output}");
+}
+
+#[test]
+fn single_value_truncation_roundtrips() {
+    let synth = Synth::new();
+    let truncated = synth.single_value(synth.call(synth.name_expr("f"), vec![]));
+    let block = synth.block(vec![], Some(synth.return_(vec![truncated])));
+    let output = assert_roundtrips(&block);
+    assert!(output.contains("return (f())"), "got: {output}");
+}
+
+#[test]
+fn long_string_carriage_return_roundtrips() {
+    let synth = Synth::new();
+    let text = synth.long_string("a\r\nb");
+    let block = synth.block(vec![synth.local(&["doc"], vec![text])], None);
+    let output = assert_roundtrips(&block);
+    assert!(output.contains("\"a\\r\\nb\""), "got: {output}");
+}
+
+#[test]
+fn version_pinned_keyword_field_roundtrips() {
+    let synth = Synth::new().with_version(LuaVersion::Luau);
+    // `goto` is a plain identifier in Luau, so the dot form is used and
+    // must survive a Luau re-parse.
+    let access = synth.field_or_index(synth.name_expr("t"), "goto");
+    let block = synth.block(vec![], Some(synth.return_(vec![access])));
+    let output = assert_roundtrips(&block);
+    assert!(output.contains("t.goto"), "got: {output}");
 }
 
 #[test]

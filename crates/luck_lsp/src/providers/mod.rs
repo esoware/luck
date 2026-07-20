@@ -1,9 +1,6 @@
 //! LSP provider implementations. Each module backs one LSP capability and
 //! consumes the cached `DocumentState` (text + parsed AST + line index).
 
-// Several providers parameterize switches and helpers that aren't all
-// wired up yet - keep the surface for future plumbing without warnings.
-
 pub mod code_action;
 pub mod completion;
 pub mod cursor;

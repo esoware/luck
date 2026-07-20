@@ -130,9 +130,6 @@ fn format_is_idempotent_and_reparses() {
 fn minify_is_idempotent_and_reparses() {
     let config = TransformConfig::default();
     for_each_program(|source, version, target, label| {
-        // TEMP-DEBUG
-        std::fs::write(std::env::temp_dir().join("luck_min_input.lua"), source).unwrap();
-        std::fs::write(std::env::temp_dir().join("luck_min_label.txt"), &label).unwrap();
         let Ok(first) = luck_minifier::minify(source, target, &config, "gen.lua") else {
             panic!("{label}: minify errored on valid input:\n{source}");
         };

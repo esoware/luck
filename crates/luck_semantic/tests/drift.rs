@@ -162,8 +162,6 @@ fn deprecation_fingerprint(entry: &StdlibEntry) -> String {
     }
 }
 
-// ---- luau.toml vs luau_roblox.toml ----
-
 /// Shared Luau surface: identical in both environments except the
 /// explicit allowlists below.
 #[test]
@@ -224,8 +222,6 @@ fn luau_and_roblox_shared_surface_agrees() {
         mismatches.join("\n")
     );
 }
-
-// ---- numbered Lua adjacency ----
 
 /// Entries shared by consecutive numbered versions must be identical
 /// unless the manuals changed them. Every allowlisted pair cites the
@@ -319,8 +315,6 @@ fn numbered_lua_adjacent_versions_agree() {
         mismatches.join("\n")
     );
 }
-
-// ---- structural invariants ----
 
 fn all_libraries() -> Vec<(&'static str, &'static StdlibLibrary)> {
     vec![
@@ -545,8 +539,6 @@ fn string_shape_mirrors_string_namespace() {
     }
 }
 
-// ---- environment invariants ----
-
 #[test]
 fn environment_surfaces_do_not_leak() {
     // Representative Roblox-only surface; none of it may appear in
@@ -611,8 +603,6 @@ fn environment_surfaces_do_not_leak() {
         }
     }
 }
-
-// ---- audit spot-check replay ----
 
 /// The original audit's headline findings, pinned forever.
 #[test]

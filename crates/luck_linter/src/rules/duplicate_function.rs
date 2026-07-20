@@ -23,7 +23,7 @@ impl Rule for DuplicateFunction {
     }
 
     fn description(&self) -> &'static str {
-        "Function with the same name is defined twice in the same block."
+        "function with the same name is defined twice in the same block"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
@@ -84,7 +84,7 @@ impl DuplicateChecker<'_> {
                 let line = line_of(self.source, *first_span);
                 self.diagnostics.push(LintDiagnostic::new(
                     "duplicate_function",
-                    format!("duplicate function definition '{name}'; also defined on line {line}"),
+                    format!("duplicate function definition `{name}`; also defined on line {line}"),
                     decl.name.span,
                 ));
             } else {
@@ -114,7 +114,7 @@ mod tests {
     fn flags_duplicate_plain_function() {
         let diags = run("function f() end\nfunction f() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'f'"));
+        assert!(diags[0].message.contains("`f`"));
         assert!(diags[0].message.contains("line 1"));
     }
 
@@ -122,7 +122,7 @@ mod tests {
     fn flags_duplicate_dotted_function() {
         let diags = run("local t = {}\nfunction t.m() end\nfunction t.m() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'t.m'"));
+        assert!(diags[0].message.contains("`t.m`"));
         assert!(diags[0].message.contains("line 2"));
     }
 
@@ -130,7 +130,7 @@ mod tests {
     fn flags_duplicate_method() {
         let diags = run("local t = {}\nfunction t:m() end\nfunction t:m() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'t:m'"));
+        assert!(diags[0].message.contains("`t:m`"));
     }
 
     #[test]

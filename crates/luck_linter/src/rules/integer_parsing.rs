@@ -31,7 +31,6 @@ impl Rule for IntegerParsing {
 }
 
 struct LiteralChecker<'a> {
-    source: &'a str,
     version: LuaVersion,
     out: &'a mut Vec<LintDiagnostic>,
 }
@@ -75,8 +74,7 @@ fn classify(text: &str) -> LiteralShape<'_> {
 }
 
 impl LiteralChecker<'_> {
-    fn check_number(&mut self, span: Span) {
-        let raw = &self.source[span.start as usize..span.end as usize];
+    fn check_number(&mut self, span: Span, raw: &str) {
         match classify(raw) {
             LiteralShape::Hex(digits) => {
                 if !has_64bit_integers(self.version) {
@@ -162,13 +160,12 @@ impl NodeRule for IntegerParsing {
         Some(&TYPES)
     }
     fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if let Expression::Number(token) = expr {
+        if let Expression::Number(literal) = expr {
             LiteralChecker {
-                source: ctx.source,
                 version: ctx.semantic.version,
                 out,
             }
-            .check_number(token.span);
+            .check_number(literal.span, &literal.text);
         }
     }
 }

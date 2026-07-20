@@ -22,7 +22,7 @@ impl Rule for RedundantNativeAttribute {
     }
 
     fn description(&self) -> &'static str {
-        "@native attribute is redundant in a --!native module."
+        "@native attribute is redundant in a --!native module"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {

@@ -673,7 +673,8 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         let Some(doc) = self.snapshot(&uri).await else {
             return Ok(None);
         };
-        Ok(definition::goto_definition(&doc, &uri, &params))
+        let settings = self.project_settings_for(&uri);
+        Ok(definition::goto_definition(&doc, &uri, &settings, &params))
     }
 
     async fn references(&self, params: ReferenceParams) -> JsonRpcResult<Option<Vec<Location>>> {
@@ -767,7 +768,8 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         let Some(doc) = doc else {
             return Ok(None);
         };
-        Ok(Some(document_link::document_links(&doc, &uri)))
+        let settings = self.project_settings_for(&uri);
+        Ok(Some(document_link::document_links(&doc, &uri, &settings)))
     }
 }
 

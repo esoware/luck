@@ -22,6 +22,7 @@ pub mod builder;
 pub mod nodes;
 pub mod resolve;
 pub mod scope;
+mod stdlib_load;
 pub mod stdlib_model;
 
 use std::collections::{HashMap, HashSet};
@@ -110,9 +111,9 @@ impl SemanticAnalysis {
     /// report stdlib diagnostics against user values.
     #[must_use]
     pub fn resolves_to_local(&self, name: &str, span: luck_token::Span) -> bool {
-        self.scope_tree.references.iter().any(|reference| {
-            reference.span == span && reference.name == name && reference.resolved.is_some()
-        })
+        self.scope_tree
+            .reference_at(name, span)
+            .is_some_and(|reference| reference.resolved.is_some())
     }
 
     /// Whether `name` is recognized as a global - either a stdlib entry

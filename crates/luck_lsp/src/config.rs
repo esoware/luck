@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use luck_core::LuaTarget;
-use luck_core::config::{FormatConfig, LuckConfig, discover_config};
+use luck_core::config::{DEFAULT_SEARCH_PATHS, FormatConfig, LuckConfig, discover_config};
 use luck_core::editorconfig::resolved_format_config;
 use luck_formatter::FormatOptions;
 use luck_linter::LintConfig;
@@ -26,6 +26,11 @@ pub struct ProjectSettings {
     pub lint_config: LintConfig,
     pub lint_enabled: bool,
     pub filter: luck_core::config::ProjectFilter,
+    /// Lua 5.x template search paths (`?.lua`, `src/?.lua`, ...). Resolved
+    /// against [`root`](Self::root) when it is set, otherwise against the
+    /// requiring file's own directory. Ignored for Luau targets, which
+    /// resolve relative/alias imports instead.
+    pub search_paths: Vec<String>,
     /// Directory containing the discovered `luck.json`. `None` means we fell
     /// back to defaults because no config was found.
     pub root: Option<PathBuf>,
@@ -42,9 +47,17 @@ impl Default for ProjectSettings {
             lint_enabled: false,
             filter: luck_core::config::ProjectFilter::new(std::path::Path::new("."), &None, &None)
                 .expect("default globs are valid"),
+            search_paths: default_search_paths(),
             root: None,
         }
     }
+}
+
+fn default_search_paths() -> Vec<String> {
+    DEFAULT_SEARCH_PATHS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 impl ProjectSettings {
@@ -178,6 +191,10 @@ fn build_settings(config: &LuckConfig, root: Option<PathBuf>) -> ProjectSettings
                 luck_core::config::ProjectFilter::new(&base, &None, &None)
                     .expect("default globs are valid")
             }),
+        search_paths: config
+            .search_paths
+            .clone()
+            .unwrap_or_else(default_search_paths),
         root,
     }
 }

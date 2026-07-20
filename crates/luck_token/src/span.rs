@@ -38,6 +38,24 @@ impl From<Span> for std::ops::Range<usize> {
     }
 }
 
+/// One-based `(line, column)` for a byte `offset` into `source`. Columns
+/// count bytes from the line start, matching ariadne's `IndexType::Byte`
+/// rendering so a position quoted in diagnostic text lines up with what the
+/// CLI prints. An out-of-range offset clamps to the end of the source.
+#[must_use]
+pub fn line_col(source: &str, offset: u32) -> (u32, u32) {
+    let end = (offset as usize).min(source.len());
+    let mut line = 1u32;
+    let mut line_start = 0usize;
+    for (idx, &byte) in source.as_bytes()[..end].iter().enumerate() {
+        if byte == b'\n' {
+            line += 1;
+            line_start = idx + 1;
+        }
+    }
+    (line, (end - line_start) as u32 + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,5 +80,22 @@ mod tests {
     fn span_conversion_to_usize_range() {
         let range: std::ops::Range<usize> = Span::new(2, 8).into();
         assert_eq!(range, 2..8);
+    }
+
+    #[test]
+    fn line_col_is_one_based_byte_columns() {
+        let source = "local x\ndo local y\nend";
+        assert_eq!(line_col(source, 0), (1, 1));
+        assert_eq!(line_col(source, 6), (1, 7));
+        // First byte of line 2 (the `d` in `do`).
+        assert_eq!(line_col(source, 8), (2, 1));
+        // `y` on line 2.
+        assert_eq!(line_col(source, 17), (2, 10));
+    }
+
+    #[test]
+    fn line_col_clamps_out_of_range() {
+        let source = "abc\ndef";
+        assert_eq!(line_col(source, 999), (2, 4));
     }
 }

@@ -25,7 +25,7 @@ impl Rule for BuiltinGlobalWrite {
     }
 
     fn description(&self) -> &'static str {
-        "Overwriting a standard-library global or one of its fields."
+        "overwriting a standard-library global or one of its fields"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
@@ -68,7 +68,7 @@ fn diagnostic(name: &str, span: Span) -> LintDiagnostic {
     LintDiagnostic::new(
         "builtin_global_write",
         format!(
-            "built-in global '{name}' is overwritten here; consider a local or a different name"
+            "built-in global `{name}` is overwritten here; consider a local or a different name"
         ),
         span,
     )
@@ -233,49 +233,49 @@ mod tests {
     fn flags_assignment_to_builtin() {
         let diags = run("print = 5");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'print'"));
+        assert!(diags[0].message.contains("`print`"));
     }
 
     #[test]
     fn flags_global_function_decl_over_builtin() {
         let diags = run("function print() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'print'"));
+        assert!(diags[0].message.contains("`print`"));
     }
 
     #[test]
     fn flags_dotted_function_decl_on_builtin() {
         let diags = run("function table.foo() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'table.foo'"));
+        assert!(diags[0].message.contains("`table.foo`"));
     }
 
     #[test]
     fn flags_method_decl_on_builtin() {
         let diags = run("function string:shout() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'string:shout'"));
+        assert!(diags[0].message.contains("`string:shout`"));
     }
 
     #[test]
     fn flags_field_write_on_builtin() {
         let diags = run("table.insert = function() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'table.insert'"));
+        assert!(diags[0].message.contains("`table.insert`"));
     }
 
     #[test]
     fn flags_index_write_on_builtin() {
         let diags = run("string[\"format\"] = 1");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'string'"));
+        assert!(diags[0].message.contains("`string`"));
     }
 
     #[test]
     fn flags_nested_field_write_on_builtin() {
         let diags = run("do math.pi = 3 end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'math.pi'"));
+        assert!(diags[0].message.contains("`math.pi`"));
     }
 
     #[test]

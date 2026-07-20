@@ -11,6 +11,7 @@ use tower_lsp::lsp_types::{
 
 use crate::backend::DocumentState;
 use crate::providers::cursor::find_call_site_at;
+use crate::stdlib_render::param_label;
 
 #[must_use]
 pub fn signature_help(doc: &DocumentState, params: &SignatureHelpParams) -> Option<SignatureHelp> {
@@ -66,29 +67,7 @@ fn build_signature(
             label.push_str(", ");
         }
         let start = label.chars().count() as u32;
-        let rendered = match &param.kind {
-            StdlibArgKind::Vararg => "...".to_string(),
-            kind => {
-                let base = match kind {
-                    StdlibArgKind::Any => "any",
-                    StdlibArgKind::Bool => "bool",
-                    StdlibArgKind::Number => "number",
-                    StdlibArgKind::String => "string",
-                    StdlibArgKind::Function => "function",
-                    StdlibArgKind::Table => "table",
-                    StdlibArgKind::Nil => "nil",
-                    StdlibArgKind::Display(d) => d.as_str(),
-                    StdlibArgKind::Constant(_) => "constant",
-                    StdlibArgKind::Vararg => unreachable!(),
-                };
-                if param.required {
-                    base.to_string()
-                } else {
-                    format!("{base}?")
-                }
-            }
-        };
-        label.push_str(&rendered);
+        label.push_str(&param_label(param));
         let end = label.chars().count() as u32;
         parameters.push(ParameterInformation {
             label: ParameterLabel::LabelOffsets([start, end]),

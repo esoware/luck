@@ -471,14 +471,18 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run check && npm run bundle",
+    "vscode:prepublish": "npm run check && npm run lint && npm run fmt:check && npm run bundle",
     "check": "tsc -p ./",
     "compile": "npm run check && npm run bundle-dev",
     "watch": "tsc -watch -p ./",
     "bundle": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node22 --minify",
     "bundle-dev": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node22 --sourcemap",
-    "package": "vsce package",
-    "publish": "vsce publish"
+    "package": "vsce package --out dist/",
+    "publish": "vsce publish",
+    "lint": "oxlint src",
+    "lint:fix": "oxlint src --fix",
+    "fmt": "oxfmt src",
+    "fmt:check": "oxfmt src --check"
   },
   "dependencies": {
     "vscode-languageclient": "^10.1.0"
@@ -489,6 +493,8 @@
     "@types/vscode": "^1.125.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
+    "oxfmt": "^0.59.0",
+    "oxlint": "^1.74.0",
     "typescript": "^7.0.2"
   }
 }

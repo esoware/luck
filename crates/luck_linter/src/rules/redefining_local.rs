@@ -32,10 +32,8 @@ impl Rule for RedefiningLocal {
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
         let block = ctx.block;
-        let _semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut checker = RedefineChecker {
+            source: ctx.source,
             diagnostics: Vec::new(),
         };
         checker.visit_block(block);
@@ -43,11 +41,12 @@ impl Rule for RedefiningLocal {
     }
 }
 
-struct RedefineChecker {
+struct RedefineChecker<'a> {
+    source: &'a str,
     diagnostics: Vec<LintDiagnostic>,
 }
 
-impl RedefineChecker {
+impl RedefineChecker<'_> {
     fn check_block(&mut self, block: &Block) {
         // (name, definition_span) for every local already declared in
         // this block. Order matters - we report later declarations.
@@ -78,20 +77,21 @@ impl RedefineChecker {
             return;
         }
         if let Some((_, first_span)) = declared.iter().find(|(n, _)| n == name.as_str()) {
+            let (line, column) = luck_token::line_col(self.source, first_span.start);
             self.diagnostics.push(
                 LintDiagnostic::new(
                     "redefining_local",
-                    format!("local '{name}' is redeclared in the same block"),
+                    format!("local `{name}` is redeclared in the same block"),
                     name_token.span,
                 )
-                .with_help(format!("previous declaration at byte {}", first_span.start)),
+                .with_help(format!("previous declaration at {line}:{column}")),
             );
         }
         declared.push((name.to_string(), name_token.span));
     }
 }
 
-impl<'ast> Visitor<'ast> for RedefineChecker {
+impl<'ast> Visitor<'ast> for RedefineChecker<'_> {
     fn visit_block(&mut self, block: &'ast Block) {
         self.check_block(block);
         // Recurse into every nested block via the default walk so that
@@ -114,7 +114,7 @@ mod tests {
     fn flags_same_block_redeclaration() {
         let diags = run("do local x = 1\nlocal x = 2\nprint(x) end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'x'"));
+        assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]

@@ -28,10 +28,7 @@ impl Rule for UnusedLoopVariable {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let _block = ctx.block;
         let semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut diagnostics = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
@@ -47,7 +44,7 @@ impl Rule for UnusedLoopVariable {
 
             let has_read = symbol.reference_ids.iter().any(|&ref_id| {
                 matches!(
-                    semantic.scope_tree.references[ref_id.index()].kind,
+                    semantic.scope_tree.reference(ref_id).kind,
                     ReferenceKind::Read | ReferenceKind::ReadWrite
                 )
             });
@@ -56,7 +53,7 @@ impl Rule for UnusedLoopVariable {
             }
 
             let fix = Some(Fix {
-                description: format!("rename '{}' to '_{}'", symbol.name, symbol.name),
+                description: format!("rename `{}` to `_{}`", symbol.name, symbol.name),
                 edits: vec![TextEdit {
                     span: symbol.definition_span,
                     replacement: format!("_{}", symbol.name),
@@ -66,10 +63,10 @@ impl Rule for UnusedLoopVariable {
             diagnostics.push(
                 LintDiagnostic::new(
                     "unused_loop_variable",
-                    format!("unused loop variable '{}'", symbol.name),
+                    format!("unused loop variable `{}`", symbol.name),
                     symbol.definition_span,
                 )
-                .with_help("prefix with '_' to suppress this warning".to_string())
+                .with_help("prefix with `_` to suppress this warning".to_string())
                 .with_fix_opt(fix),
             );
         }
@@ -112,7 +109,7 @@ mod tests {
     fn flags_numeric_for_unused() {
         let diags = run("for i = 1, 10 do print() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'i'"));
+        assert!(diags[0].message.contains("`i`"));
     }
 
     #[test]
@@ -125,7 +122,7 @@ mod tests {
     fn flags_generic_for_key_only() {
         let diags = run("for k, v in pairs(t) do print(v) end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'k'"));
+        assert!(diags[0].message.contains("`k`"));
     }
 
     #[test]

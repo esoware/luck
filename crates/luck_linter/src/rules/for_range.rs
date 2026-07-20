@@ -38,19 +38,15 @@ impl Rule for ForRange {
 }
 
 struct RangeChecker<'a> {
-    source: &'a str,
     out: &'a mut Vec<LintDiagnostic>,
 }
 
 /// Parse a numeric literal, optionally wrapped in a unary minus.
-fn literal_number(expr: &Expression, source: &str) -> Option<f64> {
+fn literal_number(expr: &Expression) -> Option<f64> {
     match expr {
-        Expression::Number(token) => {
-            let text = &source[token.span.start as usize..token.span.end as usize];
-            text.parse().ok()
-        }
+        Expression::Number(literal) => literal.text.parse().ok(),
         Expression::UnaryOp(unop) if unop.op == UnOp::Neg => {
-            literal_number(&unop.operand, source).map(|n| -n)
+            literal_number(&unop.operand).map(|value| -value)
         }
         _ => None,
     }
@@ -70,12 +66,9 @@ fn is_length_of_identifier(expr: &Expression) -> bool {
 
 impl RangeChecker<'_> {
     fn check_for(&mut self, num_for: &NumericFor) {
-        let start = literal_number(&num_for.start, self.source);
-        let limit = literal_number(&num_for.limit, self.source);
-        let step = num_for
-            .step
-            .as_ref()
-            .and_then(|step_expr| literal_number(step_expr, self.source));
+        let start = literal_number(&num_for.start);
+        let limit = literal_number(&num_for.limit);
+        let step = num_for.step.as_ref().and_then(literal_number);
 
         // Zero step is an infinite loop on Lua 5.1-5.3, a runtime error
         // on 5.4+. Either way the author meant something else.
@@ -212,15 +205,11 @@ impl NodeRule for ForRange {
     fn on_statement(
         &self,
         stmt: &luck_ast::Statement,
-        ctx: &LintContext,
+        _ctx: &LintContext,
         out: &mut Vec<LintDiagnostic>,
     ) {
         if let luck_ast::Statement::NumericFor(num_for) = stmt {
-            RangeChecker {
-                source: ctx.source,
-                out,
-            }
-            .check_for(num_for);
+            RangeChecker { out }.check_for(num_for);
         }
     }
 }

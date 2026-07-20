@@ -103,9 +103,7 @@ impl SemanticAnalysis {
         let first = segments.first()?;
         let resolved = self
             .scope_tree
-            .references
-            .iter()
-            .find(|reference| reference.span == root_span && reference.name == *first)
+            .reference_at(first, root_span)
             .and_then(|reference| reference.resolved);
         match resolved {
             Some(symbol_id) => {
@@ -173,9 +171,8 @@ fn var_path(expr: &Expression) -> Option<(Vec<&str>, Vec<Span>)> {
 /// Span-exact "is this name a local here" check, mirroring
 /// `SemanticAnalysis::resolves_to_local`.
 fn is_local(tree: &ScopeTree, name: &str, span: Span) -> bool {
-    tree.references.iter().any(|reference| {
-        reference.span == span && reference.name == name && reference.resolved.is_some()
-    })
+    tree.reference_at(name, span)
+        .is_some_and(|reference| reference.resolved.is_some())
 }
 
 fn expression_shape<'out>(
@@ -188,9 +185,7 @@ fn expression_shape<'out>(
         Expression::Var(Var::Name(token)) => {
             let name = identifier(token)?;
             let resolved = tree
-                .references
-                .iter()
-                .find(|reference| reference.span == token.span && reference.name == name)
+                .reference_at(name, token.span)
                 .and_then(|reference| reference.resolved);
             match resolved {
                 Some(symbol_id) => symbol_shapes.get(&symbol_id),
@@ -321,7 +316,7 @@ impl<'ast> Visitor<'ast> for ShapePass<'_> {
 mod tests {
     use super::*;
     use crate::builder::ScopeTreeBuilder;
-    use crate::stdlib_model::parse_library;
+    use crate::stdlib_load::parse_library;
     use luck_token::{LuaVersion, StdlibEnvironment};
 
     const SHAPED_LIB: &str = r#"

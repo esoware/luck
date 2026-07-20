@@ -130,8 +130,6 @@ impl FullGenerator {
         self.callables[idx].clone()
     }
 
-    // -- program shape ----------------------------------------------------
-
     fn prelude(&mut self) {
         if self.version.is_luau() {
             self.line("--!strict");
@@ -214,8 +212,6 @@ impl FullGenerator {
             "return {{ exported = {exported}, build = function() return {extra} end }}"
         ));
     }
-
-    // -- statements -------------------------------------------------------
 
     fn statement(&mut self) {
         let can_nest = self.stmt_depth < MAX_STMT_DEPTH;
@@ -534,8 +530,6 @@ impl FullGenerator {
         }
     }
 
-    // -- expressions ------------------------------------------------------
-
     fn condition(&mut self) -> String {
         let lhs = self.expr(1);
         match self.rng.below(4) {
@@ -773,8 +767,6 @@ impl FullGenerator {
             }
         }
     }
-
-    // -- Luau types -------------------------------------------------------
 
     fn type_alias_stmt(&mut self) {
         self.next_id += 1;

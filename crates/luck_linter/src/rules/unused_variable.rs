@@ -20,10 +20,7 @@ impl Rule for UnusedVariable {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let _block = ctx.block;
         let semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut diagnostics = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
@@ -43,7 +40,7 @@ impl Rule for UnusedVariable {
 
             let has_read = symbol.reference_ids.iter().any(|&ref_id| {
                 matches!(
-                    semantic.scope_tree.references[ref_id.index()].kind,
+                    semantic.scope_tree.reference(ref_id).kind,
                     ReferenceKind::Read | ReferenceKind::ReadWrite
                 )
             });
@@ -57,7 +54,7 @@ impl Rule for UnusedVariable {
             // The `_` rename is safe only when nothing references it at all.
             let fix = if symbol.reference_ids.is_empty() {
                 Some(Fix {
-                    description: format!("prefix '{}' with '_'", symbol.name),
+                    description: format!("prefix `{}` with `_`", symbol.name),
                     edits: vec![TextEdit {
                         span: symbol.definition_span,
                         replacement: format!("_{}", symbol.name),
@@ -70,10 +67,10 @@ impl Rule for UnusedVariable {
             diagnostics.push(
                 LintDiagnostic::new(
                     "unused_variable",
-                    format!("unused {kind_str} '{}'", symbol.name),
+                    format!("unused {kind_str} `{}`", symbol.name),
                     symbol.definition_span,
                 )
-                .with_help("prefix with '_' to suppress this warning".to_string())
+                .with_help("prefix with `_` to suppress this warning".to_string())
                 .with_fix_opt(fix),
             );
         }

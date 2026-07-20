@@ -66,7 +66,7 @@ impl NodeRule for DuplicateConditions {
                     for &(earlier_text, _) in conditions.iter().take(index) {
                         if current_text == earlier_text {
                             out.push(LintDiagnostic::new("duplicate_conditions", format!(
-                                    "duplicate condition '{}' in if/elseif chain",
+                                    "duplicate condition `{}` in if/elseif chain",
                                     current_text
                                 ), current_span).with_help(
                                     "this branch can never execute because the same condition was already checked".to_string()

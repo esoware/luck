@@ -256,7 +256,6 @@ mod tests {
         // cannot drift; this asserts the relationship explicitly. Every
         // `all_rules` name must appear, and the only extra entry is the
         // synthetic `parse_error` pseudo-rule.
-        let _config = crate::LintConfig::default();
         let live: Vec<&str> = all_rules().iter().map(|r| r.name()).collect();
         let listed = registered_rule_names();
         for name in &live {

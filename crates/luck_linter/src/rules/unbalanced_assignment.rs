@@ -25,13 +25,9 @@ impl Rule for UnbalancedAssignment {
     }
 }
 
-fn count_punctuated_exprs(punct: &luck_ast::shared::Punctuated<Expression>) -> usize {
-    punct.len()
-}
-
 fn last_is_multiret(punct: &luck_ast::shared::Punctuated<Expression>) -> bool {
     matches!(
-        punct.last_item(),
+        punct.last(),
         Some(Expression::FunctionCall(_)) | Some(Expression::VarArg(_))
     )
 }
@@ -52,7 +48,7 @@ impl NodeRule for UnbalancedAssignment {
             luck_ast::Statement::LocalAssignment(local) => {
                 if let Some(exprs) = &local.exprs {
                     let names = local.names.len();
-                    let values = count_punctuated_exprs(exprs);
+                    let values = exprs.len();
                     if !last_is_multiret(exprs) && names != values && values > 0 {
                         out.push(LintDiagnostic::new(
                             "unbalanced_assignment",
@@ -64,7 +60,7 @@ impl NodeRule for UnbalancedAssignment {
             }
             luck_ast::Statement::Assignment(assign) => {
                 let targets = assign.targets.len();
-                let values = count_punctuated_exprs(&assign.values);
+                let values = assign.values.len();
                 if !last_is_multiret(&assign.values) && targets != values {
                     out.push(LintDiagnostic::new(
                         "unbalanced_assignment",

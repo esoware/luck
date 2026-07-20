@@ -21,7 +21,7 @@ impl Rule for GlobalUsedAsLocal {
     }
 
     fn description(&self) -> &'static str {
-        "Global variable is only used inside one function; use a local."
+        "global variable is only used inside one function; use a local"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
@@ -74,7 +74,7 @@ impl Rule for GlobalUsedAsLocal {
             diagnostics.push(
                 LintDiagnostic::new(
                     "global_used_as_local",
-                    format!("global '{name}' is only used in one enclosing function"),
+                    format!("global `{name}` is only used in one enclosing function"),
                     first.span,
                 )
                 .with_help("declare it `local` inside that function".to_string()),

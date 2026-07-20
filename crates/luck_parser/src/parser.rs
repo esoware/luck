@@ -135,16 +135,20 @@ impl<'src> Parser<'src> {
         })
     }
 
+    /// The one canonical zero-width identifier placeholder, anchored at
+    /// `span`, that keeps parsing alive after a failed identifier
+    /// expectation or an invalid assignment target.
+    pub(crate) fn recovery_identifier(span: Span) -> Token {
+        Token::new(TokenKind::Identifier(String::new().into()), span)
+    }
+
     /// Expect an identifier; on mismatch record the error and return a
     /// zero-width placeholder token so parsing continues.
     #[inline]
     pub(crate) fn expect_identifier_recover(&mut self) -> Token {
         self.expect_identifier().unwrap_or_else(|err| {
             self.errors.push(err);
-            Token::new(
-                TokenKind::Identifier(String::new().into()),
-                self.current_span(),
-            )
+            Self::recovery_identifier(self.current_span())
         })
     }
 

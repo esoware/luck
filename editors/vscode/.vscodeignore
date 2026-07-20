@@ -8,3 +8,5 @@ node_modules/**
 **/*.ts
 !out/**/*.js
 .eslintrc.json
+dist/**
+*.vsix

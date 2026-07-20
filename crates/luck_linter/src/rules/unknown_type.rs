@@ -1,10 +1,11 @@
 use luck_ast::Expression;
-use luck_ast::expr::{BinaryOp, FunctionArgs, FunctionCall, Var};
+use luck_ast::expr::{BinaryOp, FunctionArgs, FunctionCall, Literal, Var};
 use luck_token::BinOp;
-use luck_token::{Span, StdlibEnvironment, TokenKind};
+use luck_token::{StdlibEnvironment, TokenKind};
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
+use crate::suggest::levenshtein;
 use luck_ast::node::{AstTypesBitset, NodeType};
 
 pub struct UnknownType;
@@ -23,7 +24,7 @@ impl Rule for UnknownType {
     }
 
     fn description(&self) -> &'static str {
-        "type() or typeof() result compared against an unknown type name."
+        "type() or typeof() result compared against an unknown type name"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
@@ -43,10 +44,10 @@ impl NodeRule for UnknownType {
         if !matches!(binop.op, BinOp::Eq | BinOp::Ne) {
             return;
         }
-        let Some((callee, literal_span)) = classify_comparison(binop, ctx) else {
+        let Some((callee, literal)) = classify_comparison(binop, ctx) else {
             return;
         };
-        let Some(name) = literal_content(ctx.source, literal_span) else {
+        let Some(name) = literal_content(&literal.text) else {
             return;
         };
         let primitives = primitive_type_names(ctx);
@@ -68,23 +69,26 @@ impl NodeRule for UnknownType {
             primitives
                 .iter()
                 .copied()
-                .find(|primitive| edit_distance(primitive, name) <= 2)
+                .find(|primitive| levenshtein(primitive, name) <= 2)
         });
         let mut diag = LintDiagnostic::new(
             "unknown_type",
-            format!("'{name}' is not a value that `{callee}` can return"),
-            literal_span,
+            format!("`{name}` is not a value that `{callee}` can return"),
+            literal.span,
         );
         if let Some(suggestion) = suggestion {
-            diag = diag.with_help(format!("did you mean '{suggestion}'?"));
+            diag = diag.with_help(format!("did you mean `{suggestion}`?"));
         }
         out.push(diag);
     }
 }
 
 /// Match `type(x) == "literal"` in either operand order. Returns the
-/// callee name (`type`/`typeof`) and the string literal's span.
-fn classify_comparison<'a>(binop: &'a BinaryOp, ctx: &LintContext) -> Option<(&'a str, Span)> {
+/// callee name (`type`/`typeof`) and the string literal.
+fn classify_comparison<'a>(
+    binop: &'a BinaryOp,
+    ctx: &LintContext,
+) -> Option<(&'a str, &'a Literal)> {
     let sides = [(&binop.left, &binop.right), (&binop.right, &binop.left)];
     for (call_side, literal_side) in sides {
         let Expression::FunctionCall(call) = call_side else {
@@ -93,10 +97,10 @@ fn classify_comparison<'a>(binop: &'a BinaryOp, ctx: &LintContext) -> Option<(&'
         let Some(callee) = type_function_callee(call, ctx) else {
             continue;
         };
-        let Expression::StringLiteral(token) = literal_side else {
+        let Expression::StringLiteral(literal) = literal_side else {
             continue;
         };
-        return Some((callee, token.span));
+        return Some((callee, literal));
     }
     None
 }
@@ -148,30 +152,13 @@ fn primitive_type_names(ctx: &LintContext) -> &'static [&'static str] {
 
 /// Quoted literal content without unescaping; long-bracket strings are
 /// skipped (their content can't hold a type name typo worth chasing).
-fn literal_content(source: &str, span: Span) -> Option<&str> {
-    let raw = &source[span.start as usize..span.end as usize];
+fn literal_content(raw: &str) -> Option<&str> {
     let bytes = raw.as_bytes();
     if bytes.len() < 2 || !matches!(bytes[0], b'"' | b'\'') {
         return None;
     }
     let inner = &raw[1..raw.len() - 1];
     inner.bytes().all(|b| b != b'\\').then_some(inner)
-}
-
-fn edit_distance(a: &str, b: &str) -> usize {
-    let a: Vec<u8> = a.bytes().collect();
-    let b: Vec<u8> = b.bytes().collect();
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut current = vec![0; b.len() + 1];
-    for (i, &a_byte) in a.iter().enumerate() {
-        current[0] = i + 1;
-        for (j, &b_byte) in b.iter().enumerate() {
-            let substitution = prev[j] + usize::from(a_byte != b_byte);
-            current[j + 1] = substitution.min(prev[j + 1] + 1).min(current[j] + 1);
-        }
-        std::mem::swap(&mut prev, &mut current);
-    }
-    prev[b.len()]
 }
 
 #[cfg(test)]
@@ -190,7 +177,7 @@ mod tests {
         let diags = run("local ok = type(x) == \"strng\"", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(
-            diags[0].help.as_deref() == Some("did you mean 'string'?"),
+            diags[0].help.as_deref() == Some("did you mean `string`?"),
             "{diags:?}"
         );
     }
@@ -206,7 +193,7 @@ mod tests {
         let diags = run("local ok = type(x) ~= \"Number\"", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(
-            diags[0].help.as_deref() == Some("did you mean 'number'?"),
+            diags[0].help.as_deref() == Some("did you mean `number`?"),
             "{diags:?}"
         );
     }

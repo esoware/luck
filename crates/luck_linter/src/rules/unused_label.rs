@@ -29,13 +29,8 @@ impl Rule for UnusedLabel {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let _semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
         let mut diagnostics = Vec::new();
-        check_scope(block, &mut diagnostics);
-        let _ = source;
+        check_scope(ctx.block, &mut diagnostics);
         diagnostics
     }
 }

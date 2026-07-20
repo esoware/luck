@@ -58,7 +58,7 @@ impl<T> Punctuated<T> {
         self.items.first()
     }
 
-    pub fn last_item(&self) -> Option<&T> {
+    pub fn last(&self) -> Option<&T> {
         self.items.last()
     }
 

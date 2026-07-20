@@ -26,18 +26,13 @@ impl Rule for ReversedForLoop {
     }
 }
 
-fn extract_number(expr: &Expression, source: &str) -> Option<f64> {
-    if let Expression::Number(token) = expr {
-        let text = &source[token.span.start as usize..token.span.end as usize];
-        text.parse().ok()
-    } else if let Expression::UnaryOp(unop) = expr {
-        if let UnOp::Neg = unop.op {
-            extract_number(&unop.operand, source).map(|n| -n)
-        } else {
-            None
+fn extract_number(expr: &Expression) -> Option<f64> {
+    match expr {
+        Expression::Number(literal) => literal.text.parse().ok(),
+        Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
+            extract_number(&unop.operand).map(|value| -value)
         }
-    } else {
-        None
+        _ => None,
     }
 }
 
@@ -49,21 +44,23 @@ impl NodeRule for ReversedForLoop {
     fn on_statement(
         &self,
         stmt: &luck_ast::Statement,
-        ctx: &LintContext,
+        _ctx: &LintContext,
         out: &mut Vec<LintDiagnostic>,
     ) {
         if let luck_ast::Statement::NumericFor(num_for) = stmt {
-            let start = extract_number(&num_for.start, ctx.source);
-            let limit = extract_number(&num_for.limit, ctx.source);
+            let start = extract_number(&num_for.start);
+            let limit = extract_number(&num_for.limit);
 
-            if let (Some(s), Some(l)) = (start, limit)
-                && s > l
+            if let (Some(start), Some(limit)) = (start, limit)
+                && start > limit
                 && num_for.step.is_none()
             {
                 out.push(
                     LintDiagnostic::new(
                         "reversed_for_loop",
-                        format!("for loop from {s} to {l} without step -1 will never execute"),
+                        format!(
+                            "for loop from {start} to {limit} without step -1 will never execute"
+                        ),
                         num_for.span,
                     )
                     .with_help("add a negative step: `for i = start, limit, -1 do`".to_string()),

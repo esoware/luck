@@ -18,10 +18,7 @@ impl Rule for Shadowing {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let _block = ctx.block;
         let semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut diagnostics = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
@@ -31,16 +28,15 @@ impl Rule for Shadowing {
                     continue;
                 }
                 let shadowed = &semantic.scope_tree.symbols[shadowed_id.index()];
+                let (line, column) =
+                    luck_token::line_col(ctx.source, shadowed.definition_span.start);
                 diagnostics.push(
                     LintDiagnostic::new(
                         "shadowing",
-                        format!("variable '{}' shadows outer variable", symbol.name),
+                        format!("variable `{}` shadows outer variable", symbol.name),
                         symbol.definition_span,
                     )
-                    .with_help(format!(
-                        "outer variable defined at offset {}",
-                        shadowed.definition_span.start
-                    )),
+                    .with_help(format!("outer variable defined at {line}:{column}")),
                 );
             }
         }
@@ -64,7 +60,7 @@ mod tests {
         // redefining_local, which is same-block only.
         let diags = run("local x = 1\ndo local x = 2 print(x) end");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("'x'"));
+        assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]

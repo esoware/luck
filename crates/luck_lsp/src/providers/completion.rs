@@ -15,7 +15,7 @@ use luck_ast::visitor::Visitor;
 use luck_semantic::stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, library_for,
 };
-use luck_token::{LuaVersion, Span, TokenKind};
+use luck_token::TokenKind;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemTag, CompletionParams, CompletionResponse,
     CompletionTextEdit, Documentation, InsertTextFormat, MarkupContent, MarkupKind, TextEdit,
@@ -23,6 +23,7 @@ use tower_lsp::lsp_types::{
 
 use crate::backend::DocumentState;
 use crate::providers::cursor::find_string_arg_at;
+use crate::stdlib_render::param_label;
 
 #[must_use]
 pub fn completion(doc: &DocumentState, params: &CompletionParams) -> Option<CompletionResponse> {
@@ -46,7 +47,7 @@ pub fn completion(doc: &DocumentState, params: &CompletionParams) -> Option<Comp
         let mut push = |name: &str, member: &StdlibEntry| {
             let is_method = matches!(member, StdlibEntry::Function(func) if func.is_method);
             if is_method == prefix.is_colon {
-                items.push(item_for_entry(name, member, doc.target.lua_version()));
+                items.push(item_for_entry(name, member));
             }
         };
         if let Some(entry) = lib.lookup_str(&segments) {
@@ -62,7 +63,7 @@ pub fn completion(doc: &DocumentState, params: &CompletionParams) -> Option<Comp
                 StdlibEntry::Constant(value) | StdlibEntry::Property(value) => value.shape.as_ref(),
                 StdlibEntry::Function(_) => None,
             };
-            if let Some(shape_members) = shape.and_then(|s| lib.shapes.get(s.as_str())) {
+            if let Some(shape_members) = shape.and_then(|name| lib.shapes.get(name.as_str())) {
                 for (name, member) in &shape_members.members {
                     push(name.as_str(), member);
                 }
@@ -82,14 +83,9 @@ pub fn completion(doc: &DocumentState, params: &CompletionParams) -> Option<Comp
     } else {
         // Bare identifier: stdlib globals + scope locals + keywords.
         for (name, entry) in &lib.globals {
-            items.push(item_for_entry(
-                name.as_str(),
-                entry,
-                doc.target.lua_version(),
-            ));
+            items.push(item_for_entry(name.as_str(), entry));
         }
-        for (name, span) in visible_locals(&doc.parsed.block, offset) {
-            let _ = span;
+        for name in visible_locals(&doc.parsed.block, offset) {
             items.push(CompletionItem {
                 label: name,
                 kind: Some(CompletionItemKind::VARIABLE),
@@ -236,7 +232,7 @@ fn is_ident_byte(b: u8) -> bool {
     b == b'_' || b.is_ascii_alphanumeric()
 }
 
-fn item_for_entry(name: &str, entry: &StdlibEntry, _version: LuaVersion) -> CompletionItem {
+fn item_for_entry(name: &str, entry: &StdlibEntry) -> CompletionItem {
     let kind = match entry {
         StdlibEntry::Function(_) => CompletionItemKind::FUNCTION,
         StdlibEntry::Namespace(_) => CompletionItemKind::MODULE,
@@ -291,28 +287,7 @@ fn format_function_doc(name: &str, func: &StdlibFunction) -> Option<String> {
         .primary_signature()
         .params
         .iter()
-        .map(|p| match &p.kind {
-            StdlibArgKind::Vararg => "...".to_string(),
-            kind => {
-                let label = match kind {
-                    StdlibArgKind::Any => "any",
-                    StdlibArgKind::Bool => "bool",
-                    StdlibArgKind::Number => "number",
-                    StdlibArgKind::String => "string",
-                    StdlibArgKind::Function => "function",
-                    StdlibArgKind::Table => "table",
-                    StdlibArgKind::Nil => "nil",
-                    StdlibArgKind::Display(d) => d.as_str(),
-                    StdlibArgKind::Constant(_) => "constant",
-                    StdlibArgKind::Vararg => unreachable!(),
-                };
-                if p.required {
-                    label.to_string()
-                } else {
-                    format!("{label}?")
-                }
-            }
-        })
+        .map(param_label)
         .collect::<Vec<_>>()
         .join(", ");
     let mut out = format!("```lua\nfunction {name}({params})\n```");
@@ -340,7 +315,7 @@ const KEYWORD_COMPLETIONS: &[&str] = &[
 /// precedes `offset`. This is intentionally lexical-only - we don't try
 /// to mirror the scope walk because completion is best-effort.
 #[must_use]
-fn visible_locals(block: &Block, offset: u32) -> Vec<(String, Span)> {
+fn visible_locals(block: &Block, offset: u32) -> Vec<String> {
     let mut collector = LocalCollector {
         offset,
         out: Vec::new(),
@@ -351,7 +326,17 @@ fn visible_locals(block: &Block, offset: u32) -> Vec<(String, Span)> {
 
 struct LocalCollector {
     offset: u32,
-    out: Vec<(String, Span)>,
+    out: Vec<String>,
+}
+
+impl LocalCollector {
+    fn record(&mut self, token: &luck_token::Token) {
+        if token.span.end <= self.offset
+            && let TokenKind::Identifier(ident) = &token.kind
+        {
+            self.out.push(ident.to_string());
+        }
+    }
 }
 
 impl<'ast> Visitor<'ast> for LocalCollector {
@@ -360,30 +345,14 @@ impl<'ast> Visitor<'ast> for LocalCollector {
         match stmt {
             Statement::LocalAssignment(local) => {
                 for name_token in local.names.iter() {
-                    if name_token.name.span.end <= self.offset {
-                        if let TokenKind::Identifier(ident) = &name_token.name.kind {
-                            self.out.push((ident.to_string(), name_token.name.span));
-                        }
-                    }
+                    self.record(&name_token.name);
                 }
             }
-            Statement::LocalFunction(local_fn) if local_fn.name.span.end <= self.offset => {
-                if let TokenKind::Identifier(ident) = &local_fn.name.kind {
-                    self.out.push((ident.to_string(), local_fn.name.span));
-                }
-            }
-            Statement::NumericFor(nfor) if nfor.name.span.end <= self.offset => {
-                if let TokenKind::Identifier(ident) = &nfor.name.kind {
-                    self.out.push((ident.to_string(), nfor.name.span));
-                }
-            }
+            Statement::LocalFunction(local_fn) => self.record(&local_fn.name),
+            Statement::NumericFor(nfor) => self.record(&nfor.name),
             Statement::GenericFor(gfor) => {
                 for binding in gfor.names.iter() {
-                    if binding.name.span.end <= self.offset {
-                        if let TokenKind::Identifier(ident) = &binding.name.kind {
-                            self.out.push((ident.to_string(), binding.name.span));
-                        }
-                    }
+                    self.record(&binding.name);
                 }
             }
             _ => {}
@@ -393,11 +362,7 @@ impl<'ast> Visitor<'ast> for LocalCollector {
 
     fn visit_function_body(&mut self, body: &'ast luck_ast::shared::FunctionBody) {
         for param in body.params.iter() {
-            if param.name.span.end <= self.offset {
-                if let TokenKind::Identifier(ident) = &param.name.kind {
-                    self.out.push((ident.to_string(), param.name.span));
-                }
-            }
+            self.record(&param.name);
         }
         self.walk_function_body(body);
     }

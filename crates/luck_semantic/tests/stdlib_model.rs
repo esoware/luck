@@ -1144,7 +1144,6 @@ fn luau_files_have_no_file_shape() {
     assert!(!lib(LuaVersion::Luau).shapes.contains_key("file"));
     assert!(!roblox().shapes.contains_key("file"));
 }
-// ---- Roblox DataModel, services, and generated class sets ----
 
 mod roblox_api {
     use super::*;
@@ -1400,8 +1399,6 @@ mod roblox_api {
     }
 }
 
-// ---- generated Enum tree ----
-
 mod enum_tree {
     use super::*;
 
@@ -1479,8 +1476,6 @@ mod enum_tree {
         assert!(lib(LuaVersion::Luau).lookup_str(&["Enum"]).is_none());
     }
 }
-
-// ---- generated roblox_api.toml regen pipeline ----
 
 mod regen {
     use std::path::PathBuf;

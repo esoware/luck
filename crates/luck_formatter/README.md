@@ -23,12 +23,12 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 ### Pipeline
 
 1. **Parse** — source text becomes an AST through `luck_parser`. (Skipped when a caller hands `format_block` an AST directly.)
-2. **IR generation** — each node's `impl Format` runs against a `Formatter`, which records a tag stream of `FormatElement`s and `Tag`s (`group`, `indent`, `align`, soft/hard lines, `best_fitting` variants, group-id-addressable conditionals, and labels). Combinators compose these rather than hand-building a `Vec<FormatElement>`.
+2. **IR generation** — each node's `impl Format` runs against a `Formatter`, which records a tag stream of `FormatElement`s and `Tag`s (`group`, `indent`, `align`, soft/hard lines, `best_fitting` variants, and group-id-addressable conditionals). Combinators compose these rather than hand-building a `Vec<FormatElement>`.
 3. **Print** — a `propagate_expand` pre-pass marks every group containing a forced break as expanded, then the printer walks the stream with a mode stack, measuring each unforced group's content against the remaining width and committing to flat or expanded (fits-then-commit).
 
 ### IR Primitives
 
-`group` decisions are local — a nested group can stay flat while its parent expands. `soft_line` becomes a space when flat and a newline when expanded; `hard_line` always becomes a newline. `indent` increases indentation for nested content, and `align` adds a fixed-width alignment. `fill` packs entries greedily. `best_fitting` supplies ordered variants and prints the first that fits. `if_group_breaks` emits content conditionally on a specific group's break decision (addressed by group id), and labels tag regions for post-passes.
+`group` decisions are local — a nested group can stay flat while its parent expands. `soft_line` becomes a space when flat and a newline when expanded; `hard_line` always becomes a newline. `indent` increases indentation for nested content, and `align` adds a fixed-width alignment. `fill` packs entries greedily. `best_fitting` supplies ordered variants and prints the first that fits. `if_group_breaks` emits content conditionally on a specific group's break decision (addressed by group id).
 
 ### Configuration
 

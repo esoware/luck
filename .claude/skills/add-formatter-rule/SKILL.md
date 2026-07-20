@@ -67,9 +67,9 @@ reference **any** already-started group by id - trailing commas, break-
 coupled layouts), `fill(mode, entries)` (greedy packing),
 `best_fitting(variants)` (most-flat first; first that fits wins),
 `expand_parent()`, `line_suffix(..)`, `format_with(|f| ..)` for closures.
-Speculation: `f.checkpoint()` / `f.restore(cp)` / `f.will_break_since(cp)`
-- comment state is checkpoint-safe, but never consume comments inside
-`best_fitting` variants.
+Speculation: `f.checkpoint()` / `f.restore(cp)` / `f.take_since(cp)` (the
+last detaches what was written since - how `best_fitting` captures its
+variants) - never consume comments inside `best_fitting` variants.
 
 Options are on `f.options`; tokens print via
 `crate::tokens::{write_token, FormatToken}`. Never push raw whitespace

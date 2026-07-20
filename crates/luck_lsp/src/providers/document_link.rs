@@ -1,26 +1,41 @@
 //! Document links. Every `require("path")` literal string becomes a
-//! clickable link that the editor can resolve to a file. Resolution probes
-//! the requiring file's directory for the module, its `.lua`/`.luau`
-//! extensions, and `init` files.
+//! clickable link resolved through [`luck_resolver`] - the same resolver the
+//! bundler uses, so links honor Lua template search paths, Luau relative and
+//! `@alias` imports, and the `init` parent-parent rule identically.
 
 use std::path::{Path, PathBuf};
 
 use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Var};
 use luck_ast::visitor::Visitor;
+use luck_resolver::{ResolveRequest, Resolver, normalize_path_str};
 use luck_token::TokenKind;
 use tower_lsp::lsp_types::{DocumentLink, Url};
 
 use crate::backend::DocumentState;
+use crate::config::ProjectSettings;
 
 #[must_use]
-pub fn document_links(doc: &DocumentState, document_uri: &Url) -> Vec<DocumentLink> {
-    let base_dir = document_uri
-        .to_file_path()
-        .ok()
-        .and_then(|path| path.parent().map(PathBuf::from));
+pub fn document_links(
+    doc: &DocumentState,
+    document_uri: &Url,
+    settings: &ProjectSettings,
+) -> Vec<DocumentLink> {
+    let Ok(document_path) = document_uri.to_file_path() else {
+        return Vec::new();
+    };
+    // Lua templates resolve against the project root; with no config, fall
+    // back to the requiring file's own directory so bare siblings still link.
+    let project_root = settings
+        .root
+        .clone()
+        .or_else(|| document_path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."));
     let mut collector = LinkCollector {
         doc,
-        base_dir,
+        from_file: normalize_path_str(&document_path),
+        project_root,
+        search_paths: &settings.search_paths,
+        resolver: Resolver::new(),
         out: Vec::new(),
     };
     collector.visit_block(&doc.parsed.block);
@@ -29,7 +44,10 @@ pub fn document_links(doc: &DocumentState, document_uri: &Url) -> Vec<DocumentLi
 
 struct LinkCollector<'a> {
     doc: &'a DocumentState,
-    base_dir: Option<PathBuf>,
+    from_file: String,
+    project_root: PathBuf,
+    search_paths: &'a [String],
+    resolver: Resolver,
     out: Vec<DocumentLink>,
 }
 
@@ -44,14 +62,10 @@ impl<'ast> Visitor<'ast> for LinkCollector<'_> {
 
 impl LinkCollector<'_> {
     fn try_record(&mut self, call: &FunctionCall) {
-        // We only handle `require("...")` calls.
         if call.method.is_some() {
             return;
         }
-        let Expression::Var(var) = &call.callee else {
-            return;
-        };
-        let Var::Name(token) = var else {
+        let Expression::Var(Var::Name(token)) = &call.callee else {
             return;
         };
         let TokenKind::Identifier(name) = &token.kind else {
@@ -61,43 +75,47 @@ impl LinkCollector<'_> {
             return;
         }
 
-        let module = match &call.args {
-            FunctionArgs::Parenthesized { args, .. } => args.first(),
-            FunctionArgs::StringLiteral(literal) => {
-                self.record_string(literal);
-                return;
-            }
-            FunctionArgs::TableConstructor(_) => None,
-        };
-        let Some(Expression::StringLiteral(literal)) = module else {
-            return;
+        let literal = match &call.args {
+            FunctionArgs::Parenthesized { args, .. } => match args.first() {
+                Some(Expression::StringLiteral(literal)) => literal,
+                _ => return,
+            },
+            FunctionArgs::StringLiteral(literal) => literal,
+            FunctionArgs::TableConstructor(_) => return,
         };
         self.record_string(literal);
     }
 
     fn record_string(&mut self, literal: &luck_ast::expr::Literal) {
         let raw = &self.doc.text[literal.span.start as usize..literal.span.end as usize];
-        let trimmed = trim_string_literal(raw);
-        if trimmed.is_empty() {
+        let module = trim_string_literal(raw);
+        if module.is_empty() {
             return;
         }
-        let Some(base_dir) = &self.base_dir else {
+        let resolved = self.resolver.resolve(&ResolveRequest {
+            module,
+            from_file: &self.from_file,
+            target: self.doc.target,
+            search_paths: self.search_paths,
+            project_root: &self.project_root,
+            span: literal.span,
+        });
+        let Ok(resolved) = resolved else {
             return;
         };
-        let candidate = resolve_module(base_dir, trimmed);
-        let target = candidate.and_then(|p| Url::from_file_path(p).ok());
-        if let Some(target) = target {
-            let range =
-                self.doc
-                    .line_index
-                    .range(&self.doc.text, literal.span.start, literal.span.end);
-            self.out.push(DocumentLink {
-                range,
-                target: Some(target),
-                tooltip: Some(trimmed.to_string()),
-                data: None,
-            });
-        }
+        let Ok(target) = Url::from_file_path(&resolved.path) else {
+            return;
+        };
+        let range = self
+            .doc
+            .line_index
+            .range(&self.doc.text, literal.span.start, literal.span.end);
+        self.out.push(DocumentLink {
+            range,
+            target: Some(target),
+            tooltip: Some(module.to_string()),
+            data: None,
+        });
     }
 }
 
@@ -110,18 +128,4 @@ fn trim_string_literal(raw: &str) -> &str {
         }
     }
     raw
-}
-
-fn resolve_module(base: &Path, module: &str) -> Option<PathBuf> {
-    // The dotted-path style: `foo.bar.baz` -> `foo/bar/baz`.
-    let relative = module.replace('.', std::path::MAIN_SEPARATOR_STR);
-    let mut candidates = vec![
-        base.join(format!("{relative}.lua")),
-        base.join(format!("{relative}.luau")),
-        base.join(&relative).join("init.lua"),
-        base.join(&relative).join("init.luau"),
-    ];
-    // Also try literal as-is (e.g. ./foo/bar).
-    candidates.push(base.join(module));
-    candidates.into_iter().find(|p| p.exists())
 }

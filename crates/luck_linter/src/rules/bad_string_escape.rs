@@ -29,7 +29,6 @@ impl Rule for BadStringEscape {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let _block = ctx.block;
         let semantic = ctx.semantic;
         let source = ctx.source;
         let comments = ctx.comments;

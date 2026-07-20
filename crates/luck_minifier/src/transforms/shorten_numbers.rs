@@ -1,7 +1,7 @@
 use luck_ast::expr::{Expression, Literal};
 use luck_ast::shared::Block;
 use luck_ast::transform::AstTransform;
-use luck_token::{LuaVersion, Span};
+use luck_token::{LuaVersion, NumberSubtypes, Span};
 
 /// Shorten numeric literals using scientific notation, decimal trimming,
 /// and hex-to-decimal - version-aware: on Lua 5.3+ the integer/float
@@ -10,13 +10,13 @@ use luck_token::{LuaVersion, Span};
 /// the identical value before it is accepted.
 pub fn shorten(block: Block, version: LuaVersion) -> Block {
     NumberShortener {
-        int_subtype: version.has_integer_subtype(),
+        subtypes: crate::expr::number_subtypes(version),
     }
     .transform_block(block)
 }
 
 struct NumberShortener {
-    int_subtype: bool,
+    subtypes: NumberSubtypes,
 }
 
 impl AstTransform for NumberShortener {
@@ -25,7 +25,7 @@ impl AstTransform for NumberShortener {
 
         match expr {
             Expression::Number(ref literal) => {
-                let shortened = shorten_number(&literal.text, self.int_subtype);
+                let shortened = shorten_number(&literal.text, self.subtypes);
                 if shortened.len() < literal.text.len() {
                     return Expression::Number(Literal {
                         text: shortened.into(),
@@ -61,12 +61,14 @@ fn roundtrips(candidate: &str, value: f64) -> bool {
     normalized.parse::<f64>() == Ok(value)
 }
 
-fn shorten_number(text: &str, int_subtype: bool) -> String {
+fn shorten_number(text: &str, subtypes: NumberSubtypes) -> String {
     // A one-character literal can never shrink - and single digits are
     // the most common literals in already-minified rounds.
     if text.len() == 1 {
         return text.to_string();
     }
+
+    let int_subtype = subtypes == NumberSubtypes::IntFloat;
 
     let bytes = text.as_bytes();
     if bytes.len() > 2 && bytes[0] == b'0' && (bytes[1] | 0x20) == b'x' {
@@ -186,58 +188,64 @@ mod tests {
 
     #[test]
     fn no_subtype_trailing_zero_drops() {
-        assert_eq!(shorten_number("1.0", false), "1");
-        assert_eq!(shorten_number("2.0", false), "2");
-        assert_eq!(shorten_number("10.0", false), "10");
+        assert_eq!(shorten_number("1.0", NumberSubtypes::Unified), "1");
+        assert_eq!(shorten_number("2.0", NumberSubtypes::Unified), "2");
+        assert_eq!(shorten_number("10.0", NumberSubtypes::Unified), "10");
     }
 
     #[test]
     fn subtype_float_keeps_float_form() {
         // On 5.3+, `1.0` -> `1` flips math.type - `1.` keeps it float.
-        assert_eq!(shorten_number("1.0", true), "1.");
-        assert_eq!(shorten_number("10.0", true), "10.");
+        assert_eq!(shorten_number("1.0", NumberSubtypes::IntFloat), "1.");
+        assert_eq!(shorten_number("10.0", NumberSubtypes::IntFloat), "10.");
     }
 
     #[test]
     fn subtype_integer_never_goes_scientific() {
         // `1e6` is a float on 5.3+; the integer must stay spelled as one.
-        assert_eq!(shorten_number("1000000", true), "1000000");
-        assert_eq!(shorten_number("100000", true), "100000");
+        assert_eq!(
+            shorten_number("1000000", NumberSubtypes::IntFloat),
+            "1000000"
+        );
+        assert_eq!(shorten_number("100000", NumberSubtypes::IntFloat), "100000");
     }
 
     #[test]
     fn no_subtype_scientific_ok() {
-        assert_eq!(shorten_number("100000", false), "1e5");
-        assert_eq!(shorten_number("1000000", false), "1e6");
+        assert_eq!(shorten_number("100000", NumberSubtypes::Unified), "1e5");
+        assert_eq!(shorten_number("1000000", NumberSubtypes::Unified), "1e6");
     }
 
     #[test]
     fn leading_zero_drops_either_way() {
-        assert_eq!(shorten_number("0.5", false), ".5");
-        assert_eq!(shorten_number("0.5", true), ".5");
-        assert_eq!(shorten_number("0.25", true), ".25");
+        assert_eq!(shorten_number("0.5", NumberSubtypes::Unified), ".5");
+        assert_eq!(shorten_number("0.5", NumberSubtypes::IntFloat), ".5");
+        assert_eq!(shorten_number("0.25", NumberSubtypes::IntFloat), ".25");
     }
 
     #[test]
     fn no_change_needed() {
-        assert_eq!(shorten_number("1", true), "1");
-        assert_eq!(shorten_number("42", false), "42");
-        assert_eq!(shorten_number("0", true), "0");
+        assert_eq!(shorten_number("1", NumberSubtypes::IntFloat), "1");
+        assert_eq!(shorten_number("42", NumberSubtypes::Unified), "42");
+        assert_eq!(shorten_number("0", NumberSubtypes::IntFloat), "0");
     }
 
     #[test]
     fn hex_to_decimal_both_models() {
-        assert_eq!(shorten_number("0xFF", true), "255");
-        assert_eq!(shorten_number("0xFF", false), "255");
-        assert_eq!(shorten_number("0x1A", true), "26");
-        assert_eq!(shorten_number("0xFFFFFFFF", true), "0xFFFFFFFF");
+        assert_eq!(shorten_number("0xFF", NumberSubtypes::IntFloat), "255");
+        assert_eq!(shorten_number("0xFF", NumberSubtypes::Unified), "255");
+        assert_eq!(shorten_number("0x1A", NumberSubtypes::IntFloat), "26");
+        assert_eq!(
+            shorten_number("0xFFFFFFFF", NumberSubtypes::IntFloat),
+            "0xFFFFFFFF"
+        );
     }
 
     #[test]
     fn wrapping_hex_kept() {
         // 0xFFFFFFFFFFFFFFFF is -1 on 5.3+; no positive decimal spelling.
         assert_eq!(
-            shorten_number("0xFFFFFFFFFFFFFFFF", true),
+            shorten_number("0xFFFFFFFFFFFFFFFF", NumberSubtypes::IntFloat),
             "0xFFFFFFFFFFFFFFFF"
         );
     }

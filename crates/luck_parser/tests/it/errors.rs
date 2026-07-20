@@ -34,7 +34,7 @@ fn recovery_parses_subsequent_statements() {
     );
     let has_valid_local = result.block.stmts.iter().any(|s| {
         matches!(s, Statement::LocalAssignment(la) if {
-            la.names.last_item().is_some_and(|name| {
+            la.names.last().is_some_and(|name| {
                 matches!(&name.name.kind, luck_token::TokenKind::Identifier(n) if n == "y")
             })
         })

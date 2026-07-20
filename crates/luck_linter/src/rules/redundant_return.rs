@@ -21,7 +21,7 @@ impl Rule for RedundantReturn {
     }
 
     fn description(&self) -> &'static str {
-        "Trailing bare return has no effect."
+        "trailing bare return has no effect"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {

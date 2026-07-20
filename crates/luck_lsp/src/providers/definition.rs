@@ -5,6 +5,7 @@
 use tower_lsp::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location, Position, Url};
 
 use crate::backend::DocumentState;
+use crate::config::ProjectSettings;
 use crate::providers::cursor::symbol_at;
 use crate::providers::document_link;
 
@@ -12,11 +13,12 @@ use crate::providers::document_link;
 pub fn goto_definition(
     doc: &DocumentState,
     uri: &Url,
+    settings: &ProjectSettings,
     params: &GotoDefinitionParams,
 ) -> Option<GotoDefinitionResponse> {
     let position = params.text_document_position_params.position;
 
-    if let Some(location) = require_target_at(doc, uri, position) {
+    if let Some(location) = require_target_at(doc, uri, settings, position) {
         return Some(GotoDefinitionResponse::Scalar(location));
     }
 
@@ -36,8 +38,13 @@ pub fn goto_definition(
 
 /// If the cursor sits inside a `require("...")` string that resolves to a
 /// file, jump to the top of that file.
-fn require_target_at(doc: &DocumentState, uri: &Url, position: Position) -> Option<Location> {
-    document_link::document_links(doc, uri)
+fn require_target_at(
+    doc: &DocumentState,
+    uri: &Url,
+    settings: &ProjectSettings,
+    position: Position,
+) -> Option<Location> {
+    document_link::document_links(doc, uri, settings)
         .into_iter()
         .find(|link| {
             position >= link.range.start && position <= link.range.end && link.target.is_some()

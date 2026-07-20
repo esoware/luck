@@ -23,8 +23,6 @@ impl Rule for InvalidLintFilter {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let _block = ctx.block;
-        let _semantic = ctx.semantic;
         let source = ctx.source;
         let comments = ctx.comments;
         let known = crate::rules::registered_rule_names();
@@ -137,7 +135,7 @@ fn directive_sites(text: &str, base: u32) -> Vec<Site> {
 fn closest_match(needle: &str, candidates: &[&str]) -> Option<String> {
     let mut best: Option<(usize, &str)> = None;
     for &candidate in candidates {
-        let distance = levenshtein(needle, candidate);
+        let distance = crate::suggest::levenshtein(needle, candidate);
         let max_allowed = (needle.len().max(candidate.len()) / 3).max(2);
         if distance <= max_allowed && best.map(|(b, _)| distance < b).unwrap_or(true) {
             best = Some((distance, candidate));
@@ -146,51 +144,9 @@ fn closest_match(needle: &str, candidates: &[&str]) -> Option<String> {
     best.map(|(_, s)| s.to_string())
 }
 
-/// Iterative two-row Levenshtein. Compact and good enough at this
-/// scale - rule names are short.
-fn levenshtein(a: &str, b: &str) -> usize {
-    if a == b {
-        return 0;
-    }
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
-    let m = a_bytes.len();
-    let n = b_bytes.len();
-    if m == 0 {
-        return n;
-    }
-    if n == 0 {
-        return m;
-    }
-    let mut prev: Vec<usize> = (0..=n).collect();
-    let mut curr: Vec<usize> = vec![0; n + 1];
-    for i in 1..=m {
-        curr[0] = i;
-        for j in 1..=n {
-            let cost = if a_bytes[i - 1] == b_bytes[j - 1] {
-                0
-            } else {
-                1
-            };
-            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[n]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn levenshtein_basic() {
-        assert_eq!(levenshtein("", ""), 0);
-        assert_eq!(levenshtein("abc", "abc"), 0);
-        assert_eq!(levenshtein("abc", "abd"), 1);
-        assert_eq!(levenshtein("abc", "ab"), 1);
-        assert_eq!(levenshtein("kitten", "sitting"), 3);
-    }
 
     #[test]
     fn closest_match_picks_near_neighbor() {

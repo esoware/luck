@@ -1,7 +1,6 @@
 use luck_ast::Expression;
 use luck_ast::expr::Var;
 use luck_ast::node::{AstTypesBitset, NodeType};
-use luck_token::{Span, Token, TokenKind};
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -42,7 +41,7 @@ impl NodeRule for RobloxUnknownEnumMember {
         let Expression::Var(Var::FieldAccess(_)) = expr else {
             return;
         };
-        let Some((segments, spans)) = dotted_path(expr) else {
+        let Some((segments, spans)) = crate::path::dotted_path(expr) else {
             return;
         };
         if segments[0] != "Enum" {
@@ -68,9 +67,9 @@ impl NodeRule for RobloxUnknownEnumMember {
         }
         let prefix_path = prefix.join(".");
         let message = match segments.len() {
-            2 => format!("unknown enum type 'Enum.{last}'"),
-            3 => format!("'{last}' is not an item of '{prefix_path}'"),
-            _ => format!("'{last}' is not a member of '{prefix_path}'"),
+            2 => format!("unknown enum type `Enum.{last}`"),
+            3 => format!("`{last}` is not an item of `{prefix_path}`"),
+            _ => format!("`{last}` is not a member of `{prefix_path}`"),
         };
         out.push(
             LintDiagnostic::new(
@@ -82,39 +81,6 @@ impl NodeRule for RobloxUnknownEnumMember {
                 "enum data is generated from the Roblox API dump; check the spelling".to_string(),
             ),
         );
-    }
-}
-
-/// Unwind a `Name(.Name)*` chain into segments and per-segment spans,
-/// outermost last. Any non-name link (indexing, calls) aborts.
-fn dotted_path(expr: &Expression) -> Option<(Vec<&str>, Vec<Span>)> {
-    let mut segments: Vec<&str> = Vec::new();
-    let mut spans: Vec<Span> = Vec::new();
-    let mut cursor = expr;
-    loop {
-        match cursor {
-            Expression::Var(Var::Name(token)) => {
-                segments.push(identifier(token)?);
-                spans.push(token.span);
-                break;
-            }
-            Expression::Var(Var::FieldAccess(field_access)) => {
-                segments.push(identifier(&field_access.name)?);
-                spans.push(field_access.name.span);
-                cursor = &field_access.prefix;
-            }
-            _ => return None,
-        }
-    }
-    segments.reverse();
-    spans.reverse();
-    Some((segments, spans))
-}
-
-fn identifier(token: &Token) -> Option<&str> {
-    match &token.kind {
-        TokenKind::Identifier(name) => Some(name.as_str()),
-        _ => None,
     }
 }
 
@@ -134,7 +100,7 @@ mod tests {
         assert!(
             diags[0]
                 .message
-                .contains("unknown enum type 'Enum.Materialz'")
+                .contains("unknown enum type `Enum.Materialz`")
         );
     }
 
@@ -145,7 +111,7 @@ mod tests {
         assert!(
             diags[0]
                 .message
-                .contains("'Grassz' is not an item of 'Enum.Material'"),
+                .contains("`Grassz` is not an item of `Enum.Material`"),
             "{diags:?}"
         );
     }
@@ -157,7 +123,7 @@ mod tests {
         assert!(
             diags[0]
                 .message
-                .contains("'Nome' is not a member of 'Enum.Material.Grass'"),
+                .contains("`Nome` is not a member of `Enum.Material.Grass`"),
             "{diags:?}"
         );
     }

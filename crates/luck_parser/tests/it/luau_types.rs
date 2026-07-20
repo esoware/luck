@@ -207,7 +207,7 @@ fn function_type_variadic_param() {
     let Type::Function(function_type) = alias_type("type F = (number, ...string) -> ()") else {
         panic!("expected Function");
     };
-    let last = function_type.params.last_item().expect("params");
+    let last = function_type.params.last().expect("params");
     assert!(matches!(last.type_value, Type::Variadic(_)));
     assert!(matches!(function_type.return_type, Type::Pack(_)));
 }
@@ -257,7 +257,7 @@ fn type_declaration_generic_defaults() {
     let generics = type_decl.generics.as_ref().expect("generics");
     assert_eq!(generics.params.len(), 2);
     assert!(generics.params.iter().all(|param| param.default.is_some()));
-    assert!(generics.params.last_item().expect("pack param").is_pack);
+    assert!(generics.params.last().expect("pack param").is_pack);
 }
 
 #[test]

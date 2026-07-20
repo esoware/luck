@@ -32,6 +32,7 @@ pub mod diagnostics;
 pub mod line_index;
 pub mod providers;
 pub mod serve;
+mod stdlib_render;
 
 pub use backend::{Backend, CapturedNotifier, DocumentState, Notifier, build_service};
 pub use line_index::LineIndex;

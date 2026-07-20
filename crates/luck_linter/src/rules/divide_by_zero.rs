@@ -36,18 +36,19 @@ impl Rule for DivideByZero {
 /// zero) the literal denotes zero. We deliberately also flag `0.0`
 /// because IEEE division by float zero is `inf` or `nan`, not a useful
 /// value.
-fn is_zero_literal(expr: &Expression, source: &str) -> bool {
-    if let Expression::Number(token) = expr {
-        let text = &source[token.span.start as usize..token.span.end as usize];
-        if let Ok(value) = text.parse::<f64>() {
-            return value == 0.0;
-        }
-        // Hex literals don't parse via `f64::from_str`; check manually.
-        if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-            return rest
-                .bytes()
-                .all(|byte| byte == b'0' || byte == b'.' || byte == b'p' || byte == b'P');
-        }
+fn is_zero_literal(expr: &Expression) -> bool {
+    let Expression::Number(literal) = expr else {
+        return false;
+    };
+    let text = &literal.text;
+    if let Ok(value) = text.parse::<f64>() {
+        return value == 0.0;
+    }
+    // Hex literals don't parse via `f64::from_str`; check manually.
+    if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        return rest
+            .bytes()
+            .all(|byte| byte == b'0' || byte == b'.' || byte == b'p' || byte == b'P');
     }
     false
 }
@@ -61,10 +62,10 @@ impl NodeRule for DivideByZero {
         static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::BinaryOp]);
         Some(&TYPES)
     }
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
+    fn on_expression(&self, expr: &Expression, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Expression::BinaryOp(binop) = expr
             && is_divisive_op(binop.op)
-            && is_zero_literal(&binop.right, ctx.source)
+            && is_zero_literal(&binop.right)
         {
             let op_name = match binop.op {
                 BinOp::Div => "division",

@@ -7,7 +7,7 @@ use luck_ast::expr::{
     BinaryOp, Expression, FieldAccess, IfExpression, InterpolatedString, Literal, ParenExpression,
     UnaryOp, Var,
 };
-use luck_token::{BinOp, Token, UnOp};
+use luck_token::{BinOp, Token, TokenKind, UnOp};
 
 use crate::ir::*;
 use crate::quotes::normalize_quote;
@@ -318,10 +318,28 @@ impl Format for IfExpression {
 
 impl Format for InterpolatedString {
     fn fmt(&self, f: &mut Formatter) {
-        // Luau: each segment is a literal part (its backtick/brace punctuation
-        // is added by write_token) optionally followed by an embedded expr.
-        for segment in &self.segments {
-            write_token(f, &segment.literal);
+        // Luau. The `` ` ``/`{`/`}` punctuation follows expression presence,
+        // not token kind: a plain `` `text` `` parses as a Begin("") +
+        // End(text) pair with no expression and must print without braces.
+        let mut prev_had_expr = false;
+        for (index, segment) in self.segments.iter().enumerate() {
+            let part = match &segment.literal.kind {
+                TokenKind::InterpBegin(text)
+                | TokenKind::InterpMid(text)
+                | TokenKind::InterpEnd(text) => text.as_str(),
+                _ => "",
+            };
+            let mut piece = String::new();
+            if index == 0 {
+                piece.push('`');
+            } else if prev_had_expr {
+                piece.push('}');
+            }
+            piece.push_str(part);
+            if segment.expr.is_some() {
+                piece.push('{');
+            }
+            f.push(FormatElement::Text(piece.into()));
             if let Some(expr) = &segment.expr {
                 // `{{` is a parse error in Luau: an expression starting
                 // with a table constructor needs a space after the
@@ -336,7 +354,9 @@ impl Format for InterpolatedString {
                     crate::write!(f, [space()]);
                 }
             }
+            prev_had_expr = segment.expr.is_some();
         }
+        f.push(FormatElement::Text("`".into()));
     }
 }
 
@@ -456,6 +476,16 @@ mod tests {
         assert_eq!(
             print_expr("`hi {x} there`", crate::QuoteStyle::Double, 80),
             "`hi {x} there`"
+        );
+    }
+
+    #[test]
+    fn plain_interpolated_string_roundtrips() {
+        // A plain backtick string parses as a Begin("") + End(text) pair with
+        // no expression; it must not gain a spurious `{}` hole.
+        assert_eq!(
+            print_expr("`plain text`", crate::QuoteStyle::Double, 80),
+            "`plain text`"
         );
     }
 }

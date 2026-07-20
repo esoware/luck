@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 
 let serverChannel: vscode.LogOutputChannel | undefined;
-let extensionChannel: vscode.OutputChannel | undefined;
+let extensionChannel: vscode.LogOutputChannel | undefined;
 let traceChannel: vscode.LogOutputChannel | undefined;
 
 export function serverOutput(): vscode.LogOutputChannel {
@@ -13,9 +13,11 @@ export function serverOutput(): vscode.LogOutputChannel {
 	return serverChannel;
 }
 
-export function extensionOutput(): vscode.OutputChannel {
+export function extensionOutput(): vscode.LogOutputChannel {
 	if (!extensionChannel) {
-		extensionChannel = vscode.window.createOutputChannel("Luck Extension");
+		extensionChannel = vscode.window.createOutputChannel("Luck Extension", {
+			log: true,
+		});
 	}
 	return extensionChannel;
 }
@@ -34,8 +36,7 @@ export function logExtension(message: string): void {
 	if (!config.get<boolean>("trace.extension", false)) {
 		return;
 	}
-	const ts = new Date().toISOString();
-	extensionOutput().appendLine(`[${ts}] ${message}`);
+	extensionOutput().info(message);
 }
 
 export function disposeChannels(): void {

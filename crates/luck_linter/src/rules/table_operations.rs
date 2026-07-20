@@ -24,7 +24,7 @@ impl Rule for TableOperations {
     }
 
     fn description(&self) -> &'static str {
-        "Misuse of table.insert, table.remove, table.move, or table.create."
+        "misuse of table.insert, table.remove, table.move, or table.create"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {

@@ -1,7 +1,7 @@
 use luck_ast::expr::{Expression, Var};
 use luck_ast::shared::Field;
 use luck_token::token::TokenKind;
-use luck_token::{BinOp, NumberSubtypes, UnOp};
+use luck_token::{BinOp, LuaVersion, NumberSubtypes, UnOp};
 
 /// Extract a compile-time boolean value from a `true`/`false` literal.
 pub fn extract_boolean(expr: &Expression) -> Option<bool> {
@@ -169,25 +169,30 @@ pub fn ident_name(token: &luck_token::Token) -> &str {
 // that folds or re-emits literals must share ONE decode/encode.
 pub use luck_token::literal::{LuaNumber, decode_string_literal, encode_string_literal};
 
-/// Extract a number with subtype fidelity. With `int_subtype` false
-/// (5.1/5.2/Luau) every number is a Float, mirroring the single f64 type.
-pub fn extract_lua_number(expr: &Expression, int_subtype: bool) -> Option<LuaNumber> {
-    let subtypes = if int_subtype {
+/// The number model a target dialect uses when folding or shortening
+/// literals: 5.3+ tracks integer/float subtypes, everything else is f64.
+pub fn number_subtypes(version: LuaVersion) -> NumberSubtypes {
+    if version.has_integer_subtype() {
         NumberSubtypes::IntFloat
     } else {
         NumberSubtypes::Unified
-    };
+    }
+}
+
+/// Extract a number with subtype fidelity. Under [`NumberSubtypes::Unified`]
+/// (5.1/5.2/Luau) every number is a Float, mirroring the single f64 type.
+pub fn extract_lua_number(expr: &Expression, subtypes: NumberSubtypes) -> Option<LuaNumber> {
     match expr {
         Expression::Number(literal) => {
             luck_token::literal::parse_lua_number(&literal.text, subtypes)
         }
         Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
-            match extract_lua_number(&unop.operand, int_subtype)? {
+            match extract_lua_number(&unop.operand, subtypes)? {
                 LuaNumber::Int(value) => Some(LuaNumber::Int(value.wrapping_neg())),
                 LuaNumber::Float(value) => Some(LuaNumber::Float(-value)),
             }
         }
-        Expression::Parenthesized(paren) => extract_lua_number(&paren.expr, int_subtype),
+        Expression::Parenthesized(paren) => extract_lua_number(&paren.expr, subtypes),
         _ => None,
     }
 }

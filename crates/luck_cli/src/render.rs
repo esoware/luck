@@ -13,7 +13,7 @@ use std::fmt;
 const MAX_RENDERABLE_LINE: usize = 10_000;
 
 /// Holds source text keyed by file path, used by ariadne to render diagnostics.
-pub struct FileCache {
+pub(crate) struct FileCache {
     sources: HashMap<String, Source<String>>,
     /// Raw text kept alongside the ariadne `Source` so we can measure line
     /// lengths without walking ariadne's line index.
@@ -21,14 +21,14 @@ pub struct FileCache {
 }
 
 impl FileCache {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             sources: HashMap::new(),
             raw: HashMap::new(),
         }
     }
 
-    pub fn add_file(&mut self, path: String, source: String) {
+    pub(crate) fn add_file(&mut self, path: String, source: String) {
         self.raw.insert(path.clone(), source.clone());
         self.sources.insert(path, Source::from(source));
     }
@@ -56,7 +56,7 @@ impl Default for FileCache {
 
 /// Error returned when a file path is not found in the [`FileCache`].
 #[derive(Debug)]
-pub struct CacheMiss(String);
+struct CacheMiss(String);
 
 impl fmt::Display for CacheMiss {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -91,19 +91,19 @@ fn build_report<'a>(diag: &'a Diagnostic) -> Report<'a, (&'a str, std::ops::Rang
         .with_message(&diag.message)
         .with_config(Config::default().with_index_type(IndexType::Byte));
 
-    for (label_span, label_msg) in &diag.labels {
+    for (label_span, label_msg) in diag.labels() {
         builder = builder.with_label(
             Label::new((diag.file_path.as_str(), label_span.clone())).with_message(label_msg),
         );
     }
 
-    if diag.labels.is_empty() {
+    if diag.labels().is_empty() {
         builder = builder.with_label(
             Label::new((diag.file_path.as_str(), diag.span.clone())).with_message(&diag.message),
         );
     }
 
-    if let Some(ref help) = diag.help {
+    if let Some(help) = diag.help() {
         builder = builder.with_help(help);
     }
 
@@ -131,7 +131,7 @@ fn is_line_too_long(diag: &Diagnostic, cache: &FileCache) -> bool {
 
 /// Prints a single diagnostic to stderr using ariadne's pretty-printer,
 /// or a compact fallback when the source line is pathologically long.
-pub fn render_diagnostic(diag: &Diagnostic, cache: &mut FileCache) {
+pub(crate) fn render_diagnostic(diag: &Diagnostic, cache: &mut FileCache) {
     if is_line_too_long(diag, cache) {
         write_compact(diag, &mut std::io::stderr());
         return;
@@ -141,7 +141,7 @@ pub fn render_diagnostic(diag: &Diagnostic, cache: &mut FileCache) {
 }
 
 /// Prints all diagnostics to stderr.
-pub fn render_diagnostics(diagnostics: &[Diagnostic], cache: &mut FileCache) {
+pub(crate) fn render_diagnostics(diagnostics: &[Diagnostic], cache: &mut FileCache) {
     for diag in diagnostics {
         render_diagnostic(diag, cache);
     }
@@ -150,7 +150,10 @@ pub fn render_diagnostics(diagnostics: &[Diagnostic], cache: &mut FileCache) {
 /// Renders all diagnostics into a buffer. Parallel per-file workers
 /// render into buffers concurrently; the caller prints them in input
 /// order so output stays deterministic.
-pub fn render_diagnostics_to_buffer(diagnostics: &[Diagnostic], cache: &mut FileCache) -> Vec<u8> {
+pub(crate) fn render_diagnostics_to_buffer(
+    diagnostics: &[Diagnostic],
+    cache: &mut FileCache,
+) -> Vec<u8> {
     let mut out = Vec::new();
     for diag in diagnostics {
         if is_line_too_long(diag, cache) {

@@ -31,10 +31,7 @@ impl Rule for SetButNeverRead {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let _block = ctx.block;
         let semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut diagnostics = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
@@ -48,7 +45,7 @@ impl Rule for SetButNeverRead {
             let mut has_write = false;
             let mut has_read = false;
             for &ref_id in &symbol.reference_ids {
-                match semantic.scope_tree.references[ref_id.index()].kind {
+                match semantic.scope_tree.reference(ref_id).kind {
                     ReferenceKind::Read => has_read = true,
                     ReferenceKind::Write => has_write = true,
                     ReferenceKind::ReadWrite => {
@@ -65,7 +62,7 @@ impl Rule for SetButNeverRead {
             diagnostics.push(
                 LintDiagnostic::new(
                     "set_but_never_read",
-                    format!("value assigned to '{}' is never read", symbol.name),
+                    format!("value assigned to `{}` is never read", symbol.name),
                     symbol.definition_span,
                 )
                 .with_help("remove the assignment or use the value somewhere".to_string()),
@@ -89,7 +86,7 @@ mod tests {
     fn flags_write_without_read() {
         let diags = run("local x\nx = 1");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'x'"));
+        assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]

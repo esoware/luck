@@ -16,14 +16,11 @@ impl Rule for SettingGlobal {
         Severity::Warning
     }
     fn description(&self) -> &'static str {
-        "implicit global variable assignment (missing 'local'?)"
+        "implicit global variable assignment (missing `local`?)"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let _block = ctx.block;
         let semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut diagnostics = Vec::new();
 
         for reference in semantic.scope_tree.unresolved_references() {
@@ -46,12 +43,12 @@ impl Rule for SettingGlobal {
                 LintDiagnostic::new(
                     "setting_global",
                     format!(
-                        "setting global variable '{}' (missing 'local'?)",
+                        "setting global variable `{}` (missing `local`?)",
                         reference.name
                     ),
                     reference.span,
                 )
-                .with_help("add 'local' before the first assignment".to_string()),
+                .with_help("add `local` before the first assignment".to_string()),
             );
         }
 

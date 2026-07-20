@@ -20,6 +20,7 @@ luck_parser = { workspace = true }
 luck_formatter = { workspace = true }
 luck_linter = { workspace = true }
 luck_semantic = { workspace = true }
+luck_resolver = { workspace = true }
 tower-lsp = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

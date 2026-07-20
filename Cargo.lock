@@ -1192,6 +1192,7 @@ dependencies = [
  "luck_lexer",
  "luck_linter",
  "luck_parser",
+ "luck_resolver",
  "luck_semantic",
  "luck_token",
  "serde",

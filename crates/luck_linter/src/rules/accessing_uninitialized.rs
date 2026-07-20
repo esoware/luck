@@ -32,8 +32,6 @@ impl Rule for AccessingUninitialized {
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
         let block = ctx.block;
         let semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut uninit = UninitCollector::default();
         uninit.visit_block(block);
 
@@ -57,7 +55,7 @@ impl Rule for AccessingUninitialized {
             let mut refs: Vec<_> = symbol
                 .reference_ids
                 .iter()
-                .map(|&ref_id| &semantic.scope_tree.references[ref_id.index()])
+                .map(|&ref_id| semantic.scope_tree.reference(ref_id))
                 .collect();
             refs.sort_by_key(|r| r.span.start);
 
@@ -72,7 +70,7 @@ impl Rule for AccessingUninitialized {
                 LintDiagnostic::new(
                     "accessing_uninitialized",
                     format!(
-                        "'{}' is read before any value is assigned; result is nil",
+                        "`{}` is read before any value is assigned; result is nil",
                         symbol.name
                     ),
                     first.span,
@@ -125,7 +123,7 @@ mod tests {
     fn flags_read_before_assign() {
         let diags = run("local x\nprint(x)");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'x'"));
+        assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]

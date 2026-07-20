@@ -52,7 +52,6 @@ fn check_local(local: &LocalAssignment, out: &mut Vec<LintDiagnostic>) {
         return;
     }
 
-    let names_count = local.names.iter().count();
     let all_nil = trailing_nils == values.len();
 
     if all_nil {
@@ -96,15 +95,11 @@ fn check_local(local: &LocalAssignment, out: &mut Vec<LintDiagnostic>) {
     ) {
         return;
     }
-    let _ = names_count;
 
     // Range to delete: from just past the last kept value (which eats
     // the separating comma) through the end of the last value.
     let delete_start = exprs.items[target_keep - 1].span().end;
-    let total_end = exprs
-        .last_item()
-        .map(|e| e.span().end)
-        .unwrap_or(delete_start);
+    let total_end = exprs.last().map(|e| e.span().end).unwrap_or(delete_start);
 
     out.push(
         LintDiagnostic::new(
@@ -131,7 +126,7 @@ fn check_local(local: &LocalAssignment, out: &mut Vec<LintDiagnostic>) {
 fn last_name_end_byte(local: &LocalAssignment) -> u32 {
     let mut end: u32 = local
         .names
-        .last_item()
+        .last()
         .map(|attributed| attributed.name.span.end)
         .unwrap_or(local.span.start);
     for attrib in local.names.iter().filter_map(|n| n.attrib.as_ref()) {

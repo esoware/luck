@@ -1,15 +1,12 @@
 import * as vscode from "vscode";
-import * as path from "path";
-import * as fs from "fs";
-import { LuckClient } from "./client";
+import path from "node:path";
+import * as fs from "node:fs";
+import type { LuckClient } from "./client";
 import { serverOutput, extensionOutput, traceOutput } from "./output";
 import { downloadServer } from "./discover";
 
-export function registerCommands(
-	context: vscode.ExtensionContext,
-	client: LuckClient,
-): void {
-	const sub = (id: string, fn: (...args: any[]) => any) =>
+export function registerCommands(context: vscode.ExtensionContext, client: LuckClient): void {
+	const sub = (id: string, fn: (...args: unknown[]) => unknown) =>
 		context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
 	sub("luck.restart", () => client.restart());
@@ -20,7 +17,7 @@ export function registerCommands(
 	sub("luck.showExtensionOutput", () => extensionOutput().show(true));
 	sub("luck.showTraceOutput", () => traceOutput().show(true));
 
-	sub("luck.serverVersion", async () => {
+	sub("luck.serverVersion", () => {
 		const lc = client.languageClient;
 		const version = lc?.initializeResult?.serverInfo?.version ?? "unknown";
 		const name = lc?.initializeResult?.serverInfo?.name ?? "luck";
@@ -37,14 +34,13 @@ export function registerCommands(
 
 	sub("luck.applyAllFixesFile", async () => {
 		const editor = vscode.window.activeTextEditor;
-		if (!editor) return;
-		await vscode.commands.executeCommand(
-			"editor.action.sourceAction",
-			{
-				kind: "source.fixAll.luck",
-				apply: "first",
-			},
-		);
+		if (!editor) {
+			return;
+		}
+		await vscode.commands.executeCommand("editor.action.sourceAction", {
+			kind: "source.fixAll.luck",
+			apply: "first",
+		});
 	});
 
 	sub("luck.applyAllFixesWorkspace", async () => {
@@ -56,17 +52,15 @@ export function registerCommands(
 		try {
 			await lc.sendRequest("luck/fixAllWorkspace", {});
 			vscode.window.showInformationMessage("Luck: workspace fixes applied.");
-		} catch (err) {
-			vscode.window.showErrorMessage(`Luck: ${err}`);
+		} catch (error) {
+			vscode.window.showErrorMessage(`Luck: ${error}`);
 		}
 	});
 
 	sub("luck.createConfig", async () => {
 		const folder = vscode.workspace.workspaceFolders?.[0];
 		if (!folder) {
-			vscode.window.showErrorMessage(
-				"Luck: open a folder before creating a config.",
-			);
+			vscode.window.showErrorMessage("Luck: open a folder before creating a config.");
 			return;
 		}
 		const target = folder.uri.fsPath;
@@ -94,7 +88,7 @@ export function registerCommands(
 			null,
 			2,
 		);
-		await fs.promises.writeFile(file, skeleton + "\n", "utf8");
+		await fs.promises.writeFile(file, `${skeleton}\n`, "utf8");
 		const doc = await vscode.workspace.openTextDocument(file);
 		vscode.window.showTextDocument(doc);
 	});
@@ -117,18 +111,15 @@ export function registerCommands(
 				language: "luck-syntax-tree",
 			});
 			vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
-		} catch (err) {
-			vscode.window.showErrorMessage(`Luck: ${err}`);
+		} catch (error) {
+			vscode.window.showErrorMessage(`Luck: ${error}`);
 		}
 	});
 
 	sub("luck.copyDebugInfo", async () => {
 		const lc = client.languageClient;
-		const serverVer =
-			lc?.initializeResult?.serverInfo?.version ?? "unknown";
-		const extVer =
-			(context.extension.packageJSON?.version as string | undefined) ??
-			"unknown";
+		const serverVer = lc?.initializeResult?.serverInfo?.version ?? "unknown";
+		const extVer = (context.extension.packageJSON?.version as string | undefined) ?? "unknown";
 		const lines = [
 			`Luck extension: ${extVer}`,
 			`Luck server:    ${serverVer}`,

@@ -29,9 +29,6 @@ impl Rule for LoopExecutesOnce {
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
         let block = ctx.block;
-        let _semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut checker = LoopChecker {
             diagnostics: Vec::new(),
         };

@@ -29,7 +29,7 @@ impl Rule for CommentDirective {
     }
 
     fn description(&self) -> &'static str {
-        "Invalid or misplaced --! comment directive."
+        "invalid or misplaced --! comment directive"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
@@ -132,15 +132,15 @@ fn check_directive(
                 let level_start = word_span.end + level_offset;
                 diagnostics.push(LintDiagnostic::new(
                     "comment_directive",
-                    format!("unknown optimization level '{level}', 0..2 expected"),
+                    format!("unknown optimization level `{level}`, 0..2 expected"),
                     Span::new(level_start, level_start + level.len() as u32),
                 ));
             }
         }
         unknown => {
-            let mut message = format!("unknown comment directive '{unknown}'");
+            let mut message = format!("unknown comment directive `{unknown}`");
             if let Some(suggestion) = closest_directive(unknown) {
-                message.push_str(&format!("; did you mean '{suggestion}'?"));
+                message.push_str(&format!("; did you mean `{suggestion}`?"));
             }
             diagnostics.push(LintDiagnostic::new("comment_directive", message, word_span));
         }
@@ -160,37 +160,10 @@ fn closest_directive(word: &str) -> Option<&'static str> {
     KNOWN_DIRECTIVES
         .iter()
         .copied()
-        .map(|candidate| (levenshtein(word, candidate), candidate))
+        .map(|candidate| (crate::suggest::levenshtein(word, candidate), candidate))
         .filter(|&(distance, _)| distance <= 2)
         .min_by_key(|&(distance, _)| distance)
         .map(|(_, candidate)| candidate)
-}
-
-/// Iterative two-row Levenshtein; directive names are short, so the
-/// quadratic cost is irrelevant.
-fn levenshtein(a: &str, b: &str) -> usize {
-    if a == b {
-        return 0;
-    }
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
-    if a_bytes.is_empty() {
-        return b_bytes.len();
-    }
-    if b_bytes.is_empty() {
-        return a_bytes.len();
-    }
-    let mut prev: Vec<usize> = (0..=b_bytes.len()).collect();
-    let mut curr: Vec<usize> = vec![0; b_bytes.len() + 1];
-    for i in 1..=a_bytes.len() {
-        curr[0] = i;
-        for j in 1..=b_bytes.len() {
-            let cost = usize::from(a_bytes[i - 1] != b_bytes[j - 1]);
-            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[b_bytes.len()]
 }
 
 #[cfg(test)]
@@ -209,7 +182,7 @@ mod tests {
         assert!(
             diags[0]
                 .message
-                .contains("unknown comment directive 'foobar'")
+                .contains("unknown comment directive `foobar`")
         );
         assert!(!diags[0].message.contains("did you mean"));
     }
@@ -219,7 +192,7 @@ mod tests {
         let diags = run("--!strcit\nlocal _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(
-            diags[0].message.contains("did you mean 'strict'"),
+            diags[0].message.contains("did you mean `strict`"),
             "{diags:?}"
         );
     }
@@ -266,7 +239,7 @@ mod tests {
         assert!(
             diags[0]
                 .message
-                .contains("unknown optimization level '3', 0..2 expected"),
+                .contains("unknown optimization level `3`, 0..2 expected"),
             "{diags:?}"
         );
     }

@@ -1,8 +1,8 @@
 //! # luck
 //!
 //! Facade crate: the complete luck toolchain as a single dependency.
-//! Embedders (build tools, editors) depend
-//! on this one crate instead of tracking fourteen.
+//! Embedders (build tools, editors) depend on this one crate instead of
+//! tracking each `luck_*` crate in the workspace.
 //!
 //! - [`token`] - Spans, `LuaVersion`, tokens, literal value semantics
 //! - [`lexer`] - Tokenizer

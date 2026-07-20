@@ -21,31 +21,44 @@
 //! - **Operator precedence.** [`Synth::binop`], [`Synth::unop`], and
 //!   [`Synth::type_cast`] parenthesize their operands whenever the printed
 //!   form would re-parse differently: precedence and associativity for
-//!   nested binary operators, `(-a)^b`, greedy Luau if-expressions, and
-//!   `(a + b) :: T`.
+//!   nested binary operators, `(-a)^b`, greedy Luau if-expressions,
+//!   `(a + b) :: T`, chained casts (`(a :: T) :: U`), and casts printed
+//!   before `<`, `&`, or `|`, which the type grammar would otherwise
+//!   swallow (`(a :: T) < b`).
 //! - **Prefix positions.** Call callees, method receivers, and index/field
 //!   prefixes that are not already a var, call, or parenthesized expression
 //!   are wrapped: `("s"):rep(2)`, `({}).x`, `(function() end)()`.
 //! - **Escaping.** [`Synth::string`] and [`Synth::string_bytes`] produce the
 //!   quoted token text (decimal escapes are always three digits so a
 //!   following literal digit cannot extend them); interpolated-string
-//!   segments escape `` ` ``, `{`, and `\`.
+//!   segments escape `` ` ``, `{`, and `\`. [`Synth::long_string`] falls
+//!   back to the quoted form for content long brackets cannot carry (`\r`).
 //! - **Numeric literals.** [`Synth::number_f64`] and [`Synth::number_int`]
 //!   render any value, including the ones with no literal form: negatives
 //!   (unary minus node), infinities (`1/0`), NaN (`0/0`), and `i64::MIN`
-//!   (hex, which wraps to the intended integer on Lua 5.3+).
+//!   (hex, which wraps to the intended integer on Lua 5.3+). Magnitudes
+//!   whose plain decimal form is long render in exponent form (`1e300`).
+//! - **Loud failure on invalid names.** [`Synth::ident`] asserts (in release
+//!   builds too) that its argument is an identifier, so hostile input -
+//!   bytecode debug info, obfuscated names - fails fast instead of emitting
+//!   output that will not re-parse.
 //!
 //! # What the caller still owes
 //!
 //! - **Multi-value truncation.** `f(g())` spreads all of `g`'s results;
-//!   wrap the call in [`Synth::paren`] when exactly one value is meant. The
-//!   same applies to the last expression of a return or assignment list.
+//!   pass the expression through [`Synth::single_value`] when exactly one
+//!   value is meant (the last argument of a call, return, or assignment
+//!   list). Only the caller knows which positions need it.
 //! - **Version gating.** Nothing stops synthesis of, say, a Lua 5.4
 //!   attribute for a Luau target; pick constructors matching the dialect.
-//! - **Identifier validity.** [`Synth::ident`] debug-asserts its argument is
-//!   a valid identifier; for names that may not be (bytecode debug info),
-//!   route fields through [`Synth::field_or_index`] and keys through
-//!   [`Synth::record`], which fall back to bracketed string form.
+//!   [`Synth::with_version`] pins name validity and field-name safety to
+//!   one dialect but deliberately does not gate constructs.
+//! - **Identifier validity.** For names that may not be identifiers
+//!   (bytecode debug info), route fields through [`Synth::field_or_index`]
+//!   and keys through [`Synth::record`], which fall back to bracketed
+//!   string form; every other name position (locals, params, labels,
+//!   function and method names) has no bracketed spelling, so pre-check
+//!   with [`is_valid_identifier`] / [`is_valid_identifier_in`] and rename.
 //!
 //! Formatting the result is `luck_formatter::format_block`, which accepts
 //! `Comments::synthetic` for [`SyntheticComment`] attachment; compact output
@@ -73,7 +86,8 @@
 use std::cell::Cell;
 
 use luck_token::{
-    Assoc, BinOp, CompactString, CompoundOp, Span, Token, TokenKind, UNARY_PRECEDENCE, UnOp,
+    Assoc, BinOp, CompactString, CompoundOp, LuaVersion, Span, Token, TokenKind, UNARY_PRECEDENCE,
+    UnOp,
 };
 
 use crate::expr::*;
@@ -86,6 +100,7 @@ use crate::types::*;
 #[derive(Debug, Default)]
 pub struct Synth {
     next_offset: Cell<u32>,
+    version: Option<LuaVersion>,
 }
 
 /// A table field passed to [`Synth::table`], before the separators and spans
@@ -94,6 +109,13 @@ pub enum SynthField<'a> {
     Positional(Expression),
     Named(&'a str, Expression),
     Bracketed(Expression, Expression),
+}
+
+/// One piece of [`Synth::interpolated_string`], in source order: literal
+/// text (UNESCAPED) or an interpolated `{expr}`.
+pub enum SynthInterpPart<'a> {
+    Text(&'a str),
+    Expr(Expression),
 }
 
 /// A table-type field passed to [`Synth::ty_table`], before the separators
@@ -142,19 +164,37 @@ pub struct SyntheticComment {
     pub is_leading: bool,
 }
 
-/// Whether `name` lexes as an identifier in every supported dialect: ASCII
-/// identifier shape and not one of the 21 always-reserved keywords. `goto`,
-/// `global`, and the Luau context-sensitive words (`type`, `continue`,
-/// `export`) pass; they are identifiers in at least one dialect.
+/// Whether `name` lexes as an identifier in at least one supported dialect:
+/// ASCII identifier shape and not one of the 21 always-reserved keywords.
+/// `goto`, `global`, and the Luau context-sensitive words (`type`,
+/// `continue`, `export`) pass. For a single-dialect check, use
+/// [`is_valid_identifier_in`].
 #[must_use]
 pub fn is_valid_identifier(name: &str) -> bool {
+    is_identifier_shaped(name) && !is_base_keyword(name)
+}
+
+/// Whether `name` lexes as an identifier under `version`: identifier shape
+/// and not reserved there. `goto` is reserved on Lua 5.2-5.5 but is an
+/// identifier on 5.1 and Luau; `global` is reserved only on 5.5.
+#[must_use]
+pub fn is_valid_identifier_in(name: &str, version: LuaVersion) -> bool {
+    is_identifier_shaped(name) && !is_keyword_in(name, version)
+}
+
+fn is_identifier_shaped(name: &str) -> bool {
     let mut bytes = name.bytes();
     let Some(first) = bytes.next() else {
         return false;
     };
     (first.is_ascii_alphabetic() || first == b'_')
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        && !is_base_keyword(name)
+}
+
+fn is_keyword_in(name: &str, version: LuaVersion) -> bool {
+    is_base_keyword(name)
+        || (name == "goto" && version.has_goto())
+        || (name == "global" && version.has_global())
 }
 
 fn is_base_keyword(name: &str) -> bool {
@@ -184,18 +224,29 @@ fn is_base_keyword(name: &str) -> bool {
     )
 }
 
-/// Identifier-shaped and safe as a `.name` field / `name =` key in every
-/// dialect: additionally excludes the version-sensitive keywords, where the
-/// bracketed form is the only spelling that works everywhere.
-fn is_safe_field_name(name: &str) -> bool {
-    is_valid_identifier(name) && !matches!(name, "goto" | "global")
-}
-
 /// Operand position relative to a binary operator.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Side {
     Left,
     Right,
+}
+
+/// Whether the type grammar consumes this operator's token when it directly
+/// follows a printed type: `<` opens generic arguments after a named type,
+/// `|` and `&` continue a union or intersection.
+fn op_token_extends_types(op: BinOp) -> bool {
+    matches!(op, BinOp::Lt | BinOp::BitAnd | BinOp::BitOr)
+}
+
+/// Whether `expr` prints with a type cast as its rightmost part, so the next
+/// token lands directly after the cast's type.
+fn ends_with_type_cast(expr: &Expression) -> bool {
+    match expr {
+        Expression::TypeCast(_) => true,
+        Expression::BinaryOp(inner) => ends_with_type_cast(&inner.right),
+        Expression::UnaryOp(inner) => ends_with_type_cast(&inner.operand),
+        _ => false,
+    }
 }
 
 impl Synth {
@@ -211,7 +262,20 @@ impl Synth {
     pub fn starting_at(offset: u32) -> Self {
         Self {
             next_offset: Cell::new(offset),
+            version: None,
         }
+    }
+
+    /// Pin name handling to one dialect: [`Synth::ident`] asserts validity
+    /// against that dialect's keyword set instead of the cross-dialect union,
+    /// and [`Synth::field_or_index`] / [`Synth::record`] use the dot/named
+    /// form for names that are identifiers there (`t.goto` on Luau) instead
+    /// of the everywhere-safe bracketed fallback. Construct availability is
+    /// deliberately not gated.
+    #[must_use]
+    pub fn with_version(mut self, version: LuaVersion) -> Self {
+        self.version = Some(version);
+        self
     }
 
     /// A fresh single-point span. Distinct per node; never slices source.
@@ -226,19 +290,31 @@ impl Synth {
         Token::new(kind, self.next_span())
     }
 
-    /// An identifier token. Debug-asserts validity; for names that may not
-    /// be identifiers, use [`Synth::field_or_index`] / [`Synth::record`] /
-    /// [`Synth::string`] instead of forcing them through here.
+    /// An identifier token. Asserts validity - in release builds too, so
+    /// untrusted names (bytecode debug info) fail loudly instead of emitting
+    /// output that will not re-parse. For names that may not be identifiers,
+    /// use [`Synth::field_or_index`] / [`Synth::record`] / [`Synth::string`]
+    /// instead of forcing them through here.
     #[must_use]
     pub fn ident(&self, name: &str) -> Token {
-        debug_assert!(
-            is_valid_identifier(name),
-            "synth: {name:?} is not a valid identifier"
-        );
+        let is_valid = match self.version {
+            Some(version) => is_valid_identifier_in(name, version),
+            None => is_valid_identifier(name),
+        };
+        assert!(is_valid, "synth: {name:?} is not a valid identifier");
         self.token(TokenKind::Identifier(CompactString::from(name)))
     }
 
-    // ----- variables -----
+    /// Identifier-shaped and safe as a `.name` field / `name =` key: under a
+    /// pinned version, exactly that dialect's identifiers; otherwise the
+    /// conservative set that works in every dialect (excluding `goto` and
+    /// `global`, identifiers in some dialects and keywords in others).
+    fn is_safe_field_name(&self, name: &str) -> bool {
+        match self.version {
+            Some(version) => is_valid_identifier_in(name, version),
+            None => is_valid_identifier(name) && !matches!(name, "goto" | "global"),
+        }
+    }
 
     #[must_use]
     pub fn name_var(&self, name: &str) -> Var {
@@ -283,19 +359,17 @@ impl Synth {
         self.var_expr(self.field_var(prefix, name))
     }
 
-    /// `prefix.name` when `name` is a safe identifier in every dialect,
-    /// `prefix["name"]` otherwise.
+    /// `prefix.name` when `name` is a safe identifier (in the pinned dialect,
+    /// or in every dialect when none is pinned), `prefix["name"]` otherwise.
     #[must_use]
     pub fn field_or_index(&self, prefix: Expression, name: &str) -> Expression {
-        if is_safe_field_name(name) {
+        if self.is_safe_field_name(name) {
             self.field(prefix, name)
         } else {
             let key = self.string(name);
             self.index(prefix, key)
         }
     }
-
-    // ----- literals -----
 
     /// A number from already-formatted literal text. Prefer
     /// [`Synth::number_f64`] / [`Synth::number_int`] for runtime values.
@@ -310,8 +384,9 @@ impl Synth {
     /// Any `f64` as an expression that evaluates back to exactly `value`.
     /// Finite integral values render with a `.0` suffix so the float subtype
     /// survives on Lua 5.3+ (use [`Synth::number_int`] where an integer is
-    /// meant); negatives become a unary-minus node, infinities `1/0`, and
-    /// NaN `0/0`.
+    /// meant); negatives become a unary-minus node, infinities `1/0`, NaN
+    /// `0/0`, and magnitudes whose plain decimal form is longer render in
+    /// exponent form (`1e300`, not a 300-digit literal).
     #[must_use]
     pub fn number_f64(&self, value: f64) -> Expression {
         if value.is_nan() {
@@ -329,9 +404,17 @@ impl Synth {
             // Lua has no negative literals; this also keeps -0.0's sign bit.
             return self.unop(UnOp::Neg, self.number_f64(-value));
         }
+        // Display never uses exponent notation, so it only ever yields
+        // digits and a possible decimal point.
         let mut text = value.to_string();
-        if !text.contains(['.', 'e', 'E']) {
+        if !text.contains('.') {
             text.push_str(".0");
+        }
+        // Both forms carry shortest round-trip digits; an exponent implies
+        // the float subtype on 5.3+ just as `.0` does.
+        let exponent = format!("{value:e}");
+        if exponent.len() < text.len() {
+            text = exponent;
         }
         self.number(&text)
     }
@@ -373,13 +456,13 @@ impl Synth {
 
     /// `[[...]]` long-bracket string, picking the smallest `=` level whose
     /// closer cannot occur early. Long brackets cannot represent `\r` (Lua
-    /// normalizes line endings inside them); use [`Synth::string`] for those.
+    /// normalizes line endings inside them), so such content falls back to
+    /// the escaped quoted form of [`Synth::string`].
     #[must_use]
     pub fn long_string(&self, content: &str) -> Expression {
-        debug_assert!(
-            !content.contains('\r'),
-            "synth: long strings normalize \\r; use string()"
-        );
+        if content.contains('\r') {
+            return self.string(content);
+        }
         let mut level = 0;
         let equals = loop {
             let equals = "=".repeat(level);
@@ -428,16 +511,14 @@ impl Synth {
         Expression::VarArg(self.next_span())
     }
 
-    // ----- operators -----
-
     /// `lhs op rhs`, parenthesizing either operand when precedence,
-    /// associativity, or a greedy if-expression would otherwise change the
-    /// parse.
+    /// associativity, a greedy if-expression, or a type cast printed before
+    /// a type-extending operator token would otherwise change the parse.
     #[must_use]
     pub fn binop(&self, lhs: Expression, op: BinOp, rhs: Expression) -> Expression {
         let (precedence, assoc) = op.precedence();
-        let lhs = self.wrap_binop_operand(lhs, precedence, assoc, Side::Left);
-        let rhs = self.wrap_binop_operand(rhs, precedence, assoc, Side::Right);
+        let lhs = self.wrap_binop_operand(lhs, op, precedence, assoc, Side::Left);
+        let rhs = self.wrap_binop_operand(rhs, op, precedence, assoc, Side::Right);
         Expression::BinaryOp(Box::new(BinaryOp {
             span: self.next_span(),
             left: lhs,
@@ -470,14 +551,30 @@ impl Synth {
         }))
     }
 
+    /// Truncate a multi-value expression to exactly one value: calls and
+    /// `...` (the only multi-value forms) are parenthesized, everything else
+    /// passes through untouched. Use in single-result positions - the last
+    /// expression of a call, return, or assignment list where exactly one
+    /// value is meant (a bytecode `CALL` requesting one result).
+    #[must_use]
+    pub fn single_value(&self, expr: Expression) -> Expression {
+        match expr {
+            multi @ (Expression::FunctionCall(_) | Expression::VarArg(_)) => self.paren(multi),
+            single => single,
+        }
+    }
+
     /// Luau type cast: `expr :: T`. The cast binds to a simple expression, so
-    /// binary, unary, and if-expression operands are parenthesized.
+    /// binary, unary, and if-expression operands are parenthesized - as are
+    /// cast operands, because chained casts (`a :: T :: U`) are a parse error
+    /// in Luau.
     #[must_use]
     pub fn type_cast(&self, expr: Expression, type_value: Type) -> Expression {
         let expr = match expr {
             wrapped @ (Expression::BinaryOp(_)
             | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)) => self.paren(wrapped),
+            | Expression::IfExpression(_)
+            | Expression::TypeCast(_)) => self.paren(wrapped),
             other => other,
         };
         Expression::TypeCast(Box::new(TypeCast {
@@ -490,6 +587,7 @@ impl Synth {
     fn wrap_binop_operand(
         &self,
         operand: Expression,
+        parent_op: BinOp,
         parent_precedence: u8,
         parent_assoc: Assoc,
         side: Side,
@@ -513,7 +611,9 @@ impl Synth {
             // both sides keeps that true for every later composition too.
             Expression::IfExpression(_) => true,
             _ => false,
-        };
+        } || (side == Side::Left
+            && op_token_extends_types(parent_op)
+            && ends_with_type_cast(&operand));
         if needs_parens {
             self.paren(operand)
         } else {
@@ -531,8 +631,6 @@ impl Synth {
             other => self.paren(other),
         }
     }
-
-    // ----- calls -----
 
     #[must_use]
     pub fn call(&self, callee: Expression, args: Vec<Expression>) -> Expression {
@@ -609,8 +707,6 @@ impl Synth {
         }))
     }
 
-    // ----- tables -----
-
     #[must_use]
     pub fn table(&self, fields: Vec<SynthField<'_>>) -> Expression {
         Expression::TableConstructor(Box::new(self.table_ctor(fields)))
@@ -630,7 +726,7 @@ impl Synth {
             fields
                 .into_iter()
                 .map(|(name, value)| {
-                    if is_safe_field_name(name) {
+                    if self.is_safe_field_name(name) {
                         SynthField::Named(name, value)
                     } else {
                         SynthField::Bracketed(self.string(name), value)
@@ -667,14 +763,13 @@ impl Synth {
         }
     }
 
-    // ----- functions -----
-
     /// `function(params) body end` with plain untyped parameters. For
-    /// generics, typed parameters, varargs, or a return type, use
-    /// [`Synth::function_def_full`].
+    /// attributes, generics, typed parameters, varargs, or a return type,
+    /// use [`Synth::function_def_full`].
     #[must_use]
     pub fn function_def(&self, params: &[&str], body: Block) -> Expression {
         self.function_def_full(
+            Vec::new(),
             FnSig {
                 params: self.params(params),
                 ..FnSig::default()
@@ -683,11 +778,18 @@ impl Synth {
         )
     }
 
+    /// Full-fidelity anonymous function. Build `attributes` with
+    /// [`Synth::function_attribute`].
     #[must_use]
-    pub fn function_def_full(&self, sig: FnSig, body: Block) -> Expression {
+    pub fn function_def_full(
+        &self,
+        attributes: Vec<FunctionAttribute>,
+        sig: FnSig,
+        body: Block,
+    ) -> Expression {
         Expression::FunctionDef(Box::new(FunctionDef {
             span: self.next_span(),
-            attributes: Vec::new(),
+            attributes,
             body: self.function_body(sig, body),
         }))
     }
@@ -706,7 +808,7 @@ impl Synth {
         self.function_decl_full(
             name_path,
             method,
-            &[],
+            Vec::new(),
             FnSig {
                 params: self.params(params),
                 ..FnSig::default()
@@ -715,20 +817,20 @@ impl Synth {
         )
     }
 
-    /// Full-fidelity function declaration. `attributes` are Luau `@attr`
-    /// names (`"native"`, `"checked"`, ...).
+    /// Full-fidelity function declaration. Build `attributes` with
+    /// [`Synth::function_attribute`].
     #[must_use]
     pub fn function_decl_full(
         &self,
         name_path: &[&str],
         method: Option<&str>,
-        attributes: &[&str],
+        attributes: Vec<FunctionAttribute>,
         sig: FnSig,
         body: Block,
     ) -> Statement {
         Statement::FunctionDecl(Box::new(FunctionDecl {
             span: self.next_span(),
-            attributes: self.function_attributes(attributes),
+            attributes,
             name: self.func_name(name_path, method),
             body: self.function_body(sig, body),
         }))
@@ -740,7 +842,7 @@ impl Synth {
     pub fn local_function(&self, name: &str, params: &[&str], body: Block) -> Statement {
         self.local_function_full(
             name,
-            &[],
+            Vec::new(),
             FnSig {
                 params: self.params(params),
                 ..FnSig::default()
@@ -749,20 +851,46 @@ impl Synth {
         )
     }
 
+    /// Full-fidelity local function. Build `attributes` with
+    /// [`Synth::function_attribute`].
     #[must_use]
     pub fn local_function_full(
         &self,
         name: &str,
-        attributes: &[&str],
+        attributes: Vec<FunctionAttribute>,
         sig: FnSig,
         body: Block,
     ) -> Statement {
+        self.local_function_node(name, attributes, sig, body, false)
+    }
+
+    /// Luau `const function name(params) body end` - a read-only local
+    /// function binding.
+    #[must_use]
+    pub fn const_function(
+        &self,
+        name: &str,
+        attributes: Vec<FunctionAttribute>,
+        sig: FnSig,
+        body: Block,
+    ) -> Statement {
+        self.local_function_node(name, attributes, sig, body, true)
+    }
+
+    fn local_function_node(
+        &self,
+        name: &str,
+        attributes: Vec<FunctionAttribute>,
+        sig: FnSig,
+        body: Block,
+        is_const: bool,
+    ) -> Statement {
         Statement::LocalFunction(Box::new(LocalFunction {
             span: self.next_span(),
-            attributes: self.function_attributes(attributes),
+            attributes,
             name: self.ident(name),
             body: self.function_body(sig, body),
-            is_const: false,
+            is_const,
         }))
     }
 
@@ -785,15 +913,19 @@ impl Synth {
         }
     }
 
-    fn function_attributes(&self, names: &[&str]) -> Vec<FunctionAttribute> {
-        names
-            .iter()
-            .map(|name| FunctionAttribute {
-                span: self.next_span(),
-                name: self.ident(name),
-                args: None,
-            })
-            .collect()
+    /// A Luau function attribute: `@name` when `args` is `None`, the
+    /// bracketed `@[name(args)]` form otherwise.
+    #[must_use]
+    pub fn function_attribute(
+        &self,
+        name: &str,
+        args: Option<Vec<Expression>>,
+    ) -> FunctionAttribute {
+        FunctionAttribute {
+            span: self.next_span(),
+            name: self.ident(name),
+            args: args.map(|args| self.punctuated(args)),
+        }
     }
 
     fn function_body(&self, sig: FnSig, block: Block) -> FunctionBody {
@@ -807,39 +939,49 @@ impl Synth {
         }
     }
 
-    // ----- simple expressions -----
-
-    /// Luau backtick string. Each tuple is one segment: leading literal text
-    /// plus an optional interpolated expression. The first segment's text is an
-    /// `InterpBegin`, the last an `InterpEnd`, the rest `InterpMid` - the exact
-    /// shape the parser builds, where the terminal segment holds the trailing
-    /// text with no expression (a plain `` `text` `` is
-    /// `[("", None), ("text", None)]`, mirroring the lexer's `InterpBegin("")` +
-    /// `InterpEnd(text)` pair). Text is UNESCAPED; `` ` ``, `{`, and `\` are
-    /// escaped here.
+    /// Luau backtick string from literal text and interpolated expressions
+    /// in source order: `` `hi {name}!` `` is
+    /// `vec![Text("hi "), Expr(name), Text("!")]`. Text is UNESCAPED; `` ` ``,
+    /// `{`, and `\` are escaped here. Adjacent text parts merge, and the
+    /// lexer's `InterpBegin`/`InterpMid`/`InterpEnd` segment shape (the
+    /// terminal segment carries the trailing text with no expression) is
+    /// derived internally.
     #[must_use]
-    pub fn interpolated_string(&self, segments: Vec<(&str, Option<Expression>)>) -> Expression {
+    pub fn interpolated_string(&self, parts: Vec<SynthInterpPart<'_>>) -> Expression {
         let span = self.next_span();
-        let last_index = segments.len().saturating_sub(1);
-        let built: Vec<InterpSegment> = segments
+        let mut pending: Vec<(CompactString, Option<Expression>)> = Vec::new();
+        let mut text = String::new();
+        for part in parts {
+            match part {
+                SynthInterpPart::Text(more) => text.push_str(more),
+                SynthInterpPart::Expr(expr) => {
+                    pending.push((interp_text(&text), Some(expr)));
+                    text.clear();
+                }
+            }
+        }
+        if pending.is_empty() {
+            // Plain-text form: the lexer shape is InterpBegin("") followed
+            // by InterpEnd(text).
+            pending.push((CompactString::from(""), None));
+        }
+        pending.push((interp_text(&text), None));
+        let last_index = pending.len() - 1;
+        let segments: Vec<InterpSegment> = pending
             .into_iter()
             .enumerate()
-            .map(|(index, (text, expr))| {
-                let text = interp_text(text);
+            .map(|(index, (segment_text, expr))| {
                 let literal = if index == 0 {
-                    self.token(TokenKind::InterpBegin(text))
+                    self.token(TokenKind::InterpBegin(segment_text))
                 } else if index == last_index {
-                    self.token(TokenKind::InterpEnd(text))
+                    self.token(TokenKind::InterpEnd(segment_text))
                 } else {
-                    self.token(TokenKind::InterpMid(text))
+                    self.token(TokenKind::InterpMid(segment_text))
                 };
                 InterpSegment { literal, expr }
             })
             .collect();
-        Expression::InterpolatedString(Box::new(InterpolatedString {
-            span,
-            segments: built,
-        }))
+        Expression::InterpolatedString(Box::new(InterpolatedString { span, segments }))
     }
 
     /// Luau `if c then a {elseif c2 then b} else z` expression.
@@ -869,8 +1011,6 @@ impl Synth {
         }))
     }
 
-    // ----- statements -----
-
     /// `local names = exprs` with plain untyped names. For type annotations
     /// or Lua 5.4 attributes, use [`Synth::local_full`].
     #[must_use]
@@ -884,6 +1024,26 @@ impl Synth {
 
     #[must_use]
     pub fn local_full(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
+        self.local_assignment(names, exprs, false)
+    }
+
+    /// Luau `const names = exprs` - a `local` whose names are read-only.
+    /// Asserts a non-empty initializer list; the grammar requires one.
+    #[must_use]
+    pub fn const_local(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
+        assert!(
+            !exprs.is_empty(),
+            "synth: const declarations require an initializer"
+        );
+        self.local_assignment(names, exprs, true)
+    }
+
+    fn local_assignment(
+        &self,
+        names: Vec<AttributedName>,
+        exprs: Vec<Expression>,
+        is_const: bool,
+    ) -> Statement {
         let span = self.next_span();
         let names = self.punctuated(names);
         let exprs = if exprs.is_empty() {
@@ -895,7 +1055,7 @@ impl Synth {
             span,
             names,
             exprs,
-            is_const: false,
+            is_const,
         }))
     }
 
@@ -1167,8 +1327,6 @@ impl Synth {
     fn params(&self, names: &[&str]) -> Vec<Parameter> {
         names.iter().map(|name| self.param(name)).collect()
     }
-
-    // ----- Luau types -----
 
     #[must_use]
     pub fn ty_named(&self, name: &str) -> Type {
@@ -1452,8 +1610,6 @@ impl Synth {
         }))
     }
 
-    // ----- comments -----
-
     /// A comment printed on its own line before `stmt`.
     #[must_use]
     pub fn leading_comment(&self, stmt: &Statement, text: &str) -> SyntheticComment {
@@ -1485,8 +1641,6 @@ impl Synth {
             is_leading: true,
         }
     }
-
-    // ----- internal plumbing -----
 
     fn paren_args(&self, args: Vec<Expression>) -> FunctionArgs {
         FunctionArgs::Parenthesized {
@@ -1899,7 +2053,7 @@ mod tests {
             ..FnSig::default()
         };
         let ret = synth.return_(vec![synth.name_expr("n")]);
-        let func = synth.function_def_full(sig, synth.block(vec![], Some(ret)));
+        let func = synth.function_def_full(Vec::new(), sig, synth.block(vec![], Some(ret)));
 
         let Expression::FunctionDef(def) = &func else {
             panic!("expected function def");
@@ -1918,7 +2072,12 @@ mod tests {
             return_type: Some(synth.ty_named("T")),
             ..FnSig::default()
         };
-        let stmt = synth.local_function_full("id", &["native"], sig, synth.block(vec![], None));
+        let stmt = synth.local_function_full(
+            "id",
+            vec![synth.function_attribute("native", None)],
+            sig,
+            synth.block(vec![], None),
+        );
 
         let Statement::LocalFunction(func) = &stmt else {
             panic!("expected local function");
@@ -2061,7 +2220,7 @@ mod tests {
             vararg: Some(synth.vararg_param(None)),
             ..FnSig::default()
         };
-        let func = synth.function_def_full(sig, synth.block(vec![], None));
+        let func = synth.function_def_full(Vec::new(), sig, synth.block(vec![], None));
 
         let Expression::FunctionDef(def) = &func else {
             panic!("expected function def");
@@ -2131,7 +2290,11 @@ mod tests {
         let synth = Synth::new();
         let inner = synth.name_expr("value");
         // `a{value}b` -> InterpBegin("a") + expr, then InterpEnd("b") terminator.
-        let string = synth.interpolated_string(vec![("a", Some(inner)), ("b{`", None)]);
+        let string = synth.interpolated_string(vec![
+            SynthInterpPart::Text("a"),
+            SynthInterpPart::Expr(inner),
+            SynthInterpPart::Text("b{`"),
+        ]);
 
         let Expression::InterpolatedString(interp) = &string else {
             panic!("expected interpolated string");
@@ -2148,6 +2311,44 @@ mod tests {
         // `{` and backtick carry their escapes, as the lexer stores them.
         assert_eq!(text.as_str(), "b\\{\\`");
         assert!(interp.segments[1].expr.is_none());
+    }
+
+    #[test]
+    fn interpolated_string_derives_segment_shape() {
+        let synth = Synth::new();
+
+        // Plain text keeps the lexer's Begin("") + End(text) pair; adjacent
+        // text parts merge.
+        let plain =
+            synth.interpolated_string(vec![SynthInterpPart::Text("a"), SynthInterpPart::Text("b")]);
+        let Expression::InterpolatedString(interp) = &plain else {
+            panic!("expected interpolated string");
+        };
+        assert_eq!(interp.segments.len(), 2);
+        let TokenKind::InterpBegin(begin) = &interp.segments[0].literal.kind else {
+            panic!("expected InterpBegin");
+        };
+        assert_eq!(begin.as_str(), "");
+        let TokenKind::InterpEnd(end) = &interp.segments[1].literal.kind else {
+            panic!("expected InterpEnd");
+        };
+        assert_eq!(end.as_str(), "ab");
+
+        // Two expressions produce a Mid segment between Begin and End.
+        let multi = synth.interpolated_string(vec![
+            SynthInterpPart::Expr(synth.name_expr("x")),
+            SynthInterpPart::Text("-"),
+            SynthInterpPart::Expr(synth.name_expr("y")),
+        ]);
+        let Expression::InterpolatedString(interp) = &multi else {
+            panic!("expected interpolated string");
+        };
+        assert_eq!(interp.segments.len(), 3);
+        assert!(matches!(
+            interp.segments[1].literal.kind,
+            TokenKind::InterpMid(_)
+        ));
+        assert!(interp.segments[2].expr.is_none());
     }
 
     #[test]
@@ -2170,7 +2371,7 @@ mod tests {
         assert!(matches!(decl.type_value, TypeDeclarationValue::Alias(_)));
         let generics = decl.generics.as_ref().expect("generics present");
         assert_eq!(generics.params.len(), 2);
-        assert!(generics.params.last_item().unwrap().is_pack);
+        assert!(generics.params.last().unwrap().is_pack);
     }
 
     #[test]
@@ -2306,5 +2507,192 @@ mod tests {
         assert!(!is_valid_identifier("has space"));
         assert!(!is_valid_identifier("end"));
         assert!(!is_valid_identifier("Ünicode"));
+    }
+
+    #[test]
+    fn identifier_validity_per_version() {
+        assert!(is_valid_identifier_in("goto", LuaVersion::Lua51));
+        assert!(is_valid_identifier_in("goto", LuaVersion::Luau));
+        assert!(!is_valid_identifier_in("goto", LuaVersion::Lua54));
+        assert!(is_valid_identifier_in("global", LuaVersion::Lua54));
+        assert!(!is_valid_identifier_in("global", LuaVersion::Lua55));
+        assert!(!is_valid_identifier_in("end", LuaVersion::Luau));
+        assert!(!is_valid_identifier_in("", LuaVersion::Luau));
+    }
+
+    #[test]
+    fn version_pinned_field_names() {
+        // Unpinned: `goto` is a keyword somewhere, so it gets bracketed.
+        let synth = Synth::new();
+        assert!(matches!(
+            synth.field_or_index(synth.name_expr("t"), "goto"),
+            Expression::Var(Var::Index(_))
+        ));
+
+        // Pinned to Luau: `goto` is a plain identifier there.
+        let synth = Synth::new().with_version(LuaVersion::Luau);
+        assert!(matches!(
+            synth.field_or_index(synth.name_expr("t"), "goto"),
+            Expression::Var(Var::FieldAccess(_))
+        ));
+
+        // Pinned to 5.4: still a keyword, still bracketed.
+        let synth = Synth::new().with_version(LuaVersion::Lua54);
+        assert!(matches!(
+            synth.field_or_index(synth.name_expr("t"), "goto"),
+            Expression::Var(Var::Index(_))
+        ));
+    }
+
+    #[test]
+    fn cast_operand_parenthesized_before_type_extending_ops() {
+        let synth = Synth::new();
+        // (a :: T) < b: bare, the type parser reads `<` as generic args.
+        for op in [BinOp::Lt, BinOp::BitAnd, BinOp::BitOr] {
+            let cast = synth.type_cast(synth.name_expr("a"), synth.ty_named("T"));
+            let compared = synth.binop(cast, op, synth.name_expr("b"));
+            let Expression::BinaryOp(compared) = &compared else {
+                panic!("expected binop");
+            };
+            assert!(
+                matches!(compared.left, Expression::Parenthesized(_)),
+                "cast before {op:?} must be parenthesized"
+            );
+        }
+
+        // a + b :: T stays bare: `+` cannot extend a printed type.
+        let cast = synth.type_cast(synth.name_expr("b"), synth.ty_named("T"));
+        let sum = synth.binop(synth.name_expr("a"), BinOp::Add, cast);
+        let Expression::BinaryOp(sum) = &sum else {
+            panic!("expected binop");
+        };
+        assert!(matches!(sum.right, Expression::TypeCast(_)));
+
+        // The cast may sit at the end of a larger left operand: the whole
+        // operand gains parens, `(a + b :: T) < c`.
+        let cast = synth.type_cast(synth.name_expr("b"), synth.ty_named("T"));
+        let sum = synth.binop(synth.name_expr("a"), BinOp::Add, cast);
+        let compared = synth.binop(sum, BinOp::Lt, synth.name_expr("c"));
+        let Expression::BinaryOp(compared) = &compared else {
+            panic!("expected binop");
+        };
+        assert!(matches!(compared.left, Expression::Parenthesized(_)));
+
+        // A cast on the right of `<` ends the statement; no parens needed.
+        let cast = synth.type_cast(synth.name_expr("b"), synth.ty_named("T"));
+        let compared = synth.binop(synth.name_expr("a"), BinOp::Lt, cast);
+        let Expression::BinaryOp(compared) = &compared else {
+            panic!("expected binop");
+        };
+        assert!(matches!(compared.right, Expression::TypeCast(_)));
+    }
+
+    #[test]
+    fn chained_cast_parenthesized() {
+        let synth = Synth::new();
+        // (a :: T) :: U: `a :: T :: U` is a parse error in Luau.
+        let inner = synth.type_cast(synth.name_expr("a"), synth.ty_named("T"));
+        let outer = synth.type_cast(inner, synth.ty_named("U"));
+        let Expression::TypeCast(outer) = &outer else {
+            panic!("expected type cast");
+        };
+        assert!(matches!(outer.expr, Expression::Parenthesized(_)));
+    }
+
+    #[test]
+    fn single_value_wraps_multi_value_forms() {
+        let synth = Synth::new();
+        let call = synth.call(synth.name_expr("f"), vec![]);
+        assert!(matches!(
+            synth.single_value(call),
+            Expression::Parenthesized(_)
+        ));
+        assert!(matches!(
+            synth.single_value(synth.vararg()),
+            Expression::Parenthesized(_)
+        ));
+        // Single-value expressions pass through untouched.
+        assert!(matches!(
+            synth.single_value(synth.name_expr("x")),
+            Expression::Var(_)
+        ));
+        assert!(matches!(
+            synth.single_value(synth.number_int(1)),
+            Expression::Number(_)
+        ));
+    }
+
+    #[test]
+    fn long_string_carriage_return_falls_back_to_quoted() {
+        let synth = Synth::new();
+        let Expression::StringLiteral(literal) = synth.long_string("a\r\nb") else {
+            panic!("expected string literal");
+        };
+        assert_eq!(literal.text.as_str(), "\"a\\r\\nb\"");
+    }
+
+    #[test]
+    fn number_f64_prefers_exponent_when_shorter() {
+        let synth = Synth::new();
+        let Expression::Number(literal) = synth.number_f64(1e300) else {
+            panic!("expected number");
+        };
+        assert_eq!(literal.text.as_str(), "1e300");
+
+        let Expression::Number(literal) = synth.number_f64(100.0) else {
+            panic!("expected number");
+        };
+        assert_eq!(literal.text.as_str(), "1e2");
+
+        // Short plain forms win ties and stay readable.
+        let Expression::Number(literal) = synth.number_f64(3.0) else {
+            panic!("expected number");
+        };
+        assert_eq!(literal.text.as_str(), "3.0");
+        let Expression::Number(literal) = synth.number_f64(1.5) else {
+            panic!("expected number");
+        };
+        assert_eq!(literal.text.as_str(), "1.5");
+    }
+
+    #[test]
+    fn builds_const_declarations() {
+        let synth = Synth::new();
+        let stmt = synth.const_local(
+            vec![synth.attributed_name("frozen", None, None)],
+            vec![synth.number_int(1)],
+        );
+        let Statement::LocalAssignment(local) = &stmt else {
+            panic!("expected local assignment");
+        };
+        assert!(local.is_const);
+
+        let plain = synth.local(&["thawed"], vec![synth.number_int(2)]);
+        let Statement::LocalAssignment(local) = &plain else {
+            panic!("expected local assignment");
+        };
+        assert!(!local.is_const);
+
+        let func = synth.const_function(
+            "pinned",
+            Vec::new(),
+            FnSig::default(),
+            synth.block(vec![], None),
+        );
+        let Statement::LocalFunction(func) = &func else {
+            panic!("expected local function");
+        };
+        assert!(func.is_const);
+    }
+
+    #[test]
+    fn builds_attribute_with_args() {
+        let synth = Synth::new();
+        let attribute = synth.function_attribute("deprecated", Some(vec![synth.string("use y")]));
+        let args = attribute.args.as_ref().expect("args present");
+        assert_eq!(args.len(), 1);
+
+        let plain = synth.function_attribute("native", None);
+        assert!(plain.args.is_none());
     }
 }

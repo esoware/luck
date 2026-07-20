@@ -29,10 +29,7 @@ impl Rule for UnusedArgument {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let _block = ctx.block;
         let semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut diagnostics = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
@@ -53,7 +50,7 @@ impl Rule for UnusedArgument {
             }
 
             let fix = Some(Fix {
-                description: format!("prefix '{}' with '_'", symbol.name),
+                description: format!("prefix `{}` with `_`", symbol.name),
                 edits: vec![TextEdit {
                     span: symbol.definition_span,
                     replacement: format!("_{}", symbol.name),
@@ -63,10 +60,10 @@ impl Rule for UnusedArgument {
             diagnostics.push(
                 LintDiagnostic::new(
                     "unused_argument",
-                    format!("unused argument '{}'", symbol.name),
+                    format!("unused argument `{}`", symbol.name),
                     symbol.definition_span,
                 )
-                .with_help("prefix with '_' to suppress this warning".to_string())
+                .with_help("prefix with `_` to suppress this warning".to_string())
                 .with_fix_opt(fix),
             );
         }
@@ -131,7 +128,7 @@ mod tests {
     fn flags_unused_parameter() {
         let diags = run("local function f(x) end");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("'x'"));
+        assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]
@@ -152,7 +149,7 @@ mod tests {
         let diags = run(source);
         // Only `x` is flagged. `self` is the implicit method receiver.
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("'x'"));
+        assert!(diags[0].message.contains("`x`"));
         assert!(!diags[0].message.contains("self"));
     }
 
@@ -160,6 +157,6 @@ mod tests {
     fn flags_multiple_parameters_some_used() {
         let diags = run("local function f(a, b, c) return a + c end");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("'b'"));
+        assert!(diags[0].message.contains("`b`"));
     }
 }

@@ -25,38 +25,30 @@ impl Rule for StringIndexToField {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
         let mut checker = IndexChecker {
-            source,
-            version: semantic.version,
+            version: ctx.semantic.version,
             diagnostics: Vec::new(),
         };
-        checker.visit_block(block);
+        checker.visit_block(ctx.block);
         checker.diagnostics
     }
 }
 
-struct IndexChecker<'src> {
-    source: &'src str,
+struct IndexChecker {
     version: LuaVersion,
     diagnostics: Vec<LintDiagnostic>,
 }
 
-impl IndexChecker<'_> {
+impl IndexChecker {
     fn check_index(&mut self, idx: &IndexExpression) {
         let Expression::StringLiteral(literal) = &idx.index else {
             return;
         };
 
-        // We need the raw source slice - the stored text is the lexed
-        // value, but the source preserves the quotes and escapes. The
-        // literal must be a simple short-string with no escape sequences
-        // and must contain only identifier chars.
-        let raw = &self.source[literal.span.start as usize..literal.span.end as usize];
-        let Some(name) = identifier_inside(raw) else {
+        // The literal token carries its raw text (quotes and escapes
+        // intact). Accept only a simple short-string with no escape
+        // sequences whose contents are a bare identifier.
+        let Some(name) = identifier_inside(&literal.text) else {
             return;
         };
         if !is_ident(name) {
@@ -152,7 +144,7 @@ fn is_reserved(name: &str, version: LuaVersion) -> bool {
         || (name == "continue" && version.has_continue())
 }
 
-impl<'ast> Visitor<'ast> for IndexChecker<'_> {
+impl<'ast> Visitor<'ast> for IndexChecker {
     fn visit_var(&mut self, var: &'ast Var) {
         if let Var::Index(idx) = var {
             self.check_index(idx);

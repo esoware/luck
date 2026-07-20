@@ -18,10 +18,7 @@ impl Rule for UndefinedVariable {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let _block = ctx.block;
         let semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut diagnostics = Vec::new();
 
         // Globals defined in this file (`function f() end`, `counter = 0`)
@@ -58,10 +55,10 @@ impl Rule for UndefinedVariable {
             diagnostics.push(
                 LintDiagnostic::new(
                     "undefined_variable",
-                    format!("undefined variable '{}'", reference.name),
+                    format!("undefined variable `{}`", reference.name),
                     reference.span,
                 )
-                .with_help("declare it with 'local' or add to globals list".to_string()),
+                .with_help("declare it with `local` or add to globals list".to_string()),
             );
         }
 

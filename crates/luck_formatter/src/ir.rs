@@ -15,11 +15,6 @@ use compact_str::CompactString;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GroupId(pub u32);
 
-/// Label attached to an IR region so post-passes (e.g. require sorting)
-/// can find it without inspecting element shapes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LabelId(pub u16);
-
 /// How a line element behaves in flat vs expanded mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineMode {
@@ -70,9 +65,6 @@ pub enum Tag {
     /// Content deferred to just before the next line break (trailing comments).
     StartLineSuffix,
     EndLineSuffix,
-    /// Semantic marker with no layout effect.
-    StartLabelled(LabelId),
-    EndLabelled,
 }
 
 /// One element of the document stream.
@@ -166,7 +158,6 @@ pub struct Checkpoint {
 pub struct Formatter {
     elements: Vec<FormatElement>,
     next_group_id: u32,
-    next_label_id: u16,
     pub options: crate::FormatOptions,
     pub comments: crate::comments::Comments,
     /// When set, only statements overlapping this byte range are formatted;
@@ -196,7 +187,6 @@ impl Formatter {
         Self {
             elements,
             next_group_id: 0,
-            next_label_id: 0,
             options,
             comments,
             format_range: None,
@@ -209,12 +199,6 @@ impl Formatter {
         id
     }
 
-    pub fn label_id(&mut self) -> LabelId {
-        let id = LabelId(self.next_label_id);
-        self.next_label_id += 1;
-        id
-    }
-
     /// Total number of group ids handed out; sizes the printer's mode table.
     pub fn group_count(&self) -> u32 {
         self.next_group_id
@@ -223,10 +207,6 @@ impl Formatter {
     #[inline]
     pub fn push(&mut self, element: FormatElement) {
         self.elements.push(element);
-    }
-
-    pub fn write(&mut self, content: &dyn Format) {
-        content.fmt(self);
     }
 
     pub fn into_elements(self) -> Vec<FormatElement> {
@@ -253,34 +233,6 @@ impl Formatter {
     /// `best_fitting` to capture variants).
     pub fn take_since(&mut self, checkpoint: Checkpoint) -> Vec<FormatElement> {
         self.elements.split_off(checkpoint.element_len)
-    }
-
-    /// Whether anything written since `checkpoint` forces a line break.
-    /// `BestFitting` is a boundary: breaks inside its variants stay inside.
-    pub fn will_break_since(&self, checkpoint: Checkpoint) -> bool {
-        self.elements[checkpoint.element_len..]
-            .iter()
-            .any(|element| match element {
-                FormatElement::Line(LineMode::Hard | LineMode::Empty)
-                | FormatElement::ExpandParent => true,
-                FormatElement::Text(content) => content.contains('\n'),
-                FormatElement::BestFitting(_)
-                | FormatElement::Token(_)
-                | FormatElement::Space
-                | FormatElement::Line(LineMode::Soft | LineMode::SoftOrSpace)
-                | FormatElement::LineSuffixBoundary
-                | FormatElement::Tag(_) => false,
-            })
-    }
-
-    /// Join items with a separator written between each adjacent pair.
-    pub fn join_with(&mut self, separator: &dyn Format, items: &[&dyn Format]) {
-        for (index, item) in items.iter().enumerate() {
-            if index > 0 {
-                separator.fmt(self);
-            }
-            item.fmt(self);
-        }
     }
 }
 
@@ -417,14 +369,6 @@ pub fn indent_if_group_breaks<T: Format>(group_id: GroupId, content: T) -> impl 
         f.push(FormatElement::Tag(Tag::StartIndentIfGroupBreaks(group_id)));
         content.fmt(f);
         f.push(FormatElement::Tag(Tag::EndIndentIfGroupBreaks));
-    })
-}
-
-pub fn labelled<T: Format>(label: LabelId, content: T) -> impl Format {
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartLabelled(label)));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndLabelled));
     })
 }
 

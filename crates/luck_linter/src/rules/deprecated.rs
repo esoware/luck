@@ -49,7 +49,7 @@ impl<'src> DeprecatedChecker<'src, '_> {
             self.out.push(
                 LintDiagnostic::new(
                     "deprecated",
-                    format!("'{display_name}' is deprecated"),
+                    format!("`{display_name}` is deprecated"),
                     call.span,
                 )
                 .with_help(deprecation.message.to_string())
@@ -98,7 +98,7 @@ impl<'src> DeprecatedChecker<'src, '_> {
                 self.out.push(
                     LintDiagnostic::new(
                         "deprecated",
-                        format!("argument {} of '{display_name}' is deprecated", idx + 1),
+                        format!("argument {} of `{display_name}` is deprecated", idx + 1),
                         expr.span(),
                     )
                     .with_help(deprecation.message.to_string()),
@@ -153,7 +153,7 @@ impl<'src> DeprecatedChecker<'src, '_> {
                 self.out.push(
                     LintDiagnostic::new(
                         "deprecated",
-                        format!("'{value}' is a deprecated argument of '{display_name}'"),
+                        format!("`{value}` is a deprecated argument of `{display_name}`"),
                         span,
                     )
                     .with_help(deprecation.message.to_string()),
@@ -184,7 +184,7 @@ impl<'src> DeprecatedChecker<'src, '_> {
             return None;
         }
         Some(Fix {
-            description: format!("replace deprecated '{display_name}' with '{replacement}'"),
+            description: format!("replace deprecated `{display_name}` with `{replacement}`"),
             edits: vec![TextEdit {
                 span: call.span,
                 replacement,
@@ -221,7 +221,7 @@ impl DeprecatedChecker<'_, '_> {
         let Expression::Var(Var::FieldAccess(_)) = expr else {
             return;
         };
-        let Some((segments, spans)) = dotted_path(expr) else {
+        let Some((segments, spans)) = crate::path::dotted_path(expr) else {
             return;
         };
         if self.semantic.resolves_to_local(segments[0], spans[0]) {
@@ -242,43 +242,11 @@ impl DeprecatedChecker<'_, '_> {
         self.out.push(
             LintDiagnostic::new(
                 "deprecated",
-                format!("'{display_name}' is deprecated"),
+                format!("`{display_name}` is deprecated"),
                 *spans.last().expect("span per segment"),
             )
             .with_help(deprecation.message.to_string()),
         );
-    }
-}
-
-/// Unwind a `Name(.Name)*` chain into segments and per-segment spans.
-fn dotted_path(expr: &Expression) -> Option<(Vec<&str>, Vec<Span>)> {
-    let mut segments: Vec<&str> = Vec::new();
-    let mut spans: Vec<Span> = Vec::new();
-    let mut cursor = expr;
-    loop {
-        match cursor {
-            Expression::Var(Var::Name(token)) => {
-                segments.push(identifier(token)?);
-                spans.push(token.span);
-                break;
-            }
-            Expression::Var(Var::FieldAccess(field_access)) => {
-                segments.push(identifier(&field_access.name)?);
-                spans.push(field_access.name.span);
-                cursor = &field_access.prefix;
-            }
-            _ => return None,
-        }
-    }
-    segments.reverse();
-    spans.reverse();
-    Some((segments, spans))
-}
-
-fn identifier(token: &luck_token::Token) -> Option<&str> {
-    match &token.kind {
-        luck_token::TokenKind::Identifier(name) => Some(name.as_str()),
-        _ => None,
     }
 }
 
@@ -350,7 +318,7 @@ mod tests {
     #[test]
     fn snapshot_loadstring_to_load() {
         let (desc, after) = run_fix("loadstring('x')", LuaVersion::Lua54).unwrap();
-        assert_eq!(desc, "replace deprecated 'loadstring' with 'load('x')'");
+        assert_eq!(desc, "replace deprecated `loadstring` with `load('x')`");
         assert_eq!(after, "load('x')");
     }
 
@@ -359,7 +327,7 @@ mod tests {
         let (desc, after) = run_fix("string.gfind(s, p)", LuaVersion::Lua54).unwrap();
         assert_eq!(
             desc,
-            "replace deprecated 'string.gfind' with 'string.gmatch(s, p)'"
+            "replace deprecated `string.gfind` with `string.gmatch(s, p)`"
         );
         assert_eq!(after, "string.gmatch(s, p)");
     }
@@ -367,21 +335,21 @@ mod tests {
     #[test]
     fn snapshot_table_getn_to_length() {
         let (desc, after) = run_fix("table.getn(t)", LuaVersion::Lua54).unwrap();
-        assert_eq!(desc, "replace deprecated 'table.getn' with '#t'");
+        assert_eq!(desc, "replace deprecated `table.getn` with `#t`");
         assert_eq!(after, "#t");
     }
 
     #[test]
     fn snapshot_unpack_to_table_unpack() {
         let (desc, after) = run_fix("unpack(t)", LuaVersion::Lua54).unwrap();
-        assert_eq!(desc, "replace deprecated 'unpack' with 'table.unpack(t)'");
+        assert_eq!(desc, "replace deprecated `unpack` with `table.unpack(t)`");
         assert_eq!(after, "table.unpack(t)");
     }
 
     #[test]
     fn snapshot_math_pow_to_caret() {
         let (desc, after) = run_fix("local r = math.pow(a, b)", LuaVersion::Lua54).unwrap();
-        assert_eq!(desc, "replace deprecated 'math.pow' with '(a ^ b)'");
+        assert_eq!(desc, "replace deprecated `math.pow` with `(a ^ b)`");
         assert_eq!(after, "local r = (a ^ b)");
     }
 
@@ -400,7 +368,7 @@ mod tests {
         let (desc, after) = run_fix("math.log10(x)", LuaVersion::Lua54).unwrap();
         assert_eq!(
             desc,
-            "replace deprecated 'math.log10' with 'math.log(x, 10)'"
+            "replace deprecated `math.log10` with `math.log(x, 10)`"
         );
         assert_eq!(after, "math.log(x, 10)");
     }
@@ -438,7 +406,7 @@ mod tests {
         assert!(
             diags.iter().any(|d| d
                 .message
-                .contains("'PointsService' is a deprecated argument")),
+                .contains("`PointsService` is a deprecated argument")),
             "{diags:?}"
         );
     }
@@ -461,7 +429,7 @@ mod tests {
         assert!(
             diags
                 .iter()
-                .any(|d| d.message.contains("argument 2 of 'Instance.new'")),
+                .any(|d| d.message.contains("argument 2 of `Instance.new`")),
             "{diags:?}"
         );
     }
@@ -484,7 +452,7 @@ mod tests {
         assert!(
             diags
                 .iter()
-                .any(|d| d.message.contains("'setpause' is a deprecated argument")),
+                .any(|d| d.message.contains("`setpause` is a deprecated argument")),
             "{diags:?}"
         );
     }

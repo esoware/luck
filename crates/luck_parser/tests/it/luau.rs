@@ -77,7 +77,7 @@ fn if_expression_simple() {
     assert_eq!(result.block.stmts.len(), 1);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
         let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last_item().expect("expression list has last element");
+        let expr = exprs.last().expect("expression list has last element");
         assert!(matches!(expr, Expression::IfExpression(_)));
         if let Expression::IfExpression(ie) = expr {
             assert!(ie.elseif_clauses.is_empty());
@@ -93,7 +93,7 @@ fn if_expression_with_elseif() {
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
         let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last_item().expect("expression list has last element");
+        let expr = exprs.last().expect("expression list has last element");
         if let Expression::IfExpression(ie) = expr {
             assert_eq!(ie.elseif_clauses.len(), 1);
         } else {
@@ -110,7 +110,7 @@ fn if_expression_nested() {
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
         let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last_item().expect("expression list has last element");
+        let expr = exprs.last().expect("expression list has last element");
         if let Expression::IfExpression(ie) = expr {
             assert!(matches!(&ie.then_expr, Expression::IfExpression(_)));
         } else {
@@ -127,7 +127,7 @@ fn interp_string_plain() {
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
         let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last_item().expect("expression list has last element");
+        let expr = exprs.last().expect("expression list has last element");
         assert!(matches!(expr, Expression::InterpolatedString(_)));
     } else {
         panic!("expected LocalAssignment");
@@ -140,7 +140,7 @@ fn interp_string_with_expression() {
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
         let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last_item().expect("expression list has last element");
+        let expr = exprs.last().expect("expression list has last element");
         if let Expression::InterpolatedString(is) = expr {
             // InterpBegin (with expr y) + InterpEnd
             assert_eq!(is.segments.len(), 2);
@@ -160,7 +160,7 @@ fn interp_string_multiple_expressions() {
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
         let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last_item().expect("expression list has last element");
+        let expr = exprs.last().expect("expression list has last element");
         if let Expression::InterpolatedString(is) = expr {
             // InterpBegin("a") + expr(1+2) -> InterpMid("b") + expr(3) -> InterpEnd("c")
             assert_eq!(is.segments.len(), 3);
@@ -216,7 +216,7 @@ fn type_cast_expression() {
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
         let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last_item().expect("expression list has last element");
+        let expr = exprs.last().expect("expression list has last element");
         assert!(matches!(expr, Expression::TypeCast(_)));
     } else {
         panic!("expected LocalAssignment");
@@ -252,7 +252,7 @@ fn type_cast_binds_tighter_than_binary_op() {
         panic!("expected LocalAssignment");
     };
     let exprs = la.exprs.as_ref().expect("assignment has values");
-    let expr = exprs.last_item().expect("has last element");
+    let expr = exprs.last().expect("has last element");
     let Expression::BinaryOp(binop) = expr else {
         panic!("expected top-level BinaryOp, got {expr:?}");
     };

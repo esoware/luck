@@ -37,21 +37,17 @@ impl Rule for ManualTableClone {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
         let semantic = ctx.semantic;
-        let source = ctx.source;
-        let _comments = ctx.comments;
         let suggestion = match suggestion_for_version(semantic.version) {
             Some(label) => label,
             None => return Vec::new(),
         };
         let mut checker = CloneChecker {
-            source,
             semantic,
             suggestion,
             diagnostics: Vec::new(),
         };
-        checker.visit_block(block);
+        checker.visit_block(ctx.block);
         checker.diagnostics
     }
 }
@@ -79,13 +75,12 @@ enum SuggestionKind {
 }
 
 struct CloneChecker<'src> {
-    source: &'src str,
     semantic: &'src SemanticAnalysis,
     suggestion: SuggestionKind,
     diagnostics: Vec<LintDiagnostic>,
 }
 
-impl<'src> CloneChecker<'src> {
+impl CloneChecker<'_> {
     fn scan_block(&mut self, block: &Block) {
         // A clone shape is always a local-table-decl immediately followed by
         // a copy-loop: two adjacent statements.
@@ -99,7 +94,7 @@ impl<'src> CloneChecker<'src> {
             let next = &window[1];
             let span = match next {
                 Statement::GenericFor(loop_node) => {
-                    if !is_generic_clone(loop_node, dest_name, self.source, self.semantic) {
+                    if !is_generic_clone(loop_node, dest_name, self.semantic) {
                         continue;
                     }
                     // pairs() copies hash keys, but table.move copies only the
@@ -111,7 +106,7 @@ impl<'src> CloneChecker<'src> {
                     loop_node.span
                 }
                 Statement::NumericFor(loop_node) => {
-                    if !is_numeric_clone(loop_node, dest_name, self.source) {
+                    if !is_numeric_clone(loop_node, dest_name) {
                         continue;
                     }
                     loop_node.span
@@ -171,12 +166,7 @@ fn single_empty_table_local(decl: &LocalAssignment) -> Option<&str> {
 }
 
 /// Is this `for k, v in pairs(src) do out[k] = v end`?
-fn is_generic_clone(
-    loop_node: &GenericFor,
-    dest: &str,
-    _source: &str,
-    semantic: &SemanticAnalysis,
-) -> bool {
+fn is_generic_clone(loop_node: &GenericFor, dest: &str, semantic: &SemanticAnalysis) -> bool {
     let names: Vec<_> = loop_node.names.iter().collect();
     if names.len() != 2 {
         return false;
@@ -205,12 +195,12 @@ fn is_generic_clone(
 }
 
 /// Is this `for i = 1, #src do out[i] = src[i] end`?
-fn is_numeric_clone(loop_node: &NumericFor, dest: &str, source: &str) -> bool {
+fn is_numeric_clone(loop_node: &NumericFor, dest: &str) -> bool {
     let TokenKind::Identifier(loop_var) = &loop_node.name.kind else {
         return false;
     };
 
-    if !is_number_one(&loop_node.start, source) {
+    if !is_number_one(&loop_node.start) {
         return false;
     }
     let Some(src_name) = length_of_identifier(&loop_node.limit) else {
@@ -218,7 +208,7 @@ fn is_numeric_clone(loop_node: &NumericFor, dest: &str, source: &str) -> bool {
     };
     // Step (if present) must also be 1; we only model the simple case.
     if let Some(step) = &loop_node.step {
-        if !is_number_one(step, source) {
+        if !is_number_one(step) {
             return false;
         }
     }
@@ -319,12 +309,8 @@ fn length_of_identifier(expr: &Expression) -> Option<&str> {
 }
 
 /// Whether the expression is the literal number `1`.
-fn is_number_one(expr: &Expression, source: &str) -> bool {
-    let Expression::Number(token) = expr else {
-        return false;
-    };
-    let text = &source[token.span.start as usize..token.span.end as usize];
-    text.parse::<f64>() == Ok(1.0)
+fn is_number_one(expr: &Expression) -> bool {
+    matches!(expr, Expression::Number(literal) if literal.text.parse::<f64>() == Ok(1.0))
 }
 
 /// Whether `var.prefix` is a bare reference to `name`.

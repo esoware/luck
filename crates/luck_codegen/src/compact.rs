@@ -498,9 +498,25 @@ impl CompactPrinter {
     }
 
     fn emit_interpolated_string(&mut self, interp: &InterpolatedString) {
-        for segment in &interp.segments {
-            self.emit_interp_token(&segment.literal);
+        // The `` ` ``/`{`/`}` punctuation follows expression presence, not
+        // token kind: a plain `` `text` `` parses as a Begin("") + End(text)
+        // pair with no expression and must print without braces.
+        let mut prev_had_expr = false;
+        for (index, segment) in interp.segments.iter().enumerate() {
+            if index == 0 {
+                self.output.print_ascii_byte(b'`');
+            } else if prev_had_expr {
+                self.output.print_ascii_byte(b'}');
+            }
+            if let TokenKind::InterpBegin(text)
+            | TokenKind::InterpMid(text)
+            | TokenKind::InterpEnd(text) = &segment.literal.kind
+            {
+                self.output.print_str(text);
+            }
+            self.prev = PrevClass::Other;
             if let Some(expr) = &segment.expr {
+                self.output.print_ascii_byte(b'{');
                 // `{{` is a parse error in Luau: an expression starting
                 // with a table constructor needs a space after the
                 // interpolation opener.
@@ -509,26 +525,9 @@ impl CompactPrinter {
                 }
                 self.emit_expression(expr);
             }
+            prev_had_expr = segment.expr.is_some();
         }
-    }
-
-    /// Emit an interpolated string token with proper backtick/brace delimiters.
-    /// InterpBegin("text") -> `` `text{ ``
-    /// InterpMid("text") -> `}text{`
-    /// InterpEnd("text") -> `` }text` ``
-    fn emit_interp_token(&mut self, token: &Token) {
-        let (open, text, close) = match &token.kind {
-            TokenKind::InterpBegin(s) => (b'`', s, b'{'),
-            TokenKind::InterpMid(s) => (b'}', s, b'{'),
-            TokenKind::InterpEnd(s) => (b'}', s, b'`'),
-            _ => {
-                self.emit_token(token);
-                return;
-            }
-        };
-        self.output.print_ascii_byte(open);
-        self.output.print_str(text);
-        self.output.print_ascii_byte(close);
+        self.output.print_ascii_byte(b'`');
         self.prev = PrevClass::Other;
     }
 

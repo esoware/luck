@@ -3,30 +3,27 @@ use luck_core::diagnostics::{Diagnostic, errors};
 use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 
-use crate::{ResolveRequest, ResolvedModule, Resolver, normalize_path};
+use crate::{ResolveRequest, ResolvedModule, Resolver, normalize_path, normalize_path_str};
 
 impl Resolver {
     pub(crate) fn resolve_luau(
         &mut self,
         request: &ResolveRequest<'_>,
-    ) -> Result<ResolvedModule, Box<Diagnostic>> {
+    ) -> Result<ResolvedModule, Diagnostic> {
         if request.module.starts_with("./") || request.module.starts_with("../") {
             self.resolve_relative(request)
         } else if request.module.starts_with('@') {
             self.resolve_alias(request)
         } else {
-            Err(Box::new(errors::e004_luau_scheme(
+            Err(errors::e004_luau_scheme(
                 request.from_file,
                 request.span.into(),
                 request.module,
-            )))
+            ))
         }
     }
 
-    fn resolve_relative(
-        &self,
-        request: &ResolveRequest<'_>,
-    ) -> Result<ResolvedModule, Box<Diagnostic>> {
+    fn resolve_relative(&self, request: &ResolveRequest<'_>) -> Result<ResolvedModule, Diagnostic> {
         let current_path = os_path(request.from_file);
         let base_dir = effective_dir(&current_path);
         let resolved_base = base_dir.join(os_path(request.module));
@@ -37,7 +34,7 @@ impl Resolver {
     fn resolve_alias(
         &mut self,
         request: &ResolveRequest<'_>,
-    ) -> Result<ResolvedModule, Box<Diagnostic>> {
+    ) -> Result<ResolvedModule, Diagnostic> {
         let without_at = &request.module[1..];
         let (alias_name, sub_path) = match without_at.find('/') {
             Some(idx) => (&without_at[..idx], Some(&without_at[idx + 1..])),
@@ -57,12 +54,12 @@ impl Resolver {
 
         let aliases = self.luaurc_aliases(&start_dir);
         let alias_path = aliases.get(&alias_lower).ok_or_else(|| {
-            Box::new(errors::e004(
+            errors::e004(
                 request.from_file,
                 request.span.into(),
                 request.module,
                 &[format!("alias @{alias_name} not found in any .luaurc")],
-            ))
+            )
         })?;
 
         let resolved_base = match sub_path {
@@ -80,12 +77,9 @@ impl Resolver {
         request: &ResolveRequest<'_>,
         sub_path: Option<&str>,
         self_dir: &Path,
-    ) -> Result<ResolvedModule, Box<Diagnostic>> {
+    ) -> Result<ResolvedModule, Diagnostic> {
         let sub = sub_path.ok_or_else(|| {
-            Box::new(errors::e004_self_needs_subpath(
-                request.from_file,
-                request.span.into(),
-            ))
+            errors::e004_self_needs_subpath(request.from_file, request.span.into())
         })?;
 
         let mut warnings = Vec::new();
@@ -186,7 +180,7 @@ fn effective_dir(current_file: &Path) -> PathBuf {
 fn probe_luau_path(
     base_path: &Path,
     request: &ResolveRequest<'_>,
-) -> Result<ResolvedModule, Box<Diagnostic>> {
+) -> Result<ResolvedModule, Diagnostic> {
     // Append the extension to the FULL name: `with_extension` replaces
     // everything after the last dot, so `./config.v2` would probe
     // `config.luau` instead of `config.v2.luau`.
@@ -215,15 +209,15 @@ fn probe_luau_path(
     };
 
     if let (Some(file), Some(dir)) = (&file_match, &dir_match) {
-        return Err(Box::new(errors::e007(
+        return Err(errors::e007(
             request.from_file,
             request.span.into(),
             &format!(
                 "both file {} and directory init file {} exist",
-                normalize_path(file),
-                normalize_path(dir)
+                normalize_path_str(file),
+                normalize_path_str(dir)
             ),
-        )));
+        ));
     }
 
     match file_match.or(dir_match) {
@@ -231,30 +225,30 @@ fn probe_luau_path(
             path: normalize_path(&path),
             warnings: Vec::new(),
         }),
-        None => Err(Box::new(errors::e004(
+        None => Err(errors::e004(
             request.from_file,
             request.span.into(),
             request.module,
             &[
-                normalize_path(&append_extension(base_path, ".luau")),
-                normalize_path(&append_extension(base_path, ".lua")),
-                normalize_path(&base_path.join("init.luau")),
-                normalize_path(&base_path.join("init.lua")),
+                normalize_path_str(&append_extension(base_path, ".luau")),
+                normalize_path_str(&append_extension(base_path, ".lua")),
+                normalize_path_str(&base_path.join("init.luau")),
+                normalize_path_str(&base_path.join("init.lua")),
             ],
-        ))),
+        )),
     }
 }
 
-fn ambiguous(request: &ResolveRequest<'_>, first: &Path, second: &Path) -> Box<Diagnostic> {
-    Box::new(errors::e007(
+fn ambiguous(request: &ResolveRequest<'_>, first: &Path, second: &Path) -> Diagnostic {
+    errors::e007(
         request.from_file,
         request.span.into(),
         &format!(
             "both {} and {} exist",
-            normalize_path(first),
-            normalize_path(second)
+            normalize_path_str(first),
+            normalize_path_str(second)
         ),
-    ))
+    )
 }
 
 fn append_extension(base_path: &Path, extension: &str) -> PathBuf {
@@ -270,16 +264,13 @@ fn os_path(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::normalize_path;
+    use crate::normalize_path_str;
     use luck_core::types::LuaTarget;
     use luck_token::Span;
     use std::fs;
     use tempfile::TempDir;
 
-    fn resolve_luau_module(
-        module: &str,
-        from_file: &str,
-    ) -> Result<ResolvedModule, Box<Diagnostic>> {
+    fn resolve_luau_module(module: &str, from_file: &str) -> Result<ResolvedModule, Diagnostic> {
         Resolver::new().resolve(&ResolveRequest {
             module,
             from_file,
@@ -303,7 +294,7 @@ mod tests {
     #[test]
     fn resolves_relative_luau_file() {
         let dir = setup_luau_project();
-        let current = normalize_path(&dir.path().join("src/main.luau"));
+        let current = normalize_path_str(&dir.path().join("src/main.luau"));
 
         let result = resolve_luau_module("./utils", &current).expect("resolve failed");
         assert!(result.path.ends_with("src/utils.luau"));
@@ -312,7 +303,7 @@ mod tests {
     #[test]
     fn prefers_lua_when_only_lua_exists() {
         let dir = setup_luau_project();
-        let current = normalize_path(&dir.path().join("src/main.luau"));
+        let current = normalize_path_str(&dir.path().join("src/main.luau"));
 
         let result = resolve_luau_module("./helper", &current).expect("resolve failed");
         assert!(result.path.ends_with("src/helper.lua"));
@@ -325,7 +316,7 @@ mod tests {
         fs::write(src.join("both.luau"), "return {}").expect("failed to write file");
         fs::write(src.join("both.lua"), "return {}").expect("failed to write file");
 
-        let current = normalize_path(&dir.path().join("src/main.luau"));
+        let current = normalize_path_str(&dir.path().join("src/main.luau"));
         let err = resolve_luau_module("./both", &current).unwrap_err();
         assert_eq!(err.code, "E007");
     }
@@ -337,7 +328,7 @@ mod tests {
         fs::create_dir_all(&comp).expect("failed to create dir");
         fs::write(comp.join("init.luau"), "return {}").expect("failed to write file");
 
-        let current = normalize_path(&dir.path().join("src/main.luau"));
+        let current = normalize_path_str(&dir.path().join("src/main.luau"));
         let result = resolve_luau_module("./components", &current).expect("resolve failed");
         assert!(result.path.ends_with("src/components/init.luau"));
     }
@@ -351,7 +342,7 @@ mod tests {
         fs::create_dir_all(&widget_dir).expect("failed to create dir");
         fs::write(widget_dir.join("init.luau"), "return {}").expect("failed to write file");
 
-        let current = normalize_path(&dir.path().join("src/main.luau"));
+        let current = normalize_path_str(&dir.path().join("src/main.luau"));
         let err = resolve_luau_module("./widget", &current).unwrap_err();
         assert_eq!(err.code, "E007");
     }
@@ -359,7 +350,7 @@ mod tests {
     #[test]
     fn reports_e004_when_relative_missing() {
         let dir = setup_luau_project();
-        let current = normalize_path(&dir.path().join("src/main.luau"));
+        let current = normalize_path_str(&dir.path().join("src/main.luau"));
 
         let err = resolve_luau_module("./nonexistent", &current).unwrap_err();
         assert_eq!(err.code, "E004");
@@ -368,7 +359,7 @@ mod tests {
     #[test]
     fn rejects_unprefixed_require() {
         let dir = setup_luau_project();
-        let current = normalize_path(&dir.path().join("src/main.luau"));
+        let current = normalize_path_str(&dir.path().join("src/main.luau"));
 
         let err = resolve_luau_module("utils", &current).unwrap_err();
         assert_eq!(err.code, "E004");
@@ -381,7 +372,7 @@ mod tests {
         fs::create_dir_all(&comp).expect("failed to create dir");
         fs::write(comp.join("init.luau"), "-- init").expect("failed to write file");
 
-        let current = normalize_path(&dir.path().join("src/components/init.luau"));
+        let current = normalize_path_str(&dir.path().join("src/components/init.luau"));
         let result = resolve_luau_module("./utils", &current).expect("resolve failed");
         assert!(result.path.ends_with("src/utils.luau"));
     }
@@ -398,7 +389,7 @@ mod tests {
         let luaurc = serde_json::json!({ "aliases": { "shared": "../shared" } });
         fs::write(src.join(".luaurc"), luaurc.to_string()).expect("failed to write file");
 
-        let current = normalize_path(&dir.path().join("src/main.luau"));
+        let current = normalize_path_str(&dir.path().join("src/main.luau"));
         let result = resolve_luau_module("@shared/common", &current).expect("resolve failed");
         assert!(result.path.ends_with("shared/common.luau"));
     }
@@ -411,7 +402,7 @@ mod tests {
         fs::write(comp.join("init.luau"), "-- init").expect("failed to write file");
         fs::write(comp.join("button.luau"), "return {}").expect("failed to write file");
 
-        let current = normalize_path(&dir.path().join("src/components/init.luau"));
+        let current = normalize_path_str(&dir.path().join("src/components/init.luau"));
         let result = resolve_luau_module("@self/button", &current).expect("resolve failed");
         assert!(result.path.ends_with("src/components/button.luau"));
     }
@@ -419,7 +410,7 @@ mod tests {
     #[test]
     fn rejects_bare_self_alias() {
         let dir = setup_luau_project();
-        let current = normalize_path(&dir.path().join("src/main.luau"));
+        let current = normalize_path_str(&dir.path().join("src/main.luau"));
 
         let err = resolve_luau_module("@self", &current).unwrap_err();
         assert_eq!(err.code, "E004");
@@ -448,7 +439,7 @@ mod tests {
         fs::create_dir_all(&src_lib).expect("failed to create dir");
         fs::write(src_lib.join("bar.luau"), "return {}").expect("failed to write file");
 
-        let current = normalize_path(&dir.path().join("src/deep/nested/mod.luau"));
+        let current = normalize_path_str(&dir.path().join("src/deep/nested/mod.luau"));
 
         let result = resolve_luau_module("@root_alias/foo", &current).expect("resolve failed");
         assert!(result.path.ends_with("root_lib/foo.luau"));
@@ -464,7 +455,7 @@ mod tests {
         fs::create_dir_all(&sub).expect("failed to create dir");
         fs::write(sub.join("child.luau"), "-- child").expect("failed to write file");
 
-        let current = normalize_path(&dir.path().join("src/sub/child.luau"));
+        let current = normalize_path_str(&dir.path().join("src/sub/child.luau"));
         let result = resolve_luau_module("../utils", &current).expect("resolve failed");
         assert!(result.path.ends_with("src/utils.luau"));
     }
@@ -476,7 +467,7 @@ mod tests {
         fs::create_dir_all(&comp).expect("failed to create dir");
         fs::write(comp.join("init.lua"), "return {}").expect("failed to write file");
 
-        let current = normalize_path(&dir.path().join("src/main.luau"));
+        let current = normalize_path_str(&dir.path().join("src/main.luau"));
         let result = resolve_luau_module("./legacy", &current).expect("resolve failed");
         assert!(result.path.ends_with("src/legacy/init.lua"));
     }
@@ -493,7 +484,7 @@ mod tests {
         let luaurc = serde_json::json!({ "aliases": { "Shared": "../shared" } });
         fs::write(src.join(".luaurc"), luaurc.to_string()).expect("failed to write file");
 
-        let current = normalize_path(&dir.path().join("src/main.luau"));
+        let current = normalize_path_str(&dir.path().join("src/main.luau"));
         let result = resolve_luau_module("@shared/thing", &current).expect("resolve failed");
         assert!(result.path.ends_with("shared/thing.luau"));
     }
@@ -506,7 +497,7 @@ mod tests {
         fs::write(comp.join("init.luau"), "return {}").expect("failed to write file");
         fs::write(comp.join("init.lua"), "return {}").expect("failed to write file");
 
-        let current = normalize_path(&dir.path().join("src/main.luau"));
+        let current = normalize_path_str(&dir.path().join("src/main.luau"));
         let err = resolve_luau_module("./ambig", &current).unwrap_err();
         assert_eq!(err.code, "E007");
     }

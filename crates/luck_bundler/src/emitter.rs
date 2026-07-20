@@ -2,8 +2,10 @@ use luck_ast::expr::{Expression, FunctionCall};
 use luck_ast::shared::Block;
 use luck_ast::stmt::Statement;
 use luck_ast::visitor::Visitor;
+use rustc_hash::FxHashMap;
 
 use crate::graph::DependencyGraph;
+use crate::module::Dependency;
 use crate::require_extraction::extract_require_string;
 
 /// The memoizing loader emitted at the top of every multi-module bundle.
@@ -64,7 +66,7 @@ pub fn emit_with_line_map(
 
     // Numeric ids in topo order (dependencies first - cosmetic only; the
     // loader is order-independent). Entry never registers: it inlines.
-    let mut path_to_slot: rustc_hash::FxHashMap<&str, usize> = rustc_hash::FxHashMap::default();
+    let mut path_to_slot: FxHashMap<&str, usize> = FxHashMap::default();
     let mut slot = 0usize;
     for id in topo_order {
         if *id == entry_id {
@@ -193,15 +195,14 @@ pub fn emit_with_line_map(
 /// can never be silently left behind in the output.
 fn collect_require_replacements(
     block: &Block,
-    path_to_slot: &rustc_hash::FxHashMap<&str, usize>,
-    dependencies: &[(String, String, String, std::ops::Range<usize>)],
+    path_to_slot: &FxHashMap<&str, usize>,
+    dependencies: &[Dependency],
 ) -> Vec<(usize, usize, String)> {
     // require string -> loader slot
-    let mut require_to_slot: rustc_hash::FxHashMap<String, usize> =
-        rustc_hash::FxHashMap::default();
-    for (_local_name, require_string, resolved_path, _) in dependencies {
-        if let Some(&slot) = path_to_slot.get(resolved_path.as_str()) {
-            require_to_slot.insert(require_string.clone(), slot);
+    let mut require_to_slot: FxHashMap<String, usize> = FxHashMap::default();
+    for dep in dependencies {
+        if let Some(&slot) = path_to_slot.get(dep.resolved_path.as_str()) {
+            require_to_slot.insert(dep.require_string.clone(), slot);
         }
     }
 
@@ -215,7 +216,7 @@ fn collect_require_replacements(
 }
 
 struct RequireCallFinder<'a> {
-    require_to_slot: &'a rustc_hash::FxHashMap<String, usize>,
+    require_to_slot: &'a FxHashMap<String, usize>,
     replacements: Vec<(usize, usize, String)>,
 }
 
@@ -254,8 +255,8 @@ impl<'ast> Visitor<'ast> for RequireCallFinder<'_> {
 /// The replacements are collected by walking the AST, ensuring correctness.
 fn transform_module_body(
     source: &str,
-    dependencies: &[(String, String, String, std::ops::Range<usize>)],
-    path_to_slot: &rustc_hash::FxHashMap<&str, usize>,
+    dependencies: &[Dependency],
+    path_to_slot: &FxHashMap<&str, usize>,
     version: luck_token::LuaVersion,
     cached_block: Option<&Block>,
 ) -> String {
@@ -314,11 +315,7 @@ mod tests {
     use super::*;
     use crate::module::{ModuleId, ModuleInfo, sanitize_module_name};
 
-    fn module(
-        path: &str,
-        source: &str,
-        deps: Vec<(String, String, String, std::ops::Range<usize>)>,
-    ) -> ModuleInfo {
+    fn module(path: &str, source: &str, deps: Vec<Dependency>) -> ModuleInfo {
         ModuleInfo {
             path: path.to_string(),
             source: source.to_string(),
@@ -328,16 +325,12 @@ mod tests {
         }
     }
 
-    fn dep(
-        require_string: &str,
-        resolved: &str,
-    ) -> (String, String, String, std::ops::Range<usize>) {
-        (
-            String::new(),
-            require_string.to_string(),
-            resolved.to_string(),
-            0..0,
-        )
+    fn dep(require_string: &str, resolved: &str) -> Dependency {
+        Dependency {
+            require_string: require_string.to_string(),
+            resolved_path: resolved.to_string(),
+            call_span: 0..0,
+        }
     }
 
     fn reparses(output: &str) {

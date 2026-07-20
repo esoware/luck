@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
-import * as path from "path";
-import * as fs from "fs";
-import * as os from "os";
+import path from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import { logExtension } from "./output";
 
 const BIN_BASENAME = process.platform === "win32" ? "luck.exe" : "luck";
@@ -10,9 +10,7 @@ const BIN_BASENAME = process.platform === "win32" ? "luck.exe" : "luck";
  * A null result means no binary was found anywhere; callers respond by
  * offering the "Download Server" command.
  */
-export async function discoverServer(
-	extensionPath: string,
-): Promise<string | null> {
+export async function discoverServer(extensionPath: string): Promise<string | null> {
 	const config = vscode.workspace.getConfiguration("luck");
 	const explicit = config.get<string>("server.path", "").trim();
 	if (explicit) {
@@ -61,36 +59,59 @@ async function maybeCopyToTemp(source: string): Promise<string> {
 		}
 		logExtension(`server: copied to temp ${dest}`);
 		return dest;
-	} catch (err) {
-		logExtension(`server: temp-copy failed: ${err}`);
+	} catch (error) {
+		logExtension(`server: temp-copy failed: ${error}`);
 		return source;
 	}
 }
 
 function bundledServerPath(extensionPath: string): string | null {
 	const platform = vsixPlatform();
-	if (!platform) return null;
+	if (!platform) {
+		return null;
+	}
 	return path.join(extensionPath, "server", platform, BIN_BASENAME);
 }
 
 function vsixPlatform(): string | null {
-	const arch = process.arch;
+	const { arch } = process;
 	switch (process.platform) {
-		case "win32":
+		case "win32": {
 			return arch === "arm64" ? "win32-arm64" : "win32-x64";
-		case "darwin":
+		}
+		case "darwin": {
 			return arch === "arm64" ? "darwin-arm64" : "darwin-x64";
-		case "linux":
+		}
+		case "linux": {
 			return arch === "arm64" ? "linux-arm64" : "linux-x64";
-		default:
+		}
+		default: {
 			return null;
+		}
 	}
 }
 
+const WINDOWS_EXECUTABLE_EXTENSIONS = new Set(
+	(process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD")
+		.split(";")
+		.map((ext) => ext.trim().toLowerCase())
+		.filter((ext) => ext.length > 0),
+);
+
 async function isExecutable(p: string): Promise<boolean> {
 	try {
-		const st = await fs.promises.stat(p);
-		return st.isFile();
+		if (process.platform === "win32") {
+			// Windows has no execute bit; a regular file with an executable
+			// extension (per PATHEXT) is the portable proxy.
+			const st = await fs.promises.stat(p);
+			if (!st.isFile()) {
+				return false;
+			}
+			const ext = path.extname(p).toLowerCase();
+			return WINDOWS_EXECUTABLE_EXTENSIONS.has(ext);
+		}
+		await fs.promises.access(p, fs.constants.X_OK);
+		return true;
 	} catch {
 		return false;
 	}
@@ -100,8 +121,11 @@ async function findOnPath(name: string): Promise<string | null> {
 	const pathEnv = process.env["PATH"] ?? "";
 	const sep = process.platform === "win32" ? ";" : ":";
 	for (const dir of pathEnv.split(sep)) {
-		if (!dir) continue;
+		if (!dir) {
+			continue;
+		}
 		const candidate = path.join(dir, name);
+		// oxlint-disable-next-line no-await-in-loop -- PATH order is a preference order; probe sequentially.
 		if (await isExecutable(candidate)) {
 			return candidate;
 		}
@@ -114,9 +138,8 @@ async function findOnPath(name: string): Promise<string | null> {
  * downloading. Registered anyway because the walkthrough and the missing-
  * binary prompt both target this command.
  */
-export async function downloadServer(
-	context: vscode.ExtensionContext,
-): Promise<string | null> {
+// oxlint-disable-next-line require-await -- stub keeps the Promise shape the future downloader needs.
+export async function downloadServer(context: vscode.ExtensionContext): Promise<string | null> {
 	const platform = vsixPlatform();
 	if (!platform) {
 		vscode.window.showErrorMessage(
@@ -124,8 +147,7 @@ export async function downloadServer(
 		);
 		return null;
 	}
-	const version =
-		(context.extension.packageJSON?.version as string | undefined) ?? "latest";
+	const version = (context.extension.packageJSON?.version as string | undefined) ?? "latest";
 	const url = `https://github.com/esoware/luck/releases/download/v${version}/luck-${platform}.zip`;
 	vscode.window.showInformationMessage(
 		`Luck: download from ${url} not yet implemented. Set luck.server.path or install luck via cargo.`,

@@ -244,7 +244,6 @@ impl Printer {
                 end
             }
             Tag::EndLineSuffix => index + 1,
-            Tag::StartLabelled(_) | Tag::EndLabelled => index + 1,
         }
     }
 

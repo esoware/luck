@@ -3,8 +3,8 @@
 //! Dependency graph construction and single-file bundling for Lua/Luau projects.
 //!
 //! Starting from an entry file, resolves all `require()` calls via [`luck_resolver`],
-//! builds a BFS dependency graph, topologically sorts modules, and emits each as an
-//! IIFE (immediately-invoked function expression) with require calls rewritten.
+//! builds a BFS dependency graph, topologically sorts modules, and registers each
+//! non-entry module with a lazy memoizing loader, rewriting require calls to it.
 //!
 //! # Usage
 //!
@@ -15,8 +15,6 @@
 //! let bundle = luck_bundler::bundle(Path::new("main.lua"), LuaTarget::Lua54, &[], Path::new(".")).unwrap();
 //! assert!(!bundle.output.is_empty());
 //! ```
-
-#![allow(clippy::result_large_err)]
 
 pub mod emitter;
 pub mod graph;
@@ -45,13 +43,12 @@ pub fn bundle(
 ) -> Result<BundleResult, Vec<Diagnostic>> {
     let dep_graph = graph::build_graph(entry_path, target, search_paths, rc_dir)?;
 
-    let warnings = dep_graph.warnings.clone();
     let source_files: Vec<String> = dep_graph.modules.iter().map(|m| m.path.clone()).collect();
     let (output, line_map) = emitter::emit_with_line_map(&dep_graph, target.lua_version());
 
     Ok(BundleResult {
         output,
-        warnings,
+        warnings: dep_graph.warnings,
         source_files,
         line_map,
     })

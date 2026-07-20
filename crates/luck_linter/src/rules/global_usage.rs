@@ -26,10 +26,7 @@ impl Rule for GlobalUsage {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let _block = ctx.block;
         let semantic = ctx.semantic;
-        let _source = ctx.source;
-        let _comments = ctx.comments;
         let mut diagnostics = Vec::new();
 
         for reference in semantic.scope_tree.unresolved_references() {
@@ -46,7 +43,7 @@ impl Rule for GlobalUsage {
             diagnostics.push(
                 LintDiagnostic::new(
                     "global_usage",
-                    format!("global variable '{}' used", reference.name),
+                    format!("global variable `{}` used", reference.name),
                     reference.span,
                 )
                 .with_help("introduce a `local` alias at module top".to_string()),
@@ -77,7 +74,7 @@ mod tests {
     fn flags_stdlib_global() {
         let diags = run("print(\"x\")", &[]);
         assert!(
-            diags.iter().any(|d| d.message.contains("'print'")),
+            diags.iter().any(|d| d.message.contains("`print`")),
             "got: {diags:?}"
         );
     }
@@ -86,7 +83,7 @@ mod tests {
     fn ignores_local_shadowing_global() {
         let diags = run("local print = function() end\nprint(\"x\")", &[]);
         assert!(
-            diags.iter().all(|d| !d.message.contains("'print'")),
+            diags.iter().all(|d| !d.message.contains("`print`")),
             "got: {diags:?}"
         );
     }
@@ -95,7 +92,7 @@ mod tests {
     fn flags_custom_global() {
         let diags = run("myCustomGlobal()", &[]);
         assert!(
-            diags.iter().any(|d| d.message.contains("'myCustomGlobal'")),
+            diags.iter().any(|d| d.message.contains("`myCustomGlobal`")),
             "got: {diags:?}"
         );
     }
@@ -106,7 +103,7 @@ mod tests {
         assert!(
             diags
                 .iter()
-                .all(|d| !d.message.contains("'myCustomGlobal'")),
+                .all(|d| !d.message.contains("`myCustomGlobal`")),
             "got: {diags:?}"
         );
     }
@@ -114,11 +111,11 @@ mod tests {
     #[test]
     fn extras_do_not_silence_other_names() {
         let diags = run("print(\"x\")\nmyCustomGlobal()", &["myCustomGlobal"]);
-        assert!(diags.iter().any(|d| d.message.contains("'print'")));
+        assert!(diags.iter().any(|d| d.message.contains("`print`")));
         assert!(
             diags
                 .iter()
-                .all(|d| !d.message.contains("'myCustomGlobal'"))
+                .all(|d| !d.message.contains("`myCustomGlobal`"))
         );
     }
 
@@ -126,7 +123,7 @@ mod tests {
     fn flags_write_to_global() {
         let diags = run("g = 1", &[]);
         assert!(
-            diags.iter().any(|d| d.message.contains("'g'")),
+            diags.iter().any(|d| d.message.contains("`g`")),
             "got: {diags:?}"
         );
     }
@@ -134,6 +131,6 @@ mod tests {
     #[test]
     fn ignores_discard_name() {
         let diags = run("_ = 1", &[]);
-        assert!(diags.iter().all(|d| !d.message.contains("'_'")));
+        assert!(diags.iter().all(|d| !d.message.contains("`_`")));
     }
 }

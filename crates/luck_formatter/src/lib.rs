@@ -21,7 +21,7 @@
 //! ```
 
 pub(crate) mod ast_equiv;
-pub mod comments;
+pub(crate) mod comments;
 pub(crate) mod format_block;
 pub(crate) mod format_expr;
 pub(crate) mod format_function;
@@ -32,7 +32,7 @@ pub mod ir;
 pub(crate) mod numbers;
 mod printer;
 pub(crate) mod quotes;
-pub mod sort_requires;
+pub(crate) mod sort_requires;
 pub(crate) mod tokens;
 
 use luck_ast::Block;

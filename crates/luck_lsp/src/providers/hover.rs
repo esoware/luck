@@ -8,6 +8,7 @@ use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, Mar
 
 use crate::backend::DocumentState;
 use crate::providers::cursor::{CursorTarget, find_target_at};
+use crate::stdlib_render::param_label;
 
 #[must_use]
 pub fn hover(doc: &DocumentState, params: &HoverParams) -> Option<Hover> {
@@ -130,27 +131,10 @@ fn render_signature(name: &str, params: &[StdlibParam]) -> String {
 }
 
 fn render_param(param: &StdlibParam) -> String {
-    let mut out = String::new();
-    let mut name = match &param.kind {
-        StdlibArgKind::Any => "any",
-        StdlibArgKind::Bool => "bool",
-        StdlibArgKind::Number => "number",
-        StdlibArgKind::String => "string",
-        StdlibArgKind::Function => "function",
-        StdlibArgKind::Table => "table",
-        StdlibArgKind::Nil => "nil",
-        StdlibArgKind::Display(d) => d.as_str(),
-        StdlibArgKind::Constant(_) => "constant",
-        StdlibArgKind::Vararg => "...",
-    }
-    .to_string();
     if matches!(param.kind, StdlibArgKind::Vararg) {
         return "...".to_string();
     }
-    if !param.required {
-        name = format!("{name}?");
-    }
-    out.push_str(&name);
+    let mut out = param_label(param);
     if let StdlibArgKind::Constant(values) = &param.kind {
         // Large generated sets (Roblox service and class names) would
         // swamp the panel; show a prefix and the total.

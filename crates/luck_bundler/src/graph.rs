@@ -1,17 +1,16 @@
-use crate::module::{ModuleId, ModuleInfo, sanitize_module_name};
+use crate::module::{Dependency, ModuleId, ModuleInfo, sanitize_module_name};
 use crate::require_extraction::{ExtractResult, extract_requires};
 use luck_core::config::DEFAULT_SEARCH_PATHS;
 use luck_core::diagnostics::{Diagnostic, errors};
 use luck_core::types::LuaTarget;
-use luck_resolver::{ResolveRequest, Resolver, normalize_path};
+use luck_resolver::{ResolveRequest, Resolver, normalize_path_str};
+use luck_token::LuaVersion;
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::depth_first_search;
-use petgraph::visit::{Control, DfsEvent};
+use petgraph::visit::{Control, DfsEvent, depth_first_search};
 use rustc_hash::FxHashMap;
+use std::ops::Range;
 use std::path::Path;
-
-type QueueItem = String;
 
 const MAX_MODULE_COUNT: usize = 10_000;
 const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
@@ -31,9 +30,9 @@ pub fn build_graph(
     search_paths: &[String],
     rc_dir: &Path,
 ) -> Result<DependencyGraph, Vec<Diagnostic>> {
-    // When the caller passes no search paths, fall back to the Lua defaults.
-    // This is the single chokepoint for both `build_graph` and `bundle`
-    // (which calls `build_graph`), so the default is applied exactly once.
+    // When the caller passes no search paths, fall back to the Lua
+    // defaults. This is the single chokepoint for both `build_graph` and
+    // `bundle` (which calls it), so the default is applied exactly once.
     let default_search_paths: Vec<String>;
     let search_paths = if search_paths.is_empty() {
         default_search_paths = DEFAULT_SEARCH_PATHS.iter().map(|s| s.to_string()).collect();
@@ -42,229 +41,240 @@ pub fn build_graph(
         search_paths
     };
 
-    let lua_version = target.lua_version();
-    let mut modules: Vec<ModuleInfo> = Vec::new();
-    let mut path_to_id: FxHashMap<String, ModuleId> = FxHashMap::default();
-    let mut graph: DiGraph<ModuleId, ()> = DiGraph::new();
-    let mut node_indices: Vec<NodeIndex> = Vec::new();
-    let mut errors: Vec<Diagnostic> = Vec::new();
-    let mut warnings: Vec<Diagnostic> = Vec::new();
+    let mut builder = GraphBuilder::new(target, search_paths, rc_dir);
+    let entry_normalized = normalize_path_str(entry_path);
+    builder.discover(entry_normalized.clone());
+    builder.finish(&entry_normalized)
+}
 
-    let mut queue: Vec<QueueItem> = Vec::new();
-    let mut resolver = Resolver::new();
+/// Accumulates modules, edges, and diagnostics as the BFS walk discovers
+/// them. Owning the whole in-progress graph on one struct keeps
+/// [`GraphBuilder::process_module`] a plain method instead of a function
+/// threading a dozen `&mut` scratch buffers.
+struct GraphBuilder<'a> {
+    lua_version: LuaVersion,
+    target: LuaTarget,
+    search_paths: &'a [String],
+    rc_dir: &'a Path,
+    resolver: Resolver,
+    modules: Vec<ModuleInfo>,
+    path_to_id: FxHashMap<String, ModuleId>,
+    graph: DiGraph<ModuleId, ()>,
+    node_indices: Vec<NodeIndex>,
+    queue: Vec<String>,
+    errors: Vec<Diagnostic>,
+    warnings: Vec<Diagnostic>,
+}
 
-    let entry_normalized = normalize_path(entry_path);
-    queue.push(entry_normalized.clone());
-
-    while let Some(file_path) = queue.pop() {
-        if path_to_id.contains_key(&file_path) {
-            continue;
-        }
-
-        if modules.len() >= MAX_MODULE_COUNT {
-            errors.push(errors::e009(&file_path, 0..0, MAX_MODULE_COUNT));
-            return Err(errors);
-        }
-
-        process_module(
-            &file_path,
-            lua_version,
+impl<'a> GraphBuilder<'a> {
+    fn new(target: LuaTarget, search_paths: &'a [String], rc_dir: &'a Path) -> Self {
+        GraphBuilder {
+            lua_version: target.lua_version(),
             target,
             search_paths,
             rc_dir,
-            &mut resolver,
-            &mut modules,
-            &mut path_to_id,
-            &mut graph,
-            &mut node_indices,
-            &mut queue,
-            &mut errors,
-            &mut warnings,
-        );
+            resolver: Resolver::new(),
+            modules: Vec::new(),
+            path_to_id: FxHashMap::default(),
+            graph: DiGraph::new(),
+            node_indices: Vec::new(),
+            queue: Vec::new(),
+            errors: Vec::new(),
+            warnings: Vec::new(),
+        }
     }
 
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-
-    for (id, module) in modules.iter().enumerate() {
-        let from_idx = node_indices[id];
-        for (_local_name, _req_str, resolved_path, _call_span) in &module.dependencies {
-            if let Some(&dep_id) = path_to_id.get(resolved_path) {
-                let to_idx = node_indices[dep_id.0];
-                graph.add_edge(from_idx, to_idx, ());
+    /// Breadth-first walk from the entry module, resolving and enqueuing
+    /// each newly discovered dependency until the queue drains.
+    fn discover(&mut self, entry_normalized: String) {
+        self.queue.push(entry_normalized);
+        while let Some(file_path) = self.queue.pop() {
+            if self.path_to_id.contains_key(&file_path) {
+                continue;
             }
+            if self.modules.len() >= MAX_MODULE_COUNT {
+                self.errors
+                    .push(errors::e009(&file_path, 0..0, MAX_MODULE_COUNT));
+                return;
+            }
+            self.process_module(&file_path);
         }
     }
 
-    // The lazy loader is registration-order independent, so a cycle no
-    // longer blocks bundling: deferred cycles (mutual requires inside
-    // function bodies) work exactly like real Lua, and a load-time cycle
-    // raises at runtime with a clear loader error. Warn and fall back to
-    // discovery order.
-    let topo_result = toposort(&graph, None);
-    let topo_order: Vec<ModuleId> = match topo_result {
-        Ok(sorted_nodes) => {
-            // Reverse: toposort gives roots-first, we need leaves-first.
-            sorted_nodes
-                .into_iter()
-                .rev()
-                .map(|idx| graph[idx])
-                .collect()
-        }
-        Err(cycle) => {
-            let cycle_path = find_cycle_path(&graph, &modules, cycle.node_id());
+    /// Reads, parses, and resolves dependencies for a single module, adding it to the graph.
+    fn process_module(&mut self, file_path: &str) {
+        let os_path = file_path.replace('/', std::path::MAIN_SEPARATOR_STR);
+        let source = match luck_core::source_io::read_source_file(&os_path) {
+            Ok(source) => source,
+            Err(io_error) => {
+                self.errors
+                    .push(errors::e010(file_path, 0..0, &io_error.to_string()));
+                return;
+            }
+        };
 
-            // Find the span of the require that closes the cycle (last module requiring the first)
-            let closing_span = if cycle_path.len() >= 2 {
-                let closing_module_path = &cycle_path[cycle_path.len() - 2];
-                let target_module_path = &cycle_path[cycle_path.len() - 1];
-                find_require_span(
-                    &modules,
-                    &path_to_id,
-                    closing_module_path,
-                    target_module_path,
-                )
-            } else {
-                None
-            };
-
-            let file_path = if cycle_path.len() >= 2 {
-                &cycle_path[cycle_path.len() - 2]
-            } else {
-                &modules[0].path
-            };
-            let span = closing_span.unwrap_or(0..0);
-
-            warnings.push(errors::w003(file_path, span, &cycle_path));
-            (0..modules.len()).map(ModuleId).collect()
-        }
-    };
-
-    let entry_id = *path_to_id
-        .get(&entry_normalized)
-        .ok_or_else(|| vec![errors::e011(&entry_normalized, 0..0)])?;
-
-    Ok(DependencyGraph {
-        modules,
-        topo_order,
-        entry_id,
-        warnings,
-    })
-}
-
-/// Reads, parses, and resolves dependencies for a single module, adding it to the graph.
-#[allow(clippy::too_many_arguments)]
-fn process_module(
-    file_path: &str,
-    lua_version: luck_token::LuaVersion,
-    target: LuaTarget,
-    search_paths: &[String],
-    rc_dir: &Path,
-    resolver: &mut Resolver,
-    modules: &mut Vec<ModuleInfo>,
-    path_to_id: &mut FxHashMap<String, ModuleId>,
-    graph: &mut DiGraph<ModuleId, ()>,
-    node_indices: &mut Vec<NodeIndex>,
-    queue: &mut Vec<QueueItem>,
-    errors: &mut Vec<Diagnostic>,
-    warnings: &mut Vec<Diagnostic>,
-) {
-    let os_path = file_path.replace('/', std::path::MAIN_SEPARATOR_STR);
-    let source = match luck_core::source_io::read_source_file(&os_path) {
-        Ok(s) => s,
-        Err(io_error) => {
-            errors.push(errors::e010(file_path, 0..0, &io_error.to_string()));
+        if source.len() > MAX_FILE_SIZE {
+            self.errors
+                .push(errors::e012(file_path, 0..0, source.len(), MAX_FILE_SIZE));
             return;
         }
-    };
 
-    if source.len() > MAX_FILE_SIZE {
-        errors.push(errors::e012(file_path, 0..0, source.len(), MAX_FILE_SIZE));
-        return;
-    }
-
-    let parse_result = luck_parser::parse(source, lua_version);
-    if !parse_result.errors.is_empty() {
+        let parse_result = luck_parser::parse(source, self.lua_version);
         for err in &parse_result.errors {
             let span = err.span.start as usize..err.span.end as usize;
-            errors.push(errors::e008(file_path, span, &err.message));
+            self.errors
+                .push(errors::e008(file_path, span, &err.message));
         }
+
+        let ExtractResult {
+            requires,
+            diagnostics,
+        } = extract_requires(&parse_result.block, file_path);
+        for diag in diagnostics {
+            if diag.is_error() {
+                self.errors.push(diag);
+            } else {
+                self.warnings.push(diag);
+            }
+        }
+
+        let mut dependencies: Vec<Dependency> = Vec::with_capacity(requires.len());
+        for req in &requires {
+            match self.resolver.resolve(&ResolveRequest {
+                module: &req.require_string,
+                from_file: file_path,
+                target: self.target,
+                search_paths: self.search_paths,
+                project_root: self.rc_dir,
+                span: req.span,
+            }) {
+                Ok(resolved) => {
+                    // The resolver returns a forward-slash normalized PathBuf; the
+                    // graph keys on its string form, so derive it here at the boundary.
+                    let resolved_path = resolved.path.to_string_lossy().into_owned();
+                    if !self.path_to_id.contains_key(&resolved_path) {
+                        self.queue.push(resolved_path.clone());
+                    }
+                    dependencies.push(Dependency {
+                        require_string: req.require_string.clone(),
+                        resolved_path,
+                        call_span: req.call_span.clone(),
+                    });
+                    self.warnings.extend(resolved.warnings);
+                }
+                Err(diag) => self.errors.push(diag),
+            }
+        }
+
+        let module_id = ModuleId(self.modules.len());
+        let node_idx = self.graph.add_node(module_id);
+        let sanitized_name = sanitize_module_name(&make_relative(file_path, self.rc_dir));
+
+        self.path_to_id.insert(file_path.to_string(), module_id);
+        self.node_indices.push(node_idx);
+        self.modules.push(ModuleInfo {
+            path: file_path.to_string(),
+            source: parse_result.source,
+            dependencies,
+            sanitized_name,
+            parsed_block: Some(parse_result.block),
+        });
     }
 
-    let ExtractResult {
-        requires,
-        diagnostics: ast_diags,
-    } = extract_requires(&parse_result.block, file_path);
-
-    for d in ast_diags {
-        if d.is_error() {
-            errors.push(d);
-        } else {
-            warnings.push(d);
+    fn finish(mut self, entry_normalized: &str) -> Result<DependencyGraph, Vec<Diagnostic>> {
+        if !self.errors.is_empty() {
+            return Err(self.errors);
         }
+
+        self.add_edges();
+        let topo_order = self.topo_order();
+        let entry_id = *self
+            .path_to_id
+            .get(entry_normalized)
+            .ok_or_else(|| vec![errors::e011(entry_normalized, 0..0)])?;
+
+        Ok(DependencyGraph {
+            modules: self.modules,
+            topo_order,
+            entry_id,
+            warnings: self.warnings,
+        })
     }
 
-    let mut deps: Vec<(String, String, String, std::ops::Range<usize>)> = Vec::new();
-    for req in &requires {
-        match resolver.resolve(&ResolveRequest {
-            module: &req.require_string,
-            from_file: file_path,
-            target,
-            search_paths,
-            project_root: rc_dir,
-            span: req.span,
-        }) {
-            Ok(result) => {
-                deps.push((
-                    req.local_name.clone(),
-                    req.require_string.clone(),
-                    result.path.clone(),
-                    req.call_span.clone(),
-                ));
-                warnings.extend(result.warnings);
-
-                if !path_to_id.contains_key(&result.path) {
-                    queue.push(result.path);
+    fn add_edges(&mut self) {
+        let mut edges: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+        for (id, module) in self.modules.iter().enumerate() {
+            let from_idx = self.node_indices[id];
+            for dep in &module.dependencies {
+                if let Some(&dep_id) = self.path_to_id.get(&dep.resolved_path) {
+                    edges.push((from_idx, self.node_indices[dep_id.0]));
                 }
             }
-            Err(diag) => {
-                errors.push(*diag);
-            }
+        }
+        for (from_idx, to_idx) in edges {
+            self.graph.add_edge(from_idx, to_idx, ());
         }
     }
 
-    let module_id = ModuleId(modules.len());
-    let relative_path = make_relative(file_path, rc_dir);
-    let sanitized = sanitize_module_name(&relative_path);
-    let node_idx = graph.add_node(module_id);
+    /// Topological order (leaves first). The lazy loader is
+    /// registration-order independent, so a cycle no longer blocks
+    /// bundling: deferred cycles (mutual requires inside function bodies)
+    /// work exactly like real Lua, and a load-time cycle raises at runtime
+    /// with a clear loader error. On a cycle, warn and fall back to
+    /// discovery order.
+    fn topo_order(&mut self) -> Vec<ModuleId> {
+        match toposort(&self.graph, None) {
+            // toposort gives roots first; reverse so leaves come first.
+            Ok(sorted_nodes) => sorted_nodes
+                .into_iter()
+                .rev()
+                .map(|idx| self.graph[idx])
+                .collect(),
+            Err(cycle) => {
+                let cycle_path = find_cycle_path(&self.graph, &self.modules, cycle.node_id());
 
-    path_to_id.insert(file_path.to_string(), module_id);
-    node_indices.push(node_idx);
-    modules.push(ModuleInfo {
-        path: file_path.to_string(),
-        source: parse_result.source,
-        dependencies: deps,
-        sanitized_name: sanitized,
-        parsed_block: Some(parse_result.block),
-    });
+                // The require that closes the cycle: the last module in the
+                // path requiring the first.
+                let closing_span = if cycle_path.len() >= 2 {
+                    find_require_span(
+                        &self.modules,
+                        &self.path_to_id,
+                        &cycle_path[cycle_path.len() - 2],
+                        &cycle_path[cycle_path.len() - 1],
+                    )
+                } else {
+                    None
+                };
+                let file_path = if cycle_path.len() >= 2 {
+                    cycle_path[cycle_path.len() - 2].clone()
+                } else {
+                    self.modules[0].path.clone()
+                };
+
+                self.warnings.push(errors::w003(
+                    &file_path,
+                    closing_span.unwrap_or(0..0),
+                    &cycle_path,
+                ));
+                (0..self.modules.len()).map(ModuleId).collect()
+            }
+        }
+    }
 }
 
-/// Finds the call_span of the require statement in `from_path` that resolves to `to_path`.
+/// Finds the call span of the require in `from_path` that resolves to `to_path`.
 fn find_require_span(
     modules: &[ModuleInfo],
     path_to_id: &FxHashMap<String, ModuleId>,
     from_path: &str,
     to_path: &str,
-) -> Option<std::ops::Range<usize>> {
+) -> Option<Range<usize>> {
     let from_id = path_to_id.get(from_path)?;
-    let from_module = &modules[from_id.0];
-    for (_local_name, _req_str, resolved_path, call_span) in &from_module.dependencies {
-        if resolved_path == to_path {
-            return Some(call_span.clone());
-        }
-    }
-    None
+    modules[from_id.0]
+        .dependencies
+        .iter()
+        .find(|dep| dep.resolved_path == to_path)
+        .map(|dep| dep.call_span.clone())
 }
 
 fn find_cycle_path(
@@ -277,16 +287,14 @@ fn find_cycle_path(
 
     depth_first_search(graph, Some(start_node), |event| {
         match event {
-            DfsEvent::Discover(n, _) => {
-                path.push(n);
-            }
-            DfsEvent::BackEdge(_, v) => {
-                if let Some(pos) = path.iter().position(|&x| x == v) {
+            DfsEvent::Discover(node, _) => path.push(node),
+            DfsEvent::BackEdge(_, target) => {
+                if let Some(pos) = path.iter().position(|&node| node == target) {
                     cycle = path[pos..]
                         .iter()
                         .map(|&idx| modules[graph[idx].0].path.clone())
                         .collect();
-                    cycle.push(modules[graph[v].0].path.clone());
+                    cycle.push(modules[graph[target].0].path.clone());
                     return Control::Break(());
                 }
             }
@@ -306,17 +314,16 @@ fn find_cycle_path(
 }
 
 fn make_relative(path: &str, base: &Path) -> String {
-    let base_normalized = normalize_path(base);
+    let base_normalized = normalize_path_str(base);
     let base_prefix = if base_normalized.ends_with('/') {
         base_normalized
     } else {
         format!("{base_normalized}/")
     };
 
-    if path.starts_with(&base_prefix) {
-        path[base_prefix.len()..].to_string()
-    } else {
-        path.to_string()
+    match path.strip_prefix(&base_prefix) {
+        Some(relative) => relative.to_string(),
+        None => path.to_string(),
     }
 }
 
@@ -334,10 +341,10 @@ mod tests {
         }
     }
 
-    /// Builds a graph whose NodeIndex `i` carries `ModuleId(i)`, matching
+    /// Builds a graph whose `NodeIndex` `i` carries `ModuleId(i)`, matching
     /// `modules[i]`, from `(from, to)` edges given as module indices.
     fn build(paths: &[&str], edges: &[(usize, usize)]) -> (DiGraph<ModuleId, ()>, Vec<ModuleInfo>) {
-        let modules: Vec<ModuleInfo> = paths.iter().map(|p| module(p)).collect();
+        let modules: Vec<ModuleInfo> = paths.iter().map(|path| module(path)).collect();
         let mut graph: DiGraph<ModuleId, ()> = DiGraph::new();
         let nodes: Vec<NodeIndex> = (0..paths.len())
             .map(|i| graph.add_node(ModuleId(i)))

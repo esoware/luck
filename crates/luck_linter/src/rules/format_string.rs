@@ -137,24 +137,11 @@ impl<'src> FormatChecker<'src, '_> {
         // Method form `receiver:method(...)`. We only handle the case
         // where the receiver is a literal - `"hello":format(x)`. Any
         // variable receiver could be any kind of value, so we cannot
-        // tell whether the method is `string.*` or a user method.
-        if let Some(name_token) = &call.method {
-            let TokenKind::Identifier(method_name) = &name_token.kind else {
-                return None;
-            };
-            // The receiver expression must itself be a literal - or a
-            // parenthesized literal - for the literal-check path to
-            // apply.
-            let receiver_is_literal =
-                matches!(unwrap_parens(&call.callee), Expression::StringLiteral(_));
-            if !receiver_is_literal {
-                return None;
-            }
-            // For the method form, the "literal" is the receiver, not
-            // an entry in `call.args`. We route through
-            // `check_method_literal_receiver` instead, which treats the
-            // receiver itself as the pattern.
-            let _ = method_name;
+        // tell whether the method is `string.*` or a user method. For the
+        // method form the "literal" is the receiver, not an entry in
+        // `call.args`; `check_method_literal_receiver` handles that shape,
+        // so this dotted-callee resolver bows out.
+        if call.method.is_some() {
             return None;
         }
 

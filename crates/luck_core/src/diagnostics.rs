@@ -1,6 +1,11 @@
 use std::ops::Range;
 
 /// A rich diagnostic (error or warning) with source location and labels.
+///
+/// The rarely-populated `labels` and `help` live behind a boxed [`DiagnosticExtra`]
+/// so the struct stays small enough to travel unboxed through `Result` (the
+/// `clippy::result_large_err` threshold is 128 bytes). Read them through the
+/// [`Diagnostic::labels`] and [`Diagnostic::help`] accessors.
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
     pub code: String,
@@ -8,8 +13,15 @@ pub struct Diagnostic {
     pub severity: DiagnosticSeverity,
     pub file_path: String,
     pub span: Range<usize>,
-    pub labels: Vec<(Range<usize>, String)>,
-    pub help: Option<String>,
+    extra: Option<Box<DiagnosticExtra>>,
+}
+
+/// Cold, usually-empty diagnostic payload. Kept off the hot path so a bare
+/// `Diagnostic` (the common case: no labels, no help) does not pay for it.
+#[derive(Debug, Clone, Default)]
+struct DiagnosticExtra {
+    labels: Vec<(Range<usize>, String)>,
+    help: Option<String>,
 }
 
 /// Whether a diagnostic is an error (blocks the build) or a warning (informational).
@@ -44,8 +56,7 @@ impl Diagnostic {
             severity: DiagnosticSeverity::Error,
             file_path,
             span,
-            labels: Vec::new(),
-            help: None,
+            extra: None,
         }
     }
 
@@ -56,8 +67,7 @@ impl Diagnostic {
             severity: DiagnosticSeverity::Warning,
             file_path,
             span,
-            labels: Vec::new(),
-            help: None,
+            extra: None,
         }
     }
 
@@ -80,13 +90,30 @@ impl Diagnostic {
     }
 
     pub fn with_label(mut self, span: Range<usize>, message: String) -> Self {
-        self.labels.push((span, message));
+        self.extra_mut().labels.push((span, message));
         self
     }
 
     pub fn with_help(mut self, help: String) -> Self {
-        self.help = Some(help);
+        self.extra_mut().help = Some(help);
         self
+    }
+
+    /// Source-location labels attached to this diagnostic; empty for the common
+    /// case that carries none.
+    pub fn labels(&self) -> &[(Range<usize>, String)] {
+        self.extra.as_deref().map_or(&[], |extra| &extra.labels)
+    }
+
+    /// The help note, if one was attached.
+    pub fn help(&self) -> Option<&str> {
+        self.extra
+            .as_deref()
+            .and_then(|extra| extra.help.as_deref())
+    }
+
+    fn extra_mut(&mut self) -> &mut DiagnosticExtra {
+        self.extra.get_or_insert_with(Box::default)
     }
 
     pub fn is_error(&self) -> bool {
@@ -337,8 +364,15 @@ mod tests {
         let diag = Diagnostic::error("E001", "msg".to_string(), "f.lua".to_string(), 0..10)
             .with_label(5..8, "here".to_string())
             .with_help("do this".to_string());
-        assert_eq!(diag.labels.len(), 1);
-        assert!(diag.help.is_some());
+        assert_eq!(diag.labels().len(), 1);
+        assert!(diag.help().is_some());
+    }
+
+    #[test]
+    fn stays_below_result_large_err_threshold() {
+        // Unboxed `Result<_, Diagnostic>` must not trip clippy::result_large_err,
+        // whose default large-error threshold is 128 bytes.
+        assert!(std::mem::size_of::<Diagnostic>() <= 128);
     }
 
     #[test]
@@ -349,7 +383,7 @@ mod tests {
 
         let e4 = errors::e004("f.lua", 0..10, "mymod", &["src/mymod.lua".to_string()]);
         assert!(
-            e4.help
+            e4.help()
                 .expect("e004 always sets help")
                 .contains("src/mymod.lua")
         );

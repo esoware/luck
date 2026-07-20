@@ -1,9 +1,8 @@
-use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Var};
-use luck_token::UnOp;
-use luck_token::literal::{LuaNumber, NumberSubtypes, parse_lua_number};
-use luck_token::{StdlibEnvironment, TokenKind};
+use luck_ast::expr::{Expression, FunctionArgs};
+use luck_token::StdlibEnvironment;
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::roblox::{is_global_new_call, literal_arg_value};
 use crate::rule::{LintContext, NodeRule, Rule};
 use luck_ast::node::{AstTypesBitset, NodeType};
 
@@ -23,55 +22,11 @@ impl Rule for RobloxIncorrectColor3NewBounds {
     }
 
     fn description(&self) -> &'static str {
-        "Color3.new component outside the 0 to 1 range."
+        "Color3.new component outside the 0 to 1 range"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
         crate::bus::run_single(self, ctx)
-    }
-}
-
-fn is_global_new_call(call: &FunctionCall, global: &str, ctx: &LintContext) -> bool {
-    if call.method.is_some() {
-        return false;
-    }
-    let Expression::Var(var) = &call.callee else {
-        return false;
-    };
-    let Var::FieldAccess(field) = var else {
-        return false;
-    };
-    if !matches!(&field.name.kind, TokenKind::Identifier(name) if name == "new") {
-        return false;
-    }
-    let Expression::Var(prefix_var) = &field.prefix else {
-        return false;
-    };
-    let Var::Name(token) = prefix_var else {
-        return false;
-    };
-    matches!(&token.kind, TokenKind::Identifier(name) if name == global)
-        && !ctx.semantic.resolves_to_local(global, token.span)
-}
-
-fn number_literal_value(literal: &luck_ast::expr::Literal) -> Option<f64> {
-    match parse_lua_number(&literal.text, NumberSubtypes::IntFloat)? {
-        LuaNumber::Int(int_value) => Some(int_value as f64),
-        LuaNumber::Float(float_value) => Some(float_value),
-    }
-}
-
-fn literal_arg_value(expr: &Expression) -> Option<f64> {
-    match expr {
-        Expression::Number(literal) => number_literal_value(literal),
-        Expression::UnaryOp(unary) if unary.op == UnOp::Neg => {
-            if let Expression::Number(literal) = &unary.operand {
-                number_literal_value(literal).map(|value| -value)
-            } else {
-                None
-            }
-        }
-        _ => None,
     }
 }
 

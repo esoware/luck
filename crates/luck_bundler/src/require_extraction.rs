@@ -10,7 +10,6 @@ use std::ops::Range;
 /// Information about a single `require()` call extracted from a module.
 #[derive(Debug, Clone)]
 pub struct RequireInfo {
-    pub local_name: String,
     pub require_string: String,
     /// Span of the `require(...)` call, handed to the resolver for diagnostics.
     pub span: Span,
@@ -74,7 +73,6 @@ impl RequireFinder<'_> {
                     ));
                 }
                 self.requires.push(RequireInfo {
-                    local_name: String::new(),
                     require_string,
                     span: func_call.span,
                     call_span,
@@ -272,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_require() {
+    fn extracts_single_require() {
         let source = r#"local utils = require("utils")
 print(utils.foo())
 "#;
@@ -284,7 +282,7 @@ print(utils.foo())
     }
 
     #[test]
-    fn test_multiple_requires() {
+    fn extracts_multiple_requires_in_order() {
         let source = r#"local a = require("mod_a")
 local b = require("mod_b")
 local c = require("mod_c")
@@ -300,7 +298,7 @@ print(a, b, c)
     }
 
     #[test]
-    fn test_require_after_code_is_legal() {
+    fn require_after_code_is_not_flagged() {
         // Position-independent with the lazy loader - no E001.
         let source = "print(\"hello\")
 local x = require(\"x\")
@@ -312,7 +310,7 @@ local x = require(\"x\")
     }
 
     #[test]
-    fn test_non_literal_require_e002() {
+    fn non_literal_require_flags_e002() {
         let source = r#"local x = require(varname)
 "#;
         let block = parse_lua(source);
@@ -327,7 +325,7 @@ local x = require(\"x\")
     }
 
     #[test]
-    fn test_bare_require_statement_extracted() {
+    fn bare_require_statement_is_extracted() {
         // `require("x")` as a statement is legal: it rewrites to a bare
         // `__luck_require(n)` call (side-effect import).
         let source = "require(\"something\")
@@ -340,7 +338,7 @@ local x = require(\"x\")
     }
 
     #[test]
-    fn test_package_loaded_e006() {
+    fn package_loaded_index_write_flags_e006() {
         let source = r#"package.loaded["mymod"] = {}
 "#;
         let block = parse_lua(source);
@@ -354,7 +352,7 @@ local x = require(\"x\")
     }
 
     #[test]
-    fn test_package_loaded_dot_e006() {
+    fn package_loaded_field_write_flags_e006() {
         let source = r#"package.loaded.mymod = {}
 "#;
         let block = parse_lua(source);
@@ -368,7 +366,7 @@ local x = require(\"x\")
     }
 
     #[test]
-    fn test_duplicate_require_w001() {
+    fn duplicate_require_flags_w001() {
         let source = r#"local a = require("utils")
 local b = require("utils")
 "#;
@@ -384,7 +382,7 @@ local b = require("utils")
     }
 
     #[test]
-    fn test_top_level_vararg_no_warning() {
+    fn top_level_vararg_is_not_flagged() {
         // The loader calls each module with its slot id, so the
         // `local modname = ...` idiom keeps working - no W002.
         let source = "local modname = ...
@@ -396,7 +394,7 @@ return modname
     }
 
     #[test]
-    fn test_vararg_in_function_no_warning() {
+    fn vararg_in_function_is_not_flagged() {
         let source = r#"local function foo(...)
     return ...
 end
@@ -412,7 +410,7 @@ end
     }
 
     #[test]
-    fn test_no_requires() {
+    fn no_requires_yields_empty_result() {
         let source = r#"print("hello world")
 "#;
         let block = parse_lua(source);
@@ -422,7 +420,7 @@ end
     }
 
     #[test]
-    fn test_require_with_return() {
+    fn require_with_return_statement_is_extracted() {
         let source = r#"local utils = require("utils")
 return utils.process()
 "#;
@@ -433,7 +431,7 @@ return utils.process()
     }
 
     #[test]
-    fn test_require_string_syntax() {
+    fn require_string_call_syntax_is_extracted() {
         let source = r#"local m = require "mymod"
 "#;
         let block = parse_lua(source);
@@ -443,7 +441,7 @@ return utils.process()
     }
 
     #[test]
-    fn test_require_single_quoted_parens() {
+    fn single_quoted_require_is_extracted() {
         let source = "local m = require('mymod')\n";
         let block = parse_lua(source);
         let result = extract_requires(&block, "test.lua");
@@ -452,7 +450,7 @@ return utils.process()
     }
 
     #[test]
-    fn test_require_long_string() {
+    fn long_bracket_require_is_extracted() {
         let source = "local m = require [[mymod]]\n";
         let block = parse_lua(source);
         let result = extract_requires(&block, "test.lua");
@@ -461,7 +459,7 @@ return utils.process()
     }
 
     #[test]
-    fn test_multi_name_local_extracted() {
+    fn require_in_multi_name_local_is_extracted() {
         // Whole-tree scan: `local a, b = require("x"), 1` bundles too.
         let source = "local a, b = require(\"x\"), 1
 ";
@@ -472,7 +470,7 @@ return utils.process()
     }
 
     #[test]
-    fn test_require_in_nested_function_extracted() {
+    fn require_in_nested_function_is_extracted() {
         // Deferred requires inside functions are the lazy loader's whole
         // point (mutually recursive modules).
         let source = "local function setup()

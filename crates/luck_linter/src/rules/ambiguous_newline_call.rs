@@ -22,7 +22,7 @@ impl Rule for AmbiguousNewlineCall {
     }
 
     fn description(&self) -> &'static str {
-        "Call arguments open on a new line, which reads ambiguously."
+        "call arguments open on a new line, which reads ambiguously"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {

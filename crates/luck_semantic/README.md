@@ -59,6 +59,7 @@ Entries model:
 | `lib.rs` | Public API and `analyze()` entry point |
 | `scope.rs` | Scope tree data structures |
 | `builder.rs` | AST visitor that constructs the scope tree |
-| `stdlib_model.rs` | Stdlib data model and TOML loader |
+| `stdlib_model.rs` | Stdlib data model, queries, and the per-environment library instances |
+| `stdlib_load.rs` | TOML deserialization and composition into the `StdlibLibrary` model |
 | `resolve.rs` | Conservative shape and callee resolution |
 | `stdlib_data/` | Per-environment library data (+ generated Roblox data) |

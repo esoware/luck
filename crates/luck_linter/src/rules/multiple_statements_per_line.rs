@@ -32,9 +32,7 @@ impl Rule for MultipleStatementsPerLine {
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
         let block = ctx.block;
-        let _semantic = ctx.semantic;
         let source = ctx.source;
-        let _comments = ctx.comments;
         let lines = LineIndex::new(source);
         let mut checker = MultiStmtChecker {
             diagnostics: Vec::new(),

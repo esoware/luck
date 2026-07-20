@@ -308,6 +308,18 @@ fn luau_interpolated_string() {
 }
 
 #[test]
+fn luau_interpolated_string_without_expressions() {
+    // A plain backtick string parses as a Begin("") + End(text) pair with
+    // no expression; it must not gain a spurious `{}` hole.
+    vluau("local  x  =  `plain text`", "local x=`plain text`");
+}
+
+#[test]
+fn luau_interpolated_string_with_trailing_text() {
+    vluau("local  x  =  `a {b} c`", "local x=`a {b} c`");
+}
+
+#[test]
 fn luau_local_type_annotation() {
     // Annotations are part of the AST now and must survive round-tripping.
     vluau("local  x :  number  =  5", "local x:number=5");

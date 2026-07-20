@@ -90,22 +90,17 @@ pub(crate) fn static_text(kind: &TokenKind) -> Option<&'static str> {
     }
 }
 
-/// Push a token's text as the appropriate IR element. Interpolated-string
-/// parts carry only the literal text between braces; their `` ` ``/`{`/`}`
-/// punctuation is added here so emitters can treat them like any token.
+/// Push a token's text as the appropriate IR element.
 pub(crate) fn write_token(f: &mut Formatter, token: &Token) {
     match &token.kind {
         TokenKind::Identifier(name) => f.push(FormatElement::Text(name.clone())),
         TokenKind::Number(number) => f.push(FormatElement::Text(number.clone())),
         TokenKind::StringLiteral(literal) => f.push(FormatElement::Text(literal.clone())),
-        TokenKind::InterpBegin(part) => {
-            f.push(FormatElement::Text(format!("`{part}{{").into()));
-        }
-        TokenKind::InterpMid(part) => {
-            f.push(FormatElement::Text(format!("}}{part}{{").into()));
-        }
-        TokenKind::InterpEnd(part) => {
-            f.push(FormatElement::Text(format!("}}{part}`").into()));
+        TokenKind::InterpBegin(_) | TokenKind::InterpMid(_) | TokenKind::InterpEnd(_) => {
+            unreachable!(
+                "interpolated-string parts are emitted by InterpolatedString::fmt, \
+                 which derives their punctuation from expression presence"
+            )
         }
         kind => {
             let content = static_text(kind).expect("carried-text kinds are matched above");
