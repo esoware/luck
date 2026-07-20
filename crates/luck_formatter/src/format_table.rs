@@ -13,7 +13,7 @@ use crate::tokens::write_token;
 /// Fill packing is only for tables whose fields are all positional simple
 /// values; a keyed or nested/compound value wants one-per-line breaking.
 fn use_fill_mode(table: &TableConstructor) -> bool {
-    table.fields.iter().all(|(field, _)| match field {
+    table.fields.iter().all(|field| match field {
         Field::Positional { value, .. } => matches!(
             value,
             Expression::Nil(_)
@@ -39,11 +39,7 @@ impl Format for TableConstructor {
         let use_fill = use_fill_mode(self);
         // A trailing comma/semicolon after the last field is the user asking
         // for multi-line layout (Black/Prettier magic trailing comma).
-        let has_trailing_separator = self
-            .fields
-            .last()
-            .is_some_and(|(_, separator)| separator.is_some());
-        let force_expand = f.options.magic_trailing_comma && has_trailing_separator;
+        let force_expand = f.options.magic_trailing_comma && self.fields.has_trailing_separator;
         let field_count = self.fields.len();
 
         let group_id = f.group_id();
@@ -61,7 +57,7 @@ impl Format for TableConstructor {
                             .fields
                             .iter()
                             .enumerate()
-                            .map(|(index, (field, _))| {
+                            .map(|(index, field)| {
                                 format_with(move |f| {
                                     field.fmt(f);
                                     if index + 1 < field_count {
@@ -74,7 +70,7 @@ impl Format for TableConstructor {
                             entries.iter().map(|entry| entry as &dyn Format).collect();
                         fill(LineMode::SoftOrSpace, &refs).fmt(f);
                     } else {
-                        for (index, (field, _)) in self.fields.iter().enumerate() {
+                        for (index, field) in self.fields.iter().enumerate() {
                             field.fmt(f);
                             if index + 1 < field_count {
                                 token(",").fmt(f);
@@ -139,7 +135,7 @@ mod tests {
         let LastStatement::Return(ret) = last.as_ref() else {
             panic!("expected a return statement");
         };
-        let expr = &ret.exprs.items[0].0;
+        let expr = &ret.exprs.items[0];
 
         let options = crate::FormatOptions {
             line_width,

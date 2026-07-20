@@ -204,7 +204,7 @@ fn analyze_statement(stmt: &Statement) -> BranchSummary {
             summary.decision_points += 1;
             summary.decision_points += count_decision_points_expression(&node.start);
             summary.decision_points += count_decision_points_expression(&node.limit);
-            if let Some((_, step)) = &node.comma2_and_step {
+            if let Some(step) = &node.step {
                 summary.decision_points += count_decision_points_expression(step);
             }
             let body = analyze_full_block(&node.block);
@@ -229,7 +229,7 @@ fn analyze_statement(stmt: &Statement) -> BranchSummary {
         Statement::FunctionDecl(_) => {}
         Statement::LocalFunction(_) => {}
         Statement::LocalAssignment(node) => {
-            if let Some((_, exprs)) = &node.equal_and_exprs {
+            if let Some(exprs) = &node.exprs {
                 summary.decision_points += count_decision_points_punctuated_exprs(exprs);
             }
         }
@@ -237,7 +237,7 @@ fn analyze_statement(stmt: &Statement) -> BranchSummary {
         Statement::Goto(_) => {}
         Statement::Label(_) => {}
         Statement::GlobalDeclaration(node) => {
-            if let Some((_, exprs)) = &node.equal_and_exprs {
+            if let Some(exprs) = &node.exprs {
                 summary.decision_points += count_decision_points_punctuated_exprs(exprs);
             }
         }
@@ -350,7 +350,7 @@ fn count_decision_points_expression(expr: &Expression) -> u32 {
         Expression::Parenthesized(node) => count_decision_points_expression(&node.expr),
         Expression::TableConstructor(node) => {
             let mut total = 0;
-            for (field, _) in &node.fields {
+            for field in node.fields.iter() {
                 match field {
                     luck_ast::shared::Field::Bracketed { key, value, .. } => {
                         total += count_decision_points_expression(key);

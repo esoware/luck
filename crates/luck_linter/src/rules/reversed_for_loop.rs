@@ -58,7 +58,7 @@ impl NodeRule for ReversedForLoop {
 
             if let (Some(s), Some(l)) = (start, limit)
                 && s > l
-                && num_for.comma2_and_step.is_none()
+                && num_for.step.is_none()
             {
                 out.push(
                     LintDiagnostic::new(

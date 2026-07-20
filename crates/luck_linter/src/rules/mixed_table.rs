@@ -46,7 +46,7 @@ impl NodeRule for MixedTable {
         if let Expression::TableConstructor(table) = expr {
             let mut has_positional = false;
             let mut has_named = false;
-            for (field, _) in &table.fields {
+            for field in table.fields.iter() {
                 match field {
                     Field::Positional { .. } => has_positional = true,
                     Field::Named { .. } => has_named = true,

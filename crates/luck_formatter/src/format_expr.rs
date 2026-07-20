@@ -4,10 +4,10 @@
 //! token-carried values via `tokens::write_token`, so synthetic ASTs format.
 
 use luck_ast::expr::{
-    BinaryOp, Expression, FieldAccess, IfExpression, InterpolatedString, ParenExpression, UnaryOp,
-    Var,
+    BinaryOp, Expression, FieldAccess, IfExpression, InterpolatedString, Literal, ParenExpression,
+    UnaryOp, Var,
 };
-use luck_token::{BinOp, Token, TokenKind, UnOp};
+use luck_token::{BinOp, Token, UnOp};
 
 use crate::ir::*;
 use crate::quotes::normalize_quote;
@@ -22,8 +22,8 @@ impl Format for Expression {
             Expression::True(_) => token("true").fmt(f),
             Expression::VarArg(_) => token("...").fmt(f),
 
-            Expression::Number(token) => format_number(f, token),
-            Expression::StringLiteral(token) => format_string_literal(f, token),
+            Expression::Number(literal) => format_number(f, literal),
+            Expression::StringLiteral(literal) => format_string_literal(f, literal),
 
             Expression::Var(var) => var.fmt(f),
             Expression::BinaryOp(binop) => binop.fmt(f),
@@ -49,7 +49,7 @@ impl Format for Expression {
                                     token("(")
                                 ]
                             );
-                            for (idx, (arg, _)) in args.items.iter().enumerate() {
+                            for (idx, arg) in args.items.iter().enumerate() {
                                 if idx > 0 {
                                     crate::write!(f, [token(","), space()]);
                                 }
@@ -87,24 +87,18 @@ impl Format for Expression {
 
 /// Numeric literals: the base prefix and exponent markers are canonicalized
 /// to lowercase, hex digit case follows the configured `hexadecimal_case`.
-fn format_number(f: &mut Formatter, token: &Token) {
-    if let TokenKind::Number(literal) = &token.kind {
-        text(crate::numbers::normalize_number(
-            literal,
-            f.options.hexadecimal_case,
-        ))
-        .fmt(f);
-    }
+fn format_number(f: &mut Formatter, literal: &Literal) {
+    text(crate::numbers::normalize_number(
+        &literal.text,
+        f.options.hexadecimal_case,
+    ))
+    .fmt(f);
 }
 
 /// String literals: long-bracket forms pass through untouched (escape-bearing
 /// raw length is unreliable); short forms are re-quoted to the configured style.
-fn format_string_literal(f: &mut Formatter, token: &Token) {
-    // The variant guarantees a `StringLiteral` kind; a malformed token carries
-    // no faithful text to emit.
-    if let TokenKind::StringLiteral(literal) = &token.kind {
-        text(normalize_quote(literal, f.options.quote_style)).fmt(f);
-    }
+fn format_string_literal(f: &mut Formatter, literal: &Literal) {
+    text(normalize_quote(&literal.text, f.options.quote_style)).fmt(f);
 }
 
 impl Format for Var {
@@ -134,10 +128,7 @@ impl Format for Var {
 /// bracket-field sites pad with spaces when this returns true.
 pub(crate) fn starts_with_bracket(expr: &Expression) -> bool {
     match expr {
-        Expression::StringLiteral(token) => match &token.kind {
-            TokenKind::StringLiteral(literal) => literal.starts_with('['),
-            _ => false,
-        },
+        Expression::StringLiteral(literal) => literal.text.starts_with('['),
         Expression::BinaryOp(binop) => starts_with_bracket(&binop.left),
         Expression::TypeCast(cast) => starts_with_bracket(&cast.expr),
         Expression::FunctionCall(call) => starts_with_bracket(&call.callee),
@@ -364,7 +355,7 @@ mod tests {
         let LastStatement::Return(ret) = last.as_ref() else {
             panic!("expected a return statement");
         };
-        let expr = &ret.exprs.items[0].0;
+        let expr = &ret.exprs.items[0];
 
         let options = crate::FormatOptions {
             quote_style,

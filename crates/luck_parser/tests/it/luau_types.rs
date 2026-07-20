@@ -58,7 +58,7 @@ fn union_type() {
         panic!("expected Union");
     };
     assert_eq!(union.types.len(), 3);
-    assert!(union.leading_pipe.is_none());
+    assert!(!union.has_leading_pipe);
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn union_with_leading_pipe() {
         panic!("expected Union");
     };
     assert_eq!(union.types.len(), 2);
-    assert!(union.leading_pipe.is_some());
+    assert!(union.has_leading_pipe);
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn table_type_named_fields() {
         panic!("expected Table");
     };
     assert_eq!(table.fields.len(), 2);
-    assert!(matches!(&table.fields[0].0, TypeField::Named { .. }));
+    assert!(matches!(&table.fields.items[0], TypeField::Named { .. }));
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn table_type_indexer() {
     let Type::Table(table) = alias_type("type X = { [string]: number }") else {
         panic!("expected Table");
     };
-    assert!(matches!(&table.fields[0].0, TypeField::Indexer { .. }));
+    assert!(matches!(&table.fields.items[0], TypeField::Indexer { .. }));
 }
 
 #[test]
@@ -141,7 +141,7 @@ fn table_type_array_shorthand() {
     let Type::Table(table) = alias_type("type X = { number }") else {
         panic!("expected Table");
     };
-    assert!(matches!(&table.fields[0].0, TypeField::Array { .. }));
+    assert!(matches!(&table.fields.items[0], TypeField::Array { .. }));
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn table_type_read_write_access() {
     else {
         panic!("expected Table");
     };
-    for (field, _) in &table.fields {
+    for field in table.fields.iter() {
         assert!(matches!(
             field,
             TypeField::Named {
@@ -167,7 +167,7 @@ fn table_field_literally_named_read() {
         panic!("expected Table");
     };
     assert!(matches!(
-        &table.fields[0].0,
+        &table.fields.items[0],
         TypeField::Named { access: None, .. }
     ));
 }
@@ -257,14 +257,7 @@ fn type_declaration_generic_defaults() {
     let generics = type_decl.generics.as_ref().expect("generics");
     assert_eq!(generics.params.len(), 2);
     assert!(generics.params.iter().all(|param| param.default.is_some()));
-    assert!(
-        generics
-            .params
-            .last_item()
-            .expect("pack param")
-            .dots
-            .is_some()
-    );
+    assert!(generics.params.last_item().expect("pack param").is_pack);
 }
 
 #[test]
@@ -274,7 +267,7 @@ fn export_type_declaration() {
     let Statement::TypeDeclaration(type_decl) = &result.block.stmts[0] else {
         panic!("expected TypeDeclaration");
     };
-    assert!(type_decl.export_token.is_some());
+    assert!(type_decl.is_exported);
 }
 
 #[test]

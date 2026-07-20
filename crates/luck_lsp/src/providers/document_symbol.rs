@@ -61,10 +61,8 @@ impl SymbolEmitter<'_> {
             Statement::LocalAssignment(local) => {
                 for (idx, name_token) in local.names.iter().enumerate() {
                     if let TokenKind::Identifier(name) = &name_token.name.kind {
-                        let initializer = local
-                            .equal_and_exprs
-                            .as_ref()
-                            .and_then(|(_, exprs)| exprs.iter().nth(idx));
+                        let initializer =
+                            local.exprs.as_ref().and_then(|exprs| exprs.iter().nth(idx));
                         if let Some(Expression::FunctionDef(def)) = initializer {
                             if let Some(symbol) = self.build_function_symbol(
                                 name.as_str(),
@@ -184,7 +182,7 @@ fn func_name_label(name: &FuncName) -> (String, SymbolKind) {
             first = false;
         }
     }
-    let kind = if let Some((_, method)) = &name.method {
+    let kind = if let Some(method) = &name.method {
         label.push(':');
         if let TokenKind::Identifier(ident) = &method.kind {
             label.push_str(ident.as_str());

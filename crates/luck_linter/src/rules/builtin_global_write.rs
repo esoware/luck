@@ -163,7 +163,7 @@ impl FieldWriteChecker<'_> {
                 display.push_str(part);
             }
         }
-        if let Some((_, method)) = &func_name.method
+        if let Some(method) = &func_name.method
             && let TokenKind::Identifier(part) = &method.kind
         {
             display.push(':');

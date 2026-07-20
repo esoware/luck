@@ -135,43 +135,38 @@ pub(crate) fn extract_require_string(func_call: &FunctionCall) -> Option<(String
                 return None;
             }
             match &arg_list[0] {
-                Expression::StringLiteral(token) => {
-                    let string_value = extract_string_literal_value(token)?;
+                Expression::StringLiteral(literal) => {
+                    let string_value = extract_string_literal_value(&literal.text)?;
                     Some((string_value, call_span))
                 }
                 _ => None,
             }
         }
-        FunctionArgs::StringLiteral(token) => {
-            let string_value = extract_string_literal_value(token)?;
+        FunctionArgs::StringLiteral(literal) => {
+            let string_value = extract_string_literal_value(&literal.text)?;
             Some((string_value, call_span))
         }
         _ => None,
     }
 }
 
-pub(crate) fn extract_string_literal_value(token: &luck_token::Token) -> Option<String> {
-    match &token.kind {
-        TokenKind::StringLiteral(raw) => {
-            if let Some(inner) = raw.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-                Some(inner.to_string())
-            } else if let Some(inner) = raw.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
-                Some(inner.to_string())
-            } else if let Some(after_bracket) = raw.strip_prefix('[') {
-                // Long string: [[...]] or [=[...]=] etc.
-                let eq_count = after_bracket.chars().take_while(|&c| c == '=').count();
-                let open_len = 2 + eq_count; // [==[
-                let close_len = 2 + eq_count; // ]==]
-                if raw.len() >= open_len + close_len {
-                    Some(raw[open_len..raw.len() - close_len].to_string())
-                } else {
-                    Some(raw.to_string())
-                }
-            } else {
-                Some(raw.to_string())
-            }
+pub(crate) fn extract_string_literal_value(raw: &str) -> Option<String> {
+    if let Some(inner) = raw.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        Some(inner.to_string())
+    } else if let Some(inner) = raw.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+        Some(inner.to_string())
+    } else if let Some(after_bracket) = raw.strip_prefix('[') {
+        // Long string: [[...]] or [=[...]=] etc.
+        let eq_count = after_bracket.chars().take_while(|&c| c == '=').count();
+        let open_len = 2 + eq_count; // [==[
+        let close_len = 2 + eq_count; // ]==]
+        if raw.len() >= open_len + close_len {
+            Some(raw[open_len..raw.len() - close_len].to_string())
+        } else {
+            Some(raw.to_string())
         }
-        _ => None,
+    } else {
+        Some(raw.to_string())
     }
 }
 
@@ -244,8 +239,8 @@ fn is_package_name_expr(expr: &Expression) -> bool {
 }
 
 fn is_string_literal_with_value(expr: &Expression, expected: &str) -> bool {
-    if let Expression::StringLiteral(token) = expr {
-        extract_string_literal_value(token).is_some_and(|val| val == expected)
+    if let Expression::StringLiteral(literal) = expr {
+        extract_string_literal_value(&literal.text).is_some_and(|val| val == expected)
     } else {
         false
     }

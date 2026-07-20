@@ -1,7 +1,6 @@
 use luck_ast::expr::*;
 use luck_ast::shared::*;
 use luck_ast::transform::AstTransform;
-use luck_token::token::TokenKind;
 
 use crate::expr::is_valid_identifier;
 use crate::tokens::{default_span as sp, make_ident};
@@ -19,15 +18,13 @@ impl AstTransform for IndexSimplifier {
         match var {
             // t["foo"] -> t.foo when "foo" is a valid identifier
             Var::Index(index_expr) => {
-                if let Expression::StringLiteral(ref token) = index_expr.index
-                    && let TokenKind::StringLiteral(ref raw) = token.kind
-                    && let Some(s) = strip_simple_quotes(raw)
+                if let Expression::StringLiteral(ref literal) = index_expr.index
+                    && let Some(s) = strip_simple_quotes(&literal.text)
                     && is_valid_identifier(&s)
                 {
                     return Var::FieldAccess(Box::new(FieldAccess {
                         span: sp(),
                         prefix: index_expr.prefix,
-                        dot: sp(),
                         name: make_ident(&s),
                     }));
                 }
@@ -38,30 +35,26 @@ impl AstTransform for IndexSimplifier {
     }
 
     fn walk_table_constructor(&mut self, mut table: TableConstructor) -> TableConstructor {
-        let fields_vec: Vec<_> = table.fields.iter().map(|(f, _)| f.clone()).collect();
-        let can_use_implicit = is_sequential_from_one(&fields_vec);
+        let can_use_implicit = is_sequential_from_one(&table.fields.items);
 
         let mut implicit_idx = 0usize;
-        table.fields = table
+        table.fields.items = table
             .fields
+            .items
             .into_iter()
-            .map(|(field, sep)| {
-                let new_field = match field {
+            .map(|field| {
+                match field {
                     // {[1]="a", [2]="b"} -> {"a", "b"} when sequential from 1
                     Field::Bracketed {
                         ref key, ref value, ..
                     } if can_use_implicit => {
-                        if let Expression::Number(tok) = key {
-                            if let TokenKind::Number(text) = &tok.kind {
-                                if let Ok(n) = text.parse::<usize>() {
-                                    if n == implicit_idx + 1 {
-                                        implicit_idx = n;
-                                        Field::Positional {
-                                            span: sp(),
-                                            value: self.transform_expression(value.clone()),
-                                        }
-                                    } else {
-                                        field
+                        if let Expression::Number(literal) = key {
+                            if let Ok(n) = literal.text.parse::<usize>() {
+                                if n == implicit_idx + 1 {
+                                    implicit_idx = n;
+                                    Field::Positional {
+                                        span: sp(),
+                                        value: self.transform_expression(value.clone()),
                                     }
                                 } else {
                                     field
@@ -75,70 +68,44 @@ impl AstTransform for IndexSimplifier {
                     }
                     // {["foo"] = val} -> {foo = val}
                     Field::Bracketed {
-                        key: Expression::StringLiteral(ref token),
-                        ref equal,
+                        key: Expression::StringLiteral(ref literal),
                         ref value,
                         ..
                     } => {
-                        if let TokenKind::StringLiteral(ref raw) = token.kind {
-                            if let Some(s) = strip_simple_quotes(raw) {
-                                if is_valid_identifier(&s) {
-                                    Field::Named {
-                                        span: sp(),
-                                        name: make_ident(&s),
-                                        equal: *equal,
-                                        value: self.transform_expression(value.clone()),
-                                    }
-                                } else {
-                                    let new_val = self.transform_expression(value.clone());
-                                    Field::Bracketed {
-                                        span: sp(),
-                                        brackets: ContainedSpan {
-                                            open: sp(),
-                                            close: sp(),
-                                        },
-                                        key: Expression::StringLiteral(token.clone()),
-                                        equal: *equal,
-                                        value: new_val,
-                                    }
+                        if let Some(s) = strip_simple_quotes(&literal.text) {
+                            if is_valid_identifier(&s) {
+                                Field::Named {
+                                    span: sp(),
+                                    name: make_ident(&s),
+                                    value: self.transform_expression(value.clone()),
                                 }
                             } else {
-                                field
+                                let new_val = self.transform_expression(value.clone());
+                                Field::Bracketed {
+                                    span: sp(),
+                                    key: Expression::StringLiteral(literal.clone()),
+                                    value: new_val,
+                                }
                             }
                         } else {
                             field
                         }
                     }
-                    Field::Bracketed {
+                    Field::Bracketed { span, key, value } => Field::Bracketed {
                         span,
-                        brackets,
-                        key,
-                        equal,
-                        value,
-                    } => Field::Bracketed {
-                        span,
-                        brackets,
                         key: self.transform_expression(key),
-                        equal,
                         value: self.transform_expression(value),
                     },
-                    Field::Named {
+                    Field::Named { span, name, value } => Field::Named {
                         span,
                         name,
-                        equal,
-                        value,
-                    } => Field::Named {
-                        span,
-                        name,
-                        equal,
                         value: self.transform_expression(value),
                     },
                     Field::Positional { span, value } => Field::Positional {
                         span,
                         value: self.transform_expression(value),
                     },
-                };
-                (new_field, sep)
+                }
             })
             .collect();
         table
@@ -160,19 +127,15 @@ fn is_sequential_from_one(fields: &[Field]) -> bool {
     for (position, field) in fields.iter().enumerate() {
         match field {
             Field::Bracketed {
-                key: Expression::Number(tok),
+                key: Expression::Number(literal),
                 value,
                 ..
             } => {
-                if let TokenKind::Number(ref text) = tok.kind {
-                    if let Ok(n) = text.parse::<usize>() {
-                        if n != expected {
-                            return false;
-                        }
-                        expected += 1;
-                    } else {
+                if let Ok(n) = literal.text.parse::<usize>() {
+                    if n != expected {
                         return false;
                     }
+                    expected += 1;
                 } else {
                     return false;
                 }

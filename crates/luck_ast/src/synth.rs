@@ -250,7 +250,6 @@ impl Synth {
         Var::Index(Box::new(IndexExpression {
             span: self.next_span(),
             prefix: self.wrap_prefix(prefix),
-            brackets: self.contained(),
             index,
         }))
     }
@@ -260,7 +259,6 @@ impl Synth {
         Var::FieldAccess(Box::new(FieldAccess {
             span: self.next_span(),
             prefix: self.wrap_prefix(prefix),
-            dot: self.next_span(),
             name: self.ident(name),
         }))
     }
@@ -303,8 +301,10 @@ impl Synth {
     /// [`Synth::number_f64`] / [`Synth::number_int`] for runtime values.
     #[must_use]
     pub fn number(&self, text: &str) -> Expression {
-        let token = self.token(TokenKind::Number(CompactString::from(text)));
-        Expression::Number(token)
+        Expression::Number(Literal {
+            text: CompactString::from(text),
+            span: self.next_span(),
+        })
     }
 
     /// Any `f64` as an expression that evaluates back to exactly `value`.
@@ -354,8 +354,10 @@ impl Synth {
     /// double-quoted form.
     #[must_use]
     pub fn string(&self, content: &str) -> Expression {
-        let token = self.token(TokenKind::StringLiteral(quote_utf8(content)));
-        Expression::StringLiteral(token)
+        Expression::StringLiteral(Literal {
+            text: quote_utf8(content),
+            span: self.next_span(),
+        })
     }
 
     /// String literal from arbitrary bytes - Lua strings are byte arrays and
@@ -363,8 +365,10 @@ impl Synth {
     /// render as decimal escapes, so the token text is always valid UTF-8.
     #[must_use]
     pub fn string_bytes(&self, content: &[u8]) -> Expression {
-        let token = self.token(TokenKind::StringLiteral(quote_bytes(content)));
-        Expression::StringLiteral(token)
+        Expression::StringLiteral(Literal {
+            text: quote_bytes(content),
+            span: self.next_span(),
+        })
     }
 
     /// `[[...]]` long-bracket string, picking the smallest `=` level whose
@@ -399,8 +403,10 @@ impl Synth {
         text.push(']');
         text.push_str(&equals);
         text.push(']');
-        let token = self.token(TokenKind::StringLiteral(CompactString::from(text)));
-        Expression::StringLiteral(token)
+        Expression::StringLiteral(Literal {
+            text: CompactString::from(text),
+            span: self.next_span(),
+        })
     }
 
     #[must_use]
@@ -436,7 +442,6 @@ impl Synth {
             span: self.next_span(),
             left: lhs,
             op,
-            op_span: self.next_span(),
             right: rhs,
         }))
     }
@@ -453,7 +458,6 @@ impl Synth {
         Expression::UnaryOp(Box::new(UnaryOp {
             span: self.next_span(),
             op,
-            op_span: self.next_span(),
             operand,
         }))
     }
@@ -462,7 +466,6 @@ impl Synth {
     pub fn paren(&self, expr: Expression) -> Expression {
         Expression::Parenthesized(Box::new(ParenExpression {
             span: self.next_span(),
-            parens: self.contained(),
             expr,
         }))
     }
@@ -480,7 +483,6 @@ impl Synth {
         Expression::TypeCast(Box::new(TypeCast {
             span: self.next_span(),
             expr,
-            double_colon: self.next_span(),
             type_annotation: type_value,
         }))
     }
@@ -559,8 +561,10 @@ impl Synth {
     /// `callee"content"` - string argument form (content is unquoted).
     #[must_use]
     pub fn call_string(&self, callee: Expression, content: &str) -> Expression {
-        let args =
-            FunctionArgs::StringLiteral(self.token(TokenKind::StringLiteral(quote_utf8(content))));
+        let args = FunctionArgs::StringLiteral(Literal {
+            text: quote_utf8(content),
+            span: self.next_span(),
+        });
         self.call_node(callee, None, args)
     }
 
@@ -584,8 +588,10 @@ impl Synth {
         name: &str,
         content: &str,
     ) -> Expression {
-        let args =
-            FunctionArgs::StringLiteral(self.token(TokenKind::StringLiteral(quote_utf8(content))));
+        let args = FunctionArgs::StringLiteral(Literal {
+            text: quote_utf8(content),
+            span: self.next_span(),
+        });
         self.call_node(receiver, Some(name), args)
     }
 
@@ -599,7 +605,7 @@ impl Synth {
             span: self.next_span(),
             callee: self.wrap_prefix(callee),
             args,
-            method: method.map(|name| (self.next_span(), self.ident(name))),
+            method: method.map(|name| self.ident(name)),
         }))
     }
 
@@ -636,11 +642,9 @@ impl Synth {
 
     fn table_ctor(&self, fields: Vec<SynthField<'_>>) -> TableConstructor {
         let span = self.next_span();
-        let braces = self.contained();
-        let count = fields.len();
-        let mut built = Vec::with_capacity(count);
-        for (index, field) in fields.into_iter().enumerate() {
-            let node = match field {
+        let built = fields
+            .into_iter()
+            .map(|field| match field {
                 SynthField::Positional(value) => Field::Positional {
                     span: self.next_span(),
                     value,
@@ -648,29 +652,18 @@ impl Synth {
                 SynthField::Named(name, value) => Field::Named {
                     span: self.next_span(),
                     name: self.ident(name),
-                    equal: self.next_span(),
                     value,
                 },
                 SynthField::Bracketed(key, value) => Field::Bracketed {
                     span: self.next_span(),
-                    brackets: self.contained(),
                     key,
-                    equal: self.next_span(),
                     value,
                 },
-            };
-            // The separator FOLLOWS its item; the final field carries none.
-            let separator = if index + 1 < count {
-                Some(self.next_span())
-            } else {
-                None
-            };
-            built.push((node, separator));
-        }
+            })
+            .collect();
         TableConstructor {
             span,
-            braces,
-            fields: built,
+            fields: Punctuated::from_items(built),
         }
     }
 
@@ -695,7 +688,6 @@ impl Synth {
         Expression::FunctionDef(Box::new(FunctionDef {
             span: self.next_span(),
             attributes: Vec::new(),
-            function_token: self.next_span(),
             body: self.function_body(sig, body),
         }))
     }
@@ -737,7 +729,6 @@ impl Synth {
         Statement::FunctionDecl(Box::new(FunctionDecl {
             span: self.next_span(),
             attributes: self.function_attributes(attributes),
-            function_token: self.next_span(),
             name: self.func_name(name_path, method),
             body: self.function_body(sig, body),
         }))
@@ -769,8 +760,6 @@ impl Synth {
         Statement::LocalFunction(Box::new(LocalFunction {
             span: self.next_span(),
             attributes: self.function_attributes(attributes),
-            local_token: self.next_span(),
-            function_token: self.next_span(),
             name: self.ident(name),
             body: self.function_body(sig, body),
             is_const: false,
@@ -782,8 +771,6 @@ impl Synth {
     pub fn global_function(&self, name: &str, sig: FnSig, body: Block) -> Statement {
         Statement::GlobalFunction(Box::new(GlobalFunction {
             span: self.next_span(),
-            global_token: self.next_span(),
-            function_token: self.next_span(),
             name: self.ident(name),
             body: self.function_body(sig, body),
         }))
@@ -791,13 +778,10 @@ impl Synth {
 
     fn func_name(&self, name_path: &[&str], method: Option<&str>) -> FuncName {
         let names: Vec<Token> = name_path.iter().map(|part| self.ident(part)).collect();
-        // One `.` sits between each pair of names.
-        let dots: Vec<Span> = (1..names.len()).map(|_| self.next_span()).collect();
         FuncName {
             span: self.next_span(),
             names,
-            dots,
-            method: method.map(|name| (self.next_span(), self.ident(name))),
+            method: method.map(|name| self.ident(name)),
         }
     }
 
@@ -806,7 +790,6 @@ impl Synth {
             .iter()
             .map(|name| FunctionAttribute {
                 span: self.next_span(),
-                at_token: self.next_span(),
                 name: self.ident(name),
                 args: None,
             })
@@ -817,12 +800,10 @@ impl Synth {
         FunctionBody {
             span: self.next_span(),
             generics: sig.generics.map(Box::new),
-            params_parens: self.contained(),
             params: self.punctuated(sig.params),
             vararg: sig.vararg,
-            return_type: sig.return_type.map(|ty| (self.next_span(), ty)),
+            return_type: sig.return_type,
             block,
-            end_token: self.next_span(),
         }
     }
 
@@ -871,26 +852,19 @@ impl Synth {
         else_expr: Expression,
     ) -> Expression {
         let span = self.next_span();
-        let if_token = self.next_span();
-        let then_token = self.next_span();
         let elseif_clauses: Vec<ElseIfExprClause> = elseifs
             .into_iter()
             .map(|(condition, expr)| ElseIfExprClause {
                 span: self.next_span(),
-                elseif_token: self.next_span(),
                 condition,
-                then_token: self.next_span(),
                 expr,
             })
             .collect();
         Expression::IfExpression(Box::new(IfExpression {
             span,
-            if_token,
             condition: cond,
-            then_token,
             then_expr,
             elseif_clauses,
-            else_token: self.next_span(),
             else_expr,
         }))
     }
@@ -911,18 +885,16 @@ impl Synth {
     #[must_use]
     pub fn local_full(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
         let span = self.next_span();
-        let local_token = self.next_span();
         let names = self.punctuated(names);
-        let equal_and_exprs = if exprs.is_empty() {
+        let exprs = if exprs.is_empty() {
             None
         } else {
-            Some((self.next_span(), self.punctuated(exprs)))
+            Some(self.punctuated(exprs))
         };
         Statement::LocalAssignment(Box::new(LocalAssignment {
             span,
-            local_token,
             names,
-            equal_and_exprs,
+            exprs,
             is_const: false,
         }))
     }
@@ -939,12 +911,10 @@ impl Synth {
     ) -> AttributedName {
         AttributedName {
             name: self.ident(name),
-            type_annotation: ty.map(|ty| (self.next_span(), ty)),
+            type_annotation: ty,
             attrib: attrib.map(|attribute| Attribute {
                 span: self.next_span(),
-                open: self.next_span(),
                 name: self.ident(attribute),
-                close: self.next_span(),
             }),
         }
     }
@@ -954,12 +924,11 @@ impl Synth {
     pub fn global_decl(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
         Statement::GlobalDeclaration(Box::new(GlobalDeclaration {
             span: self.next_span(),
-            global_token: self.next_span(),
             names: self.punctuated(names),
-            equal_and_exprs: if exprs.is_empty() {
+            exprs: if exprs.is_empty() {
                 None
             } else {
-                Some((self.next_span(), self.punctuated(exprs)))
+                Some(self.punctuated(exprs))
             },
         }))
     }
@@ -969,14 +938,10 @@ impl Synth {
     pub fn global_star(&self, attrib: Option<&str>) -> Statement {
         Statement::GlobalStar(Box::new(GlobalStar {
             span: self.next_span(),
-            global_token: self.next_span(),
             attrib: attrib.map(|attribute| Attribute {
                 span: self.next_span(),
-                open: self.next_span(),
                 name: self.ident(attribute),
-                close: self.next_span(),
             }),
-            star: self.next_span(),
         }))
     }
 
@@ -987,7 +952,6 @@ impl Synth {
         Statement::Assignment(Box::new(Assignment {
             span: self.next_span(),
             targets: self.punctuated(targets),
-            equal: self.next_span(),
             values: self.punctuated(values),
         }))
     }
@@ -999,7 +963,6 @@ impl Synth {
             span: self.next_span(),
             var: target,
             op,
-            op_span: self.next_span(),
             expr: value,
         }))
     }
@@ -1021,9 +984,7 @@ impl Synth {
     pub fn do_block(&self, block: Block) -> Statement {
         Statement::DoBlock(Box::new(DoBlock {
             span: self.next_span(),
-            do_token: self.next_span(),
             block,
-            end_token: self.next_span(),
         }))
     }
 
@@ -1031,11 +992,8 @@ impl Synth {
     pub fn while_(&self, cond: Expression, block: Block) -> Statement {
         Statement::WhileLoop(Box::new(WhileLoop {
             span: self.next_span(),
-            while_token: self.next_span(),
             condition: cond,
-            do_token: self.next_span(),
             block,
-            end_token: self.next_span(),
         }))
     }
 
@@ -1043,9 +1001,7 @@ impl Synth {
     pub fn repeat_(&self, block: Block, cond: Expression) -> Statement {
         Statement::RepeatLoop(Box::new(RepeatLoop {
             span: self.next_span(),
-            repeat_token: self.next_span(),
             block,
-            until_token: self.next_span(),
             condition: cond,
         }))
     }
@@ -1059,32 +1015,24 @@ impl Synth {
         else_block: Option<Block>,
     ) -> Statement {
         let span = self.next_span();
-        let if_token = self.next_span();
-        let then_token = self.next_span();
         let elseif_clauses: Vec<ElseIfClause> = elseifs
             .into_iter()
             .map(|(condition, block)| ElseIfClause {
                 span: self.next_span(),
-                elseif_token: self.next_span(),
                 condition,
-                then_token: self.next_span(),
                 block,
             })
             .collect();
         let else_clause = else_block.map(|block| ElseClause {
             span: self.next_span(),
-            else_token: self.next_span(),
             block,
         });
         Statement::IfStatement(Box::new(IfStatement {
             span,
-            if_token,
             condition: cond,
-            then_token,
             block: then_block,
             elseif_clauses,
             else_clause,
-            end_token: self.next_span(),
         }))
     }
 
@@ -1101,17 +1049,12 @@ impl Synth {
     ) -> Statement {
         Statement::NumericFor(Box::new(NumericFor {
             span: self.next_span(),
-            for_token: self.next_span(),
             name: var.name,
             type_annotation: var.type_annotation,
-            equal: self.next_span(),
             start,
-            comma1: self.next_span(),
             limit,
-            comma2_and_step: step.map(|step| (self.next_span(), step)),
-            do_token: self.next_span(),
+            step,
             block,
-            end_token: self.next_span(),
         }))
     }
 
@@ -1126,13 +1069,9 @@ impl Synth {
     ) -> Statement {
         Statement::GenericFor(Box::new(GenericFor {
             span: self.next_span(),
-            for_token: self.next_span(),
             names: self.punctuated(names),
-            in_token: self.next_span(),
             exprs: self.punctuated(exprs),
-            do_token: self.next_span(),
             block,
-            end_token: self.next_span(),
         }))
     }
 
@@ -1141,7 +1080,6 @@ impl Synth {
     pub fn goto_(&self, label: &str) -> Statement {
         Statement::Goto(Box::new(GotoStatement {
             span: self.next_span(),
-            goto_token: self.next_span(),
             name: self.ident(label),
         }))
     }
@@ -1151,9 +1089,7 @@ impl Synth {
     pub fn label(&self, name: &str) -> Statement {
         Statement::Label(Box::new(LabelStatement {
             span: self.next_span(),
-            colons_open: self.next_span(),
             name: self.ident(name),
-            colons_close: self.next_span(),
         }))
     }
 
@@ -1175,9 +1111,7 @@ impl Synth {
     pub fn return_(&self, exprs: Vec<Expression>) -> LastStatement {
         LastStatement::Return(Box::new(ReturnStatement {
             span: self.next_span(),
-            return_token: self.next_span(),
             exprs: self.punctuated(exprs),
-            semicolon: None,
         }))
     }
 
@@ -1215,7 +1149,7 @@ impl Synth {
         Parameter {
             span: self.next_span(),
             name: self.ident(name),
-            type_annotation: Some((self.next_span(), ty)),
+            type_annotation: Some(ty),
         }
     }
 
@@ -1225,9 +1159,8 @@ impl Synth {
     pub fn vararg_param(&self, type_annotation: Option<Type>) -> VarArgParam {
         VarArgParam {
             span: self.next_span(),
-            dots: self.next_span(),
             name: None,
-            type_annotation: type_annotation.map(|ty| (self.next_span(), ty)),
+            type_annotation,
         }
     }
 
@@ -1251,7 +1184,7 @@ impl Synth {
     pub fn ty_qualified(&self, module: &str, name: &str) -> Type {
         Type::Named(Box::new(NamedType {
             span: self.next_span(),
-            prefix: Some((self.ident(module), self.next_span())),
+            prefix: Some(self.ident(module)),
             name: self.ident(name),
             generics: None,
         }))
@@ -1261,10 +1194,8 @@ impl Synth {
     pub fn ty_generic(&self, name: &str, args: Vec<Type>) -> Type {
         let span = self.next_span();
         let name = self.ident(name);
-        let angles = self.contained();
         let generics = TypeArgs {
             span: self.next_span(),
-            angles,
             args: self.punctuated(args),
         };
         Type::Named(Box::new(NamedType {
@@ -1280,8 +1211,6 @@ impl Synth {
     pub fn ty_typeof(&self, expr: Expression) -> Type {
         Type::Typeof(Box::new(TypeofType {
             span: self.next_span(),
-            typeof_token: self.next_span(),
-            parens: self.contained(),
             expr,
         }))
     }
@@ -1291,7 +1220,6 @@ impl Synth {
         Type::Optional(Box::new(OptionalType {
             span: self.next_span(),
             type_value: inner,
-            question: self.next_span(),
         }))
     }
 
@@ -1299,7 +1227,7 @@ impl Synth {
     pub fn ty_union(&self, types: Vec<Type>) -> Type {
         Type::Union(Box::new(UnionType {
             span: self.next_span(),
-            leading_pipe: None,
+            has_leading_pipe: false,
             types: self.punctuated(types),
         }))
     }
@@ -1308,7 +1236,7 @@ impl Synth {
     pub fn ty_intersection(&self, types: Vec<Type>) -> Type {
         Type::Intersection(Box::new(IntersectionType {
             span: self.next_span(),
-            leading_ampersand: None,
+            has_leading_ampersand: false,
             types: self.punctuated(types),
         }))
     }
@@ -1318,7 +1246,6 @@ impl Synth {
     pub fn ty_paren(&self, inner: Type) -> Type {
         Type::Parenthesized(Box::new(ParenType {
             span: self.next_span(),
-            parens: self.contained(),
             type_value: inner,
         }))
     }
@@ -1349,11 +1276,9 @@ impl Synth {
     #[must_use]
     pub fn ty_table(&self, fields: Vec<SynthTypeField<'_>>) -> Type {
         let span = self.next_span();
-        let braces = self.contained();
-        let count = fields.len();
-        let mut built = Vec::with_capacity(count);
-        for (index, field) in fields.into_iter().enumerate() {
-            let node = match field {
+        let built = fields
+            .into_iter()
+            .map(|field| match field {
                 SynthTypeField::Named {
                     access,
                     name,
@@ -1362,33 +1287,23 @@ impl Synth {
                     span: self.next_span(),
                     access: access.map(|access| self.access_token(access)),
                     name: self.ident(name),
-                    colon: self.next_span(),
                     value,
                 },
                 SynthTypeField::Indexer { access, key, value } => TypeField::Indexer {
                     span: self.next_span(),
                     access: access.map(|access| self.access_token(access)),
-                    brackets: self.contained(),
                     key,
-                    colon: self.next_span(),
                     value,
                 },
                 SynthTypeField::Array(value) => TypeField::Array {
                     span: self.next_span(),
                     value,
                 },
-            };
-            let separator = if index + 1 < count {
-                Some(self.next_span())
-            } else {
-                None
-            };
-            built.push((node, separator));
-        }
+            })
+            .collect();
         Type::Table(Box::new(TableType {
             span,
-            braces,
-            fields: built,
+            fields: Punctuated::from_items(built),
         }))
     }
 
@@ -1420,12 +1335,11 @@ impl Synth {
         return_type: Type,
     ) -> Type {
         let span = self.next_span();
-        let parens = self.contained();
         let params: Vec<FunctionTypeParam> = params
             .into_iter()
             .map(|(name, type_value)| FunctionTypeParam {
                 span: self.next_span(),
-                name: name.map(|name| (self.ident(name), self.next_span())),
+                name: name.map(|name| self.ident(name)),
                 type_value,
             })
             .collect();
@@ -1433,9 +1347,7 @@ impl Synth {
         Type::Function(Box::new(FunctionType {
             span,
             generics,
-            parens,
             params,
-            arrow: self.next_span(),
             return_type,
         }))
     }
@@ -1465,10 +1377,8 @@ impl Synth {
     #[must_use]
     pub fn ty_pack(&self, types: Vec<Type>) -> Type {
         let span = self.next_span();
-        let parens = self.contained();
         Type::Pack(Box::new(TypePack {
             span,
-            parens,
             types: self.punctuated(types),
         }))
     }
@@ -1478,7 +1388,6 @@ impl Synth {
     pub fn ty_variadic(&self, element: Type) -> Type {
         Type::Variadic(Box::new(VariadicType {
             span: self.next_span(),
-            dots: self.next_span(),
             type_value: element,
         }))
     }
@@ -1489,7 +1398,6 @@ impl Synth {
         Type::GenericPack(Box::new(GenericPackType {
             span: self.next_span(),
             name: self.ident(name),
-            dots: self.next_span(),
         }))
     }
 
@@ -1498,19 +1406,17 @@ impl Synth {
     #[must_use]
     pub fn generic_type_list(&self, params: Vec<(&str, bool)>) -> GenericTypeList {
         let span = self.next_span();
-        let angles = self.contained();
         let built: Vec<GenericTypeParam> = params
             .into_iter()
             .map(|(name, is_pack)| GenericTypeParam {
                 span: self.next_span(),
                 name: self.ident(name),
-                dots: is_pack.then(|| self.next_span()),
+                is_pack,
                 default: None,
             })
             .collect();
         GenericTypeList {
             span,
-            angles,
             params: self.punctuated(built),
         }
     }
@@ -1526,12 +1432,9 @@ impl Synth {
     ) -> Statement {
         Statement::TypeDeclaration(Box::new(TypeDeclaration {
             span: self.next_span(),
-            export_token: export.then(|| self.next_span()),
-            type_token: self.next_span(),
-            function_token: None,
+            is_exported: export,
             name: self.ident(name),
             generics: generics.map(Box::new),
-            equal: Some(self.next_span()),
             type_value: TypeDeclarationValue::Alias(value),
         }))
     }
@@ -1542,12 +1445,9 @@ impl Synth {
     pub fn type_function(&self, export: bool, name: &str, sig: FnSig, body: Block) -> Statement {
         Statement::TypeDeclaration(Box::new(TypeDeclaration {
             span: self.next_span(),
-            export_token: export.then(|| self.next_span()),
-            type_token: self.next_span(),
-            function_token: Some(self.next_span()),
+            is_exported: export,
             name: self.ident(name),
             generics: None,
-            equal: None,
             type_value: TypeDeclarationValue::TypeFunction(Box::new(self.function_body(sig, body))),
         }))
     }
@@ -1588,36 +1488,15 @@ impl Synth {
 
     // ----- internal plumbing -----
 
-    fn contained(&self) -> ContainedSpan {
-        ContainedSpan {
-            open: self.next_span(),
-            close: self.next_span(),
-        }
-    }
-
     fn paren_args(&self, args: Vec<Expression>) -> FunctionArgs {
         FunctionArgs::Parenthesized {
-            parens: self.contained(),
+            span: self.next_span(),
             args: self.punctuated(args),
         }
     }
 
-    /// Separator span FOLLOWS each item; the last item's is `None`.
     fn punctuated<T>(&self, items: Vec<T>) -> Punctuated<T> {
-        let count = items.len();
-        let items = items
-            .into_iter()
-            .enumerate()
-            .map(|(index, item)| {
-                let following = if index + 1 < count {
-                    Some(self.next_span())
-                } else {
-                    None
-                };
-                (item, following)
-            })
-            .collect();
-        Punctuated { items }
+        Punctuated::from_items(items)
     }
 }
 
@@ -1704,7 +1583,7 @@ mod tests {
             panic!("expected local assignment");
         };
         assert_eq!(local.names.len(), 1);
-        let (_, exprs) = local.equal_and_exprs.as_ref().unwrap();
+        let exprs = local.exprs.as_ref().unwrap();
         assert!(matches!(exprs.first().unwrap(), Expression::BinaryOp(_)));
     }
 
@@ -1874,16 +1753,16 @@ mod tests {
     fn number_f64_handles_special_values() {
         let synth = Synth::new();
 
-        let Expression::Number(token) = synth.number_f64(1.5) else {
+        let Expression::Number(literal) = synth.number_f64(1.5) else {
             panic!("expected number");
         };
-        assert_eq!(token.kind, TokenKind::Number(CompactString::from("1.5")));
+        assert_eq!(literal.text.as_str(), "1.5");
 
         // Integral floats keep the float subtype on 5.3+.
-        let Expression::Number(token) = synth.number_f64(3.0) else {
+        let Expression::Number(literal) = synth.number_f64(3.0) else {
             panic!("expected number");
         };
-        assert_eq!(token.kind, TokenKind::Number(CompactString::from("3.0")));
+        assert_eq!(literal.text.as_str(), "3.0");
 
         // Negatives become a unary-minus node (Lua has no negative literals).
         assert!(matches!(synth.number_f64(-2.5), Expression::UnaryOp(_)));
@@ -1907,85 +1786,65 @@ mod tests {
     #[test]
     fn number_int_handles_extremes() {
         let synth = Synth::new();
-        let Expression::Number(token) = synth.number_int(42) else {
+        let Expression::Number(literal) = synth.number_int(42) else {
             panic!("expected number");
         };
-        assert_eq!(token.kind, TokenKind::Number(CompactString::from("42")));
+        assert_eq!(literal.text.as_str(), "42");
 
         assert!(matches!(synth.number_int(-7), Expression::UnaryOp(_)));
 
         // i64::MIN has no decimal literal; the hex form wraps to it.
-        let Expression::Number(token) = synth.number_int(i64::MIN) else {
+        let Expression::Number(literal) = synth.number_int(i64::MIN) else {
             panic!("expected number");
         };
-        assert_eq!(
-            token.kind,
-            TokenKind::Number(CompactString::from("0x8000000000000000"))
-        );
+        assert_eq!(literal.text.as_str(), "0x8000000000000000");
     }
 
     #[test]
     fn string_escaping_is_raw() {
         let synth = Synth::new();
-        let Expression::StringLiteral(token) = synth.string("a\"b\n") else {
+        let Expression::StringLiteral(literal) = synth.string("a\"b\n") else {
             panic!("expected string literal");
         };
-        let TokenKind::StringLiteral(raw) = &token.kind else {
-            panic!("expected string literal token");
-        };
-        assert_eq!(raw.as_str(), "\"a\\\"b\\n\"");
+        assert_eq!(literal.text.as_str(), "\"a\\\"b\\n\"");
     }
 
     #[test]
     fn string_bytes_escapes_non_utf8() {
         let synth = Synth::new();
-        let Expression::StringLiteral(token) = synth.string_bytes(&[0xff, b'a', 0x01, b'7']) else {
+        let Expression::StringLiteral(literal) = synth.string_bytes(&[0xff, b'a', 0x01, b'7'])
+        else {
             panic!("expected string literal");
-        };
-        let TokenKind::StringLiteral(raw) = &token.kind else {
-            panic!("expected string literal token");
         };
         // Escapes are zero-padded to three digits so the following literal
         // digit `7` cannot extend them.
-        assert_eq!(raw.as_str(), "\"\\255a\\0017\"");
+        assert_eq!(literal.text.as_str(), "\"\\255a\\0017\"");
     }
 
     #[test]
     fn long_string_picks_collision_free_level() {
         let synth = Synth::new();
-        let Expression::StringLiteral(token) = synth.long_string("plain text") else {
+        let Expression::StringLiteral(literal) = synth.long_string("plain text") else {
             panic!("expected string literal");
         };
-        let TokenKind::StringLiteral(raw) = &token.kind else {
-            panic!("expected token");
-        };
-        assert_eq!(raw.as_str(), "[[plain text]]");
+        assert_eq!(literal.text.as_str(), "[[plain text]]");
 
-        let Expression::StringLiteral(token) = synth.long_string("has ]] inside") else {
+        let Expression::StringLiteral(literal) = synth.long_string("has ]] inside") else {
             panic!("expected string literal");
         };
-        let TokenKind::StringLiteral(raw) = &token.kind else {
-            panic!("expected token");
-        };
-        assert_eq!(raw.as_str(), "[=[has ]] inside]=]");
+        assert_eq!(literal.text.as_str(), "[=[has ]] inside]=]");
 
         // A leading newline would be swallowed; it gets doubled.
-        let Expression::StringLiteral(token) = synth.long_string("\ntext") else {
+        let Expression::StringLiteral(literal) = synth.long_string("\ntext") else {
             panic!("expected string literal");
         };
-        let TokenKind::StringLiteral(raw) = &token.kind else {
-            panic!("expected token");
-        };
-        assert_eq!(raw.as_str(), "[[\n\ntext]]");
+        assert_eq!(literal.text.as_str(), "[[\n\ntext]]");
 
         // A trailing `]` at level 0 would merge with the closer.
-        let Expression::StringLiteral(token) = synth.long_string("x]") else {
+        let Expression::StringLiteral(literal) = synth.long_string("x]") else {
             panic!("expected string literal");
         };
-        let TokenKind::StringLiteral(raw) = &token.kind else {
-            panic!("expected token");
-        };
-        assert_eq!(raw.as_str(), "[=[x]]=]");
+        assert_eq!(literal.text.as_str(), "[=[x]]=]");
     }
 
     #[test]
@@ -2033,7 +1892,7 @@ mod tests {
             panic!("expected local assignment");
         };
         let first = local.names.first().unwrap();
-        let (_, ty) = first.type_annotation.as_ref().unwrap();
+        let ty = first.type_annotation.as_ref().unwrap();
         assert!(matches!(ty, Type::Optional(_)));
     }
 
@@ -2120,9 +1979,15 @@ mod tests {
             panic!("expected table constructor");
         };
         assert_eq!(constructor.fields.len(), 3);
-        assert!(matches!(constructor.fields[0].0, Field::Positional { .. }));
-        assert!(matches!(constructor.fields[1].0, Field::Named { .. }));
-        assert!(matches!(constructor.fields[2].0, Field::Bracketed { .. }));
+        assert!(matches!(
+            constructor.fields.items[0],
+            Field::Positional { .. }
+        ));
+        assert!(matches!(constructor.fields.items[1], Field::Named { .. }));
+        assert!(matches!(
+            constructor.fields.items[2],
+            Field::Bracketed { .. }
+        ));
     }
 
     #[test]
@@ -2137,7 +2002,7 @@ mod tests {
             array
                 .fields
                 .iter()
-                .all(|(field, _)| matches!(field, Field::Positional { .. }))
+                .all(|field| matches!(field, Field::Positional { .. }))
         );
 
         // Unsafe keys fall back to the bracketed form.
@@ -2147,8 +2012,8 @@ mod tests {
         ]) else {
             panic!("expected table");
         };
-        assert!(matches!(record.fields[0].0, Field::Named { .. }));
-        assert!(matches!(record.fields[1].0, Field::Bracketed { .. }));
+        assert!(matches!(record.fields.items[0], Field::Named { .. }));
+        assert!(matches!(record.fields.items[1], Field::Bracketed { .. }));
     }
 
     #[test]
@@ -2307,12 +2172,11 @@ mod tests {
         let Statement::TypeDeclaration(decl) = &stmt else {
             panic!("expected type declaration");
         };
-        assert!(decl.export_token.is_some());
-        assert!(decl.equal.is_some());
+        assert!(decl.is_exported);
+        assert!(matches!(decl.type_value, TypeDeclarationValue::Alias(_)));
         let generics = decl.generics.as_ref().expect("generics present");
         assert_eq!(generics.params.len(), 2);
-        // The pack parameter carries `...`.
-        assert!(generics.params.last_item().unwrap().dots.is_some());
+        assert!(generics.params.last_item().unwrap().is_pack);
     }
 
     #[test]
@@ -2326,8 +2190,7 @@ mod tests {
         let Statement::TypeDeclaration(decl) = &stmt else {
             panic!("expected type declaration");
         };
-        assert!(decl.function_token.is_some());
-        assert!(decl.equal.is_none());
+        assert!(!decl.is_exported);
         assert!(matches!(
             decl.type_value,
             TypeDeclarationValue::TypeFunction(_)
@@ -2353,13 +2216,13 @@ mod tests {
             panic!("expected table type");
         };
         assert!(matches!(
-            &table.fields[0].0,
+            &table.fields.items[0],
             TypeField::Named {
                 access: Some(_),
                 ..
             }
         ));
-        assert!(matches!(&table.fields[1].0, TypeField::Indexer { .. }));
+        assert!(matches!(&table.fields.items[1], TypeField::Indexer { .. }));
     }
 
     #[test]
@@ -2416,7 +2279,6 @@ mod tests {
             panic!("expected function declaration");
         };
         assert_eq!(decl.name.names.len(), 2);
-        assert_eq!(decl.name.dots.len(), 1);
         assert!(decl.name.method.is_some());
     }
 

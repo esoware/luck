@@ -1,4 +1,5 @@
 use luck_ast::expr::*;
+use luck_ast::stmt::TypeDeclarationValue;
 use luck_ast::{Expression, LastStatement, Statement};
 
 use crate::common::{assert_no_errors, parse_luau};
@@ -75,7 +76,7 @@ fn if_expression_simple() {
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         assert!(matches!(expr, Expression::IfExpression(_)));
         if let Expression::IfExpression(ie) = expr {
@@ -91,7 +92,7 @@ fn if_expression_with_elseif() {
     let result = parse_luau("local y = if a then b elseif c then d else e");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::IfExpression(ie) = expr {
             assert_eq!(ie.elseif_clauses.len(), 1);
@@ -108,7 +109,7 @@ fn if_expression_nested() {
     let result = parse_luau("local z = if a then if b then 1 else 2 else 3");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::IfExpression(ie) = expr {
             assert!(matches!(&ie.then_expr, Expression::IfExpression(_)));
@@ -125,7 +126,7 @@ fn interp_string_plain() {
     let result = parse_luau("local x = `hello`");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         assert!(matches!(expr, Expression::InterpolatedString(_)));
     } else {
@@ -138,7 +139,7 @@ fn interp_string_with_expression() {
     let result = parse_luau("local x = `{y}`");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::InterpolatedString(is) = expr {
             // InterpBegin (with expr y) + InterpEnd
@@ -158,7 +159,7 @@ fn interp_string_multiple_expressions() {
     let result = parse_luau("local x = `a{1+2}b{3}c`");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::InterpolatedString(is) = expr {
             // InterpBegin("a") + expr(1+2) -> InterpMid("b") + expr(3) -> InterpEnd("c")
@@ -214,7 +215,7 @@ fn type_cast_expression() {
     let result = parse_luau("local x = y :: number");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         assert!(matches!(expr, Expression::TypeCast(_)));
     } else {
@@ -250,7 +251,7 @@ fn type_cast_binds_tighter_than_binary_op() {
     let Statement::LocalAssignment(la) = &result.block.stmts[0] else {
         panic!("expected LocalAssignment");
     };
-    let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+    let exprs = la.exprs.as_ref().expect("assignment has values");
     let expr = exprs.last_item().expect("has last element");
     let Expression::BinaryOp(binop) = expr else {
         panic!("expected top-level BinaryOp, got {expr:?}");
@@ -303,7 +304,7 @@ fn export_type_declaration() {
     let result = parse_luau("export type Bar = string");
     assert_no_errors(&result);
     if let Statement::TypeDeclaration(td) = &result.block.stmts[0] {
-        assert!(td.export_token.is_some());
+        assert!(td.is_exported);
     } else {
         panic!("expected TypeDeclaration");
     }
@@ -548,9 +549,11 @@ fn export_type_function_parses() {
     let result = parse_luau("export type function Id(t) return t end");
     assert_no_errors(&result);
     if let Statement::TypeDeclaration(decl) = &result.block.stmts[0] {
-        assert!(decl.export_token.is_some());
-        assert!(decl.function_token.is_some());
-        assert!(decl.equal.is_none());
+        assert!(decl.is_exported);
+        assert!(matches!(
+            decl.type_value,
+            TypeDeclarationValue::TypeFunction(_)
+        ));
     } else {
         panic!("expected TypeDeclaration");
     }
@@ -584,7 +587,7 @@ fn const_bindings() {
     assert_no_errors(&result);
     if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
         assert!(local.is_const);
-        assert!(local.equal_and_exprs.is_some());
+        assert!(local.exprs.is_some());
     } else {
         panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
     }

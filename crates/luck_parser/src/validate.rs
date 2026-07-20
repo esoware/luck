@@ -170,7 +170,7 @@ impl ConstWriteChecker<'_> {
             Statement::NumericFor(numeric_for) => {
                 self.check_expression(&numeric_for.start);
                 self.check_expression(&numeric_for.limit);
-                if let Some((_, step)) = &numeric_for.comma2_and_step {
+                if let Some(step) = &numeric_for.step {
                     self.check_expression(step);
                 }
                 self.scopes.push(Vec::new());
@@ -205,7 +205,7 @@ impl ConstWriteChecker<'_> {
                 self.check_function_body(&func.body);
             }
             Statement::LocalAssignment(local) => {
-                if let Some((_, exprs)) = &local.equal_and_exprs {
+                if let Some(exprs) = &local.exprs {
                     for expr in exprs.iter() {
                         self.check_expression(expr);
                     }
@@ -216,7 +216,7 @@ impl ConstWriteChecker<'_> {
                 }
             }
             Statement::GlobalDeclaration(global) => {
-                if let Some((_, exprs)) = &global.equal_and_exprs {
+                if let Some(exprs) = &global.exprs {
                     for expr in exprs.iter() {
                         self.check_expression(expr);
                     }
@@ -280,7 +280,7 @@ impl ConstWriteChecker<'_> {
     }
 
     fn check_table(&mut self, table: &TableConstructor) {
-        for (field, _) in &table.fields {
+        for field in table.fields.iter() {
             match field {
                 Field::Bracketed { key, value, .. } => {
                     self.check_expression(key);

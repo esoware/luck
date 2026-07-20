@@ -73,9 +73,9 @@ impl RangeChecker<'_> {
         let start = literal_number(&num_for.start, self.source);
         let limit = literal_number(&num_for.limit, self.source);
         let step = num_for
-            .comma2_and_step
+            .step
             .as_ref()
-            .and_then(|(_, step_expr)| literal_number(step_expr, self.source));
+            .and_then(|step_expr| literal_number(step_expr, self.source));
 
         // Zero step is an infinite loop on Lua 5.1-5.3, a runtime error
         // on 5.4+. Either way the author meant something else.
@@ -142,7 +142,7 @@ impl RangeChecker<'_> {
         if is_length_of_identifier(&num_for.start)
             && let Some(limit_value) = limit
         {
-            let has_step_expr = num_for.comma2_and_step.is_some();
+            let has_step_expr = num_for.step.is_some();
             if limit_value == 0.0 && (!has_step_expr || step.is_some_and(|s| s > 0.0)) {
                 self.out.push(
                     LintDiagnostic::new(
@@ -172,7 +172,7 @@ impl RangeChecker<'_> {
         // A limit the step never lands on makes the loop stop short:
         // `for i = 1, 8.75` ends at 8. Only fractional mismatches fire -
         // integer strides like `for i = 1, 10, 2` are idiomatic.
-        let effective_step = match &num_for.comma2_and_step {
+        let effective_step = match &num_for.step {
             None => Some(1.0),
             Some(_) => step,
         };

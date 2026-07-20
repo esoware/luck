@@ -150,7 +150,7 @@ fn walk_nested_blocks<'a>(
         Statement::LocalFunction(node) => walk_body(source, &node.body, disabled, out),
         Statement::GlobalFunction(node) => walk_body(source, &node.body, disabled, out),
         Statement::LocalAssignment(local) => {
-            if let Some((_, exprs)) = &local.equal_and_exprs {
+            if let Some(exprs) = &local.exprs {
                 walk_exprs(source, exprs, disabled, out);
             }
         }
@@ -158,7 +158,7 @@ fn walk_nested_blocks<'a>(
         Statement::FunctionCall(call) => walk_call(source, &call.call, disabled, out),
         Statement::CompoundAssignment(node) => walk_expr(source, &node.expr, disabled, out),
         Statement::GlobalDeclaration(global) => {
-            if let Some((_, exprs)) = &global.equal_and_exprs {
+            if let Some(exprs) = &global.exprs {
                 walk_exprs(source, exprs, disabled, out);
             }
         }
@@ -224,7 +224,7 @@ fn sortable_line<'a>(source: &'a str, stmt: &Statement) -> Option<SortableLine<'
     };
 
     let key = single_binding_name(source, local)?;
-    let (_, exprs) = local.equal_and_exprs.as_ref()?;
+    let exprs = local.exprs.as_ref()?;
     if exprs.len() != 1 {
         return None;
     }
@@ -276,7 +276,7 @@ fn is_pure_require_call(source: &str, expr: &Expression) -> bool {
     }
 
     // `game:GetService("Foo")` - method call on a Name var.
-    if let Some((_, method_name)) = &call.method
+    if let Some(method_name) = &call.method
         && let Expression::Var(var) = &call.callee
         && let Var::Name(_) = var.as_ref()
     {

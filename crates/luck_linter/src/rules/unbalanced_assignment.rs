@@ -50,7 +50,7 @@ impl NodeRule for UnbalancedAssignment {
     ) {
         match stmt {
             luck_ast::Statement::LocalAssignment(local) => {
-                if let Some((_, exprs)) = &local.equal_and_exprs {
+                if let Some(exprs) = &local.exprs {
                     let names = local.names.len();
                     let values = count_punctuated_exprs(exprs);
                     if !last_is_multiret(exprs) && names != values && values > 0 {

@@ -75,19 +75,19 @@ fn write_local_assignment(f: &mut Formatter, local: &LocalAssignment) {
     crate::write!(
         f,
         [group(format_with(|f| {
-            for (idx, (attributed, sep)) in local.names.items.iter().enumerate() {
+            for (idx, attributed) in local.names.items.iter().enumerate() {
                 if idx > 0 {
                     crate::write!(f, [soft_line_or_space()]);
                 }
                 write_attributed_name(f, attributed);
-                if idx + 1 < local.names.items.len() || sep.is_some() {
+                if idx + 1 < local.names.items.len() || local.names.has_trailing_separator {
                     crate::write!(f, [token(",")]);
                 }
             }
         }))]
     );
 
-    if let Some((_equal, exprs)) = &local.equal_and_exprs {
+    if let Some(exprs) = &local.exprs {
         crate::write!(f, [space(), token("="), space()]);
         write_punctuated_exprs(f, exprs);
     }
@@ -97,7 +97,7 @@ fn write_local_assignment(f: &mut Formatter, local: &LocalAssignment) {
 /// Lua 5.4 `<const>`/`<close>` attribute.
 fn write_attributed_name(f: &mut Formatter, attributed: &AttributedName) {
     crate::write!(f, [FormatToken(&attributed.name)]);
-    if let Some((_, annotation)) = &attributed.type_annotation {
+    if let Some(annotation) = &attributed.type_annotation {
         crate::write!(f, [token(":"), space(), annotation]);
     }
     if let Some(attrib) = &attributed.attrib {
@@ -256,7 +256,7 @@ fn write_if_statement(f: &mut Formatter, if_stmt: &IfStatement) {
 fn write_numeric_for(f: &mut Formatter, num_for: &NumericFor) {
     crate::write!(f, [token("for"), space(), FormatToken(&num_for.name)]);
     // Luau: `: T` on the loop variable.
-    if let Some((_, annotation)) = &num_for.type_annotation {
+    if let Some(annotation) = &num_for.type_annotation {
         crate::write!(f, [token(":"), space(), annotation]);
     }
     crate::write!(
@@ -271,7 +271,7 @@ fn write_numeric_for(f: &mut Formatter, num_for: &NumericFor) {
             &num_for.limit,
         ]
     );
-    if let Some((_comma, step)) = &num_for.comma2_and_step {
+    if let Some(step) = &num_for.step {
         crate::write!(f, [token(","), space(), step]);
     }
     crate::write!(
@@ -318,16 +318,16 @@ fn write_label(f: &mut Formatter, label: &LabelStatement) {
 /// Lua 5.5 `global name, ... [= exprs]`.
 fn write_global_declaration(f: &mut Formatter, global: &GlobalDeclaration) {
     crate::write!(f, [token("global"), space()]);
-    for (idx, (attributed, sep)) in global.names.items.iter().enumerate() {
+    for (idx, attributed) in global.names.items.iter().enumerate() {
         if idx > 0 {
             crate::write!(f, [space()]);
         }
         write_attributed_name(f, attributed);
-        if idx + 1 < global.names.items.len() || sep.is_some() {
+        if idx + 1 < global.names.items.len() || global.names.has_trailing_separator {
             crate::write!(f, [token(",")]);
         }
     }
-    if let Some((_equal, exprs)) = &global.equal_and_exprs {
+    if let Some(exprs) = &global.exprs {
         crate::write!(f, [space(), token("="), space()]);
         write_punctuated_exprs(f, exprs);
     }
@@ -394,7 +394,7 @@ fn write_function_attributes(f: &mut Formatter, attributes: &[FunctionAttribute]
                     f,
                     [token("@"), token("["), FormatToken(&attr.name), token("(")]
                 );
-                for (idx, (expr, _)) in args.items.iter().enumerate() {
+                for (idx, expr) in args.items.iter().enumerate() {
                     if idx > 0 {
                         crate::write!(f, [token(","), space()]);
                     }
@@ -417,30 +417,22 @@ fn write_func_name(f: &mut Formatter, name: &FuncName) {
         }
         crate::write!(f, [FormatToken(name_token)]);
     }
-    if let Some((_, method_name)) = &name.method {
+    if let Some(method_name) = &name.method {
         crate::write!(f, [token(":"), FormatToken(method_name)]);
     }
 }
 
 /// Luau type declaration: `type Name = T`, or `type function Name funcbody`.
 fn write_type_declaration(f: &mut Formatter, decl: &TypeDeclaration) {
-    if decl.export_token.is_some() {
+    if decl.is_exported {
         crate::write!(f, [token("export"), space()]);
     }
     crate::write!(f, [token("type"), space()]);
 
     // `type function Name funcbody`: no `=`; the body is ordinary Luau.
-    if decl.function_token.is_some() {
+    if let TypeDeclarationValue::TypeFunction(body) = &decl.type_value {
         crate::write!(f, [token("function"), space(), FormatToken(&decl.name)]);
-        match &decl.type_value {
-            TypeDeclarationValue::TypeFunction(body) => {
-                crate::write!(f, [FormatFunctionBody { body }]);
-            }
-            // Defensive: the function form should always carry a TypeFunction.
-            TypeDeclarationValue::Alias(annotation) => {
-                crate::write!(f, [space(), token("="), space(), annotation]);
-            }
-        }
+        crate::write!(f, [FormatFunctionBody { body }]);
         return;
     }
 
@@ -461,12 +453,12 @@ fn write_type_declaration(f: &mut Formatter, decl: &TypeDeclaration) {
 
 /// Assignment targets: comma-separated, never broken onto multiple lines.
 fn write_punctuated_vars(f: &mut Formatter, vars: &Punctuated<Var>) {
-    for (idx, (var, sep)) in vars.items.iter().enumerate() {
+    for (idx, var) in vars.items.iter().enumerate() {
         if idx > 0 {
             crate::write!(f, [space()]);
         }
         var.fmt(f);
-        if idx + 1 < vars.items.len() || sep.is_some() {
+        if idx + 1 < vars.items.len() || vars.has_trailing_separator {
             crate::write!(f, [token(",")]);
         }
     }
@@ -474,15 +466,15 @@ fn write_punctuated_vars(f: &mut Formatter, vars: &Punctuated<Var>) {
 
 /// Generic-for bindings: typed names, comma-separated, never broken.
 fn write_punctuated_params(f: &mut Formatter, params: &Punctuated<Parameter>) {
-    for (idx, (param, sep)) in params.items.iter().enumerate() {
+    for (idx, param) in params.items.iter().enumerate() {
         if idx > 0 {
             crate::write!(f, [space()]);
         }
         crate::write!(f, [FormatToken(&param.name)]);
-        if let Some((_, annotation)) = &param.type_annotation {
+        if let Some(annotation) = &param.type_annotation {
             crate::write!(f, [token(":"), space(), annotation]);
         }
-        if idx + 1 < params.items.len() || sep.is_some() {
+        if idx + 1 < params.items.len() || params.has_trailing_separator {
             crate::write!(f, [token(",")]);
         }
     }
@@ -496,21 +488,21 @@ pub(crate) fn write_punctuated_exprs(f: &mut Formatter, exprs: &Punctuated<Expre
         crate::write!(
             f,
             [group(indent(format_with(|f| {
-                for (idx, (expr, sep)) in exprs.items.iter().enumerate() {
+                for (idx, expr) in exprs.items.iter().enumerate() {
                     if idx > 0 {
                         crate::write!(f, [soft_line_or_space()]);
                     }
                     expr.fmt(f);
-                    if idx + 1 < exprs.items.len() || sep.is_some() {
+                    if idx + 1 < exprs.items.len() || exprs.has_trailing_separator {
                         crate::write!(f, [token(",")]);
                     }
                 }
             })))]
         );
     } else {
-        for (expr, sep) in &exprs.items {
+        for expr in &exprs.items {
             expr.fmt(f);
-            if sep.is_some() {
+            if exprs.has_trailing_separator {
                 crate::write!(f, [token(",")]);
             }
         }

@@ -158,7 +158,7 @@ fn walk_statement<'ast>(
         Statement::NumericFor(num_for) => {
             walk_expression(&num_for.start, labels, goto_names, nested);
             walk_expression(&num_for.limit, labels, goto_names, nested);
-            if let Some((_, step)) = &num_for.comma2_and_step {
+            if let Some(step) = &num_for.step {
                 walk_expression(step, labels, goto_names, nested);
             }
             walk_block(&num_for.block, labels, goto_names, nested);
@@ -170,7 +170,7 @@ fn walk_statement<'ast>(
             walk_block(&generic_for.block, labels, goto_names, nested);
         }
         Statement::LocalAssignment(local) => {
-            if let Some((_, exprs)) = &local.equal_and_exprs {
+            if let Some(exprs) = &local.exprs {
                 for expr in exprs.iter() {
                     walk_expression(expr, labels, goto_names, nested);
                 }
@@ -181,7 +181,7 @@ fn walk_statement<'ast>(
             walk_expression(&compound.expr, labels, goto_names, nested);
         }
         Statement::GlobalDeclaration(global) => {
-            if let Some((_, exprs)) = &global.equal_and_exprs {
+            if let Some(exprs) = &global.exprs {
                 for expr in exprs.iter() {
                     walk_expression(expr, labels, goto_names, nested);
                 }
@@ -253,7 +253,7 @@ fn walk_expression<'ast>(
             walk_expression(&paren.expr, labels, goto_names, nested);
         }
         Expression::TableConstructor(table) => {
-            for (field, _) in &table.fields {
+            for field in table.fields.iter() {
                 match field {
                     Field::Positional { value, .. } => {
                         walk_expression(value, labels, goto_names, nested);
@@ -329,7 +329,7 @@ fn walk_function_args<'ast>(
         }
         FunctionArgs::StringLiteral(_) => {}
         FunctionArgs::TableConstructor(table) => {
-            for (field, _) in &table.fields {
+            for field in table.fields.iter() {
                 match field {
                     Field::Positional { value, .. } => {
                         walk_expression(value, labels, goto_names, nested);

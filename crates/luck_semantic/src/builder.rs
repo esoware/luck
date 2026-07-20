@@ -175,16 +175,16 @@ impl ScopeTreeBuilder {
             if let TokenKind::Identifier(name) = &param.name.kind {
                 self.declare_local(name, param.name.span, SymbolKind::Parameter);
             }
-            if let Some((_, annotation)) = &param.type_annotation {
+            if let Some(annotation) = &param.type_annotation {
                 self.visit_type(annotation);
             }
         }
         if let Some(vararg) = &body.vararg {
-            if let Some((_, annotation)) = &vararg.type_annotation {
+            if let Some(annotation) = &vararg.type_annotation {
                 self.visit_type(annotation);
             }
         }
-        if let Some((_, annotation)) = &body.return_type {
+        if let Some(annotation) = &body.return_type {
             self.visit_type(annotation);
         }
 
@@ -207,7 +207,7 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
         match stmt {
             luck_ast::Statement::LocalAssignment(local) => {
                 // Visit values first (they see the outer scope)
-                if let Some((_, exprs)) = &local.equal_and_exprs {
+                if let Some(exprs) = &local.exprs {
                     for expr in exprs.iter() {
                         self.visit_expression(expr);
                     }
@@ -215,7 +215,7 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
                 for attributed in local.names.iter() {
                     // Annotations can reference runtime bindings via
                     // typeof(expr).
-                    if let Some((_, annotation)) = &attributed.type_annotation {
+                    if let Some(annotation) = &attributed.type_annotation {
                         self.visit_type(annotation);
                     }
                     if let TokenKind::Identifier(n) = &attributed.name.kind {
@@ -301,14 +301,14 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
             luck_ast::Statement::NumericFor(num_for) => {
                 self.visit_expression(&num_for.start);
                 self.visit_expression(&num_for.limit);
-                if let Some((_, step)) = &num_for.comma2_and_step {
+                if let Some(step) = &num_for.step {
                     self.visit_expression(step);
                 }
                 self.push_scope(ScopeKind::Loop, num_for.span);
                 if let TokenKind::Identifier(name) = &num_for.name.kind {
                     self.declare_local(name, num_for.name.span, SymbolKind::NumericForVariable);
                 }
-                if let Some((_, annotation)) = &num_for.type_annotation {
+                if let Some(annotation) = &num_for.type_annotation {
                     self.visit_type(annotation);
                 }
                 self.visit_block(&num_for.block);
@@ -324,7 +324,7 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
                     if let TokenKind::Identifier(n) = &binding.name.kind {
                         self.declare_local(n, binding.name.span, SymbolKind::IteratorVariable);
                     }
-                    if let Some((_, annotation)) = &binding.type_annotation {
+                    if let Some(annotation) = &binding.type_annotation {
                         self.visit_type(annotation);
                     }
                 }
@@ -345,7 +345,7 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
             // Lua 5.5 globals declare no locals, but their initializers
             // and function bodies still reference the enclosing scopes.
             luck_ast::Statement::GlobalDeclaration(global_decl) => {
-                if let Some((_, exprs)) = &global_decl.equal_and_exprs {
+                if let Some(exprs) = &global_decl.exprs {
                     for expr in exprs.iter() {
                         self.visit_expression(expr);
                     }
@@ -442,7 +442,7 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
 
 impl ScopeTreeBuilder {
     fn visit_table_constructor(&mut self, table: &TableConstructor) {
-        for (field, _) in &table.fields {
+        for field in table.fields.iter() {
             match field {
                 Field::Named { value, .. } | Field::Positional { value, .. } => {
                     self.visit_expression(value);

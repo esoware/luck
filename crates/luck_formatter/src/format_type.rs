@@ -5,7 +5,6 @@
 //! synthetic types format identically to parsed ones.
 
 use luck_ast::types::*;
-use luck_token::Span;
 
 use crate::ir::*;
 use crate::tokens::FormatToken;
@@ -53,7 +52,7 @@ impl Format for Type {
 /// `Name`, `module.Name`, `Name<args>`. Qualification and generics are tight
 /// against the name.
 fn write_named(f: &mut Formatter, named: &NamedType) {
-    if let Some((module, _dot)) = &named.prefix {
+    if let Some(module) = &named.prefix {
         FormatToken(module).fmt(f);
         token(".").fmt(f);
     }
@@ -83,7 +82,7 @@ fn write_table(f: &mut Formatter, table: &TableType) {
     }
 
     let is_array_shorthand =
-        table.fields.len() == 1 && matches!(table.fields[0].0, TypeField::Array { .. });
+        table.fields.len() == 1 && matches!(table.fields.items[0], TypeField::Array { .. });
 
     let group_id = f.group_id();
     group_with_id(
@@ -92,7 +91,7 @@ fn write_table(f: &mut Formatter, table: &TableType) {
             token("{").fmt(f);
             indent(format_with(move |f| {
                 soft_line_or_space().fmt(f);
-                for (index, (field, _separator)) in table.fields.iter().enumerate() {
+                for (index, field) in table.fields.iter().enumerate() {
                     if index > 0 {
                         token(",").fmt(f);
                         soft_line_or_space().fmt(f);
@@ -128,13 +127,13 @@ fn write_function_type(f: &mut Formatter, function: &FunctionType) {
 /// matching how Prettier lays out TypeScript unions. The AST's
 /// `leading_pipe`/`leading_ampersand` is intentionally normalized away - the
 /// leading operator is driven by the break decision, not by the source.
-fn write_alternation(f: &mut Formatter, items: &[(Type, Option<Span>)], operator: &'static str) {
+fn write_alternation(f: &mut Formatter, items: &[Type], operator: &'static str) {
     let group_id = f.group_id();
     group_with_id(
         group_id,
         indent(format_with(move |f| {
             if_group_breaks(group_id, (soft_line_or_space(), token(operator), space())).fmt(f);
-            for (index, (element, _separator)) in items.iter().enumerate() {
+            for (index, element) in items.iter().enumerate() {
                 if index > 0 {
                     soft_line_or_space().fmt(f);
                     token(operator).fmt(f);
@@ -204,11 +203,11 @@ impl Format for GenericTypeParam {
     fn fmt(&self, f: &mut Formatter) {
         FormatToken(&self.name).fmt(f);
         // Luau: `T...` marks a generic pack parameter.
-        if self.dots.is_some() {
+        if self.is_pack {
             token("...").fmt(f);
         }
         // `= T` default - only legal in `type` declarations.
-        if let Some((_equal, default)) = &self.default {
+        if let Some(default) = &self.default {
             space().fmt(f);
             token("=").fmt(f);
             space().fmt(f);
@@ -219,8 +218,8 @@ impl Format for GenericTypeParam {
 
 impl Format for FunctionTypeParam {
     fn fmt(&self, f: &mut Formatter) {
-        // (name, colon) when the parameter is named: `x: number`.
-        if let Some((name, _colon)) = &self.name {
+        // Present when the parameter is named: `x: number`.
+        if let Some(name) = &self.name {
             FormatToken(name).fmt(f);
             token(":").fmt(f);
             space().fmt(f);
@@ -231,8 +230,8 @@ impl Format for FunctionTypeParam {
 
 /// Emit a comma-separated punctuated list, breaking one item per line when the
 /// enclosing group expands. Source separators are normalized to `,`.
-fn write_punctuated<T: Format>(f: &mut Formatter, items: &[(T, Option<Span>)]) {
-    for (index, (item, _separator)) in items.iter().enumerate() {
+fn write_punctuated<T: Format>(f: &mut Formatter, items: &[T]) {
+    for (index, item) in items.iter().enumerate() {
         if index > 0 {
             token(",").fmt(f);
             soft_line_or_space().fmt(f);
@@ -249,7 +248,7 @@ fn write_delimited<T: Format>(
     f: &mut Formatter,
     open: &'static str,
     close: &'static str,
-    items: &[(T, Option<Span>)],
+    items: &[T],
 ) {
     if items.is_empty() {
         token(open).fmt(f);

@@ -85,7 +85,7 @@ fn collect_liftable(
                 // A bare `local x` inside a loop resets to nil each
                 // iteration; lifted to function scope it would keep the
                 // previous iteration's value.
-                let bare_in_loop = in_loop && local.equal_and_exprs.is_none();
+                let bare_in_loop = in_loop && local.exprs.is_none();
                 if has_attribs || bare_in_loop {
                     for name in local.names.iter() {
                         let n = ident_name_string(&name.name);
@@ -353,20 +353,19 @@ fn rewrite_block(
                         .any(|n| shadowed.iter().any(|frame| frame.contains(n)));
 
                 if all_lifted {
-                    if let Some((_, exprs)) = local.equal_and_exprs {
+                    if let Some(exprs) = local.exprs {
                         // local a,b=X,Y -> a,b=X,Y
-                        let targets = Punctuated {
-                            items: local
+                        let targets = Punctuated::from_items(
+                            local
                                 .names
                                 .items
                                 .into_iter()
-                                .map(|(attributed, sep)| (Var::Name(attributed.name), sep))
+                                .map(|attributed| Var::Name(attributed.name))
                                 .collect(),
-                        };
+                        );
                         new_stmts.push(Statement::Assignment(Box::new(Assignment {
                             span: local.span,
                             targets,
-                            equal: sp(),
                             values: exprs,
                         })));
                     }
@@ -388,14 +387,12 @@ fn rewrite_block(
                     let func_expr = Expression::FunctionDef(Box::new(FunctionDef {
                         span: lf.span,
                         attributes: lf.attributes,
-                        function_token: lf.function_token,
                         body: lf.body,
                     }));
                     let body_block = rewrite_block_in_funcdef(func_expr, liftable);
                     new_stmts.push(Statement::Assignment(Box::new(Assignment {
                         span: lf.span,
                         targets: Punctuated::from_item(Var::Name(lf.name)),
-                        equal: sp(),
                         values: Punctuated::from_item(body_block),
                     })));
                 } else {
@@ -496,25 +493,14 @@ fn prepend_declaration(block: &mut Block, names: &[String]) {
             attrib: None,
         })
         .collect();
-    let total = name_tokens.len();
-    let names = Punctuated {
-        items: name_tokens
-            .into_iter()
-            .enumerate()
-            .map(|(idx, attributed)| {
-                let sep = (idx + 1 < total).then(sp);
-                (attributed, sep)
-            })
-            .collect(),
-    };
+    let names = Punctuated::from_items(name_tokens.into_iter().collect());
 
     block.stmts.insert(
         0,
         Statement::LocalAssignment(Box::new(LocalAssignment {
             span: sp(),
-            local_token: sp(),
             names,
-            equal_and_exprs: None,
+            exprs: None,
             is_const: false,
         })),
     );

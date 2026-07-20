@@ -156,7 +156,7 @@ fn single_empty_table_local(decl: &LocalAssignment) -> Option<&str> {
     let TokenKind::Identifier(name) = &names[0].name.kind else {
         return None;
     };
-    let (_, exprs) = decl.equal_and_exprs.as_ref()?;
+    let exprs = decl.exprs.as_ref()?;
     let values: Vec<&Expression> = exprs.iter().collect();
     if values.len() != 1 {
         return None;
@@ -217,7 +217,7 @@ fn is_numeric_clone(loop_node: &NumericFor, dest: &str, source: &str) -> bool {
         return false;
     };
     // Step (if present) must also be 1; we only model the simple case.
-    if let Some((_, step)) = &loop_node.comma2_and_step {
+    if let Some(step) = &loop_node.step {
         if !is_number_one(step, source) {
             return false;
         }

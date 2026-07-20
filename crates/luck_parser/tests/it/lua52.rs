@@ -93,7 +93,7 @@ fn return_with_trailing_semicolon() {
     assert_no_errors(&result);
     if let Some(last) = &result.block.last_stmt {
         if let LastStatement::Return(ret) = &**last {
-            assert!(ret.semicolon.is_some());
+            assert!(ret.exprs.len() == 1);
         } else {
             panic!("expected Return");
         }

@@ -107,7 +107,7 @@ impl<'ast> Visitor<'ast> for DefinitionCollector<'_> {
                 self.record(local_fn.name.span, &local_fn.body);
             }
             Statement::LocalAssignment(local) => {
-                if let Some((_equal, exprs)) = &local.equal_and_exprs {
+                if let Some(exprs) = &local.exprs {
                     for (attributed, value) in local.names.iter().zip(exprs.iter()) {
                         if let Expression::FunctionDef(def) = value {
                             self.record(attributed.name.span, &def.body);

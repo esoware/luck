@@ -138,7 +138,7 @@ impl<'src> FormatChecker<'src, '_> {
         // where the receiver is a literal - `"hello":format(x)`. Any
         // variable receiver could be any kind of value, so we cannot
         // tell whether the method is `string.*` or a user method.
-        if let Some((_colon, name_token)) = &call.method {
+        if let Some(name_token) = &call.method {
             let TokenKind::Identifier(method_name) = &name_token.kind else {
                 return None;
             };
@@ -203,7 +203,7 @@ impl<'src> FormatChecker<'src, '_> {
     /// Handle the method form `receiver:fn(args)` where the receiver is
     /// a string literal. The receiver IS the pattern in this case.
     fn check_method_literal_receiver(&mut self, call: &FunctionCall) {
-        let Some((_, method_token)) = &call.method else {
+        let Some(method_token) = &call.method else {
             return;
         };
         let TokenKind::Identifier(method_name) = &method_token.kind else {
@@ -307,7 +307,7 @@ impl<'src> FormatChecker<'src, '_> {
     /// dotted form, second arg in the method form). The pattern arg
     /// contributes a capture count only when it is itself a literal.
     fn check_gsub_replacement(&mut self, call: &FunctionCall) {
-        let (pattern_idx, repl_idx) = if let Some((_colon, method_token)) = &call.method {
+        let (pattern_idx, repl_idx) = if let Some(method_token) = &call.method {
             let TokenKind::Identifier(method_name) = &method_token.kind else {
                 return;
             };

@@ -90,12 +90,10 @@ pub trait AstTransform {
             Statement::NumericFor(mut numeric_for) => {
                 numeric_for.type_annotation = numeric_for
                     .type_annotation
-                    .map(|(colon, loop_var_type)| (colon, self.transform_type(loop_var_type)));
+                    .map(|loop_var_type| self.transform_type(loop_var_type));
                 numeric_for.start = self.transform_expression(numeric_for.start);
                 numeric_for.limit = self.transform_expression(numeric_for.limit);
-                numeric_for.comma2_and_step = numeric_for
-                    .comma2_and_step
-                    .map(|(comma, step)| (comma, self.transform_expression(step)));
+                numeric_for.step = numeric_for.step.map(|step| self.transform_expression(step));
                 numeric_for.block = self.transform_block(numeric_for.block);
                 Statement::NumericFor(numeric_for)
             }
@@ -115,9 +113,9 @@ pub trait AstTransform {
             }
             Statement::LocalAssignment(mut local_assign) => {
                 local_assign.names = self.walk_attributed_names(local_assign.names);
-                local_assign.equal_and_exprs = local_assign
-                    .equal_and_exprs
-                    .map(|(equal, exprs)| (equal, self.walk_punctuated_exprs(exprs)));
+                local_assign.exprs = local_assign
+                    .exprs
+                    .map(|exprs| self.walk_punctuated_exprs(exprs));
                 Statement::LocalAssignment(local_assign)
             }
             Statement::CompoundAssignment(mut compound) => {
@@ -131,9 +129,9 @@ pub trait AstTransform {
             }
             Statement::GlobalDeclaration(mut global_decl) => {
                 global_decl.names = self.walk_attributed_names(global_decl.names);
-                global_decl.equal_and_exprs = global_decl
-                    .equal_and_exprs
-                    .map(|(equal, exprs)| (equal, self.walk_punctuated_exprs(exprs)));
+                global_decl.exprs = global_decl
+                    .exprs
+                    .map(|exprs| self.walk_punctuated_exprs(exprs));
                 Statement::GlobalDeclaration(global_decl)
             }
             Statement::TypeDeclaration(mut type_decl) => {
@@ -254,12 +252,12 @@ pub trait AstTransform {
         body.vararg = body.vararg.map(|mut vararg| {
             vararg.type_annotation = vararg
                 .type_annotation
-                .map(|(colon, vararg_type)| (colon, self.transform_type(vararg_type)));
+                .map(|vararg_type| self.transform_type(vararg_type));
             vararg
         });
         body.return_type = body
             .return_type
-            .map(|(colon, return_type)| (colon, self.transform_type(return_type)));
+            .map(|return_type| self.transform_type(return_type));
         body.block = self.transform_block(body.block);
         body
     }
@@ -288,9 +286,9 @@ pub trait AstTransform {
 
     fn walk_function_args(&mut self, args: FunctionArgs) -> FunctionArgs {
         match args {
-            FunctionArgs::Parenthesized { parens, args } => {
+            FunctionArgs::Parenthesized { span, args } => {
                 let args = self.walk_punctuated_exprs(args);
-                FunctionArgs::Parenthesized { parens, args }
+                FunctionArgs::Parenthesized { span, args }
             }
             FunctionArgs::TableConstructor(table) => {
                 let table = self.walk_table_constructor(*table);
@@ -301,64 +299,49 @@ pub trait AstTransform {
     }
 
     fn walk_table_constructor(&mut self, mut table: TableConstructor) -> TableConstructor {
-        table.fields = table
+        table.fields.items = table
             .fields
+            .items
             .into_iter()
-            .map(|(field, sep)| {
-                let field = match field {
-                    Field::Bracketed {
-                        span,
-                        brackets,
-                        key,
-                        equal,
-                        value,
-                    } => Field::Bracketed {
-                        span,
-                        brackets,
-                        key: self.transform_expression(key),
-                        equal,
-                        value: self.transform_expression(value),
-                    },
-                    Field::Named {
-                        span,
-                        name,
-                        equal,
-                        value,
-                    } => Field::Named {
-                        span,
-                        name,
-                        equal,
-                        value: self.transform_expression(value),
-                    },
-                    Field::Positional { span, value } => Field::Positional {
-                        span,
-                        value: self.transform_expression(value),
-                    },
-                };
-                (field, sep)
+            .map(|field| match field {
+                Field::Bracketed { span, key, value } => Field::Bracketed {
+                    span,
+                    key: self.transform_expression(key),
+                    value: self.transform_expression(value),
+                },
+                Field::Named { span, name, value } => Field::Named {
+                    span,
+                    name,
+                    value: self.transform_expression(value),
+                },
+                Field::Positional { span, value } => Field::Positional {
+                    span,
+                    value: self.transform_expression(value),
+                },
             })
             .collect();
         table
     }
 
-    fn walk_punctuated_exprs(&mut self, punct: Punctuated<Expression>) -> Punctuated<Expression> {
-        Punctuated {
-            items: punct
-                .items
-                .into_iter()
-                .map(|(expr, sep)| (self.transform_expression(expr), sep))
-                .collect(),
-        }
+    fn walk_punctuated_exprs(
+        &mut self,
+        mut punct: Punctuated<Expression>,
+    ) -> Punctuated<Expression> {
+        punct.items = punct
+            .items
+            .into_iter()
+            .map(|expr| self.transform_expression(expr))
+            .collect();
+        punct
     }
 
-    fn walk_punctuated_vars(&mut self, punct: Punctuated<Var>) -> Punctuated<Var> {
-        Punctuated {
-            items: punct
-                .items
-                .into_iter()
-                .map(|(var, sep)| (self.transform_var(var), sep))
-                .collect(),
-        }
+    fn walk_punctuated_vars(&mut self, mut punct: Punctuated<Var>) -> Punctuated<Var> {
+        punct.items = punct
+            .items
+            .into_iter()
+            .map(|var| self.transform_var(var))
+            .collect();
+        punct
     }
 
     fn walk_type(&mut self, type_value: Type) -> Type {
@@ -376,45 +359,37 @@ pub trait AstTransform {
                 Type::Typeof(typeof_type)
             }
             Type::Table(mut table) => {
-                table.fields = table
+                table.fields.items = table
                     .fields
+                    .items
                     .into_iter()
-                    .map(|(field, sep)| {
-                        let field = match field {
-                            TypeField::Named {
-                                span,
-                                access,
-                                name,
-                                colon,
-                                value,
-                            } => TypeField::Named {
-                                span,
-                                access,
-                                name,
-                                colon,
-                                value: self.transform_type(value),
-                            },
-                            TypeField::Indexer {
-                                span,
-                                access,
-                                brackets,
-                                key,
-                                colon,
-                                value,
-                            } => TypeField::Indexer {
-                                span,
-                                access,
-                                brackets,
-                                key: self.transform_type(key),
-                                colon,
-                                value: self.transform_type(value),
-                            },
-                            TypeField::Array { span, value } => TypeField::Array {
-                                span,
-                                value: self.transform_type(value),
-                            },
-                        };
-                        (field, sep)
+                    .map(|field| match field {
+                        TypeField::Named {
+                            span,
+                            access,
+                            name,
+                            value,
+                        } => TypeField::Named {
+                            span,
+                            access,
+                            name,
+                            value: self.transform_type(value),
+                        },
+                        TypeField::Indexer {
+                            span,
+                            access,
+                            key,
+                            value,
+                        } => TypeField::Indexer {
+                            span,
+                            access,
+                            key: self.transform_type(key),
+                            value: self.transform_type(value),
+                        },
+                        TypeField::Array { span, value } => TypeField::Array {
+                            span,
+                            value: self.transform_type(value),
+                        },
                     })
                     .collect();
                 Type::Table(table)
@@ -423,17 +398,15 @@ pub trait AstTransform {
                 function_type.generics = function_type
                     .generics
                     .map(|generics| self.walk_generic_type_list(generics));
-                function_type.params = Punctuated {
-                    items: function_type
-                        .params
-                        .items
-                        .into_iter()
-                        .map(|(mut param, sep)| {
-                            param.type_value = self.transform_type(param.type_value);
-                            (param, sep)
-                        })
-                        .collect(),
-                };
+                function_type.params.items = function_type
+                    .params
+                    .items
+                    .into_iter()
+                    .map(|mut param| {
+                        param.type_value = self.transform_type(param.type_value);
+                        param
+                    })
+                    .collect();
                 function_type.return_type = self.transform_type(function_type.return_type);
                 Type::Function(function_type)
             }
@@ -466,63 +439,59 @@ pub trait AstTransform {
     }
 
     fn walk_generic_type_list(&mut self, mut generics: GenericTypeList) -> GenericTypeList {
-        generics.params = Punctuated {
-            items: generics
-                .params
-                .items
-                .into_iter()
-                .map(|(mut param, sep)| {
-                    param.default = param
-                        .default
-                        .map(|(equal, default)| (equal, self.transform_type(default)));
-                    (param, sep)
-                })
-                .collect(),
-        };
+        generics.params.items = generics
+            .params
+            .items
+            .into_iter()
+            .map(|mut param| {
+                param.default = param.default.map(|default| self.transform_type(default));
+                param
+            })
+            .collect();
         generics
     }
 
     fn walk_attributed_names(
         &mut self,
-        names: Punctuated<AttributedName>,
+        mut names: Punctuated<AttributedName>,
     ) -> Punctuated<AttributedName> {
-        Punctuated {
-            items: names
-                .items
-                .into_iter()
-                .map(|(mut name, sep)| {
-                    name.type_annotation = name
-                        .type_annotation
-                        .map(|(colon, name_type)| (colon, self.transform_type(name_type)));
-                    (name, sep)
-                })
-                .collect(),
-        }
+        names.items = names
+            .items
+            .into_iter()
+            .map(|mut name| {
+                name.type_annotation = name
+                    .type_annotation
+                    .map(|name_type| self.transform_type(name_type));
+                name
+            })
+            .collect();
+        names
     }
 
-    fn walk_punctuated_params(&mut self, punct: Punctuated<Parameter>) -> Punctuated<Parameter> {
-        Punctuated {
-            items: punct
-                .items
-                .into_iter()
-                .map(|(mut param, sep)| {
-                    param.type_annotation = param
-                        .type_annotation
-                        .map(|(colon, param_type)| (colon, self.transform_type(param_type)));
-                    (param, sep)
-                })
-                .collect(),
-        }
+    fn walk_punctuated_params(
+        &mut self,
+        mut punct: Punctuated<Parameter>,
+    ) -> Punctuated<Parameter> {
+        punct.items = punct
+            .items
+            .into_iter()
+            .map(|mut param| {
+                param.type_annotation = param
+                    .type_annotation
+                    .map(|param_type| self.transform_type(param_type));
+                param
+            })
+            .collect();
+        punct
     }
 
-    fn walk_punctuated_types(&mut self, punct: Punctuated<Type>) -> Punctuated<Type> {
-        Punctuated {
-            items: punct
-                .items
-                .into_iter()
-                .map(|(type_value, sep)| (self.transform_type(type_value), sep))
-                .collect(),
-        }
+    fn walk_punctuated_types(&mut self, mut punct: Punctuated<Type>) -> Punctuated<Type> {
+        punct.items = punct
+            .items
+            .into_iter()
+            .map(|type_value| self.transform_type(type_value))
+            .collect();
+        punct
     }
 }
 
@@ -543,7 +512,10 @@ mod tests {
     }
 
     fn num_expr() -> Expression {
-        Expression::Number(token(TokenKind::Number("1".into())))
+        Expression::Number(Literal {
+            text: "1".into(),
+            span: span(),
+        })
     }
 
     fn nil_expr() -> Expression {
@@ -555,7 +527,6 @@ mod tests {
             span: span(),
             left,
             op: BinOp::Add,
-            op_span: span(),
             right,
         }))
     }
@@ -606,14 +577,13 @@ mod tests {
             span: span(),
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
-                local_token: span(),
                 is_const: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("x".into())),
                     type_annotation: None,
                     attrib: None,
                 }),
-                equal_and_exprs: Some((span(), Punctuated::from_item(nil_expr()))),
+                exprs: Some(Punctuated::from_item(nil_expr())),
             }))],
             last_stmt: None,
         };
@@ -631,39 +601,28 @@ mod tests {
         // {nil, nil} => {false, false}
         let table = Expression::TableConstructor(Box::new(TableConstructor {
             span: span(),
-            braces: ContainedSpan {
-                open: span(),
-                close: span(),
-            },
-            fields: vec![
-                (
-                    Field::Positional {
-                        span: span(),
-                        value: nil_expr(),
-                    },
-                    Some(span()),
-                ),
-                (
-                    Field::Positional {
-                        span: span(),
-                        value: nil_expr(),
-                    },
-                    None,
-                ),
-            ],
+            fields: Punctuated::from_items(vec![
+                Field::Positional {
+                    span: span(),
+                    value: nil_expr(),
+                },
+                Field::Positional {
+                    span: span(),
+                    value: nil_expr(),
+                },
+            ]),
         }));
         let block = Block {
             span: span(),
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
-                local_token: span(),
                 is_const: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("t".into())),
                     type_annotation: None,
                     attrib: None,
                 }),
-                equal_and_exprs: Some((span(), Punctuated::from_item(table))),
+                exprs: Some(Punctuated::from_item(table)),
             }))],
             last_stmt: None,
         };
@@ -682,10 +641,6 @@ mod tests {
         let body = FunctionBody {
             span: span(),
             generics: None,
-            params_parens: ContainedSpan {
-                open: span(),
-                close: span(),
-            },
             params: Punctuated::empty(),
             vararg: None,
             return_type: None,
@@ -694,21 +649,16 @@ mod tests {
                 stmts: Vec::new(),
                 last_stmt: Some(Box::new(LastStatement::Return(Box::new(ReturnStatement {
                     span: span(),
-                    return_token: span(),
                     exprs: Punctuated::from_item(nil_expr()),
-                    semicolon: None,
                 })))),
             },
-            end_token: span(),
         };
         let block = Block {
             span: span(),
             stmts: vec![Statement::LocalFunction(Box::new(LocalFunction {
                 span: span(),
                 attributes: Vec::new(),
-                local_token: span(),
                 is_const: false,
-                function_token: span(),
                 name: token(TokenKind::Identifier("f".into())),
                 body,
             }))],
@@ -730,9 +680,7 @@ mod tests {
             span: span(),
             stmts: vec![Statement::IfStatement(Box::new(IfStatement {
                 span: span(),
-                if_token: span(),
                 condition: nil_expr(),
-                then_token: span(),
                 block: Block {
                     span: span(),
                     stmts: vec![Statement::Assignment(Box::new(Assignment {
@@ -740,7 +688,6 @@ mod tests {
                         targets: Punctuated::from_item(Var::Name(token(TokenKind::Identifier(
                             "x".into(),
                         )))),
-                        equal: span(),
                         values: Punctuated::from_item(nil_expr()),
                     }))],
                     last_stmt: None,
@@ -748,7 +695,6 @@ mod tests {
                 elseif_clauses: Vec::new(),
                 else_clause: Some(ElseClause {
                     span: span(),
-                    else_token: span(),
                     block: Block {
                         span: span(),
                         stmts: vec![Statement::Assignment(Box::new(Assignment {
@@ -756,13 +702,11 @@ mod tests {
                             targets: Punctuated::from_item(Var::Name(token(
                                 TokenKind::Identifier("y".into()),
                             ))),
-                            equal: span(),
                             values: Punctuated::from_item(nil_expr()),
                         }))],
                         last_stmt: None,
                     },
                 }),
-                end_token: span(),
             }))],
             last_stmt: None,
         };
@@ -785,17 +729,13 @@ mod tests {
             span: span(),
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
-                local_token: span(),
                 is_const: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("x".into())),
                     type_annotation: None,
                     attrib: None,
                 }),
-                equal_and_exprs: Some((
-                    span(),
-                    Punctuated::from_item(binop_expr(num_expr(), num_expr())),
-                )),
+                exprs: Some(Punctuated::from_item(binop_expr(num_expr(), num_expr()))),
             }))],
             last_stmt: None,
         };
@@ -811,11 +751,8 @@ mod tests {
             span: span(),
             stmts: vec![Statement::WhileLoop(Box::new(WhileLoop {
                 span: span(),
-                while_token: span(),
                 condition: nil_expr(),
-                do_token: span(),
                 block: empty_block(),
-                end_token: span(),
             }))],
             last_stmt: None,
         };
@@ -832,9 +769,7 @@ mod tests {
             span: span(),
             stmts: vec![Statement::RepeatLoop(Box::new(RepeatLoop {
                 span: span(),
-                repeat_token: span(),
                 block: empty_block(),
-                until_token: span(),
                 condition: nil_expr(),
             }))],
             last_stmt: None,
@@ -852,17 +787,12 @@ mod tests {
             span: span(),
             stmts: vec![Statement::NumericFor(Box::new(NumericFor {
                 span: span(),
-                for_token: span(),
                 name: token(TokenKind::Identifier("i".into())),
                 type_annotation: None,
-                equal: span(),
                 start: nil_expr(),
-                comma1: span(),
                 limit: nil_expr(),
-                comma2_and_step: Some((span(), nil_expr())),
-                do_token: span(),
+                step: Some(nil_expr()),
                 block: empty_block(),
-                end_token: span(),
             }))],
             last_stmt: None,
         };

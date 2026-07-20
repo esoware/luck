@@ -7,10 +7,10 @@ use luck_token::{CompoundOp, Span, Token, TokenKind};
 use crate::parser::Parser;
 
 /// Build a loop-binding `Parameter` from its name and optional annotation.
-fn binding_param(name: Token, type_annotation: Option<(Span, luck_ast::Type)>) -> Parameter {
+fn binding_param(name: Token, type_annotation: Option<luck_ast::Type>) -> Parameter {
     let end_span = type_annotation
         .as_ref()
-        .map(|(_, binding_type)| binding_type.span())
+        .map(|binding_type| binding_type.span())
         .unwrap_or(name.span);
     Parameter {
         span: name.span.merge(end_span),
@@ -29,7 +29,7 @@ fn is_attribute_literal(expr: &Expression) -> bool {
         | Expression::False(_)
         | Expression::Number(_)
         | Expression::StringLiteral(_) => true,
-        Expression::TableConstructor(table) => table.fields.iter().all(|(field, _)| match field {
+        Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
             Field::Named { value, .. } | Field::Positional { value, .. } => {
                 is_attribute_literal(value)
             }
@@ -144,9 +144,7 @@ impl Parser<'_> {
 
         LastStatement::Return(Box::new(ReturnStatement {
             span: start_span.merge(end_span),
-            return_token,
             exprs,
-            semicolon,
         }))
     }
 
@@ -154,21 +152,19 @@ impl Parser<'_> {
         let if_token = self.advance_span();
         self.push_context("if-statement", if_token);
         let condition = self.parse_expression(0);
-        let then_token = self.expect_keyword(TokenKind::Then);
+        self.expect_keyword(TokenKind::Then);
         let block = self.parse_block();
 
         let mut elseif_clauses = Vec::new();
         while matches!(self.peek(), TokenKind::ElseIf) {
             let elseif_token = self.advance_span();
             let elseif_condition = self.parse_expression(0);
-            let elseif_then = self.expect_keyword(TokenKind::Then);
+            self.expect_keyword(TokenKind::Then);
             let elseif_block = self.parse_block();
             let span = elseif_token.merge(elseif_block.span);
             elseif_clauses.push(ElseIfClause {
                 span,
-                elseif_token,
                 condition: elseif_condition,
-                then_token: elseif_then,
                 block: elseif_block,
             });
         }
@@ -179,7 +175,6 @@ impl Parser<'_> {
             let span = else_token.merge(else_block.span);
             Some(ElseClause {
                 span,
-                else_token,
                 block: else_block,
             })
         } else {
@@ -192,12 +187,9 @@ impl Parser<'_> {
 
         Statement::IfStatement(Box::new(IfStatement {
             span,
-            if_token,
             condition,
-            then_token,
             elseif_clauses,
             else_clause,
-            end_token,
             block,
         }))
     }
@@ -206,7 +198,7 @@ impl Parser<'_> {
         let while_token = self.advance_span();
         self.push_context("while-loop", while_token);
         let condition = self.parse_expression(0);
-        let do_token = self.expect_keyword(TokenKind::Do);
+        self.expect_keyword(TokenKind::Do);
         let block = self.parse_loop_block();
         let end_token = self.expect_keyword(TokenKind::End);
         self.pop_context();
@@ -214,11 +206,8 @@ impl Parser<'_> {
 
         Statement::WhileLoop(Box::new(WhileLoop {
             span,
-            while_token,
             condition,
-            do_token,
             block,
-            end_token,
         }))
     }
 
@@ -230,12 +219,7 @@ impl Parser<'_> {
         self.pop_context();
         let span = do_token.merge(end_token);
 
-        Statement::DoBlock(Box::new(DoBlock {
-            span,
-            do_token,
-            block,
-            end_token,
-        }))
+        Statement::DoBlock(Box::new(DoBlock { span, block }))
     }
 
     fn parse_for_statement(&mut self) -> Statement {
@@ -264,22 +248,21 @@ impl Parser<'_> {
         &mut self,
         for_token: Span,
         name: Token,
-        type_annotation: Option<(Span, luck_ast::Type)>,
+        type_annotation: Option<luck_ast::Type>,
     ) -> Statement {
-        let equal = self.advance_span(); // `=`
+        self.advance_span(); // `=`
         let start = self.parse_expression(0);
-        let comma1 = self.expect_keyword(TokenKind::Comma);
+        self.expect_keyword(TokenKind::Comma);
         let limit = self.parse_expression(0);
 
-        let comma2_and_step = if matches!(self.peek(), TokenKind::Comma) {
-            let comma2 = self.advance_span();
-            let step = self.parse_expression(0);
-            Some((comma2, step))
+        let step = if matches!(self.peek(), TokenKind::Comma) {
+            self.advance_span();
+            Some(self.parse_expression(0))
         } else {
             None
         };
 
-        let do_token = self.expect_keyword(TokenKind::Do);
+        self.expect_keyword(TokenKind::Do);
         let block = self.parse_loop_block();
         let end_token = self.expect_keyword(TokenKind::End);
         let span = for_token.merge(end_token);
@@ -287,17 +270,12 @@ impl Parser<'_> {
         self.pop_context();
         Statement::NumericFor(Box::new(NumericFor {
             span,
-            for_token,
             name,
             type_annotation,
-            equal,
             start,
-            comma1,
             limit,
-            comma2_and_step,
-            do_token,
+            step,
             block,
-            end_token,
         }))
     }
 
@@ -305,13 +283,12 @@ impl Parser<'_> {
         &mut self,
         for_token: Span,
         first_name: Token,
-        first_annotation: Option<(Span, luck_ast::Type)>,
+        first_annotation: Option<luck_ast::Type>,
     ) -> Statement {
-        let mut pairs = Vec::new();
-        let mut current = binding_param(first_name, first_annotation);
+        let mut params = vec![binding_param(first_name, first_annotation)];
 
         while matches!(self.peek(), TokenKind::Comma) {
-            let comma = self.advance_span();
+            self.advance_span();
             let name = self.expect_identifier().unwrap_or_else(|err| {
                 self.errors.push(err);
                 Token::new(
@@ -321,15 +298,14 @@ impl Parser<'_> {
             });
             // Luau: type annotation after each loop variable
             let type_annotation = self.try_parse_type_annotation();
-            pairs.push((current, comma));
-            current = binding_param(name, type_annotation);
+            params.push(binding_param(name, type_annotation));
         }
 
-        let names = Punctuated::from_pairs(pairs, Some(current));
+        let names = Punctuated::from_items(params);
 
-        let in_token = self.expect_keyword(TokenKind::In);
+        self.expect_keyword(TokenKind::In);
         let exprs = self.parse_expression_list();
-        let do_token = self.expect_keyword(TokenKind::Do);
+        self.expect_keyword(TokenKind::Do);
         let block = self.parse_loop_block();
         let end_token = self.expect_keyword(TokenKind::End);
         let span = for_token.merge(end_token);
@@ -337,13 +313,9 @@ impl Parser<'_> {
         self.pop_context();
         Statement::GenericFor(Box::new(GenericFor {
             span,
-            for_token,
             names,
-            in_token,
             exprs,
-            do_token,
             block,
-            end_token,
         }))
     }
 
@@ -351,16 +323,14 @@ impl Parser<'_> {
         let repeat_token = self.advance_span();
         self.push_context("repeat-loop", repeat_token);
         let block = self.parse_loop_block();
-        let until_token = self.expect_keyword(TokenKind::Until);
+        self.expect_keyword(TokenKind::Until);
         let condition = self.parse_expression(0);
         let span = repeat_token.merge(condition.span());
 
         self.pop_context();
         Statement::RepeatLoop(Box::new(RepeatLoop {
             span,
-            repeat_token,
             block,
-            until_token,
             condition,
         }))
     }
@@ -385,7 +355,6 @@ impl Parser<'_> {
         Statement::FunctionDecl(Box::new(FunctionDecl {
             span,
             attributes,
-            function_token,
             name,
             body,
         }))
@@ -401,10 +370,9 @@ impl Parser<'_> {
         });
         let start_span = first.span;
         let mut names = vec![first];
-        let mut dots = Vec::new();
 
         while matches!(self.peek(), TokenKind::Dot) {
-            let dot = self.advance_span();
+            self.advance_span();
             let name = self.expect_identifier().unwrap_or_else(|err| {
                 self.errors.push(err);
                 Token::new(
@@ -412,12 +380,11 @@ impl Parser<'_> {
                     self.current_span(),
                 )
             });
-            dots.push(dot);
             names.push(name);
         }
 
         let method = if matches!(self.peek(), TokenKind::Colon) {
-            let colon = self.advance_span();
+            self.advance_span();
             let method_name = self.expect_identifier().unwrap_or_else(|err| {
                 self.errors.push(err);
                 Token::new(
@@ -425,21 +392,20 @@ impl Parser<'_> {
                     self.current_span(),
                 )
             });
-            Some((colon, method_name))
+            Some(method_name)
         } else {
             None
         };
 
         let end_span = method
             .as_ref()
-            .map(|(_, n)| n.span)
+            .map(|n| n.span)
             .or_else(|| names.last().map(|n| n.span))
             .unwrap_or(start_span);
 
         FuncName {
             span: start_span.merge(end_span),
             names,
-            dots,
             method,
         }
     }
@@ -486,7 +452,7 @@ impl Parser<'_> {
         attributes: Vec<FunctionAttribute>,
         is_const: bool,
     ) -> Statement {
-        let function_token = self.advance_span();
+        self.advance_span(); // `function`
         self.push_context("local function", local_token);
         let name = self.expect_identifier().unwrap_or_else(|err| {
             self.errors.push(err);
@@ -503,8 +469,6 @@ impl Parser<'_> {
         Statement::LocalFunction(Box::new(LocalFunction {
             span,
             attributes,
-            local_token,
-            function_token,
             name,
             body,
             is_const,
@@ -532,10 +496,9 @@ impl Parser<'_> {
             }
         }
 
-        let equal_and_exprs = if matches!(self.peek(), TokenKind::Equal) {
-            let equal = self.advance_span();
-            let exprs = self.parse_expression_list();
-            Some((equal, exprs))
+        let exprs = if matches!(self.peek(), TokenKind::Equal) {
+            self.advance_span();
+            Some(self.parse_expression_list())
         } else {
             // Grammar: `const bindinglist '=' explist` - the initializer
             // is not optional.
@@ -546,9 +509,9 @@ impl Parser<'_> {
             None
         };
 
-        let end_span = equal_and_exprs
+        let end_span = exprs
             .as_ref()
-            .and_then(|(_, exprs)| punctuated_last_span(exprs))
+            .and_then(punctuated_last_span)
             .or_else(|| punctuated_last_name_span(&names))
             .unwrap_or(local_token);
 
@@ -556,9 +519,8 @@ impl Parser<'_> {
 
         Statement::LocalAssignment(Box::new(LocalAssignment {
             span,
-            local_token,
             names,
-            equal_and_exprs,
+            exprs,
             is_const,
         }))
     }
@@ -574,11 +536,7 @@ impl Parser<'_> {
             )
         });
         let span = goto_token.merge(name.span);
-        Statement::Goto(Box::new(GotoStatement {
-            span,
-            goto_token,
-            name,
-        }))
+        Statement::Goto(Box::new(GotoStatement { span, name }))
     }
 
     /// Parse `:: Name ::`.
@@ -598,12 +556,7 @@ impl Parser<'_> {
                 self.current_span()
             });
         let span = colons_open.merge(colons_close);
-        Statement::Label(Box::new(LabelStatement {
-            span,
-            colons_open,
-            name,
-            colons_close,
-        }))
+        Statement::Label(Box::new(LabelStatement { span, name }))
     }
 
     /// Parse `global` declarations: `global function`, `global *`, `global namelist`.
@@ -612,7 +565,7 @@ impl Parser<'_> {
 
         // `global function name(...) ... end`
         if matches!(self.peek(), TokenKind::Function) {
-            let function_token = self.advance_span();
+            self.advance_span(); // `function`
             let name = self.expect_identifier().unwrap_or_else(|err| {
                 self.errors.push(err);
                 Token::new(
@@ -622,25 +575,14 @@ impl Parser<'_> {
             });
             let body = self.parse_function_body();
             let span = global_token.merge(body.span);
-            return Statement::GlobalFunction(Box::new(GlobalFunction {
-                span,
-                global_token,
-                function_token,
-                name,
-                body,
-            }));
+            return Statement::GlobalFunction(Box::new(GlobalFunction { span, name, body }));
         }
 
         // `global <attrib> *` or `global *`
         if matches!(self.peek(), TokenKind::Star) {
             let star = self.advance_span();
             let span = global_token.merge(star);
-            return Statement::GlobalStar(Box::new(GlobalStar {
-                span,
-                global_token,
-                attrib: None,
-                star,
-            }));
+            return Statement::GlobalStar(Box::new(GlobalStar { span, attrib: None }));
         }
 
         // `global <attrib> *` - attribute before star; otherwise the
@@ -662,9 +604,7 @@ impl Parser<'_> {
                 let span = global_token.merge(star);
                 return Statement::GlobalStar(Box::new(GlobalStar {
                     span,
-                    global_token,
                     attrib: Some(attrib),
-                    star,
                 }));
             }
             let names = self.parse_attname_list_with_leading(Some(attrib));
@@ -696,27 +636,21 @@ impl Parser<'_> {
             }
         }
 
-        let equal_and_exprs = if matches!(self.peek(), TokenKind::Equal) {
-            let equal = self.advance_span();
-            let exprs = self.parse_expression_list();
-            Some((equal, exprs))
+        let exprs = if matches!(self.peek(), TokenKind::Equal) {
+            self.advance_span();
+            Some(self.parse_expression_list())
         } else {
             None
         };
 
-        let end_span = equal_and_exprs
+        let end_span = exprs
             .as_ref()
-            .and_then(|(_, exprs)| punctuated_last_span(exprs))
+            .and_then(punctuated_last_span)
             .or_else(|| punctuated_last_name_span(&names))
             .unwrap_or(global_token);
         let span = global_token.merge(end_span);
 
-        Statement::GlobalDeclaration(Box::new(GlobalDeclaration {
-            span,
-            global_token,
-            names,
-            equal_and_exprs,
-        }))
+        Statement::GlobalDeclaration(Box::new(GlobalDeclaration { span, names, exprs }))
     }
 
     /// Try to parse `< Name >` attribute if the version supports it and `<` is next.
@@ -752,12 +686,7 @@ impl Parser<'_> {
             self.current_span()
         });
         let span = open.merge(close);
-        Attribute {
-            span,
-            open,
-            name,
-            close,
-        }
+        Attribute { span, name }
     }
 
     /// Parse attnamelist: `[attrib] Name [attrib] { ',' Name [attrib] }`
@@ -814,27 +743,25 @@ impl Parser<'_> {
         let trailing_attrib = self.try_parse_attribute();
         let first_attrib = resolve_attrib(self, leading_attrib.as_ref(), trailing_attrib);
 
-        let mut pairs = Vec::new();
-        let mut current = AttributedName {
+        let mut names = vec![AttributedName {
             name: first,
             type_annotation: first_type_annotation,
             attrib: first_attrib,
-        };
+        }];
 
         while matches!(self.peek(), TokenKind::Comma) {
-            let comma = self.advance_span();
+            self.advance_span();
             match self.expect_identifier() {
                 Ok(name) => {
                     // Luau: type annotation after name
                     let type_annotation = self.try_parse_type_annotation();
                     let trailing = self.try_parse_attribute();
                     let attrib = resolve_attrib(self, leading_attrib.as_ref(), trailing);
-                    pairs.push((current, comma));
-                    current = AttributedName {
+                    names.push(AttributedName {
                         name,
                         type_annotation,
                         attrib,
-                    };
+                    });
                 }
                 Err(err) => {
                     self.errors.push(err);
@@ -843,7 +770,7 @@ impl Parser<'_> {
             }
         }
 
-        Punctuated::from_pairs(pairs, Some(current))
+        Punctuated::from_items(names)
     }
 
     fn parse_assignment_or_call(&mut self) -> Statement {
@@ -853,7 +780,7 @@ impl Parser<'_> {
         if self.version.is_luau()
             && let Some(op) = CompoundOp::from_token_kind(self.peek())
         {
-            let op_span = self.advance_span();
+            self.advance_span();
             let rhs = self.parse_expression(0);
             let var = expression_to_var(expr, self);
             let span = var.span().merge(rhs.span());
@@ -861,7 +788,6 @@ impl Parser<'_> {
                 span,
                 var,
                 op,
-                op_span,
                 expr: rhs,
             }));
         }
@@ -869,9 +795,8 @@ impl Parser<'_> {
         // Check for assignment: `varlist = explist`
         if matches!(self.peek(), TokenKind::Comma | TokenKind::Equal) {
             let mut target_exprs = vec![expr];
-            let mut commas = Vec::new();
             while matches!(self.peek(), TokenKind::Comma) {
-                commas.push(self.advance_span());
+                self.advance_span();
                 target_exprs.push(self.parse_expression(0));
             }
 
@@ -882,27 +807,20 @@ impl Parser<'_> {
 
             let values = self.parse_expression_list();
 
-            let target_count = target_exprs.len();
-            let mut var_pairs = Vec::new();
-            for (idx, target_expr) in target_exprs.into_iter().enumerate() {
-                let var = expression_to_var(target_expr, self);
-                if idx < target_count - 1 {
-                    var_pairs.push((var, commas[idx]));
-                } else {
-                    let targets = Punctuated::from_pairs(var_pairs, Some(var.clone()));
-                    let end_span = punctuated_last_span(&values).unwrap_or(equal);
-                    let start_span = targets.first().unwrap_or(&var).span();
-                    let span = start_span.merge(end_span);
+            let vars: Vec<Var> = target_exprs
+                .into_iter()
+                .map(|target_expr| expression_to_var(target_expr, self))
+                .collect();
+            let targets = Punctuated::from_items(vars);
+            let end_span = punctuated_last_span(&values).unwrap_or(equal);
+            let start_span = targets.first().map_or(equal, |var| var.span());
+            let span = start_span.merge(end_span);
 
-                    return Statement::Assignment(Box::new(Assignment {
-                        span,
-                        targets,
-                        equal,
-                        values,
-                    }));
-                }
-            }
-            unreachable!()
+            return Statement::Assignment(Box::new(Assignment {
+                span,
+                targets,
+                values,
+            }));
         }
 
         match expr {
@@ -930,7 +848,7 @@ impl Parser<'_> {
 
         // `type function Name funcbody` - no `=`; the body is ordinary Luau
         if matches!(self.peek(), TokenKind::Function) {
-            let function_token = self.advance_span();
+            self.advance_span(); // `function`
             let name = self.expect_identifier().unwrap_or_else(|err| {
                 self.errors.push(err);
                 Token::new(
@@ -942,12 +860,9 @@ impl Parser<'_> {
             let span = start_span.merge(body.span);
             return Statement::TypeDeclaration(Box::new(TypeDeclaration {
                 span,
-                export_token,
-                type_token,
-                function_token: Some(function_token),
+                is_exported: export_token.is_some(),
                 name,
                 generics: None,
-                equal: None,
                 type_value: TypeDeclarationValue::TypeFunction(Box::new(body)),
             }));
         }
@@ -966,22 +881,18 @@ impl Parser<'_> {
             None
         };
 
-        let equal = self.expect_span(&TokenKind::Equal).unwrap_or_else(|err| {
+        if let Err(err) = self.expect_span(&TokenKind::Equal) {
             self.errors.push(err);
-            self.current_span()
-        });
+        }
 
         let alias_type = self.parse_type();
         let span = start_span.merge(alias_type.span());
 
         Statement::TypeDeclaration(Box::new(TypeDeclaration {
             span,
-            export_token,
-            type_token,
-            function_token: None,
+            is_exported: export_token.is_some(),
             name,
             generics,
-            equal: Some(equal),
             type_value: TypeDeclarationValue::Alias(alias_type),
         }))
     }
@@ -1020,7 +931,6 @@ impl Parser<'_> {
                         .unwrap_or(name.span);
                     attributes.push(FunctionAttribute {
                         span: at_token.merge(end_span),
-                        at_token,
                         name,
                         args,
                     });
@@ -1044,7 +954,6 @@ impl Parser<'_> {
                 self.validate_function_attribute(&name, false, &attributes);
                 attributes.push(FunctionAttribute {
                     span: at_token.merge(name.span),
-                    at_token,
                     name,
                     args: None,
                 });
@@ -1080,9 +989,13 @@ impl Parser<'_> {
             }
             TokenKind::StringLiteral(_) => {
                 let token = self.advance();
-                let mut args = Punctuated::empty();
-                args.push(Expression::StringLiteral(token), None);
-                Some(args)
+                let TokenKind::StringLiteral(text) = token.kind else {
+                    unreachable!("peeked kind");
+                };
+                Some(Punctuated::from_item(Expression::StringLiteral(Literal {
+                    text,
+                    span: token.span,
+                })))
             }
             TokenKind::LeftBrace => {
                 let table = self.parse_table_constructor();
@@ -1093,9 +1006,7 @@ impl Parser<'_> {
                         "attribute arguments must be literals".to_string(),
                     );
                 }
-                let mut args = Punctuated::empty();
-                args.push(expr, None);
-                Some(args)
+                Some(Punctuated::from_item(expr))
             }
             _ => None,
         }

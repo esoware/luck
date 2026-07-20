@@ -7,7 +7,7 @@
 use luck_token::{Span, Token};
 
 use crate::expr::Expression;
-use crate::shared::{ContainedSpan, Punctuated};
+use crate::shared::Punctuated;
 
 /// A Luau type node.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,8 +38,8 @@ pub enum Type {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamedType {
     pub span: Span,
-    /// `module.` qualification: (module name, dot span).
-    pub prefix: Option<(Token, Span)>,
+    /// `module.` qualification.
+    pub prefix: Option<Token>,
     pub name: Token,
     pub generics: Option<TypeArgs>,
 }
@@ -48,7 +48,6 @@ pub struct NamedType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeArgs {
     pub span: Span,
-    pub angles: ContainedSpan,
     pub args: Punctuated<Type>,
 }
 
@@ -56,8 +55,6 @@ pub struct TypeArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeofType {
     pub span: Span,
-    pub typeof_token: Span,
-    pub parens: ContainedSpan,
     pub expr: Expression,
 }
 
@@ -65,10 +62,7 @@ pub struct TypeofType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableType {
     pub span: Span,
-    pub braces: ContainedSpan,
-    /// Fields with the span of their following separator (`,` or `;`),
-    /// same shape as `TableConstructor.fields`.
-    pub fields: Vec<(TypeField, Option<Span>)>,
+    pub fields: Punctuated<TypeField>,
 }
 
 /// One entry in a table type.
@@ -79,16 +73,13 @@ pub enum TypeField {
         /// Luau `read`/`write` access modifier.
         access: Option<Token>,
         name: Token,
-        colon: Span,
         value: Type,
     },
     Indexer {
         span: Span,
         /// Luau `read`/`write` access modifier.
         access: Option<Token>,
-        brackets: ContainedSpan,
         key: Type,
-        colon: Span,
         value: Type,
     },
     /// Array shorthand `{ T }` - a bare element type.
@@ -100,9 +91,7 @@ pub enum TypeField {
 pub struct FunctionType {
     pub span: Span,
     pub generics: Option<GenericTypeList>,
-    pub parens: ContainedSpan,
     pub params: Punctuated<FunctionTypeParam>,
-    pub arrow: Span,
     pub return_type: Type,
 }
 
@@ -110,8 +99,7 @@ pub struct FunctionType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionTypeParam {
     pub span: Span,
-    /// (name, colon span) when the parameter is named.
-    pub name: Option<(Token, Span)>,
+    pub name: Option<Token>,
     pub type_value: Type,
 }
 
@@ -120,24 +108,23 @@ pub struct FunctionTypeParam {
 pub struct OptionalType {
     pub span: Span,
     pub type_value: Type,
-    pub question: Span,
 }
 
-/// N-ary union `A | B | C`; the `|` separators live in `types`.
+/// N-ary union `A | B | C`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnionType {
     pub span: Span,
     /// Leading `|` (allowed in multiline definitions).
-    pub leading_pipe: Option<Span>,
+    pub has_leading_pipe: bool,
     pub types: Punctuated<Type>,
 }
 
-/// N-ary intersection `A & B & C`; the `&` separators live in `types`.
+/// N-ary intersection `A & B & C`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntersectionType {
     pub span: Span,
     /// Leading `&` (allowed in multiline definitions).
-    pub leading_ampersand: Option<Span>,
+    pub has_leading_ampersand: bool,
     pub types: Punctuated<Type>,
 }
 
@@ -145,7 +132,6 @@ pub struct IntersectionType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParenType {
     pub span: Span,
-    pub parens: ContainedSpan,
     pub type_value: Type,
 }
 
@@ -153,7 +139,6 @@ pub struct ParenType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypePack {
     pub span: Span,
-    pub parens: ContainedSpan,
     pub types: Punctuated<Type>,
 }
 
@@ -161,7 +146,6 @@ pub struct TypePack {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VariadicType {
     pub span: Span,
-    pub dots: Span,
     pub type_value: Type,
 }
 
@@ -170,7 +154,6 @@ pub struct VariadicType {
 pub struct GenericPackType {
     pub span: Span,
     pub name: Token,
-    pub dots: Span,
 }
 
 /// Generic parameter list at a declaration site:
@@ -178,7 +161,6 @@ pub struct GenericPackType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericTypeList {
     pub span: Span,
-    pub angles: ContainedSpan,
     pub params: Punctuated<GenericTypeParam>,
 }
 
@@ -188,7 +170,7 @@ pub struct GenericTypeParam {
     pub span: Span,
     pub name: Token,
     /// `...` marking a pack parameter (`T...`).
-    pub dots: Option<Span>,
-    /// `= T` default - (equal span, type). Only legal in `type` declarations.
-    pub default: Option<(Span, Type)>,
+    pub is_pack: bool,
+    /// `= T` default. Only legal in `type` declarations.
+    pub default: Option<Type>,
 }

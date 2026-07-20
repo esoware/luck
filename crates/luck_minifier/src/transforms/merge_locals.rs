@@ -5,7 +5,6 @@ use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_ast::visitor::Visitor;
-use luck_token::Span;
 use luck_token::Token;
 
 use crate::expr::{ident_name_string, is_pure_expression};
@@ -18,10 +17,6 @@ pub fn merge(block: Block) -> Block {
 
 struct LocalMerger;
 
-fn make_comma() -> Span {
-    sp()
-}
-
 fn extract_single_assignment_parts(stmt: &Statement) -> Option<(&Token, &Expression, bool)> {
     match stmt {
         Statement::LocalAssignment(local) => {
@@ -30,7 +25,7 @@ fn extract_single_assignment_parts(stmt: &Statement) -> Option<(&Token, &Express
             if local.is_const {
                 return None;
             }
-            if let Some((_, exprs)) = &local.equal_and_exprs {
+            if let Some(exprs) = &local.exprs {
                 let names: Vec<_> = local.names.iter().collect();
                 let expr_list: Vec<_> = exprs.iter().collect();
                 if names.len() == 1
@@ -104,17 +99,12 @@ impl AstTransform for LocalMerger {
                     let total = group.len();
                     let mut group_names: Vec<AttributedName> = Vec::with_capacity(total);
                     let mut group_exprs: Vec<Expression> = Vec::with_capacity(total);
-                    let mut local_token: Option<Span> = None;
                     for stmt in group {
                         match stmt {
                             Statement::LocalAssignment(local) => {
                                 let local = *local;
-                                if local_token.is_none() {
-                                    local_token = Some(local.local_token);
-                                }
-                                let (_, exprs) = local
-                                    .equal_and_exprs
-                                    .expect("group members are single assignments");
+                                let exprs =
+                                    local.exprs.expect("group members are single assignments");
                                 group_names.extend(local.names.into_items());
                                 group_exprs.extend(exprs.into_items());
                             }
@@ -139,31 +129,24 @@ impl AstTransform for LocalMerger {
                     if is_local {
                         let merged_local = LocalAssignment {
                             span: sp(),
-                            local_token: local_token
-                                .expect("local group starts with a local assignment"),
-                            names: build_punctuated(group_names),
-                            equal_and_exprs: Some((sp(), build_punctuated(group_exprs))),
+                            names: Punctuated::from_items(group_names),
+                            exprs: Some(Punctuated::from_items(group_exprs)),
                             is_const: false,
                         };
                         merged.push(self.transform_statement(Statement::LocalAssignment(
                             Box::new(merged_local),
                         )));
                     } else {
-                        let var_punct = {
-                            let len = group_names.len();
-                            let mut pairs: Vec<(Var, Span)> = Vec::new();
-                            let mut names = group_names.into_iter();
-                            let last = names.next_back().expect("group is non-empty");
-                            for attributed in names.take(len - 1) {
-                                pairs.push((Var::Name(attributed.name), make_comma()));
-                            }
-                            Punctuated::from_pairs(pairs, Some(Var::Name(last.name)))
-                        };
+                        let var_punct = Punctuated::from_items(
+                            group_names
+                                .into_iter()
+                                .map(|attributed| Var::Name(attributed.name))
+                                .collect(),
+                        );
                         let merged_assign = Assignment {
                             span: sp(),
                             targets: var_punct,
-                            equal: sp(),
-                            values: build_punctuated(group_exprs),
+                            values: Punctuated::from_items(group_exprs),
                         };
                         merged.push(
                             self.transform_statement(Statement::Assignment(Box::new(
@@ -183,23 +166,16 @@ impl AstTransform for LocalMerger {
                 }
                 if group.len() >= 2 {
                     let mut names: Vec<AttributedName> = Vec::new();
-                    let mut local_token: Option<Span> = None;
                     for stmt in group {
                         let Statement::LocalAssignment(local) = stmt else {
                             unreachable!("bare-local group members are local assignments")
                         };
-                        let local = *local;
-                        if local_token.is_none() {
-                            local_token = Some(local.local_token);
-                        }
                         names.extend(local.names.into_items());
                     }
                     merged.push(Statement::LocalAssignment(Box::new(LocalAssignment {
                         span: sp(),
-                        local_token: local_token
-                            .expect("bare-local group starts with a local assignment"),
-                        names: build_punctuated(names),
-                        equal_and_exprs: None,
+                        names: Punctuated::from_items(names),
+                        exprs: None,
                         is_const: false,
                     })));
                 } else {
@@ -227,7 +203,7 @@ impl AstTransform for LocalMerger {
 }
 
 fn is_bare_local(stmt: &Statement) -> bool {
-    matches!(stmt, Statement::LocalAssignment(local) if local.equal_and_exprs.is_none() && !local.is_const)
+    matches!(stmt, Statement::LocalAssignment(local) if local.exprs.is_none() && !local.is_const)
 }
 
 fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
@@ -236,7 +212,7 @@ fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
 
     while let Some(stmt) = iter.next() {
         if let Statement::LocalAssignment(ref local) = stmt
-            && local.equal_and_exprs.is_none()
+            && local.exprs.is_none()
         {
             let local_names: Vec<String> = local
                 .names
@@ -275,9 +251,8 @@ fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
                     if let Some(Statement::Assignment(assign)) = iter.next() {
                         let fused = Statement::LocalAssignment(Box::new(LocalAssignment {
                             span: local.span,
-                            local_token: local.local_token,
                             names: local.names.clone(),
-                            equal_and_exprs: Some((assign.equal, assign.values)),
+                            exprs: Some(assign.values),
                             is_const: false,
                         }));
                         result.push(fused);
@@ -290,19 +265,6 @@ fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
     }
 
     result
-}
-
-/// Build a comma-separated `Punctuated` from owned items (no clones).
-fn build_punctuated<T>(items: Vec<T>) -> Punctuated<T> {
-    let mut items = items.into_iter();
-    let Some(mut current) = items.next() else {
-        return Punctuated::empty();
-    };
-    let mut pairs = Vec::new();
-    for next in items {
-        pairs.push((std::mem::replace(&mut current, next), make_comma()));
-    }
-    Punctuated::from_pairs(pairs, Some(current))
 }
 
 /// Detects whether any `Var::Name` whose identifier is in `names` appears
@@ -430,15 +392,9 @@ mod tests {
 
     fn first_expr_value(block: &Block) -> Expression {
         match &block.stmts[0] {
-            Statement::LocalAssignment(local) => local
-                .equal_and_exprs
-                .as_ref()
-                .unwrap()
-                .1
-                .iter()
-                .next()
-                .unwrap()
-                .clone(),
+            Statement::LocalAssignment(local) => {
+                local.exprs.as_ref().unwrap().iter().next().unwrap().clone()
+            }
             other => panic!("expected local assignment, got {other:?}"),
         }
     }

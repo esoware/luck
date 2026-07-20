@@ -85,7 +85,7 @@ fn numeric_for_two_values() {
     let result = parse_lua51("for i = 1, 10 do end");
     assert_no_errors(&result);
     if let Statement::NumericFor(f) = &result.block.stmts[0] {
-        assert!(f.comma2_and_step.is_none());
+        assert!(f.step.is_none());
     } else {
         panic!("expected NumericFor");
     }
@@ -96,7 +96,7 @@ fn numeric_for_three_values() {
     let result = parse_lua51("for i = 1, 10, 2 do end");
     assert_no_errors(&result);
     if let Statement::NumericFor(f) = &result.block.stmts[0] {
-        assert!(f.comma2_and_step.is_some());
+        assert!(f.step.is_some());
     } else {
         panic!("expected NumericFor");
     }
@@ -149,7 +149,7 @@ fn local_assignment_no_value() {
     let result = parse_lua51("local x");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        assert!(la.equal_and_exprs.is_none());
+        assert!(la.exprs.is_none());
     } else {
         panic!("expected LocalAssignment");
     }
@@ -160,7 +160,7 @@ fn local_assignment_with_value() {
     let result = parse_lua51("local x = 42");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        assert!(la.equal_and_exprs.is_some());
+        assert!(la.exprs.is_some());
     } else {
         panic!("expected LocalAssignment");
     }
@@ -298,7 +298,7 @@ fn literal_nil() {
     let result = parse_lua51("local x = nil");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         assert!(matches!(*expr, Expression::Nil(_)));
     } else {
@@ -311,8 +311,8 @@ fn literal_true_false() {
     let result = parse_lua51("local a, b = true, false");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
-        let first = &exprs.items[0].0;
+        let exprs = la.exprs.as_ref().expect("assignment has values");
+        let first = &exprs.items[0];
         assert!(matches!(first, Expression::True(_)));
         let second = exprs.last_item().expect("expression list has last element");
         assert!(matches!(*second, Expression::False(_)));
@@ -326,7 +326,7 @@ fn literal_number() {
     let result = parse_lua51("local x = 3.14");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         assert!(matches!(*expr, Expression::Number(_)));
     } else {
@@ -339,7 +339,7 @@ fn literal_string() {
     let result = parse_lua51("local x = \"hello world\"");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         assert!(matches!(*expr, Expression::StringLiteral(_)));
     } else {
@@ -353,7 +353,7 @@ fn precedence_add_mul() {
     let result = parse_lua51("local x = 1 + 2 * 3");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(outer) = expr {
             assert!(matches!(outer.op, luck_token::BinOp::Add));
@@ -374,7 +374,7 @@ fn right_assoc_power() {
     let result = parse_lua51("local x = 2 ^ 3 ^ 4");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(outer) = expr {
             assert!(matches!(outer.op, luck_token::BinOp::Pow));
@@ -394,7 +394,7 @@ fn right_assoc_concat() {
     let result = parse_lua51("local x = a .. b .. c");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(outer) = expr {
             assert!(matches!(outer.op, luck_token::BinOp::Concat));
@@ -413,7 +413,7 @@ fn unary_minus_vs_exponent_precedence() {
     let result = parse_lua51("local x = -a ^ b");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::UnaryOp(unary) = expr {
             assert!(
@@ -439,7 +439,7 @@ fn precedence_comparison_vs_logical() {
     let result = parse_lua51("local x = a < b and c > d");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(outer) = expr {
             assert!(matches!(outer.op, luck_token::BinOp::And));
@@ -463,7 +463,7 @@ fn precedence_concat_vs_comparison() {
     let result = parse_lua51("local x = a .. b == c .. d");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(outer) = expr {
             assert!(
@@ -490,7 +490,7 @@ fn unary_not() {
     let result = parse_lua51("local x = not true");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         assert!(matches!(expr, Expression::UnaryOp(_)));
     } else {
@@ -503,7 +503,7 @@ fn unary_minus() {
     let result = parse_lua51("local x = -42");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         assert!(matches!(*expr, Expression::UnaryOp(_)));
     } else {
@@ -516,7 +516,7 @@ fn unary_length() {
     let result = parse_lua51("local x = #t");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::UnaryOp(unary) = expr {
             assert!(matches!(unary.op, luck_token::UnOp::Len));
@@ -533,7 +533,7 @@ fn table_empty() {
     let result = parse_lua51("local x = {}");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::TableConstructor(t) = expr {
             assert!(t.fields.is_empty());
@@ -556,7 +556,7 @@ fn table_leading_separator_is_rejected() {
         );
         // Recovery still produces a table constructor.
         if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-            let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+            let exprs = la.exprs.as_ref().expect("assignment has values");
             let expr = exprs.last_item().expect("expression list has last element");
             assert!(matches!(*expr, Expression::TableConstructor(_)));
         } else {
@@ -570,7 +570,7 @@ fn table_mixed_fields() {
     let result = parse_lua51("local x = {1, 2, x = 3, [4] = 5}");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::TableConstructor(t) = expr {
             assert_eq!(t.fields.len(), 4);
@@ -587,7 +587,7 @@ fn table_trailing_separator() {
     let result = parse_lua51("local x = {1,}");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::TableConstructor(t) = expr {
             assert_eq!(t.fields.len(), 1);
@@ -604,7 +604,7 @@ fn chained_field_access() {
     let result = parse_lua51("local x = a.b.c");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::Var(v) = expr {
             assert!(matches!(&**v, Var::FieldAccess(_)));
@@ -621,7 +621,7 @@ fn chained_index() {
     let result = parse_lua51("local x = a[1][2]");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::Var(v) = expr {
             assert!(matches!(&**v, Var::Index(_)));
@@ -660,7 +660,7 @@ fn parenthesized() {
     let result = parse_lua51("local x = (1 + 2) * 3");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(binop) = expr {
             assert!(matches!(binop.op, luck_token::BinOp::Mul));
@@ -765,7 +765,7 @@ fn complex_expression_in_function() {
     let result = parse_lua51("local x = function() return 1 + 2 * 3 end");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::FunctionDef(fd) = expr {
             assert!(fd.body.block.last_stmt.is_some());
@@ -783,7 +783,7 @@ fn logical_operators() {
     assert_no_errors(&result);
     // Should parse as `(a and b) or c` since `and` has higher precedence than `or`
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::BinaryOp(outer) = expr {
             assert!(matches!(outer.op, luck_token::BinOp::Or));
@@ -809,7 +809,7 @@ fn comparison_operators() {
         let result = parse_lua51(src);
         assert_no_errors(&result);
         if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-            let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+            let exprs = la.exprs.as_ref().expect("assignment has values");
             let expr = exprs.last_item().expect("expression list has last element");
             if let Expression::BinaryOp(binop) = expr {
                 assert_eq!(binop.op, expected_kind, "failed for: {}", src);
@@ -850,7 +850,7 @@ fn multiline_string_level3_brackets() {
     let result = parse_lua51("local x = [===[hello ]]] ]==] world]===]");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         assert!(matches!(*expr, Expression::StringLiteral(_)));
     } else {
@@ -863,30 +863,24 @@ fn deeply_nested_table() {
     let result = parse_lua51("local x = {{{{}}}}");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         let expr = exprs.last_item().expect("expression list has last element");
         if let Expression::TableConstructor(outer) = expr {
             assert_eq!(outer.fields.len(), 1);
-            if let (
-                Field::Positional {
-                    value: Expression::TableConstructor(mid),
-                    ..
-                },
-                _,
-            ) = &outer.fields[0]
+            if let Field::Positional {
+                value: Expression::TableConstructor(mid),
+                ..
+            } = &outer.fields.items[0]
             {
                 assert_eq!(mid.fields.len(), 1);
-                if let (
-                    Field::Positional {
-                        value: Expression::TableConstructor(inner),
-                        ..
-                    },
-                    _,
-                ) = &mid.fields[0]
+                if let Field::Positional {
+                    value: Expression::TableConstructor(inner),
+                    ..
+                } = &mid.fields.items[0]
                 {
                     assert_eq!(inner.fields.len(), 1);
                     assert!(matches!(
-                        &inner.fields[0].0,
+                        &inner.fields.items[0],
                         Field::Positional { value: Expression::TableConstructor(t), .. } if t.fields.is_empty()
                     ));
                 } else {

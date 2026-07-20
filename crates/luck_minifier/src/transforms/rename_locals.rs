@@ -253,7 +253,7 @@ impl Analyzer {
         match stmt {
             Statement::LocalAssignment(local) => {
                 // RHS before LHS: `local x = x` reads the outer x
-                if let Some((_, exprs)) = &local.equal_and_exprs {
+                if let Some(exprs) = &local.exprs {
                     for expr in exprs.iter() {
                         self.analyze_expr(expr);
                     }
@@ -325,7 +325,7 @@ impl Analyzer {
             Statement::NumericFor(numeric_for) => {
                 self.analyze_expr(&numeric_for.start);
                 self.analyze_expr(&numeric_for.limit);
-                if let Some((_, step)) = &numeric_for.comma2_and_step {
+                if let Some(step) = &numeric_for.step {
                     self.analyze_expr(step);
                 }
                 self.enter_scope();
@@ -355,7 +355,7 @@ impl Analyzer {
                 self.analyze_function_body(&global_func.body);
             }
             Statement::GlobalDeclaration(global_decl) => {
-                if let Some((_, exprs)) = &global_decl.equal_and_exprs {
+                if let Some(exprs) = &global_decl.exprs {
                     for expr in exprs.iter() {
                         self.analyze_expr(expr);
                     }
@@ -399,7 +399,7 @@ impl Analyzer {
             Expression::Parenthesized(paren) => self.analyze_expr(&paren.expr),
             Expression::FunctionDef(func) => self.analyze_function_body(&func.body),
             Expression::TableConstructor(table) => {
-                for (field, _) in &table.fields {
+                for field in table.fields.iter() {
                     match field {
                         Field::Bracketed { key, value, .. } => {
                             self.analyze_expr(key);
@@ -458,7 +458,7 @@ impl Analyzer {
                 }
             }
             FunctionArgs::TableConstructor(table) => {
-                for (field, _) in &table.fields {
+                for field in table.fields.iter() {
                     match field {
                         Field::Bracketed { key, value, .. } => {
                             self.analyze_expr(key);
@@ -801,9 +801,7 @@ impl AstTransform for AstRenamer {
         match stmt {
             Statement::LocalAssignment(mut local) => {
                 // Transform expressions first (in outer scope)
-                local.equal_and_exprs = local
-                    .equal_and_exprs
-                    .map(|(eq, exprs)| (eq, self.walk_punctuated_exprs(exprs)));
+                local.exprs = local.exprs.map(|exprs| self.walk_punctuated_exprs(exprs));
                 local.names =
                     rename_attributed_names(&mut |orig| self.declare_binding(orig), local.names);
                 Statement::LocalAssignment(local)
@@ -871,9 +869,7 @@ impl AstTransform for AstRenamer {
             Statement::NumericFor(mut numeric_for) => {
                 numeric_for.start = self.transform_expression(numeric_for.start);
                 numeric_for.limit = self.transform_expression(numeric_for.limit);
-                numeric_for.comma2_and_step = numeric_for
-                    .comma2_and_step
-                    .map(|(comma, step)| (comma, self.transform_expression(step)));
+                numeric_for.step = numeric_for.step.map(|step| self.transform_expression(step));
                 self.enter_scope();
                 let original = ident_name_string(&numeric_for.name);
                 let new_name = self.declare_binding(&original);
@@ -925,19 +921,17 @@ impl AstTransform for AstRenamer {
 
     fn walk_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
         self.enter_scope();
-        body.params = Punctuated {
-            items: body
-                .params
-                .items
-                .into_iter()
-                .map(|(mut param, sep)| {
-                    let original = ident_name_string(&param.name);
-                    let new_name = self.declare_binding(&original);
-                    param.name = make_ident(&new_name);
-                    (param, sep)
-                })
-                .collect(),
-        };
+        body.params.items = body
+            .params
+            .items
+            .into_iter()
+            .map(|mut param| {
+                let original = ident_name_string(&param.name);
+                let new_name = self.declare_binding(&original);
+                param.name = make_ident(&new_name);
+                param
+            })
+            .collect();
         body.block = self.transform_block(body.block);
         self.exit_scope();
         body
@@ -985,7 +979,7 @@ fn rename_attributed_names(
     declare: &mut dyn FnMut(&str) -> String,
     names: Punctuated<AttributedName>,
 ) -> Punctuated<AttributedName> {
-    let mut rename = |attributed: AttributedName| {
+    let rename = |attributed: AttributedName| {
         let original = ident_name_string(&attributed.name);
         let new_name = declare(&original);
         AttributedName {
@@ -995,32 +989,27 @@ fn rename_attributed_names(
             attrib: attributed.attrib,
         }
     };
-    Punctuated {
-        items: names
-            .items
-            .into_iter()
-            .map(|(attributed, sep)| (rename(attributed), sep))
-            .collect(),
-    }
+    let mut names = names;
+    names.items = names.items.into_iter().map(rename).collect();
+    names
 }
 
 fn rename_punctuated_names(
     declare: &mut dyn FnMut(&str) -> String,
-    names: Punctuated<luck_ast::Parameter>,
+    mut names: Punctuated<luck_ast::Parameter>,
 ) -> Punctuated<luck_ast::Parameter> {
-    Punctuated {
-        items: names
-            .items
-            .into_iter()
-            .map(|(mut binding, sep)| {
-                let original = ident_name_string(&binding.name);
-                let new_name = declare(&original);
-                // Renaming a loop binding never changes its declared type
-                binding.name = make_ident(&new_name);
-                (binding, sep)
-            })
-            .collect(),
-    }
+    names.items = names
+        .items
+        .into_iter()
+        .map(|mut binding| {
+            let original = ident_name_string(&binding.name);
+            let new_name = declare(&original);
+            // Renaming a loop binding never changes its declared type
+            binding.name = make_ident(&new_name);
+            binding
+        })
+        .collect();
+    names
 }
 
 fn collect_toplevel_function_globals(block: &Block) -> HashSet<String> {
@@ -1229,7 +1218,7 @@ fn collect_name_reads_from_expr(
             collect_name_reads_from_expr(&paren.expr, locals, reads);
         }
         Expression::TableConstructor(table) => {
-            for (field, _) in &table.fields {
+            for field in table.fields.iter() {
                 match field {
                     Field::Bracketed { key, value, .. } => {
                         collect_name_reads_from_expr(key, locals, reads);
@@ -1289,7 +1278,7 @@ fn collect_name_reads_from_func_args(
             }
         }
         FunctionArgs::TableConstructor(table) => {
-            for (field, _) in &table.fields {
+            for field in table.fields.iter() {
                 match field {
                     Field::Bracketed { key, value, .. } => {
                         collect_name_reads_from_expr(key, locals, reads);
@@ -1320,7 +1309,7 @@ fn collect_name_reads_from_stmt(
             collect_name_reads_from_func_args(&call_stmt.call.args, locals, reads);
         }
         Statement::LocalAssignment(local) => {
-            if let Some((_, exprs)) = &local.equal_and_exprs {
+            if let Some(exprs) = &local.exprs {
                 for expr in exprs.iter() {
                     collect_name_reads_from_expr(expr, locals, reads);
                 }
@@ -1385,7 +1374,7 @@ fn collect_name_reads_from_stmt(
         Statement::NumericFor(nf) => {
             collect_name_reads_from_expr(&nf.start, locals, reads);
             collect_name_reads_from_expr(&nf.limit, locals, reads);
-            if let Some((_, step)) = &nf.comma2_and_step {
+            if let Some(step) = &nf.step {
                 collect_name_reads_from_expr(step, locals, reads);
             }
             for s in &nf.block.stmts {
@@ -1421,7 +1410,7 @@ fn collect_name_reads_from_stmt(
         Statement::FunctionDecl(_) | Statement::LocalFunction(_) | Statement::GlobalFunction(_) => {
         }
         Statement::GlobalDeclaration(global_decl) => {
-            if let Some((_, exprs)) = &global_decl.equal_and_exprs {
+            if let Some(exprs) = &global_decl.exprs {
                 for expr in exprs.iter() {
                     collect_name_reads_from_expr(expr, locals, reads);
                 }

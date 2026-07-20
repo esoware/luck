@@ -5,6 +5,18 @@ use luck_token::{Assoc, BinOp, Span, Token, TokenKind, UNARY_PRECEDENCE, UnOp};
 
 use crate::parser::Parser;
 
+/// Split a payload-carrying token (number or string literal) into a
+/// `Literal`; the caller has already matched the kind.
+fn literal_from(token: Token) -> Literal {
+    let (TokenKind::Number(text) | TokenKind::StringLiteral(text)) = token.kind else {
+        unreachable!("caller matched a literal token kind");
+    };
+    Literal {
+        text,
+        span: token.span,
+    }
+}
+
 impl Parser<'_> {
     /// Pratt expression parser. The left side grows iteratively; only the
     /// right-hand operand recurses, avoiding stack overflow on long chains.
@@ -38,7 +50,6 @@ impl Parser<'_> {
                     span,
                     left,
                     op,
-                    op_span,
                     right: Expression::Error(op_span),
                 }));
             }
@@ -49,7 +60,6 @@ impl Parser<'_> {
                 span,
                 left,
                 op,
-                op_span,
                 right,
             }));
         }
@@ -71,12 +81,7 @@ impl Parser<'_> {
             let operand = self.parse_expression(UNARY_PRECEDENCE);
             self.exit_depth();
             let span = op_span.merge(operand.span());
-            return Expression::UnaryOp(Box::new(UnaryOp {
-                span,
-                op,
-                op_span,
-                operand,
-            }));
+            return Expression::UnaryOp(Box::new(UnaryOp { span, op, operand }));
         }
         let primary = self.parse_primary_expression();
         // Luau type assertions (`expr :: Type`) apply to ANY simpleexp, not just
@@ -93,13 +98,12 @@ impl Parser<'_> {
     /// to reject as an unexpected token.
     fn parse_type_assertions(&mut self, expr: Expression) -> Expression {
         if self.version.is_luau() && matches!(self.peek(), TokenKind::DoubleColon) {
-            let double_colon = self.advance_span();
+            self.advance_span();
             let type_annotation = self.parse_type();
             let span = expr.span().merge(type_annotation.span());
             return Expression::TypeCast(Box::new(TypeCast {
                 span,
                 expr,
-                double_colon,
                 type_annotation,
             }));
         }
@@ -112,8 +116,8 @@ impl Parser<'_> {
             TokenKind::Nil => Expression::Nil(self.advance_span()),
             TokenKind::False => Expression::False(self.advance_span()),
             TokenKind::True => Expression::True(self.advance_span()),
-            TokenKind::Number(_) => Expression::Number(self.advance()),
-            TokenKind::StringLiteral(_) => Expression::StringLiteral(self.advance()),
+            TokenKind::Number(_) => Expression::Number(literal_from(self.advance())),
+            TokenKind::StringLiteral(_) => Expression::StringLiteral(literal_from(self.advance())),
             TokenKind::DotDotDot => {
                 let span = self.advance_span();
                 if !self.is_vararg_scope {
@@ -143,11 +147,8 @@ impl Parser<'_> {
                         self.current_span()
                     });
                 let span = open.merge(close);
-                let paren_expr = Expression::Parenthesized(Box::new(ParenExpression {
-                    span,
-                    parens: ContainedSpan { open, close },
-                    expr,
-                }));
+                let paren_expr =
+                    Expression::Parenthesized(Box::new(ParenExpression { span, expr }));
                 self.parse_suffixes(paren_expr)
             }
             // Luau if-expression: `if cond then expr {elseif cond then expr} else expr`
@@ -186,7 +187,7 @@ impl Parser<'_> {
         loop {
             match self.peek() {
                 TokenKind::Dot => {
-                    let dot = self.advance_span();
+                    self.advance_span();
                     let name = self.expect_identifier().unwrap_or_else(|err| {
                         self.errors.push(err);
                         Token::new(
@@ -198,12 +199,11 @@ impl Parser<'_> {
                     expr = Expression::Var(Box::new(Var::FieldAccess(Box::new(FieldAccess {
                         span,
                         prefix: expr,
-                        dot,
                         name,
                     }))));
                 }
                 TokenKind::LeftBracket => {
-                    let open = self.advance_span();
+                    self.advance_span();
                     let index = self.parse_expression(0);
                     let close = self
                         .expect_span(&TokenKind::RightBracket)
@@ -215,12 +215,11 @@ impl Parser<'_> {
                     expr = Expression::Var(Box::new(Var::Index(Box::new(IndexExpression {
                         span,
                         prefix: expr,
-                        brackets: ContainedSpan { open, close },
                         index,
                     }))));
                 }
                 TokenKind::Colon => {
-                    let colon = self.advance_span();
+                    self.advance_span();
                     let method_name = self.expect_identifier().unwrap_or_else(|err| {
                         self.errors.push(err);
                         Token::new(
@@ -235,7 +234,7 @@ impl Parser<'_> {
                         span,
                         callee: expr,
                         args,
-                        method: Some((colon, method_name)),
+                        method: Some(method_name),
                     }));
                 }
                 TokenKind::LeftParen | TokenKind::LeftBrace | TokenKind::StringLiteral(_) => {
@@ -279,47 +278,39 @@ impl Parser<'_> {
             return Expression::Error(if_token);
         }
         let condition = self.parse_expression(0);
-        let then_token = self.expect_span(&TokenKind::Then).unwrap_or_else(|err| {
+        if let Err(err) = self.expect_span(&TokenKind::Then) {
             self.errors.push(err);
-            self.current_span()
-        });
+        }
         let then_expr = self.parse_expression(0);
 
         let mut elseif_clauses = Vec::new();
         while matches!(self.peek(), TokenKind::ElseIf) {
             let elseif_token = self.advance_span();
             let elseif_condition = self.parse_expression(0);
-            let elseif_then = self.expect_span(&TokenKind::Then).unwrap_or_else(|err| {
+            if let Err(err) = self.expect_span(&TokenKind::Then) {
                 self.errors.push(err);
-                self.current_span()
-            });
+            }
             let elseif_expr = self.parse_expression(0);
             let span = elseif_token.merge(elseif_expr.span());
             elseif_clauses.push(ElseIfExprClause {
                 span,
-                elseif_token,
                 condition: elseif_condition,
-                then_token: elseif_then,
                 expr: elseif_expr,
             });
         }
 
-        let else_token = self.expect_span(&TokenKind::Else).unwrap_or_else(|err| {
+        if let Err(err) = self.expect_span(&TokenKind::Else) {
             self.errors.push(err);
-            self.current_span()
-        });
+        }
         let else_expr = self.parse_expression(0);
         self.exit_depth();
         let span = if_token.merge(else_expr.span());
 
         Expression::IfExpression(Box::new(IfExpression {
             span,
-            if_token,
             condition,
-            then_token,
             then_expr,
             elseif_clauses,
-            else_token,
             else_expr,
         }))
     }
@@ -425,7 +416,7 @@ impl Parser<'_> {
                         self.current_span()
                     });
                 FunctionArgs::Parenthesized {
-                    parens: ContainedSpan { open, close },
+                    span: open.merge(close),
                     args,
                 }
             }
@@ -434,17 +425,13 @@ impl Parser<'_> {
                 FunctionArgs::TableConstructor(Box::new(table))
             }
             TokenKind::StringLiteral(_) => {
-                let token = self.advance();
-                FunctionArgs::StringLiteral(token)
+                FunctionArgs::StringLiteral(literal_from(self.advance()))
             }
             _ => {
                 let span = self.current_span();
                 self.error(span, "expected function arguments".to_string());
                 FunctionArgs::Parenthesized {
-                    parens: ContainedSpan {
-                        open: span,
-                        close: span,
-                    },
+                    span,
                     args: Punctuated::empty(),
                 }
             }
@@ -468,13 +455,12 @@ impl Parser<'_> {
             self.error(span, "expected 'function' after attribute".to_string());
             return Expression::Error(span);
         }
-        let function_token = self.advance_span(); // `function`
+        self.advance_span(); // `function`
         let body = self.parse_function_body();
         let span = start_span.merge(body.span);
         Expression::FunctionDef(Box::new(FunctionDef {
             span,
             attributes,
-            function_token,
             body,
         }))
     }
@@ -501,10 +487,6 @@ impl Parser<'_> {
             return FunctionBody {
                 span: start_span,
                 generics,
-                params_parens: ContainedSpan {
-                    open,
-                    close: start_span,
-                },
                 params: Punctuated::empty(),
                 vararg: None,
                 return_type: None,
@@ -513,7 +495,6 @@ impl Parser<'_> {
                     stmts: Vec::new(),
                     last_stmt: None,
                 },
-                end_token: start_span,
             };
         }
 
@@ -522,71 +503,26 @@ impl Parser<'_> {
 
         if !matches!(self.peek(), TokenKind::RightParen) {
             if matches!(self.peek(), TokenKind::DotDotDot) {
-                let dots = self.advance_span();
-                // Lua 5.5: named varargs `...name`
-                let vararg_name = if self.version.has_named_varargs() && self.check_identifier() {
-                    Some(self.advance())
-                } else {
-                    None
-                };
-                // Luau: vararg type annotation `...: type`
-                let vararg_type = self.try_parse_type_annotation();
-                let end_span = vararg_type
-                    .as_ref()
-                    .map(|(_, annotation)| annotation.span())
-                    .or(vararg_name.as_ref().map(|n| n.span))
-                    .unwrap_or(dots);
-                vararg = Some(VarArgParam {
-                    span: dots.merge(end_span),
-                    dots,
-                    name: vararg_name,
-                    type_annotation: vararg_type,
-                });
+                vararg = Some(self.parse_vararg_param());
             } else if self.check_identifier() {
                 let first_name = self.advance();
                 let type_ann = self.try_parse_type_annotation();
-                let first_param = Parameter {
+                params.push(Parameter {
                     span: first_name.span.merge(
                         type_ann
                             .as_ref()
-                            .map(|(_, annotation)| annotation.span())
+                            .map(|annotation| annotation.span())
                             .unwrap_or(first_name.span),
                     ),
                     name: first_name,
                     type_annotation: type_ann,
-                };
+                });
 
-                let mut current = Some(first_param);
                 while matches!(self.peek(), TokenKind::Comma) {
-                    let comma = self.advance_span();
+                    self.advance_span();
                     if matches!(self.peek(), TokenKind::DotDotDot) {
                         // Vararg after last named param
-                        params.push(
-                            current
-                                .take()
-                                .expect("current is always Some at loop entry"),
-                            Some(comma),
-                        );
-                        let dots = self.advance_span();
-                        // Lua 5.5: named varargs `...name`
-                        let vararg_name =
-                            if self.version.has_named_varargs() && self.check_identifier() {
-                                Some(self.advance())
-                            } else {
-                                None
-                            };
-                        let vararg_type = self.try_parse_type_annotation();
-                        let end_span = vararg_type
-                            .as_ref()
-                            .map(|(_, annotation)| annotation.span())
-                            .or(vararg_name.as_ref().map(|n| n.span))
-                            .unwrap_or(dots);
-                        vararg = Some(VarArgParam {
-                            span: dots.merge(end_span),
-                            dots,
-                            name: vararg_name,
-                            type_annotation: vararg_type,
-                        });
+                        vararg = Some(self.parse_vararg_param());
                         break;
                     }
                     let name = self.expect_identifier().unwrap_or_else(|err| {
@@ -597,37 +533,23 @@ impl Parser<'_> {
                         )
                     });
                     let type_ann = self.try_parse_type_annotation();
-                    let param = Parameter {
+                    params.push(Parameter {
                         span: name.span.merge(
                             type_ann
                                 .as_ref()
-                                .map(|(_, annotation)| annotation.span())
+                                .map(|annotation| annotation.span())
                                 .unwrap_or(name.span),
                         ),
                         name,
                         type_annotation: type_ann,
-                    };
-                    params.push(
-                        current
-                            .take()
-                            .expect("current is always Some at loop entry"),
-                        Some(comma),
-                    );
-                    current = Some(param);
-                }
-
-                if let Some(last_param) = current {
-                    params.push(last_param, None);
+                    });
                 }
             }
         }
 
-        let close = self
-            .expect_span(&TokenKind::RightParen)
-            .unwrap_or_else(|err| {
-                self.errors.push(err);
-                self.current_span()
-            });
+        if let Err(err) = self.expect_span(&TokenKind::RightParen) {
+            self.errors.push(err);
+        }
 
         // Luau: optional return type annotation after `)`
         let return_type = self.try_parse_type_annotation();
@@ -653,33 +575,49 @@ impl Parser<'_> {
         FunctionBody {
             span,
             generics,
-            params_parens: ContainedSpan { open, close },
             params,
             vararg,
             return_type,
             block,
-            end_token,
+        }
+    }
+
+    /// Parse `... [name] [: type]` (assumes `...` is the current token).
+    fn parse_vararg_param(&mut self) -> VarArgParam {
+        let dots = self.advance_span();
+        // Lua 5.5: named varargs `...name`
+        let vararg_name = if self.version.has_named_varargs() && self.check_identifier() {
+            Some(self.advance())
+        } else {
+            None
+        };
+        // Luau: vararg type annotation `...: type`
+        let vararg_type = self.try_parse_type_annotation();
+        let end_span = vararg_type
+            .as_ref()
+            .map(|annotation| annotation.span())
+            .or(vararg_name.as_ref().map(|n| n.span))
+            .unwrap_or(dots);
+        VarArgParam {
+            span: dots.merge(end_span),
+            name: vararg_name,
+            type_annotation: vararg_type,
         }
     }
 
     /// Parse a table constructor: `{ [fieldlist] }`.
     pub fn parse_table_constructor(&mut self) -> TableConstructor {
-        let open = self.advance_span(); // `{`
-        let start_span = open;
+        let start_span = self.advance_span(); // `{`
 
         if let Err(err) = self.enter_depth() {
             self.errors.push(err);
             return TableConstructor {
                 span: start_span,
-                braces: ContainedSpan {
-                    open,
-                    close: start_span,
-                },
-                fields: Vec::new(),
+                fields: Punctuated::empty(),
             };
         }
 
-        let mut fields = Vec::new();
+        let mut fields = Punctuated::empty();
 
         // A leading separator is always an error in every Lua version
         // (`{;}`, `{,}`, `{, 1}` are all rejected by PUC Lua and Luau).
@@ -698,14 +636,12 @@ impl Parser<'_> {
                 break;
             }
 
-            let field = self.parse_field();
-            let separator = if matches!(self.peek(), TokenKind::Comma | TokenKind::Semicolon) {
-                Some(self.advance_span())
-            } else {
-                None
-            };
-            let has_separator = separator.is_some();
-            fields.push((field, separator));
+            fields.push(self.parse_field());
+            let has_separator = matches!(self.peek(), TokenKind::Comma | TokenKind::Semicolon);
+            if has_separator {
+                self.advance_span();
+            }
+            fields.has_trailing_separator = has_separator;
 
             if !has_separator {
                 break;
@@ -722,11 +658,7 @@ impl Parser<'_> {
             });
         let span = start_span.merge(close);
 
-        TableConstructor {
-            span,
-            braces: ContainedSpan { open, close },
-            fields,
-        }
+        TableConstructor { span, fields }
     }
 
     fn parse_table_constructor_expr(&mut self) -> Expression {
@@ -740,39 +672,24 @@ impl Parser<'_> {
         if matches!(self.peek(), TokenKind::LeftBracket) {
             let open = self.advance_span();
             let key = self.parse_expression(0);
-            let close = self
-                .expect_span(&TokenKind::RightBracket)
-                .unwrap_or_else(|err| {
-                    self.errors.push(err);
-                    self.current_span()
-                });
-            let equal = self.expect_span(&TokenKind::Equal).unwrap_or_else(|err| {
+            if let Err(err) = self.expect_span(&TokenKind::RightBracket) {
                 self.errors.push(err);
-                self.current_span()
-            });
+            }
+            if let Err(err) = self.expect_span(&TokenKind::Equal) {
+                self.errors.push(err);
+            }
             let value = self.parse_expression(0);
             let span = open.merge(value.span());
-            return Field::Bracketed {
-                span,
-                brackets: ContainedSpan { open, close },
-                key,
-                equal,
-                value,
-            };
+            return Field::Bracketed { span, key, value };
         }
 
         // `Name = expr` - need lookahead: identifier followed by `=`
         if self.check_identifier() && matches!(self.peek_next(), TokenKind::Equal) {
             let name = self.advance();
-            let equal = self.advance_span();
+            self.advance_span();
             let value = self.parse_expression(0);
             let span = name.span.merge(value.span());
-            return Field::Named {
-                span,
-                name,
-                equal,
-                value,
-            };
+            return Field::Named { span, name, value };
         }
 
         // Positional: just an expression
@@ -785,7 +702,7 @@ impl Parser<'_> {
 /// Get the ending span of function arguments.
 fn function_args_span(args: &FunctionArgs) -> Span {
     match args {
-        FunctionArgs::Parenthesized { parens, .. } => parens.open.merge(parens.close),
+        FunctionArgs::Parenthesized { span, .. } => *span,
         FunctionArgs::TableConstructor(t) => t.span,
         FunctionArgs::StringLiteral(t) => t.span,
     }

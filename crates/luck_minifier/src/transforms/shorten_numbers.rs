@@ -1,7 +1,6 @@
-use luck_ast::expr::Expression;
+use luck_ast::expr::{Expression, Literal};
 use luck_ast::shared::Block;
 use luck_ast::transform::AstTransform;
-use luck_token::token::{Token, TokenKind};
 use luck_token::{LuaVersion, Span};
 
 /// Shorten numeric literals using scientific notation, decimal trimming,
@@ -25,15 +24,13 @@ impl AstTransform for NumberShortener {
         let expr = self.walk_expression(expr);
 
         match expr {
-            Expression::Number(ref token) => {
-                if let TokenKind::Number(ref text) = token.kind {
-                    let shortened = shorten_number(text, self.int_subtype);
-                    if shortened.len() < text.len() {
-                        return Expression::Number(Token::new(
-                            TokenKind::Number(shortened.into()),
-                            Span::default(),
-                        ));
-                    }
+            Expression::Number(ref literal) => {
+                let shortened = shorten_number(&literal.text, self.int_subtype);
+                if shortened.len() < literal.text.len() {
+                    return Expression::Number(Literal {
+                        text: shortened.into(),
+                        span: Span::default(),
+                    });
                 }
                 expr
             }

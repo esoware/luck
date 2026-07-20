@@ -11,7 +11,7 @@ fn parse_lua53(source: &str) -> ParseResult {
 /// Extract the RHS expression from `local x = <expr>`.
 fn extract_local_expr(result: &ParseResult) -> &Expression {
     if let luck_ast::Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let (_, exprs) = la.equal_and_exprs.as_ref().expect("assignment has values");
+        let exprs = la.exprs.as_ref().expect("assignment has values");
         exprs.last_item().expect("expression list has last element")
     } else {
         panic!("expected LocalAssignment");

@@ -7,27 +7,27 @@ use crate::types::*;
 
 impl<T> Punctuated<T> {
     pub fn iter(&self) -> impl Iterator<Item = &T> {
-        self.items.iter().map(|(item, _)| item)
+        self.items.iter()
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
-        self.items.iter_mut().map(|(item, _)| item)
+        self.items.iter_mut()
     }
 
     pub fn get(&self, index: usize) -> Option<&T> {
-        self.items.get(index).map(|(item, _)| item)
+        self.items.get(index)
     }
 
     pub fn first(&self) -> Option<&T> {
-        self.get(0)
+        self.items.first()
     }
 
     pub fn last_item(&self) -> Option<&T> {
-        self.items.last().map(|(item, _)| item)
+        self.items.last()
     }
 
     pub fn into_items(self) -> Vec<T> {
-        self.items.into_iter().map(|(item, _)| item).collect()
+        self.items
     }
 
     pub fn len(&self) -> usize {
@@ -40,30 +40,27 @@ impl<T> Punctuated<T> {
 
     pub fn from_item(item: T) -> Self {
         Self {
-            items: vec![(item, None)],
+            items: vec![item],
+            has_trailing_separator: false,
+        }
+    }
+
+    pub fn from_items(items: Vec<T>) -> Self {
+        Self {
+            items,
+            has_trailing_separator: false,
         }
     }
 
     pub fn empty() -> Self {
-        Self { items: Vec::new() }
-    }
-
-    /// Append an item; `separator` is the span of the token FOLLOWING it, if any.
-    pub fn push(&mut self, item: T, separator: Option<Span>) {
-        self.items.push((item, separator));
-    }
-
-    /// Build from parser-style accumulation: every item in `pairs` was
-    /// followed by its separator, then an optional final item.
-    pub fn from_pairs(pairs: Vec<(T, Span)>, last: Option<T>) -> Self {
-        let mut items: Vec<(T, Option<Span>)> = pairs
-            .into_iter()
-            .map(|(item, sep)| (item, Some(sep)))
-            .collect();
-        if let Some(last) = last {
-            items.push((last, None));
+        Self {
+            items: Vec::new(),
+            has_trailing_separator: false,
         }
-        Self { items }
+    }
+
+    pub fn push(&mut self, item: T) {
+        self.items.push(item);
     }
 }
 

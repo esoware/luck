@@ -30,7 +30,7 @@ impl Rule for RedundantNilInit {
 }
 
 fn check_local(local: &LocalAssignment, out: &mut Vec<LintDiagnostic>) {
-    let Some((equal, exprs)) = &local.equal_and_exprs else {
+    let Some(exprs) = &local.exprs else {
         return;
     };
 
@@ -73,7 +73,6 @@ fn check_local(local: &LocalAssignment, out: &mut Vec<LintDiagnostic>) {
                 }],
             }),
         );
-        let _ = equal;
         return;
     }
 
@@ -99,17 +98,13 @@ fn check_local(local: &LocalAssignment, out: &mut Vec<LintDiagnostic>) {
     }
     let _ = names_count;
 
-    // Range to delete: from the comma BEFORE the first dropped value
-    // through the end of the last value.
-    let comma_byte = exprs.items[target_keep - 1]
-        .1
-        .as_ref()
-        .expect("kept expression is followed by a comma")
-        .start;
+    // Range to delete: from just past the last kept value (which eats
+    // the separating comma) through the end of the last value.
+    let delete_start = exprs.items[target_keep - 1].span().end;
     let total_end = exprs
         .last_item()
         .map(|e| e.span().end)
-        .unwrap_or(comma_byte);
+        .unwrap_or(delete_start);
 
     out.push(
         LintDiagnostic::new(
@@ -125,7 +120,7 @@ fn check_local(local: &LocalAssignment, out: &mut Vec<LintDiagnostic>) {
         .with_fix(Fix {
             description: "drop trailing `nil` initializers".to_string(),
             edits: vec![TextEdit {
-                span: Span::new(comma_byte, total_end),
+                span: Span::new(delete_start, total_end),
                 replacement: String::new(),
             }],
         }),

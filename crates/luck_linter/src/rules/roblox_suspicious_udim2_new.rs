@@ -1,7 +1,7 @@
 use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Var};
 use luck_token::UnOp;
 use luck_token::literal::{LuaNumber, parse_lua_number};
-use luck_token::{StdlibEnvironment, Token, TokenKind};
+use luck_token::{StdlibEnvironment, TokenKind};
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -54,11 +54,8 @@ fn is_udim2_new_call(call: &FunctionCall, ctx: &LintContext) -> bool {
         && !ctx.semantic.resolves_to_local("UDim2", token.span)
 }
 
-fn number_token_value(token: &Token) -> Option<f64> {
-    let TokenKind::Number(text) = &token.kind else {
-        return None;
-    };
-    match parse_lua_number(text, true)? {
+fn number_literal_value(literal: &luck_ast::expr::Literal) -> Option<f64> {
+    match parse_lua_number(&literal.text, true)? {
         LuaNumber::Int(int_value) => Some(int_value as f64),
         LuaNumber::Float(float_value) => Some(float_value),
     }
@@ -66,10 +63,10 @@ fn number_token_value(token: &Token) -> Option<f64> {
 
 fn literal_arg_value(expr: &Expression) -> Option<f64> {
     match expr {
-        Expression::Number(token) => number_token_value(token),
+        Expression::Number(literal) => number_literal_value(literal),
         Expression::UnaryOp(unary) if unary.op == UnOp::Neg => {
-            if let Expression::Number(token) = &unary.operand {
-                number_token_value(token).map(|value| -value)
+            if let Expression::Number(literal) = &unary.operand {
+                number_literal_value(literal).map(|value| -value)
             } else {
                 None
             }

@@ -43,10 +43,7 @@ fn attribute_in_lua53_not_parsed() {
             la.names.get(0).expect("declared name").attrib.is_none(),
             "should not parse attribute in Lua 5.3"
         );
-        assert!(
-            la.equal_and_exprs.is_none(),
-            "should not reach = in Lua 5.3"
-        );
+        assert!(la.exprs.is_none(), "should not reach = in Lua 5.3");
     } else {
         panic!("expected LocalAssignment");
     }

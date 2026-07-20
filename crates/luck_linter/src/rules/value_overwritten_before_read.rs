@@ -159,7 +159,7 @@ impl InitializedCollector {
 impl<'ast> Visitor<'ast> for InitializedCollector {
     fn visit_statement(&mut self, stmt: &'ast Statement) {
         if let Statement::LocalAssignment(local) = stmt
-            && local.equal_and_exprs.is_some()
+            && local.exprs.is_some()
         {
             for attributed in local.names.iter() {
                 self.spans

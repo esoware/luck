@@ -4,14 +4,14 @@
 //! shape and identifier text of the syntax tree. Two ASTs that print to
 //! semantically identical Lua should be considered equivalent.
 
-use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Var};
+use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Literal, Var};
 use luck_ast::shared::{Block, Field, FunctionBody, Parameter, Punctuated};
 use luck_ast::stmt::{LastStatement, Statement, TypeDeclarationValue};
 use luck_ast::types::{
     FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, NamedType, TableType, Type,
     TypeArgs, TypeField,
 };
-use luck_token::{Span, Token};
+use luck_token::Token;
 
 /// First point of divergence between two ASTs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,9 +139,9 @@ fn stmt_eq(left: &Statement, right: &Statement, path: &str) -> Result<(), AstDif
             )?;
             expr_eq(&l.start, &r.start, &child(path, "NumericFor/start"))?;
             expr_eq(&l.limit, &r.limit, &child(path, "NumericFor/limit"))?;
-            match (&l.comma2_and_step, &r.comma2_and_step) {
+            match (&l.step, &r.step) {
                 (None, None) => {}
-                (Some((_, a)), Some((_, b))) => {
+                (Some(a), Some(b)) => {
                     expr_eq(a, b, &child(path, "NumericFor/step"))?;
                 }
                 _ => return Err(AstDiff::new(path, "NumericFor step presence differs")),
@@ -173,7 +173,7 @@ fn stmt_eq(left: &Statement, right: &Statement, path: &str) -> Result<(), AstDif
             }
             match (&l.name.method, &r.name.method) {
                 (None, None) => {}
-                (Some((_, a)), Some((_, b))) => {
+                (Some(a), Some(b)) => {
                     token_text_eq(a, b, &child(path, "FunctionDecl/method"))?;
                 }
                 _ => return Err(AstDiff::new(path, "FunctionDecl method presence differs")),
@@ -203,9 +203,9 @@ fn stmt_eq(left: &Statement, right: &Statement, path: &str) -> Result<(), AstDif
                 &child(path, "LocalAssignment/names"),
                 attributed_name_eq,
             )?;
-            match (&l.equal_and_exprs, &r.equal_and_exprs) {
+            match (&l.exprs, &r.exprs) {
                 (None, None) => Ok(()),
-                (Some((_, a)), Some((_, b))) => {
+                (Some(a), Some(b)) => {
                     punctuated_eq(a, b, &child(path, "LocalAssignment/exprs"), expr_eq)
                 }
                 _ => Err(AstDiff::new(path, "LocalAssignment exprs presence differs")),
@@ -225,9 +225,9 @@ fn stmt_eq(left: &Statement, right: &Statement, path: &str) -> Result<(), AstDif
                 &child(path, "GlobalDeclaration/names"),
                 attributed_name_eq,
             )?;
-            match (&l.equal_and_exprs, &r.equal_and_exprs) {
+            match (&l.exprs, &r.exprs) {
                 (None, None) => Ok(()),
-                (Some((_, a)), Some((_, b))) => {
+                (Some(a), Some(b)) => {
                     punctuated_eq(a, b, &child(path, "GlobalDeclaration/exprs"), expr_eq)
                 }
                 _ => Err(AstDiff::new(
@@ -292,14 +292,14 @@ fn expr_eq(left: &Expression, right: &Expression, path: &str) -> Result<(), AstD
         (Expression::StringLiteral(a), Expression::StringLiteral(b)) => {
             // String literals must keep their textual contents; the formatter
             // is allowed to swap quote style, so compare unescaped contents.
-            if string_literal_eq(a, b) {
+            if string_raw_eq(&a.text, &b.text) {
                 Ok(())
             } else {
                 Err(AstDiff::new(path, "literal contents differ"))
             }
         }
         (Expression::Number(a), Expression::Number(b)) => {
-            if number_literal_eq(a, b) {
+            if number_raw_eq(&a.text, &b.text) {
                 Ok(())
             } else {
                 Err(AstDiff::new(path, "number literals differ"))
@@ -392,7 +392,7 @@ fn function_call_eq(left: &FunctionCall, right: &FunctionCall, path: &str) -> Re
     expr_eq(&left.callee, &right.callee, &child(path, "callee"))?;
     match (&left.method, &right.method) {
         (None, None) => {}
-        (Some((_, a)), Some((_, b))) => token_text_eq(a, b, &child(path, "method"))?,
+        (Some(a), Some(b)) => token_text_eq(a, b, &child(path, "method"))?,
         _ => return Err(AstDiff::new(path, "method presence differs")),
     }
     args_eq(&left.args, &right.args, &child(path, "args"))
@@ -405,7 +405,7 @@ fn args_eq(left: &FunctionArgs, right: &FunctionArgs, path: &str) -> Result<(), 
         (NormalizedArgs::List(a), NormalizedArgs::List(b)) => punctuated_eq(a, b, path, expr_eq),
         (NormalizedArgs::Table(a), NormalizedArgs::Table(b)) => table_eq(a, b, path),
         (NormalizedArgs::String(a), NormalizedArgs::String(b)) => {
-            if string_literal_eq(a, b) {
+            if string_raw_eq(&a.text, &b.text) {
                 Ok(())
             } else {
                 Err(AstDiff::new(path, "call string arg differs"))
@@ -416,7 +416,7 @@ fn args_eq(left: &FunctionArgs, right: &FunctionArgs, path: &str) -> Result<(), 
         | (NormalizedArgs::List(list), NormalizedArgs::String(s)) => {
             if list.len() == 1
                 && let Some(Expression::StringLiteral(other)) = list.first()
-                && string_literal_eq(s, other)
+                && string_raw_eq(&s.text, &other.text)
             {
                 return Ok(());
             }
@@ -438,14 +438,14 @@ fn args_eq(left: &FunctionArgs, right: &FunctionArgs, path: &str) -> Result<(), 
 enum NormalizedArgs<'a> {
     List(&'a Punctuated<Expression>),
     Table(&'a luck_ast::expr::TableConstructor),
-    String(&'a luck_token::Token),
+    String(&'a Literal),
 }
 
 fn normalize_args(args: &FunctionArgs) -> NormalizedArgs<'_> {
     match args {
         FunctionArgs::Parenthesized { args, .. } => NormalizedArgs::List(args),
         FunctionArgs::TableConstructor(table) => NormalizedArgs::Table(table),
-        FunctionArgs::StringLiteral(token) => NormalizedArgs::String(token),
+        FunctionArgs::StringLiteral(literal) => NormalizedArgs::String(literal),
     }
 }
 
@@ -490,13 +490,13 @@ fn param_eq(left: &Parameter, right: &Parameter, path: &str) -> Result<(), AstDi
 /// Compare an optional `: Type` annotation. Presence must agree on both
 /// sides - a dropped annotation is data loss, not a formatter tolerance.
 fn type_annotation_eq(
-    left: &Option<(Span, Type)>,
-    right: &Option<(Span, Type)>,
+    left: &Option<Type>,
+    right: &Option<Type>,
     path: &str,
 ) -> Result<(), AstDiff> {
     match (left, right) {
         (None, None) => Ok(()),
-        (Some((_, a)), Some((_, b))) => types_equiv(a, b, path),
+        (Some(a), Some(b)) => types_equiv(a, b, path),
         _ => Err(AstDiff::new(path, "type annotation presence differs")),
     }
 }
@@ -557,7 +557,7 @@ fn types_equiv(left: &Type, right: &Type, path: &str) -> Result<(), AstDiff> {
             // Singleton tokens (string/`true`/`false`/`nil`) carry their
             // decoded value in the kind, so string singletons compare by
             // content and are quote-style-agnostic.
-            Type::Singleton(b) if string_literal_eq(a, b) => Ok(()),
+            Type::Singleton(b) if singleton_eq(a, b) => Ok(()),
             Type::Singleton(_) => Err(AstDiff::new(path, "singleton type differs")),
             _ => Err(type_kind_diff(left, right, path)),
         },
@@ -589,7 +589,7 @@ fn unwrap_type_parens(ty: &Type) -> &Type {
 fn named_type_eq(left: &NamedType, right: &NamedType, path: &str) -> Result<(), AstDiff> {
     match (&left.prefix, &right.prefix) {
         (None, None) => {}
-        (Some((lm, _)), Some((rm, _))) => token_text_eq(lm, rm, &child(path, "module"))?,
+        (Some(lm), Some(rm)) => token_text_eq(lm, rm, &child(path, "module"))?,
         _ => return Err(AstDiff::new(path, "named type module presence differs")),
     }
     token_text_eq(&left.name, &right.name, &child(path, "name"))?;
@@ -620,7 +620,7 @@ fn table_type_eq(left: &TableType, right: &TableType, path: &str) -> Result<(), 
         ));
     }
     // The following separator (`,` vs `;`) is trivia; only the field matters.
-    for (idx, ((lf, _), (rf, _))) in left.fields.iter().zip(&right.fields).enumerate() {
+    for (idx, (lf, rf)) in left.fields.iter().zip(right.fields.iter()).enumerate() {
         type_field_eq(lf, rf, &child(path, &format!("field[{idx}]")))?;
     }
     Ok(())
@@ -712,7 +712,7 @@ fn function_type_param_eq(
     // never drops them, so compare presence and text strictly.
     match (&left.name, &right.name) {
         (None, None) => {}
-        (Some((l, _)), Some((r, _))) => token_text_eq(l, r, &child(path, "name"))?,
+        (Some(l), Some(r)) => token_text_eq(l, r, &child(path, "name"))?,
         _ => {
             return Err(AstDiff::new(
                 path,
@@ -747,14 +747,12 @@ fn generic_param_eq(
     path: &str,
 ) -> Result<(), AstDiff> {
     token_text_eq(&left.name, &right.name, path)?;
-    match (&left.dots, &right.dots) {
-        (None, None) => {}
-        (Some(_), Some(_)) => {}
-        _ => return Err(AstDiff::new(path, "generic pack marker presence differs")),
+    if left.is_pack != right.is_pack {
+        return Err(AstDiff::new(path, "generic pack marker presence differs"));
     }
     match (&left.default, &right.default) {
         (None, None) => Ok(()),
-        (Some((_, a)), Some((_, b))) => types_equiv(a, b, &child(path, "default")),
+        (Some(a), Some(b)) => types_equiv(a, b, &child(path, "default")),
         _ => Err(AstDiff::new(path, "generic default presence differs")),
     }
 }
@@ -803,7 +801,7 @@ fn table_eq(
             ),
         ));
     }
-    for (idx, ((lf, _), (rf, _))) in left.fields.iter().zip(&right.fields).enumerate() {
+    for (idx, (lf, rf)) in left.fields.iter().zip(right.fields.iter()).enumerate() {
         field_eq(lf, rf, &child(path, &format!("field[{idx}]")))?;
     }
     Ok(())
@@ -898,44 +896,45 @@ fn token_text_eq(
     Ok(())
 }
 
-/// Compare two number tokens tolerating the only rewrites the formatter
+/// Compare two raw number texts tolerating the only rewrites the formatter
 /// performs: lowercasing the base prefix / exponent marker, case-folding
 /// hex digits, and prepending a zero to a bare leading dot (`.5` -> `0.5`).
 /// ASCII-lowercasing both raw texts (after undoing the leading-dot rewrite)
 /// equates exactly those and nothing looser - `0x10` and `16` stay distinct
 /// because the formatter never converts between bases.
-fn number_literal_eq(left: &luck_token::Token, right: &luck_token::Token) -> bool {
-    match (&left.kind, &right.kind) {
-        (luck_token::TokenKind::Number(left_raw), luck_token::TokenKind::Number(right_raw)) => {
-            let strip_bare_zero = |raw: &str| -> String {
-                match raw.strip_prefix("0.") {
-                    Some(rest) => format!(".{rest}"),
-                    None => raw.to_string(),
-                }
-            };
-            strip_bare_zero(left_raw).eq_ignore_ascii_case(&strip_bare_zero(right_raw))
+fn number_raw_eq(left_raw: &str, right_raw: &str) -> bool {
+    let strip_bare_zero = |raw: &str| -> String {
+        match raw.strip_prefix("0.") {
+            Some(rest) => format!(".{rest}"),
+            None => raw.to_string(),
         }
-        _ => left.kind == right.kind,
+    };
+    strip_bare_zero(left_raw).eq_ignore_ascii_case(&strip_bare_zero(right_raw))
+}
+
+/// Compare two RAW string literal texts (quotes and escapes included) by
+/// content, so the formatter's quote-style swap (`'x'` -> `"x"`,
+/// re-escaping as needed) is tolerated.
+fn string_raw_eq(left_raw: &str, right_raw: &str) -> bool {
+    match (
+        decode_string_literal(left_raw),
+        decode_string_literal(right_raw),
+    ) {
+        (Some(left_value), Some(right_value)) => left_value == right_value,
+        // Malformed literal on either side: fall back to raw equality
+        _ => left_raw == right_raw,
     }
 }
 
-/// Compare two literal tokens by content. String tokens carry their RAW
-/// text (quotes and escapes included) so the formatter's quote-style swap
-/// (`'x'` -> `"x"`, re-escaping as needed) must be undone before comparing;
-/// number tokens are never rewritten, so kind equality suffices for them.
-fn string_literal_eq(left: &luck_token::Token, right: &luck_token::Token) -> bool {
+/// Singleton tokens mix fixed spellings (`nil`/`true`/`false`) with payload
+/// literals; string payloads compare by decoded content, everything else by
+/// kind.
+fn singleton_eq(left: &Token, right: &Token) -> bool {
     match (&left.kind, &right.kind) {
         (
             luck_token::TokenKind::StringLiteral(left_raw),
             luck_token::TokenKind::StringLiteral(right_raw),
-        ) => match (
-            decode_string_literal(left_raw),
-            decode_string_literal(right_raw),
-        ) {
-            (Some(left_value), Some(right_value)) => left_value == right_value,
-            // Malformed literal on either side: fall back to raw equality
-            _ => left_raw == right_raw,
-        },
+        ) => string_raw_eq(left_raw, right_raw),
         _ => left.kind == right.kind,
     }
 }

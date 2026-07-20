@@ -6,37 +6,38 @@ use crate::types::{GenericTypeList, Type};
 
 /// A sequence of items separated by fixed tokens (typically commas).
 ///
-/// Each item carries the SPAN of its following separator; the final
-/// item's is `None` (a `Some` on the final item preserves a dangling
-/// separator from parse recovery). Same shape as table-constructor
-/// fields. Separator spelling is implied by context, so only the span
-/// is stored.
+/// Interior separators are implied by position; `has_trailing_separator`
+/// records one after the final item (a trailing comma in a table
+/// constructor, or a dangling separator preserved from parse recovery).
+/// Separator spelling is implied by context, so no spans are stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Punctuated<T> {
-    pub items: Vec<(T, Option<Span>)>,
+    pub items: Vec<T>,
+    pub has_trailing_separator: bool,
 }
 
-/// Paired delimiter spans (parens, brackets, braces, angles). The
-/// delimiter spelling is implied by the owning node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ContainedSpan {
-    pub open: Span,
-    pub close: Span,
-}
-
-/// Function body: params + optional return type + block + end.
+/// Function body: params + optional return type + block, closed by `end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionBody {
     pub span: Span,
     /// Luau: `<T, U...>` generic list before the parameter parens.
     pub generics: Option<Box<GenericTypeList>>,
-    pub params_parens: ContainedSpan,
     pub params: Punctuated<Parameter>,
     pub vararg: Option<VarArgParam>,
-    /// Luau: `: T` return annotation after `)` - (colon span, type).
-    pub return_type: Option<(Span, Type)>,
+    /// Luau: `: T` return annotation after `)`.
+    pub return_type: Option<Type>,
     pub block: Block,
-    pub end_token: Span,
+}
+
+impl FunctionBody {
+    /// Span of the closing `end` keyword, derived from the body span,
+    /// which always ends with it. Synthetic bodies carry point spans, so
+    /// the result is meaningful only for parsed ASTs; callers consult it
+    /// solely for source-anchored trivia, which synthetic ASTs lack.
+    #[must_use]
+    pub fn end_keyword_span(&self) -> Span {
+        Span::new(self.span.end.saturating_sub(3), self.span.end)
+    }
 }
 
 /// A typed name: function parameter or generic-for loop binding.
@@ -44,18 +45,17 @@ pub struct FunctionBody {
 pub struct Parameter {
     pub span: Span,
     pub name: Token,
-    /// Luau: `: T` - (colon span, type).
-    pub type_annotation: Option<(Span, Type)>,
+    /// Luau: `: T`.
+    pub type_annotation: Option<Type>,
 }
 
 /// Vararg parameter (`...` or `...name` in Lua 5.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VarArgParam {
     pub span: Span,
-    pub dots: Span,
     pub name: Option<Token>,
-    /// Luau: `: T` - (colon span, type). The type may be a pack (`...number`).
-    pub type_annotation: Option<(Span, Type)>,
+    /// Luau: `: T`. The type may be a pack (`...number`).
+    pub type_annotation: Option<Type>,
 }
 
 /// Block of statements with optional last statement.
@@ -71,15 +71,12 @@ pub struct Block {
 pub enum Field {
     Bracketed {
         span: Span,
-        brackets: ContainedSpan,
         key: Expression,
-        equal: Span,
         value: Expression,
     },
     Named {
         span: Span,
         name: Token,
-        equal: Span,
         value: Expression,
     },
     Positional {

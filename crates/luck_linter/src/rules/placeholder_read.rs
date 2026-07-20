@@ -116,7 +116,7 @@ impl<'ast> Visitor<'ast> for PlaceholderChecker {
             // Local binding names are declarations, not reads. Visit
             // initializer expressions only.
             luck_ast::Statement::LocalAssignment(local) => {
-                if let Some((_, exprs)) = &local.equal_and_exprs {
+                if let Some(exprs) = &local.exprs {
                     for expr in exprs.iter() {
                         self.visit_expression(expr);
                     }
@@ -146,7 +146,7 @@ impl<'ast> Visitor<'ast> for PlaceholderChecker {
             luck_ast::Statement::NumericFor(num_for) => {
                 self.visit_expression(&num_for.start);
                 self.visit_expression(&num_for.limit);
-                if let Some((_, step)) = &num_for.comma2_and_step {
+                if let Some(step) = &num_for.step {
                     self.visit_expression(step);
                 }
                 self.visit_block(&num_for.block);

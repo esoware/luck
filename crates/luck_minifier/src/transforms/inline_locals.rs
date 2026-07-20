@@ -103,11 +103,11 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
         match stmt {
             Statement::LocalAssignment(local) => {
                 let is_single = local
-                    .equal_and_exprs
+                    .exprs
                     .as_ref()
-                    .is_some_and(|(_, exprs)| local.names.len() == 1 && exprs.len() == 1);
+                    .is_some_and(|exprs| local.names.len() == 1 && exprs.len() == 1);
                 if is_single {
-                    let (_, exprs) = local.equal_and_exprs.as_ref().expect("checked above");
+                    let exprs = local.exprs.as_ref().expect("checked above");
                     let name_token = local.names.iter().next().expect("len checked above");
                     let expr = exprs.iter().next().expect("len checked above");
                     let name = ident_name_string(&name_token.name);
@@ -253,10 +253,6 @@ impl AstTransform for Inliner {
                 if matches!(replacement, Expression::FunctionDef(_)) {
                     return Expression::Parenthesized(Box::new(ParenExpression {
                         span: sp(),
-                        parens: ContainedSpan {
-                            open: sp(),
-                            close: sp(),
-                        },
                         expr: replacement,
                     }));
                 }
@@ -278,14 +274,7 @@ fn ensure_prefix(expr: Expression) -> Expression {
     ) {
         return expr;
     }
-    Expression::Parenthesized(Box::new(ParenExpression {
-        span: sp(),
-        parens: ContainedSpan {
-            open: sp(),
-            close: sp(),
-        },
-        expr,
-    }))
+    Expression::Parenthesized(Box::new(ParenExpression { span: sp(), expr }))
 }
 
 impl Inliner {

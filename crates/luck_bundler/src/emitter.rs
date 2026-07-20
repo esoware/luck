@@ -276,13 +276,11 @@ fn transform_module_body(
     // bundling either way.
     for stmt in &block.stmts {
         if let luck_ast::Statement::TypeDeclaration(type_decl) = stmt
-            && let Some(export_span) = type_decl.export_token
+            && type_decl.is_exported
         {
-            replacements.push((
-                export_span.start as usize,
-                export_span.end as usize,
-                String::new(),
-            ));
+            // The declaration span starts at the `export` keyword.
+            let export_start = type_decl.span.start as usize;
+            replacements.push((export_start, export_start + "export".len(), String::new()));
         }
     }
     replacements.sort_by_key(|(start, _, _)| *start);

@@ -1,7 +1,6 @@
-use luck_ast::expr::Expression;
+use luck_ast::expr::{Expression, Literal};
 use luck_ast::shared::Block;
 use luck_ast::transform::AstTransform;
-use luck_token::token::{Token, TokenKind};
 use luck_token::{LuaVersion, Span};
 
 use crate::expr::{decode_string_literal, encode_string_literal};
@@ -25,16 +24,14 @@ impl AstTransform for StringShortener {
         let expr = self.walk_expression(expr);
 
         match expr {
-            Expression::StringLiteral(ref token) => {
-                if let TokenKind::StringLiteral(ref raw) = token.kind
-                    && let Some(bytes) = decode_string_literal(raw, self.version)
-                {
+            Expression::StringLiteral(ref literal) => {
+                if let Some(bytes) = decode_string_literal(&literal.text, self.version) {
                     let candidate = encode_string_literal(&bytes);
-                    if candidate.len() < raw.len() {
-                        return Expression::StringLiteral(Token::new(
-                            TokenKind::StringLiteral(candidate.into()),
-                            Span::default(),
-                        ));
+                    if candidate.len() < literal.text.len() {
+                        return Expression::StringLiteral(Literal {
+                            text: candidate.into(),
+                            span: Span::default(),
+                        });
                     }
                 }
                 expr

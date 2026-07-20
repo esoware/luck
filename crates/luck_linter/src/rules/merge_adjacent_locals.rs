@@ -140,7 +140,7 @@ fn is_simple_single_binding(local: &LocalAssignment) -> bool {
     if local.names.len() != 1 {
         return false;
     }
-    let Some((_, exprs)) = &local.equal_and_exprs else {
+    let Some(exprs) = &local.exprs else {
         return false;
     };
     exprs.len() == 1
@@ -245,7 +245,7 @@ fn name_span(local: &LocalAssignment) -> Span {
 }
 
 fn init_expr_span(local: &LocalAssignment) -> Span {
-    let (_, exprs) = local.equal_and_exprs.as_ref().expect("checked initializer");
+    let exprs = local.exprs.as_ref().expect("checked initializer");
     exprs.first().expect("checked single-expr").span()
 }
 

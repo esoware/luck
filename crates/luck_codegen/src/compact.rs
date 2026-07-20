@@ -180,7 +180,7 @@ impl CompactPrinter {
     fn emit_numeric_for(&mut self, num_for: &NumericFor) {
         self.emit_str("for");
         self.emit_token(&num_for.name);
-        if let Some((_, type_value)) = &num_for.type_annotation {
+        if let Some(type_value) = &num_for.type_annotation {
             self.emit_str(":");
             self.emit_type(type_value);
         }
@@ -188,7 +188,7 @@ impl CompactPrinter {
         self.emit_expression(&num_for.start);
         self.emit_str(",");
         self.emit_expression(&num_for.limit);
-        if let Some((_, step)) = &num_for.comma2_and_step {
+        if let Some(step) = &num_for.step {
             self.emit_str(",");
             self.emit_expression(step);
         }
@@ -199,13 +199,13 @@ impl CompactPrinter {
 
     fn emit_generic_for(&mut self, gen_for: &GenericFor) {
         self.emit_str("for");
-        for (param, sep) in &gen_for.names.items {
+        for (idx, param) in gen_for.names.items.iter().enumerate() {
             self.emit_token(&param.name);
-            if let Some((_, type_value)) = &param.type_annotation {
+            if let Some(type_value) = &param.type_annotation {
                 self.emit_str(":");
                 self.emit_type(type_value);
             }
-            if sep.is_some() {
+            if idx + 1 < gen_for.names.len() || gen_for.names.has_trailing_separator {
                 self.emit_str(",");
             }
         }
@@ -231,7 +231,7 @@ impl CompactPrinter {
             }
             self.emit_token(name_token);
         }
-        if let Some((_, method_name)) = &name.method {
+        if let Some(method_name) = &name.method {
             self.emit_str(":");
             self.emit_token(method_name);
         }
@@ -270,21 +270,25 @@ impl CompactPrinter {
         } else {
             "local"
         });
-        for (attributed, sep) in &local_assign.names.items {
-            self.emit_attributed_name(attributed);
-            if sep.is_some() {
-                self.emit_str(",");
-            }
-        }
-        if let Some((_, exprs)) = &local_assign.equal_and_exprs {
+        self.emit_attributed_names(&local_assign.names);
+        if let Some(exprs) = &local_assign.exprs {
             self.emit_str("=");
             self.emit_punctuated_exprs(exprs);
         }
     }
 
+    fn emit_attributed_names(&mut self, names: &Punctuated<AttributedName>) {
+        for (idx, attributed) in names.items.iter().enumerate() {
+            self.emit_attributed_name(attributed);
+            if idx + 1 < names.len() || names.has_trailing_separator {
+                self.emit_str(",");
+            }
+        }
+    }
+
     fn emit_attributed_name(&mut self, attributed: &AttributedName) {
         self.emit_token(&attributed.name);
-        if let Some((_, type_value)) = &attributed.type_annotation {
+        if let Some(type_value) = &attributed.type_annotation {
             self.emit_str(":");
             self.emit_type(type_value);
         }
@@ -318,23 +322,23 @@ impl CompactPrinter {
     }
 
     fn emit_type_declaration(&mut self, type_decl: &TypeDeclaration) {
-        if type_decl.export_token.is_some() {
+        if type_decl.is_exported {
             self.emit_str("export");
         }
         self.emit_str("type");
         // Luau `type function Name funcbody` - no `=`.
-        if type_decl.function_token.is_some() {
+        if matches!(type_decl.type_value, TypeDeclarationValue::TypeFunction(_)) {
             self.emit_str("function");
         }
         self.emit_token(&type_decl.name);
         if let Some(generics) = &type_decl.generics {
             self.emit_generic_type_list(generics);
         }
-        if type_decl.equal.is_some() {
-            self.emit_str("=");
-        }
         match &type_decl.type_value {
-            TypeDeclarationValue::Alias(type_value) => self.emit_type(type_value),
+            TypeDeclarationValue::Alias(type_value) => {
+                self.emit_str("=");
+                self.emit_type(type_value);
+            }
             // Luau `type function Name funcbody` reuses ordinary function-body emission.
             TypeDeclarationValue::TypeFunction(body) => self.emit_function_body(body),
         }
@@ -342,13 +346,8 @@ impl CompactPrinter {
 
     fn emit_global_declaration(&mut self, global_decl: &GlobalDeclaration) {
         self.emit_str("global");
-        for (attributed, sep) in &global_decl.names.items {
-            self.emit_attributed_name(attributed);
-            if sep.is_some() {
-                self.emit_str(",");
-            }
-        }
-        if let Some((_, exprs)) = &global_decl.equal_and_exprs {
+        self.emit_attributed_names(&global_decl.names);
+        if let Some(exprs) = &global_decl.exprs {
             self.emit_str("=");
             self.emit_punctuated_exprs(exprs);
         }
@@ -377,7 +376,12 @@ impl CompactPrinter {
             Expression::False(_) => self.emit_str("false"),
             Expression::True(_) => self.emit_str("true"),
             Expression::VarArg(_) => self.emit_str("..."),
-            Expression::Number(token) | Expression::StringLiteral(token) => self.emit_token(token),
+            Expression::Number(literal) => {
+                self.emit_piece(&literal.text, true, PrevClass::Number);
+            }
+            Expression::StringLiteral(literal) => {
+                self.emit_piece(&literal.text, false, PrevClass::Other);
+            }
             Expression::FunctionDef(func_def) => self.emit_function_def(func_def),
             Expression::Var(var) => self.emit_var(var),
             Expression::FunctionCall(call) => self.emit_function_call(call),
@@ -408,7 +412,7 @@ impl CompactPrinter {
 
     fn emit_function_call(&mut self, call: &FunctionCall) {
         self.emit_expression(&call.callee);
-        if let Some((_, method_name)) = &call.method {
+        if let Some(method_name) = &call.method {
             self.emit_str(":");
             self.emit_token(method_name);
         }
@@ -423,7 +427,9 @@ impl CompactPrinter {
                 self.emit_str(")");
             }
             FunctionArgs::TableConstructor(table) => self.emit_table_constructor(table),
-            FunctionArgs::StringLiteral(token) => self.emit_token(token),
+            FunctionArgs::StringLiteral(literal) => {
+                self.emit_piece(&literal.text, false, PrevClass::Other);
+            }
         }
     }
 
@@ -435,7 +441,8 @@ impl CompactPrinter {
 
     fn emit_table_constructor(&mut self, table: &TableConstructor) {
         self.emit_str("{");
-        for (idx, (field, _)) in table.fields.iter().enumerate() {
+        // Trailing separators are dropped: compact output has no use for them.
+        for (idx, field) in table.fields.items.iter().enumerate() {
             self.emit_field(field);
             if idx + 1 < table.fields.len() {
                 self.emit_str(",");
@@ -550,13 +557,15 @@ impl CompactPrinter {
             self.emit_generic_type_list(generics);
         }
         self.emit_str("(");
-        for (param, sep) in &body.params.items {
+        // Params followed by a vararg keep the comma between them; the
+        // parser records it as a trailing separator on the param list.
+        for (idx, param) in body.params.items.iter().enumerate() {
             self.emit_token(&param.name);
-            if let Some((_, type_value)) = &param.type_annotation {
+            if let Some(type_value) = &param.type_annotation {
                 self.emit_str(":");
                 self.emit_type(type_value);
             }
-            if sep.is_some() {
+            if idx + 1 < body.params.len() || body.vararg.is_some() {
                 self.emit_str(",");
             }
         }
@@ -565,13 +574,13 @@ impl CompactPrinter {
             if let Some(name) = &vararg.name {
                 self.emit_token(name);
             }
-            if let Some((_, type_value)) = &vararg.type_annotation {
+            if let Some(type_value) = &vararg.type_annotation {
                 self.emit_str(":");
                 self.emit_type(type_value);
             }
         }
         self.emit_str(")");
-        if let Some((_, return_type)) = &body.return_type {
+        if let Some(return_type) = &body.return_type {
             self.emit_str(":");
             self.emit_type(return_type);
         }
@@ -580,18 +589,18 @@ impl CompactPrinter {
     }
 
     fn emit_punctuated_exprs(&mut self, punct: &Punctuated<Expression>) {
-        for (expr, sep) in &punct.items {
+        for (idx, expr) in punct.items.iter().enumerate() {
             self.emit_expression(expr);
-            if sep.is_some() {
+            if idx + 1 < punct.len() || punct.has_trailing_separator {
                 self.emit_str(",");
             }
         }
     }
 
     fn emit_punctuated_vars(&mut self, punct: &Punctuated<Var>) {
-        for (var, sep) in &punct.items {
+        for (idx, var) in punct.items.iter().enumerate() {
             self.emit_var(var);
-            if sep.is_some() {
+            if idx + 1 < punct.len() || punct.has_trailing_separator {
                 self.emit_str(",");
             }
         }
@@ -617,7 +626,7 @@ impl CompactPrinter {
     }
 
     fn emit_named_type(&mut self, named: &NamedType) {
-        if let Some((module, _)) = &named.prefix {
+        if let Some(module) = &named.prefix {
             self.emit_token(module);
             self.emit_str(".");
         }
@@ -642,7 +651,8 @@ impl CompactPrinter {
 
     fn emit_table_type(&mut self, table: &TableType) {
         self.emit_str("{");
-        for (idx, (field, _)) in table.fields.iter().enumerate() {
+        // Trailing separators are dropped, as in table constructors.
+        for (idx, field) in table.fields.items.iter().enumerate() {
             self.emit_type_field(field);
             if idx + 1 < table.fields.len() {
                 self.emit_str(",");
@@ -690,9 +700,9 @@ impl CompactPrinter {
             self.emit_generic_type_list(generics);
         }
         self.emit_str("(");
-        for (param, sep) in &function.params.items {
+        for (idx, param) in function.params.items.iter().enumerate() {
             self.emit_function_type_param(param);
-            if sep.is_some() {
+            if idx + 1 < function.params.len() || function.params.has_trailing_separator {
                 self.emit_str(",");
             }
         }
@@ -702,7 +712,7 @@ impl CompactPrinter {
     }
 
     fn emit_function_type_param(&mut self, param: &FunctionTypeParam) {
-        if let Some((name, _)) = &param.name {
+        if let Some(name) = &param.name {
             self.emit_token(name);
             self.emit_str(":");
         }
@@ -715,14 +725,14 @@ impl CompactPrinter {
     }
 
     fn emit_union_type(&mut self, union: &UnionType) {
-        if union.leading_pipe.is_some() {
+        if union.has_leading_pipe {
             self.emit_str("|");
         }
         self.emit_punctuated_types_with(&union.types, "|");
     }
 
     fn emit_intersection_type(&mut self, intersection: &IntersectionType) {
-        if intersection.leading_ampersand.is_some() {
+        if intersection.has_leading_ampersand {
             self.emit_str("&");
         }
         self.emit_punctuated_types_with(&intersection.types, "&");
@@ -752,9 +762,9 @@ impl CompactPrinter {
 
     fn emit_generic_type_list(&mut self, generics: &GenericTypeList) {
         self.emit_str("<");
-        for (param, sep) in &generics.params.items {
+        for (idx, param) in generics.params.items.iter().enumerate() {
             self.emit_generic_type_param(param);
-            if sep.is_some() {
+            if idx + 1 < generics.params.len() || generics.params.has_trailing_separator {
                 self.emit_str(",");
             }
         }
@@ -763,10 +773,10 @@ impl CompactPrinter {
 
     fn emit_generic_type_param(&mut self, param: &GenericTypeParam) {
         self.emit_token(&param.name);
-        if param.dots.is_some() {
+        if param.is_pack {
             self.emit_str("...");
         }
-        if let Some((_, default)) = &param.default {
+        if let Some(default) = &param.default {
             self.emit_str("=");
             self.emit_type(default);
         }
@@ -780,9 +790,9 @@ impl CompactPrinter {
     /// the owning node: `,` for packs and generic args, `|`/`&` for
     /// unions/intersections.
     fn emit_punctuated_types_with(&mut self, punct: &Punctuated<Type>, separator: &'static str) {
-        for (ty, sep) in &punct.items {
+        for (idx, ty) in punct.items.iter().enumerate() {
             self.emit_type(ty);
-            if sep.is_some() {
+            if idx + 1 < punct.len() || punct.has_trailing_separator {
                 self.emit_str(separator);
             }
         }

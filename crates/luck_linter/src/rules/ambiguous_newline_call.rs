@@ -1,5 +1,6 @@
 use luck_ast::Expression;
 use luck_ast::expr::{FunctionArgs, FunctionCall};
+use luck_token::Span;
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -54,14 +55,17 @@ impl NodeRule for AmbiguousNewlineCall {
 }
 
 fn check_call(call: &FunctionCall, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-    let FunctionArgs::Parenthesized { parens, .. } = &call.args else {
+    let FunctionArgs::Parenthesized {
+        span: args_span, ..
+    } = &call.args
+    else {
         return;
     };
     let prefix_end = match &call.method {
-        Some((_colon, method_token)) => method_token.span.end,
+        Some(method_token) => method_token.span.end,
         None => call.callee.span().end,
     };
-    let open_start = parens.open.start;
+    let open_start = args_span.start;
     if open_start <= prefix_end {
         return;
     }
@@ -73,7 +77,7 @@ fn check_call(call: &FunctionCall, ctx: &LintContext, out: &mut Vec<LintDiagnost
         LintDiagnostic::new(
             "ambiguous_newline_call",
             "call arguments start on a new line; Lua joins this with the previous expression",
-            parens.open,
+            Span::new(args_span.start, args_span.start + 1),
         )
         .with_help(
             "keep `(` on the same line as the callee, or add a semicolon if a new statement was \

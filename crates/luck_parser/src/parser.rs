@@ -362,16 +362,13 @@ impl<'src> Parser<'src> {
 
     /// Parse a comma-separated list of expressions.
     pub fn parse_expression_list(&mut self) -> Punctuated<luck_ast::Expression> {
-        let mut pairs = Vec::new();
-        let mut current = self.parse_expression(0);
+        let mut exprs = vec![self.parse_expression(0)];
 
         while matches!(self.peek(), TokenKind::Comma) {
-            let comma = self.advance_span();
-            let next = self.parse_expression(0);
-            pairs.push((current, comma));
-            current = next;
+            self.advance_span();
+            exprs.push(self.parse_expression(0));
         }
 
-        Punctuated::from_pairs(pairs, Some(current))
+        Punctuated::from_items(exprs)
     }
 }

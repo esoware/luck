@@ -134,7 +134,7 @@ fn global_with_initializer() {
     let result = parse_lua55("global x = 1");
     assert_no_errors(&result);
     if let Statement::GlobalDeclaration(gd) = &result.block.stmts[0] {
-        let (_, exprs) = gd.equal_and_exprs.as_ref().expect("initializer parsed");
+        let exprs = gd.exprs.as_ref().expect("initializer parsed");
         assert_eq!(exprs.len(), 1);
     } else {
         panic!(
@@ -147,7 +147,7 @@ fn global_with_initializer() {
     assert_no_errors(&result);
     if let Statement::GlobalDeclaration(gd) = &result.block.stmts[0] {
         assert_eq!(gd.names.len(), 2);
-        let (_, exprs) = gd.equal_and_exprs.as_ref().expect("initializer parsed");
+        let exprs = gd.exprs.as_ref().expect("initializer parsed");
         assert_eq!(exprs.len(), 2);
     } else {
         panic!(
@@ -162,7 +162,7 @@ fn global_attributed_with_initializer() {
     let result = parse_lua55("global x <const> = 1");
     assert_no_errors(&result);
     if let Statement::GlobalDeclaration(gd) = &result.block.stmts[0] {
-        assert!(gd.equal_and_exprs.is_some());
+        assert!(gd.exprs.is_some());
     } else {
         panic!(
             "expected GlobalDeclaration, got {:?}",

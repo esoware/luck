@@ -30,19 +30,15 @@ impl AstTransform for StatementSimplifier {
                         span: sp(),
                         left: self.transform_expression(outer_if.condition.clone()),
                         op: BinOp::And,
-                        op_span: sp(),
                         right: self.transform_expression(inner_if.condition.clone()),
                     }));
                     let merged_block = self.transform_block(inner_if.block.clone());
                     let merged_if = IfStatement {
                         span: sp(),
-                        if_token: outer_if.if_token,
                         condition: combined_condition,
-                        then_token: outer_if.then_token,
                         block: merged_block,
                         elseif_clauses: Vec::new(),
                         else_clause: None,
-                        end_token: outer_if.end_token,
                     };
                     return self.transform_statement(Statement::IfStatement(Box::new(merged_if)));
                 }
@@ -131,14 +127,12 @@ fn try_convert_if_return_chain(block: Block) -> Block {
             span: sp(),
             left: condition.clone(),
             op: BinOp::And,
-            op_span: sp(),
             right: return_expr.clone(),
         }));
         result_expr = Expression::BinaryOp(Box::new(BinaryOp {
             span: sp(),
             left: and_expr,
             op: BinOp::Or,
-            op_span: sp(),
             right: result_expr,
         }));
     }
@@ -146,9 +140,7 @@ fn try_convert_if_return_chain(block: Block) -> Block {
     let remaining_stmts: Vec<_> = block.stmts[..guard_start].to_vec();
     let new_return = ReturnStatement {
         span: sp(),
-        return_token: last_stmt.return_token,
         exprs: Punctuated::from_item(result_expr),
-        semicolon: None,
     };
 
     Block {

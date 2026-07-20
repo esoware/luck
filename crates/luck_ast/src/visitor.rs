@@ -73,19 +73,19 @@ pub trait Visitor<'ast> {
                 }
             }
             Statement::NumericFor(numeric_for) => {
-                if let Some((_, loop_var_type)) = &numeric_for.type_annotation {
+                if let Some(loop_var_type) = &numeric_for.type_annotation {
                     self.visit_type(loop_var_type);
                 }
                 self.visit_expression(&numeric_for.start);
                 self.visit_expression(&numeric_for.limit);
-                if let Some((_, step)) = &numeric_for.comma2_and_step {
+                if let Some(step) = &numeric_for.step {
                     self.visit_expression(step);
                 }
                 self.visit_block(&numeric_for.block);
             }
             Statement::GenericFor(generic_for) => {
                 for binding in generic_for.names.iter() {
-                    if let Some((_, binding_type)) = &binding.type_annotation {
+                    if let Some(binding_type) = &binding.type_annotation {
                         self.visit_type(binding_type);
                     }
                 }
@@ -102,7 +102,7 @@ pub trait Visitor<'ast> {
             }
             Statement::LocalAssignment(local_assign) => {
                 self.walk_attributed_names(&local_assign.names);
-                if let Some((_, exprs)) = &local_assign.equal_and_exprs {
+                if let Some(exprs) = &local_assign.exprs {
                     for expr in exprs.iter() {
                         self.visit_expression(expr);
                     }
@@ -117,7 +117,7 @@ pub trait Visitor<'ast> {
             }
             Statement::GlobalDeclaration(global_decl) => {
                 self.walk_attributed_names(&global_decl.names);
-                if let Some((_, exprs)) = &global_decl.equal_and_exprs {
+                if let Some(exprs) = &global_decl.exprs {
                     for expr in exprs.iter() {
                         self.visit_expression(expr);
                     }
@@ -213,16 +213,16 @@ pub trait Visitor<'ast> {
             self.walk_generic_type_list(generics);
         }
         for param in body.params.iter() {
-            if let Some((_, param_type)) = &param.type_annotation {
+            if let Some(param_type) = &param.type_annotation {
                 self.visit_type(param_type);
             }
         }
         if let Some(vararg) = &body.vararg {
-            if let Some((_, vararg_type)) = &vararg.type_annotation {
+            if let Some(vararg_type) = &vararg.type_annotation {
                 self.visit_type(vararg_type);
             }
         }
-        if let Some((_, return_type)) = &body.return_type {
+        if let Some(return_type) = &body.return_type {
             self.visit_type(return_type);
         }
         self.visit_block(&body.block);
@@ -259,7 +259,7 @@ pub trait Visitor<'ast> {
     }
 
     fn walk_table_constructor(&mut self, table: &'ast TableConstructor) {
-        for (field, _) in &table.fields {
+        for field in table.fields.iter() {
             match field {
                 Field::Bracketed { key, value, .. } => {
                     self.visit_expression(key);
@@ -289,7 +289,7 @@ pub trait Visitor<'ast> {
                 self.visit_expression(&typeof_type.expr);
             }
             Type::Table(table) => {
-                for (field, _) in &table.fields {
+                for field in table.fields.iter() {
                     match field {
                         TypeField::Named { value, .. } => self.visit_type(value),
                         TypeField::Indexer { key, value, .. } => {
@@ -333,7 +333,7 @@ pub trait Visitor<'ast> {
 
     fn walk_generic_type_list(&mut self, generics: &'ast GenericTypeList) {
         for param in generics.params.iter() {
-            if let Some((_, default)) = &param.default {
+            if let Some(default) = &param.default {
                 self.visit_type(default);
             }
         }
@@ -341,7 +341,7 @@ pub trait Visitor<'ast> {
 
     fn walk_attributed_names(&mut self, names: &'ast Punctuated<AttributedName>) {
         for name in names.iter() {
-            if let Some((_, name_type)) = &name.type_annotation {
+            if let Some(name_type) = &name.type_annotation {
                 self.visit_type(name_type);
             }
         }
@@ -364,7 +364,10 @@ mod tests {
     }
 
     fn num_expr() -> Expression {
-        Expression::Number(token(TokenKind::Number("1".into())))
+        Expression::Number(Literal {
+            text: "1".into(),
+            span: span(),
+        })
     }
 
     fn name_expr(name: &str) -> Expression {
@@ -382,7 +385,6 @@ mod tests {
             span: span(),
             left,
             op: BinOp::Add,
-            op_span: span(),
             right,
         }))
     }
@@ -418,17 +420,13 @@ mod tests {
             span: span(),
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
-                local_token: span(),
                 is_const: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("x".into())),
                     type_annotation: None,
                     attrib: None,
                 }),
-                equal_and_exprs: Some((
-                    span(),
-                    Punctuated::from_item(binop_expr(num_expr(), num_expr())),
-                )),
+                exprs: Some(Punctuated::from_item(binop_expr(num_expr(), num_expr()))),
             }))],
             last_stmt: None,
         };
@@ -442,46 +440,32 @@ mod tests {
         // {1, 2, 3} => table constructor + 3 values = 4
         let table = Expression::TableConstructor(Box::new(TableConstructor {
             span: span(),
-            braces: ContainedSpan {
-                open: span(),
-                close: span(),
-            },
-            fields: vec![
-                (
-                    Field::Positional {
-                        span: span(),
-                        value: num_expr(),
-                    },
-                    Some(span()),
-                ),
-                (
-                    Field::Positional {
-                        span: span(),
-                        value: num_expr(),
-                    },
-                    Some(span()),
-                ),
-                (
-                    Field::Positional {
-                        span: span(),
-                        value: num_expr(),
-                    },
-                    None,
-                ),
-            ],
+            fields: Punctuated::from_items(vec![
+                Field::Positional {
+                    span: span(),
+                    value: num_expr(),
+                },
+                Field::Positional {
+                    span: span(),
+                    value: num_expr(),
+                },
+                Field::Positional {
+                    span: span(),
+                    value: num_expr(),
+                },
+            ]),
         }));
         let block = Block {
             span: span(),
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
-                local_token: span(),
                 is_const: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("t".into())),
                     type_annotation: None,
                     attrib: None,
                 }),
-                equal_and_exprs: Some((span(), Punctuated::from_item(table))),
+                exprs: Some(Punctuated::from_item(table)),
             }))],
             last_stmt: None,
         };
@@ -497,32 +481,28 @@ mod tests {
             stmts: vec![
                 Statement::LocalAssignment(Box::new(LocalAssignment {
                     span: span(),
-                    local_token: span(),
                     is_const: false,
                     names: Punctuated::from_item(AttributedName {
                         name: token(TokenKind::Identifier("x".into())),
                         type_annotation: None,
                         attrib: None,
                     }),
-                    equal_and_exprs: Some((span(), Punctuated::from_item(num_expr()))),
+                    exprs: Some(Punctuated::from_item(num_expr())),
                 })),
                 Statement::LocalAssignment(Box::new(LocalAssignment {
                     span: span(),
-                    local_token: span(),
                     is_const: false,
                     names: Punctuated::from_item(AttributedName {
                         name: token(TokenKind::Identifier("y".into())),
                         type_annotation: None,
                         attrib: None,
                     }),
-                    equal_and_exprs: Some((span(), Punctuated::from_item(num_expr()))),
+                    exprs: Some(Punctuated::from_item(num_expr())),
                 })),
             ],
             last_stmt: Some(Box::new(LastStatement::Return(Box::new(ReturnStatement {
                 span: span(),
-                return_token: span(),
                 exprs: Punctuated::from_item(name_expr("x")),
-                semicolon: None,
             })))),
         };
         let mut counter = StmtCounter(0);
@@ -536,10 +516,6 @@ mod tests {
         let body = FunctionBody {
             span: span(),
             generics: None,
-            params_parens: ContainedSpan {
-                open: span(),
-                close: span(),
-            },
             params: Punctuated::from_item(Parameter {
                 span: span(),
                 name: token(TokenKind::Identifier("a".into())),
@@ -552,21 +528,16 @@ mod tests {
                 stmts: Vec::new(),
                 last_stmt: Some(Box::new(LastStatement::Return(Box::new(ReturnStatement {
                     span: span(),
-                    return_token: span(),
                     exprs: Punctuated::from_item(binop_expr(name_expr("a"), num_expr())),
-                    semicolon: None,
                 })))),
             },
-            end_token: span(),
         };
         let block = Block {
             span: span(),
             stmts: vec![Statement::LocalFunction(Box::new(LocalFunction {
                 span: span(),
                 attributes: Vec::new(),
-                local_token: span(),
                 is_const: false,
-                function_token: span(),
                 name: token(TokenKind::Identifier("f".into())),
                 body,
             }))],
@@ -584,9 +555,7 @@ mod tests {
             span: span(),
             stmts: vec![Statement::IfStatement(Box::new(IfStatement {
                 span: span(),
-                if_token: span(),
                 condition: name_expr("x"),
-                then_token: span(),
                 block: Block {
                     span: span(),
                     stmts: vec![Statement::Assignment(Box::new(Assignment {
@@ -594,7 +563,6 @@ mod tests {
                         targets: Punctuated::from_item(Var::Name(token(TokenKind::Identifier(
                             "y".into(),
                         )))),
-                        equal: span(),
                         values: Punctuated::from_item(num_expr()),
                     }))],
                     last_stmt: None,
@@ -602,7 +570,6 @@ mod tests {
                 elseif_clauses: Vec::new(),
                 else_clause: Some(ElseClause {
                     span: span(),
-                    else_token: span(),
                     block: Block {
                         span: span(),
                         stmts: vec![Statement::Assignment(Box::new(Assignment {
@@ -610,13 +577,11 @@ mod tests {
                             targets: Punctuated::from_item(Var::Name(token(
                                 TokenKind::Identifier("y".into()),
                             ))),
-                            equal: span(),
                             values: Punctuated::from_item(nil_expr()),
                         }))],
                         last_stmt: None,
                     },
                 }),
-                end_token: span(),
             }))],
             last_stmt: None,
         };
@@ -632,17 +597,12 @@ mod tests {
             span: span(),
             stmts: vec![Statement::NumericFor(Box::new(NumericFor {
                 span: span(),
-                for_token: span(),
                 name: token(TokenKind::Identifier("i".into())),
                 type_annotation: None,
-                equal: span(),
                 start: num_expr(),
-                comma1: span(),
                 limit: num_expr(),
-                comma2_and_step: Some((span(), num_expr())),
-                do_token: span(),
+                step: Some(num_expr()),
                 block: empty_block(),
-                end_token: span(),
             }))],
             last_stmt: None,
         };
@@ -658,10 +618,7 @@ mod tests {
             span: span(),
             callee: name_expr("f"),
             args: FunctionArgs::Parenthesized {
-                parens: ContainedSpan {
-                    open: span(),
-                    close: span(),
-                },
+                span: span(),
                 args: Punctuated::from_item(name_expr("x")),
             },
             method: None,

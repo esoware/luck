@@ -62,22 +62,20 @@ impl LinkCollector<'_> {
 
         let module = match &call.args {
             FunctionArgs::Parenthesized { args, .. } => args.first(),
-            FunctionArgs::StringLiteral(token) => {
-                if let TokenKind::StringLiteral(_) = &token.kind {
-                    self.record_string(token);
-                }
+            FunctionArgs::StringLiteral(literal) => {
+                self.record_string(literal);
                 return;
             }
             FunctionArgs::TableConstructor(_) => None,
         };
-        let Some(Expression::StringLiteral(tok)) = module else {
+        let Some(Expression::StringLiteral(literal)) = module else {
             return;
         };
-        self.record_string(tok);
+        self.record_string(literal);
     }
 
-    fn record_string(&mut self, tok: &luck_token::Token) {
-        let raw = &self.doc.text[tok.span.start as usize..tok.span.end as usize];
+    fn record_string(&mut self, literal: &luck_ast::expr::Literal) {
+        let raw = &self.doc.text[literal.span.start as usize..literal.span.end as usize];
         let trimmed = trim_string_literal(raw);
         if trimmed.is_empty() {
             return;
@@ -88,10 +86,10 @@ impl LinkCollector<'_> {
         let candidate = resolve_module(base_dir, trimmed);
         let target = candidate.and_then(|p| Url::from_file_path(p).ok());
         if let Some(target) = target {
-            let range = self
-                .doc
-                .line_index
-                .range(&self.doc.text, tok.span.start, tok.span.end);
+            let range =
+                self.doc
+                    .line_index
+                    .range(&self.doc.text, literal.span.start, literal.span.end);
             self.out.push(DocumentLink {
                 range,
                 target: Some(target),

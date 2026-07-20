@@ -41,7 +41,7 @@ impl NodeRule for DuplicateKeys {
     ) {
         if let luck_ast::Expression::TableConstructor(table) = expr {
             let mut seen: HashMap<String, luck_token::Span> = HashMap::new();
-            for (field, _) in &table.fields {
+            for field in table.fields.iter() {
                 let key_name = match field {
                     Field::Named { name, .. } => {
                         if let TokenKind::Identifier(n) = &name.kind {

@@ -2,7 +2,6 @@ use luck_ast::expr::*;
 use luck_ast::shared::Block;
 use luck_ast::transform::AstTransform;
 use luck_token::LuaVersion;
-use luck_token::token::{Token, TokenKind};
 use luck_token::{BinOp, UnOp};
 
 use crate::expr::{
@@ -196,10 +195,6 @@ fn truncate_multi_value(expr: &Expression) -> Expression {
         Expression::FunctionCall(_) | Expression::VarArg(_) => {
             Expression::Parenthesized(Box::new(ParenExpression {
                 span: sp(),
-                parens: luck_ast::shared::ContainedSpan {
-                    open: sp(),
-                    close: sp(),
-                },
                 expr: expr.clone(),
             }))
         }
@@ -209,13 +204,7 @@ fn truncate_multi_value(expr: &Expression) -> Expression {
 
 fn extract_string_bytes(expr: &Expression, version: LuaVersion) -> Option<Vec<u8>> {
     match expr {
-        Expression::StringLiteral(token) => {
-            if let TokenKind::StringLiteral(ref raw) = token.kind {
-                decode_string_literal(raw, version)
-            } else {
-                None
-            }
-        }
+        Expression::StringLiteral(literal) => decode_string_literal(&literal.text, version),
         Expression::Parenthesized(paren) => extract_string_bytes(&paren.expr, version),
         _ => None,
     }
@@ -255,10 +244,10 @@ fn try_fold_binary(
                 let mut joined = l;
                 joined.extend_from_slice(&r);
                 let raw = encode_string_literal(&joined);
-                return Some(Expression::StringLiteral(Token::new(
-                    TokenKind::StringLiteral(raw.into()),
-                    sp(),
-                )));
+                return Some(Expression::StringLiteral(Literal {
+                    text: raw.into(),
+                    span: sp(),
+                }));
             }
             _ => {}
         }
@@ -355,19 +344,16 @@ fn make_lua_number_expr(value: LuaNumber, int_subtype: bool) -> Option<Expressio
                 return Some(Expression::UnaryOp(Box::new(UnaryOp {
                     span: sp(),
                     op: UnOp::Neg,
-                    op_span: sp(),
-                    operand: Expression::Number(Token::new(
-                        TokenKind::Number(
-                            itoa::Buffer::new().format(int_value.unsigned_abs()).into(),
-                        ),
-                        sp(),
-                    )),
+                    operand: Expression::Number(Literal {
+                        text: itoa::Buffer::new().format(int_value.unsigned_abs()).into(),
+                        span: sp(),
+                    }),
                 })));
             }
-            Some(Expression::Number(Token::new(
-                TokenKind::Number(itoa::Buffer::new().format(int_value).into()),
-                sp(),
-            )))
+            Some(Expression::Number(Literal {
+                text: itoa::Buffer::new().format(int_value).into(),
+                span: sp(),
+            }))
         }
         LuaNumber::Float(float_value) => {
             if !float_value.is_finite() {
@@ -378,11 +364,10 @@ fn make_lua_number_expr(value: LuaNumber, int_subtype: bool) -> Option<Expressio
                 return Some(Expression::UnaryOp(Box::new(UnaryOp {
                     span: sp(),
                     op: UnOp::Neg,
-                    op_span: sp(),
-                    operand: Expression::Number(Token::new(
-                        TokenKind::Number(if int_subtype { "0.0" } else { "0" }.into()),
-                        sp(),
-                    )),
+                    operand: Expression::Number(Literal {
+                        text: if int_subtype { "0.0" } else { "0" }.into(),
+                        span: sp(),
+                    }),
                 })));
             }
             let magnitude = float_value.abs();
@@ -392,12 +377,14 @@ fn make_lua_number_expr(value: LuaNumber, int_subtype: bool) -> Option<Expressio
             if int_subtype && !text.contains('.') && !text.contains('e') && !text.contains('E') {
                 text.push_str(".0");
             }
-            let number = Expression::Number(Token::new(TokenKind::Number(text.into()), sp()));
+            let number = Expression::Number(Literal {
+                text: text.into(),
+                span: sp(),
+            });
             if float_value < 0.0 {
                 Some(Expression::UnaryOp(Box::new(UnaryOp {
                     span: sp(),
                     op: UnOp::Neg,
-                    op_span: sp(),
                     operand: number,
                 })))
             } else {

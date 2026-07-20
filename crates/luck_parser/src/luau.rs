@@ -5,7 +5,7 @@
 //! postfix `?`, primary. Function types (`(params) -> R`) are primaries
 //! disambiguated from parenthesized types by the trailing `->`.
 
-use luck_ast::shared::{ContainedSpan, Punctuated};
+use luck_ast::shared::Punctuated;
 use luck_ast::types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
     IntersectionType, NamedType, OptionalType, ParenType, TableType, Type, TypeArgs, TypeField,
@@ -22,10 +22,10 @@ const MIXED_TYPE_MSG: &str =
 impl Parser<'_> {
     /// Parse `: T` if present. All annotation sites share this so the
     /// Luau gate lives in exactly one place.
-    pub fn try_parse_type_annotation(&mut self) -> Option<(Span, Type)> {
+    pub fn try_parse_type_annotation(&mut self) -> Option<Type> {
         if self.version.is_luau() && matches!(self.peek(), TokenKind::Colon) {
-            let colon = self.advance_span();
-            Some((colon, self.parse_type()))
+            self.advance_span();
+            Some(self.parse_type())
         } else {
             None
         }
@@ -46,7 +46,7 @@ impl Parser<'_> {
                 let (types, last_span) = self.parse_separated_types(TokenKind::Pipe, true);
                 Type::Union(Box::new(UnionType {
                     span: leading_pipe.merge(last_span),
-                    leading_pipe: Some(leading_pipe),
+                    has_leading_pipe: true,
                     types,
                 }))
             }
@@ -55,7 +55,7 @@ impl Parser<'_> {
                 let (types, last_span) = self.parse_separated_types(TokenKind::Ampersand, false);
                 Type::Intersection(Box::new(IntersectionType {
                     span: leading_ampersand.merge(last_span),
-                    leading_ampersand: Some(leading_ampersand),
+                    has_leading_ampersand: true,
                     types,
                 }))
             }
@@ -86,28 +86,26 @@ impl Parser<'_> {
             }
         };
 
-        let mut pairs = Vec::new();
-        let mut current = if across_intersections {
+        let mut items = vec![if across_intersections {
             self.parse_intersection_level()
         } else {
             self.parse_postfix_type()
-        };
-        check_mixing(self, &current);
+        }];
+        check_mixing(self, items.last().expect("just pushed"));
 
         while std::mem::discriminant(self.peek()) == std::mem::discriminant(&separator) {
-            let separator_span = self.advance_span();
+            self.advance_span();
             let next = if across_intersections {
                 self.parse_intersection_level()
             } else {
                 self.parse_postfix_type()
             };
             check_mixing(self, &next);
-            pairs.push((current, separator_span));
-            current = next;
+            items.push(next);
         }
 
-        let last_span = current.span();
-        (Punctuated::from_pairs(pairs, Some(current)), last_span)
+        let last_span = items.last().expect("list is never empty").span();
+        (Punctuated::from_items(items), last_span)
     }
 
     fn parse_union_level(&mut self) -> Type {
@@ -123,23 +121,21 @@ impl Parser<'_> {
         }
 
         let start_span = first.span();
-        let mut pairs = Vec::new();
-        let mut current = first;
+        let mut items = vec![first];
         while matches!(self.peek(), TokenKind::Pipe) {
-            let pipe = self.advance_span();
+            self.advance_span();
             let next = self.parse_intersection_level();
             if matches!(next, Type::Intersection(_)) {
                 self.error(next.span(), MIXED_TYPE_MSG.to_string());
             }
-            pairs.push((current, pipe));
-            current = next;
+            items.push(next);
         }
 
-        let span = start_span.merge(current.span());
+        let span = start_span.merge(items.last().expect("list is never empty").span());
         Type::Union(Box::new(UnionType {
             span,
-            leading_pipe: None,
-            types: Punctuated::from_pairs(pairs, Some(current)),
+            has_leading_pipe: false,
+            types: Punctuated::from_items(items),
         }))
     }
 
@@ -156,23 +152,21 @@ impl Parser<'_> {
         }
 
         let start_span = first.span();
-        let mut pairs = Vec::new();
-        let mut current = first;
+        let mut items = vec![first];
         while matches!(self.peek(), TokenKind::Ampersand) {
-            let ampersand = self.advance_span();
+            self.advance_span();
             let next = self.parse_postfix_type();
             if matches!(next, Type::Optional(_)) {
                 self.error(next.span(), MIXED_TYPE_MSG.to_string());
             }
-            pairs.push((current, ampersand));
-            current = next;
+            items.push(next);
         }
 
-        let span = start_span.merge(current.span());
+        let span = start_span.merge(items.last().expect("list is never empty").span());
         Type::Intersection(Box::new(IntersectionType {
             span,
-            leading_ampersand: None,
-            types: Punctuated::from_pairs(pairs, Some(current)),
+            has_leading_ampersand: false,
+            types: Punctuated::from_items(items),
         }))
     }
 
@@ -185,7 +179,6 @@ impl Parser<'_> {
             result = Type::Optional(Box::new(OptionalType {
                 span,
                 type_value: result,
-                question,
             }));
         }
         result
@@ -203,7 +196,7 @@ impl Parser<'_> {
                 let name = self.advance();
                 let dots = self.advance_span();
                 let span = name.span.merge(dots);
-                Type::GenericPack(Box::new(GenericPackType { span, name, dots }))
+                Type::GenericPack(Box::new(GenericPackType { span, name }))
             }
             TokenKind::Identifier(_) => {
                 let name = self.advance();
@@ -229,11 +222,7 @@ impl Parser<'_> {
                 let dots = self.advance_span();
                 let type_value = self.parse_type();
                 let span = dots.merge(type_value.span());
-                Type::Variadic(Box::new(VariadicType {
-                    span,
-                    dots,
-                    type_value,
-                }))
+                Type::Variadic(Box::new(VariadicType { span, type_value }))
             }
             _ => {
                 let span = self.current_span();
@@ -247,7 +236,7 @@ impl Parser<'_> {
 
     fn parse_typeof_type(&mut self) -> Type {
         let typeof_token = self.advance_span();
-        let open = self.advance_span(); // `(` - guaranteed by the caller's lookahead
+        self.advance_span(); // `(` - guaranteed by the caller's lookahead
         let expr = self.parse_expression(0);
         let close = self
             .expect_span(&TokenKind::RightParen)
@@ -256,17 +245,12 @@ impl Parser<'_> {
                 self.current_span()
             });
         let span = typeof_token.merge(close);
-        Type::Typeof(Box::new(TypeofType {
-            span,
-            typeof_token,
-            parens: ContainedSpan { open, close },
-            expr,
-        }))
+        Type::Typeof(Box::new(TypeofType { span, expr }))
     }
 
     fn parse_named_type(&mut self, first_name: Token) -> Type {
         let (prefix, name) = if matches!(self.peek(), TokenKind::Dot) {
-            let dot = self.advance_span();
+            self.advance_span();
             let name = self.expect_identifier().unwrap_or_else(|err| {
                 self.errors.push(err);
                 Token::new(
@@ -274,7 +258,7 @@ impl Parser<'_> {
                     self.current_span(),
                 )
             });
-            (Some((first_name, dot)), name)
+            (Some(first_name), name)
         } else {
             (None, first_name)
         };
@@ -287,7 +271,7 @@ impl Parser<'_> {
 
         let start_span = prefix
             .as_ref()
-            .map(|(module, _)| module.span)
+            .map(|module| module.span)
             .unwrap_or(name.span);
         let end_span = generics.as_ref().map(|args| args.span).unwrap_or(name.span);
         Type::Named(Box::new(NamedType {
@@ -301,8 +285,7 @@ impl Parser<'_> {
     /// Generic argument list at a use site: `<T, U..., (A, B)>`.
     fn parse_type_args(&mut self) -> TypeArgs {
         let open = self.advance_span(); // `<`
-        let mut pairs = Vec::new();
-        let mut current = None;
+        let mut args = Punctuated::<Type>::empty();
 
         while !matches!(
             self.peek(),
@@ -310,11 +293,12 @@ impl Parser<'_> {
         ) {
             let arg = self.parse_type();
             let is_error = matches!(arg, Type::Error(_));
+            args.push(arg);
             if matches!(self.peek(), TokenKind::Comma) {
-                let comma = self.advance_span();
-                pairs.push((arg, comma));
+                self.advance_span();
+                args.has_trailing_separator = true;
             } else {
-                current = Some(arg);
+                args.has_trailing_separator = false;
                 break;
             }
             // An error without a following comma cannot make progress
@@ -326,8 +310,7 @@ impl Parser<'_> {
         let close = self.consume_type_close_angle();
         TypeArgs {
             span: open.merge(close),
-            angles: ContainedSpan { open, close },
-            args: Punctuated::from_pairs(pairs, current),
+            args,
         }
     }
 
@@ -335,8 +318,7 @@ impl Parser<'_> {
     /// `<T, U = string, V... = ...number>`.
     pub fn parse_generic_type_list(&mut self, allow_defaults: bool) -> GenericTypeList {
         let open = self.advance_span(); // `<`
-        let mut pairs = Vec::new();
-        let mut current = None;
+        let mut params = Punctuated::<GenericTypeParam>::empty();
         let mut seen_pack = false;
         let mut seen_default = false;
 
@@ -357,8 +339,8 @@ impl Parser<'_> {
                 None
             };
             let default = if matches!(self.peek(), TokenKind::Equal) {
-                let equal = self.advance_span();
-                Some((equal, self.parse_type()))
+                self.advance_span();
+                Some(self.parse_type())
             } else {
                 None
             };
@@ -375,7 +357,7 @@ impl Parser<'_> {
             }
             seen_pack |= dots.is_some();
             match &default {
-                Some((_, default_type)) => {
+                Some(default_type) => {
                     if !allow_defaults {
                         self.error(
                             default_type.span(),
@@ -413,21 +395,22 @@ impl Parser<'_> {
 
             let end_span = default
                 .as_ref()
-                .map(|(_, default_type)| default_type.span())
+                .map(|default_type| default_type.span())
                 .or(dots)
                 .unwrap_or(name.span);
             let param = GenericTypeParam {
                 span: name.span.merge(end_span),
                 name,
-                dots,
+                is_pack: dots.is_some(),
                 default,
             };
+            params.push(param);
 
             if matches!(self.peek(), TokenKind::Comma) {
-                let comma = self.advance_span();
-                pairs.push((param, comma));
+                self.advance_span();
+                params.has_trailing_separator = true;
             } else {
-                current = Some(param);
+                params.has_trailing_separator = false;
                 break;
             }
         }
@@ -435,25 +418,22 @@ impl Parser<'_> {
         let close = self.consume_type_close_angle();
         GenericTypeList {
             span: open.merge(close),
-            angles: ContainedSpan { open, close },
-            params: Punctuated::from_pairs(pairs, current),
+            params,
         }
     }
 
     fn parse_table_type(&mut self) -> Type {
         let open = self.advance_span(); // `{`
-        let mut fields = Vec::new();
+        let mut fields = Punctuated::<TypeField>::empty();
 
         while !matches!(self.peek(), TokenKind::RightBrace | TokenKind::Eof) {
-            let field = self.parse_type_field();
-            let separator = if matches!(self.peek(), TokenKind::Comma | TokenKind::Semicolon) {
-                Some(self.advance_span())
-            } else {
-                None
-            };
-            let is_last = separator.is_none();
-            fields.push((field, separator));
-            if is_last {
+            fields.push(self.parse_type_field());
+            let has_separator = matches!(self.peek(), TokenKind::Comma | TokenKind::Semicolon);
+            if has_separator {
+                self.advance_span();
+            }
+            fields.has_trailing_separator = has_separator;
+            if !has_separator {
                 break;
             }
         }
@@ -462,7 +442,8 @@ impl Parser<'_> {
         // an array table holds exactly one type, and a PropList holds at
         // most one indexer.
         let mut seen_indexer = false;
-        for (idx, (field, _)) in fields.iter().enumerate() {
+        let field_count = fields.len();
+        for (idx, field) in fields.items.iter().enumerate() {
             match field {
                 TypeField::Indexer { span, .. } => {
                     if seen_indexer {
@@ -471,7 +452,7 @@ impl Parser<'_> {
                     seen_indexer = true;
                 }
                 TypeField::Array { span, .. } => {
-                    if idx > 0 || fields.len() > 1 {
+                    if idx > 0 || field_count > 1 {
                         self.error(
                             *span,
                             "an array-like table type holds exactly one element type; use named fields or an indexer instead".to_string(),
@@ -491,7 +472,6 @@ impl Parser<'_> {
             });
         Type::Table(Box::new(TableType {
             span: open.merge(close),
-            braces: ContainedSpan { open, close },
             fields,
         }))
     }
@@ -517,38 +497,31 @@ impl Parser<'_> {
         if matches!(self.peek(), TokenKind::LeftBracket) {
             let open = self.advance_span();
             let key = self.parse_type();
-            let close = self
-                .expect_span(&TokenKind::RightBracket)
-                .unwrap_or_else(|err| {
-                    self.errors.push(err);
-                    self.current_span()
-                });
-            let colon = self.expect_span(&TokenKind::Colon).unwrap_or_else(|err| {
+            if let Err(err) = self.expect_span(&TokenKind::RightBracket) {
                 self.errors.push(err);
-                self.current_span()
-            });
+            }
+            if let Err(err) = self.expect_span(&TokenKind::Colon) {
+                self.errors.push(err);
+            }
             let value = self.parse_type();
             let start_span = access.as_ref().map(|token| token.span).unwrap_or(open);
             return TypeField::Indexer {
                 span: start_span.merge(value.span()),
                 access,
-                brackets: ContainedSpan { open, close },
                 key,
-                colon,
                 value,
             };
         }
 
         if self.check_identifier() && matches!(self.peek_next(), TokenKind::Colon) {
             let name = self.advance();
-            let colon = self.advance_span();
+            self.advance_span();
             let value = self.parse_type();
             let start_span = access.as_ref().map(|token| token.span).unwrap_or(name.span);
             return TypeField::Named {
                 span: start_span.merge(value.span()),
                 access,
                 name,
-                colon,
                 value,
             };
         }
@@ -571,17 +544,16 @@ impl Parser<'_> {
     /// after the closing paren.
     fn parse_paren_or_function_type(&mut self) -> Type {
         let open = self.advance_span(); // `(`
-        let mut pairs = Vec::new();
-        let mut current = None;
+        let mut params = Punctuated::<FunctionTypeParam>::empty();
 
         while !matches!(self.peek(), TokenKind::RightParen | TokenKind::Eof) {
             let param = if self.check_identifier() && matches!(self.peek_next(), TokenKind::Colon) {
                 let name = self.advance();
-                let colon = self.advance_span();
+                self.advance_span(); // `:`
                 let type_value = self.parse_type();
                 FunctionTypeParam {
                     span: name.span.merge(type_value.span()),
-                    name: Some((name, colon)),
+                    name: Some(name),
                     type_value,
                 }
             } else {
@@ -593,12 +565,13 @@ impl Parser<'_> {
                 }
             };
             let is_error = matches!(param.type_value, Type::Error(_));
+            params.push(param);
 
             if matches!(self.peek(), TokenKind::Comma) {
-                let comma = self.advance_span();
-                pairs.push((param, comma));
+                self.advance_span();
+                params.has_trailing_separator = true;
             } else {
-                current = Some(param);
+                params.has_trailing_separator = false;
                 break;
             }
             // An error without a following comma cannot make progress
@@ -613,19 +586,15 @@ impl Parser<'_> {
                 self.errors.push(err);
                 self.current_span()
             });
-        let parens = ContainedSpan { open, close };
-        let params = Punctuated::from_pairs(pairs, current);
 
         if matches!(self.peek(), TokenKind::Arrow) {
-            let arrow = self.advance_span();
+            self.advance_span();
             let return_type = self.parse_type();
-            let span = parens.open.merge(return_type.span());
+            let span = open.merge(return_type.span());
             return Type::Function(Box::new(FunctionType {
                 span,
                 generics: None,
-                parens,
                 params,
-                arrow,
                 return_type,
             }));
         }
@@ -633,7 +602,7 @@ impl Parser<'_> {
         // No arrow: plain parenthesized type or a pack. Param names are
         // only legal in function types.
         for param in params.iter() {
-            if let Some((name, _)) = &param.name {
+            if let Some(name) = &param.name {
                 self.error(
                     name.span,
                     "named parameters are only valid in function types".to_string(),
@@ -641,25 +610,24 @@ impl Parser<'_> {
             }
         }
 
-        let span = parens.open.merge(parens.close);
-        let mut type_items: Vec<(Type, Option<Span>)> = params
+        let span = open.merge(close);
+        let has_trailing_separator = params.has_trailing_separator;
+        let mut type_items: Vec<Type> = params
             .items
             .into_iter()
-            .map(|(param, separator)| (param.type_value, separator))
+            .map(|param| param.type_value)
             .collect();
         // `(T)` is a parenthesized type; `()`, `(T,)`, and `(T, U)` are packs
-        if type_items.len() == 1 && type_items[0].1.is_none() {
-            let (type_value, _) = type_items.remove(0);
-            Type::Parenthesized(Box::new(ParenType {
-                span,
-                parens,
-                type_value,
-            }))
+        if type_items.len() == 1 && !has_trailing_separator {
+            let type_value = type_items.remove(0);
+            Type::Parenthesized(Box::new(ParenType { span, type_value }))
         } else {
             Type::Pack(Box::new(TypePack {
                 span,
-                parens,
-                types: Punctuated { items: type_items },
+                types: Punctuated {
+                    items: type_items,
+                    has_trailing_separator,
+                },
             }))
         }
     }

@@ -69,7 +69,7 @@ pub fn is_pure_expression(expr: &Expression, allow_var_reads: bool) -> bool {
                 is_pure_expression(&binop.left, false) && is_pure_expression(&binop.right, false)
             }
         }
-        Expression::TableConstructor(table) => table.fields.iter().all(|(field, _)| match field {
+        Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
             Field::Bracketed { key, value, .. } => {
                 is_pure_expression(key, allow_var_reads)
                     && is_pure_expression(value, allow_var_reads)
@@ -173,11 +173,8 @@ pub use luck_token::literal::{LuaNumber, decode_string_literal, encode_string_li
 /// (5.1/5.2/Luau) every number is a Float, mirroring the single f64 type.
 pub fn extract_lua_number(expr: &Expression, int_subtype: bool) -> Option<LuaNumber> {
     match expr {
-        Expression::Number(token) => {
-            let TokenKind::Number(ref text) = token.kind else {
-                return None;
-            };
-            luck_token::literal::parse_lua_number(text, int_subtype)
+        Expression::Number(literal) => {
+            luck_token::literal::parse_lua_number(&literal.text, int_subtype)
         }
         Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
             match extract_lua_number(&unop.operand, int_subtype)? {

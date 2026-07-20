@@ -48,7 +48,7 @@ fn full_name(func_name: &FuncName) -> Option<String> {
         return None;
     }
     let mut joined = parts.join(".");
-    if let Some((_, method_token)) = &func_name.method {
+    if let Some(method_token) = &func_name.method {
         let TokenKind::Identifier(method) = &method_token.kind else {
             return None;
         };

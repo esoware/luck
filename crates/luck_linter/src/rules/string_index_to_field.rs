@@ -1,7 +1,7 @@
 use luck_ast::Expression;
 use luck_ast::expr::{IndexExpression, Var};
 use luck_ast::visitor::Visitor;
-use luck_token::{LuaVersion, Span, TokenKind};
+use luck_token::{LuaVersion, Span};
 
 use crate::diagnostic::*;
 use crate::rule::{LintContext, Rule};
@@ -47,18 +47,15 @@ struct IndexChecker<'src> {
 
 impl IndexChecker<'_> {
     fn check_index(&mut self, idx: &IndexExpression) {
-        let Expression::StringLiteral(token) = &idx.index else {
-            return;
-        };
-        let TokenKind::StringLiteral(_) = &token.kind else {
+        let Expression::StringLiteral(literal) = &idx.index else {
             return;
         };
 
-        // We need the raw source slice - the CompactString in the token
-        // is the lexed value, but the source preserves the quotes and
-        // escapes. The literal must be a simple short-string with no
-        // escape sequences and must contain only identifier chars.
-        let raw = &self.source[token.span.start as usize..token.span.end as usize];
+        // We need the raw source slice - the stored text is the lexed
+        // value, but the source preserves the quotes and escapes. The
+        // literal must be a simple short-string with no escape sequences
+        // and must contain only identifier chars.
+        let raw = &self.source[literal.span.start as usize..literal.span.end as usize];
         let Some(name) = identifier_inside(raw) else {
             return;
         };
@@ -69,12 +66,11 @@ impl IndexChecker<'_> {
             return;
         }
 
-        // The fix replaces the bracket-and-string span `[ "name" ]`
-        // with `.name`. Anchor the replacement at the opening bracket;
-        // the index expression's span already covers the whole bracket
-        // pair plus its contents.
-        let open_byte = idx.brackets.open.start;
-        let close_byte = idx.brackets.close.end;
+        // The fix replaces from the end of the prefix through the end of
+        // the index expression - `[ "name" ]` including the brackets,
+        // which start right after the prefix and close the span.
+        let open_byte = idx.prefix.span().end;
+        let close_byte = idx.span.end;
         let replacement = format!(".{name}");
 
         self.diagnostics.push(

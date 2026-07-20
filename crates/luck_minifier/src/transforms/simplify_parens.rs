@@ -58,12 +58,12 @@ impl AstTransform for ParenSimplifier {
     // f("str") -> f"str", f({...}) -> f{...}
     fn walk_function_args(&mut self, args: FunctionArgs) -> FunctionArgs {
         match args {
-            FunctionArgs::Parenthesized { parens, args } => {
+            FunctionArgs::Parenthesized { span, args } => {
                 if args.len() == 1 {
                     let items: Vec<_> = args.iter().collect();
                     match items[0] {
-                        Expression::StringLiteral(token) => {
-                            return FunctionArgs::StringLiteral(token.clone());
+                        Expression::StringLiteral(literal) => {
+                            return FunctionArgs::StringLiteral(literal.clone());
                         }
                         Expression::TableConstructor(table) => {
                             return FunctionArgs::TableConstructor(Box::new(
@@ -74,7 +74,7 @@ impl AstTransform for ParenSimplifier {
                     }
                 }
                 let args = self.walk_punctuated_exprs(args);
-                FunctionArgs::Parenthesized { parens, args }
+                FunctionArgs::Parenthesized { span, args }
             }
             FunctionArgs::TableConstructor(table) => {
                 FunctionArgs::TableConstructor(Box::new(self.walk_table_constructor(*table)))
@@ -225,14 +225,7 @@ fn can_unwrap_in_unary(inner: &Expression) -> bool {
 }
 
 fn make_clean_parens(expr: Expression) -> Expression {
-    Expression::Parenthesized(Box::new(ParenExpression {
-        span: sp(),
-        parens: ContainedSpan {
-            open: sp(),
-            close: sp(),
-        },
-        expr,
-    }))
+    Expression::Parenthesized(Box::new(ParenExpression { span: sp(), expr }))
 }
 
 #[cfg(test)]

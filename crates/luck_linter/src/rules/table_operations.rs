@@ -159,13 +159,10 @@ fn table_stdlib_function<'a>(call: &'a FunctionCall, ctx: &LintContext) -> Optio
 }
 
 fn is_number_literal(expr: &Expression, want: f64) -> bool {
-    let Expression::Number(token) = expr else {
+    let Expression::Number(literal) = expr else {
         return false;
     };
-    let TokenKind::Number(text) = &token.kind else {
-        return false;
-    };
-    text.parse::<f64>() == Ok(want)
+    literal.text.parse::<f64>() == Ok(want)
 }
 
 /// Recognize `#operand` and return the operand.

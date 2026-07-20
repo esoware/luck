@@ -47,32 +47,21 @@ impl AstTransform for ExplicitSelfRewriter {
     fn transform_statement(&mut self, stmt: Statement) -> Statement {
         match stmt {
             Statement::FunctionDecl(mut func_decl) => {
-                if let Some((_colon, method_name)) = func_decl.name.method.take() {
+                if let Some(method_name) = func_decl.name.method.take() {
                     let self_refs = count_self_refs(&func_decl.body);
                     // cost: adding "X," to params = 2 bytes
                     // saving: 3 bytes per self reference (4 -> 1 after rename)
                     if self_refs >= 2 {
                         func_decl.name.names.push(method_name);
-                        func_decl.name.dots.push(Span::default());
 
                         let self_param = Parameter {
                             span: Span::default(),
                             name: Token::new(TokenKind::Identifier("self".into()), Span::default()),
                             type_annotation: None,
                         };
-
-                        // `self` needs a comma when anything follows it -
-                        // named params or a bare `...`.
-                        let has_following =
-                            !func_decl.body.params.is_empty() || func_decl.body.vararg.is_some();
-                        let self_sep = has_following.then(Span::default);
-                        func_decl
-                            .body
-                            .params
-                            .items
-                            .insert(0, (self_param, self_sep));
+                        func_decl.body.params.items.insert(0, self_param);
                     } else {
-                        func_decl.name.method = Some((Span::default(), method_name));
+                        func_decl.name.method = Some(method_name);
                     }
                 }
                 func_decl.body = self.walk_function_body(func_decl.body);

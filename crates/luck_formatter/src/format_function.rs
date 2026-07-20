@@ -5,9 +5,9 @@
 //! ports the old formatter's hugging and parameter-breaking heuristics onto
 //! the combinator IR.
 
-use luck_ast::expr::{Expression, FunctionArgs, FunctionCall};
+use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Literal};
 use luck_ast::shared::{FunctionBody, Parameter, Punctuated, VarArgParam};
-use luck_token::{Token, TokenKind};
+use luck_token::Token;
 
 use crate::ir::*;
 use crate::tokens::FormatToken;
@@ -34,7 +34,7 @@ impl Format for FormatFunctionBody<'_> {
         write_param_list(f, body);
 
         // Luau: `: T` return annotation after `)`.
-        if let Some((_colon, return_type)) = &body.return_type {
+        if let Some(return_type) = &body.return_type {
             token(":").fmt(f);
             space().fmt(f);
             return_type.fmt(f);
@@ -43,12 +43,12 @@ impl Format for FormatFunctionBody<'_> {
         let is_empty = body.block.stmts.is_empty() && body.block.last_stmt.is_none();
         let has_dangling_comments = f
             .comments
-            .has_dangling_comments(body.block.span.start, body.end_token.start);
+            .has_dangling_comments(body.block.span.start, body.end_keyword_span().start);
         if is_empty && has_dangling_comments {
             // A body that is empty of statements but holds comments keeps
             // them indented inside, not relocated after the function.
             let anchor = body.block.span.start;
-            let end = body.end_token.start;
+            let end = body.end_keyword_span().start;
             indent(format_with(move |f| {
                 hard_line().fmt(f);
                 f.emit_dangling_comments(anchor, end);
@@ -86,7 +86,7 @@ fn write_param_list(f: &mut Formatter, body: &FunctionBody) {
         indent(format_with(move |f| {
             soft_line().fmt(f);
             let mut is_first = true;
-            for (param, _separator) in body.params.items.iter() {
+            for param in body.params.items.iter() {
                 if !is_first {
                     token(",").fmt(f);
                     soft_line_or_space().fmt(f);
@@ -115,7 +115,7 @@ impl Format for Parameter {
     fn fmt(&self, f: &mut Formatter) {
         FormatToken(&self.name).fmt(f);
         // Luau: `: T` annotation.
-        if let Some((_colon, type_annotation)) = &self.type_annotation {
+        if let Some(type_annotation) = &self.type_annotation {
             token(":").fmt(f);
             space().fmt(f);
             type_annotation.fmt(f);
@@ -131,7 +131,7 @@ impl Format for VarArgParam {
             FormatToken(name).fmt(f);
         }
         // Luau: `: T` annotation (may be a pack, e.g. `...number`).
-        if let Some((_colon, type_annotation)) = &self.type_annotation {
+        if let Some(type_annotation) = &self.type_annotation {
             token(":").fmt(f);
             space().fmt(f);
             type_annotation.fmt(f);
@@ -151,7 +151,7 @@ fn collect_chain(call: &FunctionCall) -> (&Expression, Vec<ChainSegment<'_>>) {
     let mut current = call;
     loop {
         segments.push(ChainSegment {
-            accessor: current.method.as_ref().map(|(_, name)| name),
+            accessor: current.method.as_ref(),
             args: &current.args,
         });
         match &current.callee {
@@ -307,7 +307,7 @@ fn write_args_list(f: &mut Formatter, args: &Punctuated<Expression>) {
         return;
     }
 
-    let force_expand = f.options.magic_trailing_comma && has_trailing_comma_in_args(args);
+    let force_expand = f.options.magic_trailing_comma && args.has_trailing_separator;
 
     if is_single_huggable_arg(args) && !force_expand {
         token("(").fmt(f);
@@ -320,12 +320,12 @@ fn write_args_list(f: &mut Formatter, args: &Punctuated<Expression>) {
         token("(").fmt(f);
         indent(format_with(move |f| {
             soft_line().fmt(f);
-            for (index, (expr, separator)) in args.items.iter().enumerate() {
+            for (index, expr) in args.items.iter().enumerate() {
                 if index > 0 {
                     soft_line_or_space().fmt(f);
                 }
                 expr.fmt(f);
-                if index + 1 < args.items.len() || separator.is_some() {
+                if index + 1 < args.items.len() || args.has_trailing_separator {
                     token(",").fmt(f);
                 }
             }
@@ -358,14 +358,6 @@ fn is_single_huggable_arg(args: &Punctuated<Expression>) -> bool {
         )
 }
 
-/// A trailing comma after the last argument survives parse recovery as a
-/// `Some` separator on the final item.
-fn has_trailing_comma_in_args(args: &Punctuated<Expression>) -> bool {
-    args.items
-        .last()
-        .is_some_and(|(_, separator)| separator.is_some())
-}
-
 fn space_before_call_paren(f: &mut Formatter) {
     if matches!(
         f.options.space_after_function_names,
@@ -387,13 +379,9 @@ fn space_before_def_paren(f: &mut Formatter) {
 /// Emit a string literal with quotes normalized to the configured style. Bare
 /// and hugged string arguments format their own leaf here; parenthesized
 /// arguments defer to the expression impl.
-fn write_normalized_string(f: &mut Formatter, literal: &Token) {
-    if let TokenKind::StringLiteral(raw) = &literal.kind {
-        let normalized = crate::quotes::normalize_quote(raw, f.options.quote_style);
-        text(normalized).fmt(f);
-    } else {
-        FormatToken(literal).fmt(f);
-    }
+fn write_normalized_string(f: &mut Formatter, literal: &Literal) {
+    let normalized = crate::quotes::normalize_quote(&literal.text, f.options.quote_style);
+    text(normalized).fmt(f);
 }
 
 #[cfg(test)]
@@ -440,7 +428,6 @@ mod tests {
     fn bare_vararg() {
         let vararg = VarArgParam {
             span: Span::new(0, 0),
-            dots: Span::new(0, 0),
             name: None,
             type_annotation: None,
         };
