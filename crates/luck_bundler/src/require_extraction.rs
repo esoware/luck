@@ -12,8 +12,10 @@ use std::ops::Range;
 pub struct RequireInfo {
     pub local_name: String,
     pub require_string: String,
-    pub span: Range<usize>,
-    /// Byte span of just the `require(...)` call expression within the source
+    /// Span of the `require(...)` call, handed to the resolver for diagnostics.
+    pub span: Span,
+    /// Byte range of the `require(...)` call expression, for bundler-side
+    /// diagnostics (cycle reporting) that render against source.
     pub call_span: Range<usize>,
 }
 
@@ -74,7 +76,7 @@ impl RequireFinder<'_> {
                 self.requires.push(RequireInfo {
                     local_name: String::new(),
                     require_string,
-                    span: call_span.clone(),
+                    span: func_call.span,
                     call_span,
                 });
             }

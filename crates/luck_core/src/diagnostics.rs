@@ -146,6 +146,32 @@ pub mod errors {
         .with_help(format!("Searched paths:\n  - {paths_list}"))
     }
 
+    /// A Luau require string that does not begin with `./`, `../`, or `@`.
+    pub fn e004_luau_scheme(file_path: &str, span: Range<usize>, module_name: &str) -> Diagnostic {
+        Diagnostic::error(
+            "E004",
+            format!(
+                "module not found: \"{module_name}\" (Luau requires must start with ./, ../, or @)"
+            ),
+            file_path.to_string(),
+            span,
+        )
+        .with_help(
+            "Luau requires must use relative paths (./foo, ../bar) or aliases (@alias/foo)"
+                .to_string(),
+        )
+    }
+
+    /// A bare `@self` require with no subpath.
+    pub fn e004_self_needs_subpath(file_path: &str, span: Range<usize>) -> Diagnostic {
+        Diagnostic::error(
+            "E004",
+            "\"@self\" cannot be used alone, use @self/subpath".to_string(),
+            file_path.to_string(),
+            span,
+        )
+    }
+
     pub fn e005(file_path: &str, span: Range<usize>, cycle_path: &[String]) -> Diagnostic {
         let cycle_str = cycle_path.join(" -> ");
         Diagnostic::error(

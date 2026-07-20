@@ -384,7 +384,6 @@ impl<N: Notifier> LanguageServer for Backend<N> {
 
     async fn did_change_watched_files(&self, _params: DidChangeWatchedFilesParams) {
         self.config_cache.clear();
-        luck_resolver::clear_luaurc_cache();
         // Retarget every open document (the config may have changed its
         // dialect) and republish diagnostics under the new settings.
         let uris: Vec<Url> = {

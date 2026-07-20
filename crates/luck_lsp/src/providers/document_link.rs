@@ -1,6 +1,7 @@
 //! Document links. Every `require("path")` literal string becomes a
-//! clickable link that the editor can resolve to a file. Resolution
-//! walks `luck_resolver`'s default search paths.
+//! clickable link that the editor can resolve to a file. Resolution probes
+//! the requiring file's directory for the module, its `.lua`/`.luau`
+//! extensions, and `init` files.
 
 use std::path::{Path, PathBuf};
 

@@ -3,7 +3,7 @@ use crate::require_extraction::{ExtractResult, extract_requires};
 use luck_core::config::DEFAULT_SEARCH_PATHS;
 use luck_core::diagnostics::{Diagnostic, errors};
 use luck_core::types::LuaTarget;
-use luck_resolver::{normalize_path, resolve};
+use luck_resolver::{ResolveRequest, Resolver, normalize_path};
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::depth_first_search;
@@ -51,6 +51,7 @@ pub fn build_graph(
     let mut warnings: Vec<Diagnostic> = Vec::new();
 
     let mut queue: Vec<QueueItem> = Vec::new();
+    let mut resolver = Resolver::new();
 
     let entry_normalized = normalize_path(entry_path);
     queue.push(entry_normalized.clone());
@@ -71,6 +72,7 @@ pub fn build_graph(
             target,
             search_paths,
             rc_dir,
+            &mut resolver,
             &mut modules,
             &mut path_to_id,
             &mut graph,
@@ -159,6 +161,7 @@ fn process_module(
     target: LuaTarget,
     search_paths: &[String],
     rc_dir: &Path,
+    resolver: &mut Resolver,
     modules: &mut Vec<ModuleInfo>,
     path_to_id: &mut FxHashMap<String, ModuleId>,
     graph: &mut DiGraph<ModuleId, ()>,
@@ -204,14 +207,14 @@ fn process_module(
 
     let mut deps: Vec<(String, String, String, std::ops::Range<usize>)> = Vec::new();
     for req in &requires {
-        match resolve(
-            &req.require_string,
+        match resolver.resolve(&ResolveRequest {
+            module: &req.require_string,
+            from_file: file_path,
             target,
-            file_path,
             search_paths,
-            rc_dir,
-            req.span.clone(),
-        ) {
+            project_root: rc_dir,
+            span: req.span,
+        }) {
             Ok(result) => {
                 deps.push((
                     req.local_name.clone(),
@@ -226,7 +229,7 @@ fn process_module(
                 }
             }
             Err(diag) => {
-                errors.push(diag);
+                errors.push(*diag);
             }
         }
     }

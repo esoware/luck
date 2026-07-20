@@ -138,48 +138,59 @@ Users control luck from comments; tests need the exact syntax:
 - Formatter: `-- luck: format off` / `-- luck: format on` disable a region;
   `-- luck: ignore` (alias `-- luck: format ignore`) skips one statement.
 
-## Hard invariants
+## Design guidelines
 
-These hold across every crate. Violating any of them is a correctness bug.
+How the codebase is currently built, and why. These are defaults, not
+laws: each exists because it was the better way to do the thing, and
+most are backed by tests. If you have a genuinely better design, change
+it deliberately - update the tests and this file to match - rather than
+drifting away from it by accident.
 
-1. **`SourceError` is the single error type.** `LexError`, `ParseError`,
-   `FormatError` are type aliases for it in their respective crates.
-2. **`Span` is `u32`, not `usize`** - 4 GB file cap, half the AST bytes.
-3. **`Expression` and `Statement` are not `#[non_exhaustive]`.** Every
-   `match` must be exhaustive. Missing arms = silent skipped subtrees in
-   transforms. No `_ => ...` catch-alls in transforms or visitors.
-4. **Enum size budget <=64 bytes** for `Expression`, `Statement`, and
-   `Type`, enforced by `luck_ast` tests. Box large variants.
-5. **Comments are not in the AST.** They live in a sorted `Vec<Comment>`
-   with `Leading`/`Trailing` classification (standalone = leading with
-   `preceded_by_newline`) and `attached_to`. The formatter additionally
-   accepts node-anchored `SyntheticComment`s (`luck_ast::synth`) for
-   generated ASTs.
-6. **Metamethod-safe purity.** `is_pure_expression(_, allow_var_reads=true)`
-   rejects variable arithmetic. Only literal arithmetic is pure; variable
-   reads, indexing, arithmetic, comparison, and concat may all metamethod.
-7. **Idempotency.** `minify(minify(x)) == minify(x)` and
-   `format(format(x)) == format(x)` are hard invariants - enforced by tests.
-8. **Re-parseability.** Minified and formatted output must `parse()` with
-   zero errors.
-9. **`#"str"` must not be folded.** Escape sequences make raw length
-   unreliable.
-10. **Version gating goes through `LuaVersion::has_<feature>` predicates**
-    (`has_goto`, `has_floor_div`, `has_compound_assignment`, ...; the only
-    `is_` forms are `is_luau`/`is_roblox`), never direct variant comparison.
-    Predicates are named by feature, not version.
-11. **Emitters never read source text.** Codegen and formatter leaf text
-    comes from token-carried `TokenKind` values (`compact.rs` `token_text`,
-    formatter `tokens.rs`); source is consulted only for trivia fidelity
-    (blank lines, comment gaps) and verbatim regions, and every such path
-    must degrade gracefully when source is absent (synthetic ASTs).
-12. **Luau types are a real AST** (`luck_ast::types::Type`), parsed by
-    `luck_parser/src/luau.rs`. Never store or re-tokenize opaque type
-    text.
-13. **No global string interner.** Identifiers stay per-token
-    `CompactString`; a shared interner's lock serializes rayon workers
-    and has halved CPU utilization in comparable tools. Reject "intern
-    all identifiers" proposals unless the interner is per-thread.
+- **Version gating goes through `LuaVersion::has_<feature>` predicates**
+  (`has_goto`, `has_floor_div`, `has_compound_assignment`, ...; the only
+  `is_` forms are `is_luau`/`is_roblox`), never direct variant
+  comparison. Predicates are named by feature, not version, so adding a
+  version means auditing predicates, not every call site.
+- **Emitters never read source text.** Codegen and formatter leaf text
+  comes from token-carried `TokenKind` values (`compact.rs` `token_text`,
+  formatter `tokens.rs`); source is consulted only for trivia fidelity
+  (blank lines, comment gaps) and verbatim regions, and every such path
+  degrades gracefully when source is absent - that is what makes
+  synthetic ASTs printable at all.
+- **Luau types are a real AST** (`luck_ast::types::Type`), parsed by
+  `luck_parser/src/luau.rs` - not stored or re-tokenized as opaque type
+  text, so every consumer gets structure for free.
+- **One error type: `SourceError`.** `LexError`, `ParseError`,
+  `FormatError` are aliases for it, which keeps one rendering path for
+  all diagnostics.
+- **`Span` is `u32`, not `usize`** - halves AST bytes for a 4 GB file
+  cap nobody hits.
+- **Exhaustive matches in transforms and visitors.** `Expression` and
+  `Statement` are deliberately not `#[non_exhaustive]`, and transforms/
+  visitors avoid `_ =>` catch-alls, so adding a variant makes the
+  compiler point at every place that must handle it instead of silently
+  skipping subtrees.
+- **Enum size budget <=64 bytes** for `Expression`, `Statement`, and
+  `Type` (boxed large variants), enforced by `luck_ast` tests.
+- **Comments live outside the AST** in a sorted `Vec<Comment>` with
+  `Leading`/`Trailing` classification (standalone = leading with
+  `preceded_by_newline`) and `attached_to`; the formatter additionally
+  accepts node-anchored `SyntheticComment`s (`luck_ast::synth`) for
+  generated ASTs.
+- **Purity analysis assumes metamethods.**
+  `is_pure_expression(_, allow_var_reads=true)` rejects variable
+  arithmetic: only literal arithmetic is pure, because variable reads,
+  indexing, arithmetic, comparison, and concat may all invoke
+  metamethods.
+- **Idempotency and re-parseability are tested guarantees.**
+  `minify(minify(x)) == minify(x)`, `format(format(x)) == format(x)`,
+  and both outputs `parse()` with zero errors.
+- **`#"str"` is not folded** - escape sequences make raw length
+  unreliable.
+- **No global string interner.** Identifiers stay per-token
+  `CompactString`; a shared interner's lock serializes rayon workers and
+  has halved CPU utilization in comparable tools. A per-thread interner
+  would be fine; a global one is not.
 
 ## Skills
 

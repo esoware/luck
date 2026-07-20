@@ -6,6 +6,17 @@ Module resolution for `require()` calls across Lua 5.x and Luau.
 
 The resolver maps the string argument of a `require()` call to a filesystem path. The two language flavors take different approaches: Lua uses template-based search paths, Luau uses explicit relative paths with optional alias prefixes. This crate implements both and emits an ambiguity diagnostic when more than one valid candidate exists.
 
+## API
+
+A `Resolver` owns the `.luaurc` alias cache built up during Luau resolution. Each `require()` is described by a `ResolveRequest` (the require string, the requiring file, target dialect, Lua search paths, project root, and the call span) and resolved to a `ResolvedModule` (a normalized path plus any warnings):
+
+```rust
+let mut resolver = Resolver::new();
+let resolved = resolver.resolve(&ResolveRequest { /* ... */ })?;
+```
+
+The cache lives on the resolver, not in global state: create a fresh `Resolver` per build (the bundler does this once per `build_graph`) and stale alias data is dropped with it - there is no cache to clear by hand.
+
 ## Key Features
 
 - **Lua 5.x template paths** — substitutes the dotted module name into template strings (`./?.lua`, `./lib/?/init.lua`, …) and returns the first hit.

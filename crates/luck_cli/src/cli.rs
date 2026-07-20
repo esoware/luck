@@ -847,10 +847,6 @@ fn run_build_collect_paths(
     profile: Option<&str>,
     verbosity: Verbosity,
 ) -> Vec<String> {
-    // Watch mode rebuilds on the same worker thread; without this,
-    // .luaurc alias edits are invisible until process restart.
-    luck_resolver::clear_luaurc_cache();
-
     let configs = match resolve_build_config(config_path, profile) {
         Ok(c) => c,
         Err(e) => {
