@@ -54,7 +54,11 @@ mod tests {
 
     #[test]
     fn luckrc_schema_is_up_to_date() {
-        let committed = std::fs::read_to_string(COMMITTED_SCHEMA_PATH).expect("read schema");
+        // Windows checkouts may have core.autocrlf rewriting, so compare
+        // with line endings normalized.
+        let committed = std::fs::read_to_string(COMMITTED_SCHEMA_PATH)
+            .expect("read schema")
+            .replace("\r\n", "\n");
         assert_eq!(
             committed,
             luckrc_schema_json(),

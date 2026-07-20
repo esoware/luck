@@ -13,6 +13,14 @@ fn trailing_comment() {
 }
 
 #[test]
+fn comment_after_only_empty_statements() {
+    // Fuzz-found: a block holding only dropped `;` statements counted as
+    // "has statements", opening a spurious line before the comment flush.
+    assert_format(";-- a\n", "-- a\n");
+    assert_format(";\n-- a\n-- b\n", "-- a\n-- b\n");
+}
+
+#[test]
 fn comment_between_statements() {
     assert_format(
         "local x = 1\n-- between\nlocal y = 2\n",

@@ -90,10 +90,7 @@ impl StdlibFunction {
     pub fn max_args(&self) -> Option<usize> {
         let mut max = 0;
         for sig in &self.signatures {
-            match sig.max_args {
-                Some(n) => max = max.max(n),
-                None => return None,
-            }
+            max = max.max(sig.max_args?);
         }
         Some(max)
     }

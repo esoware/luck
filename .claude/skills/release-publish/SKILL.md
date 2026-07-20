@@ -26,11 +26,11 @@ every publishable crate and the VS Code extension share ONE version,
 inherited from `[workspace.package]`. If `cargo metadata` shows any
 publishable crate at a different version, stop - a spot was missed.
 
-Known blocker: the crate name `luck` is already taken on crates.io by an
-unrelated project. The facade (and possibly the binary crate) need a
-registry name decision (`publish = false`, a rename, or a `luck-*`
-prefix) before first publish - surface this to the human, do not pick
-for them.
+Registry naming (decided 2026-07): the crate name `luck` is taken on
+crates.io by an unrelated project, so the facade publishes as the
+package `luck-lua` with `[lib] name = "luck"` - users still write
+`use luck::...`. All `luck_*` crates publish under their real names,
+and `luck_cli` keeps its `luck` binary. Do not revisit this decision.
 
 ## 2. Dependency-ordered publish list
 
@@ -51,7 +51,7 @@ luck_minifier
 luck_formatter
 luck_linter
 luck_lsp
-luck
+luck-lua
 luck_cli
 ```
 
