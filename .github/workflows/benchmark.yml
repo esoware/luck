@@ -1,10 +1,8 @@
 # Benchmarks are sharded: each pipeline stage runs as a separate job,
-# built with `--cfg codspeed` and executed under the CodSpeed runner.
+# built and executed under CodSpeed with the `codspeed` feature enabled.
 # Modeled on oxc's benchmark workflow.
 
 name: Benchmark
-
-permissions: {}
 
 on:
   workflow_dispatch:
@@ -20,6 +18,10 @@ on:
     branches:
       - main
     paths: *paths
+
+permissions:
+  contents: read
+  id-token: write # for OpenID Connect authentication with CodSpeed
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event.pull_request.number || github.sha }}
@@ -62,20 +64,15 @@ jobs:
           tool: cargo-codspeed
 
       - name: Build benchmark
-        env:
-          RUSTFLAGS: "-C debuginfo=1 -C strip=none -g --cfg codspeed"
         run: |
-          cargo build --release -p luck_benchmark \
+          cargo codspeed build -p luck_benchmark \
             --bench ${{ matrix.component }} --features codspeed
-          mkdir -p target/codspeed/analysis/luck_benchmark
-          mv target/release/deps/${{ matrix.component }}-* target/codspeed/analysis/luck_benchmark
-          rm target/codspeed/analysis/luck_benchmark/*.d
 
       - name: Run benchmark
         uses: CodSpeedHQ/action@v4
         timeout-minutes: 30
         with:
-          token: ${{ secrets.CODSPEED_TOKEN }}
+          mode: simulation
           run: cargo codspeed run ${{ matrix.component }}
 
   minsize:
