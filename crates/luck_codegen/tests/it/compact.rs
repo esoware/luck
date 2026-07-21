@@ -1076,7 +1076,7 @@ fn adjacency_end_left_paren_call() {
 // and `end` is a keyword that can't be a call prefix.
 
 #[test]
-fn adjacency_stress_test() {
+fn adjacency_stress() {
     let cases = [
         "local a,b,c=1,2,3",
         "x=a+b-c*d/e%f^g",

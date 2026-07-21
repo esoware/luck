@@ -415,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fold_addition() {
+    fn fold_addition() {
         let result = apply("local x = 1 + 2\n");
         assert!(
             result.contains("3"),
@@ -428,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fold_multiplication() {
+    fn fold_multiplication() {
         let result = apply("local x = 10 * 5\n");
         assert!(
             result.contains("50"),
@@ -437,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fold_string_concat() {
+    fn fold_string_concat() {
         let result = apply("local x = \"hello\" .. \" world\"\n");
         assert!(
             result.contains("\"hello world\""),
@@ -446,19 +446,19 @@ mod tests {
     }
 
     #[test]
-    fn test_fold_not_true() {
+    fn fold_not_true() {
         let result = apply("local x = not true\n");
         assert!(result.contains("false"), "Expected `false`, got: {result}");
     }
 
     #[test]
-    fn test_fold_not_false() {
+    fn fold_not_false() {
         let result = apply("local x = not false\n");
         assert!(result.contains("true"), "Expected `true`, got: {result}");
     }
 
     #[test]
-    fn test_fold_not_number() {
+    fn fold_not_number() {
         let result = apply("local x = not 5\n");
         assert!(
             result.contains("false"),
@@ -467,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fold_not_string() {
+    fn fold_not_string() {
         let result = apply("local x = not \"hello\"\n");
         assert!(
             result.contains("false"),
@@ -476,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hash_string_not_folded() {
+    fn hash_string_not_folded() {
         // #"str" must NOT be folded - escape sequences make raw length unreliable
         let result = apply("local x = #\"hello\"\n");
         assert!(
@@ -486,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_fold_division_by_zero() {
+    fn no_fold_division_by_zero() {
         let result = apply("local x = 1 / 0\n");
         assert!(
             result.contains("/"),
@@ -495,31 +495,31 @@ mod tests {
     }
 
     #[test]
-    fn test_fold_and_true_lhs() {
+    fn fold_and_true_lhs() {
         let result = apply("local x = true and 42\n");
         assert!(result.contains("42"), "Expected 42, got: {result}");
     }
 
     #[test]
-    fn test_fold_and_false_lhs() {
+    fn fold_and_false_lhs() {
         let result = apply("local x = false and 42\n");
         assert!(result.contains("false"), "Expected false, got: {result}");
     }
 
     #[test]
-    fn test_fold_or_true_lhs() {
+    fn fold_or_true_lhs() {
         let result = apply("local x = true or 42\n");
         assert!(result.contains("true"), "Expected true, got: {result}");
     }
 
     #[test]
-    fn test_fold_or_false_lhs() {
+    fn fold_or_false_lhs() {
         let result = apply("local x = false or 42\n");
         assert!(result.contains("42"), "Expected 42, got: {result}");
     }
 
     #[test]
-    fn test_identity_add_zero_preserves_metamethods() {
+    fn identity_add_zero_preserves_metamethods() {
         // a + 0 must NOT be folded - the + operator may invoke __add metamethod
         let result = apply("return a + 0\n");
         assert!(
@@ -529,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn test_comparison_negation_preserves_metamethods() {
+    fn comparison_negation_preserves_metamethods() {
         // not (a < b) must NOT become a >= b - different metamethods (__lt vs __le)
         let result = apply("return not (a < b)\n");
         assert!(
@@ -539,13 +539,13 @@ mod tests {
     }
 
     #[test]
-    fn test_fold_nil_and() {
+    fn fold_nil_and() {
         let result = apply("local x = nil and 42\n");
         assert!(result.contains("nil"), "Expected nil, got: {result}");
     }
 
     #[test]
-    fn test_fold_nil_or() {
+    fn fold_nil_or() {
         let result = apply("local x = nil or 42\n");
         assert!(result.contains("42"), "Expected 42, got: {result}");
     }

@@ -122,7 +122,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_lua_target_from_str_case_insensitive() {
+    fn lua_target_from_str_case_insensitive() {
         assert_eq!("lua54".parse::<LuaTarget>().unwrap(), LuaTarget::Lua54);
         assert_eq!("LUA54".parse::<LuaTarget>().unwrap(), LuaTarget::Lua54);
         assert_eq!("Lua54".parse::<LuaTarget>().unwrap(), LuaTarget::Lua54);
@@ -134,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lua_target_short_and_bare_number_aliases() {
+    fn lua_target_short_and_bare_number_aliases() {
         for alias in ["54", "5.4", "Lua54", "LUA54", "lua54"] {
             assert_eq!(
                 alias.parse::<LuaTarget>().unwrap(),
@@ -157,14 +157,14 @@ mod tests {
     }
 
     #[test]
-    fn test_is_luau() {
+    fn is_luau_per_target() {
         assert!(!LuaTarget::Lua51.is_luau());
         assert!(!LuaTarget::Lua54.is_luau());
         assert!(LuaTarget::Luau.is_luau());
     }
 
     #[test]
-    fn test_keywords() {
+    fn keywords_per_target() {
         let kw51 = LuaTarget::Lua51.keywords();
         assert!(!kw51.contains(&"goto"));
         assert!(kw51.contains(&"while"));
@@ -178,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lua_target_display_roundtrip() {
+    fn lua_target_display_roundtrip() {
         for target in [
             LuaTarget::Lua51,
             LuaTarget::Lua52,

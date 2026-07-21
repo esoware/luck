@@ -336,7 +336,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_diagnostic_creation() {
+    fn diagnostic_creation() {
         let diag = Diagnostic::error(
             "E001",
             "test message".to_string(),
@@ -348,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn test_diagnostic_warning() {
+    fn diagnostic_warning() {
         let diag = Diagnostic::warning(
             "W001",
             "test warning".to_string(),
@@ -360,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn test_diagnostic_with_labels() {
+    fn diagnostic_with_labels() {
         let diag = Diagnostic::error("E001", "msg".to_string(), "f.lua".to_string(), 0..10)
             .with_label(5..8, "here".to_string())
             .with_help("do this".to_string());
@@ -376,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn test_error_constructors() {
+    fn error_constructors() {
         let e1 = errors::e001("f.lua", 0..10);
         assert_eq!(e1.code, "E001");
         assert!(e1.is_error());

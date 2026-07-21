@@ -68,7 +68,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_luck_config() {
+    fn parse_luck_config_full() {
         let json = r#"{
             "lua": "lua54",
             "entry": "src/main.lua",
@@ -86,7 +86,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_luck_config_minimal() {
+    fn parse_luck_config_minimal() {
         let json = r#"{"luau": "luau", "entry": "main.luau", "output_dir": "out"}"#;
         let config = parse_luck_config(json).expect("deserialize failed");
         assert_eq!(config.luau.as_deref(), Some("luau"));
@@ -96,7 +96,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_luaurc() {
+    fn parse_luaurc_aliases() {
         let json5 = r#"{
             // This is a comment
             "languageMode": "strict",
@@ -119,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_luaurc_empty() {
+    fn parse_luaurc_empty() {
         let json5 = "{}";
         let rc = parse_luaurc(json5).expect("deserialize failed");
         assert!(rc.aliases.is_none());
@@ -127,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_entries_config() {
+    fn parse_entries_config() {
         let json = r#"{
             "lua": "lua54",
             "entries": [
@@ -143,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_profiles_config() {
+    fn parse_profiles_config() {
         let json = r#"{
             "lua": "lua54",
             "entry": "src/main.lua",
@@ -161,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_output_field() {
+    fn parse_output_field() {
         let json = r#"{
             "lua": "lua54",
             "entry": "src/main.lua",
@@ -172,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_optional_fields_default_to_none() {
+    fn missing_optional_fields_default_to_none() {
         let json = r#"{"lua": "lua51"}"#;
         let config = parse_luck_config(json).expect("deserialize failed");
         assert_eq!(config.lua.as_deref(), Some("lua51"));
@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lint_config() {
+    fn parse_lint_config() {
         let json = r#"{
             "lua": "lua54",
             "entry": "main.lua",
@@ -232,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lint_config_defaults_when_omitted() {
+    fn parse_lint_config_defaults_when_omitted() {
         let json = r#"{
             "lua": "lua54",
             "entry": "main.lua",
@@ -249,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_json5_returns_error() {
+    fn invalid_json5_returns_error() {
         let bad_json = r#"{ target: }"#;
         let result = parse_luck_config(bad_json);
         assert!(result.is_err());
@@ -261,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn test_completely_invalid_input() {
+    fn completely_invalid_input() {
         let result = parse_luck_config("not json at all !!!");
         assert!(result.is_err());
     }
@@ -347,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn test_profile_override_with_transforms() {
+    fn profile_override_with_transforms() {
         let json = r#"{
             "lua": "lua54",
             "entry": "main.lua",
@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn test_json5_features_supported() {
+    fn json5_features_supported() {
         // JSON5 allows comments, trailing commas, unquoted keys
         let json5 = r#"{
             // this is a comment
@@ -406,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_format_config() {
+    fn parse_format_config() {
         let json = r#"{
             "lua": "lua54",
             "entry": "main.lua",
@@ -427,14 +427,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_luaurc_invalid_json() {
+    fn parse_luaurc_invalid_json() {
         let result = parse_luaurc("not valid json {{{");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Failed to parse .luaurc"));
     }
 
     #[test]
-    fn test_parse_config_entry_and_entries_both_present() {
+    fn parse_config_entry_and_entries_both_present() {
         let json = r#"{
             "lua": "lua54",
             "entry": "main.lua",
@@ -447,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn test_preamble_and_luck_preamble() {
+    fn preamble_and_luck_preamble() {
         let json = r#"{
             "lua": "lua54",
             "entry": "main.lua",
@@ -461,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_format_polish_options() {
+    fn parse_format_polish_options() {
         let json = r#"{
             "lua": "lua54",
             "entry": "main.lua",
@@ -487,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_polish_defaults_when_omitted() {
+    fn format_polish_defaults_when_omitted() {
         let json = r#"{
             "lua": "lua54",
             "entry": "main.lua",
