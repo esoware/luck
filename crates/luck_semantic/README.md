@@ -42,6 +42,8 @@ Each environment is one fully self-contained TOML file under `stdlib_data/`, sel
 - `luau.toml` — standalone (open-source) Luau.
 - `luau_roblox.toml` — the Roblox runtime, plus two **generated** files spliced in at load: `roblox_api.toml` (service and class-name constant sets from the Roblox API dump) and `roblox_enums.toml` (the full `Enum` tree). Regenerate both with `cargo test -p luck_semantic regenerate_roblox_api -- --ignored`; never hand-edit them.
 
+Both Luau catalogs include the distinct `integer` primitive's library surface, the matching `buffer.readinteger` / `buffer.writeinteger` APIs, and the current Luau math predicates/constants (`isnan`, `isinf`, `isfinite`, `nan`, `e`, `phi`, `sqrt2`, `tau`).
+
 The files are deliberately independent — no inheritance or tier layering. Shared entries are duplicated and kept honest by the drift-guard suite in `tests/drift.rs`, which cross-checks every surface shared between files against an explicit allowlist of manual-verified divergences.
 
 Entries model:

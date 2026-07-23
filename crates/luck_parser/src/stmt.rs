@@ -60,11 +60,15 @@ impl Parser<'_> {
                             }
                         }
                         "export" => {
-                            // `export type Name` = exported type declaration
-                            if let TokenKind::Identifier(next) = self.peek_next()
-                                && next == "type"
-                            {
-                                return self.parse_export_type_declaration();
+                            let next_starts_export = matches!(
+                                self.peek_next(),
+                                TokenKind::Local | TokenKind::Function
+                            ) || matches!(
+                                self.peek_next(),
+                                TokenKind::Identifier(next) if next == "type" || next == "const"
+                            );
+                            if next_starts_export {
+                                return self.parse_export_statement(Vec::new());
                             }
                         }
                         "const" => {
@@ -106,6 +110,16 @@ impl Parser<'_> {
     pub(crate) fn parse_return_statement(&mut self) -> LastStatement {
         let return_token = self.advance_span(); // `return`
         let start_span = return_token;
+
+        if self.function_depth == 0 {
+            self.has_module_return = true;
+            if self.has_value_exports {
+                self.error(
+                    return_token,
+                    "a module cannot use both value exports and return statements".to_string(),
+                );
+            }
+        }
 
         let exprs = if is_block_end(self.peek()) || matches!(self.peek(), TokenKind::Semicolon) {
             Punctuated::empty()
@@ -373,7 +387,7 @@ impl Parser<'_> {
         let local_token = self.advance_span();
 
         if matches!(self.peek(), TokenKind::Function) {
-            return self.parse_local_function(local_token, attributes, false);
+            return self.parse_local_function(local_token, attributes, false, false);
         }
 
         if let Some(attr) = attributes.first() {
@@ -383,7 +397,7 @@ impl Parser<'_> {
                 "attributes are only allowed on function declarations".to_string(),
             );
         }
-        self.parse_local_assignment(local_token, false)
+        self.parse_local_assignment(local_token, false, false)
     }
 
     /// Parse Luau `const` declarations, dispatched from the contextual
@@ -392,9 +406,9 @@ impl Parser<'_> {
     fn parse_const_statement(&mut self) -> Statement {
         let const_token = self.advance_span(); // contextual `const`
         if matches!(self.peek(), TokenKind::Function) {
-            return self.parse_local_function(const_token, Vec::new(), true);
+            return self.parse_local_function(const_token, Vec::new(), true, false);
         }
-        self.parse_local_assignment(const_token, true)
+        self.parse_local_assignment(const_token, true, false)
     }
 
     fn parse_local_function(
@@ -402,6 +416,7 @@ impl Parser<'_> {
         local_token: Span,
         attributes: Vec<FunctionAttribute>,
         is_const: bool,
+        is_exported: bool,
     ) -> Statement {
         self.advance_span(); // `function`
         self.push_context("local function", local_token);
@@ -417,10 +432,16 @@ impl Parser<'_> {
             name,
             body,
             is_const,
+            is_exported,
         }))
     }
 
-    fn parse_local_assignment(&mut self, local_token: Span, is_const: bool) -> Statement {
+    fn parse_local_assignment(
+        &mut self,
+        local_token: Span,
+        is_const: bool,
+        is_exported: bool,
+    ) -> Statement {
         let names = self.parse_attname_list();
 
         // 5.4 §3.3.7: "A list of variables can contain at most one
@@ -467,6 +488,7 @@ impl Parser<'_> {
             names,
             exprs,
             is_const,
+            is_exported,
         }))
     }
 
@@ -766,10 +788,123 @@ impl Parser<'_> {
         }))
     }
 
-    /// Parse `export type Name ...`
-    fn parse_export_type_declaration(&mut self) -> Statement {
-        let export_token = self.advance_span(); // `export`
-        self.parse_type_declaration(Some(export_token))
+    /// Parse Luau `export type`, `export local`, `export const`, or
+    /// `export function` after an optional function attribute list.
+    fn parse_export_statement(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
+        let export_token = self.advance_span(); // contextual `export`
+
+        if let TokenKind::Identifier(name) = self.peek()
+            && name == "type"
+        {
+            if !attributes.is_empty() {
+                self.error(
+                    export_token,
+                    "attributes are only allowed on exported functions".to_string(),
+                );
+            }
+            return self.parse_type_declaration(Some(export_token));
+        }
+
+        if !self.version.has_value_exports() {
+            self.error(
+                export_token,
+                "value exports are not supported in this Lua version".to_string(),
+            );
+            return Statement::Error(export_token);
+        }
+
+        if self.block_depth != 1 {
+            self.error(
+                export_token,
+                "value exports are only allowed at module scope".to_string(),
+            );
+        }
+        if self.has_module_return {
+            self.error(
+                export_token,
+                "a module cannot use both value exports and return statements".to_string(),
+            );
+        }
+        self.has_value_exports = true;
+
+        let statement = match self.peek() {
+            TokenKind::Local => {
+                let local_token = self.advance_span();
+                if matches!(self.peek(), TokenKind::Function) {
+                    self.error(
+                        export_token,
+                        "'export local function' is not supported; use 'export function'"
+                            .to_string(),
+                    );
+                    self.parse_local_function(local_token, attributes, false, false)
+                } else {
+                    if !attributes.is_empty() {
+                        self.error(
+                            export_token,
+                            "attributes are only allowed on exported functions".to_string(),
+                        );
+                    }
+                    self.parse_local_assignment(export_token, false, true)
+                }
+            }
+            TokenKind::Function => self.parse_local_function(export_token, attributes, true, true),
+            TokenKind::Identifier(name) if name == "const" => {
+                self.advance_span();
+                if !attributes.is_empty() {
+                    self.error(
+                        export_token,
+                        "attributes are only allowed on exported functions".to_string(),
+                    );
+                }
+                if matches!(self.peek(), TokenKind::Function) {
+                    self.error(
+                        export_token,
+                        "'export const function' is not supported; use 'export function'"
+                            .to_string(),
+                    );
+                    self.parse_local_function(export_token, Vec::new(), true, false)
+                } else {
+                    self.parse_local_assignment(export_token, true, true)
+                }
+            }
+            _ => {
+                let span = self.current_span();
+                self.error(
+                    span,
+                    "'export' must be followed by 'type', 'local', 'const', or 'function'"
+                        .to_string(),
+                );
+                return Statement::Error(export_token.merge(span));
+            }
+        };
+
+        self.register_exported_names(&statement);
+        statement
+    }
+
+    fn register_exported_names(&mut self, statement: &Statement) {
+        let mut names = Vec::new();
+        match statement {
+            Statement::LocalAssignment(local) if local.is_exported => {
+                names.extend(local.names.iter().map(|name| &name.name));
+            }
+            Statement::LocalFunction(function) if function.is_exported => {
+                names.push(&function.name);
+            }
+            _ => {}
+        }
+
+        for token in names {
+            let TokenKind::Identifier(name) = &token.kind else {
+                continue;
+            };
+            if !self.exported_names.insert(name.clone()) {
+                self.error(
+                    token.span,
+                    format!("duplicate exported identifier '{name}'"),
+                );
+            }
+        }
     }
 
     fn parse_attributed_function(&mut self) -> Statement {
@@ -782,6 +917,10 @@ impl Parser<'_> {
 
         if matches!(self.peek(), TokenKind::Function) {
             return self.parse_function_decl_with_attributes(attributes);
+        }
+
+        if matches!(self.peek(), TokenKind::Identifier(name) if name == "export") {
+            return self.parse_export_statement(attributes);
         }
 
         let span = self.current_span();

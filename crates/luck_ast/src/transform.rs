@@ -163,6 +163,7 @@ pub trait AstTransform {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
+            | Expression::Integer(_) // Luau
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::Error(_)) => expr,
@@ -223,6 +224,12 @@ pub trait AstTransform {
                 cast.type_annotation = self.transform_type(cast.type_annotation);
                 Expression::TypeCast(cast)
             }
+            Expression::TypeInstantiation(mut instantiation) => {
+                instantiation.expr = self.transform_expression(instantiation.expr);
+                instantiation.type_args.args =
+                    self.walk_punctuated_types(instantiation.type_args.args);
+                Expression::TypeInstantiation(instantiation)
+            }
         }
     }
 
@@ -274,11 +281,20 @@ pub trait AstTransform {
     fn walk_function_call(&mut self, call: FunctionCall) -> FunctionCall {
         let callee = self.transform_expression(call.callee);
         let args = self.walk_function_args(call.args);
+        let explicit_type_args = call
+            .explicit_type_args
+            .map(|type_args| Box::new(self.walk_type_args(*type_args)));
         FunctionCall {
             callee,
             args,
+            explicit_type_args,
             ..call
         }
+    }
+
+    fn walk_type_args(&mut self, mut type_args: TypeArgs) -> TypeArgs {
+        type_args.args = self.walk_punctuated_types(type_args.args);
+        type_args
     }
 
     fn walk_function_args(&mut self, args: FunctionArgs) -> FunctionArgs {
@@ -418,6 +434,10 @@ pub trait AstTransform {
             Type::Intersection(mut intersection) => {
                 intersection.types = self.walk_punctuated_types(intersection.types);
                 Type::Intersection(intersection)
+            }
+            Type::Negation(mut negation) => {
+                negation.type_value = self.transform_type(negation.type_value);
+                Type::Negation(negation)
             }
             Type::Parenthesized(mut paren) => {
                 paren.type_value = self.transform_type(paren.type_value);
@@ -575,6 +595,7 @@ mod tests {
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
                 is_const: false,
+                is_exported: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("x".into())),
                     type_annotation: None,
@@ -614,6 +635,7 @@ mod tests {
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
                 is_const: false,
+                is_exported: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("t".into())),
                     type_annotation: None,
@@ -656,6 +678,7 @@ mod tests {
                 span: span(),
                 attributes: Vec::new(),
                 is_const: false,
+                is_exported: false,
                 name: token(TokenKind::Identifier("f".into())),
                 body,
             }))],
@@ -727,6 +750,7 @@ mod tests {
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
                 is_const: false,
+                is_exported: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("x".into())),
                     type_annotation: None,

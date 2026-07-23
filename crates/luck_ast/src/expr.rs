@@ -14,6 +14,8 @@ pub enum Expression {
     False(Span),
     True(Span),
     Number(Literal),
+    /// Luau: exact 64-bit integer literal with an `i` suffix.
+    Integer(Literal),
     StringLiteral(Literal),
     VarArg(Span),
     FunctionDef(Box<FunctionDef>),
@@ -26,6 +28,8 @@ pub enum Expression {
     IfExpression(Box<IfExpression>),
     InterpolatedString(Box<InterpolatedString>),
     TypeCast(Box<TypeCast>),
+    /// Luau: explicit type-parameter instantiation (`f<<T>>`).
+    TypeInstantiation(Box<TypeInstantiation>),
     Error(Span),
 }
 
@@ -53,6 +57,10 @@ pub struct FunctionCall {
     pub args: FunctionArgs,
     /// `:method` name.
     pub method: Option<Token>,
+    /// Luau: explicit type arguments between a method name and its call
+    /// arguments (`receiver:method<<T>>()`). Non-method instantiation is
+    /// represented by [`Expression::TypeInstantiation`] instead.
+    pub explicit_type_args: Option<Box<crate::types::TypeArgs>>,
 }
 
 /// Function call arguments: parenthesized list, table literal, or string literal.
@@ -161,4 +169,12 @@ pub struct TypeCast {
     pub span: Span,
     pub expr: Expression,
     pub type_annotation: Type,
+}
+
+/// Luau explicit type-parameter instantiation (`expr<<T, U>>`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeInstantiation {
+    pub span: Span,
+    pub expr: Expression,
+    pub type_args: crate::types::TypeArgs,
 }

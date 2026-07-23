@@ -8,8 +8,8 @@
 use luck_ast::shared::Punctuated;
 use luck_ast::types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
-    IntersectionType, NamedType, OptionalType, ParenType, TableType, Type, TypeArgs, TypeField,
-    TypePack, TypeofType, UnionType, VariadicType,
+    IntersectionType, NamedType, NegationType, OptionalType, ParenType, TableType, Type, TypeArgs,
+    TypeField, TypePack, TypeofType, UnionType, VariadicType,
 };
 use luck_token::{Span, Token, TokenKind};
 
@@ -140,7 +140,7 @@ impl Parser<'_> {
     }
 
     fn parse_intersection_level(&mut self) -> Type {
-        let first = self.parse_postfix_type();
+        let first = self.parse_negation_type();
         if !matches!(self.peek(), TokenKind::Ampersand) {
             return first;
         }
@@ -155,7 +155,7 @@ impl Parser<'_> {
         let mut items = vec![first];
         while matches!(self.peek(), TokenKind::Ampersand) {
             self.advance_span();
-            let next = self.parse_postfix_type();
+            let next = self.parse_negation_type();
             if matches!(next, Type::Optional(_)) {
                 self.error(next.span(), MIXED_TYPE_MSG.to_string());
             }
@@ -182,6 +182,17 @@ impl Parser<'_> {
             }));
         }
         result
+    }
+
+    fn parse_negation_type(&mut self) -> Type {
+        if self.version.has_negation_types() && matches!(self.peek(), TokenKind::Tilde) {
+            let tilde = self.advance_span();
+            let type_value = self.parse_negation_type();
+            let span = tilde.merge(type_value.span());
+            Type::Negation(Box::new(NegationType { span, type_value }))
+        } else {
+            self.parse_postfix_type()
+        }
     }
 
     fn parse_primary_type(&mut self) -> Type {
@@ -272,7 +283,7 @@ impl Parser<'_> {
     }
 
     /// Generic argument list at a use site: `<T, U..., (A, B)>`.
-    fn parse_type_args(&mut self) -> TypeArgs {
+    pub(crate) fn parse_type_args(&mut self) -> TypeArgs {
         let open = self.advance_span(); // `<`
         let mut args = Punctuated::<Type>::empty();
 

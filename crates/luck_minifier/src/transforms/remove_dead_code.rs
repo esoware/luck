@@ -125,7 +125,10 @@ fn is_const_truthy(expr: &Expression) -> Option<bool> {
     if is_nil(expr) {
         return Some(false);
     }
-    if matches!(expr, Expression::Number(_) | Expression::StringLiteral(_)) {
+    if matches!(
+        expr,
+        Expression::Number(_) | Expression::Integer(_) | Expression::StringLiteral(_)
+    ) {
         return Some(true);
     }
     None
@@ -390,10 +393,11 @@ fn classify_dead_local(stmt: &Statement, referenced: &FxHashSet<CompactString>) 
         Statement::LocalAssignment(local) => {
             // `<close>` runs __close at scope exit and `<const>` affects
             // validity - an attributed local is never dead.
-            if local
-                .names
-                .iter()
-                .any(|attributed| attributed.attrib.is_some())
+            if local.is_exported
+                || local
+                    .names
+                    .iter()
+                    .any(|attributed| attributed.attrib.is_some())
             {
                 return DeadLocalAction::Keep;
             }
@@ -422,6 +426,9 @@ fn classify_dead_local(stmt: &Statement, referenced: &FxHashSet<CompactString>) 
             }
         }
         Statement::LocalFunction(local_func) => {
+            if local_func.is_exported {
+                return DeadLocalAction::Keep;
+            }
             let name = ident_name(&local_func.name);
             if referenced.contains(name) {
                 DeadLocalAction::Keep

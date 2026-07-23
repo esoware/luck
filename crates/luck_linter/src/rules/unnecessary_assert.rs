@@ -68,6 +68,7 @@ fn check_call(call: &FunctionCall, ctx: &LintContext, out: &mut Vec<LintDiagnost
         // 0 and "" are truthy in Lua, so every number and string passes.
         Expression::True(_)
         | Expression::Number(_)
+        | Expression::Integer(_) // Luau
         | Expression::StringLiteral(_)
         | Expression::InterpolatedString(_)
         | Expression::TableConstructor(_)

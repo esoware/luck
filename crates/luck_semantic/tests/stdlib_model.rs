@@ -210,12 +210,85 @@ fn luau_buffer_and_vector_present() {
 }
 
 #[test]
-fn luau_math_has_no_isnan_family() {
+fn luau_integer_library_and_buffer_accessors_are_present() {
+    let integer_members = [
+        "create",
+        "fromstring",
+        "tonumber",
+        "neg",
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "rem",
+        "idiv",
+        "mod",
+        "udiv",
+        "urem",
+        "bnot",
+        "band",
+        "bor",
+        "bxor",
+        "btest",
+        "min",
+        "max",
+        "clamp",
+        "lt",
+        "le",
+        "gt",
+        "ge",
+        "ult",
+        "ule",
+        "ugt",
+        "uge",
+        "lshift",
+        "rshift",
+        "arshift",
+        "lrotate",
+        "rrotate",
+        "extract",
+        "replace",
+        "countrz",
+        "countlz",
+        "bswap",
+        "maxsigned",
+        "minsigned",
+    ];
+
+    for library in [lib(LuaVersion::Luau), roblox()] {
+        assert!(library.lookup(&path(&["integer"])).is_some());
+        for member in integer_members {
+            assert!(
+                library.lookup(&path(&["integer", member])).is_some(),
+                "integer.{member} should be modeled"
+            );
+        }
+        assert!(library.lookup(&path(&["buffer", "readinteger"])).is_some());
+        assert!(library.lookup(&path(&["buffer", "writeinteger"])).is_some());
+    }
+
+    assert!(lib(LuaVersion::Lua54).lookup(&path(&["integer"])).is_none());
+}
+
+#[test]
+fn luau_math_has_predicates_and_new_constants() {
     for library in [lib(LuaVersion::Luau), roblox()] {
         for name in ["isnan", "isinf", "isfinite"] {
             assert!(
-                library.lookup(&path(&["math", name])).is_none(),
-                "math.{name} does not exist in Luau"
+                matches!(
+                    library.lookup(&path(&["math", name])),
+                    Some(StdlibEntry::Function(_))
+                ),
+                "math.{name} should be modeled as a function"
+            );
+        }
+        for name in ["nan", "e", "phi", "sqrt2", "tau"] {
+            assert!(
+                matches!(
+                    library.lookup(&path(&["math", name])),
+                    Some(StdlibEntry::Constant(_))
+                ),
+                "math.{name} should be modeled as a constant"
             );
         }
     }

@@ -297,11 +297,11 @@
         },
         {
           "name": "constant.numeric.hex.luau",
-          "match": "\\b0[xX][0-9A-Fa-f_]+\\b"
+          "match": "\\b0[xX][0-9A-Fa-f_]+i?\\b"
         },
         {
           "name": "constant.numeric.binary.luau",
-          "match": "\\b0[bB][01_]+\\b"
+          "match": "\\b0[bB][01_]+i?\\b"
         },
         {
           "name": "constant.numeric.float.luau",
@@ -309,7 +309,7 @@
         },
         {
           "name": "constant.numeric.decimal.luau",
-          "match": "\\b\\d[\\d_]*\\b"
+          "match": "\\b\\d[\\d_]*i?\\b"
         }
       ]
     },
@@ -326,8 +326,16 @@
       "match": "\\bcontinue\\b(?=\\s*(?:--|$|;|\\bend\\b|\\buntil\\b|\\belse\\b|\\belseif\\b))"
     },
     "keyword-modifier": {
-      "name": "storage.modifier.local.luau",
-      "match": "\\b(local)\\b"
+      "patterns": [
+        {
+          "name": "storage.modifier.local.luau",
+          "match": "\\b(local)\\b"
+        },
+        {
+          "name": "storage.modifier.export.luau",
+          "match": "\\b(export)\\b(?=\\s+(?:local|const|function)\\b)"
+        }
+      ]
     },
     "self": {
       "name": "variable.language.self.luau",
@@ -436,7 +444,7 @@
         },
         {
           "name": "support.type.primitive.luau",
-          "match": "\\b(any|never|unknown|nil|boolean|number|string|thread|userdata|buffer|vector|self)\\b"
+          "match": "\\b(any|never|unknown|nil|boolean|number|integer|string|thread|userdata|buffer|vector|self)\\b"
         },
         {
           "name": "constant.language.luau",

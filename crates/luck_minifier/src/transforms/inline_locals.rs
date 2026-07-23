@@ -43,6 +43,7 @@ struct InlineCandidate {
 fn is_closed_literal_expr(expr: &Expression) -> bool {
     match expr {
         Expression::Number(_)
+        | Expression::Integer(_) // Luau
         | Expression::StringLiteral(_)
         | Expression::Nil(_)
         | Expression::True(_)
@@ -54,6 +55,9 @@ fn is_closed_literal_expr(expr: &Expression) -> bool {
         }
         // Luau type casts are transparent wrappers.
         Expression::TypeCast(cast) => is_closed_literal_expr(&cast.expr),
+        Expression::TypeInstantiation(instantiation) => {
+            is_closed_literal_expr(&instantiation.expr)
+        }
         _ => false,
     }
 }
@@ -103,6 +107,13 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
     fn visit_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalAssignment(local) => {
+                if local.is_exported {
+                    for attributed in local.names.iter() {
+                        self.shadowed.insert(ident_name(&attributed.name).into());
+                    }
+                    self.walk_statement(stmt);
+                    return;
+                }
                 let is_single = local
                     .exprs
                     .as_ref()

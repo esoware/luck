@@ -81,6 +81,10 @@ pub struct Symbol {
     pub is_upvalue: bool,
     /// True if this symbol is assigned to after its initial definition.
     pub is_modified: bool,
+    /// Luau: true for `export local` / `export const` / `export function`
+    /// bindings. The identifier is a key of the module's export table,
+    /// so it is read externally even with zero in-module references.
+    pub is_exported: bool,
     /// The symbol this one shadows, if any.
     pub shadows: Option<SymbolId>,
 }
@@ -191,10 +195,15 @@ impl ScopeTree {
             reference_ids: Vec::new(),
             is_upvalue: false,
             is_modified: false,
+            is_exported: false,
             shadows,
         });
         self.scopes[scope.index()].symbols.push(id);
         id
+    }
+
+    pub(crate) fn mark_exported(&mut self, id: SymbolId) {
+        self.symbols[id.index()].is_exported = true;
     }
 
     /// Record a reference whose binding was already resolved on the

@@ -119,6 +119,9 @@ impl AstTransform for ParenSimplifier {
             }
             other => self.transform_expression(other),
         };
+        call.explicit_type_args = call
+            .explicit_type_args
+            .map(|type_args| Box::new(self.walk_type_args(*type_args)));
         call.args = self.walk_function_args(call.args);
         call
     }
@@ -127,6 +130,7 @@ impl AstTransform for ParenSimplifier {
 fn can_remove_parens(inner: &Expression) -> bool {
     match inner {
         Expression::Number(_)
+        | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::Nil(_)
         | Expression::True(_)
@@ -154,6 +158,7 @@ fn is_right_associative(op: BinOp) -> bool {
 fn can_unwrap_in_binop_lhs(inner: &Expression, outer: BinOp) -> bool {
     match inner {
         Expression::Number(_)
+        | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::Nil(_)
         | Expression::True(_)
@@ -182,6 +187,7 @@ fn can_unwrap_in_binop_lhs(inner: &Expression, outer: BinOp) -> bool {
 fn can_unwrap_in_binop_rhs(inner: &Expression, outer: BinOp) -> bool {
     match inner {
         Expression::Number(_)
+        | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::Nil(_)
         | Expression::True(_)
@@ -209,6 +215,7 @@ fn can_unwrap_in_binop_rhs(inner: &Expression, outer: BinOp) -> bool {
 fn can_unwrap_in_unary(inner: &Expression) -> bool {
     match inner {
         Expression::Number(_)
+        | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::Nil(_)
         | Expression::True(_)

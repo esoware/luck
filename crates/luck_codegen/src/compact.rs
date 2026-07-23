@@ -1,6 +1,7 @@
 use luck_ast::expr::{
     BinaryOp, Expression, FieldAccess, FunctionArgs, FunctionCall, FunctionDef, IfExpression,
-    IndexExpression, InterpolatedString, ParenExpression, TableConstructor, TypeCast, UnaryOp, Var,
+    IndexExpression, InterpolatedString, ParenExpression, TableConstructor, TypeCast,
+    TypeInstantiation, UnaryOp, Var,
 };
 use luck_ast::shared::{Block, Field, FunctionBody, Parameter, Punctuated};
 use luck_ast::stmt::{
@@ -11,8 +12,8 @@ use luck_ast::stmt::{
 };
 use luck_ast::types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
-    IntersectionType, NamedType, OptionalType, ParenType, TableType, Type, TypeArgs, TypeField,
-    TypePack, TypeofType, UnionType, VariadicType,
+    IntersectionType, NamedType, NegationType, OptionalType, ParenType, TableType, Type, TypeArgs,
+    TypeField, TypePack, TypeofType, UnionType, VariadicType,
 };
 use luck_token::code_buffer::CodeBuffer;
 use luck_token::token::{Token, TokenKind};
@@ -232,7 +233,11 @@ impl CompactPrinter {
     fn emit_local_function(&mut self, local_fn: &LocalFunction) {
         // Luau: `@native` etc. change runtime behavior - never drop them.
         self.emit_function_attributes(&local_fn.attributes);
-        self.emit_str(if local_fn.is_const { "const" } else { "local" });
+        if local_fn.is_exported {
+            self.emit_str("export");
+        } else {
+            self.emit_str(if local_fn.is_const { "const" } else { "local" });
+        }
         self.emit_str("function");
         self.emit_token(&local_fn.name);
         self.emit_function_body(&local_fn.body);
@@ -257,6 +262,9 @@ impl CompactPrinter {
     }
 
     fn emit_local_assignment(&mut self, local_assign: &LocalAssignment) {
+        if local_assign.is_exported {
+            self.emit_str("export");
+        }
         self.emit_str(if local_assign.is_const {
             "const"
         } else {
@@ -363,7 +371,7 @@ impl CompactPrinter {
             Expression::False(_) => self.emit_str("false"),
             Expression::True(_) => self.emit_str("true"),
             Expression::VarArg(_) => self.emit_str("..."),
-            Expression::Number(literal) => {
+            Expression::Number(literal) | Expression::Integer(literal) => {
                 self.emit_piece(&literal.text, true, PrevClass::Number);
             }
             Expression::StringLiteral(literal) => {
@@ -379,6 +387,9 @@ impl CompactPrinter {
             Expression::IfExpression(if_expr) => self.emit_if_expression(if_expr),
             Expression::InterpolatedString(interp) => self.emit_interpolated_string(interp),
             Expression::TypeCast(cast) => self.emit_type_cast(cast),
+            Expression::TypeInstantiation(instantiation) => {
+                self.emit_type_instantiation(instantiation);
+            }
             Expression::Error(_) => {}
         }
     }
@@ -402,6 +413,11 @@ impl CompactPrinter {
         if let Some(method_name) = &call.method {
             self.emit_str(":");
             self.emit_token(method_name);
+        }
+        if let Some(type_args) = &call.explicit_type_args {
+            self.emit_str("<<");
+            self.emit_punctuated_types(&type_args.args);
+            self.emit_str(">>");
         }
         self.emit_function_args(&call.args);
     }
@@ -537,6 +553,13 @@ impl CompactPrinter {
         self.emit_type(&cast.type_annotation);
     }
 
+    fn emit_type_instantiation(&mut self, instantiation: &TypeInstantiation) {
+        self.emit_expression(&instantiation.expr);
+        self.emit_str("<<");
+        self.emit_punctuated_types(&instantiation.type_args.args);
+        self.emit_str(">>");
+    }
+
     fn emit_function_body(&mut self, body: &FunctionBody) {
         // Luau: `<T, U...>` generics sit between the function name and `(`.
         if let Some(generics) = &body.generics {
@@ -609,6 +632,7 @@ impl CompactPrinter {
             Type::Optional(optional) => self.emit_optional_type(optional),
             Type::Union(union) => self.emit_union_type(union),
             Type::Intersection(intersection) => self.emit_intersection_type(intersection),
+            Type::Negation(negation) => self.emit_negation_type(negation),
             Type::Parenthesized(paren) => self.emit_paren_type(paren),
             Type::Pack(pack) => self.emit_type_pack(pack),
             Type::Singleton(token) => self.emit_token(token),
@@ -634,6 +658,11 @@ impl CompactPrinter {
         self.emit_str("<");
         self.emit_punctuated_types(&args.args);
         self.emit_str(">");
+    }
+
+    fn emit_negation_type(&mut self, negation: &NegationType) {
+        self.emit_str("~");
+        self.emit_type(&negation.type_value);
     }
 
     fn emit_typeof_type(&mut self, typeof_type: &TypeofType) {

@@ -449,6 +449,30 @@ impl Synth {
         })
     }
 
+    /// A Luau integer literal from source-form text including the `i` suffix.
+    #[must_use]
+    pub fn integer_literal(&self, text: &str) -> Expression {
+        assert!(
+            text.ends_with('i'),
+            "synth: Luau integer literal must end with 'i'"
+        );
+        Expression::Integer(Literal {
+            text: CompactString::from(text),
+            span: self.next_span(),
+        })
+    }
+
+    /// An exact Luau 64-bit integer. Negative values use a hexadecimal bit
+    /// pattern because the sign is not part of the literal token.
+    #[must_use]
+    pub fn integer_i64(&self, value: i64) -> Expression {
+        if value < 0 {
+            self.integer_literal(&format!("0x{:x}i", value as u64))
+        } else {
+            self.integer_literal(&format!("{value}i"))
+        }
+    }
+
     /// Any `f64` as an expression that evaluates back to exactly `value`.
     /// Finite integral values render with a `.0` suffix so the float subtype
     /// survives on Lua 5.3+ (use [`Synth::number_int`] where an integer is
@@ -664,6 +688,19 @@ impl Synth {
         }))
     }
 
+    /// Luau explicit type-parameter instantiation: `expr<<T, U>>`.
+    #[must_use]
+    pub fn type_instantiation(&self, expr: Expression, type_args: Vec<Type>) -> Expression {
+        Expression::TypeInstantiation(Box::new(TypeInstantiation {
+            span: self.next_span(),
+            expr: self.wrap_prefix(expr),
+            type_args: TypeArgs {
+                span: self.next_span(),
+                args: self.punctuated(type_args),
+            },
+        }))
+    }
+
     fn wrap_binop_operand(
         &self,
         operand: Expression,
@@ -705,9 +742,10 @@ impl Synth {
     /// (call callee, method receiver, index/field prefix).
     fn wrap_prefix(&self, prefix: Expression) -> Expression {
         match prefix {
-            Expression::Var(_) | Expression::FunctionCall(_) | Expression::Parenthesized(_) => {
-                prefix
-            }
+            Expression::Var(_)
+            | Expression::FunctionCall(_)
+            | Expression::Parenthesized(_)
+            | Expression::TypeInstantiation(_) => prefix,
             other => self.paren(other),
         }
     }
@@ -727,6 +765,19 @@ impl Synth {
     ) -> Expression {
         let args = self.paren_args(args);
         self.call_node(receiver, Some(name), args)
+    }
+
+    /// `receiver:name<<T, U>>(args)`.
+    #[must_use]
+    pub fn method_call_with_types(
+        &self,
+        receiver: Expression,
+        name: &str,
+        type_args: Vec<Type>,
+        args: Vec<Expression>,
+    ) -> Expression {
+        let args = self.paren_args(args);
+        self.call_node_with_types(receiver, Some(name), Some(type_args), args)
     }
 
     /// `callee{ fields }` - table-constructor argument form.
@@ -779,11 +830,27 @@ impl Synth {
         method: Option<&str>,
         args: FunctionArgs,
     ) -> Expression {
+        self.call_node_with_types(callee, method, None, args)
+    }
+
+    fn call_node_with_types(
+        &self,
+        callee: Expression,
+        method: Option<&str>,
+        type_args: Option<Vec<Type>>,
+        args: FunctionArgs,
+    ) -> Expression {
         Expression::FunctionCall(Box::new(FunctionCall {
             span: self.next_span(),
             callee: self.wrap_prefix(callee),
             args,
             method: method.map(|name| self.ident(name)),
+            explicit_type_args: type_args.map(|type_args| {
+                Box::new(TypeArgs {
+                    span: self.next_span(),
+                    args: Punctuated::from_items(type_args),
+                })
+            }),
         }))
     }
 
@@ -941,7 +1008,7 @@ impl Synth {
         sig: FnSig,
         body: Block,
     ) -> Statement {
-        self.local_function_node(name, attributes, sig, body, false)
+        self.local_function_node(name, attributes, sig, body, false, false)
     }
 
     /// Luau `const function name(params) body end` - a read-only local
@@ -954,7 +1021,19 @@ impl Synth {
         sig: FnSig,
         body: Block,
     ) -> Statement {
-        self.local_function_node(name, attributes, sig, body, true)
+        self.local_function_node(name, attributes, sig, body, true, false)
+    }
+
+    /// Luau `export function name(...) ... end`.
+    #[must_use]
+    pub fn export_function(
+        &self,
+        name: &str,
+        attributes: Vec<FunctionAttribute>,
+        sig: FnSig,
+        body: Block,
+    ) -> Statement {
+        self.local_function_node(name, attributes, sig, body, true, true)
     }
 
     fn local_function_node(
@@ -964,6 +1043,7 @@ impl Synth {
         sig: FnSig,
         body: Block,
         is_const: bool,
+        is_exported: bool,
     ) -> Statement {
         Statement::LocalFunction(Box::new(LocalFunction {
             span: self.next_span(),
@@ -971,6 +1051,7 @@ impl Synth {
             name: self.ident(name),
             body: self.function_body(sig, body),
             is_const,
+            is_exported,
         }))
     }
 
@@ -1104,7 +1185,7 @@ impl Synth {
 
     #[must_use]
     pub fn local_full(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
-        self.local_assignment(names, exprs, false)
+        self.local_assignment(names, exprs, false, false)
     }
 
     /// Luau `const names = exprs` - a `local` whose names are read-only.
@@ -1115,7 +1196,23 @@ impl Synth {
             !exprs.is_empty(),
             "synth: const declarations require an initializer"
         );
-        self.local_assignment(names, exprs, true)
+        self.local_assignment(names, exprs, true, false)
+    }
+
+    /// Luau `export local names [= exprs]`.
+    #[must_use]
+    pub fn export_local(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
+        self.local_assignment(names, exprs, false, true)
+    }
+
+    /// Luau `export const names = exprs`.
+    #[must_use]
+    pub fn export_const(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
+        assert!(
+            !exprs.is_empty(),
+            "synth: exported const declarations require an initializer"
+        );
+        self.local_assignment(names, exprs, true, true)
     }
 
     fn local_assignment(
@@ -1123,6 +1220,7 @@ impl Synth {
         names: Vec<AttributedName>,
         exprs: Vec<Expression>,
         is_const: bool,
+        is_exported: bool,
     ) -> Statement {
         let span = self.next_span();
         let names = self.punctuated(names);
@@ -1136,6 +1234,7 @@ impl Synth {
             names,
             exprs,
             is_const,
+            is_exported,
         }))
     }
 
@@ -1476,6 +1575,21 @@ impl Synth {
             span: self.next_span(),
             has_leading_ampersand: false,
             types: self.punctuated(types),
+        }))
+    }
+
+    /// Luau type negation: `~T`.
+    #[must_use]
+    pub fn ty_negation(&self, inner: Type) -> Type {
+        let inner = match inner {
+            value @ (Type::Union(_) | Type::Intersection(_) | Type::Function(_)) => {
+                self.ty_paren(value)
+            }
+            value => value,
+        };
+        Type::Negation(Box::new(NegationType {
+            span: self.next_span(),
+            type_value: inner,
         }))
     }
 
@@ -2957,5 +3071,54 @@ mod tests {
 
         let plain = synth.function_attribute("native", None);
         assert!(plain.args.is_none());
+    }
+
+    #[test]
+    fn builds_merged_luau_rfc_nodes() {
+        let synth = Synth::new().with_version(LuaVersion::Luau);
+
+        let Expression::Integer(integer) = synth.integer_i64(-1) else {
+            panic!("expected integer literal");
+        };
+        assert_eq!(integer.text.as_str(), "0xffffffffffffffffi");
+
+        let instantiated =
+            synth.type_instantiation(synth.name_expr("f"), vec![synth.ty_named("integer")]);
+        let Expression::TypeInstantiation(instantiated) = instantiated else {
+            panic!("expected type instantiation");
+        };
+        assert_eq!(instantiated.type_args.args.len(), 1);
+
+        let method = synth.method_call_with_types(
+            synth.name_expr("receiver"),
+            "map",
+            vec![synth.ty_named("string")],
+            vec![synth.string("value")],
+        );
+        let Expression::FunctionCall(method) = method else {
+            panic!("expected method call");
+        };
+        assert_eq!(
+            method
+                .explicit_type_args
+                .expect("type arguments")
+                .args
+                .len(),
+            1
+        );
+
+        assert!(matches!(
+            synth.ty_negation(synth.ty_singleton_nil()),
+            Type::Negation(_)
+        ));
+
+        let exported = synth.export_local(
+            vec![synth.attributed_name("value", Some(synth.ty_named("integer")), None)],
+            vec![synth.integer_i64(1)],
+        );
+        assert!(matches!(
+            exported,
+            Statement::LocalAssignment(local) if local.is_exported
+        ));
     }
 }

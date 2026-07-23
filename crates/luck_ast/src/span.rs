@@ -52,7 +52,9 @@ impl Expression {
             | Expression::False(span)
             | Expression::True(span)
             | Expression::VarArg(span) => *span,
-            Expression::Number(literal) | Expression::StringLiteral(literal) => literal.span,
+            Expression::Number(literal) // Lua
+            | Expression::Integer(literal) // Luau
+            | Expression::StringLiteral(literal) => literal.span,
             Expression::FunctionDef(e) => e.span,
             Expression::Var(e) => e.span(),
             Expression::FunctionCall(e) => e.span,
@@ -63,6 +65,7 @@ impl Expression {
             Expression::IfExpression(e) => e.span,
             Expression::InterpolatedString(e) => e.span,
             Expression::TypeCast(e) => e.span,
+            Expression::TypeInstantiation(e) => e.span, // Luau
             Expression::Error(span) => *span,
         }
     }
@@ -98,6 +101,7 @@ impl Type {
             Type::Optional(t) => t.span,
             Type::Union(t) => t.span,
             Type::Intersection(t) => t.span,
+            Type::Negation(t) => t.span, // Luau
             Type::Parenthesized(t) => t.span,
             Type::Pack(t) => t.span,
             Type::Singleton(t) => t.span,

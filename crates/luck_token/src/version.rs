@@ -120,6 +120,30 @@ impl LuaVersion {
         matches!(self, Self::Luau)
     }
 
+    /// Whether Luau's distinct 64-bit integer literals (`123i`) are supported.
+    #[must_use]
+    pub fn has_luau_integer_literals(self) -> bool {
+        matches!(self, Self::Luau)
+    }
+
+    /// Whether explicit type-parameter instantiation (`f<<T>>`) is supported.
+    #[must_use]
+    pub fn has_explicit_type_instantiation(self) -> bool {
+        matches!(self, Self::Luau)
+    }
+
+    /// Whether runtime values may be exported from a Luau module.
+    #[must_use]
+    pub fn has_value_exports(self) -> bool {
+        matches!(self, Self::Luau)
+    }
+
+    /// Whether Luau type negation (`~T`) is supported.
+    #[must_use]
+    pub fn has_negation_types(self) -> bool {
+        matches!(self, Self::Luau)
+    }
+
     #[must_use]
     pub fn is_luau(self) -> bool {
         matches!(self, Self::Luau)
@@ -295,6 +319,14 @@ mod tests {
         assert!(!Lua54.has_binary_literals());
         assert!(Luau.has_underscore_separators());
         assert!(!Lua54.has_underscore_separators());
+        assert!(Luau.has_luau_integer_literals());
+        assert!(!Lua54.has_luau_integer_literals());
+        assert!(Luau.has_explicit_type_instantiation());
+        assert!(!Lua54.has_explicit_type_instantiation());
+        assert!(Luau.has_value_exports());
+        assert!(!Lua54.has_value_exports());
+        assert!(Luau.has_negation_types());
+        assert!(!Lua54.has_negation_types());
         assert!(Luau.is_luau());
         assert!(!Lua54.is_luau());
         assert!(Luau.has_continue());

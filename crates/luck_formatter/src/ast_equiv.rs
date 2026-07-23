@@ -186,6 +186,9 @@ fn stmt_eq(left: &Statement, right: &Statement, path: &str) -> Result<(), AstDif
             if l.is_const != r.is_const {
                 return Err(AstDiff::new(path, "LocalFunction const-ness differs"));
             }
+            if l.is_exported != r.is_exported {
+                return Err(AstDiff::new(path, "LocalFunction export differs"));
+            }
             function_attributes_eq(&l.attributes, &r.attributes, &child(path, "LocalFunction"))?;
             function_body_eq(&l.body, &r.body, &child(path, "LocalFunction/body"))
         }
@@ -196,6 +199,9 @@ fn stmt_eq(left: &Statement, right: &Statement, path: &str) -> Result<(), AstDif
         (Statement::LocalAssignment(l), Statement::LocalAssignment(r)) => {
             if l.is_const != r.is_const {
                 return Err(AstDiff::new(path, "LocalAssignment const-ness differs"));
+            }
+            if l.is_exported != r.is_exported {
+                return Err(AstDiff::new(path, "LocalAssignment export differs"));
             }
             punctuated_eq(
                 &l.names,
@@ -305,6 +311,13 @@ fn expr_eq(left: &Expression, right: &Expression, path: &str) -> Result<(), AstD
                 Err(AstDiff::new(path, "number literals differ"))
             }
         }
+        (Expression::Integer(a), Expression::Integer(b)) => {
+            if number_raw_eq(&a.text, &b.text) {
+                Ok(())
+            } else {
+                Err(AstDiff::new(path, "integer literals differ"))
+            }
+        }
         (Expression::Var(a), Expression::Var(b)) => var_eq(a, b, path),
         (Expression::BinaryOp(a), Expression::BinaryOp(b)) => {
             if a.op != b.op {
@@ -361,6 +374,15 @@ fn expr_eq(left: &Expression, right: &Expression, path: &str) -> Result<(), AstD
                 &child(path, "TypeCast/type"),
             )
         }
+        (Expression::TypeInstantiation(a), Expression::TypeInstantiation(b)) => {
+            expr_eq(&a.expr, &b.expr, &child(path, "TypeInstantiation/expr"))?;
+            punctuated_eq(
+                &a.type_args.args,
+                &b.type_args.args,
+                &child(path, "TypeInstantiation/args"),
+                types_equiv,
+            )
+        }
         (Expression::Error(_), Expression::Error(_)) => Ok(()),
         _ => Err(AstDiff::new(
             path,
@@ -394,6 +416,21 @@ fn function_call_eq(left: &FunctionCall, right: &FunctionCall, path: &str) -> Re
         (None, None) => {}
         (Some(a), Some(b)) => token_text_eq(a, b, &child(path, "method"))?,
         _ => return Err(AstDiff::new(path, "method presence differs")),
+    }
+    match (&left.explicit_type_args, &right.explicit_type_args) {
+        (None, None) => {}
+        (Some(a), Some(b)) => punctuated_eq(
+            &a.args,
+            &b.args,
+            &child(path, "explicit_type_args"),
+            types_equiv,
+        )?,
+        _ => {
+            return Err(AstDiff::new(
+                path,
+                "explicit type argument presence differs",
+            ));
+        }
     }
     args_eq(&left.args, &right.args, &child(path, "args"))
 }
@@ -570,6 +607,10 @@ fn types_equiv(left: &Type, right: &Type, path: &str) -> Result<(), AstDiff> {
                 &child(path, "intersection"),
                 types_equiv,
             ),
+            _ => Err(type_kind_diff(left, right, path)),
+        },
+        Type::Negation(a) => match right {
+            Type::Negation(b) => types_equiv(&a.type_value, &b.type_value, path),
             _ => Err(type_kind_diff(left, right, path)),
         },
         Type::Pack(a) => match right {
@@ -800,6 +841,7 @@ fn type_kind(ty: &Type) -> &'static str {
         Type::Optional(_) => "Optional",
         Type::Union(_) => "Union",
         Type::Intersection(_) => "Intersection",
+        Type::Negation(_) => "Negation",
         Type::Parenthesized(_) => "Parenthesized",
         Type::Pack(_) => "Pack",
         Type::Singleton(_) => "Singleton",
@@ -1094,6 +1136,7 @@ fn expr_kind(expr: &Expression) -> &'static str {
         Expression::False(_) => "False",
         Expression::True(_) => "True",
         Expression::Number(_) => "Number",
+        Expression::Integer(_) => "Integer",
         Expression::StringLiteral(_) => "StringLiteral",
         Expression::VarArg(_) => "VarArg",
         Expression::FunctionDef(_) => "FunctionDef",
@@ -1106,6 +1149,7 @@ fn expr_kind(expr: &Expression) -> &'static str {
         Expression::IfExpression(_) => "IfExpression",
         Expression::InterpolatedString(_) => "InterpolatedString",
         Expression::TypeCast(_) => "TypeCast",
+        Expression::TypeInstantiation(_) => "TypeInstantiation",
         Expression::Error(_) => "Error",
     }
 }

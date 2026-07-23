@@ -662,6 +662,9 @@ is_pure = true
 must_use = true
 params = [{ kind = "number" }]
 
+[globals.math.members.e]
+kind = "constant"
+
 [globals.math.members.exp]
 kind = "function"
 min_args = 1
@@ -696,6 +699,30 @@ params = [{ kind = "number" }]
 
 [globals.math.members.huge]
 kind = "constant"
+
+[globals.math.members.isfinite]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.isinf]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.isnan]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
 
 [globals.math.members.ldexp]
 kind = "function"
@@ -776,6 +803,9 @@ is_pure = true
 must_use = true
 params = [{ kind = "number" }]
 
+[globals.math.members.nan]
+kind = "constant"
+
 [globals.math.members.noise]
 kind = "function"
 min_args = 1
@@ -789,6 +819,9 @@ params = [
 ]
 
 [globals.math.members.pi]
+kind = "constant"
+
+[globals.math.members.phi]
 kind = "constant"
 
 [globals.math.members.pow]
@@ -863,6 +896,9 @@ is_pure = true
 must_use = true
 params = [{ kind = "number" }]
 
+[globals.math.members.sqrt2]
+kind = "constant"
+
 [globals.math.members.tan]
 kind = "function"
 min_args = 1
@@ -878,6 +914,9 @@ max_args = 1
 is_pure = true
 must_use = true
 params = [{ kind = "number" }]
+
+[globals.math.members.tau]
+kind = "constant"
 
 # ---- bit32 namespace (Luau retains bit32) ----
 
@@ -1252,6 +1291,13 @@ max_args = 2
 must_use = true
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
 
+[globals.buffer.members.readinteger]
+kind = "function"
+min_args = 2
+max_args = 2
+must_use = true
+params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
+
 [globals.buffer.members.readstring]
 kind = "function"
 min_args = 3
@@ -1329,6 +1375,16 @@ min_args = 3
 max_args = 3
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
 
+[globals.buffer.members.writeinteger]
+kind = "function"
+min_args = 3
+max_args = 3
+params = [
+  { kind = "display", display = "buffer" },
+  { kind = "number" },
+  { kind = "display", display = "integer" },
+]
+
 [globals.buffer.members.writestring]
 kind = "function"
 min_args = 3
@@ -1357,6 +1413,342 @@ kind = "function"
 min_args = 3
 max_args = 3
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
+
+# ---- integer namespace ----
+
+[globals.integer]
+kind = "namespace"
+
+[globals.integer.members.create]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "number" }]
+
+[globals.integer.members.fromstring]
+kind = "function"
+min_args = 1
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "string" }, { kind = "number", required = false }]
+
+[globals.integer.members.tonumber]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }]
+
+[globals.integer.members.neg]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }]
+
+[globals.integer.members.add]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.sub]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.mul]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.div]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.rem]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.idiv]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.mod]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.udiv]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.urem]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.min]
+kind = "function"
+min_args = 1
+max_args = -1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "vararg", required = false }]
+
+[globals.integer.members.max]
+kind = "function"
+min_args = 1
+max_args = -1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "vararg", required = false }]
+
+[globals.integer.members.clamp]
+kind = "function"
+min_args = 3
+max_args = 3
+is_pure = true
+must_use = true
+params = [
+  { kind = "display", display = "integer" },
+  { kind = "display", display = "integer" },
+  { kind = "display", display = "integer" },
+]
+
+[globals.integer.members.bnot]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }]
+
+[globals.integer.members.band]
+kind = "function"
+min_args = 0
+max_args = -1
+is_pure = true
+must_use = true
+params = [{ kind = "vararg", required = false }]
+
+[globals.integer.members.bor]
+kind = "function"
+min_args = 0
+max_args = -1
+is_pure = true
+must_use = true
+params = [{ kind = "vararg", required = false }]
+
+[globals.integer.members.bxor]
+kind = "function"
+min_args = 0
+max_args = -1
+is_pure = true
+must_use = true
+params = [{ kind = "vararg", required = false }]
+
+[globals.integer.members.btest]
+kind = "function"
+min_args = 0
+max_args = -1
+is_pure = true
+must_use = true
+params = [{ kind = "vararg", required = false }]
+
+[globals.integer.members.lt]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.le]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.gt]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.ge]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.ult]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.ule]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.ugt]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.uge]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.lshift]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.rshift]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.arshift]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.lrotate]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.rrotate]
+kind = "function"
+min_args = 2
+max_args = 2
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
+
+[globals.integer.members.extract]
+kind = "function"
+min_args = 2
+max_args = 3
+is_pure = true
+must_use = true
+params = [
+  { kind = "display", display = "integer" },
+  { kind = "display", display = "integer" },
+  { kind = "display", display = "integer", required = false },
+]
+
+[globals.integer.members.replace]
+kind = "function"
+min_args = 3
+max_args = 4
+is_pure = true
+must_use = true
+params = [
+  { kind = "display", display = "integer" },
+  { kind = "display", display = "integer" },
+  { kind = "display", display = "integer" },
+  { kind = "display", display = "integer", required = false },
+]
+
+[globals.integer.members.countrz]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }]
+
+[globals.integer.members.countlz]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }]
+
+[globals.integer.members.bswap]
+kind = "function"
+min_args = 1
+max_args = 1
+is_pure = true
+must_use = true
+params = [{ kind = "display", display = "integer" }]
+
+[globals.integer.members.maxsigned]
+kind = "constant"
+
+[globals.integer.members.minsigned]
+kind = "constant"
 
 # ---- vector namespace ----
 

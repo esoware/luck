@@ -28,6 +28,13 @@ impl Rule for UnusedVariable {
                 continue;
             }
 
+            // Luau: an exported binding's identifier is the export
+            // table's key, so it is read externally and renaming it
+            // would change the module's public API.
+            if symbol.is_exported {
+                continue;
+            }
+
             // Parameters and loop variables are owned by unused_argument and
             // unused_loop_variable; reporting them here would double-fire.
             let kind_str = match symbol.kind {
@@ -86,6 +93,21 @@ mod tests {
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
         crate::test_support::run_rule(&UnusedVariable, source, LuaVersion::Luau)
+    }
+
+    #[test]
+    fn ignores_exported_bindings() {
+        let diags = run(
+            "export local answer = 42\nexport const LIMIT = 1i\nexport function helper()\nreturn 1\nend",
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_plain_local_next_to_exports() {
+        let diags = run("export local answer = 42\nlocal dead = 1");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("`dead`"));
     }
 
     #[test]

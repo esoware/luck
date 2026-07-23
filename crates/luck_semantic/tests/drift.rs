@@ -604,15 +604,26 @@ fn environment_surfaces_do_not_leak() {
     }
 }
 
-/// The original audit's headline findings, pinned forever.
+/// Deliberate catalog decisions, pinned so they only change on purpose.
 #[test]
-fn audit_spot_checks_hold() {
-    // Phantoms stay gone.
+fn stdlib_spot_checks_hold() {
     for lib in [luau(), roblox()] {
         for name in ["isnan", "isinf", "isfinite"] {
             assert!(
-                lib.lookup_str(&["math", name]).is_none(),
-                "phantom math.{name} returned"
+                matches!(
+                    lib.lookup_str(&["math", name]),
+                    Some(StdlibEntry::Function(_))
+                ),
+                "math.{name} missing"
+            );
+        }
+        for name in ["nan", "e", "phi", "sqrt2", "tau"] {
+            assert!(
+                matches!(
+                    lib.lookup_str(&["math", name]),
+                    Some(StdlibEntry::Constant(_))
+                ),
+                "math.{name} missing"
             );
         }
         assert!(lib.globals.contains_key("loadstring"));

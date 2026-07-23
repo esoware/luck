@@ -269,24 +269,55 @@ fn transform_module_body(
         }
     };
     let mut replacements = collect_require_replacements(block, path_to_slot, dependencies);
+    let mut value_exports = Vec::new();
 
-    // Luau rejects `export type` below the top level, and every bundled
-    // module body lands inside a loader function (the entry inside the
-    // wrapping do-block). Dropping the `export` keyword keeps the alias
-    // usable within its module; cross-module type imports cannot survive
-    // bundling either way.
+    // Luau rejects every form of `export` below the top level, and every
+    // bundled module body lands inside a loader function (the entry
+    // inside the wrapping do-block). Type exports can simply become
+    // private aliases. Value exports become ordinary declarations plus
+    // the frozen table Luau would implicitly return for the module.
     for stmt in &block.stmts {
-        if let luck_ast::Statement::TypeDeclaration(type_decl) = stmt
-            && type_decl.is_exported
-        {
-            // The declaration span starts at the `export` keyword.
-            let export_start = type_decl.span.start as usize;
-            replacements.push((export_start, export_start + "export".len(), String::new()));
+        match stmt {
+            luck_ast::Statement::TypeDeclaration(type_decl) if type_decl.is_exported => {
+                let start = type_decl.span.start as usize;
+                replacements.push((start, start + "export".len(), String::new()));
+            }
+            luck_ast::Statement::LocalAssignment(local) if local.is_exported => {
+                for name in local.names.iter() {
+                    if let luck_token::TokenKind::Identifier(name) = &name.name.kind {
+                        value_exports.push(name.to_string());
+                    }
+                }
+                let start = local.span.start as usize;
+                replacements.push((start, start + "export".len(), String::new()));
+            }
+            luck_ast::Statement::LocalFunction(function) if function.is_exported => {
+                if let luck_token::TokenKind::Identifier(name) = &function.name.kind {
+                    value_exports.push(name.to_string());
+                }
+                // `export function` declares a module-local function.
+                // An attributed statement's span starts at the first
+                // attribute rather than at `export`, so the head is
+                // rewritten from the last attribute onward; comments
+                // between the keywords do not survive.
+                match function.attributes.last() {
+                    Some(attr) => replacements.push((
+                        attr.span.end as usize,
+                        function.name.span.start as usize,
+                        "\nlocal function ".to_string(),
+                    )),
+                    None => {
+                        let start = function.span.start as usize;
+                        replacements.push((start, start + "export".len(), "local".to_string()));
+                    }
+                }
+            }
+            _ => {}
         }
     }
     replacements.sort_by_key(|(start, _, _)| *start);
 
-    if replacements.is_empty() {
+    if replacements.is_empty() && value_exports.is_empty() {
         return source.to_string();
     }
 
@@ -305,6 +336,22 @@ fn transform_module_body(
 
     if cursor < source.len() {
         result.push_str(&source[cursor..]);
+    }
+
+    if !value_exports.is_empty() {
+        if !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push_str("return table.freeze({");
+        for (index, name) in value_exports.iter().enumerate() {
+            if index != 0 {
+                result.push(',');
+            }
+            result.push_str(name);
+            result.push('=');
+            result.push_str(name);
+        }
+        result.push_str("})\n");
     }
 
     result
@@ -442,6 +489,53 @@ mod tests {
         assert!(
             output.contains("local m = __luck_require(1) :: any"),
             "{output}"
+        );
+    }
+
+    #[test]
+    fn luau_value_exports_are_lowered_inside_bundle_wrappers() {
+        let dependency = "\
+export type Public = integer
+export local value = 129312i
+export const LIMIT = 0xffffffffffffffffi
+@native
+export function get(): integer
+    return value
+end
+";
+        let modules = vec![
+            module("src/dep.luau", dependency, vec![]),
+            module(
+                "src/main.luau",
+                "local dep = require(\"dep\")\nprint(dep.get())\n",
+                vec![dep("dep", "src/dep.luau")],
+            ),
+        ];
+        let graph = DependencyGraph {
+            topo_order: vec![ModuleId(0), ModuleId(1)],
+            entry_id: ModuleId(1),
+            modules,
+            warnings: vec![],
+        };
+        let output = emit(&graph, luck_token::LuaVersion::Luau);
+
+        assert!(!output.contains("export "), "{output}");
+        assert!(output.contains("local value = 129312i"), "{output}");
+        assert!(
+            output.contains("const LIMIT = 0xffffffffffffffffi"),
+            "{output}"
+        );
+        assert!(output.contains("@native\nlocal function get()"), "{output}");
+        assert!(
+            output.contains("return table.freeze({value=value,LIMIT=LIMIT,get=get})"),
+            "{output}"
+        );
+
+        let parsed = luck_parser::parse(output.clone(), luck_token::LuaVersion::Luau);
+        assert!(
+            parsed.errors.is_empty(),
+            "lowered Luau bundle must reparse: {:?}\n{output}",
+            parsed.errors
         );
     }
 

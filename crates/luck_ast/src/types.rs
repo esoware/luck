@@ -19,6 +19,8 @@ pub enum Type {
     Optional(Box<OptionalType>),
     Union(Box<UnionType>),
     Intersection(Box<IntersectionType>),
+    /// Luau: complement of a type (`~T`).
+    Negation(Box<NegationType>),
     Parenthesized(Box<ParenType>),
     /// `(T, U)` / `()` - only valid where a type pack is expected
     /// (return positions, generic argument lists).
@@ -126,6 +128,13 @@ pub struct IntersectionType {
     /// Leading `&` (allowed in multiline definitions).
     pub has_leading_ampersand: bool,
     pub types: Punctuated<Type>,
+}
+
+/// Luau negation type: `~T`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NegationType {
+    pub span: Span,
+    pub type_value: Type,
 }
 
 /// Parenthesized type: `(T)`.

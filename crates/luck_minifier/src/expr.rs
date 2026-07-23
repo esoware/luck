@@ -44,6 +44,7 @@ fn is_literal_expression(expr: &Expression) -> bool {
 pub fn is_pure_expression(expr: &Expression, allow_var_reads: bool) -> bool {
     match expr {
         Expression::Number(_)
+        | Expression::Integer(_) // Luau integers are exact literal values.
         | Expression::StringLiteral(_)
         | Expression::Nil(_)
         | Expression::True(_)
@@ -91,6 +92,10 @@ pub fn is_pure_expression(expr: &Expression, allow_var_reads: bool) -> bool {
         Expression::VarArg(_) => true,
         // Luau type casts are transparent wrappers - purity depends on the inner expression
         Expression::TypeCast(cast) => is_pure_expression(&cast.expr, allow_var_reads),
+        // Explicit type arguments have no runtime evaluation of their own.
+        Expression::TypeInstantiation(instantiation) => {
+            is_pure_expression(&instantiation.expr, allow_var_reads)
+        }
         _ => false,
     }
 }
@@ -99,7 +104,10 @@ pub fn is_pure_expression(expr: &Expression, allow_var_reads: bool) -> bool {
 /// Numbers, strings, tables, and functions are always truthy in Lua.
 pub fn is_always_truthy(expr: &Expression) -> bool {
     match expr {
-        Expression::Number(_) | Expression::StringLiteral(_) | Expression::FunctionDef(_) => true,
+        Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::FunctionDef(_) => true,
         Expression::TableConstructor(_) => true,
         Expression::True(_) => true,
         Expression::Parenthesized(paren) => is_always_truthy(&paren.expr),

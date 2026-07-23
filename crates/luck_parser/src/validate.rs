@@ -296,6 +296,7 @@ impl ConstWriteChecker<'_> {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
+            | Expression::Integer(_) // Luau
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::Error(_) => {}
@@ -326,6 +327,9 @@ impl ConstWriteChecker<'_> {
                 }
             }
             Expression::TypeCast(cast) => self.check_expression(&cast.expr),
+            Expression::TypeInstantiation(instantiation) => {
+                self.check_expression(&instantiation.expr);
+            }
         }
     }
 }

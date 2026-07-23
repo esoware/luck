@@ -141,7 +141,7 @@ fn primitive_type_names(ctx: &LintContext) -> &'static [&'static str] {
     if ctx.semantic.version.is_luau() {
         &[
             "nil", "boolean", "number", "string", "table", "function", "thread", "userdata",
-            "buffer", "vector",
+            "buffer", "vector", "integer",
         ]
     } else {
         &[

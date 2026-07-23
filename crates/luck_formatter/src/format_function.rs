@@ -9,6 +9,7 @@ use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Literal};
 use luck_ast::shared::{FunctionBody, Parameter, Punctuated, VarArgParam};
 use luck_token::Token;
 
+use crate::format_type::FormatExplicitTypeArgs;
 use crate::ir::*;
 use crate::tokens::FormatToken;
 use crate::{CallParentheses, SpaceAfterFunction};
@@ -142,6 +143,7 @@ impl Format for VarArgParam {
 /// A single link in a method/call chain: optional `:method` accessor + args.
 struct ChainSegment<'a> {
     accessor: Option<&'a Token>,
+    explicit_type_args: Option<&'a luck_ast::types::TypeArgs>,
     args: &'a FunctionArgs,
 }
 
@@ -152,6 +154,7 @@ fn collect_chain(call: &FunctionCall) -> (&Expression, Vec<ChainSegment<'_>>) {
     loop {
         segments.push(ChainSegment {
             accessor: current.method.as_ref(),
+            explicit_type_args: current.explicit_type_args.as_deref(),
             args: &current.args,
         });
         match &current.callee {
@@ -187,6 +190,9 @@ impl Format for FunctionCall {
                             token(":").fmt(f);
                             FormatToken(name).fmt(f);
                         }
+                        if let Some(type_args) = segment.explicit_type_args {
+                            FormatExplicitTypeArgs(type_args).fmt(f);
+                        }
                         segment.args.fmt(f);
                     }
                 }))
@@ -199,6 +205,9 @@ impl Format for FunctionCall {
                 if let Some(name) = segment.accessor {
                     token(":").fmt(f);
                     FormatToken(name).fmt(f);
+                }
+                if let Some(type_args) = segment.explicit_type_args {
+                    FormatExplicitTypeArgs(type_args).fmt(f);
                 }
                 segment.args.fmt(f);
             }

@@ -22,7 +22,7 @@ fn extract_single_assignment_parts(stmt: &Statement) -> Option<(&Token, &Express
         Statement::LocalAssignment(local) => {
             // Const declarations stay unmerged: mixing them with plain
             // locals in one statement would extend or drop const-ness.
-            if local.is_const {
+            if local.is_const || local.is_exported {
                 return None;
             }
             if let Some(exprs) = &local.exprs {
@@ -132,6 +132,7 @@ impl AstTransform for LocalMerger {
                             names: Punctuated::from_items(group_names),
                             exprs: Some(Punctuated::from_items(group_exprs)),
                             is_const: false,
+                            is_exported: false,
                         };
                         merged.push(self.transform_statement(Statement::LocalAssignment(
                             Box::new(merged_local),
@@ -177,6 +178,7 @@ impl AstTransform for LocalMerger {
                         names: Punctuated::from_items(names),
                         exprs: None,
                         is_const: false,
+                        is_exported: false,
                     })));
                 } else {
                     let stmt = group.pop().expect("group holds the first statement");
@@ -203,7 +205,11 @@ impl AstTransform for LocalMerger {
 }
 
 fn is_bare_local(stmt: &Statement) -> bool {
-    matches!(stmt, Statement::LocalAssignment(local) if local.exprs.is_none() && !local.is_const)
+    matches!(
+        stmt,
+        Statement::LocalAssignment(local)
+            if local.exprs.is_none() && !local.is_const && !local.is_exported
+    )
 }
 
 fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
@@ -213,6 +219,7 @@ fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
     while let Some(stmt) = iter.next() {
         if let Statement::LocalAssignment(ref local) = stmt
             && local.exprs.is_none()
+            && !local.is_exported
         {
             let local_names: Vec<CompactString> = local
                 .names
@@ -254,6 +261,7 @@ fn fuse_bare_locals(stmts: Vec<Statement>) -> Vec<Statement> {
                         names: local.names.clone(),
                         exprs: Some(assign.values),
                         is_const: false,
+                        is_exported: false,
                     }));
                     result.push(fused);
                     continue;

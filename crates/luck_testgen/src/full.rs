@@ -36,8 +36,8 @@ const BUILTIN_CALLEES: [&str; 12] = [
     "math.floor",
 ];
 
-const BUILTIN_TYPES: [&str; 7] = [
-    "number", "string", "boolean", "any", "unknown", "thread", "never",
+const BUILTIN_TYPES: [&str; 8] = [
+    "number", "integer", "string", "boolean", "any", "unknown", "thread", "never",
 ];
 
 pub struct FullGenerator {
@@ -46,6 +46,10 @@ pub struct FullGenerator {
     out: String,
     indent: usize,
     stmt_depth: usize,
+    /// Luau: this program exports values instead of returning a table.
+    /// The two mechanisms are mutually exclusive, so the choice is made
+    /// once per program.
+    uses_value_exports: bool,
     vararg_fns: Vec<bool>,
     names: Vec<String>,
     /// Names the validator treats as read-only (const bindings, 5.5 for
@@ -65,6 +69,7 @@ impl FullGenerator {
             out: String::new(),
             indent: 0,
             stmt_depth: 0,
+            uses_value_exports: false,
             // The chunk itself is a vararg function in every version.
             vararg_fns: vec![true],
             names: Vec::new(),
@@ -76,11 +81,21 @@ impl FullGenerator {
         }
     }
 
-    pub fn program(mut self, statement_budget: usize) -> String {
+    pub fn program(self, statement_budget: usize) -> String {
+        self.program_impl(statement_budget, true)
+    }
+
+    fn program_impl(mut self, statement_budget: usize, allow_value_exports: bool) -> String {
+        self.uses_value_exports =
+            allow_value_exports && self.version.has_value_exports() && self.rng.chance(30);
         self.prelude();
         self.class();
         for _ in 0..statement_budget {
-            self.statement();
+            if self.uses_value_exports && self.rng.chance(15) {
+                self.export_decl();
+            } else {
+                self.statement();
+            }
         }
         self.module_return();
         self.out
@@ -204,6 +219,18 @@ impl FullGenerator {
     }
 
     fn module_return(&mut self) {
+        // Luau: an export module may not also return at module scope.
+        if self.uses_value_exports {
+            let local = self.fresh_name();
+            let value = self.expr(1);
+            self.line(&format!("export local {local} = {value}"));
+            let function = self.fresh_name();
+            self.readonly_names.push(function.clone());
+            let param = self.fresh_name();
+            self.line(&format!("export function {function}({param}: number)"));
+            self.function_body(false);
+            return;
+        }
         let exported = self.known_name();
         self.vararg_fns.push(false);
         let extra = self.expr(1);
@@ -211,6 +238,37 @@ impl FullGenerator {
         self.line(&format!(
             "return {{ exported = {exported}, build = function() return {extra} end }}"
         ));
+    }
+
+    /// Luau: one `export` declaration at module scope. Names come from
+    /// `fresh_name`, which never repeats, so duplicate-export errors
+    /// cannot arise.
+    fn export_decl(&mut self) {
+        match self.rng.below(3) {
+            0 => {
+                let name = self.fresh_name();
+                let annotation = self.type_expr(1);
+                let value = self.expr(2);
+                self.line(&format!("export local {name}: {annotation} = {value}"));
+            }
+            1 => {
+                let name = self.fresh_name();
+                self.readonly_names.push(name.clone());
+                let value = self.expr(2);
+                self.line(&format!("export const {name} = {value}"));
+            }
+            _ => {
+                let name = self.fresh_name();
+                self.readonly_names.push(name.clone());
+                let param = self.fresh_name();
+                if self.rng.chance(30) {
+                    self.line("@native");
+                }
+                self.line(&format!("export function {name}({param}: number)"));
+                self.function_body(false);
+                self.callables.push(name);
+            }
+        }
     }
 
     fn statement(&mut self) {
@@ -614,7 +672,7 @@ impl FullGenerator {
     }
 
     fn number_literal(&mut self) -> String {
-        match self.rng.below(8) {
+        match self.rng.below(10) {
             0 => format!("{}", self.rng.below(10_000)),
             1 => format!("{}.{}", self.rng.below(100), self.rng.below(100)),
             2 => format!("0x{:X}", self.rng.below(0xFFFF)),
@@ -627,6 +685,12 @@ impl FullGenerator {
                 format!("0b{:b}", self.rng.below(256))
             }
             7 if self.version.has_underscore_separators() => "1_000_000".to_string(),
+            8 if self.version.has_luau_integer_literals() => "1_000_000i".to_string(),
+            9 if self.version.has_luau_integer_literals() => match self.rng.below(3) {
+                0 => format!("{}i", self.rng.below(10_000)),
+                1 => format!("0x{:X}i", self.rng.below(0xFFFF)),
+                _ => format!("0b{:b}i", self.rng.below(256)),
+            },
             _ => format!("{}", self.rng.below(100)),
         }
     }
@@ -737,7 +801,18 @@ impl FullGenerator {
     }
 
     fn luau_expr(&mut self, depth: usize) -> String {
-        match self.rng.below(4) {
+        match self.rng.below(6) {
+            4 if self.version.has_explicit_type_instantiation() => {
+                let callee = self.known_callable();
+                let type_arg = self.leaf_type();
+                let arg = self.expr(depth - 1);
+                format!("{callee}<<{type_arg}>>({arg})")
+            }
+            5 if self.version.has_explicit_type_instantiation() => {
+                let receiver = self.known_name();
+                let type_arg = self.leaf_type();
+                format!("{receiver}:clone<<{type_arg}>>()")
+            }
             0 => {
                 let operand = self.expr(depth - 1);
                 let annotation = self.type_expr(1);
@@ -793,7 +868,8 @@ impl FullGenerator {
         if depth == 0 {
             return self.leaf_type();
         }
-        match self.rng.below(10) {
+        match self.rng.below(11) {
+            9 if self.version.has_negation_types() => format!("~{}", self.leaf_type()),
             0..=2 => self.leaf_type(),
             3 => {
                 let inner = BUILTIN_TYPES[self.rng.below(BUILTIN_TYPES.len())];
@@ -858,6 +934,13 @@ pub fn generate_full(seed: u64, version: LuaVersion, statement_budget: usize) ->
     FullGenerator::new(seed, version).program(statement_budget)
 }
 
+/// Like [`generate_full`], but safe to splice into a nested block
+/// (`do ... end` wrappers): Luau value exports are only valid at module
+/// scope, so the export-module mode is disabled.
+pub fn generate_full_embeddable(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
+    FullGenerator::new(seed, version).program_impl(statement_budget, false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -878,6 +961,35 @@ mod tests {
             assert!(!lua51.contains("<const>"), "5.1 must not emit attributes");
             assert!(!lua51.contains("continue"), "5.1 must not emit continue");
             assert!(!lua51.contains("0b"), "5.1 must not emit binary literals");
+            assert!(!lua51.contains("export local"), "5.1 must not emit exports");
+            assert!(!lua51.contains("export const"), "5.1 must not emit exports");
+            assert!(
+                !lua51.contains("export function"),
+                "5.1 must not emit exports"
+            );
+            assert!(!lua51.contains("<<"), "5.1 must not emit instantiation");
+            assert!(
+                !lua51.contains("1_000_000i"),
+                "5.1 must not emit integer literals"
+            );
+        }
+    }
+
+    #[test]
+    fn luau_emits_merged_rfc_constructs() {
+        let mut all = String::new();
+        for seed in 0..16 {
+            all.push_str(&generate_full(seed, LuaVersion::Luau, 60));
+        }
+        for needle in [
+            "export local",
+            "export const",
+            "export function",
+            "1_000_000i",
+            "<<",
+            "= ~",
+        ] {
+            assert!(all.contains(needle), "expected generated {needle}");
         }
     }
 }

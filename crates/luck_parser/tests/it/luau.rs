@@ -665,3 +665,147 @@ fn empty_interpolation_rejected() {
     assert_no_errors(&parse_luau("return ``"));
     assert_no_errors(&parse_luau("return `a{1}b`"));
 }
+
+#[test]
+fn integer_literals_have_a_distinct_ast_node() {
+    let result = parse_luau(
+        "return 1i, 1_000_000i, 0xffffffffffffffffi, \
+         0b1000000000000000000000000000000000000000000000000000000000000000i",
+    );
+    assert_no_errors(&result);
+    let Some(last) = result.block.last_stmt.as_deref() else {
+        panic!("expected return");
+    };
+    let LastStatement::Return(ret) = last else {
+        panic!("expected return");
+    };
+    assert!(
+        ret.exprs
+            .iter()
+            .all(|expr| matches!(expr, Expression::Integer(_)))
+    );
+
+    for source in [
+        "return 9223372036854775808i",
+        "return 0x10000000000000000i",
+        "return 123ii",
+        "return 123.0i",
+        "return 0b250i",
+    ] {
+        assert!(
+            !parse_luau(source).errors.is_empty(),
+            "{source} must be rejected"
+        );
+    }
+
+    // The suffix binds to the literal, not the unary minus, so the
+    // decimal boundary value overflows even when negated; i64::MIN is
+    // only spellable as a hex bit pattern.
+    assert_no_errors(&parse_luau("return -123i"));
+    assert_no_errors(&parse_luau("return 0x8000000000000000i"));
+    assert!(
+        !parse_luau("return -9223372036854775808i").errors.is_empty(),
+        "decimal i64::MIN spelling must overflow"
+    );
+}
+
+#[test]
+fn explicit_type_instantiation_is_a_suffix() {
+    let result = parse_luau("return module.f<<number, string>>(value)");
+    assert_no_errors(&result);
+    let Some(LastStatement::Return(ret)) = result.block.last_stmt.as_deref() else {
+        panic!("expected return");
+    };
+    let Some(Expression::FunctionCall(call)) = ret.exprs.first() else {
+        panic!("expected call");
+    };
+    let Expression::TypeInstantiation(instantiation) = &call.callee else {
+        panic!("expected explicit type instantiation");
+    };
+    assert_eq!(instantiation.type_args.args.len(), 2);
+
+    for source in [
+        "return f<<number>>",
+        "return t.f<<number>>()",
+        "return t:f<<number>>()",
+        "return t[\"f\"]<<number>>()",
+    ] {
+        assert_no_errors(&parse_luau(source));
+    }
+
+    let method = parse_luau("return t:f<<number, string>>()");
+    let Some(LastStatement::Return(ret)) = method.block.last_stmt.as_deref() else {
+        panic!("expected return");
+    };
+    let Some(Expression::FunctionCall(call)) = ret.exprs.first() else {
+        panic!("expected method call");
+    };
+    assert_eq!(
+        call.explicit_type_args
+            .as_ref()
+            .expect("method type arguments")
+            .args
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn value_exports_parse_and_enforce_module_rules() {
+    let result = parse_luau(
+        "export local mutable: number = 1\n\
+         export const FIXED = 2\n\
+         @native\nexport function run() return mutable end",
+    );
+    assert_no_errors(&result);
+    let Statement::LocalAssignment(local) = &result.block.stmts[0] else {
+        panic!("expected exported local");
+    };
+    assert!(local.is_exported);
+    assert!(!local.is_const);
+    let Statement::LocalAssignment(constant) = &result.block.stmts[1] else {
+        panic!("expected exported const");
+    };
+    assert!(constant.is_exported);
+    assert!(constant.is_const);
+    let Statement::LocalFunction(function) = &result.block.stmts[2] else {
+        panic!("expected exported function");
+    };
+    assert!(function.is_exported);
+    assert!(function.is_const);
+    assert_eq!(function.attributes.len(), 1);
+
+    for source in [
+        "export local x = 1\nexport local x = 2",
+        "if true then export local x = 1 end",
+        "export local x = 1\nreturn x",
+        "if true then return end\nexport local x = 1",
+        "export local function f() end",
+    ] {
+        assert!(
+            !parse_luau(source).errors.is_empty(),
+            "{source} must be rejected"
+        );
+    }
+
+    // Type-only exports retain the longstanding compatibility with returns.
+    assert_no_errors(&parse_luau("export type T = number\nreturn 1"));
+
+    // `export` remains contextual when it does not introduce a declaration.
+    assert_no_errors(&parse_luau(
+        "export = 5\nexport += 1\nexport()\nreturn export",
+    ));
+}
+
+#[test]
+fn merged_luau_features_are_version_gated() {
+    for source in [
+        "return 1i",
+        "return f<<number>>()",
+        "export local x = 1",
+        "type T = ~nil",
+    ] {
+        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
+        assert!(!result.errors.is_empty(), "{source} must be Luau-only");
+    }
+}

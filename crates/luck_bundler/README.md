@@ -34,3 +34,5 @@ The bundler takes a multi-file Lua project and produces one self-contained outpu
 ### AST-Based Rewriting
 
 Require rewriting happens on the AST, not on source text: the emitter walks the parsed block, collects the span of every `require("...")` that resolved to a bundled module, and splices `__luck_require(slot)` into the source at those spans. This means even unusually formatted requires — multi-line strings, long-bracket arguments, Luau type casts — survive bundling, while `require(...)` text inside string literals is left untouched.
+
+When a Luau value-export module is placed inside a generated loader wrapper, the emitter lowers its top-level `export` declarations to local declarations and appends the frozen export table that the module would otherwise return implicitly. Type-only exports are made private inside wrappers.

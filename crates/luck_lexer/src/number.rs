@@ -116,6 +116,11 @@ fn lex_hex_number(
         ));
     }
 
+    if version.has_luau_integer_literals() && cursor.peek() == Some(b'i') {
+        cursor.advance();
+        validate_integer_range(source, start, cursor.position(), 16)?;
+    }
+
     let raw = &source[start..cursor.position()];
     validate_underscore_placement(raw, start, version)?;
     Ok(TokenKind::Number(raw.into()))
@@ -147,6 +152,11 @@ fn lex_binary_number(
         ));
     }
 
+    if cursor.peek() == Some(b'i') {
+        cursor.advance();
+        validate_integer_range(source, start, cursor.position(), 2)?;
+    }
+
     let raw = &source[start..cursor.position()];
     validate_underscore_placement(raw, start, LuaVersion::Luau)?;
     Ok(TokenKind::Number(raw.into()))
@@ -162,6 +172,7 @@ fn lex_decimal_number(
 
     eat_decimal_digits(cursor, allow_underscores);
 
+    let mut is_float = false;
     if cursor.peek() == Some(b'.') {
         let after_dot = cursor.peek_at(1);
         let consume_dot = match after_dot {
@@ -172,12 +183,14 @@ fn lex_decimal_number(
             _ => true,           // EOF, operators, whitespace - `1.` is a valid float
         };
         if consume_dot {
+            is_float = true;
             cursor.advance(); // .
             eat_decimal_digits(cursor, allow_underscores);
         }
     }
 
     if matches!(cursor.peek(), Some(b'e' | b'E')) {
+        is_float = true;
         cursor.advance();
         if matches!(cursor.peek(), Some(b'+' | b'-')) {
             cursor.advance();
@@ -201,6 +214,19 @@ fn lex_decimal_number(
             Span::new(start as u32, (cursor.position() + 2) as u32),
             "malformed number (a numeral cannot directly precede '..')",
         ));
+    }
+
+    if version.has_luau_integer_literals() && cursor.peek() == Some(b'i') {
+        cursor.advance();
+        // Luau consumes the suffix on floats too: `2.5i` is a malformed
+        // integer, not a float followed by an identifier.
+        if is_float {
+            return Err(crate::lex_error(
+                Span::new(start as u32, cursor.position() as u32),
+                "the 'i' integer suffix is not allowed on float literals",
+            ));
+        }
+        validate_integer_range(source, start, cursor.position(), 10)?;
     }
 
     let raw = &source[start..cursor.position()];
@@ -239,4 +265,35 @@ fn validate_underscore_placement(
         ));
     }
     Ok(())
+}
+
+/// Integer literals use signed decimal spelling but allow all 64 bits in
+/// hexadecimal and binary spellings, matching Luau's bit-pattern semantics.
+fn validate_integer_range(
+    source: &str,
+    start: usize,
+    end: usize,
+    radix: u32,
+) -> Result<(), LexError> {
+    let raw = &source[start..end - 1]; // exclude the trailing `i`
+    let digits = match radix {
+        16 | 2 => &raw[2..],
+        10 => raw,
+        _ => unreachable!("Luau integer literals use radix 2, 10, or 16"),
+    };
+    let normalized: String = digits.chars().filter(|ch| *ch != '_').collect();
+    let valid = if radix == 10 {
+        normalized.parse::<i64>().is_ok()
+    } else {
+        u64::from_str_radix(&normalized, radix).is_ok()
+    };
+
+    if valid {
+        Ok(())
+    } else {
+        Err(crate::lex_error(
+            Span::new(start as u32, end as u32),
+            "integer literal is outside the 64-bit range",
+        ))
+    }
 }
