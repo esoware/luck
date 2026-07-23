@@ -5,14 +5,19 @@ use crate::common::{first_kind, first_kind_v, kinds_v};
 
 #[test]
 fn tilde_standalone_version_gating() {
-    // Tilde is bitwise NOT in 5.3-5.5
-    for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+    // Tilde is bitwise NOT in 5.3-5.5 and starts a negation type in Luau.
+    for version in [
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+        LuaVersion::Luau,
+    ] {
         let result = lex("~", version);
         assert!(result.errors.is_empty(), "~ should work in {:?}", version);
         assert_eq!(result.tokens[0].kind, TokenKind::Tilde);
     }
     // Error in all other versions
-    for version in [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Luau] {
+    for version in [LuaVersion::Lua51, LuaVersion::Lua52] {
         let result = lex("~", version);
         assert!(
             !result.errors.is_empty(),
@@ -20,6 +25,49 @@ fn tilde_standalone_version_gating() {
             version
         );
     }
+}
+
+#[test]
+fn luau_integer_literal_suffix_and_range() {
+    for source in [
+        "1i",
+        "1_000_000i",
+        "0xabi",
+        "0XAB05i",
+        "0xff_ffi",
+        "0xffffffffffffffffi",
+        "0b1111111111111111111111111111111111111111111111111111111111111111i",
+    ] {
+        let result = lex(source, LuaVersion::Luau);
+        assert!(result.errors.is_empty(), "{source}: {:?}", result.errors);
+        assert_eq!(result.tokens[0].kind, TokenKind::Number(source.into()));
+    }
+
+    // Decimal overflow applies even under a direct unary minus;
+    // i64::MIN is only spellable as 0x8000000000000000i.
+    for source in [
+        "9223372036854775808i",
+        "0x10000000000000000i",
+        "0b10000000000000000000000000000000000000000000000000000000000000000i",
+    ] {
+        assert!(
+            !lex(source, LuaVersion::Luau).errors.is_empty(),
+            "{source} must overflow"
+        );
+    }
+
+    // `1.i` is exempt: `.` followed by a letter ends the number, so it
+    // lexes as field access on `1` and no float-suffix pairing arises.
+    for source in ["2.5i", "1e5i", "1E5i"] {
+        assert!(
+            !lex(source, LuaVersion::Luau).errors.is_empty(),
+            "{source} must be a malformed integer"
+        );
+    }
+
+    let non_luau = lex("1i", LuaVersion::Lua54);
+    assert_eq!(non_luau.tokens[0].kind, TokenKind::Number("1".into()));
+    assert_eq!(non_luau.tokens[1].kind, TokenKind::Identifier("i".into()));
 }
 
 #[test]

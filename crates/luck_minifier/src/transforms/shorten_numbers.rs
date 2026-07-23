@@ -34,8 +34,57 @@ impl AstTransform for NumberShortener {
                 }
                 expr
             }
+            // Luau
+            Expression::Integer(ref literal) => {
+                let shortened = shorten_integer(&literal.text);
+                if shortened.len() < literal.text.len() {
+                    return Expression::Integer(Literal {
+                        text: shortened.into(),
+                        span: Span::default(),
+                    });
+                }
+                expr
+            }
             other => other,
         }
+    }
+}
+
+/// Shorten a Luau integer literal (`i` suffix). The value is an exact
+/// 64-bit pattern, so respelling is lossless. Hex covers every pattern;
+/// decimal only up to i64::MAX, since larger values would need a unary
+/// minus, which is a different AST shape.
+fn shorten_integer(text: &str) -> String {
+    let body = &text[..text.len() - 1];
+    let digits: String = body
+        .trim_start_matches("0x")
+        .trim_start_matches("0X")
+        .trim_start_matches("0b")
+        .trim_start_matches("0B")
+        .chars()
+        .filter(|ch| *ch != '_')
+        .collect();
+    let radix = match body.as_bytes().get(1) {
+        Some(b'x' | b'X') => 16,
+        Some(b'b' | b'B') => 2,
+        _ => 10,
+    };
+    let Ok(value) = u64::from_str_radix(&digits, radix) else {
+        return text.to_string();
+    };
+
+    let mut best = format!("0x{value:x}i");
+    if value <= i64::MAX as u64 {
+        let decimal = format!("{value}i");
+        // Prefer decimal when the spellings tie.
+        if decimal.len() <= best.len() {
+            best = decimal;
+        }
+    }
+    if best.len() < text.len() {
+        best
+    } else {
+        text.to_string()
     }
 }
 
@@ -247,5 +296,32 @@ mod tests {
             shorten_number("0xFFFFFFFFFFFFFFFF", NumberSubtypes::IntFloat),
             "0xFFFFFFFFFFFFFFFF"
         );
+    }
+
+    #[test]
+    fn integer_literals_shorten_losslessly() {
+        // Luau
+        assert_eq!(shorten_integer("1_000_000i"), "1000000i");
+        assert_eq!(shorten_integer("0xffi"), "255i");
+        assert_eq!(shorten_integer("0b1111i"), "15i");
+        assert_eq!(shorten_integer("0XFF_FFi"), "65535i");
+        // Bit patterns above i64::MAX have no decimal spelling; hex is
+        // still shorter than binary.
+        assert_eq!(
+            shorten_integer("0b1111111111111111111111111111111111111111111111111111111111111111i"),
+            "0xffffffffffffffffi"
+        );
+        assert_eq!(
+            shorten_integer("0xFFFF_FFFF_FFFF_FFFFi"),
+            "0xffffffffffffffffi"
+        );
+        // Already-shortest spellings stay put (idempotent).
+        assert_eq!(shorten_integer("255i"), "255i");
+        assert_eq!(shorten_integer("0i"), "0i");
+        assert_eq!(
+            shorten_integer("0xffffffffffffffffi"),
+            "0xffffffffffffffffi"
+        );
+        assert_eq!(shorten_integer("1000000i"), "1000000i");
     }
 }

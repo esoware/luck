@@ -91,7 +91,9 @@ fn collect_liftable(
                 // Const bindings cannot be lifted: the hoisted bare
                 // declaration would lack the mandatory initializer and
                 // the later write would assign to a const.
-                let has_attribs = local.names.iter().any(|n| n.attrib.is_some()) || local.is_const;
+                let has_attribs = local.names.iter().any(|n| n.attrib.is_some())
+                    || local.is_const
+                    || local.is_exported;
                 // A bare `local x` inside a loop resets to nil each
                 // iteration; lifted to function scope it would keep the
                 // previous iteration's value.
@@ -133,6 +135,7 @@ fn collect_liftable(
             Statement::LocalFunction(lf) => {
                 let name: CompactString = ident_name(&lf.name).into();
                 if !lf.is_const
+                    && !lf.is_exported
                     && !is_in_parent(scope_names, &name)
                     && !ineligible.contains(&name)
                     && liftable.insert(name.clone())
@@ -511,10 +514,12 @@ impl IneligibleScanner {
                 self.scan_expr(&if_expr.else_expr);
             }
             Expression::TypeCast(cast) => self.scan_expr(&cast.expr),
+            Expression::TypeInstantiation(instantiation) => self.scan_expr(&instantiation.expr),
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
+            | Expression::Integer(_) // Luau
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::Error(_) => {}
@@ -736,6 +741,7 @@ fn prepend_declaration(block: &mut Block, names: &[CompactString]) {
             names,
             exprs: None,
             is_const: false,
+            is_exported: false,
         })),
     );
 }

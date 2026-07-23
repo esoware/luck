@@ -13,8 +13,8 @@ Two entry points share the same machine:
 
 ## Key features
 
-- **Version-gated tokens** - keyword and operator recognition queries `LuaVersion` predicates. `//` is floor division only from Lua 5.3+; `goto` is a keyword only from 5.2+; `global` from 5.5; `&`, `|`, `~`, `<<`, `>>` arrive with bitwise ops in 5.3+; compound assignment, `@`, `?`, backtick strings, and binary/underscore-separated numbers are Luau-only.
-- **Complete number literals** - decimal, hexadecimal, hex floats (5.2+), binary literals (Luau), and underscore separators (Luau).
+- **Version-gated tokens** - keyword and operator recognition queries `LuaVersion` predicates. `//` is floor division only from Lua 5.3+; `goto` is a keyword only from 5.2+; `global` from 5.5; `&`, `|`, `~`, `<<`, `>>` arrive with bitwise ops in 5.3+; compound assignment, `@`, `?`, backtick strings, and binary/underscore-separated numbers are Luau-only. In Luau, `~` also starts a negation type and doubled angle tokens form explicit type instantiation.
+- **Complete number literals** - decimal, hexadecimal, hex floats (5.2+), binary literals and underscore separators (Luau), plus Luau's exact signed-decimal/full-bit-pattern 64-bit integer literals with an `i` suffix.
 - **Complete string literals** - short strings with single or double quotes, long brackets (`[==[...]==]`) at any equals-sign depth, and the full escape repertoire (`\x`, `\z`, `\u{}`, decimal escapes), each escape gated to the versions that accept it.
 - **Luau interpolated strings** - backtick-delimited strings with `{expr}` segments, split into `InterpBegin` / `InterpMid` / `InterpEnd` tokens with brace depth tracked across nested expressions so the parser sees a consistent begin/end shape.
 - **Shebang and BOM** - a leading UTF-8 BOM is skipped, and a `#`-prefixed first line is captured as a shebang comment rather than parsed as the length operator.

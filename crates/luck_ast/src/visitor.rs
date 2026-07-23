@@ -147,6 +147,7 @@ pub trait Visitor<'ast> {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
+            | Expression::Integer(_) // Luau
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::Error(_) => {}
@@ -191,6 +192,12 @@ pub trait Visitor<'ast> {
             Expression::TypeCast(cast) => {
                 self.visit_expression(&cast.expr);
                 self.visit_type(&cast.type_annotation);
+            }
+            Expression::TypeInstantiation(instantiation) => {
+                self.visit_expression(&instantiation.expr);
+                for argument in instantiation.type_args.args.iter() {
+                    self.visit_type(argument);
+                }
             }
         }
     }
@@ -241,6 +248,11 @@ pub trait Visitor<'ast> {
 
     fn walk_function_call(&mut self, call: &'ast FunctionCall) {
         self.visit_expression(&call.callee);
+        if let Some(type_args) = &call.explicit_type_args {
+            for type_arg in type_args.args.iter() {
+                self.visit_type(type_arg);
+            }
+        }
         self.walk_function_args(&call.args);
     }
 
@@ -320,6 +332,7 @@ pub trait Visitor<'ast> {
                     self.visit_type(item);
                 }
             }
+            Type::Negation(negation) => self.visit_type(&negation.type_value),
             Type::Parenthesized(paren) => self.visit_type(&paren.type_value),
             Type::Pack(pack) => {
                 for item in pack.types.iter() {
@@ -419,6 +432,7 @@ mod tests {
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
                 is_const: false,
+                is_exported: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("x".into())),
                     type_annotation: None,
@@ -458,6 +472,7 @@ mod tests {
             stmts: vec![Statement::LocalAssignment(Box::new(LocalAssignment {
                 span: span(),
                 is_const: false,
+                is_exported: false,
                 names: Punctuated::from_item(AttributedName {
                     name: token(TokenKind::Identifier("t".into())),
                     type_annotation: None,
@@ -480,6 +495,7 @@ mod tests {
                 Statement::LocalAssignment(Box::new(LocalAssignment {
                     span: span(),
                     is_const: false,
+                    is_exported: false,
                     names: Punctuated::from_item(AttributedName {
                         name: token(TokenKind::Identifier("x".into())),
                         type_annotation: None,
@@ -490,6 +506,7 @@ mod tests {
                 Statement::LocalAssignment(Box::new(LocalAssignment {
                     span: span(),
                     is_const: false,
+                    is_exported: false,
                     names: Punctuated::from_item(AttributedName {
                         name: token(TokenKind::Identifier("y".into())),
                         type_annotation: None,
@@ -536,6 +553,7 @@ mod tests {
                 span: span(),
                 attributes: Vec::new(),
                 is_const: false,
+                is_exported: false,
                 name: token(TokenKind::Identifier("f".into())),
                 body,
             }))],
@@ -620,6 +638,7 @@ mod tests {
                 args: Punctuated::from_item(name_expr("x")),
             },
             method: None,
+            explicit_type_args: None,
         };
         let block = Block {
             span: span(),

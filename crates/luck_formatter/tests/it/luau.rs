@@ -171,3 +171,25 @@ fn interp_expr_starting_with_table_gets_space() {
         "return `list { { 1, 2 } } tail`\n",
     );
 }
+
+#[test]
+fn merged_rfc_syntax_roundtrips() {
+    assert_luau(
+        "@native\nexport function convert<T>(value: T): T\nreturn value\nend\n\
+         export local seen: integer = 0i\n\
+         export const MAX: integer = 0XFF_FFi\n\
+         type NonNil = ~nil\n\
+         type Closed = ~(string | nil)\n\
+         local partial = convert<<integer>>\n\
+         local value = convert<<integer>>(MAX)\n\
+         local mapped = values:map<<integer, string>>(convert)\n",
+        "@native\nexport function convert<T>(value: T): T\n\treturn value\nend\n\
+         export local seen: integer = 0i\n\
+         export const MAX: integer = 0xFF_FFi\n\
+         type NonNil = ~nil\n\
+         type Closed = ~(string | nil)\n\
+         local partial = convert<<integer>>\n\
+         local value = convert<<integer>>(MAX)\n\
+         local mapped = values:map<<integer, string>>(convert)\n",
+    );
+}

@@ -62,6 +62,9 @@ impl Format for Statement {
 }
 
 fn write_local_assignment(f: &mut Formatter, local: &LocalAssignment) {
+    if local.is_exported {
+        crate::write!(f, [token("export"), space()]);
+    }
     crate::write!(
         f,
         [
@@ -355,6 +358,20 @@ fn write_function_decl(f: &mut Formatter, decl: &FunctionDecl) {
 
 fn write_local_function(f: &mut Formatter, func: &LocalFunction) {
     write_function_attributes(f, &func.attributes);
+    if func.is_exported {
+        crate::write!(
+            f,
+            [
+                token("export"),
+                space(),
+                token("function"),
+                space(),
+                FormatToken(&func.name),
+                FormatFunctionBody { body: &func.body },
+            ]
+        );
+        return;
+    }
     crate::write!(
         f,
         [

@@ -8,8 +8,8 @@ Abstract syntax tree definitions and traversal infrastructure for Lua 5.1–5.5 
 
 ## Key Features
 
-- **Complete language coverage** — Lua 5.1 through 5.5, plus Luau extensions (if-expressions, interpolated strings, type casts, compound assignment, attributes, generalized iteration).
-- **Luau type AST** — a full `Type` node family (`luck_ast::types`) covering named/generic references, table types, function types, unions/intersections, optionals, singletons, `typeof`, type packs, and variadic/generic packs. Type annotations, `TypeCast`, `TypeDeclaration`, and `FunctionBody` generics/return types hold real `Type` nodes rather than opaque spans.
+- **Complete language coverage** — Lua 5.1 through 5.5, plus Luau extensions including exact integer literals, explicit type instantiation, value exports, if-expressions, interpolated strings, type casts, compound assignment, attributes, and generalized iteration.
+- **Luau type AST** — a full `Type` node family (`luck_ast::types`) covering named/generic references, table types, function types, unions/intersections, negation, optionals, singletons, `typeof`, type packs, and variadic/generic packs. Type annotations, `TypeCast`, `TypeDeclaration`, and `FunctionBody` generics/return types hold real `Type` nodes rather than opaque spans.
 - **64-byte enum budget** — `Expression`, `Statement`, and `Type` are each ≤64 bytes by boxing large variants. Size tests in `lib.rs` fail the build if a variant grows past the budget.
 - **Exhaustive matching** — neither enum is `#[non_exhaustive]`. Every transform and visitor must cover every variant, so adding a new node surfaces every site that needs updating.
 - **Visitor and AstTransform traits** — one for read-only analysis, one for ownership-based rewrites. Both own recursion through `walk_*` defaults (including `walk_type` for the type grammar); consumers override only the cases they care about.
@@ -21,9 +21,9 @@ Abstract syntax tree definitions and traversal infrastructure for Lua 5.1–5.5 
 
 A `Block` is the fundamental unit: a sequence of `Statement`s followed by an optional `LastStatement`. Every function body, loop body, and `do…end` contains one.
 
-`Expression` (16 variants plus `Error`) covers literals (`Nil`, `False`, `True`, `Number`, `StringLiteral`, `VarArg`), compound forms (`BinaryOp`, `UnaryOp`, `Parenthesized`, `TableConstructor`, `FunctionDef`, `FunctionCall`, `Var`), and Luau extensions (`IfExpression`, `InterpolatedString`, `TypeCast`).
+`Expression` covers literals (`Nil`, `False`, `True`, `Number`, Luau `Integer`, `StringLiteral`, `VarArg`), compound forms (`BinaryOp`, `UnaryOp`, `Parenthesized`, `TableConstructor`, `FunctionDef`, `FunctionCall`, `Var`), and Luau extensions (`IfExpression`, `InterpolatedString`, `TypeCast`, `TypeInstantiation`).
 
-`Statement` (20 variants plus `Error`) covers the imperative side: `Assignment`, `FunctionCall`, `DoBlock`, `WhileLoop`, `RepeatLoop`, `IfStatement`, `NumericFor`, `GenericFor`, `FunctionDecl`, `LocalFunction`, `LocalAssignment`, plus version-gated statements — `Goto` / `Label` (5.2+), attribute-bearing `LocalAssignment` (5.4), `GlobalDeclaration` / `GlobalFunction` / `GlobalStar` (5.5), `CompoundAssignment` and `TypeDeclaration` (Luau).
+`Statement` covers the imperative side: `Assignment`, `FunctionCall`, `DoBlock`, `WhileLoop`, `RepeatLoop`, `IfStatement`, `NumericFor`, `GenericFor`, `FunctionDecl`, `LocalFunction`, `LocalAssignment`, plus version-gated statements — `Goto` / `Label` (5.2+), attribute-bearing `LocalAssignment` (5.4), `GlobalDeclaration` / `GlobalFunction` / `GlobalStar` (5.5), `CompoundAssignment` and `TypeDeclaration` (Luau). Exported Luau locals/functions are represented by flags on their declaration nodes.
 
 `LastStatement` has four variants: `Return`, `Break`, `Continue` (Luau), `Error`.
 
@@ -36,7 +36,7 @@ A `Block` is the fundamental unit: a sequence of `Statement`s followed by an opt
 
 ### Types
 
-The Luau type grammar lives in `types.rs` as its own `Type` node family, held to the same ≤64-byte budget as `Expression` and `Statement`. `Type` covers named and generic references (`Name`, `module.Name`, `Name<args>`), table types, function types, unions and intersections, postfix optionals (`T?`), literal singletons, `typeof(expr)`, parenthesized types, explicit type packs (`(T, U)`), and variadic (`...T`) / generic (`T...`) pack elements. `Visitor` and `AstTransform` carry matching `visit_type` / `transform_type` arms (with `walk_type` recursion), and the `synth` module builds these nodes too. Type nodes appear only in Luau sources — the parser gates them on `LuaVersion::is_luau`.
+The Luau type grammar lives in `types.rs` as its own `Type` node family, held to the same ≤64-byte budget as `Expression` and `Statement`. `Type` covers named and generic references (`Name`, `module.Name`, `Name<args>`), table types, function types, unions and intersections, negation (`~T`), postfix optionals (`T?`), literal singletons, `typeof(expr)`, parenthesized types, explicit type packs (`(T, U)`), and variadic (`...T`) / generic (`T...`) pack elements. `Visitor` and `AstTransform` carry matching `visit_type` / `transform_type` arms (with `walk_type` recursion), and the `synth` module builds these nodes too. Type nodes appear only in Luau sources — the parser gates them on `LuaVersion` feature predicates.
 
 ### Traversal
 

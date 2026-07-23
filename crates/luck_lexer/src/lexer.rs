@@ -513,7 +513,7 @@ impl<'src> Lexer<'src> {
                 if self.cursor.peek() == Some(b'=') {
                     self.cursor.advance();
                     TokenKind::TildeEqual
-                } else if self.version.has_bitwise_ops() {
+                } else if self.version.has_bitwise_ops() || self.version.has_negation_types() {
                     TokenKind::Tilde
                 } else {
                     self.errors.push(crate::lex_error(Span::new(start as u32, self.cursor.position() as u32), "standalone '~' is not supported in this Lua version (use '~=' for not-equal)"));

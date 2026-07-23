@@ -35,6 +35,8 @@ pub enum NodeType {
     False,
     True,
     Number,
+    // Luau
+    Integer,
     StringLiteral,
     VarArg,
     FunctionDef,
@@ -47,6 +49,8 @@ pub enum NodeType {
     IfExpression,
     InterpolatedString,
     TypeCast,
+    // Luau
+    TypeInstantiation,
     ErrorExpr,
     Return,
     LastBreak,
@@ -101,6 +105,7 @@ impl NodeType {
             Expression::False(_) => NodeType::False,
             Expression::True(_) => NodeType::True,
             Expression::Number(_) => NodeType::Number,
+            Expression::Integer(_) => NodeType::Integer, // Luau
             Expression::StringLiteral(_) => NodeType::StringLiteral,
             Expression::VarArg(_) => NodeType::VarArg,
             Expression::FunctionDef(_) => NodeType::FunctionDef,
@@ -113,6 +118,7 @@ impl NodeType {
             Expression::IfExpression(_) => NodeType::IfExpression,
             Expression::InterpolatedString(_) => NodeType::InterpolatedString,
             Expression::TypeCast(_) => NodeType::TypeCast,
+            Expression::TypeInstantiation(_) => NodeType::TypeInstantiation, // Luau
             Expression::Error(_) => NodeType::ErrorExpr,
         }
     }

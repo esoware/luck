@@ -532,6 +532,32 @@ mod tests {
     }
 
     #[test]
+    fn luau_merged_rfc_syntax_and_exports_survive_minification() {
+        let source = "\
+export local public = 129312i
+export const mask = 0xffffffffffffffffi
+export function apply<T>(value: ~nil)
+    return identity<<T>>(value), public, mask
+end
+";
+        let result = minify_luau(source);
+        assert!(result.contains("export local public=129312i"), "{result}");
+        assert!(
+            result.contains("export const mask=0xffffffffffffffffi"),
+            "{result}"
+        );
+        assert!(result.contains("export function apply"), "{result}");
+        assert!(result.contains("identity<<T>>"), "{result}");
+        assert!(result.contains(":~nil"), "{result}");
+        let reparsed = luck_parser::parse(result.clone(), luck_token::LuaVersion::Luau);
+        assert!(
+            reparsed.errors.is_empty(),
+            "minified merged-RFC syntax must reparse: {:?}\n{result}",
+            reparsed.errors
+        );
+    }
+
+    #[test]
     fn disable_rename() {
         let config = TransformConfig {
             rename_locals: false,

@@ -340,6 +340,7 @@ fn count_decision_points_expression(expr: &Expression) -> u32 {
         Expression::False(_) => 0,
         Expression::True(_) => 0,
         Expression::Number(_) => 0,
+        Expression::Integer(_) => 0, // Luau
         Expression::StringLiteral(_) => 0,
         Expression::VarArg(_) => 0,
         Expression::FunctionDef(_) => 0,
@@ -397,6 +398,7 @@ fn count_decision_points_expression(expr: &Expression) -> u32 {
             total
         }
         Expression::TypeCast(node) => count_decision_points_expression(&node.expr),
+        Expression::TypeInstantiation(node) => count_decision_points_expression(&node.expr),
         Expression::Error(_) => 0,
     }
 }

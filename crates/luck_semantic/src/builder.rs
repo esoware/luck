@@ -142,6 +142,11 @@ impl ScopeTreeBuilder {
 
     fn visit_call(&mut self, call: &luck_ast::expr::FunctionCall) {
         self.visit_expression(&call.callee);
+        if let Some(type_args) = &call.explicit_type_args {
+            for type_arg in type_args.args.iter() {
+                self.visit_type(type_arg);
+            }
+        }
         match &call.args {
             FunctionArgs::Parenthesized { args, .. } => {
                 for expr in args.iter() {
@@ -226,7 +231,10 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
                         self.visit_type(annotation);
                     }
                     if let TokenKind::Identifier(n) = &attributed.name.kind {
-                        self.declare_local(n, attributed.name.span, SymbolKind::Local);
+                        let id = self.declare_local(n, attributed.name.span, SymbolKind::Local);
+                        if local.is_exported {
+                            self.tree.mark_exported(id); // Luau
+                        }
                     }
                 }
             }
@@ -241,7 +249,10 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
             luck_ast::Statement::LocalFunction(func) => {
                 // Declare the function name first (allows recursion)
                 if let TokenKind::Identifier(name) = &func.name.kind {
-                    self.declare_local(name, func.name.span, SymbolKind::FunctionName);
+                    let id = self.declare_local(name, func.name.span, SymbolKind::FunctionName);
+                    if func.is_exported {
+                        self.tree.mark_exported(id); // Luau
+                    }
                 }
                 self.visit_function_body(&func.body);
             }
@@ -423,10 +434,17 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
                 self.visit_expression(&cast.expr);
                 self.visit_type(&cast.type_annotation);
             }
+            Expression::TypeInstantiation(instantiation) => {
+                self.visit_expression(&instantiation.expr);
+                for argument in instantiation.type_args.args.iter() {
+                    self.visit_type(argument);
+                }
+            }
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
+            | Expression::Integer(_) // Luau
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::Error(_) => {}

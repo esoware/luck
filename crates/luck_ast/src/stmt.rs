@@ -167,6 +167,8 @@ pub struct LocalFunction {
     /// Luau `const function NAME funcbody` - emitted with `const` in
     /// place of `local`.
     pub is_const: bool,
+    /// Luau: `export function NAME funcbody`.
+    pub is_exported: bool,
 }
 
 /// Lua 5.4 local variable attribute: `<const>` or `<close>`. The name
@@ -200,6 +202,8 @@ pub struct LocalAssignment {
     /// Luau `const bindinglist = explist` - emitted with `const` in
     /// place of `local`; every name in the list is read-only.
     pub is_const: bool,
+    /// Luau: `export local` or `export const`.
+    pub is_exported: bool,
 }
 
 /// `goto name` statement (Lua 5.2+).

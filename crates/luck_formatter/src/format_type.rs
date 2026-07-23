@@ -25,6 +25,10 @@ impl Format for Type {
             Type::Intersection(intersection) => {
                 write_alternation(f, &intersection.types.items, "&");
             }
+            Type::Negation(negation) => {
+                token("~").fmt(f);
+                negation.type_value.fmt(f);
+            }
             Type::Parenthesized(paren) => {
                 token("(").fmt(f);
                 paren.type_value.fmt(f);
@@ -190,6 +194,15 @@ impl Format for TypeField {
 impl Format for TypeArgs {
     fn fmt(&self, f: &mut Formatter) {
         write_delimited(f, "<", ">", &self.args.items);
+    }
+}
+
+/// Luau expression-side explicit type arguments use doubled delimiters.
+pub(crate) struct FormatExplicitTypeArgs<'a>(pub &'a TypeArgs);
+
+impl Format for FormatExplicitTypeArgs<'_> {
+    fn fmt(&self, f: &mut Formatter) {
+        write_delimited(f, "<<", ">>", &self.0.args.items);
     }
 }
 

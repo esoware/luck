@@ -289,10 +289,14 @@ fn walk_expression<'ast>(
         Expression::TypeCast(cast) => {
             walk_expression(&cast.expr, labels, goto_names, nested);
         }
+        Expression::TypeInstantiation(instantiation) => {
+            walk_expression(&instantiation.expr, labels, goto_names, nested);
+        }
         Expression::Nil(_)
         | Expression::False(_)
         | Expression::True(_)
         | Expression::Number(_)
+        | Expression::Integer(_) // Luau
         | Expression::StringLiteral(_)
         | Expression::VarArg(_)
         | Expression::Error(_) => {}

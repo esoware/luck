@@ -9,6 +9,7 @@ use luck_ast::expr::{
 };
 use luck_token::{BinOp, Token, TokenKind, UnOp};
 
+use crate::format_type::FormatExplicitTypeArgs;
 use crate::ir::*;
 use crate::quotes::normalize_quote;
 use crate::tokens::write_token;
@@ -22,7 +23,9 @@ impl Format for Expression {
             Expression::True(_) => token("true").fmt(f),
             Expression::VarArg(_) => token("...").fmt(f),
 
-            Expression::Number(literal) => format_number(f, literal),
+            Expression::Number(literal) | Expression::Integer(literal) => {
+                format_number(f, literal);
+            }
             Expression::StringLiteral(literal) => format_string_literal(f, literal),
 
             Expression::Var(var) => var.fmt(f),
@@ -76,6 +79,10 @@ impl Format for Expression {
                 cast.expr.fmt(f);
                 crate::write!(f, [space(), token("::"), space()]);
                 cast.type_annotation.fmt(f);
+            }
+            Expression::TypeInstantiation(instantiation) => {
+                instantiation.expr.fmt(f);
+                FormatExplicitTypeArgs(&instantiation.type_args).fmt(f);
             }
 
             // Parse-recovery placeholder: source is unslicable here, so there
@@ -131,6 +138,7 @@ pub(crate) fn starts_with_bracket(expr: &Expression) -> bool {
         Expression::StringLiteral(literal) => literal.text.starts_with('['),
         Expression::BinaryOp(binop) => starts_with_bracket(&binop.left),
         Expression::TypeCast(cast) => starts_with_bracket(&cast.expr),
+        Expression::TypeInstantiation(instantiation) => starts_with_bracket(&instantiation.expr),
         Expression::FunctionCall(call) => starts_with_bracket(&call.callee),
         Expression::Var(var) => match var {
             Var::Name(_) => false,
@@ -141,6 +149,7 @@ pub(crate) fn starts_with_bracket(expr: &Expression) -> bool {
         | Expression::False(_)
         | Expression::True(_)
         | Expression::Number(_)
+        | Expression::Integer(_)
         | Expression::VarArg(_)
         | Expression::FunctionDef(_)
         | Expression::Parenthesized(_)

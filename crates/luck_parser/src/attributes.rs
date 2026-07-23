@@ -21,6 +21,7 @@ fn is_attribute_literal(expr: &Expression) -> bool {
         | Expression::True(_)
         | Expression::False(_)
         | Expression::Number(_)
+        | Expression::Integer(_) // Luau
         | Expression::StringLiteral(_) => true,
         Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
             Field::Named { value, .. } | Field::Positional { value, .. } => {

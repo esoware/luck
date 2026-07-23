@@ -20,6 +20,7 @@ fn use_fill_mode(table: &TableConstructor) -> bool {
                 | Expression::False(_)
                 | Expression::True(_)
                 | Expression::Number(_)
+                | Expression::Integer(_) // Luau
                 | Expression::StringLiteral(_)
                 | Expression::VarArg(_)
                 | Expression::Var(_)

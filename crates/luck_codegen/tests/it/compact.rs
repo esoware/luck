@@ -303,6 +303,46 @@ fn luau_if_expression() {
 }
 
 #[test]
+fn luau_explicit_method_type_arguments() {
+    vluau(
+        "local result = receiver:map<<number, string>>(value)",
+        "local result=receiver:map<<number,string>>(value)",
+    );
+}
+
+#[test]
+fn luau_explicit_type_instantiation() {
+    vluau(
+        "local partial = f<<number>>\nlocal called = t.f<<number, string>>(value)",
+        "local partial=f<<number>>local called=t.f<<number,string>>(value)",
+    );
+}
+
+#[test]
+fn luau_integer_literals() {
+    vluau(
+        "return 1i, 1_000_000i, 0xffffffffffffffffi, -123i",
+        "return 1i,1_000_000i,0xffffffffffffffffi,-123i",
+    );
+}
+
+#[test]
+fn luau_negation_types() {
+    vluau(
+        "type NonNil = ~nil\ntype Closed = ~(string | nil)\nlocal x: ~nil = 1",
+        "type NonNil=~nil type Closed=~(string|nil)local x:~nil=1",
+    );
+}
+
+#[test]
+fn luau_value_exports() {
+    vluau(
+        "export local seen = 0i\nexport const MAX = 2i\n@native\nexport function run()\nreturn seen\nend",
+        "export local seen=0i export const MAX=2i@native export function run()return seen end",
+    );
+}
+
+#[test]
 fn luau_interpolated_string() {
     vluau("local  x  =  `hello {name}`", "local x=`hello {name}`");
 }

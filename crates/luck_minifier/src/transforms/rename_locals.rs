@@ -283,13 +283,13 @@ impl<'globals> Analyzer<'globals> {
                 }
                 for name_tok in local.names.iter() {
                     let name = ident_name(&name_tok.name);
-                    let is_fixed = name == "self" || name == "_ENV";
+                    let is_fixed = name == "self" || name == "_ENV" || local.is_exported;
                     self.declare_binding(name, is_fixed);
                 }
             }
             Statement::LocalFunction(local_func) => {
                 let name = ident_name(&local_func.name);
-                let is_fixed = name == "self" || name == "_ENV";
+                let is_fixed = name == "self" || name == "_ENV" || local_func.is_exported;
                 self.declare_binding(name, is_fixed);
                 self.analyze_function_body(&local_func.body);
             }
@@ -450,11 +450,15 @@ impl<'globals> Analyzer<'globals> {
                 self.analyze_expr(&if_expr.else_expr);
             }
             Expression::TypeCast(cast) => self.analyze_expr(&cast.expr),
+            Expression::TypeInstantiation(instantiation) => {
+                self.analyze_expr(&instantiation.expr);
+            }
             // Literal leaves: no sub-expressions, no name references.
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
+            | Expression::Integer(_) // Luau
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::Error(_) => {}
@@ -952,6 +956,7 @@ impl AstTransform for AstRenamer<'_> {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
+            | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
@@ -963,8 +968,12 @@ impl AstTransform for AstRenamer<'_> {
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
             | Expression::TypeCast(_)
+            | Expression::TypeInstantiation(_)
             | Expression::Error(_)) => self.transform_expression(callee),
         };
+        call.explicit_type_args = call
+            .explicit_type_args
+            .map(|type_args| Box::new(self.walk_type_args(*type_args)));
         call.args = self.walk_function_args(call.args);
         call
     }
@@ -1249,6 +1258,9 @@ fn collect_name_reads_from_expr(
         Expression::TypeCast(cast) => {
             collect_name_reads_from_expr(&cast.expr, locals, reads);
         }
+        Expression::TypeInstantiation(instantiation) => {
+            collect_name_reads_from_expr(&instantiation.expr, locals, reads);
+        }
         // A function body's reads belong to its own scope, not this one.
         Expression::FunctionDef(_) => {}
         // Literal leaves: no sub-expressions, no name reads.
@@ -1256,6 +1268,7 @@ fn collect_name_reads_from_expr(
         | Expression::False(_)
         | Expression::True(_)
         | Expression::Number(_)
+        | Expression::Integer(_) // Luau
         | Expression::StringLiteral(_)
         | Expression::VarArg(_)
         | Expression::Error(_) => {}

@@ -41,6 +41,11 @@ impl Rule for SetButNeverRead {
             if symbol.name == "_" || symbol.name.starts_with('_') {
                 continue;
             }
+            // Luau: exported bindings are read through the module's
+            // export table, so no write to one is dead.
+            if symbol.is_exported {
+                continue;
+            }
 
             let mut has_write = false;
             let mut has_read = false;
@@ -112,5 +117,15 @@ mod tests {
     fn flags_multiple_writes_no_reads() {
         let diags = run("local x\nx = 1\nx = 2");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_exported_local_only_written() {
+        let diags = crate::test_support::run_rule(
+            &SetButNeverRead,
+            "export local counter = 0\ncounter = 1",
+            LuaVersion::Luau,
+        );
+        assert!(diags.is_empty(), "got: {diags:?}");
     }
 }

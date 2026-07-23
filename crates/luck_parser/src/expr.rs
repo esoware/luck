@@ -17,6 +17,15 @@ fn literal_from(token: Token) -> Literal {
     }
 }
 
+fn number_from(token: Token) -> Expression {
+    let literal = literal_from(token);
+    if literal.text.ends_with('i') {
+        Expression::Integer(literal)
+    } else {
+        Expression::Number(literal)
+    }
+}
+
 impl Parser<'_> {
     /// Pratt expression parser. The left side grows iteratively; only the
     /// right-hand operand recurses, avoiding stack overflow on long chains.
@@ -116,7 +125,7 @@ impl Parser<'_> {
             TokenKind::Nil => Expression::Nil(self.advance_span()),
             TokenKind::False => Expression::False(self.advance_span()),
             TokenKind::True => Expression::True(self.advance_span()),
-            TokenKind::Number(_) => Expression::Number(literal_from(self.advance())),
+            TokenKind::Number(_) => number_from(self.advance()),
             TokenKind::StringLiteral(_) => Expression::StringLiteral(literal_from(self.advance())),
             TokenKind::DotDotDot => {
                 let span = self.advance_span();
@@ -181,6 +190,22 @@ impl Parser<'_> {
     fn parse_suffixes(&mut self, mut expr: Expression) -> Expression {
         loop {
             match self.peek() {
+                // Luau: explicit type-parameter instantiation is a suffix,
+                // so it composes with field access, indexing, and calls.
+                TokenKind::Less
+                    if self.version.has_explicit_type_instantiation()
+                        && matches!(self.peek_next(), TokenKind::Less) =>
+                {
+                    self.advance_span(); // first `<`
+                    let type_args = self.parse_type_args(); // second `<` through first `>`
+                    let close = self.expect(&TokenKind::Greater);
+                    let span = expr.span().merge(close);
+                    expr = Expression::TypeInstantiation(Box::new(TypeInstantiation {
+                        span,
+                        expr,
+                        type_args,
+                    }));
+                }
                 TokenKind::Dot => {
                     self.advance_span();
                     let name = self.expect_identifier_recover();
@@ -205,6 +230,17 @@ impl Parser<'_> {
                 TokenKind::Colon => {
                     self.advance_span();
                     let method_name = self.expect_identifier_recover();
+                    let explicit_type_args = if self.version.has_explicit_type_instantiation()
+                        && matches!(self.peek(), TokenKind::Less)
+                        && matches!(self.peek_next(), TokenKind::Less)
+                    {
+                        self.advance_span(); // first `<`
+                        let type_args = self.parse_type_args(); // second `<` through first `>`
+                        self.expect(&TokenKind::Greater);
+                        Some(Box::new(type_args))
+                    } else {
+                        None
+                    };
                     let args = self.parse_function_args();
                     let args_span = function_args_span(&args);
                     let span = expr.span().merge(args_span);
@@ -213,6 +249,7 @@ impl Parser<'_> {
                         callee: expr,
                         args,
                         method: Some(method_name),
+                        explicit_type_args,
                     }));
                 }
                 TokenKind::LeftParen | TokenKind::LeftBrace | TokenKind::StringLiteral(_) => {
@@ -237,6 +274,7 @@ impl Parser<'_> {
                         callee: expr,
                         args,
                         method: None,
+                        explicit_type_args: None,
                     }));
                 }
                 // Type assertions (`expr :: Type`) are handled by
@@ -513,7 +551,9 @@ impl Parser<'_> {
         // valid when this function's params end in `...`.
         let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let saved_vararg_scope = std::mem::replace(&mut self.is_vararg_scope, vararg.is_some());
+        self.function_depth += 1;
         let block = self.parse_block();
+        self.function_depth -= 1;
         self.loop_depth = saved_loop_depth;
         self.is_vararg_scope = saved_vararg_scope;
 

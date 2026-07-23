@@ -1,6 +1,7 @@
 use luck_ast::{Block, shared::Punctuated};
 use luck_lexer::Lexer;
 use luck_token::{Comment, LuaVersion, Span, Token, TokenKind};
+use std::collections::HashSet;
 
 use crate::ParseError;
 
@@ -31,6 +32,13 @@ pub(crate) struct Parser<'src> {
     pub(crate) version: LuaVersion,
     depth: u32,
     max_depth: u32,
+    /// Lexical block depth. The root module block is 1.
+    pub(crate) block_depth: u32,
+    /// Function nesting depth, used to distinguish module returns.
+    pub(crate) function_depth: u32,
+    pub(crate) has_module_return: bool,
+    pub(crate) has_value_exports: bool,
+    pub(crate) exported_names: HashSet<luck_token::CompactString>,
     /// Nesting depth of enclosing loops; reset inside function bodies.
     /// `break`/`continue` at depth 0 is a compile error in every Lua.
     pub(crate) loop_depth: u32,
@@ -56,6 +64,11 @@ impl<'src> Parser<'src> {
             version,
             depth: 0,
             max_depth: 256,
+            block_depth: 0,
+            function_depth: 0,
+            has_module_return: false,
+            has_value_exports: false,
+            exported_names: HashSet::new(),
             loop_depth: 0,
             is_vararg_scope: true,
             errors: Vec::new(),
@@ -247,9 +260,11 @@ impl<'src> Parser<'src> {
     /// Parse a block (statement list with optional trailing return/break/continue).
     pub(crate) fn parse_block(&mut self) -> Block {
         let start_span = self.current_span();
+        self.block_depth += 1;
 
         if let Err(err) = self.enter_depth() {
             self.errors.push(err);
+            self.block_depth = self.block_depth.saturating_sub(1);
             return Block {
                 span: start_span,
                 stmts: Vec::new(),
@@ -335,6 +350,7 @@ impl<'src> Parser<'src> {
         }
 
         self.exit_depth();
+        self.block_depth = self.block_depth.saturating_sub(1);
 
         let end_span = if stmts.is_empty() && last_stmt.is_none() {
             start_span

@@ -35,12 +35,14 @@ pub struct TestProject {
 
 // Seeds and statement budget are fixed so numbers are comparable
 // run to run. Each program ends in a top-level `return`, so wrap it in
-// `do ... end` to keep the concatenation one valid chunk.
+// `do ... end` to keep the concatenation one valid chunk. Those
+// wrappers are why the embeddable variant is needed: Luau value
+// exports are only valid at module scope.
 fn generated(version: LuaVersion) -> String {
     let mut source = String::new();
     for seed in 0..40 {
         source.push_str("do\n");
-        source.push_str(&luck_testgen::generate_full(seed, version, 60));
+        source.push_str(&luck_testgen::generate_full_embeddable(seed, version, 60));
         source.push_str("end\n");
     }
     source
