@@ -15,6 +15,3 @@ rust-version.workspace = true
 luck_token.workspace = true
 luck_ast.workspace = true
 luck_lexer.workspace = true
-
-[dev-dependencies]
-luck_codegen.workspace = true
