@@ -14,10 +14,11 @@ use crate::ir::*;
 
 impl Format for Block {
     fn fmt(&self, f: &mut Formatter) {
-        // Carries the previous emitted item's end offset and whether it wants
-        // a blank line around it (used only on the synthetic, source-less
-        // path where offsets can't be scanned).
-        let mut previous: Option<(u32, bool)> = None;
+        // Carries the previous emitted item's end offset, whether it wants a
+        // blank line around it (used only on the synthetic, source-less path
+        // where offsets can't be scanned), and whether it ended with a comment
+        // relocated onto its own line (which suppresses a following blank).
+        let mut previous: Option<(u32, bool, bool)> = None;
 
         let preserve_edge_blanks =
             f.options.block_newline_gaps == crate::BlockNewlineGaps::Preserve;
@@ -48,8 +49,14 @@ impl Format for Block {
             let end = stmt.span().end;
             let wants_blank = stmt_wants_surrounding_blank(stmt);
 
-            if let Some((previous_end, previous_wants)) = previous {
-                emit_separator(f, previous_end, start, previous_wants || wants_blank);
+            if let Some((previous_end, previous_wants, previous_own_line)) = previous {
+                emit_separator(
+                    f,
+                    previous_end,
+                    start,
+                    previous_wants || wants_blank,
+                    previous_own_line,
+                );
             }
 
             let is_ignored = f.emit_leading_comments(start);
@@ -71,9 +78,9 @@ impl Format for Block {
             emit_verbatim_or(f, start, end, is_ignored || is_outside_range, |f| {
                 stmt.fmt(f)
             });
-            f.emit_trailing_comments(start, end);
+            let trailing_own_line = f.emit_trailing_comments(start, end);
 
-            previous = Some((end, wants_blank));
+            previous = Some((end, wants_blank, trailing_own_line));
         }
 
         if let Some(last) = &self.last_stmt {
@@ -82,10 +89,10 @@ impl Format for Block {
                 let start = last.span().start;
                 let end = last.span().end;
 
-                if let Some((previous_end, previous_wants)) = previous {
+                if let Some((previous_end, previous_wants, previous_own_line)) = previous {
                     // A last statement (return/break/continue) never wants a blank
                     // line of its own, so only the previous item's preference counts.
-                    emit_separator(f, previous_end, start, previous_wants);
+                    emit_separator(f, previous_end, start, previous_wants, previous_own_line);
                 }
 
                 let is_ignored = f.emit_leading_comments(start);
@@ -96,12 +103,12 @@ impl Format for Block {
                 emit_verbatim_or(f, start, end, is_ignored || is_outside_range, |f| {
                     last.fmt(f)
                 });
-                f.emit_trailing_comments(start, end);
-                previous = Some((end, false));
+                let trailing_own_line = f.emit_trailing_comments(start, end);
+                previous = Some((end, false, trailing_own_line));
             }
         }
 
-        if preserve_edge_blanks && let Some((last_end, _)) = previous {
+        if preserve_edge_blanks && let Some((last_end, _, _)) = previous {
             let has_blank = f
                 .comments
                 .source_text()
@@ -198,8 +205,20 @@ pub(crate) fn is_simple_block(block: &Block) -> bool {
 /// Emit the line break between two adjacent items, upgraded to a blank line
 /// when the source has one (or, on the source-less path, when a neighbor
 /// wants surrounding blanks or the next statement's anchor requested one).
-fn emit_separator(f: &mut Formatter, previous_end: u32, next_start: u32, synthetic_blank: bool) {
+///
+/// `previous_own_line` suppresses the blank when the previous item ended with a
+/// comment relocated onto its own line: the blank would land between that
+/// comment and this statement, where a reparse reads it as a leading comment
+/// and drops the blank, breaking idempotency.
+fn emit_separator(
+    f: &mut Formatter,
+    previous_end: u32,
+    next_start: u32,
+    synthetic_blank: bool,
+    previous_own_line: bool,
+) {
     let is_blank = match f.comments.source_text() {
+        Some(_) if previous_own_line => false,
         Some(source) => {
             // Bound the scan at an intervening comment so a blank line after
             // the comment doesn't get attributed to the statement gap.

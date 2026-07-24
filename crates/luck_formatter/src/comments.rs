@@ -320,7 +320,12 @@ impl Formatter {
     /// Emit trailing comments for the statement ending at `stmt_end`, plus
     /// any comments that lived inside the statement's span which no emitter
     /// visited. `anchor` is the statement's span start (synthetic path).
-    pub fn emit_trailing_comments(&mut self, anchor: u32, stmt_end: u32) {
+    ///
+    /// Returns true when a comment was relocated onto its own line after the
+    /// statement: a following blank line would then sit between that comment
+    /// and the next statement, where reparse reads it as a leading comment and
+    /// drops the blank - so the caller suppresses it to stay idempotent.
+    pub fn emit_trailing_comments(&mut self, anchor: u32, stmt_end: u32) -> bool {
         enum Placement {
             Suffix(CompactString),
             OwnLine(CompactString),
@@ -376,6 +381,7 @@ impl Formatter {
             Store::Empty => Vec::new(),
         };
 
+        let mut emitted_own_line = false;
         for placement in placements {
             match placement {
                 Placement::Suffix(text) => {
@@ -387,9 +393,11 @@ impl Formatter {
                 Placement::OwnLine(text) => {
                     self.push(FormatElement::Line(LineMode::Hard));
                     self.push(FormatElement::Text(text));
+                    emitted_own_line = true;
                 }
             }
         }
+        emitted_own_line
     }
 
     /// Emit comments dangling in an empty region (e.g. a function body with
