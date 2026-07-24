@@ -21,11 +21,27 @@ luck_token.workspace = true
 luck_lexer.workspace = true
 luck_ast.workspace = true
 luck_parser.workspace = true
-luck_codegen.workspace = true
 luck_core.workspace = true
-luck_resolver.workspace = true
-luck_bundler.workspace = true
-luck_minifier.workspace = true
-luck_formatter.workspace = true
-luck_semantic.workspace = true
-luck_linter.workspace = true
+luck_codegen = { workspace = true, optional = true }
+luck_resolver = { workspace = true, optional = true }
+luck_bundler = { workspace = true, optional = true }
+luck_minifier = { workspace = true, optional = true }
+luck_formatter = { workspace = true, optional = true }
+luck_semantic = { workspace = true, optional = true }
+luck_linter = { workspace = true, optional = true }
+
+[features]
+default = []
+
+full = ["codegen", "bundler", "minifier", "formatter", "linter"]
+
+codegen = ["luck_codegen"]
+resolver = ["luck_resolver"]
+bundler = ["luck_bundler", "resolver"]
+minifier = ["luck_minifier"]
+formatter = ["luck_formatter"]
+semantic = ["luck_semantic"]
+linter = ["luck_linter", "semantic"]
+
+[package.metadata.docs.rs]
+all-features = true
