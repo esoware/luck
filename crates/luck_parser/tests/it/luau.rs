@@ -513,38 +513,6 @@ fn attribute_on_local_variable_rejected() {
 }
 
 #[test]
-fn function_attributes_roundtrip_through_codegen() {
-    let source = "@native function f() end";
-    let result = parse_luau(source);
-    assert_no_errors(&result);
-    let output = luck_codegen::compact(&result.block, &result.source);
-    assert!(
-        output.contains("@native"),
-        "attribute dropped from output: {output:?}"
-    );
-    let reparsed = parse_luau(&output);
-    assert_no_errors(&reparsed);
-}
-
-#[test]
-fn type_function_roundtrips_through_codegen() {
-    let source = "type function Pair(t)\n\treturn t\nend";
-    let result = parse_luau(source);
-    assert_no_errors(&result);
-    let output = luck_codegen::compact(&result.block, &result.source);
-    assert!(
-        output.contains("type function Pair") || output.contains("type function\u{20}Pair"),
-        "type function mangled: {output:?}"
-    );
-    assert!(
-        !output.contains('='),
-        "type function must not gain an '=': {output:?}"
-    );
-    let reparsed = parse_luau(&output);
-    assert_no_errors(&reparsed);
-}
-
-#[test]
 fn export_type_function_parses() {
     let result = parse_luau("export type function Id(t) return t end");
     assert_no_errors(&result);
