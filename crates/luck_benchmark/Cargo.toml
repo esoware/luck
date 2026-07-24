@@ -5,7 +5,7 @@ publish = false
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Internal benchmark harness: per-stage criterion benches run on CodSpeed."
+description = "Internal benchmark harness: per-stage criterion benches run on CodSpeed"
 
 [lib]
 test = false

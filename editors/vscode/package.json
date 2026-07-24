@@ -2,7 +2,7 @@
   "name": "luck",
   "displayName": "Luck",
   "description": "Lua/Luau language support: linter, formatter, and language server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "luck",
   "license": "MIT",
   "galleryBanner": {
