@@ -109,6 +109,27 @@ pub(crate) fn collect_target_files(paths: &[String], filter: &ProjectFilter) -> 
     files
 }
 
+/// Resolve every file's target up front, exiting `EXIT_USAGE` on a bad
+/// dialect. The parallel commands must call this before their locked
+/// output sections: those hold the stdio locks on the main thread while
+/// rayon workers run, so an `eprintln!` + `process::exit` from a worker
+/// deadlocks against the lock instead of exiting.
+pub(crate) fn resolve_file_targets(
+    files: Vec<PathBuf>,
+    config: &LuckConfig,
+) -> Vec<(PathBuf, LuaTarget)> {
+    files
+        .into_iter()
+        .map(|path| {
+            let target = config.target_for_path(&path).unwrap_or_else(|message| {
+                eprintln!("Error: {message}");
+                process::exit(EXIT_USAGE as i32);
+            });
+            (path, target)
+        })
+        .collect()
+}
+
 pub(crate) fn collect_lua_files(dir: &Path, filter: &ProjectFilter) -> Vec<PathBuf> {
     use ignore::WalkBuilder;
 

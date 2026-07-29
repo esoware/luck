@@ -2,7 +2,9 @@
 //! overrides, `--fix`, JSON output, and stdin mode.
 
 use crate::output::parallel_chunk_size;
-use crate::project::{collect_target_files, project_filter, resolve_project_config};
+use crate::project::{
+    collect_target_files, project_filter, resolve_file_targets, resolve_project_config,
+};
 use crate::render::{FileCache, render_diagnostics_to_buffer};
 use crate::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE, Verbosity};
 use clap::{Args, ValueEnum};
@@ -93,7 +95,9 @@ impl LintArgs {
             return ExitCode::from(EXIT_SUCCESS);
         }
 
-        // Resolve the target lazily per file, defaulting to the config dialects.
+        // Resolve the stdin target from the config dialects. The file walk
+        // resolves targets through resolve_file_targets instead: this closure
+        // exits the process, which must never happen on a rayon worker.
         let target_for = |path: &Path| -> LuaTarget {
             luck_config.target_for_path(path).unwrap_or_else(|message| {
                 eprintln!("Error: {message}");
@@ -109,6 +113,7 @@ impl LintArgs {
 
         let filter = project_filter(&config_dir, &luck_config);
         let files = collect_target_files(&self.paths, &filter);
+        let files = resolve_file_targets(files, &luck_config);
 
         // Files lint in parallel; each worker renders its diagnostics into
         // buffers which are then flushed IN INPUT ORDER, so output is
@@ -127,10 +132,10 @@ impl LintArgs {
             for chunk in files.chunks(parallel_chunk_size()) {
                 let outcomes: Vec<LintOutcome> = chunk
                     .par_iter()
-                    .map(|file_path| {
+                    .map(|(file_path, target)| {
                         lint_file(
                             file_path,
-                            target_for(file_path),
+                            *target,
                             &lint_config,
                             self.fix,
                             self.silent,
