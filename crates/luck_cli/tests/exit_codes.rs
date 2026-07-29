@@ -143,6 +143,58 @@ fn invalid_config_unknown_key_exits_usage() {
         .stderr(predicate::str::contains("Error"));
 }
 
+/// Populate `dir` with a config whose `lua` dialect is invalid for `.lua`
+/// files plus enough sources that rayon spreads them across worker threads.
+/// Target resolution used to run inside the workers, whose error path
+/// (eprintln + exit) deadlocked against the stdio locks the main thread
+/// holds during the parallel section; the timeout in these tests turns a
+/// regression back into a failure instead of a hang.
+fn write_bad_dialect_project(dir: &Path) {
+    write_file(dir, "luck.json", "{ \"lua\": \"luau\" }\n");
+    for name in ["a.lua", "b.lua", "c.lua", "d.lua"] {
+        write_file(dir, name, "return 1\n");
+    }
+}
+
+#[test]
+fn fmt_bad_dialect_with_multiple_files_exits_usage() {
+    let dir = TempDir::new().unwrap();
+    write_bad_dialect_project(dir.path());
+
+    luck_in(dir.path())
+        .args(["fmt", "--check"])
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("lua51..lua55"));
+}
+
+#[test]
+fn lint_bad_dialect_with_multiple_files_exits_usage() {
+    let dir = TempDir::new().unwrap();
+    write_bad_dialect_project(dir.path());
+
+    luck_in(dir.path())
+        .arg("lint")
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("lua51..lua55"));
+}
+
+#[test]
+fn check_bad_dialect_with_multiple_files_exits_usage() {
+    let dir = TempDir::new().unwrap();
+    write_bad_dialect_project(dir.path());
+
+    luck_in(dir.path())
+        .arg("check")
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("lua51..lua55"));
+}
+
 #[test]
 fn fmt_range_formats_only_covered_statement() {
     let dir = TempDir::new().unwrap();

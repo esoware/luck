@@ -1,14 +1,15 @@
 //! `luck check` - parse every target file and report syntax errors.
 
 use crate::output::parallel_chunk_size;
-use crate::project::{collect_target_files, project_filter, resolve_project_config};
+use crate::project::{
+    collect_target_files, project_filter, resolve_file_targets, resolve_project_config,
+};
 use crate::render::{FileCache, render_diagnostics_to_buffer};
-use crate::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE, Verbosity};
+use crate::{EXIT_FAILURE, EXIT_SUCCESS, Verbosity};
 use clap::Args;
 use luck_core::diagnostics::Diagnostic;
 use luck_core::types::LuaTarget;
 use std::path::{Path, PathBuf};
-use std::process;
 use std::process::ExitCode;
 
 #[derive(Args)]
@@ -27,16 +28,9 @@ impl CheckArgs {
     pub(crate) fn run(self, verbosity: Verbosity) -> ExitCode {
         let (luck_config, config_dir) = resolve_project_config(self.config.as_deref());
 
-        // Resolve the parse target lazily per file from the config dialects.
-        let target_for = |path: &Path| -> LuaTarget {
-            luck_config.target_for_path(path).unwrap_or_else(|message| {
-                eprintln!("Error: {message}");
-                process::exit(EXIT_USAGE as i32);
-            })
-        };
-
         let filter = project_filter(&config_dir, &luck_config);
         let files = collect_target_files(&self.paths, &filter);
+        let files = resolve_file_targets(files, &luck_config);
 
         // Files parse in parallel; rendered errors flush in input order so
         // output matches the sequential loop byte-for-byte.
@@ -50,7 +44,7 @@ impl CheckArgs {
             for chunk in files.chunks(parallel_chunk_size()) {
                 let outcomes: Vec<Option<Vec<u8>>> = chunk
                     .par_iter()
-                    .map(|file_path| check_file(file_path, target_for(file_path)))
+                    .map(|(file_path, target)| check_file(file_path, *target))
                     .collect();
 
                 for rendered in outcomes.into_iter().flatten() {

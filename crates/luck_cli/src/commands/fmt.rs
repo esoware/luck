@@ -2,7 +2,9 @@
 //! `--list-different`, range formatting, and stdin mode.
 
 use crate::output::parallel_chunk_size;
-use crate::project::{collect_target_files, project_filter, resolve_project_config};
+use crate::project::{
+    collect_target_files, project_filter, resolve_file_targets, resolve_project_config,
+};
 use crate::render::{FileCache, render_diagnostics_to_buffer};
 use crate::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE, Verbosity};
 use clap::Args;
@@ -66,7 +68,9 @@ impl FmtArgs {
     pub(crate) fn run(self, verbosity: Verbosity) -> ExitCode {
         let (luck_config, config_dir) = resolve_project_config(self.config.as_deref());
 
-        // Resolve the parse target lazily per file from the config dialects.
+        // Resolve the stdin target from the config dialects. The file walk
+        // resolves targets through resolve_file_targets instead: this closure
+        // exits the process, which must never happen on a rayon worker.
         let target_for = |path: &Path| -> LuaTarget {
             luck_config.target_for_path(path).unwrap_or_else(|message| {
                 eprintln!("Error: {message}");
@@ -92,6 +96,7 @@ impl FmtArgs {
 
         let filter = project_filter(&config_dir, &luck_config);
         let files = collect_target_files(&self.paths, &filter);
+        let files = resolve_file_targets(files, &luck_config);
 
         // --check and --list-different only report; --write (or no mode flag at
         // all) writes in place. --write is the implicit default, so its presence
@@ -120,10 +125,10 @@ impl FmtArgs {
             for chunk in files.chunks(parallel_chunk_size()) {
                 let outcomes: Vec<FileOutcome> = chunk
                     .par_iter()
-                    .map(|file_path| {
+                    .map(|(file_path, target)| {
                         format_file(
                             file_path,
-                            target_for(file_path),
+                            *target,
                             self.range_start,
                             self.range_end,
                             report_only,
