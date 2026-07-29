@@ -1181,7 +1181,6 @@ name = "luck_parser"
 version = "0.2.0"
 dependencies = [
  "luck_ast",
- "luck_codegen",
  "luck_lexer",
  "luck_token",
 ]
