@@ -13,6 +13,8 @@
       "Bash(cargo tree:*)",
       "Bash(cargo metadata:*)",
       "Bash(cargo bench:*)",
+      "Bash(cargo nextest:*)",
+      "Bash(just:*)",
       "Bash(rustup:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",

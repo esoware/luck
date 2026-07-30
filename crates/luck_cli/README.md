@@ -4,7 +4,7 @@ Command-line interface for the luck bundler, minifier, formatter, and linter.
 
 ## Overview
 
-`luck_cli` is the binary crate that wires the luck facade into a `clap`-based CLI. It spawns a 16 MB-stack worker thread to handle deeply nested ASTs without overflowing default stacks, then dispatches to the requested subcommand.
+`luck_cli` is the binary crate that wires the individual `luck_*` crates (bundler, minifier, formatter, linter, LSP) into a `clap`-based CLI. It spawns a 16 MB-stack worker thread to handle deeply nested ASTs without overflowing default stacks, then dispatches to the requested subcommand.
 
 ## Key Features
 
@@ -37,7 +37,7 @@ luck lsp [--socket <port>]                   # Run the language server over stdi
 |---------|-------|
 | `bundle` | `--no-fold-constants`, `--no-rename-locals`, … (per-transform), `--rename-globals`, `--minify`, `--line-map`, `-s/--search-path` |
 | `minify` | `--no-fold-constants`, `--no-rename-locals`, … (per-transform), `--rename-globals`, `--stats` |
-| `fmt` | `--write`, `--check`, `--list-different`, `--no-editorconfig`, `--stdin-filepath`, `-c/--config` (layout options live in `luck.json`/`.editorconfig`, not flags) |
+| `fmt` | `--write`, `--check`, `--list-different`, `--no-editorconfig`, `--stdin-filepath`, `--range-start`/`--range-end`, `--verify`, `-c/--config` (layout options live in `luck.json`/`.editorconfig`, not flags) |
 | `lint` | `--fix`, `--format` (default / json), `-A/--allow`, `-W/--warn`, `-D/--deny` per rule or category, `--global`, `--max-warnings`, `--deny-warnings`, `--silent`, `--rules`, `--print-config`, `--stdin-filepath` |
 | `build` | `--release`, `--dev`, `--profile <name>`, `--watch`, `--dry-run`, `-c/--config` |
 

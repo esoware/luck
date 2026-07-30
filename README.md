@@ -43,7 +43,7 @@ Every tool is also a library crate (`luck_parser`, `luck_formatter`, `luck_linte
 
 ## Contribute
 
-Issues and pull requests are welcome. If you want to poke around, `CLAUDE.md` documents the architecture, crate layout, and invariants the codebase holds itself to.
+Issues and pull requests are welcome. If you want to poke around, `ARCHITECTURE.md` documents the pipeline, crate layout, and design decisions, and `AGENTS.md` holds the working conventions and invariants the codebase holds itself to.
 
 ## License
 

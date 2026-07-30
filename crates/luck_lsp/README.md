@@ -11,11 +11,15 @@ Text-document features:
 - hover with stdlib signature, deprecation, must-use / pure / Roblox markers
 - completion (stdlib globals + namespace members + scope-visible locals + keywords)
 - signature help (active-parameter tracking, typed parameter labels)
-- document symbols (outline view for functions, methods, locals)
+- document symbols (outline view for functions, methods, locals) and
+  workspace symbols (substring search over open documents' outlines)
+- go-to-definition (local symbols via the scope tree; `require("path")`
+  strings jump to the resolved module file)
+- find references and rename (local symbols only; rename refuses globals,
+  stdlib names, and any new name that would change meaning)
 - code actions: per-diagnostic auto-fix, `source.fixAll.luck`,
   "disable rule for this line"
-- semantic tokens (full document)
-- inlay hints (parameter-name hints for stdlib calls)
+- semantic tokens (full document and range)
 - document highlights (occurrences of the symbol under cursor)
 - folding ranges (block constructs)
 - selection ranges (smart-expand selection)
@@ -39,18 +43,20 @@ base, or the requiring file's own directory when no config is found.
 
 ## Build
 
-```sh
-cargo build -p luck_lsp --release
-```
+`luck_lsp` is a library crate with no binary of its own (`[lib]` only, no
+`[[bin]]` in its `Cargo.toml`). The server is served by the `luck_cli`
+binary's `lsp` subcommand, which calls `luck_lsp::serve_stdio` or
+`luck_lsp::serve_socket`.
 
-The binary lands at `target/release/luck_lsp` (or `luck_lsp.exe` on Windows).
+```sh
+cargo build -p luck_cli --release
+```
 
 ## Transports
 
 ```sh
-luck_lsp                    # stdio (default — what every editor uses)
-luck_lsp --stdio            # explicit stdio
-luck_lsp --socket 9257      # TCP on 127.0.0.1:9257 — useful for debugging
+luck lsp                    # stdio (default — what every editor uses)
+luck lsp --socket 9257      # TCP on 127.0.0.1:9257 — useful for debugging
 ```
 
 ## Editor integration
@@ -66,7 +72,7 @@ restart / show output / view syntax tree / apply-all-fixes / etc.
 ```lua
 require("lspconfig.configs").luck_lsp = {
   default_config = {
-    cmd = { "luck_lsp" },
+    cmd = { "luck", "lsp" },
     filetypes = { "lua", "luau" },
     root_dir = require("lspconfig.util").root_pattern("luck.json", ".luaurc", ".git"),
     single_file_support = true,

@@ -38,3 +38,7 @@ The bundler takes a multi-file Lua project and produces one self-contained outpu
 Require rewriting splices over the exact byte ranges the dependency scan recorded, so the extractor and the emitter can never disagree about which calls are bundled. Even unusually formatted requires — multi-line calls, long-bracket arguments, escaped strings, Luau type casts — survive bundling, while `require(...)` text inside string literals is left untouched and shadowed calls stay exactly as written.
 
 When a Luau value-export module is placed inside a generated loader wrapper, the emitter lowers its top-level `export` declarations to local declarations and appends the frozen export table that the module would otherwise return implicitly. Type-only exports are made private inside wrappers.
+
+### Testing
+
+Inline unit tests cover individual modules; `tests/integration.rs` bundles fixture projects end-to-end and asserts on the emitted output via `insta` snapshots under `tests/snapshots/`.

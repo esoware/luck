@@ -31,7 +31,7 @@ The cache lives on the resolver, not in global state: create a fresh `Resolver` 
 
 `lib.rs` implements the template resolver. For `require("foo.bar")`, the resolver:
 
-1. Replaces every `.` in the require string with the OS path separator (`foo.bar` → `foo/bar`).
+1. Replaces every `.` in the require string with `/` (`foo.bar` → `foo/bar`).
 2. Substitutes the result into each template's `?` placeholder.
 3. Probes each candidate on disk in order; the first existing file wins.
 

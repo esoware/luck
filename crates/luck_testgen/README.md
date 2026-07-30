@@ -50,7 +50,7 @@ construct its version rejects.
 ## Property tests
 
 `tests/roundtrip.rs` runs the workspace's hard invariants over both
-generators across every version and 60 seeds:
+generators, across every version and many seeds:
 
 - **Parse cleanliness** - every generated program parses with zero errors.
 - **Compact round-trip** - `compact` output re-parses cleanly.

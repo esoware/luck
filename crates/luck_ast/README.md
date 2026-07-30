@@ -45,3 +45,7 @@ The Luau type grammar lives in `types.rs` as its own `Type` node family, held to
 `AstTransform` takes each node by value and returns a replacement. Override `transform_expression` or `transform_statement`, then call `self.walk_*` to apply default recursion before or after your rewrite. Every minifier pass uses this pattern.
 
 The key difference: `Visitor` borrows, so you read but cannot modify; `AstTransform` consumes, so you can restructure, replace, or remove nodes.
+
+### Node discriminants and structural queries
+
+`node.rs` defines `NodeType` (one variant per `Statement`/`LastStatement`/`Expression` variant, built by the exhaustive `of_stmt`/`of_last_stmt`/`of_expr`), a borrowed `NodeKind` view, and `AstTypesBitset`, a fixed-size bitset over `NodeType` used by `luck_semantic`'s flat node table and `luck_linter`'s node-type-bucketed rule dispatch. `query.rs` holds small read-only structural predicates shared by the codegen and formatter printers, such as whether a statement's or expression's first emitted token is `(` or `{` — cases both printers must guard against reprinting into a different parse.

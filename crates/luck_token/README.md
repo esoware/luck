@@ -11,11 +11,12 @@ The crate has zero internal dependencies. Its only external dependency is `compa
 ## Key Features
 
 - **Compact spans** — `Span` uses `u32` start and end. Source files are capped at 4 GB; every AST node shrinks by half compared to `usize` spans.
-- **Version-gated feature flags** — `LuaVersion` exposes predicates like `has_goto()`, `has_bitwise_ops()`, `has_attributes()`, `has_integer_division()`. Downstream crates branch on capabilities, not version numbers.
+- **Version-gated feature flags** — `LuaVersion` exposes predicates like `has_goto()`, `has_bitwise_ops()`, `has_attributes()`, `has_floor_div()`. Downstream crates branch on capabilities, not version numbers.
 - **Inline string storage** — `TokenKind` payloads use `CompactString`. Strings ≤24 bytes live on the stack; most Lua identifiers fit.
 - **Single error type** — `SourceError` carries a span and a message, and is the only error struct in the toolchain. `LexError`, `ParseError`, and `FormatError` are type aliases for it, so errors flow end-to-end without conversion.
 - **Shared literal semantics** — `parse_lua_number`, `decode_string_literal`, and `encode_string_literal` decode literal token text to runtime values (and back), so every crate that folds or re-emits literals shares one implementation instead of re-parsing raw text.
 - **First-class comments** — `Comment` records kind (line, single- or multi-line block, shebang), position (leading, trailing), and an `attached_to` slot the parser fills during AST construction.
+- **Byte-level output buffer** — `CodeBuffer` wraps a `Vec<u8>` behind a UTF-8 invariant, giving `luck_codegen` and `luck_formatter` ASCII-byte pushes without per-character UTF-8 encoding, while `into_string` stays zero-copy.
 
 ## Architecture
 

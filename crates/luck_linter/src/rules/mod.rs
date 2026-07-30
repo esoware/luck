@@ -274,8 +274,7 @@ mod tests {
 
     #[test]
     fn rule_count_locked() {
-        // If this changes, update the rule count in README.md,
-        // crates/luck_linter/README.md, and CLAUDE.md.
+        // If this changes, update the rule count in the root README.md.
         assert_eq!(all_rules().len(), 64);
     }
 
