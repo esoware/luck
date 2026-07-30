@@ -114,6 +114,13 @@ fn circular_dep_bundles_with_warning() {
         result.warnings.iter().map(|w| &w.code).collect::<Vec<_>>()
     );
     assert!(result.output.contains("__luck_require"));
+    // The cycle runs through the entry: its function must register under
+    // the require string so the bundle stays self-contained.
+    assert!(
+        result.output.contains("__luck_modules[\"a\"]=__luck_entry"),
+        "entry must register when required:\n{}",
+        result.output
+    );
 }
 
 #[test]
@@ -172,12 +179,26 @@ fn require_after_code_bundles() {
 }
 
 #[test]
-fn package_loaded_manip() {
-    let result = run_bundle(
+fn package_loaded_manip_is_allowed_on_lua_targets() {
+    // The bundle cache IS package.loaded on Lua targets, so preseeding
+    // an entry behaves exactly as in real Lua - no E006.
+    let output = run_bundle(
         "lua54",
         "errors/package_loaded_manip",
         LuaTarget::Lua54,
         "main.lua",
+    )
+    .expect("package.loaded writes bundle fine on Lua targets");
+    assert!(output.contains("package.loaded[\"x\"] = {}"), "{output}");
+}
+
+#[test]
+fn package_loaded_manip_flags_e006_on_luau() {
+    let result = run_bundle(
+        "luau",
+        "errors/package_loaded_manip",
+        LuaTarget::Luau,
+        "main.luau",
     );
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -282,6 +303,24 @@ fn luau_hot_comments_hoisted() {
     assert!(
         output.starts_with("--!strict\n--!native\n"),
         "entry hot comments must lead the bundle:\n{output}"
+    );
+}
+
+#[test]
+fn luau_dependency_hot_comments_warn_w006() {
+    // A non-entry module's hot comments land mid-bundle where Luau
+    // ignores them; W006 makes that visible.
+    let input_dir = fixture_dir("luau", "hot_comments");
+    let entry = input_dir.join("main.luau");
+    let result =
+        luck_bundler::bundle(&entry, LuaTarget::Luau, &[], &input_dir).expect("bundle failed");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code == "W006" && w.message.contains("--!nonstrict")),
+        "Expected W006 for util.luau, got: {:?}",
+        result.warnings.iter().map(|w| &w.code).collect::<Vec<_>>()
     );
 }
 

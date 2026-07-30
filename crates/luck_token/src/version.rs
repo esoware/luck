@@ -179,6 +179,31 @@ impl LuaVersion {
         matches!(self, Self::Luau)
     }
 
+    /// Whether a required module chunk receives the resolved file path
+    /// as its second argument (Lua 5.2+; 5.1 loaders pass only the
+    /// module name, and Luau's require calls the chunk with no args).
+    #[must_use]
+    pub fn has_require_filepath_arg(self) -> bool {
+        matches!(self, Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55)
+    }
+
+    /// Whether `require` returns the loader data (the resolved file
+    /// path, or ":preload:") as a second result on first load (5.4+).
+    /// Cache hits still return a single value.
+    #[must_use]
+    pub fn has_require_loaderdata(self) -> bool {
+        matches!(self, Self::Lua54 | Self::Lua55)
+    }
+
+    /// Whether a failed module load may be retried by a later `require`.
+    /// 5.2+ leaves `package.loaded[name]` unset when the loader raises;
+    /// 5.1 leaves its sentinel behind and raises "loop or previous
+    /// error" forever after, and Luau caches the failure.
+    #[must_use]
+    pub fn has_require_error_retry(self) -> bool {
+        matches!(self, Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55)
+    }
+
     /// Whether float `%` is computed as fmod plus a sign fix (5.3+).
     /// 5.1, 5.2, and Luau compute `a - floor(a/b)*b`, which loses
     /// precision at large magnitudes and the sign of zero results.
@@ -339,6 +364,25 @@ mod tests {
         // 5.5-only features
         assert!(Lua55.has_named_varargs());
         assert!(!Lua54.has_named_varargs());
+
+        // has_require_filepath_arg: 5.2-5.5 (not 5.1, not Luau)
+        assert!(!Lua51.has_require_filepath_arg());
+        assert!(Lua52.has_require_filepath_arg());
+        assert!(Lua55.has_require_filepath_arg());
+        assert!(!Luau.has_require_filepath_arg());
+
+        // has_require_loaderdata: 5.4+ only
+        assert!(!Lua51.has_require_loaderdata());
+        assert!(!Lua53.has_require_loaderdata());
+        assert!(Lua54.has_require_loaderdata());
+        assert!(Lua55.has_require_loaderdata());
+        assert!(!Luau.has_require_loaderdata());
+
+        // has_require_error_retry: 5.2-5.5 (5.1 and Luau keep the failure)
+        assert!(!Lua51.has_require_error_retry());
+        assert!(Lua52.has_require_error_retry());
+        assert!(Lua55.has_require_error_retry());
+        assert!(!Luau.has_require_error_retry());
     }
 
     #[test]

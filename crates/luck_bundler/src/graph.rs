@@ -129,7 +129,7 @@ impl<'a> GraphBuilder<'a> {
         let ExtractResult {
             requires,
             diagnostics,
-        } = extract_requires(&parse_result.block, file_path);
+        } = extract_requires(&parse_result.block, file_path, self.lua_version);
         for diag in diagnostics {
             if diag.is_error() {
                 self.errors.push(diag);
@@ -168,7 +168,8 @@ impl<'a> GraphBuilder<'a> {
 
         let module_id = ModuleId(self.modules.len());
         let node_idx = self.graph.add_node(module_id);
-        let sanitized_name = sanitize_module_name(&make_relative(file_path, self.rc_dir));
+        let relative_path = make_relative(file_path, self.rc_dir);
+        let sanitized_name = sanitize_module_name(&relative_path);
 
         self.path_to_id.insert(file_path.to_string(), module_id);
         self.node_indices.push(node_idx);
@@ -177,6 +178,7 @@ impl<'a> GraphBuilder<'a> {
             source: parse_result.source,
             dependencies,
             sanitized_name,
+            relative_path,
             parsed_block: Some(parse_result.block),
         });
     }
@@ -193,12 +195,35 @@ impl<'a> GraphBuilder<'a> {
             .get(entry_normalized)
             .ok_or_else(|| vec![errors::e011(entry_normalized, 0..0)])?;
 
+        self.warn_inert_hot_comments(entry_id);
+
         Ok(DependencyGraph {
             modules: self.modules,
             topo_order,
             entry_id,
             warnings: self.warnings,
         })
+    }
+
+    /// Luau hot comments only take effect at the top of a chunk. The
+    /// emitter hoists the entry module's leading run above the loader;
+    /// any other module's hot comments become inert in the bundle.
+    fn warn_inert_hot_comments(&mut self, entry_id: ModuleId) {
+        if !self.lua_version.is_luau() {
+            return;
+        }
+        for (idx, module) in self.modules.iter().enumerate() {
+            if ModuleId(idx) == entry_id {
+                continue;
+            }
+            if let Some((offset, line)) = leading_hot_comment(&module.source) {
+                self.warnings.push(errors::w006(
+                    &module.path,
+                    offset..offset + line.len(),
+                    line,
+                ));
+            }
+        }
     }
 
     fn add_edges(&mut self) {
@@ -313,6 +338,27 @@ fn find_cycle_path(
     }
 }
 
+/// First `--!` hot comment in the module's leading comment run, with its
+/// byte offset. Mirrors the emitter's hoisting scan.
+fn leading_hot_comment(source: &str) -> Option<(usize, &str)> {
+    let mut offset = 0usize;
+    for line in source.split_inclusive('\n') {
+        let content = line.trim_end_matches(['\n', '\r']);
+        let trimmed = content.trim_start();
+        if trimmed.is_empty() {
+            offset += line.len();
+            continue;
+        }
+        let rest = trimmed.strip_prefix("--")?;
+        if rest.starts_with('!') {
+            let column = content.len() - trimmed.len();
+            return Some((offset + column, trimmed));
+        }
+        offset += line.len();
+    }
+    None
+}
+
 fn make_relative(path: &str, base: &Path) -> String {
     let base_normalized = normalize_path_str(base);
     let base_prefix = if base_normalized.ends_with('/') {
@@ -337,6 +383,7 @@ mod tests {
             source: String::new(),
             dependencies: vec![],
             sanitized_name: sanitize_module_name(path),
+            relative_path: path.to_string(),
             parsed_block: None,
         }
     }

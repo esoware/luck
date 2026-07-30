@@ -218,7 +218,8 @@ pub mod errors {
             span,
         )
         .with_help(
-            "luck does not support runtime module caching. Remove package.loaded manipulation."
+            "Luau has no package.loaded; the bundle's module cache is private. \
+             Remove the package.loaded manipulation."
                 .to_string(),
         )
     }
@@ -317,7 +318,8 @@ pub mod errors {
         )
         .with_help(format!(
             "Cycle: {cycle_str}\nModules load lazily, so cycles deferred into function bodies work; \
-             a cycle hit while a module is still loading raises at runtime."
+             a cycle hit while a module is still loading fails at runtime, matching the target \
+             Lua's own behavior."
         ))
     }
 
@@ -327,6 +329,50 @@ pub mod errors {
             "alias \"self\" defined in .luaurc is shadowed by built-in @self".to_string(),
             file_path.to_string(),
             span,
+        )
+    }
+
+    /// A call through a local binding named `require`; left untouched.
+    pub fn w005_shadowed(file_path: &str, span: Range<usize>) -> Diagnostic {
+        Diagnostic::warning(
+            "W005",
+            "call goes through a local binding named \"require\" and is not bundled".to_string(),
+            file_path.to_string(),
+            span,
+        )
+        .with_help(
+            "The call is left exactly as written; it will invoke the local function at runtime."
+                .to_string(),
+        )
+    }
+
+    /// The global `require` referenced without being directly called.
+    pub fn w005_aliased(file_path: &str, span: Range<usize>) -> Diagnostic {
+        Diagnostic::warning(
+            "W005",
+            "global require is referenced without being called; aliased call sites are not bundled"
+                .to_string(),
+            file_path.to_string(),
+            span,
+        )
+        .with_help(
+            "Only direct require(\"literal\") calls are bundled. Calls through an alias like \
+             `local r = require` fall through to the runtime's own require."
+                .to_string(),
+        )
+    }
+
+    pub fn w006(file_path: &str, span: Range<usize>, hot_comment: &str) -> Diagnostic {
+        Diagnostic::warning(
+            "W006",
+            format!("hot comment \"{hot_comment}\" has no effect in a bundle"),
+            file_path.to_string(),
+            span,
+        )
+        .with_help(
+            "Luau hot comments only apply at the top of a chunk; only the entry module's are \
+             hoisted above the bundle's loader."
+                .to_string(),
         )
     }
 }

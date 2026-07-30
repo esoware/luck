@@ -16,6 +16,7 @@ luck_core.workspace = true
 luck_ast.workspace = true
 luck_resolver.workspace = true
 luck_parser.workspace = true
+luck_semantic.workspace = true
 luck_token.workspace = true
 petgraph.workspace = true
 rustc-hash.workspace = true
