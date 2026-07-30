@@ -8,46 +8,17 @@ Rule-based linter for Lua and Luau with scope-aware analysis.
 
 ## Key Features
 
-- **64 rules across 4 categories** — Correctness, Suspicious, Style, and Performance. Correctness rules are on by default; the rest are opt-in.
+- **Rules grouped into 4 categories** — Correctness, Suspicious, Style, and Performance (`luck_core::Category`). Correctness rules run by default; Suspicious, Style, and Performance rules are opt-in, enabled per-rule or by enabling the whole category in `luck.json`.
 - **Auto-fix** — rules with a safe fix attach `TextEdit`s to their diagnostic, applied in a single pass with overlap detection.
 - **Suppression comments** — `-- luck: allow(rule_name)` on the preceding line suppresses the rule for the entire span of the following statement.
 - **Semantic-aware** — unused/undefined variable, incorrect stdlib usage, and similar rules query the `ScopeTree` rather than re-walking the AST.
 
 ## Rules
 
-### Correctness (on by default)
-
-| Rule | Description |
-|------|-------------|
-| `unused_variable` | Variables declared but never read |
-| `undefined_variable` | References to variables not in scope |
-| `unreachable_code` | Statements after an unconditional return or break |
-| `unbalanced_assignment` | Assignments where LHS and RHS counts differ |
-| `duplicate_keys` | Repeated keys in table constructors |
-| `incorrect_stdlib_use` | Wrong argument count or misuse of standard library functions |
-| `compare_nan` | Comparisons with NaN (always false) |
-| `type_check_inside_call` | `type()` used inside a function call instead of being compared |
-
-### Suspicious (off by default)
-
-| Rule | Description |
-|------|-------------|
-| `almost_swapped` | Variable swap attempts missing the temporary |
-| `constant_table_comparison` | Comparing a fresh table literal with `==` / `~=` |
-| `deprecated` | Use of deprecated standard library functions |
-| `duplicate_conditions` | Repeated conditions in `if` / `elseif` chains |
-| `empty_block` | Empty `if`, `else`, or loop bodies |
-| `if_same_then_else` | Identical `then` and `else` branches |
-| `setting_global` | Assignments to the global scope |
-| `reversed_for_loop` | Numeric `for` loops where the step goes the wrong direction |
-| `must_use` | Discarding return values from pure functions |
-
-### Style (off by default)
-
-| Rule | Description |
-|------|-------------|
-| `parenthesized_conditions` | Unnecessary parentheses around `if` and `while` conditions |
-| `shadowing` | Variable declarations that shadow an outer variable |
+Each rule lives in its own file under `src/rules/`, one module per rule
+(`unused_variable.rs`, `deprecated.rs`, ...), and is registered in the
+`RULES` array in `src/rules/mod.rs` - the authoritative list of every rule,
+its category, and its default severity.
 
 ## Architecture
 
@@ -59,7 +30,7 @@ Rule-based linter for Lua and Luau with scope-aware analysis.
 
 Every rule implements the `Rule` trait: `name`, `category`, `default_severity`, `description`, and `check`. `check` receives a single `LintContext` — `fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic>` — which bundles the block, the semantic analysis, the source text, the comment array, and the resolved config. Rules that need traversal state (scope stacks, statement sequences, control flow) walk the AST through `Visitor`, never hand-rolled recursion.
 
-Rules whose logic is node-local additionally implement the `NodeRule` trait, which exposes per-node hooks (`on_statement`, `on_expression`) instead of a full walk. The `bus` runs one shared pre-order pass over the AST and fans each node out to every subscribed `NodeRule`, replacing N per-rule traversals with a single one; each node rule's `Rule::check` just delegates to `bus::run_single`.
+Rules whose logic is node-local additionally implement the `NodeRule` trait, which exposes per-node hooks (`on_statement`, `on_expression`, `on_last_statement`) instead of a full walk. The `bus` runs one shared pre-order pass over the AST and fans each node out to every subscribed `NodeRule`, replacing N per-rule traversals with a single one; each node rule's `Rule::check` just delegates to `bus::run_single`.
 
 ### Auto-Fix
 
@@ -81,3 +52,7 @@ A rule with an always-safe transformation attaches a `Fix` to its diagnostic. `F
 | `roblox.rs` | Shared helpers for the Roblox `<Global>.new(...)` constructor rules |
 | `suggest.rs` | Levenshtein "did you mean" distance shared by the suggestion rules |
 | `rules/*.rs` | Individual rule implementations |
+
+### Testing
+
+Each rule file carries its own `#[cfg(test)] mod tests` (positive cases named `flags_*`, negative cases `ignores_*`) built through the shared `test_support::run_rule` helper. `src/lib.rs` has driver-level tests for config resolution, suppression, and auto-fix. `tests/idiomatic_fixtures.rs` asserts the shared `tests/fixtures/idiomatic/` corpus stays lint-clean.

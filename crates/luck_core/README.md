@@ -11,7 +11,7 @@ Shared types, configuration parsing, and diagnostics for the luck toolchain.
 - **Build targets** — `LuaTarget` enumerates the supported flavors (Lua 5.1 through 5.5, standalone Luau, and Roblox Luau) and parses from common string forms (`"lua54"`, `"5.4"`, `"luau"`, `"roblox"`). It projects onto the two independent axes the rest of the workspace keys off: `lua_version()` (syntax) and `stdlib_environment()` (stdlib).
 - **Transform toggles** — `TransformConfig` enables and disables individual minifier passes, with serde-driven partial overrides from JSON.
 - **Format options** — the option enums (`IndentStyle`, `QuoteStyle`, `HexCase`, `CallParentheses`, `CollapseSimpleStatement`, `LineEndings`, `BlockNewlineGaps`, `SpaceAfterFunction`) live here so `FormatConfig` deserializes directly into them; `luck_formatter` re-exports every type.
-- **Rich diagnostics** — `Diagnostic` carries a code, message, severity, span, labels, and help text; the `error_at`/`warning_at` constructors are the single entry point, and the `diagnostics::errors` module owns the numbered `E001`–`E012` / `W001`–`W004` codes.
+- **Rich diagnostics** — `Diagnostic` carries a code, message, severity, span, labels, and help text; the `diagnostics::errors` module owns the numbered `E001`–`E012` / `W001`–`W006` constructors, which are the single entry point for building one.
 - **Project configuration** — `luck.json` (parsed as JSON5), `.luaurc`, profile overrides, `extends` chains, and config discovery up the directory tree.
 - **Source loading** — `source_io::read_source_file` reads a file with SIMD UTF-8 validation, matching `fs::read_to_string`'s error behavior.
 
@@ -60,3 +60,5 @@ The VS Code schema at `editors/vscode/schemas/luckrc.schema.json` is **generated
 | W002 | top-level vararg in bundled module |
 | W003 | circular dependency between lazily-loaded modules |
 | W004 | `.luaurc` alias `self` shadowed by built-in `@self` |
+| W005 | require call not bundled (local shadow or unaliased reference to global `require`) |
+| W006 | Luau hot comment has no effect in a bundle |

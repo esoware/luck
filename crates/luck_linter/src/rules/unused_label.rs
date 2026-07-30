@@ -95,8 +95,8 @@ fn walk_statement<'ast>(
     goto_names: &mut Vec<&'ast str>,
     nested: &mut Vec<&'ast FunctionBody>,
 ) {
-    // Exhaustive match per CLAUDE.md invariant 3 - every Statement
-    // variant gets explicit handling; no catch-alls.
+    // Exhaustive match, no catch-alls: a new Statement variant must
+    // surface here as a compile error.
     match stmt {
         Statement::Label(label) => {
             if let Some(name) = token_identifier(&label.name.kind) {
@@ -230,7 +230,7 @@ fn walk_expression<'ast>(
     goto_names: &mut Vec<&'ast str>,
     nested: &mut Vec<&'ast FunctionBody>,
 ) {
-    // Exhaustive match per CLAUDE.md invariant 3.
+    // Exhaustive match, no catch-alls.
     match expr {
         // Function definitions open a new scope - collected here and
         // processed separately by `check_scope` to honor the

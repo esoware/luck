@@ -32,3 +32,7 @@ Each compound statement (`if`, `for`, `while`, `repeat`, function declarations) 
 ### Luau Type Annotations
 
 `luau.rs` is a full recursive-descent parser for the Luau type grammar. It produces real `luck_ast::types::Type` nodes — not opaque spans — for every annotation site (`x: T`, `<T>`, function return types, type-declaration bodies). The grammar covers unions and intersections (including the leading-separator multiline form `| A | B`), tight-binding negation (`~T`), optionals (`T?`), table types, function types (`(params) -> R`), generic lists with defaults, type packs, `typeof(expr)`, singletons, and variadic packs. The nested-generic cases where `>>` and `>=` must be split back into closing angle brackets are handled during parsing. Codegen reconstructs types by walking these typed nodes; there is no source slicing.
+
+## Testing
+
+Public-API tests live in `tests/it/` as a single binary: one file per Lua version (`lua51.rs`...`lua55.rs`, `luau.rs`, `luau_types.rs`), plus `errors.rs`, `depth.rs`, `validate.rs`, and `fixtures.rs`, which sweeps the shared `tests/fixtures/` corpus at the repo root.

@@ -10,22 +10,19 @@ Code generation from Lua ASTs back to source text. Supports Lua 5.1–5.5 and Lu
 
 - **Compact output** — minimal valid code. Strips comments, uses minimal whitespace, and inserts smart separators only where ambiguity requires them. Produces idempotent output: `compact(compact(x)) == compact(x)`.
 - **Source-independent** — leaf text is read from the tokens stored on AST nodes, so the printer needs no access to the original bytes. Luau type annotations are emitted by walking the real `Type` AST, not by re-slicing source spans.
-- **40+ ambiguity cases handled** — the separator system covers every place Lua's grammar allows two adjacent tokens to merge into the wrong meaning.
-- **Statement boundary disambiguation** — inserts semicolons when a previous statement ends with `)` or `}` and the next begins with `(`, preventing the parser from re-reading the second statement as a function call on the first.
+- **Token-merge disambiguation** — the separator system inserts a space wherever two adjacent emitted pieces would otherwise merge into a different token, covering cases like `--` (comment start), `//` (floor division), `[[` (long-string open), `..`/`...` (concat/vararg), and `<<`/`>>`/`>=`.
+- **Statement boundary disambiguation** — inserts a semicolon when a statement whose first token is `(` follows one that could be read as a call prefix, preventing the parser from re-reading the second statement as a continuation of the first.
 
 ## Architecture
 
 ### Compact Printer
 
-`compact.rs` is a tree-walking printer. Each AST variant has an emitter that calls the printer's spacing primitives and recurses into children. Output is built into a single growing string with minimal copying.
+`compact.rs` is a tree-walking printer. Each AST variant has an emitter that calls the printer's spacing primitives and recurses into children. Output is built into a `luck_token::code_buffer::CodeBuffer` (a byte buffer with an ASCII fast path), sized to the source length as a capacity hint since compact output is never longer than its input.
 
 ### Separator Logic
 
-`separator.rs` is a token adjacency analyzer. It answers: given the last token emitted and the next one queued, is a space required? The cases it handles include:
+`separator.rs` tracks the previously emitted piece as a one-byte `PrevClass` (word, number, `-`, `/`, `[`, `.`, `..`, `<`, `>`, `;`, or other) instead of a cloned token, and `needs_space` answers whether the next piece's first byte would merge with it into something else: two words merging into one identifier, `--` forming a comment, `//` forming floor division, `[[` opening a long string, `..`/`...` colliding with concat or vararg, and `<<`/`>>`/`>=` forming shift or comparison tokens. Each case is enumerated rather than derived from a general rule, because Lua's lexer rules differ enough by version that a unified rule would be wrong somewhere.
 
-- `a..b` vs `a ..b` (concat vs number-prefix ambiguity in 5.x)
-- `a-b` vs `a -b` (subtraction vs unary minus near comment starts)
-- `a<<b` (Lua 5.3+ shift operator collisions)
-- Keyword boundaries (`returnx` would lex as one identifier)
+## Testing
 
-Each case is enumerated rather than derived from a general rule, because Lua's lexer rules differ enough by version that a unified rule would be wrong somewhere.
+Public-API and round-trip tests live in `tests/it/` as a single binary (`compact.rs`, `roundtrip.rs`). `separator.rs` additionally keeps inline white-box tests at the bottom of the file.

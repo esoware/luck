@@ -40,3 +40,7 @@ Comments are buffered as they are encountered and emitted into the comment array
 ### Error recovery
 
 On a malformed token the lexer pushes a `SourceError`, advances past the offending byte (consuming a full UTF-8 sequence so a multi-byte character yields one error), and resumes. There is no fatal tier; the parser sees whatever tokens were produced and reports downstream errors against them.
+
+## Testing
+
+Public-API tests live in `tests/it/` as a single binary, split by concern (`tokens.rs`, `numbers.rs`, `strings.rs`, `comments.rs`, `errors.rs`, `versions.rs`).

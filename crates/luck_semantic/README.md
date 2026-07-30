@@ -30,7 +30,7 @@ Each scope owns its locally declared symbols and tracks every reference to them.
 
 ### Symbols and References
 
-A `Symbol` is a declared variable with a `SymbolKind` (Local, Parameter, ForVariable, …) and the span of its declaration. A `Reference` is a usage site with a `ReferenceKind` (Read, Write, ReadWrite — the last covers `x += 1` in Luau and similar compound assignments).
+A `Symbol` is a declared variable with a `SymbolKind` (`Local`, `Parameter`, `IteratorVariable`, `NumericForVariable`, `FunctionName`) and the span of its declaration. A `Reference` is a usage site with a `ReferenceKind` (Read, Write, ReadWrite — the last covers `x += 1` in Luau and similar compound assignments).
 
 Names not declared in any enclosing scope are unresolved — they reach the global scope, where they may match a stdlib entry or remain unknown.
 
@@ -61,6 +61,7 @@ Entries model:
 | `lib.rs` | Public API and `analyze()` entry point |
 | `scope.rs` | Scope tree data structures |
 | `builder.rs` | AST visitor that constructs the scope tree |
+| `nodes.rs` | Flat pre-order node table (`Nodes`/`collect_nodes`) with parent links and per-node scope, shared with the linter |
 | `stdlib_model.rs` | Stdlib data model, queries, and the per-environment library instances |
 | `stdlib_load.rs` | TOML deserialization and composition into the `StdlibLibrary` model |
 | `resolve.rs` | Conservative shape and callee resolution |
