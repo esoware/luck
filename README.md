@@ -29,7 +29,7 @@ luck lint src/     # lint (add --fix to auto-fix)
 luck check src/    # everything at once
 ```
 
-Configuration lives in a single `luck.json`, discovered by walking up from the working directory. Lint suppressions, formatter toggles, and per-dialect targets are all driven from it — see the schema shipped with the [VS Code extension](editors/vscode).
+Configuration lives in a single `luck.json`, discovered by walking up from the working directory. Lint suppressions, formatter toggles, and per-extension targets are all driven from it — the `lua` and `luau` keys each name any dialect, so a Roblox or Rojo tree that keeps Luau in `.lua` files just sets `"lua": "roblox"`. See the schema shipped with the [VS Code extension](editors/vscode).
 
 ## Tools
 

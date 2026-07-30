@@ -12,9 +12,10 @@ use std::process;
 /// Resolve the target for the one-shot `bundle`/`minify`/`graph` commands.
 ///
 /// An explicit `-t/--target` is parsed via the alias-rich `FromStr`; a bad
-/// value exits with code 2. When omitted, the target is inferred from the
-/// primary input file's extension: `.luau` maps to Luau, everything else to
-/// Lua 5.4.
+/// value exits with code 2. When omitted, the project's `luck.json` decides
+/// per extension - an extension alone cannot say which dialect a `.lua` file
+/// is written in. With no config in scope the defaults reproduce plain
+/// inference: `.luau` is Luau, everything else Lua 5.4.
 pub(crate) fn resolve_explicit_target(target: Option<&str>, input_path: &str) -> LuaTarget {
     if let Some(target_str) = target {
         return target_str.parse::<LuaTarget>().unwrap_or_else(|error| {
@@ -23,13 +24,36 @@ pub(crate) fn resolve_explicit_target(target: Option<&str>, input_path: &str) ->
         });
     }
 
-    if Path::new(input_path)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("luau"))
+    config_governing(input_path)
+        .target_for_path(Path::new(input_path))
+        .unwrap_or_else(|message| {
+            eprintln!("Error: {message}");
+            process::exit(EXIT_USAGE as i32);
+        })
+}
+
+/// The `luck.json` governing a one-shot input, discovered upward from the
+/// input file's own directory rather than from cwd, so `luck bundle
+/// path/to/project/src/main.lua` still sees that project's config.
+fn config_governing(input_path: &str) -> LuckConfig {
+    let start_dir = match Path::new(input_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
     {
-        LuaTarget::Luau
-    } else {
-        LuaTarget::Lua54
+        Some(parent) => parent
+            .canonicalize()
+            .unwrap_or_else(|_| current_dir_or_exit().join(parent)),
+        // A bare file name, or `-` for stdin: cwd is the only context there is.
+        None => current_dir_or_exit(),
+    };
+
+    match luck_core::config::discover_config(&start_dir) {
+        Ok(Some((_, config))) => config,
+        Ok(None) => LuckConfig::default(),
+        Err(message) => {
+            eprintln!("Error: {message}");
+            process::exit(EXIT_USAGE as i32);
+        }
     }
 }
 
@@ -161,12 +185,45 @@ pub(crate) fn collect_lua_files(dir: &Path, filter: &ProjectFilter) -> Vec<PathB
 mod tests {
     use super::*;
 
+    /// Paths inside a config-free tempdir, so discovery finds nothing and the
+    /// defaults are what is under test.
     #[test]
     fn resolve_explicit_target_infers_from_extension() {
-        assert_eq!(resolve_explicit_target(None, "main.luau"), LuaTarget::Luau);
-        assert_eq!(resolve_explicit_target(None, "main.lua"), LuaTarget::Lua54);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = |name: &str| dir.path().join(name).display().to_string();
+
+        assert_eq!(
+            resolve_explicit_target(None, &path("main.luau")),
+            LuaTarget::Luau
+        );
+        assert_eq!(
+            resolve_explicit_target(None, &path("main.lua")),
+            LuaTarget::Lua54
+        );
         // No extension falls back to Lua54.
-        assert_eq!(resolve_explicit_target(None, "main"), LuaTarget::Lua54);
+        assert_eq!(
+            resolve_explicit_target(None, &path("main")),
+            LuaTarget::Lua54
+        );
+    }
+
+    /// The one-shot commands must honour the project's per-extension dialect,
+    /// or a Roblox tree keeping Luau in `.lua` files cannot bundle at all.
+    #[test]
+    fn resolve_explicit_target_honors_project_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("luck.json"), r#"{"lua":"roblox"}"#)
+            .expect("write luck.json");
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).expect("mkdir src");
+
+        let entry = src.join("main.lua").display().to_string();
+        assert_eq!(resolve_explicit_target(None, &entry), LuaTarget::LuauRoblox);
+        // An explicit -t still wins over the config.
+        assert_eq!(
+            resolve_explicit_target(Some("51"), &entry),
+            LuaTarget::Lua51
+        );
     }
 
     #[test]

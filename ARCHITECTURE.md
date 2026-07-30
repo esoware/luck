@@ -57,7 +57,9 @@ syntax, so `-t roblox` and `-t luau` minify identically (correct, not a bug).
 One typed source of truth: `luck.json`, discovered by walking up from cwd
 (`-c/--config` overrides). All config types live in `luck_core` and
 deserialize with `deny_unknown_fields` - unknown keys and invalid enum values
-are hard errors. Targets are per-extension via the `lua`/`luau` keys;
+are hard errors. Targets are per-extension via the `lua`/`luau` keys, and
+either key may name any dialect - extension and dialect are independent, so a
+Roblox or Rojo tree that keeps Luau in `.lua` files sets `"lua": "roblox"`.
 `extends`/`include`/`exclude`/`root` shape the project. Each minifier pass is
 gated by a bool flag on `TransformConfig`. The VS Code schema
 (`editors/vscode/schemas/luckrc.schema.json`) is generated from the Rust
