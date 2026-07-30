@@ -30,6 +30,10 @@ pub struct ModuleInfo {
     /// loader data real 5.2+ chunks receive (absolute paths would leak
     /// build-host details into the output).
     pub relative_path: String,
+    /// Byte ranges of the `require` identifier in this module's
+    /// `require(expr)` calls, which the emitter retargets at the loader's
+    /// dynamic entry point. Always empty on Luau targets.
+    pub dynamic_callees: Vec<Range<usize>>,
     /// Parsed AST block, cached during graph construction to avoid re-parsing in the emitter.
     pub parsed_block: Option<Block>,
 }

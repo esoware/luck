@@ -2,7 +2,7 @@
 
 use crate::minify_flags::MinifyFlags;
 use crate::output::{build_file_cache, current_dir_or_exit, fail_with_diagnostics, write_output};
-use crate::project::resolve_explicit_target;
+use crate::project::{config_governing, resolve_dynamic_require, resolve_explicit_target};
 use crate::render::render_diagnostics;
 use crate::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE, Verbosity};
 use clap::Args;
@@ -31,6 +31,10 @@ pub(crate) struct BundleArgs {
     #[arg(long)]
     minify: bool,
 
+    /// How to treat require(expr): error, warn, or allow
+    #[arg(long = "dynamic-require", value_name = "MODE")]
+    dynamic_require: Option<String>,
+
     /// Write a JSON line map (bundle lines -> source files) to PATH.
     /// Incompatible with --minify, which rewrites line structure.
     #[arg(long = "line-map", value_name = "PATH", conflicts_with = "minify")]
@@ -42,7 +46,9 @@ pub(crate) struct BundleArgs {
 
 impl BundleArgs {
     pub(crate) fn run(self, verbosity: Verbosity) -> ExitCode {
-        let target = resolve_explicit_target(self.target.as_deref(), &self.entry);
+        let config = config_governing(&self.entry);
+        let target = resolve_explicit_target(&config, self.target.as_deref(), &self.entry);
+        let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require.as_deref());
         let transforms = self.minify_flags.to_transform_config();
 
         let entry_path = PathBuf::from(&self.entry);
@@ -59,7 +65,13 @@ impl BundleArgs {
             .map(Path::to_path_buf)
             .unwrap_or_else(current_dir_or_exit);
 
-        match bundle(&entry_path, target, &self.search_path, &search_root) {
+        match bundle(
+            &entry_path,
+            target,
+            &self.search_path,
+            &search_root,
+            dynamic_require,
+        ) {
             Ok(result) => {
                 if !result.warnings.is_empty() && verbosity != Verbosity::Quiet {
                     let mut cache = build_file_cache(&result.warnings);

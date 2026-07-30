@@ -5,7 +5,7 @@
 use crate::EXIT_USAGE;
 use crate::output::current_dir_or_exit;
 use luck_core::config::{LuckConfig, ProjectFilter};
-use luck_core::types::LuaTarget;
+use luck_core::types::{DynamicRequire, LuaTarget};
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -16,7 +16,11 @@ use std::process;
 /// per extension - an extension alone cannot say which dialect a `.lua` file
 /// is written in. With no config in scope the defaults reproduce plain
 /// inference: `.luau` is Luau, everything else Lua 5.4.
-pub(crate) fn resolve_explicit_target(target: Option<&str>, input_path: &str) -> LuaTarget {
+pub(crate) fn resolve_explicit_target(
+    config: &LuckConfig,
+    target: Option<&str>,
+    input_path: &str,
+) -> LuaTarget {
     if let Some(target_str) = target {
         return target_str.parse::<LuaTarget>().unwrap_or_else(|error| {
             eprintln!("Error: {error}");
@@ -24,7 +28,7 @@ pub(crate) fn resolve_explicit_target(target: Option<&str>, input_path: &str) ->
         });
     }
 
-    config_governing(input_path)
+    config
         .target_for_path(Path::new(input_path))
         .unwrap_or_else(|message| {
             eprintln!("Error: {message}");
@@ -32,10 +36,23 @@ pub(crate) fn resolve_explicit_target(target: Option<&str>, input_path: &str) ->
         })
 }
 
+/// Resolve how the one-shot commands treat `require(expr)`: an explicit
+/// `--dynamic-require` wins over the project's setting, which defaults to
+/// warning and keeping the call.
+pub(crate) fn resolve_dynamic_require(config: &LuckConfig, flag: Option<&str>) -> DynamicRequire {
+    match flag {
+        Some(value) => value.parse().unwrap_or_else(|error| {
+            eprintln!("Error: {error}");
+            process::exit(EXIT_USAGE as i32);
+        }),
+        None => config.dynamic_require.unwrap_or_default(),
+    }
+}
+
 /// The `luck.json` governing a one-shot input, discovered upward from the
 /// input file's own directory rather than from cwd, so `luck bundle
 /// path/to/project/src/main.lua` still sees that project's config.
-fn config_governing(input_path: &str) -> LuckConfig {
+pub(crate) fn config_governing(input_path: &str) -> LuckConfig {
     let start_dir = match Path::new(input_path)
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -192,19 +209,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = |name: &str| dir.path().join(name).display().to_string();
 
-        assert_eq!(
-            resolve_explicit_target(None, &path("main.luau")),
-            LuaTarget::Luau
-        );
-        assert_eq!(
-            resolve_explicit_target(None, &path("main.lua")),
-            LuaTarget::Lua54
-        );
+        let target = |name: &str| {
+            let input = path(name);
+            resolve_explicit_target(&config_governing(&input), None, &input)
+        };
+
+        assert_eq!(target("main.luau"), LuaTarget::Luau);
+        assert_eq!(target("main.lua"), LuaTarget::Lua54);
         // No extension falls back to Lua54.
-        assert_eq!(
-            resolve_explicit_target(None, &path("main")),
-            LuaTarget::Lua54
-        );
+        assert_eq!(target("main"), LuaTarget::Lua54);
     }
 
     /// The one-shot commands must honour the project's per-extension dialect,
@@ -218,23 +231,47 @@ mod tests {
         std::fs::create_dir_all(&src).expect("mkdir src");
 
         let entry = src.join("main.lua").display().to_string();
-        assert_eq!(resolve_explicit_target(None, &entry), LuaTarget::LuauRoblox);
+        let config = config_governing(&entry);
+        assert_eq!(
+            resolve_explicit_target(&config, None, &entry),
+            LuaTarget::LuauRoblox
+        );
         // An explicit -t still wins over the config.
         assert_eq!(
-            resolve_explicit_target(Some("51"), &entry),
+            resolve_explicit_target(&config, Some("51"), &entry),
             LuaTarget::Lua51
         );
     }
 
     #[test]
     fn resolve_explicit_target_parses_when_provided() {
+        let config = LuckConfig::default();
         assert_eq!(
-            resolve_explicit_target(Some("54"), "main.luau"),
+            resolve_explicit_target(&config, Some("54"), "main.luau"),
             LuaTarget::Lua54
         );
         assert_eq!(
-            resolve_explicit_target(Some("roblox"), "main.lua"),
+            resolve_explicit_target(&config, Some("roblox"), "main.lua"),
             LuaTarget::LuauRoblox
+        );
+    }
+
+    #[test]
+    fn resolve_dynamic_require_prefers_the_flag_over_the_config() {
+        let config = luck_core::config::parse_luck_config(r#"{"dynamic_require":"error"}"#)
+            .expect("parse config");
+        assert_eq!(
+            resolve_dynamic_require(&config, None),
+            DynamicRequire::Error
+        );
+        assert_eq!(
+            resolve_dynamic_require(&config, Some("allow")),
+            DynamicRequire::Allow
+        );
+        // Warning and keeping the call is the default when nothing says otherwise.
+        assert_eq!(
+            resolve_dynamic_require(&LuckConfig::default(), None),
+            DynamicRequire::Warn
         );
     }
 

@@ -11,7 +11,7 @@ use crate::format_options::{
     QuoteStyle, SpaceAfterFunction,
 };
 use crate::transform_config::TransformConfig;
-use crate::types::LuaTarget;
+use crate::types::{DynamicRequire, LuaTarget};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -120,6 +120,9 @@ pub struct LuckConfig {
     pub output: Option<String>,
     pub entries: Option<Vec<EntryConfig>>,
     pub minify: Option<bool>,
+    /// How `require(expr)` - an argument that is not a string literal - is
+    /// treated when bundling: `"error"`, `"warn"` (default), or `"allow"`.
+    pub dynamic_require: Option<DynamicRequire>,
     pub search_paths: Option<Vec<String>>,
     pub transforms: Option<TransformConfig>,
     pub profiles: Option<HashMap<String, ProfileOverrides>>,
@@ -190,6 +193,7 @@ impl LuckConfig {
             output: self.output.or(base.output),
             entries: self.entries.or(base.entries),
             minify: self.minify.or(base.minify),
+            dynamic_require: self.dynamic_require.or(base.dynamic_require),
             search_paths: cat(self.search_paths, base.search_paths),
             transforms: self.transforms.or(base.transforms),
             profiles: self.profiles.or(base.profiles),

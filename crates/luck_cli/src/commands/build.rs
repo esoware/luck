@@ -110,6 +110,7 @@ fn build_one(
         config.target,
         &config.search_paths,
         &config.rc_dir,
+        config.dynamic_require,
     ) {
         Ok(result) => {
             if !result.warnings.is_empty() && verbosity != Verbosity::Quiet {

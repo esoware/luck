@@ -2,7 +2,7 @@
 
 use crate::minify_flags::MinifyFlags;
 use crate::output::{fail_with_diagnostics, format_size, write_output};
-use crate::project::resolve_explicit_target;
+use crate::project::{config_governing, resolve_explicit_target};
 use crate::{EXIT_FAILURE, EXIT_SUCCESS, Verbosity};
 use clap::Args;
 use std::process::ExitCode;
@@ -32,7 +32,11 @@ impl MinifyArgs {
     // Minify emits no advisory banner; `--stats`, the result, and fatal errors
     // are all essential, so there is nothing for `--quiet` to silence.
     pub(crate) fn run(self, _verbosity: Verbosity) -> ExitCode {
-        let target = resolve_explicit_target(self.target.as_deref(), &self.input);
+        let target = resolve_explicit_target(
+            &config_governing(&self.input),
+            self.target.as_deref(),
+            &self.input,
+        );
         let config = self.minify_flags.to_transform_config();
 
         let (source, file_path) = if self.input == "-" {

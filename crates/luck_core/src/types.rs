@@ -15,6 +15,46 @@ pub enum LuaTarget {
     LuauRoblox,
 }
 
+/// How the bundler treats `require(expr)` - a require whose argument is not a
+/// string literal, so no module can be resolved for it at build time.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DynamicRequire {
+    /// Abort the bundle.
+    Error,
+    /// Keep the call, resolving it at runtime, and warn (W007).
+    #[default]
+    Warn,
+    /// Keep the call silently - for trees where runtime-resolved requires are
+    /// the norm, such as Roblox `require(script.Parent.Child)`.
+    Allow,
+}
+
+impl FromStr for DynamicRequire {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "error" => Ok(DynamicRequire::Error),
+            "warn" => Ok(DynamicRequire::Warn),
+            "allow" => Ok(DynamicRequire::Allow),
+            _ => Err(format!(
+                "invalid dynamic require mode \"{s}\": expected error, warn, or allow"
+            )),
+        }
+    }
+}
+
+impl fmt::Display for DynamicRequire {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DynamicRequire::Error => write!(f, "error"),
+            DynamicRequire::Warn => write!(f, "warn"),
+            DynamicRequire::Allow => write!(f, "allow"),
+        }
+    }
+}
+
 impl FromStr for LuaTarget {
     type Err = String;
 

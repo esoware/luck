@@ -2,7 +2,7 @@ use crate::module::{Dependency, ModuleId, ModuleInfo, sanitize_module_name};
 use crate::require_extraction::{ExtractResult, extract_requires};
 use luck_core::config::DEFAULT_SEARCH_PATHS;
 use luck_core::diagnostics::{Diagnostic, errors};
-use luck_core::types::LuaTarget;
+use luck_core::types::{DynamicRequire, LuaTarget};
 use luck_resolver::{ResolveRequest, Resolver, normalize_path_str};
 use luck_token::LuaVersion;
 use petgraph::algo::toposort;
@@ -29,6 +29,7 @@ pub fn build_graph(
     target: LuaTarget,
     search_paths: &[String],
     rc_dir: &Path,
+    dynamic_require: DynamicRequire,
 ) -> Result<DependencyGraph, Vec<Diagnostic>> {
     // When the caller passes no search paths, fall back to the Lua
     // defaults. This is the single chokepoint for both `build_graph` and
@@ -41,7 +42,7 @@ pub fn build_graph(
         search_paths
     };
 
-    let mut builder = GraphBuilder::new(target, search_paths, rc_dir);
+    let mut builder = GraphBuilder::new(target, search_paths, rc_dir, dynamic_require);
     let entry_normalized = normalize_path_str(entry_path);
     builder.discover(entry_normalized.clone());
     builder.finish(&entry_normalized)
@@ -56,6 +57,7 @@ struct GraphBuilder<'a> {
     target: LuaTarget,
     search_paths: &'a [String],
     rc_dir: &'a Path,
+    dynamic_require: DynamicRequire,
     resolver: Resolver,
     modules: Vec<ModuleInfo>,
     path_to_id: FxHashMap<String, ModuleId>,
@@ -67,12 +69,18 @@ struct GraphBuilder<'a> {
 }
 
 impl<'a> GraphBuilder<'a> {
-    fn new(target: LuaTarget, search_paths: &'a [String], rc_dir: &'a Path) -> Self {
+    fn new(
+        target: LuaTarget,
+        search_paths: &'a [String],
+        rc_dir: &'a Path,
+        dynamic_require: DynamicRequire,
+    ) -> Self {
         GraphBuilder {
             lua_version: target.lua_version(),
             target,
             search_paths,
             rc_dir,
+            dynamic_require,
             resolver: Resolver::new(),
             modules: Vec::new(),
             path_to_id: FxHashMap::default(),
@@ -128,8 +136,14 @@ impl<'a> GraphBuilder<'a> {
 
         let ExtractResult {
             requires,
+            dynamic_callees,
             diagnostics,
-        } = extract_requires(&parse_result.block, file_path, self.lua_version);
+        } = extract_requires(
+            &parse_result.block,
+            file_path,
+            self.lua_version,
+            self.dynamic_require,
+        );
         for diag in diagnostics {
             if diag.is_error() {
                 self.errors.push(diag);
@@ -179,6 +193,7 @@ impl<'a> GraphBuilder<'a> {
             dependencies,
             sanitized_name,
             relative_path,
+            dynamic_callees,
             parsed_block: Some(parse_result.block),
         });
     }
@@ -384,6 +399,7 @@ mod tests {
             dependencies: vec![],
             sanitized_name: sanitize_module_name(path),
             relative_path: path.to_string(),
+            dynamic_callees: Vec::new(),
             parsed_block: None,
         }
     }

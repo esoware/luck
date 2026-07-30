@@ -1,6 +1,7 @@
 use luck_ast::shared::Block;
 use luck_token::LuaVersion;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::ops::Range;
 
 use crate::graph::DependencyGraph;
 use crate::module::{Dependency, ModuleId, ModuleInfo};
@@ -108,8 +109,16 @@ pub fn emit_with_line_map(
         }
     }
 
+    let has_dynamic_require = modules
+        .iter()
+        .any(|module| !module.dynamic_callees.is_empty());
+
     push(&mut output, &mut next_line, "do\n");
-    push(&mut output, &mut next_line, &loader_text(&prefix, version));
+    push(
+        &mut output,
+        &mut next_line,
+        &loader_text(&prefix, version, has_dynamic_require),
+    );
 
     let emit_body = |output: &mut String,
                      next_line: &mut usize,
@@ -119,6 +128,8 @@ pub fn emit_with_line_map(
         let mut body = transform_module_body(
             &module.source,
             &module.dependencies,
+            &module.dynamic_callees,
+            &prefix,
             version,
             module.parsed_block.as_ref(),
             replacement,
@@ -380,7 +391,10 @@ fn quote_lua_string(value: &str) -> String {
 
 /// The memoizing loader emitted at the top of every multi-module
 /// bundle, mirroring the target version's `ll_require` exactly.
-fn loader_text(prefix: &str, version: LuaVersion) -> String {
+///
+/// `has_dynamic_require` adds the entry point that `require(expr)` calls are
+/// retargeted at; bundles without one carry no extra bytes.
+fn loader_text(prefix: &str, version: LuaVersion, has_dynamic_require: bool) -> String {
     if version.is_luau() {
         // Luau/Roblox require: private cache keyed by file, cycles and
         // repeated failures raise, modules must return exactly one
@@ -502,6 +516,22 @@ fn loader_text(prefix: &str, version: LuaVersion) -> String {
             p = prefix
         ));
     }
+
+    if has_dynamic_require {
+        // A name computed at runtime can still be a bundled one - the Lua
+        // cache is keyed by module name - so try the bundle first and fall
+        // through to the host's own require, read at call time so a `require`
+        // the host installs later is still honored.
+        loader.push_str(&format!(
+            "local function {p}dynamic(name)\n\
+             if {p}modules[name]~=nil or {p}preload[name]~=nil then return {p}require(name)end\n\
+             if type(require)==\"function\" then return require(name)end\n\
+             error(\"luck bundle: dynamic require of '\"..tostring(name)..\"' is not in the bundle and this runtime has no require\",2)\n\
+             end\n",
+            p = prefix
+        ));
+    }
+
     loader
 }
 
@@ -512,6 +542,8 @@ fn loader_text(prefix: &str, version: LuaVersion) -> String {
 fn transform_module_body(
     source: &str,
     dependencies: &[Dependency],
+    dynamic_callees: &[Range<usize>],
+    prefix: &str,
     version: luck_token::LuaVersion,
     cached_block: Option<&Block>,
     replacement: &dyn Fn(&Dependency, usize) -> String,
@@ -528,6 +560,15 @@ fn transform_module_body(
             )
         })
         .collect();
+
+    // Only the callee token is retargeted, so the argument expression - which
+    // may itself contain a static require - is spliced independently.
+    replacements.extend(
+        dynamic_callees
+            .iter()
+            .filter(|callee| callee.end <= source.len() && callee.start < callee.end)
+            .map(|callee| (callee.start, callee.end, format!("{prefix}dynamic"))),
+    );
 
     let mut value_exports = Vec::new();
     if version.has_value_exports() {
@@ -632,6 +673,7 @@ mod tests {
     use super::*;
     use crate::module::sanitize_module_name;
     use crate::require_extraction::extract_requires;
+    use luck_core::types::DynamicRequire;
     use luck_token::LuaVersion;
 
     /// Build a ModuleInfo by running the REAL require extraction over
@@ -648,7 +690,7 @@ mod tests {
             "fixture must parse: {:?}",
             parsed.errors
         );
-        let extracted = extract_requires(&parsed.block, path, version);
+        let extracted = extract_requires(&parsed.block, path, version, DynamicRequire::default());
         let dependencies = extracted
             .requires
             .iter()
@@ -670,6 +712,7 @@ mod tests {
             dependencies,
             sanitized_name: sanitize_module_name(path),
             relative_path: path.to_string(),
+            dynamic_callees: extracted.dynamic_callees,
             parsed_block: Some(parsed.block),
         }
     }

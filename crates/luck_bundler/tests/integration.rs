@@ -1,5 +1,5 @@
 use luck_bundler::bundle;
-use luck_core::types::LuaTarget;
+use luck_core::types::{DynamicRequire, LuaTarget};
 use std::path::PathBuf;
 
 fn fixture_dir(target_dir: &str, name: &str) -> PathBuf {
@@ -17,6 +17,23 @@ fn run_bundle(
     target: LuaTarget,
     entry_name: &str,
 ) -> Result<String, Vec<luck_core::diagnostics::Diagnostic>> {
+    run_bundle_with(
+        target_dir,
+        name,
+        target,
+        entry_name,
+        DynamicRequire::default(),
+    )
+    .map(|result| result.output)
+}
+
+fn run_bundle_with(
+    target_dir: &str,
+    name: &str,
+    target: LuaTarget,
+    entry_name: &str,
+    dynamic_require: DynamicRequire,
+) -> Result<luck_bundler::BundleResult, Vec<luck_core::diagnostics::Diagnostic>> {
     let input_dir = fixture_dir(target_dir, name);
     let entry = input_dir.join(entry_name);
     let search_paths = if target.is_luau() {
@@ -24,8 +41,7 @@ fn run_bundle(
     } else {
         vec!["?.lua".to_string(), "?/init.lua".to_string()]
     };
-    let result = bundle(&entry, target, &search_paths, &input_dir)?;
-    Ok(result.output)
+    bundle(&entry, target, &search_paths, &input_dir, dynamic_require)
 }
 
 #[test]
@@ -106,6 +122,7 @@ fn circular_dep_bundles_with_warning() {
         LuaTarget::Lua54,
         &["?.lua".to_string(), "?/init.lua".to_string()],
         &input_dir,
+        DynamicRequire::default(),
     )
     .expect("cycle must bundle");
     assert!(
@@ -141,12 +158,13 @@ fn unresolved_module() {
 }
 
 #[test]
-fn non_literal_require() {
-    let result = run_bundle(
+fn non_literal_require_errors_in_error_mode() {
+    let result = run_bundle_with(
         "lua54",
         "errors/non_literal_require",
         LuaTarget::Lua54,
         "main.lua",
+        DynamicRequire::Error,
     );
     assert!(result.is_err());
     let errors = result.unwrap_err();
@@ -154,6 +172,49 @@ fn non_literal_require() {
         errors.iter().any(|e| e.code == "E002"),
         "Expected E002, got: {:?}",
         errors.iter().map(|e| &e.code).collect::<Vec<_>>()
+    );
+}
+
+/// The default: the bundle is produced, the call is retargeted at the
+/// loader's dynamic entry point, and W007 says so.
+#[test]
+fn dynamic_require_bundles_through_the_loader() {
+    let result = run_bundle_with(
+        "lua54",
+        "dynamic_require",
+        LuaTarget::Lua54,
+        "main.lua",
+        DynamicRequire::default(),
+    )
+    .expect("a dynamic require must not abort the bundle");
+
+    assert!(
+        result.warnings.iter().any(|w| w.code == "W007"),
+        "Expected W007, got: {:?}",
+        result.warnings.iter().map(|w| &w.code).collect::<Vec<_>>()
+    );
+    insta::assert_snapshot!("dynamic_require", result.output);
+}
+
+#[test]
+fn dynamic_require_in_allow_mode_is_silent() {
+    let result = run_bundle_with(
+        "lua54",
+        "dynamic_require",
+        LuaTarget::Lua54,
+        "main.lua",
+        DynamicRequire::Allow,
+    )
+    .expect("bundle failed");
+    assert!(
+        result.warnings.is_empty(),
+        "expected no warnings, got: {:?}",
+        result.warnings.iter().map(|w| &w.code).collect::<Vec<_>>()
+    );
+    assert!(
+        result.output.contains("__luck_dynamic("),
+        "{}",
+        result.output
     );
 }
 
@@ -312,8 +373,14 @@ fn luau_dependency_hot_comments_warn_w006() {
     // ignores them; W006 makes that visible.
     let input_dir = fixture_dir("luau", "hot_comments");
     let entry = input_dir.join("main.luau");
-    let result =
-        luck_bundler::bundle(&entry, LuaTarget::Luau, &[], &input_dir).expect("bundle failed");
+    let result = luck_bundler::bundle(
+        &entry,
+        LuaTarget::Luau,
+        &[],
+        &input_dir,
+        DynamicRequire::default(),
+    )
+    .expect("bundle failed");
     assert!(
         result
             .warnings

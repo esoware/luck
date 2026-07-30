@@ -25,7 +25,7 @@ harness.
 | `luck_codegen` | Compact printer (ambiguity cases live in `separator.rs` + its tests) | `compact.rs`, `separator.rs` |
 | `luck_core` | `LuaTarget`, typed config, `TransformConfig`, diagnostic codes, schemars schema, `source_io` (SIMD-validated file reads) | `config.rs`, `diagnostics.rs`, `format_options.rs` |
 | `luck_resolver` | Lua search paths, Luau `@aliases`, `.luaurc` chain | `lib.rs`, `luau.rs` |
-| `luck_bundler` | Scope-aware require extraction (via `luck_semantic`), dep graph with cycle detection, version-exact lazy loader emit + line maps, collision-proof `__luck` prefix | `graph.rs`, `emitter.rs`, `module.rs` |
+| `luck_bundler` | Scope-aware require extraction (via `luck_semantic`), dep graph with cycle detection, version-exact lazy loader emit + line maps, collision-proof `__luck` prefix, runtime-resolved `require(expr)` kept via the loader's dynamic entry point (`dynamic_require`) | `graph.rs`, `emitter.rs`, `module.rs` |
 | `luck_minifier` | AST transform pipeline; passes individually gated by `TransformConfig` flags | `lib.rs` `minify()`, `transforms/` |
 | `luck_formatter` | Wadler-style engine: `Format` trait + combinator IR, AST-in `format_block` formats synthetic ASTs (no source needed), idempotency invariant | `ir.rs`, `printer.rs`, `format_*.rs`, `comments.rs` |
 | `luck_linter` | `Rule`/`NodeRule` traits + `LintContext`, stateless rules in a static `RULES` registry, node-type-bucketed single-pass bus, suppressions, `--fix` | `rules/`, `rule.rs`, `bus.rs` |

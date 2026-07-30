@@ -45,7 +45,7 @@ The VS Code schema at `editors/vscode/schemas/luckrc.schema.json` is **generated
 | Code | Meaning |
 |------|---------|
 | E001 | require not at top of file |
-| E002 | require argument not a string literal |
+| E002 | require argument not a string literal (only in `dynamic_require: "error"`) |
 | E003 | require not assigned to local |
 | E004 | module not found (lists searched paths) |
 | E005 | circular dependency |
@@ -62,3 +62,4 @@ The VS Code schema at `editors/vscode/schemas/luckrc.schema.json` is **generated
 | W004 | `.luaurc` alias `self` shadowed by built-in `@self` |
 | W005 | require call not bundled (local shadow or unaliased reference to global `require`) |
 | W006 | Luau hot comment has no effect in a bundle |
+| W007 | require argument not a string literal; the call resolves at runtime |
