@@ -1,4 +1,4 @@
-use crate::module::{Dependency, ModuleId, ModuleInfo, sanitize_module_name};
+use crate::module::{Dependency, ModuleId, ModuleInfo};
 use crate::require_extraction::{ExtractResult, extract_requires};
 use luck_core::config::DEFAULT_SEARCH_PATHS;
 use luck_core::diagnostics::{Diagnostic, errors};
@@ -10,7 +10,7 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Control, DfsEvent, depth_first_search};
 use rustc_hash::FxHashMap;
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const MAX_MODULE_COUNT: usize = 10_000;
 const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
@@ -42,10 +42,36 @@ pub fn build_graph(
         search_paths
     };
 
-    let mut builder = GraphBuilder::new(target, search_paths, rc_dir, dynamic_require);
+    // Every emitted path is relative to this one, so it has to be absolute and
+    // normalized before anything is compared against it: `luck bundle main.lua`
+    // hands in the entry's parent, which for a bare file name is empty.
+    let project_root = PathBuf::from(absolute_project_root(rc_dir));
+
+    let mut builder = GraphBuilder::new(target, search_paths, &project_root, dynamic_require);
     let entry_normalized = normalize_path_str(entry_path);
     builder.discover(entry_normalized.clone());
     builder.finish(&entry_normalized)
+}
+
+/// The project root as a normalized absolute path. An empty or relative root
+/// resolves against the working directory; if even that is unavailable the
+/// input is returned as-is, leaving paths absolute rather than failing a build.
+fn absolute_project_root(rc_dir: &Path) -> String {
+    let normalized = normalize_path_str(rc_dir);
+    if Path::new(&normalized).is_absolute() {
+        return normalized;
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => {
+            let cwd = normalize_path_str(&cwd);
+            if normalized.is_empty() || normalized == "." {
+                cwd
+            } else {
+                format!("{}/{normalized}", cwd.trim_end_matches('/'))
+            }
+        }
+        Err(_) => normalized,
+    }
 }
 
 /// Accumulates modules, edges, and diagnostics as the BFS walk discovers
@@ -183,7 +209,6 @@ impl<'a> GraphBuilder<'a> {
         let module_id = ModuleId(self.modules.len());
         let node_idx = self.graph.add_node(module_id);
         let relative_path = make_relative(file_path, self.rc_dir);
-        let sanitized_name = sanitize_module_name(&relative_path);
 
         self.path_to_id.insert(file_path.to_string(), module_id);
         self.node_indices.push(node_idx);
@@ -191,7 +216,6 @@ impl<'a> GraphBuilder<'a> {
             path: file_path.to_string(),
             source: parse_result.source,
             dependencies,
-            sanitized_name,
             relative_path,
             dynamic_callees,
             parsed_block: Some(parse_result.block),
@@ -374,30 +398,100 @@ fn leading_hot_comment(source: &str) -> Option<(usize, &str)> {
     None
 }
 
+/// A project-relative, host-independent form of `path`, used for every path
+/// the bundle itself carries.
+///
+/// A module above the project root keeps its shape through `..` segments: the
+/// names on the root's side never appear, so the build host's directory layout
+/// stays out of the output. When the two share no root at all - a different
+/// Windows drive or UNC share - only the file name survives, because an
+/// absolute path is exactly what must not be emitted.
 fn make_relative(path: &str, base: &Path) -> String {
     let base_normalized = normalize_path_str(base);
-    let base_prefix = if base_normalized.ends_with('/') {
-        base_normalized
-    } else {
-        format!("{base_normalized}/")
-    };
+    let base_prefix = format!("{}/", base_normalized.trim_end_matches('/'));
 
-    match path.strip_prefix(&base_prefix) {
-        Some(relative) => relative.to_string(),
-        None => path.to_string(),
+    if let Some(relative) = path.strip_prefix(&base_prefix) {
+        return relative.to_string();
     }
+
+    let path_parts: Vec<&str> = path.split('/').collect();
+    let base_parts: Vec<&str> = base_normalized.trim_end_matches('/').split('/').collect();
+    let shared = path_parts
+        .iter()
+        .zip(&base_parts)
+        .take_while(|(from_path, from_base)| from_path == from_base)
+        .count();
+
+    if shared == 0 {
+        return path_parts.last().unwrap_or(&path).to_string();
+    }
+
+    let mut relative = "../".repeat(base_parts.len() - shared);
+    relative.push_str(&path_parts[shared..].join("/"));
+    relative
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn path_inside_the_project_root_loses_the_prefix() {
+        assert_eq!(
+            make_relative("D:/proj/src/utils.lua", Path::new("D:/proj")),
+            "src/utils.lua"
+        );
+        // A trailing separator on the root must not survive into the path.
+        assert_eq!(
+            make_relative("D:/proj/main.lua", Path::new("D:/proj/")),
+            "main.lua"
+        );
+    }
+
+    /// A vendored dependency above the root keeps its shape, but nothing from
+    /// the root's own side of the tree is emitted.
+    #[test]
+    fn path_above_the_project_root_walks_up() {
+        assert_eq!(
+            make_relative("D:/work/shared/util.lua", Path::new("D:/work/proj/src")),
+            "../../shared/util.lua"
+        );
+        assert_eq!(
+            make_relative("D:/work/sibling/a.lua", Path::new("D:/work/proj")),
+            "../sibling/a.lua"
+        );
+    }
+
+    /// Nothing relates a path on another drive or share to the root, and an
+    /// absolute path is exactly what must not reach the output.
+    #[test]
+    fn path_without_a_shared_root_keeps_only_the_file_name() {
+        assert_eq!(
+            make_relative("E:/elsewhere/lib.lua", Path::new("D:/proj")),
+            "lib.lua"
+        );
+    }
+
+    /// `luck bundle main.lua` hands in the entry's parent, which for a bare
+    /// file name is empty - the case that used to leave paths absolute.
+    #[test]
+    fn empty_project_root_resolves_to_the_working_directory() {
+        let cwd = normalize_path_str(&std::env::current_dir().expect("cwd"));
+        assert_eq!(absolute_project_root(Path::new("")), cwd);
+        assert_eq!(absolute_project_root(Path::new(".")), cwd);
+
+        let root = absolute_project_root(Path::new(""));
+        assert_eq!(
+            make_relative(&format!("{root}/main.lua"), Path::new(&root)),
+            "main.lua"
+        );
+    }
+
     fn module(path: &str) -> ModuleInfo {
         ModuleInfo {
             path: path.to_string(),
             source: String::new(),
             dependencies: vec![],
-            sanitized_name: sanitize_module_name(path),
             relative_path: path.to_string(),
             dynamic_callees: Vec::new(),
             parsed_block: None,

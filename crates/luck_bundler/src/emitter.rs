@@ -181,7 +181,7 @@ pub fn emit_with_line_map(
             push(
                 &mut output,
                 &mut next_line,
-                &format!("-- module #{module_slot}: {}\n", module.sanitized_name),
+                &format!("-- module #{module_slot}: {}\n", module.relative_path),
             );
             push(
                 &mut output,
@@ -671,7 +671,6 @@ fn transform_module_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::module::sanitize_module_name;
     use crate::require_extraction::extract_requires;
     use luck_core::types::DynamicRequire;
     use luck_token::LuaVersion;
@@ -710,7 +709,6 @@ mod tests {
             path: path.to_string(),
             source: source.to_string(),
             dependencies,
-            sanitized_name: sanitize_module_name(path),
             relative_path: path.to_string(),
             dynamic_callees: extracted.dynamic_callees,
             parsed_block: Some(parsed.block),

@@ -23,7 +23,7 @@ value=__luck_result(__luck_modules[id]())
 __luck_loaded[id]=value
 return value
 end
--- module #1: __luck_lib_utils
+-- module #1: lib/utils.luau
 __luck_modules[1]=function(...)
 local utils = {}
 

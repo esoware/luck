@@ -16,6 +16,7 @@ The bundler takes a multi-file Lua project and produces one self-contained outpu
 - **Entry wrapper** — the entry body is wrapped in a function invoked with the chunk's varargs (`return __luck_entry(...)`), so CLI args and chunk returns flow through unchanged and the entry keeps its full 200-local budget.
 - **Collision-proof identifiers** — every generated name shares one prefix chosen to appear nowhere in any module source (`__luck_`, falling back to `__luck1_`, `__luck2_`, ...), so user code can never capture or shadow loader internals.
 - **No 200-locals ceiling** — modules live as table slots, not one local per module, so bundles scale past Lua's 200-locals-per-function limit.
+- **No host paths in the output** — every path the bundle carries (module provenance comments and the file path 5.2+ chunks receive as loader data) is project-relative. A module above the project root keeps its shape through `..` segments, so the root's own side of the tree - the part holding the build host's home and project directories - is never named; when a module shares no root with the project at all (another Windows drive or UNC share) only its file name is emitted.
 - **Zero-runtime output** — the loader is plain inline Lua; no external helper library and no monkey-patched `require`.
 
 ## Architecture
@@ -32,7 +33,9 @@ The bundler takes a multi-file Lua project and produces one self-contained outpu
 
 ### Module Identity
 
-`module.rs` defines `ModuleId` (an opaque index into the graph's module list), `Dependency` (a resolved require edge: decoded require string, resolved path, and call span), and `ModuleInfo`, which carries a module's path, source text, discovered dependencies, sanitized name, project-relative path (the loader data 5.2+ chunks receive), the callee spans of its dynamic requires, and an optional cached parsed `Block` (populated during graph construction to avoid re-parsing in the emitter).
+`module.rs` defines `ModuleId` (an opaque index into the graph's module list), `Dependency` (a resolved require edge: decoded require string, resolved path, and call span), and `ModuleInfo`, which carries a module's path, source text, discovered dependencies, project-relative path, the callee spans of its dynamic requires, and an optional cached parsed `Block` (populated during graph construction to avoid re-parsing in the emitter).
+
+`ModuleInfo::path` is the canonical absolute path and is the graph's identity key; `ModuleInfo::relative_path` (built by `graph::make_relative` against the project root, which resolves to the working directory when the caller has none) is the only one the emitted bundle is allowed to name. `BundleResult::source_files` and the `LineMapEntry` paths stay canonical: they are local build/debug data, not part of the shipped file.
 
 ### Span-Based Rewriting
 
