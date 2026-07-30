@@ -105,7 +105,11 @@ pub struct FormatConfig {
 #[derive(Debug, Clone, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LuckConfig {
+    /// Dialect for `.lua` files (default `lua54`). Any dialect is accepted:
+    /// Roblox and Rojo trees that keep Luau in `.lua` files set
+    /// `"lua": "roblox"` or `"lua": "luau"`.
     pub lua: Option<String>,
+    /// Dialect for `.luau` files (default `luau`). Any dialect is accepted.
     pub luau: Option<String>,
     pub root: Option<bool>,
     pub extends: Option<Vec<String>>,
@@ -126,34 +130,25 @@ pub struct LuckConfig {
 }
 
 impl LuckConfig {
-    /// Resolves the target for `.lua` files. Defaults to Lua 5.4. The `lua`
-    /// key must name a Lua 5.x dialect - naming a Luau dialect is an error.
+    /// Resolves the target for `.lua` files. Defaults to Lua 5.4.
+    ///
+    /// The key names a dialect, not a language family: extension and dialect
+    /// are independent axes, so `"lua": "roblox"` is how a Roblox or Rojo tree
+    /// declares that its `.lua` files are Luau.
     pub fn lua_target(&self) -> Result<LuaTarget, String> {
         match &self.lua {
-            Some(value) => {
-                let target: LuaTarget = value.parse()?;
-                if target.is_luau() {
-                    return Err(format!("\"lua\" must be lua51..lua55, got \"{value}\""));
-                }
-                Ok(target)
-            }
+            Some(value) => value.parse().map_err(|error| format!("\"lua\": {error}")),
             None => Ok(LuaTarget::Lua54),
         }
     }
 
-    /// Resolves the target for `.luau` files. Defaults to standalone Luau. The
-    /// `luau` key must name a Luau dialect - naming a Lua 5.x dialect is an error.
+    /// Resolves the target for `.luau` files. Defaults to standalone Luau.
+    /// Any dialect is accepted, for the same reason as [`lua_target`].
+    ///
+    /// [`lua_target`]: LuckConfig::lua_target
     pub fn luau_target(&self) -> Result<LuaTarget, String> {
         match &self.luau {
-            Some(value) => {
-                let target: LuaTarget = value.parse()?;
-                if !target.is_luau() {
-                    return Err(format!(
-                        "\"luau\" must be \"luau\" or \"roblox\", got \"{value}\""
-                    ));
-                }
-                Ok(target)
-            }
+            Some(value) => value.parse().map_err(|error| format!("\"luau\": {error}")),
             None => Ok(LuaTarget::Luau),
         }
     }

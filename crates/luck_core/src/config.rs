@@ -539,17 +539,41 @@ mod tests {
             c.target_for_path(Path::new("a.luau")).unwrap(),
             LuaTarget::Luau
         );
-        assert!(
-            parse_luck_config(r#"{ "lua":"luau" }"#)
-                .unwrap()
-                .lua_target()
-                .is_err()
+        let bad = parse_luck_config(r#"{ "lua":"lua99" }"#)
+            .unwrap()
+            .lua_target()
+            .unwrap_err();
+        assert!(bad.starts_with("\"lua\":"), "{bad}");
+        let bad = parse_luck_config(r#"{ "luau":"nonsense" }"#)
+            .unwrap()
+            .luau_target()
+            .unwrap_err();
+        assert!(bad.starts_with("\"luau\":"), "{bad}");
+    }
+
+    /// Extension and dialect are independent axes: a Roblox or Rojo tree
+    /// keeping Luau in `.lua` files must be able to say so.
+    #[test]
+    fn lua_extension_can_name_a_luau_dialect() {
+        let c = parse_luck_config(r#"{ "lua":"roblox" }"#).unwrap();
+        assert_eq!(
+            c.target_for_path(Path::new("src/init.lua")).unwrap(),
+            LuaTarget::LuauRoblox
         );
-        assert!(
-            parse_luck_config(r#"{ "luau":"lua54" }"#)
-                .unwrap()
-                .luau_target()
-                .is_err()
+        // The `.luau` axis keeps its own default rather than following `lua`.
+        assert_eq!(
+            c.target_for_path(Path::new("src/init.luau")).unwrap(),
+            LuaTarget::Luau
+        );
+
+        let c = parse_luck_config(r#"{ "lua":"luau","luau":"lua51" }"#).unwrap();
+        assert_eq!(
+            c.target_for_path(Path::new("a.lua")).unwrap(),
+            LuaTarget::Luau
+        );
+        assert_eq!(
+            c.target_for_path(Path::new("a.luau")).unwrap(),
+            LuaTarget::Lua51
         );
     }
 

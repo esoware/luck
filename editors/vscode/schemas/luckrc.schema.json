@@ -67,12 +67,14 @@
       ]
     },
     "lua": {
+      "description": "Dialect for `.lua` files (default `lua54`). Any dialect is accepted:\nRoblox and Rojo trees that keep Luau in `.lua` files set\n`\"lua\": \"roblox\"` or `\"lua\": \"luau\"`.",
       "type": [
         "string",
         "null"
       ]
     },
     "luau": {
+      "description": "Dialect for `.luau` files (default `luau`). Any dialect is accepted.",
       "type": [
         "string",
         "null"
