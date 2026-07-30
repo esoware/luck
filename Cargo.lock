@@ -1050,6 +1050,7 @@ dependencies = [
  "luck_core",
  "luck_parser",
  "luck_resolver",
+ "luck_semantic",
  "luck_token",
  "petgraph",
  "rustc-hash",

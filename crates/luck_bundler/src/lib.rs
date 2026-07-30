@@ -3,8 +3,9 @@
 //! Dependency graph construction and single-file bundling for Lua/Luau projects.
 //!
 //! Starting from an entry file, resolves all `require()` calls via [`luck_resolver`],
-//! builds a BFS dependency graph, topologically sorts modules, and registers each
-//! non-entry module with a lazy memoizing loader, rewriting require calls to it.
+//! builds a BFS dependency graph, topologically sorts modules, and registers modules
+//! with a lazy memoizing loader that mirrors the target version's own `require`
+//! semantics, rewriting require calls to it.
 //!
 //! # Usage
 //!

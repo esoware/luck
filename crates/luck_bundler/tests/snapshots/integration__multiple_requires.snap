@@ -4,37 +4,52 @@ expression: output
 ---
 do
 local __luck_modules={}
-local __luck_loaded={}
-local __luck_loading={}
-local function __luck_require(id)
-local value=__luck_loaded[id]
-if value~=nil then
-if value==__luck_loading then error("luck bundle: require cycle hit while loading module #"..id,2)end
-return value
+local __luck_loaded=type(package)=="table" and type(package.loaded)=="table" and package.loaded or {}
+local __luck_preload=type(package)=="table" and type(package.preload)=="table" and package.preload or {}
+local __luck_paths={}
+local function __luck_require(name)
+local value=__luck_loaded[name]
+if value then return value end
+local loaderdata
+local loader=__luck_preload[name]
+if loader then
+loaderdata=":preload:"
+else
+loader=__luck_modules[name]
+loaderdata=__luck_paths[name]
 end
-__luck_loaded[id]=__luck_loading
-value=__luck_modules[id](id)
-if value==nil then value=true end
-__luck_loaded[id]=value
-return value
+value=loader(name,loaderdata)
+if value~=nil then __luck_loaded[name]=value end
+value=__luck_loaded[name]
+if value==nil then
+value=true
+__luck_loaded[name]=value
 end
--- module #1: __luck_a
-__luck_modules[1]=function(...)
+return value,loaderdata
+end
+-- module "a": a.lua
+__luck_modules["a"]=function(...)
 return { value = 10 }
 end
--- module #2: __luck_b
-__luck_modules[2]=function(...)
+__luck_paths["a"]="a.lua"
+-- module "b": b.lua
+__luck_modules["b"]=function(...)
 return { value = 20 }
 end
--- module #3: __luck_c
-__luck_modules[3]=function(...)
+__luck_paths["b"]="b.lua"
+-- module "c": c.lua
+__luck_modules["c"]=function(...)
 return { value = 30 }
 end
-local a = __luck_require(1)
-local b = __luck_require(2)
-local c = __luck_require(3)
+__luck_paths["c"]="c.lua"
+local __luck_entry=function(...)
+local a = __luck_require("a")
+local b = __luck_require("b")
+local c = __luck_require("c")
 
 local result = a.value + b.value + c.value
 print(result)
 return result
+end
+return __luck_entry(...)
 end

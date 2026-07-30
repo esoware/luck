@@ -26,6 +26,10 @@ pub struct ModuleInfo {
     pub source: String,
     pub dependencies: Vec<Dependency>,
     pub sanitized_name: String,
+    /// Project-relative path, used for provenance comments and as the
+    /// loader data real 5.2+ chunks receive (absolute paths would leak
+    /// build-host details into the output).
+    pub relative_path: String,
     /// Parsed AST block, cached during graph construction to avoid re-parsing in the emitter.
     pub parsed_block: Option<Block>,
 }

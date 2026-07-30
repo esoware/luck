@@ -6,6 +6,12 @@ do
 local __luck_modules={}
 local __luck_loaded={}
 local __luck_loading={}
+local function __luck_result(...)
+if select("#",...)~=1 or (...)==nil then
+error("luck bundle: module must return exactly one non-nil value",0)
+end
+return ...
+end
 local function __luck_require(id)
 local value=__luck_loaded[id]
 if value~=nil then
@@ -13,8 +19,7 @@ if value==__luck_loading then error("luck bundle: require cycle hit while loadin
 return value
 end
 __luck_loaded[id]=__luck_loading
-value=__luck_modules[id](id)
-if value==nil then value=true end
+value=__luck_result(__luck_modules[id]())
 __luck_loaded[id]=value
 return value
 end
@@ -44,10 +49,13 @@ typed.distance = distance
 
 return typed
 end
+local __luck_entry=function(...)
 local typed = __luck_require(1)
 
 local p: typed.Point = { x = 1, y = 2 }
 local result = typed.add(p.x, p.y)
 print(result)
 return result
+end
+return __luck_entry(...)
 end

@@ -43,9 +43,9 @@ and feeds `luck_bundler`. On top sit `luck` (facade re-exports),
 | `luck_ast` | `Expression`/`Statement`/`Type` <=64 B, `Visitor`, `AstTransform`, `synth` builder (dummy-span AST construction for programmatic use), `NodeType`/`NodeKind`/`AstTypesBitset` for node-table dispatch | `expr.rs`, `stmt.rs`, `types.rs`, `transform.rs`, `synth.rs`, `node.rs` |
 | `luck_parser` | Pratt expressions + recursive-descent statements + full Luau type grammar, version-gated | `expr.rs`, `stmt.rs`, `luau.rs` |
 | `luck_codegen` | Compact printer (ambiguity cases live in `separator.rs` + its tests) | `compact.rs`, `separator.rs` |
-| `luck_core` | `LuaTarget`, typed config + `FormatOptions`/`LintConfig` enums, `TransformConfig`, diagnostics E001-E012/W001-W004, schemars schema, `source_io` (SIMD-validated file reads) | `config.rs`, `diagnostics.rs`, `format_options.rs` |
+| `luck_core` | `LuaTarget`, typed config + `FormatOptions`/`LintConfig` enums, `TransformConfig`, diagnostics E001-E012/W001-W006, schemars schema, `source_io` (SIMD-validated file reads) | `config.rs`, `diagnostics.rs`, `format_options.rs` |
 | `luck_resolver` | Lua search paths, Luau `@aliases`, `.luaurc` chain | `lib.rs`, `luau.rs` |
-| `luck_bundler` | Require validation, dep graph (cycle detection), lazy memoizing loader emit + line maps, `ModuleId`/`ModuleInfo`, `insta` snapshots | `graph.rs`, `emitter.rs`, `module.rs` |
+| `luck_bundler` | Scope-aware require extraction (via `luck_semantic`; decoded string literals), dep graph (cycle detection), version-exact lazy loader emit (Lua: name-keyed cache backed by `package.loaded`; Luau: file-keyed) + line maps, collision-proof `__luck` prefix, `ModuleId`/`ModuleInfo`, `insta` snapshots | `graph.rs`, `emitter.rs`, `module.rs` |
 | `luck_minifier` | 12-transform pipeline; passes gated by `TransformConfig` flags | `lib.rs` `minify()`, `transforms/` |
 | `luck_formatter` | Wadler-style engine: `Format` trait + combinator IR (`BestFitting`, group-id conditionals), AST-in `format_block` formats synthetic ASTs (no source needed), idempotency invariant | `ir.rs`, `printer.rs`, `format_*.rs`, `comments.rs` |
 | `luck_linter` | `Rule`/`NodeRule` traits + `LintContext`, 64 stateless rules in a static `RULES` registry, node-type-bucketed parallel bus (rules declare `node_types()`; debug builds verify bucketed == brute-force dispatch), suppressions, `--fix` | `rules/`, `rule.rs`, `bus.rs` |
@@ -121,7 +121,7 @@ regen with the command in the Commands section.
 Format-option precedence: defaults < `.editorconfig` < `luck.json` `format`.
 
 **Diagnostics are one scheme.** Codes live in `luck_core::diagnostics::errors`
-(E001-E012, W001-W004); build them with the `Span`-accepting `error_at`/
+(E001-E012, W001-W006); build them with the `Span`-accepting `error_at`/
 `warning_at` constructors - never inline literal codes in consumers. Parse
 failures are always E008. Lint diagnostics render with the rule name as the
 code; the driver stamps category/severity from the rule's `category()` and the

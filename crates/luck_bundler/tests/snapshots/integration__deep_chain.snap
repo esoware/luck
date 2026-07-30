@@ -4,22 +4,31 @@ expression: output
 ---
 do
 local __luck_modules={}
-local __luck_loaded={}
-local __luck_loading={}
-local function __luck_require(id)
-local value=__luck_loaded[id]
-if value~=nil then
-if value==__luck_loading then error("luck bundle: require cycle hit while loading module #"..id,2)end
-return value
+local __luck_loaded=type(package)=="table" and type(package.loaded)=="table" and package.loaded or {}
+local __luck_preload=type(package)=="table" and type(package.preload)=="table" and package.preload or {}
+local __luck_paths={}
+local function __luck_require(name)
+local value=__luck_loaded[name]
+if value then return value end
+local loaderdata
+local loader=__luck_preload[name]
+if loader then
+loaderdata=":preload:"
+else
+loader=__luck_modules[name]
+loaderdata=__luck_paths[name]
 end
-__luck_loaded[id]=__luck_loading
-value=__luck_modules[id](id)
-if value==nil then value=true end
-__luck_loaded[id]=value
-return value
+value=loader(name,loaderdata)
+if value~=nil then __luck_loaded[name]=value end
+value=__luck_loaded[name]
+if value==nil then
+value=true
+__luck_loaded[name]=value
 end
--- module #1: __luck_e
-__luck_modules[1]=function(...)
+return value,loaderdata
+end
+-- module "e": e.lua
+__luck_modules["e"]=function(...)
 local e = {}
 
 function e.compute()
@@ -28,9 +37,10 @@ end
 
 return e
 end
--- module #2: __luck_d
-__luck_modules[2]=function(...)
-local e = __luck_require(1)
+__luck_paths["e"]="e.lua"
+-- module "d": d.lua
+__luck_modules["d"]=function(...)
+local e = __luck_require("e")
 
 local d = {}
 
@@ -40,9 +50,10 @@ end
 
 return d
 end
--- module #3: __luck_c
-__luck_modules[3]=function(...)
-local d = __luck_require(2)
+__luck_paths["d"]="d.lua"
+-- module "c": c.lua
+__luck_modules["c"]=function(...)
+local d = __luck_require("d")
 
 local c = {}
 
@@ -52,9 +63,10 @@ end
 
 return c
 end
--- module #4: __luck_b
-__luck_modules[4]=function(...)
-local c = __luck_require(3)
+__luck_paths["c"]="c.lua"
+-- module "b": b.lua
+__luck_modules["b"]=function(...)
+local c = __luck_require("c")
 
 local b = {}
 
@@ -64,9 +76,13 @@ end
 
 return b
 end
-local b = __luck_require(4)
+__luck_paths["b"]="b.lua"
+local __luck_entry=function(...)
+local b = __luck_require("b")
 
 local result = b.compute()
 print(result)
 return result
+end
+return __luck_entry(...)
 end
