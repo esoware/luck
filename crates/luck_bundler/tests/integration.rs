@@ -413,3 +413,41 @@ fn luau_export_type_stripped_in_thunks() {
         reparsed.errors
     );
 }
+
+/// Nothing the bundle carries may name a directory on the build host: the
+/// provenance comments and the 5.2+ loader data are all project-relative,
+/// including for a module vendored above the project root.
+#[test]
+fn emitted_paths_stay_project_relative() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("src");
+    let shared = dir.path().join("shared");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::create_dir_all(&shared).expect("mkdir shared");
+    std::fs::write(
+        src.join("main.lua"),
+        "local util = require(\"util\")\nreturn util.value\n",
+    )
+    .expect("write main");
+    std::fs::write(shared.join("util.lua"), "return { value = 1 }\n").expect("write util");
+
+    // Rooted at the entry's own directory, as `luck bundle src/main.lua` does,
+    // so `shared/` lands above the root.
+    let output = bundle(
+        &src.join("main.lua"),
+        LuaTarget::Lua54,
+        &["../shared/?.lua".to_string()],
+        &src,
+        DynamicRequire::default(),
+    )
+    .expect("bundle failed")
+    .output;
+
+    let native_root = dir.path().to_string_lossy().to_string();
+    let slash_root = native_root.replace('\\', "/");
+    assert!(
+        !output.contains(&native_root) && !output.contains(&slash_root),
+        "absolute path leaked into the bundle:\n{output}"
+    );
+    assert!(output.contains("../shared/util.lua"), "{output}");
+}
