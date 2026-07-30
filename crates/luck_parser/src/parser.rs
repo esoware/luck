@@ -1,7 +1,7 @@
 use luck_ast::{Block, shared::Punctuated};
 use luck_lexer::Lexer;
 use luck_token::{Comment, LuaVersion, Span, Token, TokenKind};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::ParseError;
 
@@ -38,7 +38,7 @@ pub(crate) struct Parser<'src> {
     pub(crate) function_depth: u32,
     pub(crate) has_module_return: bool,
     pub(crate) has_value_exports: bool,
-    pub(crate) exported_names: HashSet<luck_token::CompactString>,
+    pub(crate) exported_names: FxHashSet<luck_token::CompactString>,
     /// Nesting depth of enclosing loops; reset inside function bodies.
     /// `break`/`continue` at depth 0 is a compile error in every Lua.
     pub(crate) loop_depth: u32,
@@ -68,7 +68,7 @@ impl<'src> Parser<'src> {
             function_depth: 0,
             has_module_return: false,
             has_value_exports: false,
-            exported_names: HashSet::new(),
+            exported_names: FxHashSet::default(),
             loop_depth: 0,
             is_vararg_scope: true,
             errors: Vec::new(),

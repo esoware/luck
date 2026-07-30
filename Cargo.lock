@@ -1184,6 +1184,7 @@ dependencies = [
  "luck_ast",
  "luck_lexer",
  "luck_token",
+ "rustc-hash",
 ]
 
 [[package]]
