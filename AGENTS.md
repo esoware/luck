@@ -111,8 +111,9 @@ Multi-step task recipes live in `.agents/skills/*/SKILL.md`: adding a lint
 rule, formatter rule, minifier transform, config option, LSP provider, or
 Lua-version feature, bumping versions, and releasing. When a task matches
 one, read and follow it - each encodes registration steps and cross-crate
-plumbing that is easy to miss. (`.claude/skills/` holds thin pointer stubs
-for Claude Code discovery; always edit the `.agents/skills/` copies.)
+plumbing that is easy to miss. (`.claude/skills/` holds discovery stubs that
+inline the `.agents/skills/` copy when invoked; always edit the
+`.agents/skills/` copies.)
 
 Versioning is lockstep: every publishable crate and the VS Code extension
 share one workspace version. Follow `.agents/skills/bump-versions/SKILL.md`;

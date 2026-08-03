@@ -4,5 +4,6 @@ description: Adds a new AST-level optimization pass to luck_minifier with its co
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash(cargo:*), Bash(just:*)
 ---
 
-Read and follow `.agents/skills/add-minifier-transform/SKILL.md` (the canonical,
-harness-agnostic copy of this workflow). Arguments: $ARGUMENTS
+!`cat "${CLAUDE_PROJECT_DIR}/.agents/skills/add-minifier-transform/SKILL.md"`
+
+Arguments: $ARGUMENTS
