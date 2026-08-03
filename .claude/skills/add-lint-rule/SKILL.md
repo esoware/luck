@@ -4,5 +4,6 @@ description: Adds a new lint rule to luck_linter end-to-end - rule file, categor
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash(cargo:*), Bash(just:*)
 ---
 
-Read and follow `.agents/skills/add-lint-rule/SKILL.md` (the canonical,
-harness-agnostic copy of this workflow). Arguments: $ARGUMENTS
+!`cat "${CLAUDE_PROJECT_DIR}/.agents/skills/add-lint-rule/SKILL.md"`
+
+Arguments: $ARGUMENTS

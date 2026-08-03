@@ -4,5 +4,6 @@ description: Adds or changes a luck.json configuration field end-to-end - typed 
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash(cargo:*), Bash(just:*)
 ---
 
-Read and follow `.agents/skills/add-config-option/SKILL.md` (the canonical,
-harness-agnostic copy of this workflow). Arguments: $ARGUMENTS
+!`cat "${CLAUDE_PROJECT_DIR}/.agents/skills/add-config-option/SKILL.md"`
+
+Arguments: $ARGUMENTS

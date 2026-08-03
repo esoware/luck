@@ -4,5 +4,6 @@ description: Adds or extends a language-server feature in luck_lsp - hover, comp
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash(cargo:*), Bash(just:*)
 ---
 
-Read and follow `.agents/skills/add-lsp-provider/SKILL.md` (the canonical,
-harness-agnostic copy of this workflow). Arguments: $ARGUMENTS
+!`cat "${CLAUDE_PROJECT_DIR}/.agents/skills/add-lsp-provider/SKILL.md"`
+
+Arguments: $ARGUMENTS

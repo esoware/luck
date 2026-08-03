@@ -4,5 +4,6 @@ description: Changes how a Lua/Luau construct is formatted by luck_formatter - l
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash(cargo:*), Bash(just:*)
 ---
 
-Read and follow `.agents/skills/add-formatter-rule/SKILL.md` (the canonical,
-harness-agnostic copy of this workflow). Arguments: $ARGUMENTS
+!`cat "${CLAUDE_PROJECT_DIR}/.agents/skills/add-formatter-rule/SKILL.md"`
+
+Arguments: $ARGUMENTS

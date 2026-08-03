@@ -4,5 +4,6 @@ description: Adds support for a syntactic feature introduced in a specific Lua v
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash(cargo:*), Bash(just:*)
 ---
 
-Read and follow `.agents/skills/add-lua-version-feature/SKILL.md` (the canonical,
-harness-agnostic copy of this workflow). Arguments: $ARGUMENTS
+!`cat "${CLAUDE_PROJECT_DIR}/.agents/skills/add-lua-version-feature/SKILL.md"`
+
+Arguments: $ARGUMENTS

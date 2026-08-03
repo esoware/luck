@@ -4,5 +4,6 @@ description: Brings the tree to a provably releasable state and produces the dep
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash(cargo:*), Bash(just:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git tag:*)
 ---
 
-Read and follow `.agents/skills/release-publish/SKILL.md` (the canonical,
-harness-agnostic copy of this workflow). Arguments: $ARGUMENTS
+!`cat "${CLAUDE_PROJECT_DIR}/.agents/skills/release-publish/SKILL.md"`
+
+Arguments: $ARGUMENTS

@@ -4,5 +4,6 @@ description: Applies the workspace-wide lockstep version bump (single shared 0.x
 allowed-tools: Read, Edit, Bash(cargo metadata:*), Bash(cargo check:*), Bash(git diff:*), Bash(git status:*), Bash(git log:*), Bash(git tag:*)
 ---
 
-Read and follow `.agents/skills/bump-versions/SKILL.md` (the canonical,
-harness-agnostic copy of this workflow). Arguments: $ARGUMENTS
+!`cat "${CLAUDE_PROJECT_DIR}/.agents/skills/bump-versions/SKILL.md"`
+
+Arguments: $ARGUMENTS
