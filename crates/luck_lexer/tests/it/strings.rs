@@ -1,6 +1,6 @@
 use luck_token::*;
 
-use crate::common::{first_kind, lex51};
+use crate::common::{first_kind, kinds_v, lex51};
 
 #[test]
 fn string_double_quoted() {
@@ -52,10 +52,26 @@ fn string_escape_decimal() {
 }
 
 #[test]
-fn string_escape_newline() {
-    // \<newline> continues the string to the next line
-    let src = "\"hello\\\nworld\"";
-    assert_eq!(first_kind(src), TokenKind::StringLiteral(src.into()));
+fn string_line_continuations_all_versions() {
+    for version in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+        LuaVersion::Luau,
+    ] {
+        for quote in ['\'', '"'] {
+            for newline in ["\r\n", "\n", "\r"] {
+                let source = format!("{quote}a \\{newline}b{quote}");
+                assert_eq!(
+                    kinds_v(&source, version),
+                    vec![TokenKind::StringLiteral(source.as_str().into())],
+                    "{version:?} {source:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
