@@ -703,7 +703,7 @@ impl<'src> Lexer<'src> {
                                 }
                             }
                         }
-                    } else if self.cursor.peek().is_some() {
+                    } else if let Some(escaped) = self.cursor.peek() {
                         // Copy the escaped character whole (it may be
                         // multi-byte); continuation bytes are 0b10xxxxxx.
                         let escaped_start = self.cursor.position();
@@ -713,7 +713,7 @@ impl<'src> Lexer<'src> {
                         }
                         // `\z` skips following whitespace, including line
                         // breaks; keep the raw run so payloads re-emit as-is.
-                        if self.source.as_bytes()[escaped_start] == b'z' {
+                        if escaped == b'z' {
                             while self
                                 .cursor
                                 .peek()
@@ -721,6 +721,8 @@ impl<'src> Lexer<'src> {
                             {
                                 self.cursor.advance();
                             }
+                        } else if escaped == b'\r' && self.cursor.peek() == Some(b'\n') {
+                            self.cursor.advance();
                         }
                         text.push_str(&self.source[escaped_start..self.cursor.position()]);
                     }

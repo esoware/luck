@@ -579,9 +579,26 @@ fn interp_string_unterminated_luau() {
 }
 
 #[test]
-fn backtick_error_in_lua54() {
-    let result = lex("`hello`", LuaVersion::Lua54);
-    assert!(!result.errors.is_empty());
+fn backtick_strings_rejected_in_lua() {
+    for version in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        for source in ["`hello`", "`a \\\r\n{n}`"] {
+            let result = lex(source, version);
+            assert!(
+                result
+                    .errors
+                    .iter()
+                    .any(|error| error.message == "unexpected character '`'"),
+                "{version:?} {source:?}: {:?}",
+                result.errors
+            );
+        }
+    }
 }
 
 #[test]
@@ -966,9 +983,63 @@ fn interp_string_unicode_escape_is_not_interpolation() {
 }
 
 #[test]
-fn interp_string_rejects_raw_newline() {
-    let result = lex("`broken\nstring`", LuaVersion::Luau);
-    assert!(!result.errors.is_empty(), "raw newline must be an error");
+fn interp_string_line_continuations_luau() {
+    for newline in ["\r\n", "\n", "\r"] {
+        let cases = [
+            (
+                format!("`a \\{newline}{{n}}`"),
+                vec![
+                    TokenKind::InterpBegin(format!("a \\{newline}").into()),
+                    TokenKind::Identifier("n".into()),
+                    TokenKind::InterpEnd(CompactString::default()),
+                ],
+            ),
+            (
+                format!("`a \\{newline}b`"),
+                vec![
+                    TokenKind::InterpBegin(CompactString::default()),
+                    TokenKind::InterpEnd(format!("a \\{newline}b").into()),
+                ],
+            ),
+            (
+                format!("`{{n}}a \\{newline}{{m}}b \\{newline}`"),
+                vec![
+                    TokenKind::InterpBegin(CompactString::default()),
+                    TokenKind::Identifier("n".into()),
+                    TokenKind::InterpMid(format!("a \\{newline}").into()),
+                    TokenKind::Identifier("m".into()),
+                    TokenKind::InterpEnd(format!("b \\{newline}").into()),
+                ],
+            ),
+        ];
+        for (source, expected) in cases {
+            assert_eq!(kinds_v(&source, LuaVersion::Luau), expected, "{source:?}");
+        }
+    }
+}
+
+#[test]
+fn interp_string_rejects_unescaped_line_breaks() {
+    for line_break in [
+        "\n", "\r", "\r\n", "\\\n\r", "\\\r\n\n", "\\\r\n\r", "\\\\\r\n",
+    ] {
+        for source in [
+            format!("`a{line_break}b`"),
+            format!("`a{line_break}{{n}}`"),
+            format!("`{{n}}a{line_break}{{m}}`"),
+            format!("`{{n}}a{line_break}`"),
+        ] {
+            let result = lex(&source, LuaVersion::Luau);
+            assert!(
+                result
+                    .errors
+                    .iter()
+                    .any(|error| error.message == "unterminated interpolated string"),
+                "{source:?}: {:?}",
+                result.errors
+            );
+        }
+    }
 }
 
 #[test]
