@@ -39,6 +39,14 @@ impl LuaVersion {
         matches!(self, Self::Lua55)
     }
 
+    /// Whether global access desugars to an index of the `_ENV` upvalue
+    /// (Lua 5.2+). Where it does not, a binding named `_ENV` is an
+    /// ordinary local with no effect on the names around it.
+    #[must_use]
+    pub fn has_env_upvalue(self) -> bool {
+        matches!(self, Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55)
+    }
+
     /// Whether numbers have distinct integer/float subtypes (Lua 5.3+).
     /// Observable via `math.type`, `tostring` (`1` vs `1.0`), and `//`.
     /// Luau keeps a single f64 number type like 5.1/5.2.
@@ -135,12 +143,6 @@ impl LuaVersion {
     /// Whether runtime values may be exported from a Luau module.
     #[must_use]
     pub fn has_value_exports(self) -> bool {
-        matches!(self, Self::Luau)
-    }
-
-    /// Whether Luau type negation (`~T`) is supported.
-    #[must_use]
-    pub fn has_negation_types(self) -> bool {
         matches!(self, Self::Luau)
     }
 
@@ -350,8 +352,6 @@ mod tests {
         assert!(!Lua54.has_explicit_type_instantiation());
         assert!(Luau.has_value_exports());
         assert!(!Lua54.has_value_exports());
-        assert!(Luau.has_negation_types());
-        assert!(!Lua54.has_negation_types());
         assert!(Luau.is_luau());
         assert!(!Lua54.is_luau());
         assert!(Luau.has_continue());

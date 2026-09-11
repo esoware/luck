@@ -68,7 +68,7 @@ pub struct DocumentState {
 }
 
 impl DocumentState {
-    fn new(text: String, version: i32, target: LuaTarget) -> Self {
+    pub(crate) fn new(text: String, version: i32, target: LuaTarget) -> Self {
         let line_index = LineIndex::new(&text);
         let parsed = Arc::new(luck_parser::parse(&text, target.lua_version()));
         let semantic = Arc::new(luck_semantic::analyze_with_environment(

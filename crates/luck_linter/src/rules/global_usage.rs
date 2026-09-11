@@ -1,12 +1,9 @@
 use crate::diagnostic::*;
 use crate::rule::{LintContext, Rule};
 
-/// Flags every reference (read or write) to an unresolved name except
-/// for user-configured `extra_globals`. The rule deliberately FIRES on
-/// stdlib names like `print` and `tostring`: the goal is a
-/// "no-implicit-globals" style policy where the file declares each
-/// external name as a `local` at module top. The only escape hatch is
-/// `extra_globals` in `LintConfig` (e.g. `vim`, `roblox`). Off by default.
+/// Flags reads and writes of the global environment tables. `_G` exists in
+/// every dialect; `shared` is a Roblox global and an ordinary user name
+/// anywhere else, so it only counts under the Roblox stdlib.
 pub struct GlobalUsage;
 
 impl Rule for GlobalUsage {
@@ -14,42 +11,35 @@ impl Rule for GlobalUsage {
         "global_usage"
     }
     fn category(&self) -> Category {
-        // The diagnostic crate has no `Complexity` variant. This is a
-        // codebase-wide stylistic rule, so `Style` is the right slot.
         Category::Style
     }
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
     fn description(&self) -> &'static str {
-        "reference to a global variable; prefer an explicit local"
+        "use of the global environment tables `_G` or `shared`"
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let semantic = ctx.semantic;
-        let mut diagnostics = Vec::new();
-
-        for reference in semantic.scope_tree.unresolved_references() {
-            // Discard slot: never a real read.
-            if reference.name == "_" {
-                continue;
-            }
-            // User-configured extras are the explicit escape hatch.
-            // Stdlib globals still fire - that's the point of the rule.
-            if semantic.extra_globals.contains(reference.name.as_str()) {
-                continue;
-            }
-
-            diagnostics.push(
+        let is_roblox = ctx.semantic.environment.is_roblox();
+        ctx.semantic
+            .scope_tree
+            .unresolved_references()
+            .filter(|reference| match reference.name.as_str() {
+                "_G" => true,
+                // Roblox.
+                "shared" => is_roblox,
+                _ => false,
+            })
+            .map(|reference| {
                 LintDiagnostic::new(
-                    "global_usage",
-                    format!("global variable `{}` used", reference.name),
+                    self.name(),
+                    format!("global environment `{}` used", reference.name),
                     reference.span,
                 )
-                .with_help("introduce a `local` alias at module top".to_string()),
-            );
-        }
-        diagnostics
+                .with_help("prefer a module or an explicitly passed dependency".to_string())
+            })
+            .collect()
     }
 }
 
@@ -58,79 +48,47 @@ mod tests {
     use super::*;
     use luck_token::LuaVersion;
 
-    /// Run with the same `extra_globals` plumbing the driver uses: a
-    /// user-defined name is inserted into `SemanticAnalysis::extra_globals`.
-    /// The rule uses that set as its escape hatch and otherwise fires
-    /// on every unresolved reference (stdlib names included).
-    fn run(source: &str, extras: &[&str]) -> Vec<LintDiagnostic> {
-        let config = crate::LintConfig {
-            extra_globals: extras.iter().map(|name| name.to_string()).collect(),
-            ..crate::LintConfig::default()
-        };
-        crate::test_support::run_rule_with_config(&GlobalUsage, source, LuaVersion::Lua54, &config)
-    }
-
     #[test]
-    fn flags_stdlib_global() {
-        let diags = run("print(\"x\")", &[]);
-        assert!(
-            diags.iter().any(|d| d.message.contains("`print`")),
-            "got: {diags:?}"
+    fn flags_global_environment_reads_and_writes() {
+        let diags = crate::test_support::run_rule_roblox(
+            &GlobalUsage,
+            "_G.value = shared.value; shared = {}",
         );
+        assert_eq!(diags.len(), 3, "{diags:?}");
     }
 
     #[test]
-    fn ignores_local_shadowing_global() {
-        let diags = run("local print = function() end\nprint(\"x\")", &[]);
-        assert!(
-            diags.iter().all(|d| !d.message.contains("`print`")),
-            "got: {diags:?}"
+    fn flags_global_env_table_outside_roblox() {
+        let diags = crate::test_support::run_rule(&GlobalUsage, "_G.value = 1", LuaVersion::Lua54);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_shared_outside_roblox() {
+        let diags = crate::test_support::run_rule(
+            &GlobalUsage,
+            "local function init() shared = {} end",
+            LuaVersion::Lua54,
         );
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
-    fn flags_custom_global() {
-        let diags = run("myCustomGlobal()", &[]);
-        assert!(
-            diags.iter().any(|d| d.message.contains("`myCustomGlobal`")),
-            "got: {diags:?}"
+    fn ignores_ordinary_globals() {
+        let diags = crate::test_support::run_rule(
+            &GlobalUsage,
+            "print(pairs(items)); custom = 1",
+            LuaVersion::Lua54,
         );
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
-    fn extras_silence_specific_name() {
-        let diags = run("myCustomGlobal()", &["myCustomGlobal"]);
-        assert!(
-            diags
-                .iter()
-                .all(|d| !d.message.contains("`myCustomGlobal`")),
-            "got: {diags:?}"
+    fn ignores_local_shadowing_and_fields() {
+        let diags = crate::test_support::run_rule_roblox(
+            &GlobalUsage,
+            "local _G, shared = {}, {}; _G.x = shared.x; object._G = object.shared",
         );
-    }
-
-    #[test]
-    fn extras_do_not_silence_other_names() {
-        let diags = run("print(\"x\")\nmyCustomGlobal()", &["myCustomGlobal"]);
-        assert!(diags.iter().any(|d| d.message.contains("`print`")));
-        assert!(
-            diags
-                .iter()
-                .all(|d| !d.message.contains("`myCustomGlobal`"))
-        );
-    }
-
-    #[test]
-    fn flags_write_to_global() {
-        let diags = run("g = 1", &[]);
-        assert!(
-            diags.iter().any(|d| d.message.contains("`g`")),
-            "got: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_discard_name() {
-        let diags = run("_ = 1", &[]);
-        assert!(diags.iter().all(|d| !d.message.contains("`_`")));
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

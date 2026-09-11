@@ -435,10 +435,6 @@ pub trait AstTransform {
                 intersection.types = self.walk_punctuated_types(intersection.types);
                 Type::Intersection(intersection)
             }
-            Type::Negation(mut negation) => {
-                negation.type_value = self.transform_type(negation.type_value);
-                Type::Negation(negation)
-            }
             Type::Parenthesized(mut paren) => {
                 paren.type_value = self.transform_type(paren.type_value);
                 Type::Parenthesized(paren)

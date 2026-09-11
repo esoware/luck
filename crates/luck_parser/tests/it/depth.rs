@@ -7,6 +7,35 @@ fn parse(source: &str, version: LuaVersion) -> ParseResult {
 }
 
 #[test]
+fn documented_resource_boundary_is_dialect_independent() {
+    for version in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+        LuaVersion::Luau,
+    ] {
+        for depth in [255, 256] {
+            let source = format!("return {}1{}", "(".repeat(depth), ")".repeat(depth));
+            let result = parse(&source, version);
+            if depth == 255 {
+                assert!(result.errors.is_empty(), "{version:?}: {:?}", result.errors);
+            } else {
+                assert!(
+                    result
+                        .errors
+                        .iter()
+                        .any(|error| error.message.contains("luck parser resource limit")),
+                    "{version:?}: {:?}",
+                    result.errors
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn deeply_nested_parens_no_crash() {
     let open = "(".repeat(1000);
     let close = ")".repeat(1000);

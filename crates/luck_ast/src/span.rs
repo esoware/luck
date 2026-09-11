@@ -101,7 +101,6 @@ impl Type {
             Type::Optional(t) => t.span,
             Type::Union(t) => t.span,
             Type::Intersection(t) => t.span,
-            Type::Negation(t) => t.span, // Luau
             Type::Parenthesized(t) => t.span,
             Type::Pack(t) => t.span,
             Type::Singleton(t) => t.span,

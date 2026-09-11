@@ -1,5 +1,6 @@
 use luck_ast::expr::{Expression, Var};
 use luck_ast::shared::Field;
+use luck_ast::stmt::LocalAssignment;
 use luck_token::token::TokenKind;
 use luck_token::{BinOp, LuaVersion, NumberSubtypes, UnOp};
 
@@ -163,6 +164,26 @@ pub fn is_valid_identifier(s: &str) -> bool {
         return false;
     }
     !LUA_KEYWORDS.contains(&s)
+}
+
+/// Whether a `local` declaration binds a name no transform may reshape,
+/// merge away, or move: an export, a `const`, an attributed name
+/// (`<close>` runs `__close` at scope exit and `<const>` affects validity),
+/// or `_ENV`, which redirects global lookup for everything after it.
+pub fn has_fixed_binding(local: &LocalAssignment, version: LuaVersion) -> bool {
+    local.is_const
+        || local.is_exported
+        || local
+            .names
+            .iter()
+            .any(|name| name.attrib.is_some() || is_env_binding(ident_name(&name.name), version))
+}
+
+/// Whether this name is the `_ENV` upvalue every global read and write
+/// goes through. Outside 5.2+ the name binds an ordinary local, so
+/// pinning it would cost bytes for nothing.
+pub fn is_env_binding(name: &str, version: LuaVersion) -> bool {
+    version.has_env_upvalue() && name == "_ENV"
 }
 
 pub fn ident_name(token: &luck_token::Token) -> &str {

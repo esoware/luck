@@ -31,6 +31,102 @@ fn assert_roundtrips(block: &Block) -> String {
 }
 
 #[test]
+fn long_string_delimiters_and_bytes_roundtrip() {
+    let synth = Synth::new();
+    let mut contents = vec![
+        String::new(),
+        "]]=".to_string(),
+        "a\0b".to_string(),
+        "\n\0\r".to_string(),
+    ];
+    for level in 0..8 {
+        let mut content = String::new();
+        for preceding in 0..level {
+            content.push_str(&format!("]{}]", "=".repeat(preceding)));
+        }
+        content.push_str(&format!("]{}", "=".repeat(level)));
+        contents.push(content);
+    }
+    for content in contents {
+        let block = synth.block(
+            vec![],
+            Some(synth.return_(vec![synth.long_string(&content)])),
+        );
+        for version in [
+            LuaVersion::Lua51,
+            LuaVersion::Lua52,
+            LuaVersion::Lua53,
+            LuaVersion::Lua54,
+            LuaVersion::Lua55,
+            LuaVersion::Luau,
+        ] {
+            let output = assert_roundtrips_in(&block, version);
+            let lexed = luck_lexer::lex(&output, version);
+            let literal = lexed
+                .tokens
+                .iter()
+                .find_map(|token| match &token.kind {
+                    luck_token::TokenKind::StringLiteral(text) => Some(text),
+                    _ => None,
+                })
+                .expect("string literal");
+            assert_eq!(
+                luck_token::literal::decode_string_literal(literal, version).as_deref(),
+                Some(content.as_bytes()),
+                "{version:?}: {output}"
+            );
+            assert!(!output.contains('\0'));
+        }
+    }
+}
+
+#[test]
+fn composite_types_preserve_grouping() {
+    let synth = Synth::new();
+    let children = [
+        synth.ty_union(vec![synth.ty_named("A"), synth.ty_named("B")]),
+        synth.ty_intersection(vec![synth.ty_named("A"), synth.ty_named("B")]),
+        synth.ty_function(vec![], synth.ty_named("A")),
+        synth.ty_optional(synth.ty_named("A")),
+    ];
+    for child in children {
+        let types = [
+            synth.ty_optional(child.clone()),
+            synth.ty_union(vec![child.clone(), synth.ty_named("C")]),
+            synth.ty_union(vec![synth.ty_named("C"), child.clone()]),
+            synth.ty_intersection(vec![child.clone(), synth.ty_named("C")]),
+            synth.ty_intersection(vec![synth.ty_named("C"), child]),
+        ];
+        for type_value in types {
+            let block = synth.block(
+                vec![synth.type_declaration(false, "Result", None, type_value)],
+                None,
+            );
+            for width in [1, 60, 80, 120] {
+                let options = FormatOptions {
+                    line_width: width,
+                    ..FormatOptions::default()
+                };
+                let output = format_block(&block, Comments::none(), &options);
+                let parsed = luck_parser::parse(&output, LuaVersion::Luau);
+                assert!(parsed.errors.is_empty(), "{output}: {:?}", parsed.errors);
+                blocks_equiv(&block, &parsed.block).expect("type meaning preserved");
+                let verified =
+                    luck_formatter::format_and_verify(&output, LuaVersion::Luau, &options)
+                        .expect("type formatting verifies");
+                assert_eq!(verified.output, output);
+            }
+        }
+    }
+    let optional_function = synth.ty_optional(synth.ty_function(vec![], synth.ty_named("A")));
+    let block = synth.block(
+        vec![synth.type_declaration(false, "Callback", None, optional_function)],
+        None,
+    );
+    assert_eq!(assert_roundtrips(&block), "type Callback = (() -> A)?\n");
+}
+
+#[test]
 fn typed_local_roundtrips() {
     let synth = Synth::new();
     let optional = synth.ty_optional(synth.ty_named("number"));

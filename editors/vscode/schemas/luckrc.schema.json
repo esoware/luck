@@ -352,7 +352,7 @@
           "minimum": 0
         },
         "magic_trailing_comma": {
-          "description": "When true, a trailing comma in a table or call argument list forces\nthe surrounding group to break across multiple lines (Black/Prettier\nconvention). Defaults to `false` to preserve existing pack/hug behavior.",
+          "description": "When true, a trailing comma in a table constructor forces the\nsurrounding group to break across multiple lines (Black/Prettier\nconvention). Call argument lists have no trailing comma to read - no\ndialect's grammar allows one. Defaults to `false` to preserve\nexisting pack/hug behavior.",
           "type": [
             "boolean",
             "null"

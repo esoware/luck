@@ -332,7 +332,6 @@ pub trait Visitor<'ast> {
                     self.visit_type(item);
                 }
             }
-            Type::Negation(negation) => self.visit_type(&negation.type_value),
             Type::Parenthesized(paren) => self.visit_type(&paren.type_value),
             Type::Pack(pack) => {
                 for item in pack.types.iter() {

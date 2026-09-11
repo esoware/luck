@@ -25,10 +25,6 @@ impl Format for Type {
             Type::Intersection(intersection) => {
                 write_alternation(f, &intersection.types.items, "&");
             }
-            Type::Negation(negation) => {
-                token("~").fmt(f);
-                negation.type_value.fmt(f);
-            }
             Type::Parenthesized(paren) => {
                 token("(").fmt(f);
                 paren.type_value.fmt(f);

@@ -327,14 +327,6 @@ fn luau_integer_literals() {
 }
 
 #[test]
-fn luau_negation_types() {
-    vluau(
-        "type NonNil = ~nil\ntype Closed = ~(string | nil)\nlocal x: ~nil = 1",
-        "type NonNil=~nil type Closed=~(string|nil)local x:~nil=1",
-    );
-}
-
-#[test]
 fn luau_value_exports() {
     vluau(
         "export local seen = 0i\nexport const MAX = 2i\n@native\nexport function run()\nreturn seen\nend",

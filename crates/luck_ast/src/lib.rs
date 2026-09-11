@@ -147,7 +147,6 @@ mod tests {
             types::OptionalType => 48,
             types::UnionType => 48,
             types::IntersectionType => 48,
-            types::NegationType => 48,
             types::ParenType => 48,
             types::TypePack => 40,
             types::VariadicType => 48,

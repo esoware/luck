@@ -5,9 +5,9 @@ use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_core::types::LuaTarget;
-use luck_token::CompactString;
+use luck_token::{CompactString, LuaVersion};
 
-use crate::expr::ident_name;
+use crate::expr::{ident_name, is_env_binding};
 use crate::name_gen::name_for_index;
 use crate::tokens::make_ident;
 
@@ -29,7 +29,7 @@ pub fn rename(block: Block, target: LuaTarget, rename_globals: bool) -> Block {
     // name-set that excluded any name used as a local ANYWHERE in the
     // file let a global read be captured by a renamed local sharing its
     // name.
-    let mut analyzer = Analyzer::new(&func_globals, &assign_globals);
+    let mut analyzer = Analyzer::new(&func_globals, &assign_globals, target.lua_version());
     analyzer.analyze_block(&block);
     analyzer.propagate_globals();
 
@@ -125,12 +125,14 @@ struct Analyzer<'globals> {
     name_stack: FxHashMap<CompactString, Vec<usize>>,
     func_globals: &'globals FxHashSet<CompactString>,
     assign_globals: &'globals FxHashSet<CompactString>,
+    version: LuaVersion,
 }
 
 impl<'globals> Analyzer<'globals> {
     fn new(
         func_globals: &'globals FxHashSet<CompactString>,
         assign_globals: &'globals FxHashSet<CompactString>,
+        version: LuaVersion,
     ) -> Self {
         let root_scope = ScopeNode {
             parent: None,
@@ -146,6 +148,7 @@ impl<'globals> Analyzer<'globals> {
             name_stack: FxHashMap::default(),
             func_globals,
             assign_globals,
+            version,
         }
     }
 
@@ -283,13 +286,15 @@ impl<'globals> Analyzer<'globals> {
                 }
                 for name_tok in local.names.iter() {
                     let name = ident_name(&name_tok.name);
-                    let is_fixed = name == "self" || name == "_ENV" || local.is_exported;
+                    let is_fixed =
+                        name == "self" || is_env_binding(name, self.version) || local.is_exported;
                     self.declare_binding(name, is_fixed);
                 }
             }
             Statement::LocalFunction(local_func) => {
                 let name = ident_name(&local_func.name);
-                let is_fixed = name == "self" || name == "_ENV" || local_func.is_exported;
+                let is_fixed =
+                    name == "self" || is_env_binding(name, self.version) || local_func.is_exported;
                 self.declare_binding(name, is_fixed);
                 self.analyze_function_body(&local_func.body);
             }
@@ -506,7 +511,7 @@ impl<'globals> Analyzer<'globals> {
         // never appears in the params list
         for param in body.params.iter() {
             let name = ident_name(&param.name);
-            self.declare_binding(name, name == "_ENV");
+            self.declare_binding(name, is_env_binding(name, self.version));
         }
         self.analyze_block(&body.block);
         self.exit_scope();

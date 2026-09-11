@@ -5,19 +5,14 @@ use crate::common::{first_kind, first_kind_v, kinds_v};
 
 #[test]
 fn tilde_standalone_version_gating() {
-    // Tilde is bitwise NOT in 5.3-5.5 and starts a negation type in Luau.
-    for version in [
-        LuaVersion::Lua53,
-        LuaVersion::Lua54,
-        LuaVersion::Lua55,
-        LuaVersion::Luau,
-    ] {
+    // Lua 5.3+ supports bitwise NOT; Luau does not.
+    for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         let result = lex("~", version);
         assert!(result.errors.is_empty(), "~ should work in {:?}", version);
         assert_eq!(result.tokens[0].kind, TokenKind::Tilde);
     }
     // Error in all other versions
-    for version in [LuaVersion::Lua51, LuaVersion::Lua52] {
+    for version in [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Luau] {
         let result = lex("~", version);
         assert!(
             !result.errors.is_empty(),
@@ -188,9 +183,62 @@ fn hex_float_rejected_in_unsupported_versions() {
 }
 
 #[test]
-fn hex_float_requires_exponent() {
-    let result = lex("0x1.F", LuaVersion::Lua52);
-    assert!(!result.errors.is_empty());
+fn hex_float_exponent_is_optional() {
+    for version in [
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        for source in [
+            "0x.1", "0X0.41", "0xA.8", "0x1.F", "0x1.", "0x1.p2", "0x.1p-2",
+        ] {
+            let result = lex(source, version);
+            assert!(
+                result.errors.is_empty(),
+                "{version:?} {source}: {:?}",
+                result.errors
+            );
+            assert_eq!(result.tokens[0].kind, TokenKind::Number(source.into()));
+        }
+        for source in ["0x.", "0xp2", "0x1.p", "0x.1p+", "0x1..2"] {
+            let result = lex(source, version);
+            assert!(!result.errors.is_empty(), "{version:?} {source}");
+        }
+    }
+    for version in [LuaVersion::Lua51, LuaVersion::Luau] {
+        for source in ["0x.1", "0X0.41", "0xA.8"] {
+            assert!(
+                !lex(source, version).errors.is_empty(),
+                "{version:?} {source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn hex_numeral_touching_a_letter_is_error() {
+    // The optional exponent must not turn `0xFF.foo` into the number
+    // `0xFF.f` followed by the name `oo`.
+    for version in [
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        for source in ["0xFF.foo", "0x1.5g", "0x1.5p2x", "0x1_2"] {
+            assert!(
+                !lex(source, version).errors.is_empty(),
+                "{version:?} must reject {source}"
+            );
+        }
+    }
+    for version in [LuaVersion::Lua51, LuaVersion::Luau] {
+        assert!(
+            !lex("0xFFz", version).errors.is_empty(),
+            "{version:?} must reject 0xFFz"
+        );
+    }
 }
 
 #[test]
@@ -790,6 +838,30 @@ fn hex_no_digits_is_error() {
             .message
             .contains("hex literal requires at least one digit")
     );
+}
+
+#[test]
+fn digitless_hex_prefix_is_error_in_every_version() {
+    // A `.` after `0x` opens a fraction only where hex floats exist; the
+    // versions without them must still reject the digitless prefix rather
+    // than emitting `0x` as a number and leaving the dots to lex as concat.
+    for version in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+        LuaVersion::Luau,
+    ] {
+        for source in ["0x", "0x.", "0x..1"] {
+            assert!(
+                !lex(source, version).errors.is_empty(),
+                "{version:?} must reject {source}"
+            );
+        }
+    }
+    // Underscores separate digits, they are not digits themselves.
+    assert!(!lex("0x_", LuaVersion::Luau).errors.is_empty());
 }
 
 #[test]

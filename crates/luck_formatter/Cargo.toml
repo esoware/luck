@@ -18,5 +18,4 @@ luck_token.workspace = true
 unicode-width.workspace = true
 luck_ast.workspace = true
 luck_parser.workspace = true
-
-[dev-dependencies]
+luck_lexer.workspace = true

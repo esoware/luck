@@ -27,6 +27,15 @@ impl Format for Condition<'_> {
     }
 }
 
+/// The `--[[ why ]]` a header carries between its last expression and the
+/// keyword that closes it - `if cond --[[ why ]] then`. No emitter owns the
+/// gap between the two, so without this the comment would stall and take the
+/// whole statement, body and all, down the verbatim fallback.
+fn header_comments(after: &Expression) -> impl Format {
+    let position = after.span().end;
+    format_with(move |f| f.emit_inline_comments_after(position))
+}
+
 impl Format for Statement {
     fn fmt(&self, f: &mut Formatter) {
         match self {
@@ -152,7 +161,11 @@ fn write_while_loop(f: &mut Formatter, while_loop: &WhileLoop) {
         f,
         [group((
             token("while"),
-            indent((soft_line_or_space(), Condition(&while_loop.condition))),
+            indent((
+                soft_line_or_space(),
+                Condition(&while_loop.condition),
+                header_comments(&while_loop.condition),
+            )),
             soft_line_or_space(),
             token("do"),
         ))]
@@ -200,6 +213,7 @@ fn write_if_statement(f: &mut Formatter, if_stmt: &IfStatement) {
                 token("if"),
                 space(),
                 Condition(&if_stmt.condition),
+                header_comments(&if_stmt.condition),
                 space(),
                 token("then"),
                 space(),
@@ -218,7 +232,11 @@ fn write_if_statement(f: &mut Formatter, if_stmt: &IfStatement) {
         [
             group((
                 token("if"),
-                indent((soft_line_or_space(), Condition(&if_stmt.condition))),
+                indent((
+                    soft_line_or_space(),
+                    Condition(&if_stmt.condition),
+                    header_comments(&if_stmt.condition),
+                )),
                 soft_line_or_space(),
                 token("then"),
             )),
@@ -233,7 +251,11 @@ fn write_if_statement(f: &mut Formatter, if_stmt: &IfStatement) {
                 hard_line(),
                 group((
                     token("elseif"),
-                    indent((soft_line_or_space(), Condition(&clause.condition))),
+                    indent((
+                        soft_line_or_space(),
+                        Condition(&clause.condition),
+                        header_comments(&clause.condition),
+                    )),
                     soft_line_or_space(),
                     token("then"),
                 )),
@@ -280,6 +302,7 @@ fn write_numeric_for(f: &mut Formatter, num_for: &NumericFor) {
     crate::write!(
         f,
         [
+            header_comments(num_for.step.as_ref().unwrap_or(&num_for.limit)),
             space(),
             token("do"),
             indent((hard_line(), &num_for.block)),
@@ -295,6 +318,9 @@ fn write_generic_for(f: &mut Formatter, gen_for: &GenericFor) {
     write_punctuated_params(f, &gen_for.names);
     crate::write!(f, [space(), token("in"), space()]);
     write_punctuated_exprs(f, &gen_for.exprs);
+    if let Some(last) = gen_for.exprs.items.last() {
+        crate::write!(f, [header_comments(last)]);
+    }
     crate::write!(
         f,
         [
@@ -541,7 +567,7 @@ mod tests {
             "parse errors: {:?}",
             parsed.errors
         );
-        let comments = Comments::from_source(&parsed.comments, source);
+        let comments = Comments::from_source(&parsed.comments, source, version);
         let mut formatter = Formatter::with_context(crate::FormatOptions::default(), comments);
         formatter.emit_shebang();
         parsed.block.fmt(&mut formatter);

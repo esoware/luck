@@ -12,8 +12,8 @@ use luck_ast::stmt::{
 };
 use luck_ast::types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
-    IntersectionType, NamedType, NegationType, OptionalType, ParenType, TableType, Type, TypeArgs,
-    TypeField, TypePack, TypeofType, UnionType, VariadicType,
+    IntersectionType, NamedType, OptionalType, ParenType, TableType, Type, TypeArgs, TypeField,
+    TypePack, TypeofType, UnionType, VariadicType,
 };
 use luck_token::code_buffer::CodeBuffer;
 use luck_token::token::{Token, TokenKind};
@@ -632,7 +632,6 @@ impl CompactPrinter {
             Type::Optional(optional) => self.emit_optional_type(optional),
             Type::Union(union) => self.emit_union_type(union),
             Type::Intersection(intersection) => self.emit_intersection_type(intersection),
-            Type::Negation(negation) => self.emit_negation_type(negation),
             Type::Parenthesized(paren) => self.emit_paren_type(paren),
             Type::Pack(pack) => self.emit_type_pack(pack),
             Type::Singleton(token) => self.emit_token(token),
@@ -658,11 +657,6 @@ impl CompactPrinter {
         self.emit_str("<");
         self.emit_punctuated_types(&args.args);
         self.emit_str(">");
-    }
-
-    fn emit_negation_type(&mut self, negation: &NegationType) {
-        self.emit_str("~");
-        self.emit_type(&negation.type_value);
     }
 
     fn emit_typeof_type(&mut self, typeof_type: &TypeofType) {

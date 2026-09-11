@@ -33,6 +33,7 @@ pub mod mixed_table;
 pub mod multiple_statements_per_line;
 pub mod must_use;
 pub mod mutating_uninitialized;
+pub mod no_implicit_globals;
 pub mod parenthesized_conditions;
 pub mod placeholder_read;
 pub mod redefining_local;
@@ -174,6 +175,7 @@ pub static RULES: &[RuleEntry] = &[
     RuleEntry::Whole(&multiple_statements_per_line::MultipleStatementsPerLine),
     RuleEntry::Whole(&cyclomatic_complexity::CyclomaticComplexity),
     RuleEntry::Whole(&global_usage::GlobalUsage),
+    RuleEntry::Whole(&no_implicit_globals::NoImplicitGlobals),
     RuleEntry::Whole(&manual_table_clone::ManualTableClone),
     RuleEntry::Whole(&mismatched_arg_count::MismatchedArgCount),
     RuleEntry::Whole(&global_used_as_local::GlobalUsedAsLocal),
@@ -275,7 +277,7 @@ mod tests {
     #[test]
     fn rule_count_locked() {
         // If this changes, update the rule count in the root README.md.
-        assert_eq!(all_rules().len(), 64);
+        assert_eq!(all_rules().len(), 65);
     }
 
     #[test]

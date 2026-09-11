@@ -4,10 +4,10 @@ use luck_ast::expr::*;
 use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
-use luck_token::Span;
 use luck_token::token::{Token, TokenKind};
+use luck_token::{LuaVersion, Span};
 
-use crate::expr::ident_name;
+use crate::expr::{has_fixed_binding, ident_name};
 use crate::tokens::default_span as sp;
 use luck_token::CompactString;
 
@@ -22,12 +22,14 @@ use luck_token::CompactString;
 /// redistributes names, and that unblocks further lifts. Gating the
 /// "unprofitable" lone lifts freezes that cascade early and benchmarked
 /// hundreds of bytes WORSE corpus-wide than lifting unconditionally.
-pub fn lift(block: Block) -> Block {
-    let mut lifter = Lifter;
+pub fn lift(block: Block, version: LuaVersion) -> Block {
+    let mut lifter = Lifter { version };
     lifter.transform_block(block)
 }
 
-struct Lifter;
+struct Lifter {
+    version: LuaVersion,
+}
 
 impl AstTransform for Lifter {
     fn walk_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
@@ -44,7 +46,7 @@ impl AstTransform for Lifter {
             param_names.insert(ident_name(name).into());
         }
 
-        let ineligible = collect_ineligible_names(&body);
+        let ineligible = collect_ineligible_names(&body, self.version);
 
         let mut liftable_set = FxHashSet::default();
         let mut liftable_ordered = Vec::new();
@@ -52,10 +54,10 @@ impl AstTransform for Lifter {
         collect_liftable(
             &body.block,
             &mut scope_names,
-            false,
             &ineligible,
             &mut liftable_set,
             &mut liftable_ordered,
+            self.version,
         );
 
         if liftable_set.is_empty() {
@@ -63,7 +65,7 @@ impl AstTransform for Lifter {
             return body;
         }
 
-        body.block = rewrite_block(body.block, &liftable_set, &mut Vec::new());
+        body.block = rewrite_block(body.block, &liftable_set, &mut Vec::new(), self.version);
         body.block = self.transform_block(body.block);
 
         prepend_declaration(&mut body.block, &liftable_ordered);
@@ -80,25 +82,15 @@ impl AstTransform for Lifter {
 fn collect_liftable(
     block: &Block,
     scope_names: &mut Vec<FxHashSet<CompactString>>,
-    in_loop: bool,
     ineligible: &FxHashSet<CompactString>,
     liftable: &mut FxHashSet<CompactString>,
     liftable_ordered: &mut Vec<CompactString>,
+    version: LuaVersion,
 ) {
     for stmt in &block.stmts {
         match stmt {
             Statement::LocalAssignment(local) => {
-                // Const bindings cannot be lifted: the hoisted bare
-                // declaration would lack the mandatory initializer and
-                // the later write would assign to a const.
-                let has_attribs = local.names.iter().any(|n| n.attrib.is_some())
-                    || local.is_const
-                    || local.is_exported;
-                // A bare `local x` inside a loop resets to nil each
-                // iteration; lifted to function scope it would keep the
-                // previous iteration's value.
-                let bare_in_loop = in_loop && local.exprs.is_none();
-                if has_attribs || bare_in_loop {
+                if !can_lift_assignment(local, version) {
                     for name in local.names.iter() {
                         let n = ident_name(&name.name);
                         scope_names.last_mut().unwrap().insert(n.into());
@@ -150,10 +142,10 @@ fn collect_liftable(
                 collect_liftable(
                     &do_block.block,
                     scope_names,
-                    in_loop,
                     ineligible,
                     liftable,
                     liftable_ordered,
+                    version,
                 );
                 scope_names.pop();
             }
@@ -162,10 +154,10 @@ fn collect_liftable(
                 collect_liftable(
                     &while_loop.block,
                     scope_names,
-                    true,
                     ineligible,
                     liftable,
                     liftable_ordered,
+                    version,
                 );
                 scope_names.pop();
             }
@@ -174,10 +166,10 @@ fn collect_liftable(
                 collect_liftable(
                     &repeat_loop.block,
                     scope_names,
-                    true,
                     ineligible,
                     liftable,
                     liftable_ordered,
+                    version,
                 );
                 scope_names.pop();
             }
@@ -186,10 +178,10 @@ fn collect_liftable(
                 collect_liftable(
                     &if_stmt.block,
                     scope_names,
-                    in_loop,
                     ineligible,
                     liftable,
                     liftable_ordered,
+                    version,
                 );
                 scope_names.pop();
                 for clause in &if_stmt.elseif_clauses {
@@ -197,10 +189,10 @@ fn collect_liftable(
                     collect_liftable(
                         &clause.block,
                         scope_names,
-                        in_loop,
                         ineligible,
                         liftable,
                         liftable_ordered,
+                        version,
                     );
                     scope_names.pop();
                 }
@@ -209,10 +201,10 @@ fn collect_liftable(
                     collect_liftable(
                         &else_clause.block,
                         scope_names,
-                        in_loop,
                         ineligible,
                         liftable,
                         liftable_ordered,
+                        version,
                     );
                     scope_names.pop();
                 }
@@ -224,10 +216,10 @@ fn collect_liftable(
                 collect_liftable(
                     &nf.block,
                     scope_names,
-                    true,
                     ineligible,
                     liftable,
                     liftable_ordered,
+                    version,
                 );
                 scope_names.pop();
             }
@@ -242,10 +234,10 @@ fn collect_liftable(
                 collect_liftable(
                     &gf.block,
                     scope_names,
-                    true,
                     ineligible,
                     liftable,
                     liftable_ordered,
+                    version,
                 );
                 scope_names.pop();
             }
@@ -269,6 +261,24 @@ fn collect_liftable(
     }
 }
 
+fn can_lift_assignment(local: &LocalAssignment, version: LuaVersion) -> bool {
+    // Bare declarations reset to nil even when a sibling previously used
+    // the hoisted slot. Keep them local rather than extending their lifetime.
+    // An annotated name is equally unliftable: the hoisted declaration is a
+    // bare `local x`, so the annotation would be dropped, not carried along.
+    local.exprs.is_some()
+        && !has_fixed_binding(local, version)
+        && local
+            .names
+            .iter()
+            .all(|name| name.type_annotation.is_none())
+        && local.names.iter().enumerate().all(|(index, name)| {
+            local.names.items[..index]
+                .iter()
+                .all(|previous| ident_name(&previous.name) != ident_name(&name.name))
+        })
+}
+
 fn is_in_parent(scope_names: &[FxHashSet<CompactString>], name: &str) -> bool {
     scope_names.iter().any(|frame| frame.contains(name))
 }
@@ -286,7 +296,7 @@ fn is_in_parent(scope_names: &[FxHashSet<CompactString>], name: &str) -> bool {
 /// Names a closure binds internally resolve inside it and block nothing,
 /// which is what unlocks lifts the old mentioned-in-any-closure set
 /// rejected.
-fn collect_ineligible_names(body: &FunctionBody) -> FxHashSet<CompactString> {
+fn collect_ineligible_names(body: &FunctionBody, version: LuaVersion) -> FxHashSet<CompactString> {
     let mut root_frame: FxHashSet<CompactString> = body
         .params
         .iter()
@@ -300,7 +310,11 @@ fn collect_ineligible_names(body: &FunctionBody) -> FxHashSet<CompactString> {
     let mut scanner = IneligibleScanner {
         frames: vec![root_frame],
         closure_floor: Vec::new(),
-        ineligible: FxHashSet::default(),
+        ineligible: if version.has_env_upvalue() {
+            FxHashSet::from_iter([CompactString::from("_ENV")])
+        } else {
+            FxHashSet::default()
+        },
     };
     scanner.scan_block(&body.block);
     scanner.ineligible
@@ -564,16 +578,14 @@ impl IneligibleScanner {
     }
 }
 
-/// Rewrite a block: convert lifted `local X=Y` to `X=Y`, remove bare `local X`.
-/// `shadowed` carries names bound by NON-lifted declarations (loop control
-/// variables, kept locals) on the path here: a declaration whose name is
-/// currently shadowed must stay a `local` - rewriting it into an
-/// assignment would rebind it to the shadowing binding, not the hoisted
-/// one (e.g. a renamed shadow inside `for l = ...` assigning the loop var).
+/// Rewrite selected initializers while retaining the original lexical
+/// binding boundaries. Every declaration shadows, including lifted ones:
+/// sharing a spelling does not make a nested declaration the same binding.
 fn rewrite_block(
     block: Block,
     liftable: &FxHashSet<CompactString>,
     shadowed: &mut Vec<FxHashSet<CompactString>>,
+    version: LuaVersion,
 ) -> Block {
     let mut new_stmts: Vec<Statement> = Vec::new();
     shadowed.push(FxHashSet::default());
@@ -586,86 +598,91 @@ fn rewrite_block(
                     .iter()
                     .map(|attributed| ident_name(&attributed.name).into())
                     .collect();
-                let all_lifted = names.iter().all(|n| liftable.contains(n))
+                let all_lifted = can_lift_assignment(&local, version)
+                    && names.iter().all(|n| liftable.contains(n))
                     && !names
                         .iter()
                         .any(|n| shadowed.iter().any(|frame| frame.contains(n)));
 
+                shadowed
+                    .last_mut()
+                    .expect("frame pushed above")
+                    .extend(names);
                 if all_lifted {
-                    if let Some(exprs) = local.exprs {
-                        // local a,b=X,Y -> a,b=X,Y
-                        let targets = Punctuated::from_items(
-                            local
-                                .names
-                                .items
-                                .into_iter()
-                                .map(|attributed| Var::Name(attributed.name))
-                                .collect(),
-                        );
-                        new_stmts.push(Statement::Assignment(Box::new(Assignment {
-                            span: local.span,
-                            targets,
-                            values: exprs,
-                        })));
-                    }
-                    // bare `local X` with no values: just drop it
+                    // local a,b=X,Y -> a,b=X,Y. `can_lift_assignment` rejects
+                    // bare declarations, whose hoisted form would need a
+                    // statement rather than an initializer to move.
+                    let values = local
+                        .exprs
+                        .expect("can_lift_assignment requires an initializer");
+                    let targets = Punctuated::from_items(
+                        local
+                            .names
+                            .items
+                            .into_iter()
+                            .map(|attributed| Var::Name(attributed.name))
+                            .collect(),
+                    );
+                    new_stmts.push(Statement::Assignment(Box::new(Assignment {
+                        span: local.span,
+                        targets,
+                        values,
+                    })));
                 } else {
-                    for name in names {
-                        shadowed
-                            .last_mut()
-                            .expect("frame pushed above")
-                            .insert(name);
-                    }
                     new_stmts.push(Statement::LocalAssignment(local));
                 }
             }
             Statement::LocalFunction(lf) => {
                 let name: CompactString = ident_name(&lf.name).into();
-                if liftable.contains(&name) && !shadowed.iter().any(|frame| frame.contains(&name)) {
+                let is_lifted = !lf.is_const
+                    && !lf.is_exported
+                    && liftable.contains(&name)
+                    && !shadowed.iter().any(|frame| frame.contains(&name));
+                shadowed
+                    .last_mut()
+                    .expect("frame pushed above")
+                    .insert(name);
+                if is_lifted {
                     // local function f(x)...end -> f=function(x)...end
                     let func_expr = Expression::FunctionDef(Box::new(FunctionDef {
                         span: lf.span,
                         attributes: lf.attributes,
                         body: lf.body,
                     }));
-                    let body_block = rewrite_block_in_funcdef(func_expr, liftable);
+
                     new_stmts.push(Statement::Assignment(Box::new(Assignment {
                         span: lf.span,
                         targets: Punctuated::from_item(Var::Name(lf.name)),
-                        values: Punctuated::from_item(body_block),
+                        values: Punctuated::from_item(func_expr),
                     })));
                 } else {
-                    shadowed
-                        .last_mut()
-                        .expect("frame pushed above")
-                        .insert(name);
                     new_stmts.push(Statement::LocalFunction(lf));
                 }
             }
             Statement::DoBlock(mut do_block) => {
-                do_block.block = rewrite_block(do_block.block, liftable, shadowed);
+                do_block.block = rewrite_block(do_block.block, liftable, shadowed, version);
                 new_stmts.push(Statement::DoBlock(do_block));
             }
             Statement::WhileLoop(mut wl) => {
-                wl.block = rewrite_block(wl.block, liftable, shadowed);
+                wl.block = rewrite_block(wl.block, liftable, shadowed, version);
                 new_stmts.push(Statement::WhileLoop(wl));
             }
             Statement::RepeatLoop(mut rl) => {
-                rl.block = rewrite_block(rl.block, liftable, shadowed);
+                rl.block = rewrite_block(rl.block, liftable, shadowed, version);
                 new_stmts.push(Statement::RepeatLoop(rl));
             }
             Statement::IfStatement(mut if_stmt) => {
-                if_stmt.block = rewrite_block(if_stmt.block, liftable, shadowed);
+                if_stmt.block = rewrite_block(if_stmt.block, liftable, shadowed, version);
                 if_stmt.elseif_clauses = if_stmt
                     .elseif_clauses
                     .into_iter()
                     .map(|mut clause| {
-                        clause.block = rewrite_block(clause.block, liftable, shadowed);
+                        clause.block = rewrite_block(clause.block, liftable, shadowed, version);
                         clause
                     })
                     .collect();
                 if_stmt.else_clause = if_stmt.else_clause.map(|mut ec| {
-                    ec.block = rewrite_block(ec.block, liftable, shadowed);
+                    ec.block = rewrite_block(ec.block, liftable, shadowed, version);
                     ec
                 });
                 new_stmts.push(Statement::IfStatement(if_stmt));
@@ -674,7 +691,7 @@ fn rewrite_block(
                 let mut frame = FxHashSet::default();
                 frame.insert(CompactString::from(ident_name(&nf.name)));
                 shadowed.push(frame);
-                nf.block = rewrite_block(nf.block, liftable, shadowed);
+                nf.block = rewrite_block(nf.block, liftable, shadowed, version);
                 shadowed.pop();
                 new_stmts.push(Statement::NumericFor(nf));
             }
@@ -684,7 +701,7 @@ fn rewrite_block(
                     frame.insert(CompactString::from(ident_name(&binding.name)));
                 }
                 shadowed.push(frame);
-                gf.block = rewrite_block(gf.block, liftable, shadowed);
+                gf.block = rewrite_block(gf.block, liftable, shadowed, version);
                 shadowed.pop();
                 new_stmts.push(Statement::GenericFor(gf));
             }
@@ -713,11 +730,6 @@ fn rewrite_block(
         stmts: new_stmts,
         last_stmt: block.last_stmt,
     }
-}
-
-fn rewrite_block_in_funcdef(expr: Expression, _liftable: &FxHashSet<CompactString>) -> Expression {
-    // don't rewrite inside nested function defs - they get their own lift pass
-    expr
 }
 
 fn prepend_declaration(block: &mut Block, names: &[CompactString]) {
@@ -755,7 +767,7 @@ mod tests {
         let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
         assert!(result.errors.is_empty(), "parse failed");
         let block = crate::transforms::rename_locals::rename(result.block, LuaTarget::Lua54, true);
-        let block = lift(block);
+        let block = lift(block, luck_token::LuaVersion::Lua54);
         luck_codegen::compact(&block, source)
     }
 
@@ -832,7 +844,7 @@ mod tests {
     fn apply_lift_only(source: &str) -> String {
         let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
         assert!(result.errors.is_empty(), "parse failed");
-        let block = lift(result.block);
+        let block = lift(result.block, luck_token::LuaVersion::Lua54);
         luck_codegen::compact(&block, source)
     }
 
@@ -918,7 +930,7 @@ mod tests {
         );
         let result = luck_parser::parse(source, luck_token::LuaVersion::Lua55);
         assert!(result.errors.is_empty(), "parse failed");
-        let block = lift(result.block);
+        let block = lift(result.block, luck_token::LuaVersion::Lua54);
         let output = luck_codegen::compact(&block, source);
         assert!(
             output.contains("local args=1") || output.contains("local args = 1"),

@@ -20,6 +20,19 @@ Each rule lives in its own file under `src/rules/`, one module per rule
 `RULES` array in `src/rules/mod.rs` - the authoritative list of every rule,
 its category, and its default severity.
 
+`global_usage` warns about the global environment tables: `_G` everywhere,
+and `shared` only under the Roblox stdlib, where it is a global rather than
+an ordinary name. `no_implicit_globals` is the separate, broader policy -
+every unresolved name, stdlib calls included, except configured
+`extra_globals`. Both are opt-in Style rules.
+
+Migrating from 0.2.x: `global_usage` was the name of that broader policy
+through 0.2, and now carries the narrow `_G`/`shared` meaning above. A
+`luck.json` that enables `global_usage` therefore keeps linting, with the
+narrower rule; configs that wanted the old behavior must rename the
+override to `no_implicit_globals`. The name is still registered, so
+`unknown_rule_names` cannot flag the stale spelling for you.
+
 ## Architecture
 
 ### Pipeline

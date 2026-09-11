@@ -9,10 +9,10 @@ Command-line interface for the luck bundler, minifier, formatter, and linter.
 ## Key Features
 
 - **Flat subcommands** — every operation is a top-level command (`init`, `build`, `bundle`, `minify`, `graph`, `lint`, `fmt`, `check`, `lsp`). The Lua version is selected per command with a `-t/--target` flag, not via per-target subcommands.
-- **Project config** — `luck init` and `luck build` read `luck.json` and drive the full pipeline. `lint`/`fmt`/`check` discover `luck.json` by walking up from cwd.
+- **Project config** — `luck init` and `luck build` read `luck.json` and drive the full pipeline. `lint`/`fmt`/`check` discover `luck.json` by walking up from cwd. `bundle`/`minify` discover it from the input directory (cwd for stdin), or accept `-c/--config`; both use its per-extension target and transforms. Explicit CLI flags override those settings, including with `-t` present. Build-only fields such as profiles, output paths, and entry points do not change these one-shot commands; `bundle` still requires `--minify` and roots its `-s` search paths at the entry directory.
 - **Profiles** — on `build`, `--release`, `--dev`, or `--profile <name>` override config-file settings.
 - **File watching** — on `build`, `--watch` rebuilds on filesystem changes via `notify`.
-- **Per-transform toggles** — `bundle` and `minify` expose a `--no-<pass>` flag per minifier pass for targeted comparisons.
+- **Per-transform toggles** — `bundle` and `minify` expose `--<pass>` and `--no-<pass>` flags per minifier pass for targeted comparisons. Both polarities exist so either can override the configured value; the flag given last wins.
 - **Language server** — `luck lsp` serves the LSP backend over stdio (or TCP with `--socket <port>`).
 
 ## Commands
@@ -35,8 +35,8 @@ luck lsp [--socket <port>]                   # Run the language server over stdi
 
 | Command | Flags |
 |---------|-------|
-| `bundle` | `--no-fold-constants`, `--no-rename-locals`, … (per-transform), `--rename-globals`, `--minify`, `--line-map`, `-s/--search-path` |
-| `minify` | `--no-fold-constants`, `--no-rename-locals`, … (per-transform), `--rename-globals`, `--stats` |
+| `bundle` | `-c/--config`, `--fold-constants`/`--no-fold-constants`, `--rename-locals`/`--no-rename-locals`, … (per-transform), `--rename-globals`/`--no-rename-globals`, `--minify`, `--line-map`, `-s/--search-path` |
+| `minify` | `-c/--config`, `--fold-constants`/`--no-fold-constants`, `--rename-locals`/`--no-rename-locals`, … (per-transform), `--rename-globals`/`--no-rename-globals`, `--stats` |
 | `fmt` | `--write`, `--check`, `--list-different`, `--no-editorconfig`, `--stdin-filepath`, `--range-start`/`--range-end`, `--verify`, `-c/--config` (layout options live in `luck.json`/`.editorconfig`, not flags) |
 | `lint` | `--fix`, `--format` (default / json), `-A/--allow`, `-W/--warn`, `-D/--deny` per rule or category, `--global`, `--max-warnings`, `--deny-warnings`, `--silent`, `--rules`, `--print-config`, `--stdin-filepath` |
 | `build` | `--release`, `--dev`, `--profile <name>`, `--watch`, `--dry-run`, `-c/--config` |

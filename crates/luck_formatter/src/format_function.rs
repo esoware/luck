@@ -9,6 +9,7 @@ use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Literal};
 use luck_ast::shared::{FunctionBody, Parameter, Punctuated, VarArgParam};
 use luck_token::Token;
 
+use crate::comments::ListSeparator;
 use crate::format_type::FormatExplicitTypeArgs;
 use crate::ir::*;
 use crate::tokens::FormatToken;
@@ -225,7 +226,23 @@ impl Format for FunctionArgs {
 /// arguments) before falling back to a parenthesized, breakable list.
 fn write_call_args(f: &mut Formatter, args: &FunctionArgs) {
     match args {
-        FunctionArgs::Parenthesized { args, .. } => {
+        FunctionArgs::Parenthesized { span, args } => {
+            // A comment between the parens has to keep them: dropping the
+            // parens or hugging a lone argument leaves nowhere to print it.
+            if f.comments
+                .has_claimable_comments(*span, args.items.iter().map(|arg| arg.span()))
+            {
+                space_before_call_paren(f);
+                f.write_commented_list(
+                    ("(", ")"),
+                    *span,
+                    &args.items,
+                    Expression::span,
+                    ListSeparator::BetweenItems,
+                );
+                return;
+            }
+
             let can_omit = match f.options.call_parentheses {
                 CallParentheses::Always => false,
                 CallParentheses::NoSingleString => is_single_string_arg(args),
@@ -308,17 +325,19 @@ fn write_call_args(f: &mut Formatter, args: &FunctionArgs) {
 }
 
 /// Emit a parenthesized argument list. A single table/function argument is
-/// "hugged" - `({...})` rather than an indented break - unless a magic
-/// trailing comma requests a forced multi-line layout.
+/// "hugged" - `({...})` rather than an indented break.
+///
+/// No dialect's grammar allows a trailing comma after the last argument, so
+/// an argument list can never carry the magic trailing comma that expands a
+/// table; `magic_trailing_comma` reaches the tables written inside the
+/// arguments, not the list itself.
 fn write_args_list(f: &mut Formatter, args: &Punctuated<Expression>) {
     if args.is_empty() {
         token("()").fmt(f);
         return;
     }
 
-    let force_expand = f.options.magic_trailing_comma && args.has_trailing_separator;
-
-    if is_single_huggable_arg(args) && !force_expand {
+    if is_single_huggable_arg(args) {
         token("(").fmt(f);
         args.first().expect("hug check guarantees an item").fmt(f);
         token(")").fmt(f);
@@ -334,12 +353,12 @@ fn write_args_list(f: &mut Formatter, args: &Punctuated<Expression>) {
                     soft_line_or_space().fmt(f);
                 }
                 expr.fmt(f);
-                if index + 1 < args.items.len() || args.has_trailing_separator {
+                // No trailing comma, ever: no dialect's grammar allows one
+                // after the last argument, so emitting one for a synthetic
+                // list that carries the flag would not re-parse.
+                if index + 1 < args.items.len() {
                     token(",").fmt(f);
                 }
-            }
-            if force_expand {
-                expand_parent().fmt(f);
             }
         }))
         .fmt(f);

@@ -1,14 +1,14 @@
 use rustc_hash::FxHashMap;
 
-use crate::expr::ident_name;
+use crate::expr::{has_fixed_binding, ident_name};
 use crate::tokens::default_span as sp;
 use luck_ast::expr::*;
 use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_ast::visitor::Visitor;
-use luck_token::CompactString;
 use luck_token::token::TokenKind;
+use luck_token::{CompactString, LuaVersion};
 
 /// Inline single-use local variables whose initializer is a CLOSED
 /// LITERAL expression, removing the declaration.
@@ -21,9 +21,9 @@ use luck_token::token::TokenKind;
 /// - the value must carry no identity (no tables, no closures - moving
 ///   one into a loop mints a fresh object per iteration), capture nothing,
 ///   and not be `...` (whose meaning changes across function boundaries).
-pub fn inline(mut block: Block) -> Block {
+pub fn inline(mut block: Block, version: LuaVersion) -> Block {
     loop {
-        let candidates = find_inline_candidates(&block);
+        let candidates = find_inline_candidates(&block, version);
         if candidates.is_empty() {
             break;
         }
@@ -62,7 +62,10 @@ fn is_closed_literal_expr(expr: &Expression) -> bool {
     }
 }
 
-fn find_inline_candidates(block: &Block) -> FxHashMap<CompactString, InlineCandidate> {
+fn find_inline_candidates(
+    block: &Block,
+    version: LuaVersion,
+) -> FxHashMap<CompactString, InlineCandidate> {
     // One walk gathers everything the candidate filter needs:
     // declarations, disqualifying binders, and reference counts.
     let mut scanner = CandidateScanner {
@@ -70,6 +73,7 @@ fn find_inline_candidates(block: &Block) -> FxHashMap<CompactString, InlineCandi
         declared_names: rustc_hash::FxHashSet::default(),
         shadowed: rustc_hash::FxHashSet::default(),
         ref_counts: FxHashMap::default(),
+        version,
     };
     scanner.visit_block(block);
 
@@ -101,13 +105,14 @@ struct CandidateScanner {
     declared_names: rustc_hash::FxHashSet<CompactString>,
     shadowed: rustc_hash::FxHashSet<CompactString>,
     ref_counts: FxHashMap<CompactString, usize>,
+    version: LuaVersion,
 }
 
 impl<'ast> Visitor<'ast> for CandidateScanner {
     fn visit_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalAssignment(local) => {
-                if local.is_exported {
+                if has_fixed_binding(local, self.version) {
                     for attributed in local.names.iter() {
                         self.shadowed.insert(ident_name(&attributed.name).into());
                     }
@@ -310,7 +315,7 @@ mod tests {
     fn apply(source: &str) -> String {
         let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
         assert!(result.errors.is_empty(), "parse failed");
-        let block = inline(result.block);
+        let block = inline(result.block, luck_token::LuaVersion::Lua54);
         luck_codegen::compact(&block, source)
     }
 
@@ -433,7 +438,7 @@ mod tests {
             "parse failed: {:?}",
             result.errors
         );
-        let block = inline(result.block);
+        let block = inline(result.block, luck_token::LuaVersion::Luau);
         luck_codegen::compact(&block, source)
     }
 
@@ -454,7 +459,7 @@ mod tests {
             "parse failed: {:?}",
             result.errors
         );
-        let block = inline(result.block);
+        let block = inline(result.block, luck_token::LuaVersion::Lua55);
         luck_codegen::compact(&block, source)
     }
 

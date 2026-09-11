@@ -2,9 +2,10 @@
 
 use crate::minify_flags::MinifyFlags;
 use crate::output::{fail_with_diagnostics, format_size, write_output};
-use crate::project::resolve_explicit_target;
+use crate::project::{config_for_one_shot, resolve_configured_target};
 use crate::{EXIT_FAILURE, EXIT_SUCCESS, Verbosity};
 use clap::Args;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[derive(Args)]
@@ -20,6 +21,10 @@ pub(crate) struct MinifyArgs {
     #[arg(short, long, value_name = "PATH")]
     output: Option<String>,
 
+    /// Project config [default: discovered from input directory, or cwd for stdin]
+    #[arg(short = 'c', long = "config", value_name = "PATH")]
+    config: Option<PathBuf>,
+
     /// Print size statistics to stderr
     #[arg(long)]
     stats: bool,
@@ -32,8 +37,11 @@ impl MinifyArgs {
     // Minify emits no advisory banner; `--stats`, the result, and fatal errors
     // are all essential, so there is nothing for `--quiet` to silence.
     pub(crate) fn run(self, _verbosity: Verbosity) -> ExitCode {
-        let target = resolve_explicit_target(self.target.as_deref(), &self.input);
-        let config = self.minify_flags.to_transform_config();
+        let project = config_for_one_shot(self.config.as_deref(), &self.input);
+        let target = resolve_configured_target(self.target.as_deref(), &self.input, &project);
+        let config = self
+            .minify_flags
+            .apply_to(project.transforms.unwrap_or_default());
 
         let (source, file_path) = if self.input == "-" {
             use std::io::Read;

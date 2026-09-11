@@ -55,9 +55,12 @@ syntax, so `-t roblox` and `-t luau` minify identically (correct, not a bug).
 ## Configuration
 
 One typed source of truth: `luck.json`, discovered by walking up from cwd
-(`-c/--config` overrides). All config types live in `luck_core` and
-deserialize with `deny_unknown_fields` - unknown keys and invalid enum values
-are hard errors. Targets are per-extension via the `lua`/`luau` keys, and
+for project/path commands, or from the input directory for one-shot
+`minify`/`bundle` commands (cwd for stdin). `-c/--config` overrides
+discovery; explicit transform flags layer over configured transforms, not
+fresh defaults. All config types live in `luck_core` and deserialize with
+`deny_unknown_fields` - unknown keys and invalid enum values are hard
+errors. Targets are per-extension via the `lua`/`luau` keys, and
 either key may name any dialect - extension and dialect are independent, so a
 Roblox or Rojo tree that keeps Luau in `.lua` files sets `"lua": "roblox"`.
 `extends`/`include`/`exclude`/`root` shape the project. Each minifier pass is
@@ -98,6 +101,22 @@ the rule's `category()` and the resolved severity. The CLI exits 0 (success),
   arithmetic, comparison, and concat may all invoke metamethods; only literal
   arithmetic is pure, and `#"str"` is never folded (escape sequences make raw
   length unreliable).
+- **Parser depth is a host resource budget, not a VM limit.** The 256-entry
+  recursion cap is independent of dialect; target compilers have their own
+  configurable limits. Failed depth entries do not change the active count.
+- **Interior comments must not relocate.** List-shaped emitters (table
+  constructors, call argument lists) claim the comments written between their
+  items and break one item per line to host them; a statement header emits a
+  single-line block comment stalled before its `then`/`do` inline. Each claims
+  only what its own span covers, so none drags a comment across its opening
+  delimiter. Anything unplaceable falls back to the smallest enclosing sourced
+  statement, re-indented to its block but otherwise emitted as written - and
+  never split at a newline inside a long string or long comment, where the
+  newline is content. A comment the emitters moved crosses nothing but
+  whitespace and the separators the formatter writes at its own discretion
+  (`;`, `,`). Verified formatting aligns the two token streams, skipping the
+  parens only one side has, and checks every comment's text and its position
+  among the tokens both sides keep - alongside AST equivalence and idempotency.
 - **Idempotency and re-parseability are tested guarantees.**
   `minify(minify(x)) == minify(x)`, `format(format(x)) == format(x)`, and
   both outputs parse with zero errors.

@@ -10,7 +10,7 @@ The parser consumes a token stream from `luck_lexer` and produces an AST from `l
 
 - **Pratt expression parsing** — binding power tables encode operator precedence correctly across every Lua version, including the multi-step precedence climb required for `or` / `and` / comparisons / bitwise / arithmetic / unary / power.
 - **Recursive descent for statements** — control flow, declarations, and assignments parse top-down with explicit context markers.
-- **Depth limiting** — caps recursion to prevent stack overflow on pathological input.
+- **Depth limiting** — caps recursive parser work at 256 entries to protect the host stack. This is a tool resource limit, not a dialect grammar rule or an emulation of a VM's configurable compiler limits; deeply nested valid programs can exceed it.
 - **Error recovery** — on failure, the parser pushes a `SourceError` and synchronizes at the next statement keyword (`if`, `while`, `for`, `local`, etc.), allowing multiple errors to surface in a single pass.
 - **Context stack** — tracks the active parsing context ("if-statement", "for-loop", "function declaration") so diagnostics report where a problem occurred, not just what.
 - **Version-gated syntax** — goto/labels (5.2+), bitwise operators (5.3+), local attributes (5.4+), generalized iteration (5.5+), and the Luau extensions, including 64-bit integer literals, explicit type instantiation, value exports, and the full Luau type grammar.
@@ -31,7 +31,7 @@ Each compound statement (`if`, `for`, `while`, `repeat`, function declarations) 
 
 ### Luau Type Annotations
 
-`luau.rs` is a full recursive-descent parser for the Luau type grammar. It produces real `luck_ast::types::Type` nodes — not opaque spans — for every annotation site (`x: T`, `<T>`, function return types, type-declaration bodies). The grammar covers unions and intersections (including the leading-separator multiline form `| A | B`), tight-binding negation (`~T`), optionals (`T?`), table types, function types (`(params) -> R`), generic lists with defaults, type packs, `typeof(expr)`, singletons, and variadic packs. The nested-generic cases where `>>` and `>=` must be split back into closing angle brackets are handled during parsing. Codegen reconstructs types by walking these typed nodes; there is no source slicing.
+`luau.rs` is a full recursive-descent parser for the Luau type grammar. It produces real `luck_ast::types::Type` nodes — not opaque spans — for every annotation site (`x: T`, `<T>`, function return types, type-declaration bodies). The grammar covers unions and intersections (including the leading-separator multiline form `| A | B`), optionals (`T?`), table types, function types (`(params) -> R`), generic lists with defaults, type packs, `typeof(expr)`, singletons, and variadic packs. The nested-generic cases where `>>` and `>=` must be split back into closing angle brackets are handled during parsing. Codegen reconstructs types by walking these typed nodes; there is no source slicing.
 
 ## Testing
 

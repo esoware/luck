@@ -139,6 +139,22 @@ fn sort_requires_respects_blank_line_break() {
 }
 
 #[test]
+fn sort_requires_verifies_against_the_sorted_buffer() {
+    // Verification compares the output to the text the formatter read, which
+    // sort_requires rewrote; comparing against the original would report every
+    // reordering as a structural change.
+    let mut options = opts();
+    options.sort_requires = true;
+    let input = "-- a header\nlocal zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\nreturn alpha, zeta\n";
+    let result = luck_formatter::format_and_verify(input, LuaVersion::Lua54, &options)
+        .unwrap_or_else(|(_, diff)| panic!("{diff:?}"));
+    assert_eq!(
+        result.output,
+        "-- a header\nlocal alpha = require(\"alpha\")\nlocal zeta = require(\"zeta\")\nreturn alpha, zeta\n"
+    );
+}
+
+#[test]
 fn sort_requires_format_off_excluded() {
     let mut options = opts();
     options.sort_requires = true;

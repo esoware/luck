@@ -869,7 +869,6 @@ impl FullGenerator {
             return self.leaf_type();
         }
         match self.rng.below(11) {
-            9 if self.version.has_negation_types() => format!("~{}", self.leaf_type()),
             0..=2 => self.leaf_type(),
             3 => {
                 let inner = BUILTIN_TYPES[self.rng.below(BUILTIN_TYPES.len())];
@@ -987,7 +986,6 @@ mod tests {
             "export function",
             "1_000_000i",
             "<<",
-            "= ~",
         ] {
             assert!(all.contains(needle), "expected generated {needle}");
         }

@@ -129,3 +129,35 @@ fn trim_string_literal(raw: &str) -> &str {
     }
     raw
 }
+
+#[cfg(test)]
+mod tests {
+    use luck_core::LuaTarget;
+
+    use super::*;
+
+    /// The unrooted fallback, driven from settings the test owns. Going
+    /// through `ConfigCache` instead would let discovery walk above the
+    /// temp directory and pick up whatever `luck.json` sits there.
+    #[test]
+    fn bare_sibling_resolves_against_the_requiring_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
+        let main_path = dir.path().join("main.lua");
+        let text = "local foo = require(\"foo\")\n";
+        std::fs::write(&main_path, text).expect("write main.lua");
+        let uri = Url::from_file_path(&main_path).expect("file path URI");
+
+        let settings = ProjectSettings::default();
+        assert!(
+            settings.root.is_none(),
+            "the fallback needs no project root"
+        );
+        let doc = DocumentState::new(text.to_string(), 1, LuaTarget::Lua54);
+
+        let links = document_links(&doc, &uri, &settings);
+        assert_eq!(links.len(), 1, "{links:?}");
+        let target = links[0].target.as_ref().expect("link target");
+        assert!(target.path().ends_with("foo.lua"), "{target}");
+    }
+}

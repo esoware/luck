@@ -1,15 +1,15 @@
 //! Luau type grammar parser.
 //!
 //! Recursive descent over the type grammar, producing `luck_ast::types`
-//! nodes. Precedence, loosest to tightest: union `|`, intersection `&`,
-//! postfix `?`, primary. Function types (`(params) -> R`) are primaries
-//! disambiguated from parenthesized types by the trailing `->`.
+//! nodes. Union (`|` and `?`) and intersection (`&`) suffixes cannot mix
+//! without parentheses. Function types (`(params) -> R`) are disambiguated
+//! from parenthesized types by `->`; their return type consumes a full type.
 
 use luck_ast::shared::Punctuated;
 use luck_ast::types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
-    IntersectionType, NamedType, NegationType, OptionalType, ParenType, TableType, Type, TypeArgs,
-    TypeField, TypePack, TypeofType, UnionType, VariadicType,
+    IntersectionType, NamedType, OptionalType, ParenType, TableType, Type, TypeArgs, TypeField,
+    TypePack, TypeofType, UnionType, VariadicType,
 };
 use luck_token::{Span, Token, TokenKind};
 
@@ -140,7 +140,7 @@ impl Parser<'_> {
     }
 
     fn parse_intersection_level(&mut self) -> Type {
-        let first = self.parse_negation_type();
+        let first = self.parse_postfix_type();
         if !matches!(self.peek(), TokenKind::Ampersand) {
             return first;
         }
@@ -155,7 +155,7 @@ impl Parser<'_> {
         let mut items = vec![first];
         while matches!(self.peek(), TokenKind::Ampersand) {
             self.advance_span();
-            let next = self.parse_negation_type();
+            let next = self.parse_postfix_type();
             if matches!(next, Type::Optional(_)) {
                 self.error(next.span(), MIXED_TYPE_MSG.to_string());
             }
@@ -182,17 +182,6 @@ impl Parser<'_> {
             }));
         }
         result
-    }
-
-    fn parse_negation_type(&mut self) -> Type {
-        if self.version.has_negation_types() && matches!(self.peek(), TokenKind::Tilde) {
-            let tilde = self.advance_span();
-            let type_value = self.parse_negation_type();
-            let span = tilde.merge(type_value.span());
-            Type::Negation(Box::new(NegationType { span, type_value }))
-        } else {
-            self.parse_postfix_type()
-        }
     }
 
     fn parse_primary_type(&mut self) -> Type {

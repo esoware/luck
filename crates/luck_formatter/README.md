@@ -9,13 +9,13 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 ## Key Features
 
 - **Formats ASTs directly** — the primary entry point, `format_block`, formats an AST with no source text required, so programmatically constructed ASTs and synthetic comments format the same as parsed source.
-- **Comment preservation** — comments are tracked separately and reinserted at their original positions. `-- luck: format off` / `-- luck: format on` directives suppress formatting for a region.
-- **Hug patterns** — a single function or table argument inside a call stays inline rather than forcing the outer group to expand.
+- **Comment preservation** — supported comment positions are laid out normally. Table constructors and call argument lists claim the comments written between their items: the list breaks one item per line, and each comment keeps the line it was on. A statement header does the same for a single-line block comment left between its condition and its `then`/`do`, printing it where it was written. Each construct claims only what its own span covers, so no comment is dragged across an opening delimiter. If an interior comment still has no safe layout, the smallest enclosing statement is preserved verbatim rather than relocating it — re-anchored to its block's indentation, and otherwise as written apart from the usual collapse of a blank-line run to one; a newline inside a long string or long comment is content, so the lines around it are never re-anchored. This deliberately prioritizes fidelity over reformatting that statement. `-- luck: format off` / `-- luck: format on` directives suppress formatting for a region.
+- **Hug patterns** — a single function or table argument inside a call stays inline rather than forcing the outer group to expand. Multi-argument calls use a uniform expanded list when needed, including calls ending in a callback or table. StyLua byte-for-byte compatibility is not a goal.
 - **Access chain breaking** — long method chains (`foo:bar():baz()`) break at each call with proper indentation.
 - **Smart condition breaking** — multi-line `if` and `while` conditions drop unnecessary outer parentheses when they expand.
 - **Fill mode** — simple table constructors pack entries greedily onto lines instead of one-per-line.
 - **Range formatting** — `format_range` formats only statements overlapping a byte range, emitting the rest verbatim. Useful for editor "format selection".
-- **Verified formatting** — `format_and_verify` re-parses its own output and compares the AST to the original, catching any structure-altering bug before it ships.
+- **Verified formatting** — `format_and_verify` checks re-parsing, AST equivalence, comment text (normalizing line endings and trailing whitespace), comment position among the tokens both texts keep (the two token streams are aligned so a paren only one side has is skipped, while one both keep is a real boundary), and second-pass idempotency. It is not a target VM compiler or a proof of runtime equivalence.
 - **Luau type annotations** — full formatting of Luau type syntax by walking the real `Type` AST, with group-based line breaking.
 
 ## Architecture
@@ -45,7 +45,7 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 | `block_newline_gaps` | `BlockNewlineGaps` | `Never` | Never (strip) or Preserve blank lines at block start/end |
 | `space_after_function_names` | `SpaceAfterFunction` | `Never` | Never, Definitions, Calls, or Always — space between callee/`function` and `(` |
 | `sort_requires` | `bool` | `false` | Sort `require` statements (source-level pre-pass) |
-| `magic_trailing_comma` | `bool` | `false` | A trailing comma forces the surrounding table/call list to break |
+| `magic_trailing_comma` | `bool` | `false` | A trailing comma forces the surrounding table to break (argument lists cannot carry one) |
 
 ### Module Layout
 

@@ -142,7 +142,7 @@ fn apply_core_transforms(
     let version = target.lua_version();
 
     let block = if config.remove_dead_code {
-        transforms::remove_dead_code::remove(block)
+        transforms::remove_dead_code::remove(block, version)
     } else {
         block
     };
@@ -157,7 +157,7 @@ fn apply_core_transforms(
         block
     };
     let block = if config.inline_locals {
-        transforms::inline_locals::inline(block)
+        transforms::inline_locals::inline(block, version)
     } else {
         block
     };
@@ -170,12 +170,12 @@ fn apply_core_transforms(
     // ...and folding those (`local DEBUG = false` inlined into
     // `if DEBUG then`) exposes new dead branches within the same round.
     let block = if config.remove_dead_code {
-        transforms::remove_dead_code::remove(block)
+        transforms::remove_dead_code::remove(block, version)
     } else {
         block
     };
     let block = if config.merge_locals {
-        transforms::merge_locals::merge(block)
+        transforms::merge_locals::merge(block, version)
     } else {
         block
     };
@@ -216,6 +216,7 @@ fn apply_tail_transforms(
     if !config.rename_locals && !config.lift_locals {
         return block;
     }
+    let version = target.lua_version();
 
     // explicit self before rename so the renamer can shorten the parameter
     let mut block = if config.rename_locals {
@@ -242,14 +243,14 @@ fn apply_tail_transforms(
         };
 
         block = if config.lift_locals {
-            transforms::lift_locals::lift(block)
+            transforms::lift_locals::lift(block, version)
         } else {
             block
         };
 
         // fuse `local X\nX=Y` back into `local X=Y` after lifting
         block = if config.rename_locals && config.merge_locals {
-            transforms::merge_locals::merge(block)
+            transforms::merge_locals::merge(block, version)
         } else {
             block
         };
@@ -536,7 +537,7 @@ mod tests {
         let source = "\
 export local public = 129312i
 export const mask = 0xffffffffffffffffi
-export function apply<T>(value: ~nil)
+export function apply<T>(value: T)
     return identity<<T>>(value), public, mask
 end
 ";
@@ -548,7 +549,7 @@ end
         );
         assert!(result.contains("export function apply"), "{result}");
         assert!(result.contains("identity<<T>>"), "{result}");
-        assert!(result.contains(":~nil"), "{result}");
+        assert!(result.contains(":T"), "{result}");
         let reparsed = luck_parser::parse(result.clone(), luck_token::LuaVersion::Luau);
         assert!(
             reparsed.errors.is_empty(),

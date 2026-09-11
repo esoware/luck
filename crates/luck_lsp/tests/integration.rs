@@ -469,6 +469,10 @@ async fn semantic_tokens_cover_every_identifier() {
 #[tokio::test]
 async fn document_link_resolves_require_path() {
     let dir = tempfile::tempdir().expect("tempdir");
+    // Pin the project root here. Discovery walks up past the temp directory,
+    // so without a config of its own this would resolve `?.lua` against
+    // whatever `luck.json` happens to sit above the machine's temp root.
+    std::fs::write(dir.path().join("luck.json"), "{}").expect("write luck.json");
     // A neighbouring module the `require` should resolve to.
     std::fs::write(dir.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
     let main_path = dir.path().join("main.lua");

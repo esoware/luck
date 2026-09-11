@@ -95,9 +95,11 @@ pub struct FormatConfig {
     /// `"never"` (default) / `"definitions"` / `"calls"` / `"always"`.
     /// Inserts a space before `(` in function definitions, calls, or both.
     pub space_after_function_names: Option<SpaceAfterFunction>,
-    /// When true, a trailing comma in a table or call argument list forces
-    /// the surrounding group to break across multiple lines (Black/Prettier
-    /// convention). Defaults to `false` to preserve existing pack/hug behavior.
+    /// When true, a trailing comma in a table constructor forces the
+    /// surrounding group to break across multiple lines (Black/Prettier
+    /// convention). Call argument lists have no trailing comma to read - no
+    /// dialect's grammar allows one. Defaults to `false` to preserve
+    /// existing pack/hug behavior.
     pub magic_trailing_comma: Option<bool>,
 }
 

@@ -609,10 +609,6 @@ fn types_equiv(left: &Type, right: &Type, path: &str) -> Result<(), AstDiff> {
             ),
             _ => Err(type_kind_diff(left, right, path)),
         },
-        Type::Negation(a) => match right {
-            Type::Negation(b) => types_equiv(&a.type_value, &b.type_value, path),
-            _ => Err(type_kind_diff(left, right, path)),
-        },
         Type::Pack(a) => match right {
             Type::Pack(b) => punctuated_eq(&a.types, &b.types, &child(path, "pack"), types_equiv),
             _ => Err(type_kind_diff(left, right, path)),
@@ -841,7 +837,6 @@ fn type_kind(ty: &Type) -> &'static str {
         Type::Optional(_) => "Optional",
         Type::Union(_) => "Union",
         Type::Intersection(_) => "Intersection",
-        Type::Negation(_) => "Negation",
         Type::Parenthesized(_) => "Parenthesized",
         Type::Pack(_) => "Pack",
         Type::Singleton(_) => "Singleton",
