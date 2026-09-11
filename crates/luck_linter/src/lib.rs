@@ -38,15 +38,15 @@ use luck_semantic::nodes::Nodes;
 use luck_token::{LuaVersion, StdlibEnvironment};
 
 /// The lint configuration types live in `luck_core` as the single source of
-/// truth and are re-exported here so rule code and external callers keep using
-/// the `luck_linter::{LintConfig, RuleSetting}` paths.
+/// truth. This re-export gives rule code and external callers the
+/// `luck_linter::{LintConfig, RuleSetting}` paths.
 pub use luck_core::{LintConfig, RuleSetting};
 
 /// Returns the lint config's rule-override names that are not registered
-/// rules. Uses the same registered-name source as `invalid_lint_filter`,
-/// so config-file and CLI-supplied rule names are validated against the
-/// exact set the linter actually runs. The result is sorted for stable
-/// error output.
+/// rules. This reads the same registered-name source as
+/// `invalid_lint_filter`, so config-file and CLI-supplied rule names are
+/// checked against the exact set the linter runs. The result is sorted
+/// for stable error output.
 pub fn unknown_rule_names(config: &LintConfig) -> Vec<String> {
     let known = rules::registered_rule_names();
     let mut unknown: Vec<String> = config
@@ -93,8 +93,8 @@ fn lint_inner(
 }
 
 /// Lint an ALREADY-PARSED document. Long-lived hosts (the LSP) parse once
-/// per edit and cache the result: re-parsing inside the linter doubled
-/// (sometimes tripled) the per-keystroke parse cost.
+/// per edit and cache the result, so re-parsing inside the linter would
+/// double or triple the per-keystroke parse cost.
 pub fn lint_parsed(
     parse_result: &luck_parser::ParseResult,
     version: LuaVersion,
@@ -158,7 +158,7 @@ pub fn lint_parsed(
         }
         match entry {
             rules::RuleEntry::Whole(whole) => whole_rules.push((slot, *whole)),
-            rules::RuleEntry::Node(_, node) => {
+            rules::RuleEntry::Node(node) => {
                 if let Some(types) = node.node_types()
                     && !nodes.contains_any(types)
                 {
@@ -184,7 +184,7 @@ pub fn lint_parsed(
     );
 
     // Bucketed dispatch and the file-level skip must be pure
-    // optimizations: re-run every node rule against every node and
+    // optimizations, so re-run every node rule against every node and
     // require identical diagnostics. A mismatch means a rule's
     // `node_types()` is missing a type its hooks act on.
     #[cfg(debug_assertions)]
@@ -234,9 +234,9 @@ pub fn lint_parsed(
             .get(rule.name())
             .and_then(|setting| setting.severity)
             .unwrap_or(rule.default_severity());
-        // The rule's `category()` is authoritative: it both gates
-        // enablement and now stamps every diagnostic, so a per-diagnostic
-        // `category:` literal can't disagree with the rule's category.
+        // The rule's `category()` is authoritative. It gates enablement
+        // and stamps every diagnostic, so a per-diagnostic `category:`
+        // literal cannot disagree with the rule's category.
         let category = rule.category();
         for diag in &mut rule_diags {
             diag.severity = severity;
@@ -251,8 +251,8 @@ pub fn lint_parsed(
     diagnostics
 }
 
-/// Statement spans for suppression resolution: one linear pass over the
-/// node table. Suppression expects the list sorted by start offset.
+/// Statement spans for suppression resolution, in one linear pass over
+/// the node table. Suppression expects the list sorted by start offset.
 fn collect_statement_spans(nodes: &Nodes) -> Vec<(u32, u32)> {
     let mut spans: Vec<(u32, u32)> = nodes
         .iter()

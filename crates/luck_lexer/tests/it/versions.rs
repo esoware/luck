@@ -11,7 +11,6 @@ fn tilde_standalone_version_gating() {
         assert!(result.errors.is_empty(), "~ should work in {:?}", version);
         assert_eq!(result.tokens[0].kind, TokenKind::Tilde);
     }
-    // Error in all other versions
     for version in [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Luau] {
         let result = lex("~", version);
         assert!(
@@ -309,7 +308,6 @@ fn shift_operators_version_gating() {
 
 #[test]
 fn tilde_equal_works_in_all_versions() {
-    // ~= should always work, even in Lua 5.1
     for version in [
         LuaVersion::Lua51,
         LuaVersion::Lua52,
@@ -545,7 +543,7 @@ fn interp_string_no_expressions_luau() {
 
 #[test]
 fn interp_string_with_expression_luau() {
-    // `hello {` - the lexer stops at { and emits InterpBegin
+    // The lexer stops at the `{` and emits InterpBegin.
     let result = lex("`hello {", LuaVersion::Luau);
     assert!(result.errors.is_empty());
     assert_eq!(
@@ -633,7 +631,7 @@ fn unicode_escape_only_53_plus_and_luau() {
             version
         );
     }
-    // 5.2 is strict and lacks \u - error. 5.1 laxly accepts any escaped
+    // 5.2 is strict and lacks \u, so it errors. 5.1 laxly accepts any escaped
     // non-digit as that literal character, so it lexes (value "u{41}").
     let result = lex("\"\\u{41}\"", LuaVersion::Lua52);
     assert!(!result.errors.is_empty(), "\\u{{41}} should fail in Lua52");

@@ -2,20 +2,20 @@ use crate::LintConfig;
 use crate::diagnostic::{LintDiagnostic, TextEdit};
 use luck_token::LuaVersion;
 
-/// Maximum fixpoint iterations before giving up. A reasonable upper
-/// bound - if more passes are needed something is cycling and the
-/// caller should investigate rather than silently spinning.
+/// Maximum fixpoint iterations before giving up. Needing more passes
+/// than this means two rules are cycling, so the caller should
+/// investigate rather than spin.
 pub const FIXPOINT_BUDGET: usize = 10;
 
-/// Apply fixes from diagnostics to source text - a single pass.
+/// Apply fixes from diagnostics to source text in a single pass.
 ///
 /// Returns the modified source text. Only applies fixes that don't
 /// overlap; when fixes conflict, the one with the higher start byte
 /// wins (descending-sort iteration drops any later overlap).
 ///
-/// Hard invariant 8: if the edited result no longer parses, the
-/// original source is returned untouched - a broken fix must never
-/// reach the user's file.
+/// Hard invariant 8. If the edited result no longer parses, this
+/// returns the original source untouched, because a broken fix must
+/// never reach the user's file.
 ///
 /// For multi-pass / re-lint behavior, prefer `apply_fixes_fixpoint`.
 pub fn apply_fixes(source: &str, diagnostics: &[LintDiagnostic], version: LuaVersion) -> String {
@@ -66,8 +66,8 @@ fn apply_one_pass(source: &str, diagnostics: &[LintDiagnostic]) -> String {
 /// Reason a fixpoint iteration ended without converging.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FixpointError {
-    /// The iteration budget was exhausted with fixes still being
-    /// produced - likely two rules undoing each other.
+    /// The loop spent its whole budget and rules were still producing
+    /// fixes, most likely two rules undoing each other.
     BudgetExhausted { iterations: usize },
     /// Output of one round failed to re-parse. Carries the round
     /// number where parsing broke.
@@ -98,8 +98,17 @@ pub fn apply_fixes_fixpoint(
     version: LuaVersion,
     config: &LintConfig,
 ) -> Result<String, FixpointError> {
+    fixpoint_within(source, version, config, FIXPOINT_BUDGET)
+}
+
+fn fixpoint_within(
+    source: &str,
+    version: LuaVersion,
+    config: &LintConfig,
+    budget: usize,
+) -> Result<String, FixpointError> {
     let mut current = source.to_string();
-    for iteration in 0..FIXPOINT_BUDGET {
+    for iteration in 0..budget {
         let diagnostics = crate::lint(&current, version, config);
         let has_fix = diagnostics.iter().any(|d| d.fix.is_some());
         if !has_fix {
@@ -108,11 +117,11 @@ pub fn apply_fixes_fixpoint(
         let next = apply_one_pass(&current, &diagnostics);
         if next == current {
             // Edits all collided with each other and produced no
-            // change - treat as fixed point.
+            // change, so this is a fixed point.
             return Ok(current);
         }
-        // Re-parse check: catch a rule that produces ungrammatical
-        // output before the next iteration wastes work.
+        // Catch a rule that produces ungrammatical output before the
+        // next iteration wastes work on it.
         let parse = luck_parser::parse(&next, version);
         if !parse.errors.is_empty() {
             return Err(FixpointError::ReparseFailed {
@@ -127,9 +136,7 @@ pub fn apply_fixes_fixpoint(
         }
         current = next;
     }
-    Err(FixpointError::BudgetExhausted {
-        iterations: FIXPOINT_BUDGET,
-    })
+    Err(FixpointError::BudgetExhausted { iterations: budget })
 }
 
 #[cfg(test)]
@@ -179,7 +186,7 @@ mod tests {
     fn overlapping_fixes_first_wins() {
         let source = "abcdefghij";
         let diagnostics = vec![make_diagnostic(2, 6, "XX"), make_diagnostic(4, 8, "YY")];
-        // Mechanics test on non-Lua text: bypass the reparse guard.
+        // Mechanics test on non-Lua text, so bypass the reparse guard.
         let result = apply_one_pass(source, &diagnostics);
         assert_eq!(result, "abcdYYij");
     }
@@ -227,8 +234,8 @@ mod tests {
     #[test]
     fn fixpoint_chains_two_rules() {
         // redundant_nil_init drops the `= nil`, producing `local unused`,
-        // which is then caught by `unused_variable` and prefixed with
-        // `_`. After two iterations we should stabilize.
+        // which `unused_variable` then catches and prefixes with `_`.
+        // Two iterations, then stable.
         let mut config = LintConfig::default();
         config.rule_overrides.insert(
             "redundant_nil_init".to_string(),
@@ -239,20 +246,49 @@ mod tests {
         );
         let source = "local unused = nil";
         let result = apply_fixes_fixpoint(source, LuaVersion::Lua54, &config).expect("fixpoint");
-        // After dropping `= nil` we get `local unused`, and the
-        // unused_variable rule rewrites the name to `_unused`.
         assert_eq!(result, "local _unused");
     }
 
     #[test]
-    fn fixpoint_budget_exhausts_on_cycle() {
-        // Simulate a cycle by limiting iterations and using a config
-        // where no rule fires (so the loop ends immediately - proves
-        // the no-fix early exit works). True cycle detection is hard
-        // to construct without two specifically-conflicting rules; we
-        // verify the budget plumbing using a smoke test.
+    fn fixpoint_returns_source_when_no_rule_fires() {
         let config = LintConfig::default();
-        let result = apply_fixes_fixpoint("local x = 1", LuaVersion::Lua54, &config);
-        assert!(result.is_ok());
+        let source = "local x = 1\nreturn x";
+        let result = apply_fixes_fixpoint(source, LuaVersion::Lua54, &config);
+        assert_eq!(result.expect("fixpoint"), source);
+    }
+
+    #[test]
+    fn fixpoint_reports_budget_exhausted() {
+        // `local unused = nil` needs two rounds: `redundant_nil_init`
+        // drops the initializer, then `unused_variable` prefixes the
+        // name. One round leaves a fix still pending.
+        let mut config = LintConfig::default();
+        config.rule_overrides.insert(
+            "redundant_nil_init".to_string(),
+            crate::RuleSetting {
+                enabled: Some(true),
+                severity: None,
+            },
+        );
+        let result = fixpoint_within("local unused = nil", LuaVersion::Lua54, &config, 1);
+        assert_eq!(
+            result,
+            Err(FixpointError::BudgetExhausted { iterations: 1 }),
+            "one round should leave a pending fix"
+        );
+    }
+
+    #[test]
+    fn fixpoint_converges_within_its_budget() {
+        let mut config = LintConfig::default();
+        config.rule_overrides.insert(
+            "redundant_nil_init".to_string(),
+            crate::RuleSetting {
+                enabled: Some(true),
+                severity: None,
+            },
+        );
+        let result = fixpoint_within("local unused = nil", LuaVersion::Lua54, &config, 2);
+        assert_eq!(result.expect("fixpoint"), "local _unused");
     }
 }

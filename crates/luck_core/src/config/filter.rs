@@ -24,8 +24,8 @@ impl ProjectFilter {
         let inc = include.clone().unwrap_or(default_include);
         // Canonicalize once: callers canonicalize candidate files (on
         // Windows that yields `\\?\C:\...`), and strip_prefix against a
-        // non-canonical base silently fails - every include matched
-        // nothing and every exclude excluded nothing.
+        // non-canonical base silently fails, so every include would match
+        // nothing and every exclude would exclude nothing.
         let base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
         Ok(Self {
             base,
@@ -51,7 +51,7 @@ impl ProjectFilter {
 
 fn build_set(patterns: &[String]) -> Result<GlobSet, String> {
     // Invalid patterns are hard errors, matching the config contract
-    // everywhere else - a typo'd exclude silently processing generated
+    // everywhere else. A typo'd exclude silently processing generated
     // code is exactly the failure deny_unknown_fields exists to prevent.
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {

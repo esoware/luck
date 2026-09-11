@@ -2,8 +2,8 @@ use crate::LexError;
 use crate::cursor::Cursor;
 use luck_token::{LuaVersion, Span, TokenKind};
 
-/// Lex a number literal. Cursor should be positioned at the first digit or `.` (when followed
-/// by a digit). Handles all Lua version formats based on version flags.
+/// Lex a number literal. Cursor should be positioned at the first digit or `.`
+/// (when followed by a digit).
 pub fn lex_number(
     cursor: &mut Cursor,
     source: &str,
@@ -83,7 +83,7 @@ fn lex_hex_number(
         }
     } else if !has_integer_part {
         // Without hex floats there is no fraction to carry the value, so a
-        // digitless `0x` is malformed whatever follows it - including the `.`
+        // digitless `0x` is malformed whatever follows it, including the `.`
         // the float path would have consumed.
         return Err(crate::lex_error(
             Span::new(start as u32, cursor.position() as u32),
@@ -184,7 +184,7 @@ fn lex_decimal_number(
             Some(b'e' | b'E') => true,
             Some(b'.') => false, // `..` or `...`
             Some(b) if b.is_ascii_alphabetic() || b == b'_' => false, // method access like `1.foo`
-            _ => true,           // EOF, operators, whitespace - `1.` is a valid float
+            _ => true,           // `1.` is a valid float at EOF or before an operator
         };
         if consume_dot {
             is_float = true;
@@ -211,8 +211,8 @@ fn lex_decimal_number(
 
     // Every real Lua numeral scanner consumes `.` greedily, so a number
     // running straight into `..` is "malformed number", never a concat;
-    // `1 ..2` needs the space. (5.1's hex scanner stops at `.`, so hex
-    // is exempt there - see lex_hex_number.)
+    // `1 ..2` needs the space. 5.1's hex scanner stops at `.`, so hex is
+    // exempt there; see lex_hex_number.
     if cursor.peek() == Some(b'.') && cursor.peek_at(1) == Some(b'.') {
         return Err(crate::lex_error(
             Span::new(start as u32, (cursor.position() + 2) as u32),
@@ -256,7 +256,7 @@ fn eat_decimal_digits(cursor: &mut Cursor, allow_underscores: bool) {
 
 /// Reject underscore separators outside Luau. Luau itself strips
 /// underscores anywhere in the literal before conversion, so `0b_01`,
-/// `1__2`, and `12_` are all valid there - no placement rules.
+/// `1__2`, and `12_` are all valid there, with no placement rules.
 fn validate_underscore_placement(
     raw: &str,
     start: usize,

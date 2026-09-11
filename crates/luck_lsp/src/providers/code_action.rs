@@ -26,9 +26,9 @@ pub fn code_action(
 
     // The same lint pass that produced the published diagnostics (through
     // the opt-in gate, so we never offer fixes the user wasn't shown).
-    // Served from the backend's cache when current; recomputed only on a
-    // version mismatch - VS Code fires codeAction on nearly every cursor
-    // move, and each request used to re-run all 47 rules.
+    // Served from the backend's cache when current, recomputed only on a
+    // version mismatch. VS Code fires codeAction on nearly every cursor
+    // move, so an uncached request would re-run the whole rule set.
     let lint_config = settings.effective_lint_config();
     let all_diags: std::sync::Arc<Vec<LintDiagnostic>> = match cached_lints {
         Some(cached) => cached,
@@ -179,9 +179,8 @@ fn should_offer_fix_all(ctx: &CodeActionContext) -> bool {
     }
 }
 
-/// Workspace-wide "fix all" - used by the `luck/fixAllWorkspace`
-/// custom request. Walks every open document and returns the merged
-/// edit set.
+/// Workspace-wide "fix all", behind the `luck/fixAllWorkspace` custom
+/// request. Walks every open document and returns the merged edit set.
 #[must_use]
 pub fn fix_all_open(
     documents: &HashMap<Url, DocumentState>,

@@ -15,9 +15,9 @@ pub struct TransformConfig {
     pub simplify_parens: bool,
     pub rename_locals: bool,
     pub lift_locals: bool,
-    /// Rename globals DEFINED in this file (`function myHelper() end`,
-    /// `counter = 0`). Off by default: renamed globals live under
-    /// different `_G` keys, breaking any cross-chunk consumer,
+    /// Rename globals that this file defines (`function myHelper() end`,
+    /// `counter = 0`). Off by default, because renamed globals live under
+    /// different `_G` keys, which breaks any cross-chunk consumer,
     /// `_G["name"]` access, or loaded string that expects the original
     /// names. Enable only for fully self-contained single-chunk scripts.
     pub rename_globals: bool,

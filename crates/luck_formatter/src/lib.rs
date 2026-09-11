@@ -42,9 +42,9 @@ pub use ast_equiv::{AstDiff, blocks_equiv};
 pub use comments::Comments;
 use ir::Format;
 
-// The format-option enums live in `luck_core` so config parsing can deserialize
-// directly into them. Re-exported here so existing `luck_formatter::Xxx` paths
-// keep resolving.
+// The format-option enums live in `luck_core` so config parsing can
+// deserialize directly into them, and are re-exported here so callers can name
+// them as `luck_formatter::Xxx`.
 pub use luck_core::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, HexCase, IndentStyle, LineEndings,
     QuoteStyle, SpaceAfterFunction,
@@ -84,10 +84,9 @@ impl Default for FormatOptions {
             block_newline_gaps: BlockNewlineGaps::default(),
             sort_requires: false,
             space_after_function_names: SpaceAfterFunction::default(),
-            // Default false to preserve existing fill/hug behavior; users opt in
-            // for Black/Prettier semantics. (We pick false rather than true so
-            // that existing fixtures with trailing commas keep their packed
-            // layout - flipping a default mid-release breaks downstreams.)
+            // Off by default, so a table written with a trailing comma keeps
+            // the packed fill/hug layout. Turning it on opts into
+            // Black/Prettier semantics.
             magic_trailing_comma: false,
         }
     }
@@ -267,7 +266,7 @@ fn format_source(
         source
     };
 
-    // If we rewrote, re-parse so spans match the new buffer.
+    // A rewrite invalidates the spans, so re-parse against the new buffer.
     let parse_result = if std::ptr::eq(working_source.as_ptr(), source.as_ptr()) {
         parse_result
     } else {

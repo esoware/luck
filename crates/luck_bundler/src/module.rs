@@ -3,14 +3,15 @@
 use luck_ast::shared::Block;
 use std::ops::Range;
 
-/// Opaque identifier for a module in the dependency graph.
+/// Index into the dependency graph's `modules` list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ModuleId(pub usize);
 
 /// A resolved `require()` edge out of a module.
 #[derive(Debug, Clone)]
 pub struct Dependency {
-    /// The literal require string as written in source (`require("foo")` -> `foo`).
+    /// The decoded require string, escapes resolved, exactly what real
+    /// `require` would receive (`require("foo")` -> `foo`).
     pub require_string: String,
     /// The normalized path the require resolved to; the graph's canonical module key.
     pub resolved_path: String,
@@ -19,7 +20,6 @@ pub struct Dependency {
     pub call_span: Range<usize>,
 }
 
-/// Source file metadata: path, content, and discovered dependencies.
 #[derive(Debug, Clone)]
 pub struct ModuleInfo {
     pub path: String,

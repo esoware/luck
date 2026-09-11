@@ -118,15 +118,15 @@ fn run_chunk(
     out
 }
 
-/// Run one node rule by itself: the `Rule::check` implementation for
-/// every converted rule (used directly by per-rule tests).
+/// Run one node rule by itself. Node rules delegate `Rule::check` here,
+/// and per-rule tests call it directly.
 pub fn run_single(rule: &dyn NodeRule, ctx: &LintContext) -> Vec<LintDiagnostic> {
     run(&[rule], ctx)
         .pop()
         .expect("run returns one slot per rule")
 }
 
-/// Reference dispatch: every rule sees every node, ignoring
+/// Reference dispatch. Every rule sees every node, ignoring
 /// `node_types()` declarations and the driver's file-level skip. The
 /// driver compares this against the bucketed path in debug builds.
 #[cfg(debug_assertions)]

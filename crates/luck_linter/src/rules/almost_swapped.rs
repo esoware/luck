@@ -76,9 +76,9 @@ impl<'ast> Visitor<'ast> for SwapChecker {
             ) else {
                 continue;
             };
-            // The `a = b; b = a` pattern: the second assignment reads back
-            // the value the first just overwrote, so neither variable ends
-            // up swapped.
+            // In `a = b; b = a` the second assignment reads back the
+            // value the first overwrote, so neither variable ends up
+            // swapped.
             if target_a == value_b && target_b == value_a {
                 self.diagnostics.push(
                     LintDiagnostic::new(

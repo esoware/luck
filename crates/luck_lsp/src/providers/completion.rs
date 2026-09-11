@@ -4,8 +4,8 @@
 //! names, class names, collectgarbage options).
 //!
 //! Known limitation: a literal receiver mid-typing (`("x"):` with
-//! nothing after the colon) is not completed - the dangling colon does
-//! not parse and there is no error-tolerant recovery yet. Parsed
+//! nothing after the colon) is not completed, because the dangling colon
+//! does not parse and there is no error-tolerant recovery. Parsed
 //! literal-receiver code resolves fine everywhere else (hover, lints,
 //! semantic tokens).
 
@@ -39,7 +39,7 @@ pub fn completion(doc: &DocumentState, params: &CompletionParams) -> Option<Comp
     let mut items: Vec<CompletionItem> = Vec::new();
 
     if let Some(prefix) = prefix {
-        // After `string.` / `Enum.Material.` / `Enum.Material:` - only
+        // After `string.` / `Enum.Material.` / `Enum.Material:`, offer only
         // members of the resolved prefix. Dot access offers namespace
         // members plus non-method shape members; colon access offers
         // methods only.
@@ -74,8 +74,8 @@ pub fn completion(doc: &DocumentState, params: &CompletionParams) -> Option<Comp
         {
             // A shaped local: `local f = io.open(...); f:` offers the
             // file methods, `local g = game; g:` the DataModel ones.
-            // Lexical nearest-declaration resolution - mid-typing text
-            // has no reference to resolve span-exactly.
+            // Resolution is by lexically nearest declaration, because
+            // mid-typing text has no reference to resolve span-exactly.
             for (name, member) in &shape_members.members {
                 push(name.as_str(), member);
             }
@@ -186,7 +186,7 @@ struct MemberPrefix {
     /// Dotted path before the final separator, outermost first
     /// (`Enum.Material.` -> `["Enum", "Material"]`).
     segments: Vec<String>,
-    /// Final separator was `:` - complete methods instead of members.
+    /// Final separator was `:`, so complete methods instead of members.
     is_colon: bool,
 }
 
@@ -254,7 +254,7 @@ fn item_for_entry(name: &str, entry: &StdlibEntry) -> CompletionItem {
         StdlibEntry::Property(_) => Some("property".to_string()),
     };
 
-    // Insert just the bare name - no paren, no placeholders. The stdlib
+    // Insert the bare name, with no paren and no placeholders. The stdlib
     // model has parameter *types* but not *names*, and synthesizing fake
     // names like `xpcall(fn, fn)` is more annoying than helpful. The
     // user types `(`, signatureHelp shows the real signature.
@@ -312,8 +312,8 @@ const KEYWORD_COMPLETIONS: &[&str] = &[
 ];
 
 /// Collect every local-binding or parameter name whose declaration site
-/// precedes `offset`. This is intentionally lexical-only - we don't try
-/// to mirror the scope walk because completion is best-effort.
+/// precedes `offset`. Deliberately lexical-only: completion is
+/// best-effort, so it does not mirror the scope walk.
 #[must_use]
 fn visible_locals(block: &Block, offset: u32) -> Vec<String> {
     let mut collector = LocalCollector {

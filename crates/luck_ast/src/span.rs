@@ -1,5 +1,5 @@
 //! `span()` accessors for the node enums, kept together so span extraction
-//! is one greppable surface rather than scattered across the node modules.
+//! stays greppable in one place rather than scattered across the node modules.
 
 use luck_token::Span;
 

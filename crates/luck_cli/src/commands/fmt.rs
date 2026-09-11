@@ -472,7 +472,6 @@ mod tests {
             written.command,
             Command::Fmt(FmtArgs { write: true, .. })
         ));
-        // --check and --write are mutually exclusive.
         assert!(Cli::try_parse_from(["luck", "fmt", "--check", "--write"]).is_err());
     }
 

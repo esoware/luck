@@ -210,8 +210,8 @@ fn trailing_comment() {
 
 #[test]
 fn comment_after_only_empty_statements() {
-    // Fuzz-found: a block holding only dropped `;` statements counted as
-    // "has statements", opening a spurious line before the comment flush.
+    // A block holding only dropped `;` statements has nothing to print, so
+    // the comment flush must not open a line before it.
     assert_format(";-- a\n", "-- a\n");
     assert_format(";\n-- a\n-- b\n", "-- a\n-- b\n");
 }
@@ -367,9 +367,8 @@ fn fill_mode_packs_positional_table_entries() {
         line_width: 20,
         ..FormatOptions::default()
     };
-    // Fill mode packs as many positional values per line as fit the width
-    // (the old printer overflowed the limit here; wrapping after `6,` is the
-    // width-correct layout).
+    // Fill mode packs as many positional values per line as the width allows,
+    // so the wrap lands after `6,`.
     assert_format_with(
         "local t = {1, 2, 3, 4, 5, 6, 7, 8}\n",
         "local t = {\n\t1, 2, 3, 4, 5, 6,\n\t7, 8,\n}\n",

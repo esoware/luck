@@ -90,8 +90,8 @@ fn check_directive(
     let (word, rest) = body.split_at(word_len);
     let word_span = Span::new(word_start, word_start + word_len as u32);
     match word {
-        // Nolint arguments are Luau's own lint names, not ours; validating
-        // them here would flag every legitimate use.
+        // Nolint arguments name Luau's own lints, not luck's, so
+        // validating them here would flag every legitimate use.
         "nolint" => {}
         "native" => {
             if let Some(extra_span) = trailing_symbols_span(rest, word_span.end) {

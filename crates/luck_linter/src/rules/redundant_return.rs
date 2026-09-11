@@ -40,8 +40,9 @@ struct ReturnChecker {
 
 impl ReturnChecker {
     /// Flag a bare `return` closing `block` when `block` is a function
-    /// body (or the chunk): falling off the end returns nothing anyway.
-    /// Nested blocks are early returns - control flow, not redundancy.
+    /// body or the chunk, since falling off the end returns nothing
+    /// anyway. In a nested block the same `return` is an early return,
+    /// which is control flow rather than redundancy.
     fn check_tail(&mut self, block: &Block) {
         let Some(last) = block.last_stmt.as_deref() else {
             return;

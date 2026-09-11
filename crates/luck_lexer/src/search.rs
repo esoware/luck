@@ -1,6 +1,6 @@
-//! Byte lookup tables for batched scanning. A table marks the bytes a
-//! scan must stop at;
-//! `find_match` walks fixed-size batches so the inner loop vectorizes.
+//! Byte lookup tables for batched scanning. A table marks the bytes a scan
+//! must stop at, and `find_match` walks fixed-size batches so the inner loop
+//! vectorizes.
 
 pub const SEARCH_BATCH_SIZE: usize = 32;
 

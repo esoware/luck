@@ -46,14 +46,14 @@ pub struct FullGenerator {
     out: String,
     indent: usize,
     stmt_depth: usize,
-    /// Luau: this program exports values instead of returning a table.
-    /// The two mechanisms are mutually exclusive, so the choice is made
-    /// once per program.
+    /// Luau: this program exports values rather than returning a table. The
+    /// two mechanisms are mutually exclusive, so the generator picks one per
+    /// program.
     uses_value_exports: bool,
     vararg_fns: Vec<bool>,
     names: Vec<String>,
     /// Names the validator treats as read-only (const bindings, 5.5 for
-    /// control variables) - never used as assignment targets.
+    /// control variables). They never appear as assignment targets.
     readonly_names: Vec<String>,
     callables: Vec<String>,
     type_aliases: Vec<(String, usize)>,

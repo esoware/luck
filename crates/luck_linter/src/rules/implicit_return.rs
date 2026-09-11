@@ -10,8 +10,8 @@ use crate::rule::{LintContext, Rule};
 
 /// Detects functions where some control paths return a value while
 /// others fall off the end (an implicit `nil` return). A function with
-/// no `return` anywhere is treated as an imperative procedure and is
-/// left alone - only mixed return/fallthrough functions are flagged.
+/// no `return` anywhere is an imperative procedure and stays unflagged.
+/// Only mixed return/fallthrough functions fire.
 pub struct ImplicitReturn;
 
 impl Rule for ImplicitReturn {
@@ -19,8 +19,9 @@ impl Rule for ImplicitReturn {
         "implicit_return"
     }
     fn category(&self) -> Category {
-        // Mixed implicit/explicit returns are idiomatic Lua ("return value
-        // or nil"); neither Selene nor Luacheck flags them. Not default-on.
+        // Mixed implicit and explicit returns are idiomatic Lua ("return
+        // value or nil"), and neither Selene nor Luacheck flags them, so
+        // this rule is not default-on.
         Category::Suspicious
     }
     fn default_severity(&self) -> Severity {
@@ -47,8 +48,8 @@ struct ImplicitReturnChecker {
 impl ImplicitReturnChecker {
     fn check_function_body(&mut self, body: &FunctionBody, span: Span) {
         let summary = analyze_full_block(&body.block);
-        // If the function never returns anywhere, it's a procedure -
-        // leaving the end open is the intended pattern, not a bug.
+        // A function that never returns anywhere is a procedure, and
+        // leaving its end open is the intended pattern.
         if !summary.may_return {
             return;
         }
@@ -71,8 +72,8 @@ impl ImplicitReturnChecker {
 
 impl<'ast> Visitor<'ast> for ImplicitReturnChecker {
     fn visit_statement(&mut self, stmt: &'ast Statement) {
-        // Each function is its own control-flow unit; we scan the body
-        // independently before recursing into nested functions.
+        // Each function is its own control-flow unit, so scan the body
+        // before recursing into nested functions.
         match stmt {
             Statement::FunctionDecl(decl) => {
                 self.check_function_body(&decl.body, decl.span);
@@ -126,8 +127,8 @@ mod tests {
 
     #[test]
     fn ignores_explicit_bare_return() {
-        // A bare `return` at the end is explicit; the function "always
-        // returns" so there's no fallthrough.
+        // A bare `return` at the end is explicit, so the function always
+        // returns and never falls through.
         let diags = run("function f() return end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -146,7 +147,7 @@ mod tests {
 
     #[test]
     fn nested_functions_scanned_independently() {
-        // Outer is fine (no return anywhere); inner is the offender.
+        // The outer function never returns, so only the inner one fires.
         let source = "function f() local function g(x) if x then return 1 end end end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
@@ -169,7 +170,7 @@ mod tests {
 
     #[test]
     fn ignores_while_true_with_return() {
-        // `while true do ... return end` is always-returns; no fire.
+        // `while true do ... return end` always returns.
         let diags = run("function f() while true do return 1 end end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }

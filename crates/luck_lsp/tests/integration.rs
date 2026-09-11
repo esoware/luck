@@ -1,8 +1,8 @@
 //! End-to-end tests that drive the `LanguageServer` trait directly via the
-//! `CapturedNotifier` shim. This exercises the full backend pipeline -
-//! document-store updates, lint runs, formatter calls, position mapping -
-//! without going through a stdio transport, which would add framing overhead
-//! and obscure assertions.
+//! `CapturedNotifier` shim. These exercise the full backend pipeline:
+//! document-store updates, lint runs, formatter calls, and position
+//! mapping. They skip the stdio transport, which would add framing
+//! overhead and obscure assertions.
 
 use std::str::FromStr;
 
@@ -180,7 +180,6 @@ async fn range_formatting_preserves_out_of_range_content() {
         .expect("formatter returned no edits");
     assert!(!edits.is_empty(), "range formatter produced no edits");
     let new_text = &edits[0].new_text;
-    // The middle line must be reformatted.
     assert!(
         new_text.contains("local middle = 2"),
         "middle line must be reformatted: {new_text}"
@@ -506,8 +505,8 @@ async fn document_link_resolves_require_path() {
 
 #[tokio::test]
 async fn document_link_resolves_luau_relative_import() {
-    // Luau relative imports were mishandled by the old ad-hoc resolver
-    // (dots-to-slashes mangled `./sibling`); the real resolver handles them.
+    // Luau relative imports go through the shared resolver, so `./sibling`
+    // survives instead of being mangled by a dots-to-slashes rewrite.
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("sibling.luau"), "return {}\n").expect("write sibling.luau");
     let main_path = dir.path().join("main.luau");
@@ -537,7 +536,7 @@ async fn document_link_resolves_luau_relative_import() {
 
 #[tokio::test]
 async fn document_link_resolves_luau_alias_import() {
-    // `@alias` imports were entirely unsupported by the old resolver.
+    // `@alias` imports resolve through the `.luaurc` alias table.
     let dir = tempfile::tempdir().expect("tempdir");
     let shared = dir.path().join("shared");
     std::fs::create_dir_all(&shared).expect("mkdir shared");
@@ -960,7 +959,7 @@ async fn did_change_applies_multi_change_batch_with_shifted_ranges() {
     let uri = workspace_uri("batch.lua");
     open(&server, &uri, "local a = 1\nlocal b = 2\nlocal c = 3").await;
 
-    // A single batch whose first edit inserts a line - the second edit's
+    // A single batch whose first edit inserts a line. The second edit's
     // range is expressed against the text the first one produced, so the
     // per-change line index must be refreshed between them.
     server

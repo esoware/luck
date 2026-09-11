@@ -5,13 +5,11 @@ use crate::rule::{LintContext, Rule};
 
 /// Scan short-string literals in the raw source for backslash escapes
 /// that are not recognized by the target Lua version. The lexer also
-/// rejects these, but does so by aborting the string and discarding the
-/// AST node - so a downstream rule that only looked at the AST would
-/// never see the offending literal. Walking the source directly lets
-/// this rule produce a single focused diagnostic per bad escape with
-/// a help message tied to the target version's accepted set, which is
-/// strictly more actionable than the lexer's "invalid escape sequence"
-/// message and survives parse recovery on later statements.
+/// rejects these, but it aborts the string and discards the AST node, so
+/// a rule that only looked at the AST would never see the offending
+/// literal. Walking the source directly gives one diagnostic per bad
+/// escape with a help message tied to the target version's accepted set,
+/// and it survives parse recovery on later statements.
 pub struct BadStringEscape;
 
 impl Rule for BadStringEscape {
@@ -46,7 +44,7 @@ fn escape_length(rest: &[u8], version: LuaVersion) -> Option<usize> {
     match first {
         b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'"' | b'\'' | b'\n' => Some(1),
         b'\r' => {
-            // CRLF or bare CR - both treated as one logical newline.
+            // CRLF and bare CR are both one logical newline.
             if rest.get(1) == Some(&b'\n') {
                 Some(2)
             } else {
@@ -54,7 +52,7 @@ fn escape_length(rest: &[u8], version: LuaVersion) -> Option<usize> {
             }
         }
         b'x' if version.has_hex_escape() => {
-            // `\xHH` - two hex digits required.
+            // `\xHH` requires two hex digits.
             if rest.len() >= 3 && is_hex(rest[1]) && is_hex(rest[2]) {
                 Some(3)
             } else {
@@ -63,7 +61,7 @@ fn escape_length(rest: &[u8], version: LuaVersion) -> Option<usize> {
         }
         b'z' if version.has_whitespace_escape() => Some(1),
         b'u' if version.has_unicode_escape() => {
-            // `\u{HHHH}` - at least one hex digit between braces.
+            // `\u{HHHH}` needs at least one hex digit between braces.
             if rest.get(1) != Some(&b'{') {
                 return None;
             }
@@ -83,7 +81,7 @@ fn escape_length(rest: &[u8], version: LuaVersion) -> Option<usize> {
             Some(idx + 1)
         }
         b'0'..=b'9' => {
-            // `\ddd` - up to three decimal digits.
+            // `\ddd` takes up to three decimal digits.
             let mut idx = 1usize;
             while idx < 3 && matches!(rest.get(idx), Some(byte) if byte.is_ascii_digit()) {
                 idx += 1;
@@ -211,9 +209,9 @@ fn scan_short_string(
                 return idx + 1;
             }
             b'\n' => {
-                // Unterminated short string - bail out, the lexer will
-                // raise its own diagnostic; we don't want to chase the
-                // scanner into the next statement.
+                // Unterminated short string. The lexer raises its own
+                // diagnostic, and chasing the scanner into the next
+                // statement would only produce noise.
                 return idx;
             }
             _ => idx += 1,
@@ -227,9 +225,9 @@ mod tests {
     use super::*;
 
     fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
-        // We deliberately do not assert parse.errors.is_empty(): the
-        // lexer also rejects these escapes, but the rule operates on
-        // raw source and is responsible for surfacing its own diagnostic.
+        // No `parse.errors.is_empty()` assertion here. The lexer also
+        // rejects these escapes, but the rule reads raw source and owns
+        // its own diagnostic.
         let parse = luck_parser::parse(source, version);
         let semantic = luck_semantic::analyze(&parse.block, version);
         let nodes = luck_semantic::nodes::collect_nodes(&parse.block, &semantic.scope_tree);

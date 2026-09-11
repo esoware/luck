@@ -221,7 +221,7 @@
       "description": "Controls collapsing of simple single-statement blocks onto one line.",
       "oneOf": [
         {
-          "description": "Never collapse - always expand blocks.",
+          "description": "Always expand blocks.",
           "type": "string",
           "const": "never"
         },
@@ -352,7 +352,7 @@
           "minimum": 0
         },
         "magic_trailing_comma": {
-          "description": "When true, a trailing comma in a table constructor forces the\nsurrounding group to break across multiple lines (Black/Prettier\nconvention). Call argument lists have no trailing comma to read - no\ndialect's grammar allows one. Defaults to `false` to preserve\nexisting pack/hug behavior.",
+          "description": "When true, a trailing comma in a table constructor forces the\nsurrounding group to break across multiple lines (Black/Prettier\nconvention). This applies to table constructors only. No dialect's\ngrammar allows a trailing comma in a call argument list. Defaults to\n`false`, which leaves the normal pack and hug rules in charge.",
           "type": [
             "boolean",
             "null"
@@ -390,7 +390,7 @@
       "additionalProperties": false
     },
     "HexCase": {
-      "description": "Case of the hexadecimal digits `A`-`F` in numeric literals. The base\nprefix (`0x`, `0b`) and exponent markers (`e`, `p`) are always lowered\nregardless - uppercase `0X` has no stylistic constituency - so this only\ngoverns the digits.",
+      "description": "Case of the hexadecimal digits `A`-`F` in numeric literals. The base\nprefix (`0x`, `0b`) and exponent markers (`e`, `p`) are always lowercase,\nso this setting only governs the digits.",
       "oneOf": [
         {
           "description": "Leave the author's digit case untouched (`0xB0` and `0xb0` both stand).",
@@ -424,7 +424,7 @@
       ]
     },
     "LintConfig": {
-      "description": "Linter settings from luck.json. This is the single source of truth for\nlint configuration; `luck_linter` re-exports it and reads it directly.",
+      "description": "Linter settings from luck.json.",
       "type": "object",
       "properties": {
         "categories": {
@@ -435,7 +435,7 @@
           }
         },
         "disable_default_rules": {
-          "description": "When true, only rules explicitly enabled via `rule_overrides`\nrun - even correctness defaults are silenced.",
+          "description": "When true, only rules explicitly enabled via `rule_overrides` run.\nEven correctness defaults are silenced.",
           "type": "boolean",
           "default": false
         },
@@ -523,7 +523,7 @@
       ]
     },
     "RuleSetting": {
-      "description": "Per-rule override slot. `enabled` toggles a rule on/off; `severity`\noverrides the default severity (`\"error\"` or `\"warning\"`). Both are\noptional so the user can override one without touching the other.\n\nThis is the single lint rule-override type; `luck_linter` re-exports it.",
+      "description": "Per-rule override slot. `enabled` toggles a rule on/off; `severity`\noverrides the default severity (`\"error\"` or `\"warning\"`). Both are\noptional so the user can override one without touching the other.",
       "type": "object",
       "properties": {
         "enabled": {
@@ -595,7 +595,7 @@
           "default": true
         },
         "rename_globals": {
-          "description": "Rename globals DEFINED in this file (`function myHelper() end`,\n`counter = 0`). Off by default: renamed globals live under\ndifferent `_G` keys, breaking any cross-chunk consumer,\n`_G[\"name\"]` access, or loaded string that expects the original\nnames. Enable only for fully self-contained single-chunk scripts.",
+          "description": "Rename globals that this file defines (`function myHelper() end`,\n`counter = 0`). Off by default, because renamed globals live under\ndifferent `_G` keys, which breaks any cross-chunk consumer,\n`_G[\"name\"]` access, or loaded string that expects the original\nnames. Enable only for fully self-contained single-chunk scripts.",
           "type": "boolean",
           "default": false
         },

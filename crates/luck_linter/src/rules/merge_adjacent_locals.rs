@@ -85,8 +85,8 @@ impl MergeChecker<'_> {
             }
 
             // In `local a, b = EXPR_A, EXPR_B` both RHS evaluate before
-            // either binding exists - if b's initializer mentions a's
-            // name it would resolve to the OUTER a (or nil), changing
+            // either binding exists, so if b's initializer mentions a's
+            // name it resolves to the OUTER a (or nil), changing
             // behavior. `local a = 1 local b = a` must not merge.
             let a_name = source_for(self.source, name_span(a));
             let b_init = source_for(self.source, init_expr_span(b));
@@ -112,9 +112,9 @@ impl MergeChecker<'_> {
                 }),
             );
 
-            // Skip over the consumed pair to avoid double-firing on the
-            // overlap with the next iteration; this also keeps the fix
-            // edits non-overlapping for a single pass of apply_fixes.
+            // Skip the consumed pair so the next iteration cannot
+            // double-fire on the overlap. This also keeps the fix edits
+            // non-overlapping for a single pass of apply_fixes.
             i += 2;
         }
     }
@@ -145,9 +145,9 @@ fn is_simple_single_binding(local: &LocalAssignment) -> bool {
     exprs.len() == 1
 }
 
-/// Annotations match iff both have the same attribute presence/text.
-/// We compare textual spans via the source slice to avoid having to
-/// reconstruct the attribute structurally.
+/// Annotations match iff both have the same attribute presence and
+/// text. This compares source slices rather than reconstructing the
+/// attribute structurally.
 fn annotations_match(source: &str, a: &LocalAssignment, b: &LocalAssignment) -> bool {
     let a_attr = a
         .names
@@ -170,13 +170,11 @@ fn annotations_match(source: &str, a: &LocalAssignment, b: &LocalAssignment) -> 
     }
 }
 
-/// Build the merged replacement text. Falls back to source slicing -
-/// we never reconstruct from tokens because that risks losing original
-/// formatting niceties.
+/// Build the merged replacement text by slicing source. Reconstructing
+/// from tokens would lose the author's original formatting.
 fn build_merged(source: &str, a: &LocalAssignment, b: &LocalAssignment) -> String {
-    // If annotations differ, the caller shouldn't have invoked us; we
-    // re-check defensively and bail to a no-op merge that's identical
-    // to the original.
+    // Callers must not reach here with differing annotations. This
+    // re-check bails to a no-op merge identical to the original.
     if !annotations_match(source, a, b) {
         return format!(
             "{}\n{}",
@@ -191,8 +189,8 @@ fn build_merged(source: &str, a: &LocalAssignment, b: &LocalAssignment) -> Strin
     let a_expr = source_for(source, init_expr_span(a));
     let b_expr = source_for(source, init_expr_span(b));
 
-    // Per-name attributes: `local a <const>, b <const> = ...`. A single
-    // trailing attribute would silently drop a's.
+    // Attributes go per name, `local a <const>, b <const> = ...`. A
+    // single trailing attribute would silently drop a's.
     let attr_suffix = match a
         .names
         .iter()
@@ -206,8 +204,8 @@ fn build_merged(source: &str, a: &LocalAssignment, b: &LocalAssignment) -> Strin
     format!("local {a_name}{attr_suffix}, {b_name}{attr_suffix} = {a_expr}, {b_expr}")
 }
 
-/// Whole-word identifier scan. Conservative: a hit inside a string
-/// literal also bails, which only means a merge is skipped.
+/// Whole-word identifier scan. A hit inside a string literal also bails,
+/// which costs nothing beyond a skipped merge.
 fn references_identifier(haystack: &str, name: &str) -> bool {
     let bytes = haystack.as_bytes();
     let mut search_from = 0;

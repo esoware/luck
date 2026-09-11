@@ -92,9 +92,9 @@ fn collect_groups_in_block<'a>(
             flush_group(&mut current, out);
         }
 
-        // `;` carries no content and the formatter drops it on the same
-        // pass - treating it as a group break made sorting kick in only on
-        // the SECOND format run, breaking idempotency.
+        // `;` carries no content and the formatter drops it on the same pass.
+        // Treating it as a group break would delay sorting to the second
+        // format run, breaking idempotency.
         if matches!(stmt, Statement::EmptyStatement(_)) {
             prev_end = Some(stmt_end);
             continue;
@@ -213,11 +213,9 @@ fn walk_call<'a>(
     // No nested blocks reachable through a bare call statement at the top level.
 }
 
-/// Recognize one of:
-///   `local NAME = require(<string>)`
-///   `local NAME = require("path")`
-///   `local NAME = game:GetService("Foo")` (Roblox / Luau compatibility)
-/// Multi-name (`local a, b = ...`) and chained calls are rejected.
+/// Recognize `local NAME = require("path")` or, for Roblox and Luau,
+/// `local NAME = game:GetService("Foo")`. Multi-name bindings
+/// (`local a, b = ...`) and chained calls are rejected.
 fn sortable_line<'a>(source: &'a str, stmt: &Statement) -> Option<SortableLine<'a>> {
     let Statement::LocalAssignment(local) = stmt else {
         return None;
@@ -247,16 +245,16 @@ fn single_binding_name<'a>(source: &'a str, local: &LocalAssignment) -> Option<&
     Some(&source[name.span.start as usize..name.span.end as usize])
 }
 
-/// Recognize the require/GetService callee patterns. Anything else (including
-/// `require("a")()` chains) is rejected because it may have side effects we
-/// must not reorder.
+/// Recognize the require/GetService callee patterns. Anything else, including
+/// `require("a")()` chains, is rejected, because it may carry side effects
+/// that reordering would move.
 fn is_pure_require_call(source: &str, expr: &Expression) -> bool {
     let Expression::FunctionCall(call) = expr else {
         return false;
     };
 
-    // Chained call like `require("x")()` - outermost call's callee is itself
-    // a FunctionCall. Reject so we never reorder side effects.
+    // In a chained call like `require("x")()` the outermost callee is itself
+    // a FunctionCall. Reject it so side effects never move.
     if matches!(call.callee, Expression::FunctionCall(_)) {
         return false;
     }
@@ -296,7 +294,7 @@ fn is_single_string_arg(args: &FunctionArgs) -> bool {
 }
 
 /// Expand the statement byte range to cover the full source lines it occupies,
-/// including the trailing newline. We do not extend over a blank line.
+/// including the trailing newline. The range never crosses a blank line.
 fn line_range(source: &str, start: usize, end: usize) -> std::ops::Range<usize> {
     let bytes = source.as_bytes();
 

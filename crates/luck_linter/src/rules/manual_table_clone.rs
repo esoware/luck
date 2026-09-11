@@ -16,9 +16,9 @@ use crate::rule::{LintContext, Rule};
 /// 2. `local out = {}; for i = 1, #src do out[i] = src[i] end`
 ///
 /// The recommended replacement depends on the target's stdlib:
-/// `table.clone(src)` for Luau (and Lua 5.5+ where the entry now
-/// exists), `table.move(src, 1, #src, 1, {})` for Lua 5.3+. Lua 5.1/5.2
-/// have neither helper so the rule stays silent there.
+/// `table.clone(src)` for Luau and Lua 5.5+, `table.move(src, 1, #src,
+/// 1, {})` for Lua 5.3+. Lua 5.1/5.2 have neither helper, so the rule
+/// stays silent there.
 pub struct ManualTableClone;
 
 impl Rule for ManualTableClone {
@@ -26,7 +26,7 @@ impl Rule for ManualTableClone {
         "manual_table_clone"
     }
     fn category(&self) -> Category {
-        // Manual copy loops are slower than a single stdlib call, hence Performance.
+        // Manual copy loops are slower than a single stdlib call.
         Category::Performance
     }
     fn default_severity(&self) -> Severity {
@@ -56,13 +56,12 @@ impl Rule for ManualTableClone {
 /// `None` on versions that have neither helper available (Lua 5.1/5.2).
 fn suggestion_for_version(version: LuaVersion) -> Option<SuggestionKind> {
     match version {
-        // Luau exposes `table.clone` natively. Lua 5.5 added it too, so
-        // we treat them the same.
+        // Luau and Lua 5.5 both expose `table.clone`.
         LuaVersion::Luau | LuaVersion::Lua55 => Some(SuggestionKind::TableClone),
         // Lua 5.3 and 5.4 have `table.move` but not `table.clone`.
         LuaVersion::Lua53 | LuaVersion::Lua54 => Some(SuggestionKind::TableMove),
-        // Lua 5.1 and 5.2 lack both helpers, so stay silent - the rule must
-        // never suggest something that won't compile.
+        // Lua 5.1 and 5.2 lack both helpers, and the rule must never
+        // suggest something that will not compile.
         LuaVersion::Lua51 | LuaVersion::Lua52 => None,
     }
 }
@@ -82,8 +81,8 @@ struct CloneChecker<'src> {
 
 impl CloneChecker<'_> {
     fn scan_block(&mut self, block: &Block) {
-        // A clone shape is always a local-table-decl immediately followed by
-        // a copy-loop: two adjacent statements.
+        // A clone shape is always two adjacent statements, a local table
+        // declaration followed by a copy loop.
         for window in block.stmts.windows(2) {
             let Statement::LocalAssignment(decl) = &window[0] else {
                 continue;
@@ -125,9 +124,9 @@ impl CloneChecker<'_> {
     }
 
     fn suggestion_text(&self, _dest: &str) -> String {
-        // The diagnostic only knows the destination's name; the source
-        // table comes from the loop, which the caller has already
-        // matched. Spell out the canonical replacement form per target.
+        // The diagnostic only knows the destination's name. The source
+        // table comes from the loop the caller already matched, so spell
+        // out the canonical replacement form per target instead.
         match self.suggestion {
             SuggestionKind::TableClone => "use table.clone(src) instead".to_string(),
             SuggestionKind::TableMove => "use table.move(src, 1, #src, 1, {}) instead".to_string(),
@@ -206,7 +205,7 @@ fn is_numeric_clone(loop_node: &NumericFor, dest: &str) -> bool {
     let Some(src_name) = length_of_identifier(&loop_node.limit) else {
         return false;
     };
-    // Step (if present) must also be 1; we only model the simple case.
+    // A step, if present, must also be 1. Only the simple case is modeled.
     if let Some(step) = &loop_node.step
         && !is_number_one(step)
     {
@@ -308,17 +307,14 @@ fn length_of_identifier(expr: &Expression) -> Option<&str> {
     Some(name.as_str())
 }
 
-/// Whether the expression is the literal number `1`.
 fn is_number_one(expr: &Expression) -> bool {
     matches!(expr, Expression::Number(literal) if literal.text.parse::<f64>() == Ok(1.0))
 }
 
-/// Whether `var.prefix` is a bare reference to `name`.
 fn is_named_prefix(expr: &Expression, name: &str) -> bool {
     is_named_var(expr, name)
 }
 
-/// Whether an expression is `Var::Name(name)`.
 fn is_named_var(expr: &Expression, name: &str) -> bool {
     let Expression::Var(var) = expr else {
         return false;

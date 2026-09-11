@@ -15,8 +15,8 @@ mod full;
 
 pub use full::{FullGenerator, generate_full, generate_full_embeddable};
 
-/// xorshift64* - deterministic, no external dependency, stable across
-/// platforms. Speed and statistical quality are irrelevant here; only
+/// xorshift64*, chosen for being deterministic, dependency-free, and stable
+/// across platforms. Speed and statistical quality are irrelevant here; only
 /// reproducibility matters.
 pub struct Rng {
     state: u64,
@@ -120,8 +120,8 @@ impl Generator {
     }
 
     fn fresh_name(&mut self) -> String {
-        // Small pool of stems forces shadowing, the bug class that
-        // killed the minifier's flat analyses.
+        // A small pool of stems forces shadowing, the bug class a flat
+        // name-based analysis gets wrong.
         const STEMS: [&str; 6] = ["alpha", "beta", "gamma", "delta", "value", "item"];
         let stem = STEMS[self.rng.below(STEMS.len())];
         self.next_id += 1;
@@ -453,7 +453,7 @@ impl Generator {
     }
 }
 
-/// Convenience wrapper: one deterministic program per (seed, version).
+/// One deterministic program per (seed, version).
 pub fn generate(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
     Generator::new(seed, version).program(statement_budget)
 }

@@ -73,7 +73,6 @@ fn table_getn_only_deprecated_in_52_plus() {
                 func.deprecated.is_some(),
                 "Lua 5.1 marks table.getn deprecated in luck since it's already replaced by '#'"
             );
-            // Luck's policy: even in 5.1, prefer `#` so we suggest it.
         }
         _ => panic!("table.getn should be a function"),
     }
@@ -1370,7 +1369,7 @@ mod roblox_api {
         (parsed, semantic)
     }
 
-    /// The last statement's call - either a call statement or the last
+    /// The last statement's call, either a call statement or the last
     /// initializer of a local assignment.
     fn last_call(parsed: &luck_parser::ParseResult) -> &luck_ast::expr::FunctionCall {
         match parsed.block.stmts.last().expect("statement") {
@@ -1737,8 +1736,8 @@ mod regen {
     }
 
     /// The `[enums]` companion artifact: every enum type and item from
-    /// the dump, deprecation tags carried over. Same command, second
-    /// file - see stdlib_model.rs `splice_enums` for the loader side.
+    /// the dump, deprecation tags carried over. Same command, second file.
+    /// See `splice_enums` in stdlib_load.rs for the loader side.
     fn write_enum_file(dump: &serde_json::Value) {
         let enums = dump["Enums"].as_array().expect("Enums array");
         type EnumRow = (String, bool, Vec<(String, bool)>);

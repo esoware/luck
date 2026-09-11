@@ -10,7 +10,8 @@ use luck_token::{CompactString, LuaVersion, Token};
 use crate::expr::{has_fixed_binding, ident_name, is_env_binding, is_pure_expression};
 use crate::tokens::default_span as sp;
 
-/// Merge consecutive single-assignment locals (or globals) into multi-assignment statements.
+/// Merges consecutive single-assignment locals (or globals) into
+/// multi-assignment statements.
 pub fn merge(block: Block, version: LuaVersion) -> Block {
     LocalMerger { version }.transform_block(block)
 }
@@ -168,7 +169,8 @@ impl AstTransform for LocalMerger {
                     merged.push(self.transform_statement(stmt));
                 }
             } else if is_bare_local_stmt(&first_stmt, self.version) {
-                // merge consecutive bare locals: `local a\nlocal b` -> `local a,b`
+                // Merge consecutive bare locals: `local a\nlocal b` becomes
+                // `local a,b`.
                 let mut group: Vec<Statement> = vec![first_stmt];
                 while iter
                     .peek()
@@ -200,7 +202,7 @@ impl AstTransform for LocalMerger {
             }
         }
 
-        // fuse `local a,b` + `a,b=X,Y` -> `local a,b=X,Y`
+        // Fuse `local a,b` plus `a,b=X,Y` into `local a,b=X,Y`.
         let merged = fuse_bare_locals(merged, self.version);
 
         let last_stmt = block
@@ -237,8 +239,8 @@ fn fuse_bare_locals(stmts: Vec<Statement>, version: LuaVersion) -> Vec<Statement
                 .map(|attributed| ident_name(&attributed.name).into())
                 .collect();
             if let Some(Statement::Assignment(assign)) = iter.peek() {
-                // EVERY target must be a bare name - filtering out field
-                // targets and then comparing silently deleted `t.x = ...`
+                // EVERY target must be a bare name. Filtering field targets out
+                // and then comparing what is left silently drops `t.x = ...`
                 // from `a, t.x = 1, 2`.
                 let target_count = assign.targets.iter().count();
                 let assign_names: Vec<CompactString> = assign
@@ -285,12 +287,12 @@ fn fuse_bare_locals(stmts: Vec<Statement>, version: LuaVersion) -> Vec<Statement
 }
 
 /// Detects whether any `Var::Name` whose identifier is in `names` appears
-/// anywhere in the visited subtree. Because it rides the `Visitor` framework,
-/// the walk is exhaustive over every statement and expression variant -
-/// nested blocks, loops, closure bodies, type casts, compound assignments,
-/// and call arguments included. Both reads and assignment-target writes count,
-/// since assignment targets and compound-assignment vars are `Var::Name` nodes
-/// that `walk_statement` routes through `visit_var`.
+/// anywhere in the visited subtree. Building on `Visitor` makes the walk
+/// exhaustive over every statement and expression variant, nested blocks,
+/// loops, closure bodies, type casts, compound assignments, and call arguments
+/// included. Both reads and assignment-target writes count, since assignment
+/// targets and compound-assignment vars are `Var::Name` nodes that
+/// `walk_statement` routes through `visit_var`.
 struct ReferenceFinder<'a> {
     names: &'a FxHashSet<CompactString>,
     found: bool,
@@ -416,7 +418,6 @@ mod tests {
         }
     }
 
-    // Bug 1: a Luau type cast `... :: T` referencing a name must be detected.
     #[test]
     fn detects_reference_in_type_cast() {
         let block = parse_block("local y = x :: number\n");
@@ -424,7 +425,6 @@ mod tests {
         assert!(references_any_in_expr(&expr, &names_of(&["x"])));
     }
 
-    // The type-cast reference must actually block a real merge.
     #[test]
     fn type_cast_dependency_blocks_merge() {
         let r = apply_version(
@@ -438,7 +438,6 @@ mod tests {
         );
     }
 
-    // Bug 2: a reference buried inside a nested block / if / loop must be detected.
     #[test]
     fn detects_reference_in_nested_block() {
         let block =
@@ -447,17 +446,14 @@ mod tests {
         assert!(references_any_in_expr(&expr, &names_of(&["x"])));
     }
 
-    // Bug 3: a reference appearing as a statement-level call ARGUMENT must be detected.
     #[test]
     fn detects_reference_in_call_argument() {
-        // Statement-level call inside a closure: `foo(x)` references x as an arg.
         let block = parse_block("local y = function()\n  foo(x)\nend\n");
         let expr = first_expr_value(&block);
         assert!(
             references_any_in_expr(&expr, &names_of(&["x"])),
             "call argument reference must be detected"
         );
-        // And the callee-only case still works (regression guard).
         let callee = parse_block("local y = function()\n  x()\nend\n");
         assert!(references_any_in_expr(
             &first_expr_value(&callee),
@@ -465,7 +461,6 @@ mod tests {
         ));
     }
 
-    // Block-level statement call argument, exercised through references_any_in_block.
     #[test]
     fn detects_call_argument_at_block_level() {
         let block = parse_block("foo(x)\n");
@@ -475,7 +470,6 @@ mod tests {
         );
     }
 
-    // Bug 4: a reference inside a closure body must be detected.
     #[test]
     fn detects_reference_in_closure_body() {
         let block = parse_block("local y = function() return x + 1 end\n");
@@ -483,8 +477,8 @@ mod tests {
         assert!(references_any_in_expr(&expr, &names_of(&["x"])));
     }
 
-    // A new local declared inside a nested scope shadowing the name is NOT a
-    // reference - declaration tokens are not Var::Name nodes.
+    // A nested declaration shadowing the name is NOT a reference, because
+    // declaration tokens are not Var::Name nodes.
     #[test]
     fn declaration_of_same_name_is_not_a_reference() {
         let block = parse_block("local y = function()\n  local x = 1\n  return 0\nend\n");
@@ -495,7 +489,7 @@ mod tests {
         );
     }
 
-    // Compound-assignment target and value are both references (Luau `+=`).
+    // Both the target and the value of a Luau `+=` count as references.
     #[test]
     fn detects_reference_in_compound_assignment() {
         let target = parse_block("local y = function()\n  x += 1\nend\n");

@@ -222,9 +222,9 @@ fn run_build_watch(
         {
             dirs.insert(parent.to_path_buf());
         }
-        // A failed first build used to leave NOTHING watched: the session sat
-        // on `[watching for changes...]` forever with no way to recover. Fall
-        // back to watching the working directory.
+        // A failed first build yields no source paths. Watching the working
+        // directory instead keeps the session recoverable, rather than
+        // sitting on `[watching for changes...]` forever.
         if dirs.is_empty()
             && let Ok(cwd) = std::env::current_dir()
         {
@@ -274,8 +274,8 @@ fn run_build_watch(
     }
 }
 
-/// Only source/config changes trigger a rebuild - editor temp files and .git
-/// churn used to retrigger constantly.
+/// Only source/config changes trigger a rebuild, so editor temp files and
+/// .git churn do not retrigger one.
 fn is_relevant_change(path: &Path) -> bool {
     match path.extension().and_then(|ext| ext.to_str()) {
         Some("lua" | "luau" | "json") => true,

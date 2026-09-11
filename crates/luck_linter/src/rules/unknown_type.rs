@@ -54,8 +54,8 @@ impl NodeRule for UnknownType {
         if primitives.contains(&name) {
             return;
         }
-        // Roblox typeof() yields class names (`"Instance"`, `"Vector3"`),
-        // which no static list can enumerate; only case typos of true
+        // Roblox typeof() yields class names (`"Instance"`, `"Vector3"`)
+        // that no static list can enumerate, so only case typos of true
         // primitives are safe to flag there.
         let roblox_typeof =
             callee == "typeof" && ctx.semantic.environment == StdlibEnvironment::Roblox;
@@ -150,8 +150,9 @@ fn primitive_type_names(ctx: &LintContext) -> &'static [&'static str] {
     }
 }
 
-/// Quoted literal content without unescaping; long-bracket strings are
-/// skipped (their content can't hold a type name typo worth chasing).
+/// Quoted literal content without unescaping. Long-bracket strings are
+/// skipped, since their content cannot hold a type-name typo worth
+/// chasing.
 fn literal_content(raw: &str) -> Option<&str> {
     let bytes = raw.as_bytes();
     if bytes.len() < 2 || !matches!(bytes[0], b'"' | b'\'') {

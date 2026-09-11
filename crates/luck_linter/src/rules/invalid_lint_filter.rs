@@ -28,11 +28,10 @@ impl Rule for InvalidLintFilter {
         let known = crate::rules::registered_rule_names();
         let mut diagnostics = Vec::new();
 
-        // Iterate comments and re-extract each directive site, then
-        // validate names. We deliberately don't go through the
-        // `Suppression` struct here - that's parametric on statement
-        // spans, but the meta-rule only cares about the rule-name
-        // tokens, which `directive_sites` is enough for.
+        // This re-extracts directive sites instead of going through the
+        // `Suppression` struct, which is parametric on statement spans.
+        // The meta-rule only needs the rule-name tokens, and
+        // `directive_sites` covers those.
         for comment in comments {
             let text = &source[comment.span.start as usize..comment.span.end as usize];
             for site in directive_sites(text, comment.span.start) {
@@ -61,9 +60,10 @@ impl Rule for InvalidLintFilter {
     }
 }
 
-/// Minimal directive-site parser, mirroring the structure of
-/// `suppression::parse_directive` but standalone - we only need rule
-/// names and their positions, not the verb or modifier semantics.
+/// Minimal directive-site parser. It mirrors the structure of
+/// `suppression::parse_directive` but stands alone, because only the
+/// rule names and their positions matter here, not the verb or modifier
+/// semantics.
 struct Site {
     rule: String,
     name_span: Span,
@@ -130,8 +130,8 @@ fn directive_sites(text: &str, base: u32) -> Vec<Site> {
 
 /// Return the closest match (by Levenshtein distance) from `candidates`
 /// to `needle`, but only if the distance is below a small threshold.
-/// Without the threshold a totally-different typo would surface a
-/// nonsensical "did you mean" - worse than no suggestion.
+/// Without the threshold an unrelated typo would surface a nonsensical
+/// "did you mean", which is worse than no suggestion.
 fn closest_match(needle: &str, candidates: &[&str]) -> Option<String> {
     let mut best: Option<(usize, &str)> = None;
     for &candidate in candidates {

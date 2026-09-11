@@ -1,7 +1,7 @@
 //! Attribute grammar for both dialects: Lua `<const>`/`<close>` variable
 //! attributes (5.4+) and Luau `@native`/`@[deprecated(...)]` function
-//! attributes. Both are parsed and validated at parse time, mirroring
-//! real Lua and Luau, which reject unknown attributes as syntax errors.
+//! attributes. The parser validates both as it parses them, mirroring real
+//! Lua and Luau, which reject unknown attributes as syntax errors.
 
 use luck_ast::Expression;
 use luck_ast::expr::Literal;
@@ -62,9 +62,9 @@ impl Parser<'_> {
     }
 
     /// Parse `@native function ...` (Luau attributed function declaration).
-    /// `@native` and friends change runtime codegen, so the attributes are
-    /// kept on the AST and re-emitted - dropping them changes behavior.
-    /// Covers both grammar forms:
+    /// `@native` and friends change runtime codegen, so the AST keeps the
+    /// attributes and the emitter writes them back out. Dropping them would
+    /// change behavior. Covers both grammar forms:
     /// `attribute ::= '@' NAME | '@[' parattr {',' parattr} ']'` with
     /// `parattr ::= NAME [pars]` and literal-only arguments.
     pub(crate) fn parse_function_attributes(&mut self) -> Vec<FunctionAttribute> {

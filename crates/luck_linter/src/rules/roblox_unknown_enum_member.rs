@@ -48,8 +48,8 @@ impl NodeRule for RobloxUnknownEnumMember {
             return;
         }
         let lib = ctx.semantic.stdlib();
-        // Standalone Luau and numbered Lua have no Enum global; the rule
-        // only speaks for environments that ship one.
+        // Standalone Luau and numbered Lua have no Enum global, so the
+        // rule only speaks for environments that ship one.
         if !lib.globals.contains_key("Enum") {
             return;
         }
@@ -57,8 +57,8 @@ impl NodeRule for RobloxUnknownEnumMember {
             return;
         }
         let (last, prefix) = segments.split_last().expect("path has >= 2 segments");
-        // A broken prefix is reported by the inner access node; this
-        // node only owns its final segment.
+        // The inner access node reports a broken prefix. This node owns
+        // only its final segment.
         let Some(prefix_entry) = lib.lookup_str(prefix) else {
             return;
         };

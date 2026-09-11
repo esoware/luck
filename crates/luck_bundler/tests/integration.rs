@@ -98,7 +98,7 @@ fn no_deps() {
 
 #[test]
 fn circular_dep_bundles_with_warning() {
-    // Cycles bundle now (lazy loader); a W003 warning flags the risk.
+    // The lazy loader lets a cycle bundle; a W003 warning flags the risk.
     let input_dir = fixture_dir("lua54", "errors/circular_dep");
     let entry = input_dir.join("a.lua");
     let result = luck_bundler::bundle(
@@ -159,7 +159,7 @@ fn non_literal_require() {
 
 #[test]
 fn bare_require_bundles() {
-    // Side-effect imports (`require("x")` as a statement) are legal now.
+    // Side-effect imports (`require("x")` as a statement) are legal.
     let output = run_bundle("lua54", "errors/bare_require", LuaTarget::Lua54, "main.lua")
         .expect("bare require must bundle");
     assert!(output.contains("__luck_require"), "{output}");
@@ -181,7 +181,7 @@ fn require_after_code_bundles() {
 #[test]
 fn package_loaded_manip_is_allowed_on_lua_targets() {
     // The bundle cache IS package.loaded on Lua targets, so preseeding
-    // an entry behaves exactly as in real Lua - no E006.
+    // an entry behaves exactly as in real Lua, so no E006.
     let output = run_bundle(
         "lua54",
         "errors/package_loaded_manip",
@@ -296,7 +296,7 @@ fn lua54_const_close_attrs() {
 
 #[test]
 fn luau_hot_comments_hoisted() {
-    // Hot comments only apply before any code: the entry module's
+    // Hot comments only apply before any code, so the entry module's
     // leading run must reach the very top of the bundle.
     let output =
         run_bundle("luau", "hot_comments", LuaTarget::Luau, "main.luau").expect("bundle failed");

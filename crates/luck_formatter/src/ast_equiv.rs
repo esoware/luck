@@ -1,8 +1,8 @@
 //! Structural AST equivalence used by `--verify` and `format_and_verify`.
 //!
-//! The check ignores spans, comments, and trivia - it only compares the
-//! shape and identifier text of the syntax tree. Two ASTs that print to
-//! semantically identical Lua should be considered equivalent.
+//! The check ignores spans, comments, and trivia, comparing only the shape
+//! and identifier text of the syntax tree. Two ASTs that print to
+//! semantically identical Lua compare equal.
 
 use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Literal, Var};
 use luck_ast::shared::{Block, Field, FunctionBody, Parameter, Punctuated};
@@ -38,15 +38,15 @@ fn child(path: &str, segment: &str) -> String {
     }
 }
 
-/// Top-level entry: compare two blocks structurally.
+/// Compare two blocks structurally.
 pub fn blocks_equiv(left: &Block, right: &Block) -> Result<(), AstDiff> {
     block_eq(left, right, "block")
 }
 
 fn block_eq(left: &Block, right: &Block, path: &str) -> Result<(), AstDiff> {
-    // The formatter intentionally drops `;` empty statements and inserts a
-    // disambiguating `;` before `(`-starting statements - both are
-    // semantics-neutral, so compare with EmptyStatement filtered out.
+    // The formatter drops `;` empty statements and inserts a disambiguating
+    // `;` before `(`-starting statements. Both are semantics-neutral, so
+    // compare with EmptyStatement filtered out.
     let left_stmts: Vec<&Statement> = left
         .stmts
         .iter()
@@ -58,8 +58,9 @@ fn block_eq(left: &Block, right: &Block, path: &str) -> Result<(), AstDiff> {
         .filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_)))
         .collect();
 
-    // Statements may legitimately reorder (sort_requires); we still require
-    // identical length and pointwise structural equality after the rewrite.
+    // `sort_requires` reorders statements before the formatter runs, and
+    // verification compares against that rewritten buffer, so the two sides
+    // still have to match in length and pointwise.
     if left_stmts.len() != right_stmts.len() {
         return Err(AstDiff::new(
             path,
@@ -164,7 +165,6 @@ fn stmt_eq(left: &Statement, right: &Statement, path: &str) -> Result<(), AstDif
             block_eq(&l.block, &r.block, &child(path, "GenericFor/body"))
         }
         (Statement::FunctionDecl(l), Statement::FunctionDecl(r)) => {
-            // Dotted name pieces must match
             if l.name.names.len() != r.name.names.len() {
                 return Err(AstDiff::new(path, "FunctionDecl name length differs"));
             }
@@ -565,9 +565,9 @@ fn type_annotation_eq(
 /// semantics-neutral rewrites (redundant parens, leading union/intersection
 /// separators, and `,`/`;` table-field separators).
 fn types_equiv(left: &Type, right: &Type, path: &str) -> Result<(), AstDiff> {
-    // `(T)` is equivalent to `T`: the formatter may add or drop redundant type parens, so
-    // strip them from both sides before matching, mirroring the expression
-    // paren rule in `expr_eq`.
+    // `(T)` means `T`, and the formatter may add or drop redundant type
+    // parens, so strip them from both sides before matching. This mirrors the
+    // expression paren rule in `expr_eq`.
     let left = unwrap_type_parens(left);
     let right = unwrap_type_parens(right);
     match left {
@@ -948,11 +948,8 @@ fn token_text_eq(
     if left.kind != right.kind {
         return Err(AstDiff::new(path, "token kind differs"));
     }
-    // Identifiers carry their text on the token via the source slice in
-    // separate contexts; here we conservatively require identical kind only.
-    // The full text comparison is performed via the source slice path during
-    // verify (re-parsed buffer is the formatter's output, so identifiers must
-    // match by definition if kinds match).
+    // `TokenKind::Identifier` carries the name, so the kind comparison above
+    // already compares spelling and nothing further is needed.
     Ok(())
 }
 
@@ -1168,10 +1165,6 @@ mod tests {
 
     #[test]
     fn equivalent_when_formatting_differs() {
-        // Both forms produce the same two LocalAssignment statements; the
-        // semicolon variant may also include an EmptyStatement that affects
-        // counts. We test the stricter "same whitespace" pair here so the
-        // expected invariant is unambiguous.
         let a = parse("local x = 1\nlocal y = 2");
         let b = parse("local x=1\nlocal y=2");
         assert!(blocks_equiv(&a, &b).is_ok());
@@ -1258,8 +1251,8 @@ mod tests {
 
     #[test]
     fn detects_dropped_annotation() {
-        // The data-loss bug this rewrite fixes: an annotation present on one
-        // side and absent on the other must be reported, never tolerated.
+        // An annotation on one side and not the other is data loss, so it
+        // must be reported, never tolerated.
         let a = parse_luau("local x: number = 1");
         let b = parse_luau("local x = 1");
         let err = blocks_equiv(&a, &b).expect_err("dropped annotation should diverge");

@@ -10,8 +10,8 @@ use crate::expr::{
 };
 use crate::tokens::default_span as sp;
 
-/// Evaluate compile-time constant expressions (arithmetic, string concat, boolean logic).
-/// Version-aware: Lua 5.3+ integer/float subtypes are preserved exactly.
+/// Evaluates compile-time constant expressions (arithmetic, string concat,
+/// boolean logic), preserving Lua 5.3+ integer/float subtypes exactly.
 pub fn fold(block: Block, version: LuaVersion) -> Block {
     ConstFolder { version }.transform_block(block)
 }
@@ -46,8 +46,8 @@ impl AstTransform for ConstFolder {
     }
 }
 
-/// An integer whose f64 image is exact - beyond this a float comparison
-/// against an int literal silently loses precision, so we refuse to fold.
+/// Whether the integer's f64 image is exact. Beyond this bound, comparing a
+/// float against an int literal silently loses precision, so folding stops.
 fn int_fits_f64(value: i64) -> bool {
     value.abs() <= (1i64 << 53)
 }
@@ -69,7 +69,7 @@ fn fold_numeric(l: LuaNumber, op: BinOp, r: LuaNumber, version: LuaVersion) -> O
                 }
             }
             BinOp::Pow => Some(Float((a as f64).powf(b as f64))),
-            // Integer % 0 and // 0 raise at runtime - never fold.
+            // Integer % 0 and // 0 raise at runtime, so never fold them.
             BinOp::Mod => {
                 if b != 0 {
                     Some(Int(floored_mod(a, b)))
@@ -112,8 +112,8 @@ fn floored_mod(a: i64, b: i64) -> i64 {
 }
 
 fn floored_div(a: i64, b: i64) -> Option<i64> {
-    // i64::MIN / -1 overflows; Lua wraps, but the literal form of the
-    // result can't round-trip (see make_int_expr) - skip.
+    // i64::MIN / -1 overflows. Lua wraps, but the literal form of the result
+    // cannot round-trip (see make_int_expr), so this refuses to fold.
     let quotient = a.checked_div(b)?;
     let remainder = a.wrapping_rem(b);
     if remainder != 0 && (remainder < 0) != (b < 0) {
@@ -231,8 +231,8 @@ fn try_fold_binary(
         }
     }
 
-    // Strings fold on their DECODED byte values - comparing or joining
-    // raw escaped text conflates `"\65"` with `"\\65"` and worse.
+    // Strings fold on their DECODED byte values. Comparing or joining raw
+    // escaped text conflates `"\65"` with `"\\65"` and worse.
     if let (Some(l), Some(r)) = (
         extract_string_bytes(lhs, version),
         extract_string_bytes(rhs, version),
@@ -287,9 +287,8 @@ fn try_fold_binary(
         _ => {}
     }
 
-    // Empty-string concat elision is subsumed by the decoded concat fold
-    // above. (The old special-case arms also forgot to check the operator,
-    // folding `"" < x` to `x`.)
+    // Empty-string concat needs no arm of its own: the decoded concat fold
+    // above already covers it, and for every operator rather than just `..`.
     None
 }
 
@@ -303,7 +302,8 @@ fn try_fold_unary(op: UnOp, expr: &Expression, subtypes: NumberSubtypes) -> Opti
                 };
                 return make_lua_number_expr(negated, subtypes);
             }
-            // -(-x) -> x only when x is a number literal (metamethod/coercion safe)
+            // -(-x) folds to x only for a number literal, where neither a
+            // metamethod nor a string coercion can intervene.
             if let Expression::UnaryOp(inner) = expr
                 && inner.op == UnOp::Neg
                 && matches!(inner.operand, Expression::Number(_))
@@ -318,7 +318,7 @@ fn try_fold_unary(op: UnOp, expr: &Expression, subtypes: NumberSubtypes) -> Opti
             if is_nil(expr) {
                 return Some(make_boolean_expr(true));
             }
-            // Numbers and strings are always truthy in Lua
+            // Numbers and strings are always truthy in Lua.
             if matches!(expr, Expression::Number(_) | Expression::StringLiteral(_)) {
                 return Some(make_boolean_expr(false));
             }
@@ -329,15 +329,15 @@ fn try_fold_unary(op: UnOp, expr: &Expression, subtypes: NumberSubtypes) -> Opti
     None
 }
 
-/// Emit a folded number, or None when no literal can represent the value
-/// exactly for the target's number model.
+/// Emits a folded number, or None when no literal can represent the value
+/// exactly under the target's number model.
 fn make_lua_number_expr(value: LuaNumber, subtypes: NumberSubtypes) -> Option<Expression> {
     let int_subtype = subtypes == NumberSubtypes::IntFloat;
     match value {
         LuaNumber::Int(int_value) => {
-            // `-9223372036854775808` parses as unary minus on a literal
-            // that overflows into a FLOAT in 5.3+ - the one integer with
-            // no literal spelling. Refuse to fold it.
+            // `-9223372036854775808` parses as unary minus on a literal that
+            // overflows into a FLOAT in 5.3+, making i64::MIN the one integer
+            // with no literal spelling. Refuse to fold it.
             if int_value == i64::MIN {
                 return None;
             }
@@ -360,7 +360,7 @@ fn make_lua_number_expr(value: LuaNumber, subtypes: NumberSubtypes) -> Option<Ex
             if !float_value.is_finite() {
                 return None;
             }
-            // Preserve negative zero - 1/(-0) == -inf vs 1/0 == inf
+            // Preserve negative zero: 1/(-0) is -inf where 1/0 is inf.
             if float_value == 0.0 && float_value.is_sign_negative() {
                 return Some(Expression::UnaryOp(Box::new(UnaryOp {
                     span: sp(),
@@ -477,7 +477,8 @@ mod tests {
 
     #[test]
     fn hash_string_not_folded() {
-        // #"str" must NOT be folded - escape sequences make raw length unreliable
+        // #"str" must NOT be folded: escape sequences make the raw length
+        // unreliable.
         let result = apply("local x = #\"hello\"\n");
         assert!(
             result.contains("#"),
@@ -520,7 +521,7 @@ mod tests {
 
     #[test]
     fn identity_add_zero_preserves_metamethods() {
-        // a + 0 must NOT be folded - the + operator may invoke __add metamethod
+        // a + 0 must NOT be folded: `+` may invoke an __add metamethod.
         let result = apply("return a + 0\n");
         assert!(
             result.contains("+"),
@@ -530,7 +531,8 @@ mod tests {
 
     #[test]
     fn comparison_negation_preserves_metamethods() {
-        // not (a < b) must NOT become a >= b - different metamethods (__lt vs __le)
+        // not (a < b) must NOT become a >= b: the two call different
+        // metamethods, __lt and __le.
         let result = apply("return not (a < b)\n");
         assert!(
             !result.contains(">="),
@@ -579,7 +581,7 @@ mod tests {
             parsed.errors.is_empty(),
             "minified output should re-parse: {result}"
         );
-        // Must not turn -0 into 0
+        // Must not turn -0 into 0.
         assert!(
             !result.contains("local x=0")
                 || result.contains("local x=-0")
@@ -590,7 +592,7 @@ mod tests {
 
     #[test]
     fn fold_modulo_by_zero() {
-        // Should NOT fold (would be nan)
+        // Folding would yield nan.
         let result = apply("local x = 5 % 0\n");
         assert!(
             result.contains("%"),
@@ -612,7 +614,7 @@ mod tests {
         let result = apply_v("return 1e16 % 3\n", luck_token::LuaVersion::Lua54);
         assert!(result.contains("1"), "5.4 folds 1e16%3 to 1.0: {result}");
         assert!(!result.contains('%'), "must fold: {result}");
-        // 5.1's floor formula really does produce 0.0 - mirror it.
+        // 5.1's floor formula really does produce 0.0, so mirror it.
         let result = apply_v("return 1e16 % 3\n", luck_token::LuaVersion::Lua51);
         assert!(!result.contains('%'), "5.1 folds too: {result}");
         assert!(result.contains("0"), "5.1 floor formula gives 0: {result}");

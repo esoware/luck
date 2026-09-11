@@ -26,9 +26,9 @@ pub enum PatternError {
     BadPrecision { offset: usize },
     /// `[set]` opened but never closed.
     UnterminatedSet { offset: usize },
-    /// `[]` with no characters - Lua treats this as an error in our
-    /// validator. (Lua only allows a leading `]` to mean "literal ]"
-    /// when there is at least one other character in the set.)
+    /// `[]` with no characters. Lua only allows a leading `]` to mean
+    /// "literal ]" when at least one other character follows it in the
+    /// set.
     EmptySet { offset: usize },
     /// `%X` where X is not valid in a pattern context.
     BadEscape { offset: usize, ch: char },
@@ -231,14 +231,16 @@ pub fn validate_lua_pattern(pattern: &str) -> Result<usize, PatternError> {
                         idx += 1;
                         prev_quantifiable = true;
                     }
-                    // `%n` back-references (`%0` through `%9`). They refer
-                    // to earlier captures; not quantifiable.
+                    // `%n` back-references (`%0` through `%9`) refer to
+                    // earlier captures. Lua resumes past the reference
+                    // without reading a suffix, so a following `*` is a
+                    // literal `*` and quantifies nothing.
                     b'0'..=b'9' => {
                         idx += 1;
-                        prev_quantifiable = true;
+                        prev_quantifiable = false;
                     }
-                    // `%bxy`: balanced match between literal x and y.
-                    // Consumes three more bytes total.
+                    // `%bxy` is a balanced match between literal x and y.
+                    // It consumes three more bytes total.
                     b'b' => {
                         idx += 1;
                         if idx + 1 >= bytes.len() {
@@ -247,8 +249,8 @@ pub fn validate_lua_pattern(pattern: &str) -> Result<usize, PatternError> {
                         idx += 2;
                         prev_quantifiable = false;
                     }
-                    // `%f[set]`: frontier pattern. Must be followed by a
-                    // character set.
+                    // `%f[set]` is a frontier pattern. A character set
+                    // must follow it.
                     b'f' => {
                         idx += 1;
                         if idx >= bytes.len() || bytes[idx] != b'[' {
@@ -339,9 +341,9 @@ fn scan_set(bytes: &[u8], mut idx: usize) -> Result<usize, PatternError> {
         idx += 1;
     }
 
-    // Plain `[]` (or `[^]`) - closing bracket with no preceding content -
-    // is rejected as an empty set. Lua's "leading `]` is literal" rule
-    // only applies when at least one other character follows.
+    // Plain `[]` (or `[^]`) closes with no preceding content, so it is
+    // an empty set. Lua's "leading `]` is literal" rule only applies
+    // when at least one other character follows.
     if idx < bytes.len() && bytes[idx] == b']' {
         return Err(PatternError::EmptySet { offset: start });
     }
@@ -370,8 +372,8 @@ fn utf8_char_len(bytes: &[u8], idx: usize) -> usize {
     if lead < 0x80 {
         1
     } else if lead < 0xC0 {
-        // Continuation byte - shouldn't be a leading position, but be
-        // defensive and step one byte.
+        // Continuation byte. This should never be a lead position, so
+        // step one byte and keep going.
         1
     } else if lead < 0xE0 {
         2
@@ -396,14 +398,14 @@ pub fn validate_pack_format(pattern: &str) -> Result<usize, PatternError> {
     while idx < bytes.len() {
         let here = bytes[idx];
 
-        // Whitespace is ignored between options.
+        // Lua ignores whitespace between options.
         if here == b' ' || here == b'\t' {
             idx += 1;
             continue;
         }
 
         match here {
-            // Endianness/alignment controls - no value consumed. The
+            // Endianness and alignment controls consume no value. The
             // `!` option takes an optional alignment size suffix.
             b'<' | b'>' | b'=' => {
                 idx += 1;
@@ -414,13 +416,13 @@ pub fn validate_pack_format(pattern: &str) -> Result<usize, PatternError> {
                     idx += 1;
                 }
             }
-            // Padding byte - emits one byte, consumes no value.
+            // Padding byte. Emits one byte, consumes no value.
             b'x' => {
                 idx += 1;
             }
             // Align-to-type. Reads a following type option but does not
             // itself consume a value. The next option must be a sized
-            // type letter; we only check that one follows.
+            // type letter, and only its presence is checked.
             b'X' => {
                 idx += 1;
                 while idx < bytes.len() && (bytes[idx] == b' ' || bytes[idx] == b'\t') {
@@ -429,8 +431,8 @@ pub fn validate_pack_format(pattern: &str) -> Result<usize, PatternError> {
                 if idx >= bytes.len() {
                     return Err(PatternError::TruncatedPackSize { offset: idx });
                 }
-                // Consume the argument option letter (and any digits
-                // following it) so we don't double-count it as a value.
+                // Consume the argument option letter and any digits
+                // after it so it is not double-counted as a value.
                 let arg = bytes[idx];
                 if !matches!(
                     arg,
@@ -471,7 +473,7 @@ pub fn validate_pack_format(pattern: &str) -> Result<usize, PatternError> {
                 }
                 values += 1;
             }
-            // Floats - no size suffix.
+            // Floats take no size suffix.
             b'f' | b'd' | b'n' => {
                 idx += 1;
                 values += 1;
@@ -489,7 +491,7 @@ pub fn validate_pack_format(pattern: &str) -> Result<usize, PatternError> {
                 idx += 1;
                 values += 1;
             }
-            // Fixed-length string `c<n>` - requires a size suffix.
+            // Fixed-length string `c<n>` requires a size suffix.
             b'c' => {
                 idx += 1;
                 let size_start = idx;
@@ -501,8 +503,8 @@ pub fn validate_pack_format(pattern: &str) -> Result<usize, PatternError> {
                 }
                 values += 1;
             }
-            // A digit that wasn't consumed by an option above is a stray
-            // size suffix without an option - invalid.
+            // A digit no option above consumed is a stray size suffix
+            // with no host option.
             digit if digit.is_ascii_digit() => {
                 return Err(PatternError::InvalidPackOption {
                     offset: idx,
@@ -641,6 +643,19 @@ mod tests {
     }
 
     #[test]
+    fn pattern_quantifier_after_back_reference() {
+        assert!(matches!(
+            validate_lua_pattern("(a)%1*"),
+            Err(PatternError::InvalidQuantifierTarget { offset: 5 })
+        ));
+    }
+
+    #[test]
+    fn pattern_back_reference_without_quantifier() {
+        assert_eq!(validate_lua_pattern("(a)%1").unwrap(), 1);
+    }
+
+    #[test]
     fn pack_two_int_values() {
         assert_eq!(validate_pack_format(">i4 i4").unwrap(), 2);
     }
@@ -685,7 +700,7 @@ mod tests {
 
     #[test]
     fn pack_size_on_unsized_option() {
-        // `x` is a padding byte - it does not accept a size suffix. A
+        // `x` is a padding byte and accepts no size suffix, so the
         // trailing digit is a stray size with no host option.
         assert!(matches!(
             validate_pack_format("x4"),

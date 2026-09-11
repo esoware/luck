@@ -1,4 +1,5 @@
-/// Byte range in source text. Uses u32 (not usize) for compact storage - 4 GB file limit.
+/// Byte range in source text. Uses u32 rather than usize for compact storage,
+/// which caps a file at 4 GB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Span {
     pub start: u32,

@@ -1,6 +1,6 @@
-//! Wave 1C polish features: block_newline_gaps, sort_requires,
-//! space_after_function_names, CallParentheses::Input, format ignore,
-//! magic_trailing_comma, --verify.
+//! The options that shape output beyond basic layout: block_newline_gaps,
+//! sort_requires, space_after_function_names, CallParentheses::Input, format
+//! ignore, magic_trailing_comma, and --verify.
 
 use crate::common::assert_format_with;
 use luck_formatter::{
@@ -284,11 +284,11 @@ fn legacy_luck_ignore_still_works() {
 
 #[test]
 fn magic_trailing_comma_off_keeps_packed_table() {
-    // Default magic_trailing_comma=false: trailing comma does NOT force expand.
+    // With magic_trailing_comma off, the trailing comma does not force an
+    // expand and the packed fill layout stands.
     let input = "local t = { 1, 2, 3, }\n";
     let result = format(input, LuaVersion::Lua54, &opts());
     assert!(result.errors.is_empty());
-    // The fill/flat layout is allowed when magic_trailing_comma is off.
     assert!(!result.output.contains("\n\t1,"));
 }
 
@@ -303,16 +303,14 @@ fn magic_trailing_comma_on_expands_table() {
 
 #[test]
 fn magic_trailing_comma_on_expands_call_args_via_table() {
-    // The parser doesn't accept a bare trailing comma in call args, so we
-    // exercise the call-args expansion path through a nested table literal
-    // whose trailing comma propagates expand up to the surrounding call.
+    // No dialect accepts a bare trailing comma in call args, so the call-args
+    // expansion path is reached through a nested table whose trailing comma
+    // propagates the expand up to the surrounding call group.
     let mut options = opts();
     options.magic_trailing_comma = true;
     let input = "f({ 1, 2, 3, })\n";
     let result = format(input, LuaVersion::Lua54, &options);
     assert!(result.errors.is_empty(), "parse: {:?}", result.errors);
-    // The table is forced to expand by the magic comma, which propagates the
-    // expand decision up through the parent call group.
     assert!(
         result.output.contains("\n\t1,"),
         "table inside call must expand, got:\n{}",
@@ -343,10 +341,8 @@ fn verify_passes_on_clean_format() {
 
 #[test]
 fn verify_detects_structural_divergence() {
-    // We simulate a buggy printer by hand-rolling a "formatted" string with a
-    // structural change, then calling blocks_equiv directly on the original
-    // and modified parse trees. This proves the diff machinery surfaces the
-    // first point of divergence with a useful path.
+    // Two parse trees that differ structurally stand in for a buggy printer,
+    // so the diff has to name the first point of divergence and its path.
     let original = luck_parser::parse("local x = 1\nlocal y = 2", LuaVersion::Lua54).block;
     let mutated = luck_parser::parse("local x = 1", LuaVersion::Lua54).block;
     let err = luck_formatter::blocks_equiv(&original, &mutated).expect_err("must diverge");

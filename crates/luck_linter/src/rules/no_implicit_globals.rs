@@ -2,11 +2,11 @@ use crate::diagnostic::*;
 use crate::rule::{LintContext, Rule};
 
 /// Flags every reference (read or write) to an unresolved name except
-/// for user-configured `extra_globals`. The rule deliberately FIRES on
-/// stdlib names like `print` and `tostring`: the goal is a
-/// "no-implicit-globals" style policy where dependencies are supplied
-/// through local bindings or parameters. The explicit allowlist is
-/// `extra_globals` in `LintConfig` (e.g. `vim`, `roblox`). Off by default.
+/// for user-configured `extra_globals`. The rule FIRES on stdlib names
+/// like `print` and `tostring`, enforcing a "no-implicit-globals" policy
+/// where every dependency arrives through a local binding or parameter.
+/// `extra_globals` in `LintConfig` is the allowlist (e.g. `vim`,
+/// `roblox`). Off by default.
 pub struct NoImplicitGlobals;
 
 impl Rule for NoImplicitGlobals {
@@ -14,8 +14,8 @@ impl Rule for NoImplicitGlobals {
         "no_implicit_globals"
     }
     fn category(&self) -> Category {
-        // The diagnostic crate has no `Complexity` variant. This is a
-        // codebase-wide stylistic rule, so `Style` is the right slot.
+        // The diagnostic crate has no `Complexity` variant, and this is
+        // a codebase-wide stylistic policy, so `Style` is the slot.
         Category::Style
     }
     fn default_severity(&self) -> Severity {
@@ -30,12 +30,12 @@ impl Rule for NoImplicitGlobals {
         let mut diagnostics = Vec::new();
 
         for reference in semantic.scope_tree.unresolved_references() {
-            // Discard slot: never a real read.
+            // The discard slot is never a real read.
             if reference.name == "_" {
                 continue;
             }
-            // User-configured extras are the explicit escape hatch.
-            // Stdlib globals still fire - that's the point of the rule.
+            // User-configured extras are the only escape hatch. Stdlib
+            // globals still fire, which is the point of the rule.
             if semantic.extra_globals.contains(reference.name.as_str()) {
                 continue;
             }
@@ -58,10 +58,11 @@ mod tests {
     use super::*;
     use luck_token::LuaVersion;
 
-    /// Run with the same `extra_globals` plumbing the driver uses: a
-    /// user-defined name is inserted into `SemanticAnalysis::extra_globals`.
-    /// The rule uses that set as its escape hatch and otherwise fires
-    /// on every unresolved reference (stdlib names included).
+    /// Run with the same `extra_globals` plumbing the driver uses, which
+    /// inserts each user-defined name into
+    /// `SemanticAnalysis::extra_globals`. That set is the rule's escape
+    /// hatch; every other unresolved reference fires, stdlib names
+    /// included.
     fn run(source: &str, extras: &[&str]) -> Vec<LintDiagnostic> {
         let config = crate::LintConfig {
             extra_globals: extras.iter().map(|name| name.to_string()).collect(),

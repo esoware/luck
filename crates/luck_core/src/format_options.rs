@@ -2,8 +2,8 @@
 //!
 //! These live here (rather than in `luck_formatter`) so that
 //! [`config::FormatConfig`](crate::config) can deserialize directly into them.
-//! `luck_formatter` re-exports every type so existing `luck_formatter::Xxx`
-//! paths keep resolving.
+//! `luck_formatter` re-exports every type, so callers can also name them as
+//! `luck_formatter::Xxx`.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -28,9 +28,8 @@ pub enum QuoteStyle {
 }
 
 /// Case of the hexadecimal digits `A`-`F` in numeric literals. The base
-/// prefix (`0x`, `0b`) and exponent markers (`e`, `p`) are always lowered
-/// regardless - uppercase `0X` has no stylistic constituency - so this only
-/// governs the digits.
+/// prefix (`0x`, `0b`) and exponent markers (`e`, `p`) are always lowercase,
+/// so this setting only governs the digits.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HexCase {
@@ -71,7 +70,7 @@ pub enum LineEndings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CollapseSimpleStatement {
-    /// Never collapse - always expand blocks.
+    /// Always expand blocks.
     Never,
     /// Collapse simple function bodies: `function() return x end`.
     FunctionOnly,

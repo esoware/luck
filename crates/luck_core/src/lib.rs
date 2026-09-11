@@ -2,11 +2,11 @@
 //!
 //! Shared types, configuration parsing, and diagnostics for the luck toolchain.
 //!
-//! ## Key Types
+//! ## Key types
 //!
-//! - [`LuaTarget`] - Build target (Lua51-Lua55, Luau), maps to parser version + bundler behavior
-//! - [`TransformConfig`] - Flags controlling which minification passes are enabled
-//! - [`Diagnostic`](diagnostics::Diagnostic) - Rich error/warning type with source spans
+//! - [`LuaTarget`]: build target (Lua51-Lua55, Luau), maps to parser version + bundler behavior
+//! - [`TransformConfig`]: flags controlling which minification passes are enabled
+//! - [`Diagnostic`](diagnostics::Diagnostic): rich error/warning type with source spans
 //!
 //! # Usage
 //!

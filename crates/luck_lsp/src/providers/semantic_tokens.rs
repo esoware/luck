@@ -1,6 +1,6 @@
-//! Semantic tokens. Emits a token for every identifier - variables,
-//! parameters, properties, methods, functions - mirroring the coloring
-//! contract of the TypeScript language server. Many themes color
+//! Semantic tokens. Emits a token for every identifier: variables,
+//! parameters, properties, methods, and functions. That mirrors the
+//! coloring contract of the TypeScript language server. Many themes color
 //! identifiers only through semantic tokens and leave the TextMate
 //! variable scopes unthemed, so a stdlib-only emission renders user
 //! code plain in those themes. Types and modifiers are chosen so the
@@ -70,7 +70,7 @@ pub fn semantic_tokens_range(doc: &DocumentState, range: &Range) -> SemanticToke
     SemanticTokensRangeResult::Tokens(encode_tokens(doc, Some((start, end))))
 }
 
-/// How the token stream uses a name at a given position - the same
+/// How the token stream uses a name at a given position. These are the
 /// signals the grammar's lookaheads key on, so semantic and TextMate
 /// classification agree at every site.
 enum ValueShape {
@@ -219,8 +219,8 @@ fn encode_tokens(doc: &DocumentState, byte_range: Option<(u32, u32)>) -> Semanti
             continue;
         }
         // Walk the whole chain back to its root so nested paths classify
-        // too (`Enum.Material.Grass`, `game:GetService`, `f:read` on a
-        // shaped local - not just `math.floor`). The final separator may
+        // too: `Enum.Material.Grass`, `game:GetService`, and `f:read` on a
+        // shaped local, not only `math.floor`. The final separator may
         // be `.` or `:`; the base chain is dots only.
         let stdlib_member = {
             let mut segments: Vec<&str> = vec![name.as_str()];

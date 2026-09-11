@@ -3,8 +3,9 @@
 //! Single-pass lexer for Lua 5.1-5.5 and Luau. Converts source text into a flat
 //! [`Token`] stream plus a separate [`Comment`] array.
 //!
-//! Version-gated: binary literals (Luau), floor division (5.3+), hex floats (5.2+),
-//! interpolated strings (Luau), and more are only recognized for their respective versions.
+//! Version-gated: binary literals (Luau), floor division (5.3+), hex floats
+//! (5.2+), and interpolated strings (Luau) are recognized only for the versions
+//! that have them.
 //!
 //! # Usage
 //!
@@ -31,7 +32,6 @@ pub struct LexResult {
     pub errors: Vec<LexError>,
 }
 
-/// A lexer error with position and message.
 pub type LexError = luck_token::SourceError;
 
 // Error construction stays out of the hot lexing loops; #[cold] keeps

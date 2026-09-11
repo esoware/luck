@@ -5,7 +5,8 @@ use luck_ast::transform::AstTransform;
 use crate::expr::is_valid_identifier;
 use crate::tokens::{default_span as sp, make_ident};
 
-/// Convert bracket indexing to dot notation and simplify table constructors.
+/// Converts bracket indexing to dot notation and simplifies table
+/// constructors.
 pub fn simplify(block: Block) -> Block {
     IndexSimplifier.transform_block(block)
 }
@@ -16,7 +17,7 @@ impl AstTransform for IndexSimplifier {
     fn transform_var(&mut self, var: Var) -> Var {
         let var = self.walk_var(var);
         match var {
-            // t["foo"] -> t.foo when "foo" is a valid identifier
+            // t["foo"] becomes t.foo when "foo" is a valid identifier.
             Var::Index(index_expr) => {
                 if let Expression::StringLiteral(ref literal) = index_expr.index
                     && let Some(s) = strip_simple_quotes(&literal.text)
@@ -44,7 +45,8 @@ impl AstTransform for IndexSimplifier {
             .into_iter()
             .map(|field| {
                 match field {
-                    // {[1]="a", [2]="b"} -> {"a", "b"} when sequential from 1
+                    // {[1]="a", [2]="b"} becomes {"a", "b"} when the keys run
+                    // sequentially from 1.
                     Field::Bracketed {
                         ref key, ref value, ..
                     } if can_use_implicit => {
@@ -66,7 +68,7 @@ impl AstTransform for IndexSimplifier {
                             field
                         }
                     }
-                    // {["foo"] = val} -> {foo = val}
+                    // {["foo"] = val} becomes {foo = val}.
                     Field::Bracketed {
                         key: Expression::StringLiteral(ref literal),
                         ref value,
@@ -139,9 +141,9 @@ fn is_sequential_from_one(fields: &[Field]) -> bool {
                 } else {
                     return false;
                 }
-                // `{[1] = f()}` truncates f() to one value; `{f()}` in
-                // final position expands every return - refuse when the
-                // LAST field's value is a call or `...`.
+                // `{[1] = f()}` truncates f() to one value, while `{f()}` in
+                // final position expands every return. Refuse when the LAST
+                // field's value is a call or `...`.
                 if position == fields.len() - 1
                     && matches!(value, Expression::FunctionCall(_) | Expression::VarArg(_))
                 {

@@ -1,7 +1,8 @@
-//! End-to-end proof of the AST-in path (`format_block`), format a programmatically
-//! built tree with no source text, then re-parse the output and require it be error-free and structurally
-//! identical to the tree we started from. This is the guarantee source-based tests can't
-//! give - there is no original text to lean on, only the AST.
+//! End-to-end coverage of the AST-in path (`format_block`). Each test formats
+//! a programmatically built tree with no source text, re-parses the output,
+//! and requires it to be error-free and structurally identical to the tree it
+//! started from. Source-based tests cannot prove this, since they always have
+//! an original text to lean on.
 
 use luck_ast::Block;
 use luck_ast::synth::{FnSig, Synth, SynthField, SynthInterpPart, SynthTypeField, TypeFieldAccess};
@@ -137,8 +138,7 @@ fn typed_local_roundtrips() {
     let block = synth.block(vec![stmt], None);
 
     let output = assert_roundtrips(&block);
-    // The annotation must survive; losing it is the data-loss bug the rewrite
-    // set out to fix.
+    // Dropping the annotation is silent data loss, so it has to survive.
     assert!(
         output.contains("value: number?"),
         "type annotation dropped: {output}"

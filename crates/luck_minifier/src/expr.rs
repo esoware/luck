@@ -4,7 +4,6 @@ use luck_ast::stmt::LocalAssignment;
 use luck_token::token::TokenKind;
 use luck_token::{BinOp, LuaVersion, NumberSubtypes, UnOp};
 
-/// Extract a compile-time boolean value from a `true`/`false` literal.
 pub fn extract_boolean(expr: &Expression) -> Option<bool> {
     match expr {
         Expression::True(_) => Some(true),
@@ -14,7 +13,6 @@ pub fn extract_boolean(expr: &Expression) -> Option<bool> {
     }
 }
 
-/// Returns true if the expression is a `nil` literal (possibly parenthesized).
 pub fn is_nil(expr: &Expression) -> bool {
     match expr {
         Expression::Nil(_) => true,
@@ -23,8 +21,9 @@ pub fn is_nil(expr: &Expression) -> bool {
     }
 }
 
-/// Returns true if the expression is composed entirely of literal values (no variable reads).
-/// Nested arithmetic on literals is still literal - metamethods cannot fire on primitives.
+/// Whether the expression is built only from literal values, with no variable
+/// reads. Nested arithmetic on literals is still literal, because metamethods
+/// cannot fire on primitives.
 fn is_literal_expression(expr: &Expression) -> bool {
     match expr {
         Expression::Number(_)
@@ -62,7 +61,8 @@ pub fn is_pure_expression(expr: &Expression, allow_var_reads: bool) -> bool {
         Expression::BinaryOp(binop) => {
             let is_logic_op = matches!(binop.op, BinOp::And | BinOp::Or);
             if is_logic_op {
-                // and/or never invoke metamethods - pure if operands are pure
+                // and/or never invoke metamethods, so they are pure whenever
+                // both operands are.
                 is_pure_expression(&binop.left, allow_var_reads)
                     && is_pure_expression(&binop.right, allow_var_reads)
             } else if allow_var_reads {
@@ -83,15 +83,16 @@ pub fn is_pure_expression(expr: &Expression, allow_var_reads: bool) -> bool {
             allow_var_reads
                 && match var {
                     Var::Name(_) => true,
-                    // Field access can raise (nil prefix) or fire __index -
+                    // Field access can raise on a nil prefix or fire __index,
                     // exactly as impure as Var::Index (hard invariant 6).
                     Var::FieldAccess(_) | Var::Index(_) => false,
                 }
         }
-        // VarArg (...) is pure: no side effects, value is fixed within a function body.
-        // Unlike variable reads, varargs can't be reassigned after function entry.
+        // `...` is pure: its value is fixed within a function body, and unlike
+        // a variable read it cannot be reassigned after function entry.
         Expression::VarArg(_) => true,
-        // Luau type casts are transparent wrappers - purity depends on the inner expression
+        // Luau type casts are transparent wrappers, so purity is the inner
+        // expression's.
         Expression::TypeCast(cast) => is_pure_expression(&cast.expr, allow_var_reads),
         // Explicit type arguments have no runtime evaluation of their own.
         Expression::TypeInstantiation(instantiation) => {
@@ -101,8 +102,8 @@ pub fn is_pure_expression(expr: &Expression, allow_var_reads: bool) -> bool {
     }
 }
 
-/// Returns true if the expression is guaranteed to be truthy at runtime.
-/// Numbers, strings, tables, and functions are always truthy in Lua.
+/// Whether the expression is guaranteed truthy at runtime. Only `nil` and
+/// `false` are falsy in Lua, so numbers, strings, tables, and functions pass.
 pub fn is_always_truthy(expr: &Expression) -> bool {
     match expr {
         Expression::Number(_)
@@ -143,14 +144,12 @@ pub fn is_always_truthy(expr: &Expression) -> bool {
     }
 }
 
-/// All Lua and Luau reserved keywords.
 pub const LUA_KEYWORDS: &[&str] = &[
     "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in",
     "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
     "continue", // Luau
 ];
 
-/// Returns true if the string is a valid Lua identifier (not a keyword).
 pub fn is_valid_identifier(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -194,8 +193,8 @@ pub fn ident_name(token: &luck_token::Token) -> &str {
     }
 }
 
-// Literal value semantics live in luck_token::literal - every crate
-// that folds or re-emits literals must share ONE decode/encode.
+// Literal value semantics live in luck_token::literal. Every crate that folds
+// or re-emits literals must share ONE decode/encode.
 pub use luck_token::literal::{LuaNumber, decode_string_literal, encode_string_literal};
 
 /// The number model a target dialect uses when folding or shortening
@@ -208,7 +207,7 @@ pub fn number_subtypes(version: LuaVersion) -> NumberSubtypes {
     }
 }
 
-/// Extract a number with subtype fidelity. Under [`NumberSubtypes::Unified`]
+/// Extracts a number with subtype fidelity. Under [`NumberSubtypes::Unified`]
 /// (5.1/5.2/Luau) every number is a Float, mirroring the single f64 type.
 pub fn extract_lua_number(expr: &Expression, subtypes: NumberSubtypes) -> Option<LuaNumber> {
     match expr {

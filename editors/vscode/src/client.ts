@@ -47,7 +47,7 @@ export class LuckClient implements vscode.Disposable {
 	}
 
 	// Lifecycle transitions run one at a time, so start/stop/restart can never
-	// Interleave and observe a half-built client.
+	// interleave and observe a half-built client.
 	private enqueue(task: () => Promise<void>): Promise<void> {
 		this.operation = this.operation.then(task, task);
 		return this.operation;
@@ -111,7 +111,7 @@ export class LuckClient implements vscode.Disposable {
 		const args = ["lsp", ...extraArgs];
 
 		// No `transport` here: vscode-languageclient appends `--stdio` to the
-		// Args when TransportKind.stdio is declared, which `luck lsp` rejects.
+		// args when TransportKind.stdio is declared, which `luck lsp` rejects.
 		// An Executable without a transport already talks over stdio pipes.
 		const serverOptions: ServerOptions = {
 			run: {

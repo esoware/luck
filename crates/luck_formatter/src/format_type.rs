@@ -125,8 +125,8 @@ fn write_function_type(f: &mut Formatter, function: &FunctionType) {
 /// N-ary union/intersection. Flat reads `A | B | C`; when the group breaks
 /// each member gets a leading `| ` (`& ` for intersections) on its own line,
 /// matching how Prettier lays out TypeScript unions. The AST's
-/// `leading_pipe`/`leading_ampersand` is intentionally normalized away - the
-/// leading operator is driven by the break decision, not by the source.
+/// `leading_pipe`/`leading_ampersand` is normalized away, because the break
+/// decision drives the leading operator, not the source.
 fn write_alternation(f: &mut Formatter, items: &[Type], operator: &'static str) {
     let group_id = f.group_id();
     group_with_id(

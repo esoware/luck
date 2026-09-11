@@ -82,8 +82,8 @@ pub enum FormatElement {
     /// Flush pending line suffixes here even without a line break.
     LineSuffixBoundary,
     /// Layout variants ordered most-flat first; the printer takes the first
-    /// variant that fits, or the last if none fit. Acts as an expansion
-    /// boundary: breaks inside variants don't force outer groups.
+    /// variant that fits, or the last if none fit. This is an expansion
+    /// boundary, so breaks inside a variant do not force outer groups.
     BestFitting(Vec<Vec<FormatElement>>),
     Tag(Tag),
 }

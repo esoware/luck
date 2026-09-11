@@ -66,8 +66,8 @@ impl<'src> DeprecatedChecker<'src, '_> {
 
     /// A live function called with an argument in a position every
     /// arity-matching signature marks deprecated (e.g. the `parent`
-    /// arg of `Instance.new`). Fires on any expression, not just
-    /// literals - passing the position at all is the problem.
+    /// arg of `Instance.new`). Fires on any expression, literal or not,
+    /// because passing the position at all is the problem.
     fn check_deprecated_params(
         &mut self,
         call: &FunctionCall,
@@ -110,7 +110,7 @@ impl<'src> DeprecatedChecker<'src, '_> {
     /// A live function called with a deprecated constant value (e.g. a
     /// dead service name in `game:GetService(...)`, or
     /// `collectgarbage("setpause")` in 5.4). Same matching discipline
-    /// as the constant-set arity check: only literal strings, only
+    /// as the constant-set arity check. Only literal strings, and only
     /// positions constrained in every signature accepting this arity.
     fn check_deprecated_constants(
         &mut self,
@@ -213,10 +213,10 @@ impl<'src> DeprecatedChecker<'src, '_> {
 }
 
 impl DeprecatedChecker<'_, '_> {
-    /// Deprecated value READS: a dotted access resolving to a
-    /// deprecated constant, property, or namespace (deprecated Roblox
-    /// enum items and types). Functions are excluded here - their use
-    /// site is the call, which `check_call` already reports.
+    /// Deprecated value READS, meaning a dotted access that resolves to
+    /// a deprecated constant, property, or namespace (deprecated Roblox
+    /// enum items and types). Functions are excluded here, since their
+    /// use site is the call, which `check_call` already reports.
     fn check_field_access(&mut self, expr: &Expression) {
         let Expression::Var(Var::FieldAccess(_)) = expr else {
             return;
@@ -233,8 +233,8 @@ impl DeprecatedChecker<'_, '_> {
         if matches!(entry, StdlibEntry::Function(_)) {
             return;
         }
-        // Only this node's own entry: a deprecated prefix is reported
-        // by the inner access node, so chains warn exactly once.
+        // Only this node's own entry. The inner access node reports a
+        // deprecated prefix, so chains warn exactly once.
         let Some(deprecation) = entry.deprecation() else {
             return;
         };
@@ -304,7 +304,7 @@ mod tests {
         let diags = crate::test_support::run_rule(&Deprecated, source, version);
         let diag = diags.into_iter().find(|d| d.fix.is_some())?;
         let Fix { description, edits } = diag.fix.unwrap();
-        // Every fix produces exactly one edit, so applying the first one in place is sufficient.
+        // Every fix produces exactly one edit, so applying the first in place covers it.
         let edit = edits.into_iter().next()?;
         let mut applied = String::with_capacity(source.len());
         applied.push_str(&source[..edit.span.start as usize]);
@@ -375,9 +375,9 @@ mod tests {
 
     #[test]
     fn ignores_method_call() {
-        // `obj:method(...)` shouldn't resolve to a stdlib path even if
-        // the method name matches a deprecated entry - we can't know
-        // what type `obj` is, so no diagnostic.
+        // `obj:method(...)` must not resolve to a stdlib path even when
+        // the method name matches a deprecated entry, because the type
+        // of `obj` is unknown.
         let diags = crate::test_support::run_rule(&Deprecated, "obj:getn()", LuaVersion::Lua54);
         assert!(diags.is_empty(), "{diags:?}");
     }

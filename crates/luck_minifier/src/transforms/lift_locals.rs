@@ -11,10 +11,11 @@ use crate::expr::{has_fixed_binding, ident_name};
 use crate::tokens::default_span as sp;
 use luck_token::CompactString;
 
-/// Lift local declarations to function scope, eliminating redundant `local` keywords.
-/// Runs post-rename: the renamer guarantees non-overlapping lifetimes for same-named
-/// bindings, but parent-child slot reuse means a child local can share a name with a
-/// parent local. We only lift when the name doesn't appear in any ancestor scope.
+/// Lifts local declarations to function scope, dropping redundant `local`
+/// keywords. Runs after rename, which guarantees non-overlapping lifetimes for
+/// same-named bindings. Parent-child slot reuse still lets a child local share
+/// a name with a parent local, so a name that appears in any ancestor scope is
+/// left alone.
 ///
 /// There is deliberately no per-lift byte-cost gate, even though a lone
 /// lift can cost a few bytes for its hoisted head. The tail fixpoint
@@ -74,7 +75,7 @@ impl AstTransform for Lifter {
     }
 }
 
-/// Walk a block and determine which locals can be lifted.
+/// Walks a block and collects the locals that can be lifted.
 /// A local is liftable if:
 /// - its name doesn't appear in any ancestor scope (avoids clobbering parent bindings)
 /// - its name is not ineligible (free in the body or captured by a closure)
@@ -135,7 +136,7 @@ fn collect_liftable(
                     liftable_ordered.push(name.clone());
                 }
                 scope_names.last_mut().unwrap().insert(name);
-                // don't recurse into function body - it gets its own lift pass
+                // The function body gets its own lift pass, so stop here.
             }
             Statement::DoBlock(do_block) => {
                 scope_names.push(FxHashSet::default());
@@ -293,9 +294,8 @@ fn is_in_parent(scope_names: &[FxHashSet<CompactString>], name: &str) -> bool {
 ///   lifting merges all same-named lifted bindings into one shared
 ///   function-scope binding.
 ///
-/// Names a closure binds internally resolve inside it and block nothing,
-/// which is what unlocks lifts the old mentioned-in-any-closure set
-/// rejected.
+/// A name a closure binds internally resolves inside that closure and blocks
+/// nothing, so merely mentioning a name in a closure does not veto its lift.
 fn collect_ineligible_names(body: &FunctionBody, version: LuaVersion) -> FxHashSet<CompactString> {
     let mut root_frame: FxHashSet<CompactString> = body
         .params
@@ -778,7 +778,7 @@ mod tests {
 
     #[test]
     fn lifts_nested_locals() {
-        let result = minify(concat!(
+        let result = apply_lift_only(concat!(
             "local function f(x)\n",
             "  local a = 1\n",
             "  if x then\n",
@@ -790,55 +790,86 @@ mod tests {
             "return f\n",
         ));
         assert!(reparses(&result), "Parse errors\nOutput: {result}");
-        // Should have fewer `local` keywords than original
+        assert!(
+            result.contains("local a,b"),
+            "both declarations should hoist to one function-head local: {result}"
+        );
+        assert!(
+            !result.contains("local b"),
+            "the nested declaration should lose its `local`: {result}"
+        );
     }
 
     #[test]
     fn does_not_lift_parent_shadowed() {
-        // After rename, if inner and outer share a name, inner must keep `local`
+        // When rename gives inner and outer the same name, the inner
+        // declaration must keep its `local`.
         let result = minify(concat!(
             "local function f()\n",
             "  local a = 1\n",
             "  do\n",
-            "    local b = 2\n", // might get same name as a after rename
+            "    local b = 2\n", // may get the same name as a after rename
             "    print(b)\n",
             "  end\n",
-            "  return a\n", // a is still needed after do-block
+            "  return a\n",
             "end\n",
             "return f\n",
         ));
         assert!(reparses(&result), "Parse errors\nOutput: {result}");
+        assert!(
+            result.contains("do local l=2"),
+            "the shadowed inner declaration must keep its `local`: {result}"
+        );
     }
 
     #[test]
     fn does_not_lift_closure_in_loop() {
-        let result = minify(concat!(
-            "local t = {}\n",
-            "for i = 1, 10 do\n",
-            "  local x = i\n",
-            "  t[i] = function() return x end\n",
+        // Lifting hoists to function scope, so the loop needs an enclosing
+        // function for there to be anywhere to hoist to.
+        let result = apply_lift_only(concat!(
+            "local function f()\n",
+            "  local t = {}\n",
+            "  for i = 1, 10 do\n",
+            "    local x = i\n",
+            "    t[i] = function() return x end\n",
+            "  end\n",
+            "  return t\n",
             "end\n",
-            "return t\n",
+            "return f\n",
         ));
         assert!(reparses(&result), "Parse errors\nOutput: {result}");
-        // x must keep its `local` to preserve per-iteration binding
         assert!(
-            result.contains("local"),
-            "closure-captured loop local must keep local: {result}"
+            result.contains("local x=i"),
+            "closure-captured loop local must keep its per-iteration binding: {result}"
+        );
+        assert!(
+            result.contains("local t t="),
+            "the uncaptured local should still hoist: {result}"
         );
     }
 
     #[test]
     fn lifts_loop_local_without_closure() {
-        let result = minify(concat!(
-            "local s = 0\n",
-            "for i = 1, 10 do\n",
-            "  local x = i * 2\n",
-            "  s = s + x\n",
+        let result = apply_lift_only(concat!(
+            "local function f()\n",
+            "  local s = 0\n",
+            "  for i = 1, 10 do\n",
+            "    local x = i * 2\n",
+            "    s = s + x\n",
+            "  end\n",
+            "  return s\n",
             "end\n",
-            "return s\n",
+            "return f\n",
         ));
         assert!(reparses(&result), "Parse errors\nOutput: {result}");
+        assert!(
+            result.contains("local s,x"),
+            "an uncaptured loop local should hoist to the function head: {result}"
+        );
+        assert!(
+            !result.contains("local x"),
+            "the loop-body declaration should lose its `local`: {result}"
+        );
     }
 
     fn apply_lift_only(source: &str) -> String {
@@ -852,8 +883,8 @@ mod tests {
     fn does_not_lift_over_free_reference() {
         // `u[k]` reads the module upvalue; the inner `local u` shadows it
         // only from its declaration point on. Hoisting `local u` to the
-        // body top would capture the earlier read (observed miscompiling
-        // roact's Config:set validation path).
+        // body top would capture the earlier read, which miscompiles
+        // roact's Config:set validation path.
         let result = apply_lift_only(concat!(
             "local u = {}\n",
             "local function f(k)\n",
@@ -898,7 +929,7 @@ mod tests {
     #[test]
     fn closure_internal_names_do_not_block_lift() {
         // The closure binds its own `x`; that must not veto lifting the
-        // unrelated do-block `x` (the old mentioned-in-any-closure set did).
+        // unrelated do-block `x`.
         let result = apply_lift_only(concat!(
             "local function f()\n",
             "  local c = function() local x = 1 return x end\n",

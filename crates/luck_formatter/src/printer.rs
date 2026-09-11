@@ -571,8 +571,7 @@ impl Printer {
 
         if self.options.use_tabs {
             self.output.print_ascii_repeat(b'\t', width);
-            // Tabs count as one column here; the printer's width model
-            // treats a tab as a single cell, matching the old printer.
+            // The width model treats a tab as a single cell.
             self.column += width;
         } else {
             let spaces = width * self.options.indent_width as usize;

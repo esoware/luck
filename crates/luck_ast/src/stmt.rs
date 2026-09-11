@@ -4,7 +4,6 @@ use crate::expr::{Expression, FunctionCall, Var};
 use crate::shared::{Block, FunctionBody, Parameter, Punctuated};
 use crate::types::{GenericTypeList, Type};
 
-/// A Lua statement node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
     Assignment(Box<Assignment>),
@@ -24,7 +23,7 @@ pub enum Statement {
     GlobalDeclaration(Box<GlobalDeclaration>),
     GlobalFunction(Box<GlobalFunction>),
     GlobalStar(Box<GlobalStar>),
-    /// Lua 5.2+: `break` as a regular statement (not just last statement)
+    /// Lua 5.2+: `break` as a regular statement, not only a last statement.
     Break(Span),
     CompoundAssignment(Box<CompoundAssignment>),
     TypeDeclaration(Box<TypeDeclaration>),
@@ -40,7 +39,6 @@ pub enum LastStatement {
     Error(Span),
 }
 
-/// Multi-assignment: `targets = values`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assignment {
     pub span: Span,
@@ -48,21 +46,18 @@ pub struct Assignment {
     pub values: Punctuated<Expression>,
 }
 
-/// A function call used as a statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCallStmt {
     pub span: Span,
     pub call: FunctionCall,
 }
 
-/// `do ... end` block statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoBlock {
     pub span: Span,
     pub block: Block,
 }
 
-/// `while condition do ... end` loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhileLoop {
     pub span: Span,
@@ -70,7 +65,6 @@ pub struct WhileLoop {
     pub block: Block,
 }
 
-/// `repeat ... until condition` loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepeatLoop {
     pub span: Span,
@@ -78,7 +72,6 @@ pub struct RepeatLoop {
     pub condition: Expression,
 }
 
-/// `if ... then ... {elseif ... then ...} [else ...] end` statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IfStatement {
     pub span: Span,
@@ -88,7 +81,6 @@ pub struct IfStatement {
     pub else_clause: Option<ElseClause>,
 }
 
-/// An `elseif condition then ...` clause within an if statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElseIfClause {
     pub span: Span,
@@ -96,14 +88,12 @@ pub struct ElseIfClause {
     pub block: Block,
 }
 
-/// An `else ...` clause within an if statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElseClause {
     pub span: Span,
     pub block: Block,
 }
 
-/// `for name = start, limit [, step] do ... end` numeric loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NumericFor {
     pub span: Span,
@@ -116,7 +106,6 @@ pub struct NumericFor {
     pub block: Block,
 }
 
-/// `for names in exprs do ... end` generic iterator loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericFor {
     pub span: Span,
@@ -146,7 +135,7 @@ pub struct FunctionAttribute {
     pub args: Option<Punctuated<Expression>>,
 }
 
-/// Global function declaration: `function name(...) ... end`.
+/// Named function declaration: `function a.b.c:m(...) ... end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionDecl {
     pub span: Span,
@@ -164,16 +153,16 @@ pub struct LocalFunction {
     pub attributes: Vec<FunctionAttribute>,
     pub name: Token,
     pub body: FunctionBody,
-    /// Luau `const function NAME funcbody` - emitted with `const` in
-    /// place of `local`.
+    /// Luau `const function NAME funcbody`. The emitter prints `const`
+    /// in place of `local`.
     pub is_const: bool,
     /// Luau: `export function NAME funcbody`.
     pub is_exported: bool,
 }
 
 /// Lua 5.4 local variable attribute: `<const>` or `<close>`. The name
-/// stays a token: the parser accepts any identifier there and diagnoses
-/// unknown attribute names downstream with the original spelling.
+/// stays a token because the parser accepts any identifier there and
+/// diagnoses unknown attribute names downstream with the original spelling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attribute {
     pub span: Span,
@@ -188,19 +177,18 @@ pub struct Attribute {
 pub struct AttributedName {
     pub name: Token,
     /// Luau: `: T` annotation. Mutually exclusive with `attrib` in
-    /// practice: attributes are Lua 5.4+, annotations Luau.
+    /// practice, since attributes are Lua 5.4+ and annotations Luau.
     pub type_annotation: Option<Type>,
     pub attrib: Option<Attribute>,
 }
 
-/// Local variable declaration: `local names [= exprs]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalAssignment {
     pub span: Span,
     pub names: Punctuated<AttributedName>,
     pub exprs: Option<Punctuated<Expression>>,
-    /// Luau `const bindinglist = explist` - emitted with `const` in
-    /// place of `local`; every name in the list is read-only.
+    /// Luau `const bindinglist = explist`. The emitter prints `const` in
+    /// place of `local`, and every name in the list is read-only.
     pub is_const: bool,
     /// Luau: `export local` or `export const`.
     pub is_exported: bool,
@@ -220,14 +208,13 @@ pub struct LabelStatement {
     pub name: Token,
 }
 
-/// `return [exprs]` statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReturnStatement {
     pub span: Span,
     pub exprs: Punctuated<Expression>,
 }
 
-/// Luau compound assignment (e.g. `x += 1`)
+/// Luau compound assignment, for example `x += 1`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompoundAssignment {
     pub span: Span,
@@ -249,13 +236,11 @@ pub struct TypeDeclaration {
     pub type_value: TypeDeclarationValue,
 }
 
-/// The right-hand side of a `type` declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeDeclarationValue {
-    /// `type Name = T`
     Alias(Type),
-    /// `type function Name funcbody` - a compile-time function evaluated
-    /// during type checking; its body is ordinary Luau.
+    /// `type function Name funcbody`, a compile-time function evaluated
+    /// during type checking. Its body is ordinary Luau.
     TypeFunction(Box<FunctionBody>),
 }
 
@@ -267,7 +252,7 @@ pub struct GlobalDeclaration {
     pub exprs: Option<Punctuated<Expression>>,
 }
 
-/// Lua 5.5 `global function`
+/// Lua 5.5 `global function`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalFunction {
     pub span: Span,
@@ -275,7 +260,7 @@ pub struct GlobalFunction {
     pub body: FunctionBody,
 }
 
-/// Lua 5.5 `global *`
+/// Lua 5.5 `global *`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalStar {
     pub span: Span,

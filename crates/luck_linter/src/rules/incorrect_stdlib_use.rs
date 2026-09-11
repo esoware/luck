@@ -55,8 +55,8 @@ impl StdlibChecker<'_, '_> {
         };
 
         // A call or `...` in tail position expands to any number of
-        // values, so the static count is a lower bound only - checks
-        // that need an exact count can't fire.
+        // values, so the static count is only a lower bound and checks
+        // needing an exact count cannot fire.
         let has_multi_value_tail = positional_args.last().is_some_and(|last| {
             matches!(last, Expression::FunctionCall(_) | Expression::VarArg(_))
         });
@@ -96,8 +96,8 @@ impl StdlibChecker<'_, '_> {
     }
 
     /// Constant-typed parameter check. Only applies to a literal string
-    /// argument at a fixed parameter position - we can't statically
-    /// resolve dynamic values. With overloads, a value passes if any
+    /// argument at a fixed parameter position, since dynamic values do
+    /// not resolve statically. With overloads, a value passes if any
     /// signature accepting this arg count allows it (or leaves the
     /// position unconstrained).
     fn check_constant_params(
@@ -128,7 +128,7 @@ impl StdlibChecker<'_, '_> {
             };
             if !allowed.iter().any(|constant| constant.value == value) {
                 // Generated sets (Roblox service and class names) run to
-                // hundreds of values; cap the rendered list.
+                // hundreds of values, so cap the rendered list.
                 const LIST_LIMIT: usize = 8;
                 let mut allowed_list = allowed
                     .iter()
@@ -171,9 +171,9 @@ pub(crate) fn string_literal_value<'src>(
     }
     match bytes[0] {
         b'"' | b'\'' => {
-            // Quoted literal. Strip the surrounding quotes; we don't
-            // attempt to unescape - `\n` etc. won't match a constant
-            // set value of `\n` either way, which is fine.
+            // Quoted literal. Strip the surrounding quotes and leave
+            // escapes alone, since `\n` would not match a constant-set
+            // value of `\n` either way.
             if bytes.len() < 2 {
                 return None;
             }
@@ -284,8 +284,8 @@ mod tests {
 
     #[test]
     fn ignores_every_valid_cframe_new_overload() {
-        // Overload arity sweep: 0 / 1 Vector3 / 2 Vector3s / 3 / 7 / 12
-        // number forms are all valid; none may false-positive.
+        // Overload arity sweep. The 0, 1 Vector3, 2 Vector3, 3, 7, and
+        // 12 number forms are all valid, so none may false-positive.
         let source = "local v = Vector3.new(1, 2, 3)\n\
                       local a = CFrame.new()\n\
                       local b = CFrame.new(v)\n\

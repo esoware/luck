@@ -54,7 +54,7 @@ fn local_close_attribute() {
 
 #[test]
 fn local_mixed_attributes_only_second() {
-    // `local a, b <const> = 1, 2` - only b has attribute
+    // In `local a, b <const> = 1, 2` only `b` carries the attribute
     let result = parse_lua54("local a, b <const> = 1, 2");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {

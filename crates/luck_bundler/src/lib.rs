@@ -3,7 +3,7 @@
 //! Dependency graph construction and single-file bundling for Lua/Luau projects.
 //!
 //! Starting from an entry file, resolves all `require()` calls via [`luck_resolver`],
-//! builds a BFS dependency graph, topologically sorts modules, and registers modules
+//! builds the dependency graph, topologically sorts modules, and registers modules
 //! with a lazy memoizing loader that mirrors the target version's own `require`
 //! semantics, rewriting require calls to it.
 //!
@@ -26,8 +26,6 @@ use luck_core::diagnostics::Diagnostic;
 use luck_core::types::LuaTarget;
 use std::path::Path;
 
-/// Output of the bundling process: merged source, warnings, file list,
-/// and the module->bundle line map for the emitted output.
 pub struct BundleResult {
     pub output: String,
     pub warnings: Vec<Diagnostic>,

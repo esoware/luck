@@ -2,7 +2,9 @@
 //!
 //! Code generation from Lua ASTs back to source text.
 //!
-//! - [`compact()`] - Minimal output, strips comments, smart separators. Used after minification.
+//! - [`compact()`] - Minimal output, drops comments, spaces only where two
+//!   adjacent pieces would otherwise merge into one token. Used after
+//!   minification.
 //!
 //! # Usage
 //!

@@ -1,7 +1,6 @@
-//! Flat table of every `Statement`, `LastStatement`, and `Expression`
-//! node, in the same pre-order the linter's shared walk used to produce.
-//! Rules iterate this once instead of re-walking the tree; each entry
-//! carries its parent and enclosing scope.
+//! Flat table of every `Statement`, `LastStatement`, and `Expression` node,
+//! in the default visitor's pre-order. Rules iterate this once instead of
+//! re-walking the tree; each entry carries its parent and enclosing scope.
 
 use luck_ast::node::{AstTypesBitset, NodeKind, NodeType};
 use luck_ast::shared::Block;

@@ -1,7 +1,7 @@
-//! Lua string/number literal semantics shared by every crate that
-//! folds, compares, or re-emits literal values. Working on raw token
-//! text instead of decoded values caused an entire class of miscompiles
-//! (UTF-8 corruption, escape-state confusion, \"5\" != \"A\").
+//! Lua string/number literal semantics shared by every crate that folds,
+//! compares, or re-emits literal values. Working on raw token text instead
+//! of decoded values miscompiles: UTF-8 corruption, escape-state confusion,
+//! and `"\65"` comparing unequal to `"A"`.
 
 use crate::LuaVersion;
 
@@ -29,7 +29,7 @@ pub fn parse_lua_number(text: &str, subtypes: NumberSubtypes) -> Option<LuaNumbe
     let lower = text.to_ascii_lowercase();
     if let Some(hex) = lower.strip_prefix("0x") {
         if hex.contains('.') || hex.contains('p') {
-            // Hex float - rare; not folded.
+            // Hex floats are rare, and never folded.
             return None;
         }
         // Lua 5.3+: hex integer literals wrap into the integer range.
@@ -50,8 +50,8 @@ pub fn parse_lua_number(text: &str, subtypes: NumberSubtypes) -> Option<LuaNumbe
 /// Decode a string literal token's raw text to its runtime byte value.
 /// Handles both quote forms with all Lua escapes and long-bracket strings
 /// (EOL normalization, leading-newline strip, no escapes). Returns None
-/// on any form this doesn't model exactly - callers must then refuse to
-/// fold. Version-dependent: 5.1 treats undefined escapes as the literal
+/// on any form this doesn't model exactly, and a caller that gets None must
+/// refuse to fold. Version-dependent: 5.1 treats undefined escapes as the literal
 /// character, and Luau's long strings do not treat a lone CR as a newline.
 pub fn decode_string_literal(raw: &str, version: LuaVersion) -> Option<Vec<u8>> {
     let bytes = raw.as_bytes();
@@ -199,7 +199,7 @@ pub fn decode_string_literal(raw: &str, version: LuaVersion) -> Option<Vec<u8>> 
 /// Encode runtime bytes back into a double-quoted literal, escaping
 /// exactly what must be escaped. Valid UTF-8 runs pass through intact;
 /// bytes that aren't valid UTF-8 (e.g. produced by `\xFF` escapes)
-/// become decimal escapes - never pushed as reinterpreted chars.
+/// become decimal escapes, never reinterpreted chars.
 pub fn encode_string_literal(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() + 2);
     out.push('"');

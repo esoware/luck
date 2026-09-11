@@ -16,11 +16,11 @@ use luck_token::{CompactString, LuaVersion};
 /// This pass works on names, not bindings, so every candidate must be
 /// position-insensitive:
 /// - the name must not be bound by ANY other binder in the file (another
-///   local, a parameter, a loop variable, a function name) - otherwise a
-///   use of the shadowing binding gets the wrong value;
-/// - the value must carry no identity (no tables, no closures - moving
-///   one into a loop mints a fresh object per iteration), capture nothing,
-///   and not be `...` (whose meaning changes across function boundaries).
+///   local, a parameter, a loop variable, a function name), or a use of the
+///   shadowing binding gets the wrong value;
+/// - the value must carry no identity (a table or closure moved into a loop
+///   mints a fresh object per iteration), capture nothing, and not be `...`,
+///   whose meaning changes across function boundaries.
 pub fn inline(mut block: Block, version: LuaVersion) -> Block {
     loop {
         let candidates = find_inline_candidates(&block, version);
@@ -37,9 +37,9 @@ struct InlineCandidate {
     expr: Expression,
 }
 
-/// Closed literal expression: literals and operators over literals.
-/// No vars, no varargs, no calls, no tables, no closures - nothing whose
-/// value or identity depends on WHERE it is evaluated.
+/// Closed literal expression: literals and operators over literals. No vars,
+/// varargs, calls, tables, or closures, nothing whose value or identity
+/// depends on WHERE it is evaluated.
 fn is_closed_literal_expr(expr: &Expression) -> bool {
     match expr {
         Expression::Number(_)
@@ -95,7 +95,7 @@ fn find_inline_candidates(
 /// Single-walk scanner behind `find_inline_candidates`: single-name
 /// literal declarations, every disqualifying binder (a parameter, loop
 /// variable, or function name that shadows a candidate would receive
-/// the candidate's value at its use sites - Lua 5.5 `global function`
+/// the candidate's value at its use sites, Lua 5.5 `global function`
 /// bodies included), and per-name reference counts.
 struct CandidateScanner {
     declarations: FxHashMap<CompactString, Expression>,
@@ -132,7 +132,7 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
                         self.shadowed.insert(name.into());
                     } else {
                         self.declared_names.insert(name.into());
-                        // Only closed literals can ever inline - skip the
+                        // Only closed literals can ever inline, so skip the
                         // clone for everything else.
                         if is_closed_literal_expr(expr) {
                             self.declarations.insert(name.into(), expr.clone());
@@ -267,8 +267,8 @@ impl AstTransform for Inliner {
             let var_name = ident_name(name);
             if let Some(candidate) = self.candidates.get(var_name) {
                 let replacement = candidate.expr.clone();
-                // Bare FunctionDef can't be a call prefix without parens:
-                // function() end() is invalid, needs (function() end)()
+                // A bare FunctionDef cannot be a call prefix: `function() end()`
+                // is invalid and has to be `(function() end)()`.
                 if matches!(replacement, Expression::FunctionDef(_)) {
                     return Expression::Parenthesized(Box::new(ParenExpression {
                         span: sp(),
@@ -408,8 +408,8 @@ mod tests {
 
     #[test]
     fn inlines_chained_single_use() {
-        // Pass 1: x is inlined into y's expr -> local y = 42 + 1; return y
-        // Pass 2: y = 42 + 1 is now pure -> inlined -> return 42 + 1
+        // Pass 1 inlines x into y's initializer, giving `local y = 42 + 1`.
+        // Pass 2 finds that closed literal and inlines y, giving `return 42 + 1`.
         let r = apply("local x = 42\nlocal y = x + 1\nreturn y\n");
         assert!(!r.contains("local"), "Both should be inlined: {r}");
     }
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn no_inline_typecast_var_read() {
-        // TypeCast is transparent - inner expression (variable read) is impure
+        // TypeCast is transparent, and the inner variable read is impure.
         let r = apply_luau("local x = foo :: Bar\nreturn x\n");
         assert!(
             r.contains("local"),
@@ -467,9 +467,8 @@ mod tests {
     fn no_inline_across_global_function_shadow() {
         // The outer `local x` has zero reads at top level; the inner
         // `global function` body declares its own `local x` with one read.
-        // The inner shadow must be recorded so the outer x is NOT inlined into
-        // the inner scope. Regression: collect_declarations used to skip the
-        // global-function body, producing `global function g()return 1 end`.
+        // The scan must record that inner shadow, or the outer value leaks
+        // into the inner scope as `global function g()return 1 end`.
         let r = apply_lua55(
             "local x = 1\nglobal function g()\n  local x = 2\n  return x\nend\nreturn g\n",
         );

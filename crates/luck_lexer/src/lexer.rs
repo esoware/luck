@@ -125,11 +125,11 @@ impl<'src> Lexer<'src> {
         (self.comments, self.errors)
     }
 
-    /// Single-jump dispatch on the lead byte; a match compiles to the
-    /// same jump table as a fn-pointer array but
-    /// keeps the small handlers inlinable. Whitespace never reaches here -
-    /// the tokenize loop consumes it before dispatching. Returns `None`
-    /// when the dispatch produced no token (comments, error recovery).
+    /// Single-jump dispatch on the lead byte. A match compiles to the same
+    /// jump table as a fn-pointer array but keeps the small handlers
+    /// inlinable. Whitespace never reaches here, because the tokenize loop
+    /// consumes it before dispatching. Returns `None` when the dispatch
+    /// produced no token (comments, error recovery).
     #[inline]
     fn dispatch_byte(&mut self, byte: u8) -> Option<Token> {
         match byte {
@@ -432,7 +432,8 @@ impl<'src> Lexer<'src> {
             b'}' => {
                 if let Some(depth) = self.interp_brace_stack.last_mut() {
                     if *depth == 0 {
-                        // Depth 0 means this `}` closes the interpolation - resume string scanning
+                        // Depth 0 means this `}` closes the interpolation, so
+                        // string scanning resumes.
                         self.interp_brace_stack.pop();
                         return self.lex_interp_continuation(start);
                     } else {
@@ -792,8 +793,8 @@ fn match_keyword(text: &str, version: LuaVersion) -> Option<TokenKind> {
 
 /// How a raw interpolated-string segment ended.
 enum InterpSegmentEnd {
-    /// `{` - an interpolation expression follows.
+    /// `{`, so an interpolation expression follows.
     OpenBrace,
-    /// `` ` `` - the string is complete.
+    /// `` ` ``, so the string is complete.
     Backtick,
 }

@@ -296,7 +296,7 @@ pub trait Visitor<'ast> {
                     }
                 }
             }
-            // typeof embeds a real expression - semantic passes must see it
+            // typeof embeds a real expression, so semantic passes must see it.
             Type::Typeof(typeof_type) => {
                 self.visit_expression(&typeof_type.expr);
             }
@@ -628,7 +628,6 @@ mod tests {
 
     #[test]
     fn visit_nested_function_call() {
-        // f(x) => callee f (1 var expr) + arg x (1 var expr) + whole call (1 call expr) = 3
         let call = FunctionCall {
             span: span(),
             callee: name_expr("f"),
@@ -649,7 +648,8 @@ mod tests {
         };
         let mut counter = ExprCounter(0);
         counter.visit_block(&block);
-        // callee "f" + arg "x" = 2 expressions (FunctionCall is a statement here, not an expression)
+        // f(x) counts callee "f" and arg "x"; the call itself is a statement here,
+        // not an expression.
         assert_eq!(counter.0, 2);
     }
 }

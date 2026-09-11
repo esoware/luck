@@ -7,15 +7,15 @@ use luck_token::TokenKind;
 use crate::diagnostic::*;
 use crate::rule::{LintContext, Rule};
 
-/// Luacheck 341: a local is declared without an initializer, then a
-/// field or index assignment is performed on it before any value is
-/// assigned to the variable itself. `local x; x.foo = 1` is a runtime
-/// error - `x` is `nil`.
+/// Luacheck 341: a local is declared without an initializer, then code
+/// assigns to a field or index on it before assigning the variable
+/// itself. `local x; x.foo = 1` is a runtime error, because `x` is
+/// `nil`.
 ///
 /// Why a custom AST pass: the scope builder records `x.foo = ...` as a
-/// *read* of `x` (it has to evaluate the prefix to do the field
-/// assignment). We need to disambiguate that read from `print(x)` -
-/// only the former is a field/index write target.
+/// *read* of `x`, since it has to evaluate the prefix to do the field
+/// assignment. Only that read is a field/index write target, so it has
+/// to be told apart from `print(x)`.
 pub struct MutatingUninitialized;
 
 impl Rule for MutatingUninitialized {
@@ -51,8 +51,8 @@ impl Rule for MutatingUninitialized {
                 continue;
             }
 
-            // First reference ANYWHERE, by source order - writes inside
-            // nested branch/loop scopes initialize too (see
+            // First reference ANYWHERE, by source order, because writes
+            // inside nested branch and loop scopes initialize too (see
             // accessing_uninitialized for the idiom this protects).
             let mut refs: Vec<_> = symbol
                 .reference_ids
@@ -69,10 +69,10 @@ impl Rule for MutatingUninitialized {
             if !collector.is_field_write_prefix(first.span.start) {
                 continue;
             }
-            // A bare-name write would have shown up as Write kind. Reads
-            // from `x.foo` (rvalue) also count as Read but live in an
-            // Expression position, not an Assignment target - those are
-            // not recorded by `field_write_prefix_positions`.
+            // A bare-name write shows up as Write kind. Reads from
+            // `x.foo` as an rvalue also count as Read, but they live in
+            // an Expression position rather than an Assignment target,
+            // so `field_write_prefix_positions` never records them.
             if !matches!(first.kind, ReferenceKind::Read) {
                 continue;
             }

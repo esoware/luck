@@ -28,7 +28,7 @@ pub fn parse_luaurc(contents: &str) -> Result<LuauRc, String> {
 }
 
 /// Loads a config file and recursively applies its `extends` chain, merging
-/// each parent base-first. Cycles are detected and errored.
+/// each parent base-first. A cycle in the chain is an error.
 pub fn load_with_extends(path: &Path) -> Result<LuckConfig, String> {
     let mut visited = HashSet::new();
     load_with_extends_inner(path, &mut visited)
@@ -41,7 +41,7 @@ fn load_with_extends_inner(
     let canonical = path
         .canonicalize()
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    // `visited` tracks the ACTIVE chain, not everything ever loaded - a
+    // `visited` tracks the ACTIVE chain, not everything ever loaded. A
     // diamond (A extends B and C, both extend D) is legal; only a path
     // back onto the current chain is a cycle. Popped before returning.
     if !visited.insert(canonical.clone()) {

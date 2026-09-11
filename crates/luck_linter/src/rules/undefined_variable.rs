@@ -22,8 +22,8 @@ impl Rule for UndefinedVariable {
         let mut diagnostics = Vec::new();
 
         // Globals defined in this file (`function f() end`, `counter = 0`)
-        // are known names for the rest of the file - without this, plain
-        // Lua script style errors on both the definition and every use.
+        // are known names for the rest of the file. Without this, plain
+        // Lua script style errors on the definition and on every use.
         let defined_in_file: std::collections::HashSet<&str> = semantic
             .scope_tree
             .unresolved_references()
@@ -44,7 +44,7 @@ impl Rule for UndefinedVariable {
             if reference.name == "_" {
                 continue;
             }
-            // Writes are skipped because setting globals is a different rule.
+            // `setting_global` owns writes to undeclared names.
             if matches!(reference.kind, luck_semantic::scope::ReferenceKind::Write) {
                 continue;
             }

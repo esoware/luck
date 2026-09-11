@@ -225,8 +225,8 @@ fn type_cast_expression() {
 
 /// `::` applies to any simpleexp, not just prefix expressions. Literals,
 /// tables, and call results must accept a cast (Luau `asexp = simpleexp
-/// ['::' Type]`). Regression test for the parser gap that also made the
-/// minifier emit unparseable `print(1::number)`.
+/// ['::' Type]`). Rejecting them here makes the minifier emit unparseable
+/// output such as `print(1::number)`.
 #[test]
 fn type_cast_on_literals_and_tables() {
     for source in [
@@ -262,11 +262,10 @@ fn type_cast_binds_tighter_than_binary_op() {
     );
 }
 
-/// Chained assertions parse left-to-right.
 #[test]
 fn type_cast_chained() {
-    // Grammar: asexp ::= simpleexp ['::' Type] - one cast per simpleexp;
-    // real Luau rejects a second `::` (wrap in parens to chain).
+    // Grammar: asexp ::= simpleexp ['::' Type], one cast per simpleexp.
+    // Real Luau rejects a second `::`; parens are needed to chain.
     let result = parse_luau("local x = v :: A :: B");
     assert!(!result.errors.is_empty(), "chained casts must error");
     let result = parse_luau("local x = (v :: A) :: B");
@@ -354,7 +353,7 @@ fn continue_in_for_loop() {
 
 #[test]
 fn continue_as_identifier() {
-    // `continue` used as a variable name - should parse as assignment
+    // `continue` used as a variable name parses as a local assignment
     let result = parse_luau("local continue = 5");
     assert_no_errors(&result);
     assert!(matches!(
@@ -468,9 +467,8 @@ fn continue_as_field_access() {
 
 #[test]
 fn nested_interpolated_strings() {
-    // Nested interpolated strings are valid Luau but not yet supported by the
-    // parser. This test documents the current behavior: parsing produces errors
-    // rather than panicking.
+    // Nested interpolated strings are valid Luau, but luck's parser rejects
+    // them. It must report errors rather than panic.
     let source = "`outer{`inner{x}`}`";
     let result = parse_luau(source);
     assert!(
@@ -756,7 +754,7 @@ fn value_exports_parse_and_enforce_module_rules() {
         );
     }
 
-    // Type-only exports retain the longstanding compatibility with returns.
+    // A type-only export still coexists with a module return.
     assert_no_errors(&parse_luau("export type T = number\nreturn 1"));
 
     // `export` remains contextual when it does not introduce a declaration.

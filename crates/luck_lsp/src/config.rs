@@ -14,7 +14,7 @@ use luck_core::editorconfig::resolved_format_config;
 use luck_formatter::FormatOptions;
 use luck_linter::LintConfig;
 
-/// Resolved per-project settings - what the LSP actually needs at runtime.
+/// The per-project settings the LSP reads at runtime.
 #[derive(Debug, Clone)]
 pub struct ProjectSettings {
     pub lua_target: LuaTarget,
@@ -63,10 +63,9 @@ fn default_search_paths() -> Vec<String> {
 impl ProjectSettings {
     /// The lint config to actually run with. Linting is opt-in: a project with
     /// no `lint` section disables all default rules so only parse errors
-    /// surface. Every lint pass - published diagnostics, code actions, and
-    /// fix-all - MUST go through this so they agree on what is enabled;
-    /// otherwise code actions would offer/apply fixes for diagnostics the user
-    /// was never shown.
+    /// surface. Published diagnostics, code actions, and fix-all MUST all go
+    /// through this so they agree on what is enabled; otherwise code actions
+    /// would offer and apply fixes for diagnostics the user was never shown.
     #[must_use]
     pub fn effective_lint_config(&self) -> LintConfig {
         if self.lint_enabled {
@@ -164,7 +163,7 @@ impl ConfigCache {
         }
     }
 
-    /// Drop every cached entry - useful when `luck.json` changes on disk.
+    /// Drop every cached entry, for when `luck.json` changes on disk.
     pub fn clear(&self) {
         if let Ok(mut by_root) = self.by_root.write() {
             by_root.clear();
@@ -184,8 +183,8 @@ fn build_settings(config: &LuckConfig, root: Option<PathBuf>) -> ProjectSettings
         format_config: config.format.clone(),
         lint_config: config.lint.clone().unwrap_or_default(),
         lint_enabled: config.lint.is_some(),
-        // A server must not die on a typo'd glob - fall back to the
-        // default filter (the CLI, by contrast, hard-errors).
+        // A server must not die on a typo'd glob, so fall back to the
+        // default filter. The CLI, by contrast, hard-errors.
         filter: luck_core::config::ProjectFilter::new(&base, &config.include, &config.exclude)
             .unwrap_or_else(|_| {
                 luck_core::config::ProjectFilter::new(&base, &None, &None)

@@ -38,7 +38,7 @@ pub struct LineMapEntry {
 ///
 /// The entry module body is wrapped in a function invoked with the
 /// chunk's varargs, so CLI args flow through unchanged and a module
-/// requiring the entry re-executes it as a fresh instance - the same
+/// requiring the entry re-executes it as a fresh instance, the same
 /// thing real Lua does when a file doubles as main chunk and module.
 ///
 /// Every generated identifier shares one prefix chosen to appear
@@ -88,8 +88,8 @@ pub fn emit_with_line_map(
         *next_line += fragment.matches('\n').count();
     };
 
-    // Luau hot comments only apply before any code: hoist the entry
-    // module's leading run above the loader so they keep their effect.
+    // Luau hot comments only apply before any code. Hoisting the entry
+    // module's leading run above the loader keeps their effect.
     if version.is_luau() {
         let entry_module = &modules[entry_id.0];
         for line in entry_module.source.lines() {
@@ -212,7 +212,7 @@ pub fn emit_with_line_map(
         // Lua caches per module NAME: one slot per unique require
         // string, in first-discovery order. Strings reaching the same
         // file share its function but keep separate cache entries, so
-        // the file executes once per name - exactly like package.loaded.
+        // the file executes once per name, exactly like package.loaded.
         let mut seen: FxHashSet<&str> = FxHashSet::default();
         let mut slots: Vec<(&str, ModuleId)> = Vec::new();
         for id in topo_order {
@@ -411,7 +411,7 @@ fn loader_text(prefix: &str, version: LuaVersion) -> String {
     }
 
     // Lua: the cache IS package.loaded when available, keyed by module
-    // name, and package.preload wins over bundled files - the same
+    // name, and package.preload wins over bundled files, giving the same
     // observable state and searcher order as real require. The
     // truthiness check makes a module that returned false reload on the
     // next require, as in every PUC version.
@@ -451,8 +451,8 @@ fn loader_text(prefix: &str, version: LuaVersion) -> String {
             p = prefix
         ));
     } else if !version.has_require_loaderdata() {
-        // 5.2/5.3: no sentinel - a load-time cycle recurses until the
-        // stack overflows and an error during load leaves the cache
+        // 5.2/5.3: no sentinel. A load-time cycle recurses until the
+        // stack overflows, and an error during load leaves the cache
         // unset so a later require retries, both exactly as in real
         // 5.2+.
         loader.push_str(&format!(
@@ -542,7 +542,7 @@ fn transform_module_body(
 
         // Luau rejects every form of `export` below the top level, and every
         // bundled module body lands inside a loader function. Type exports
-        // can simply become private aliases. Value exports become ordinary
+        // become private aliases. Value exports become ordinary
         // declarations plus the frozen table Luau would implicitly return
         // for the module.
         for stmt in &block.stmts {
@@ -788,11 +788,10 @@ mod tests {
 
     #[test]
     fn entry_cycle_registers_entry_module() {
-        // A module requiring the entry used to leave a raw require() in
-        // the output. The entry function now registers under the require
-        // string, so the bundle stays self-contained; the extra load
-        // executes a fresh instance, exactly like real Lua loading the
-        // main file a second time as a module.
+        // The entry function registers under the require string, so a
+        // module requiring the entry leaves no raw require() in the
+        // output. The extra load executes a fresh instance, exactly like
+        // real Lua loading the main file a second time as a module.
         let modules = vec![
             module(
                 "src/b.lua",

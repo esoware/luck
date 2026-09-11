@@ -13,15 +13,12 @@ pub(crate) fn normalize_quote(literal: &str, style: QuoteStyle) -> String {
         return literal.to_string();
     }
 
-    // Transform escape sequences for the delimiter swap:
-    // 1. Unescape old delimiter: \' -> ' (or \" -> ")
-    // 2. Escape new delimiter: " -> \" (or ' -> \')
     let mut result = String::with_capacity(content.len() + 2);
     result.push(target_quote);
 
-    // Char-wise walk: byte-wise reinterpretation corrupts UTF-8, and every
-    // escape must consume BOTH chars or `\\` followed by a quote merges
-    // into a bogus escape.
+    // The walk is char-wise because byte-wise reinterpretation corrupts UTF-8,
+    // and each escape has to consume both of its chars, or a `\\` followed by
+    // a quote merges into a bogus escape.
     let mut chars = content.chars();
     while let Some(ch) = chars.next() {
         if ch == '\\' {

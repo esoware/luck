@@ -77,8 +77,8 @@ fn left_shift() {
 
 #[test]
 fn shift_and_bitwise_precedence() {
-    // `a >> b & c` - >> (level 7) binds tighter than & (level 6)
-    // So it parses as `(a >> b) & c`
+    // `>>` (level 7) binds tighter than `&` (level 6), so `a >> b & c`
+    // parses as `(a >> b) & c`
     let result = parse_lua53("local x = a >> b & c");
     assert_no_errors(&result);
     let expr = extract_local_expr(&result);

@@ -35,12 +35,11 @@ pub struct ParseResult {
     pub source: String,
 }
 
-/// A parse error with position and message.
 pub type ParseError = luck_token::SourceError;
 
-/// Callers that own their source `String` should pass it by value: the
-/// text is stored in `ParseResult.source` without a copy. Borrowed
-/// `&str` input is copied once, as before.
+/// Callers that own their source `String` should pass it by value, since
+/// `ParseResult.source` then holds the text without a copy. Borrowed `&str`
+/// input is copied once.
 #[must_use]
 pub fn parse(source: impl Into<String>, version: LuaVersion) -> ParseResult {
     parse_owned(source.into(), version)
@@ -48,9 +47,9 @@ pub fn parse(source: impl Into<String>, version: LuaVersion) -> ParseResult {
 
 /// Scope-context checks real Lua performs at compile time but that need
 /// extra AST walks: writes to const bindings, goto/label resolution, and
-/// Luau's continue/until rule. NOT part of [`parse`] - transform
-/// pipelines don't pay for it; diagnostic front ends (`luck check`)
-/// opt in explicitly. Only meaningful on a clean parse; recovery ASTs
+/// Luau's continue/until rule. NOT part of [`parse`], so transform
+/// pipelines don't pay for it; diagnostic front ends (`luck check`) opt in
+/// explicitly. Only meaningful on a clean parse, because recovery ASTs
 /// cascade misleading secondary errors.
 #[must_use]
 pub fn validate(block: &Block, version: LuaVersion) -> Vec<ParseError> {
@@ -84,10 +83,10 @@ fn parse_owned(source: String, version: LuaVersion) -> ParseResult {
     let block = parser.parse_block();
     // A chunk must consume its whole input. `parse_block` returns at any
     // block boundary (a `return`, a stray `end`), and silently accepting
-    // trailing statements would drop them from the AST - every downstream
+    // trailing statements would drop them from the AST, so every downstream
     // consumer (minifier, formatter, bundler) would then silently discard
-    // user code. Suppressed after an earlier error: recovery may already
-    // have abandoned the tail, and the first error is the real one.
+    // user code. Suppressed after an earlier error, because recovery may
+    // already have abandoned the tail and the first error is the real one.
     if !parser.at_eof() && !parser.has_errors() {
         let span = parser.current_span();
         let message = format!("expected end of file, found {}", parser.peek());

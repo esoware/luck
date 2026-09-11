@@ -1,8 +1,8 @@
 //! # luck
 //!
-//! Facade crate: the complete luck toolchain as a single dependency.
-//! Embedders (build tools, editors) depend on this one crate instead of
-//! tracking each `luck_*` crate in the workspace.
+//! The whole luck toolchain behind one dependency. Embedders (build tools,
+//! editors) depend on this crate instead of tracking each `luck_*` crate in
+//! the workspace.
 //!
 //! The parse core is always present; downstream stages are behind features,
 //! and `full` enables all of them:

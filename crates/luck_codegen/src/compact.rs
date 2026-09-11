@@ -29,8 +29,8 @@ pub struct CompactPrinter {
 impl CompactPrinter {
     pub fn new(source: &str) -> Self {
         Self {
-            // Capacity hint only: compact output stays at or under source
-            // length, and synthetic ASTs (empty source) just start empty.
+            // Capacity hint only. Compact output stays at or under source
+            // length, and a synthetic AST has no source, so it starts empty.
             output: CodeBuffer::with_capacity(source.len()),
             prev: PrevClass::None,
         }
@@ -444,7 +444,8 @@ impl CompactPrinter {
 
     fn emit_table_constructor(&mut self, table: &TableConstructor) {
         self.emit_str("{");
-        // Trailing separators are dropped: compact output has no use for them.
+        // A trailing separator the source carried is dropped; it costs bytes
+        // and changes nothing.
         for (idx, field) in table.fields.items.iter().enumerate() {
             self.emit_field(field);
             if idx + 1 < table.fields.len() {
@@ -637,7 +638,8 @@ impl CompactPrinter {
             Type::Singleton(token) => self.emit_token(token),
             Type::Variadic(variadic) => self.emit_variadic_type(variadic),
             Type::GenericPack(generic_pack) => self.emit_generic_pack_type(generic_pack),
-            // Mirrors `Statement::Error` / `Expression::Error`: emit nothing.
+            // Mirrors `Statement::Error` and `Expression::Error`, which also
+            // emit nothing.
             Type::Error(_) => {}
         }
     }

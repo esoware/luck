@@ -59,7 +59,7 @@ impl<'src> RestrictedChecker<'src, '_> {
             return;
         }
 
-        // Extract the literal string argument. The two shapes we accept
+        // Extract the literal string argument. The two accepted shapes
         // are `require("path")` and `require"path"`.
         let (literal_span, literal_text) = match &call.args {
             FunctionArgs::Parenthesized { args, .. } => {
@@ -68,7 +68,7 @@ impl<'src> RestrictedChecker<'src, '_> {
                     return;
                 };
                 // Only a single literal arg is meaningful for path
-                // matching; bail on `require(x .. y)` and similar.
+                // matching, so bail on `require(x .. y)` and similar.
                 let Expression::StringLiteral(tok) = first else {
                     return;
                 };
@@ -104,7 +104,7 @@ impl<'src> RestrictedChecker<'src, '_> {
     }
 
     /// Pull the body out of a short-string literal token. Long-bracket
-    /// strings return None - they're unusual for module paths and
+    /// strings return None, since they are unusual for module paths and
     /// would need escape-aware decoding.
     fn string_body(&self, span: Span) -> Option<String> {
         let slice = &self.source[span.start as usize..span.end as usize];
@@ -163,9 +163,9 @@ impl NodeRule for RestrictedModulePaths {
     }
 }
 
-/// Whether `path` should be considered a match for the restricted
-/// `pattern`. Currently exact string equality; a trailing `.*` is
-/// honored as a prefix match so `forbidden.*` matches every submodule.
+/// Whether `path` matches the restricted `pattern`. Exact string
+/// equality, except that a trailing `.*` matches as a prefix, so
+/// `forbidden.*` covers every submodule.
 fn path_matches(path: &str, pattern: &str) -> bool {
     if let Some(prefix) = pattern.strip_suffix(".*") {
         path == prefix || path.starts_with(&format!("{prefix}."))

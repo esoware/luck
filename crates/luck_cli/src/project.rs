@@ -13,9 +13,9 @@ use std::process;
 ///
 /// An explicit `-t/--target` is parsed via the alias-rich `FromStr`; a bad
 /// value exits with code 2. When omitted, the project's `luck.json` decides
-/// per extension - an extension alone cannot say which dialect a `.lua` file
-/// is written in. With no config in scope the defaults reproduce plain
-/// inference: `.luau` is Luau, everything else Lua 5.4.
+/// per extension, because an extension alone cannot say which dialect a
+/// `.lua` file is written in. With no config in scope the defaults
+/// reproduce plain inference: `.luau` is Luau, everything else Lua 5.4.
 pub(crate) fn resolve_explicit_target(target: Option<&str>, input_path: &str) -> LuaTarget {
     resolve_configured_target(target, input_path, &config_governing(input_path))
 }
@@ -67,8 +67,8 @@ pub(crate) fn config_governing(input_path: &str) -> LuckConfig {
 
 /// The config a one-shot `bundle`/`minify` run answers to: an explicit `-c`
 /// resolved through `extends`, otherwise the one governing the input file.
-/// The config directory is not returned - a one-shot run names its input
-/// directly, so no include/exclude filter is rooted anywhere.
+/// The config directory is not returned, because a one-shot run names its
+/// input directly, so no include/exclude filter is rooted anywhere.
 pub(crate) fn config_for_one_shot(config: Option<&Path>, input_path: &str) -> LuckConfig {
     match config {
         Some(path) => resolve_project_config(Some(path)).0,

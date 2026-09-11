@@ -41,7 +41,6 @@ impl Format for Statement {
         match self {
             Statement::LocalAssignment(local) => write_local_assignment(f, local),
             Statement::Assignment(assign) => write_assignment(f, assign),
-            // A call statement's callee/args are ordinary expressions.
             Statement::FunctionCall(call) => call.call.fmt(f),
             Statement::FunctionDecl(decl) => write_function_decl(f, decl),
             Statement::LocalFunction(func) => write_local_function(f, func),

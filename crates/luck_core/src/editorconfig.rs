@@ -3,8 +3,8 @@
 //! Resolves a [`FormatConfig`] for a given file via the spec-compliant
 //! `ec4rs` engine (upward walk, `root = true`, section matching), then maps
 //! editorconfig properties onto the subset of `FormatConfig` fields they
-//! correspond to. Lives here (rather than in the CLI) so the LSP can adopt
-//! the same precedence rules later.
+//! correspond to. This lives here rather than in the CLI so the CLI and the
+//! LSP share one set of precedence rules.
 //!
 //! Precedence: built-in defaults < `.editorconfig` < the luck.json `format`
 //! section. The luck.json values always win.
@@ -244,8 +244,8 @@ mod tests {
             "# comment\n; also comment\n\n[*.lua]\n\nindent_size = 5 # inline kept as value? no\n",
         )
         .expect("write");
-        // The inline `# ...` is part of the value; `5 # ...` won't parse as u8,
-        // so indent_width stays None. This documents the simple parser behavior.
+        // The inline `# ...` is part of the value, and `5 # ...` does not
+        // parse as u8, so indent_width stays None.
         let config = format_config_for(&dir.path().join("main.lua"));
         assert!(config.indent_width.is_none());
     }

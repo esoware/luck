@@ -39,7 +39,7 @@ impl Parser<'_> {
         }
 
         let result = match self.peek() {
-            // Leading separator - multiline definition style:
+            // Leading separator, the multiline definition style:
             // `type T =` newline `| A` newline `| B`
             TokenKind::Pipe => {
                 let leading_pipe = self.advance_span();
@@ -172,7 +172,7 @@ impl Parser<'_> {
 
     fn parse_postfix_type(&mut self) -> Type {
         let mut result = self.parse_primary_type();
-        // `?` stacks (`T??`) - accepted permissively, same as Luau
+        // `?` stacks (`T??`), which real Luau also accepts
         while matches!(self.peek(), TokenKind::Question) {
             let question = self.advance_span();
             let span = result.span().merge(question);
@@ -191,7 +191,7 @@ impl Parser<'_> {
             {
                 self.parse_typeof_type()
             }
-            // `T...` - generic pack reference
+            // `T...` is a generic pack reference
             TokenKind::Identifier(_) if matches!(self.peek_next(), TokenKind::DotDotDot) => {
                 let name = self.advance();
                 let dots = self.advance_span();
@@ -202,9 +202,8 @@ impl Parser<'_> {
                 let name = self.advance();
                 self.parse_named_type(name)
             }
-            // Singletons. Number singletons are not valid Luau but were
-            // historically accepted by the span scanner; stay permissive
-            // so those sources keep round-tripping.
+            // Singletons. Real Luau has no number singleton, but luck accepts
+            // one so sources carrying it keep round-tripping.
             TokenKind::Nil
             | TokenKind::True
             | TokenKind::False
@@ -212,12 +211,12 @@ impl Parser<'_> {
             | TokenKind::Number(_) => Type::Singleton(self.advance()),
             TokenKind::LeftBrace => self.parse_table_type(),
             TokenKind::LeftParen => self.parse_paren_or_function_type(),
-            // `<T>(...) -> R` - generic function type
+            // `<T>(...) -> R` is a generic function type
             TokenKind::Less => {
                 let generics = self.parse_generic_type_list(false);
                 self.parse_function_type(Some(generics))
             }
-            // `...T` - variadic pack
+            // `...T` is a variadic pack
             TokenKind::DotDotDot => {
                 let dots = self.advance_span();
                 let type_value = self.parse_type();
@@ -227,8 +226,8 @@ impl Parser<'_> {
             _ => {
                 let span = self.current_span();
                 self.error(span, format!("expected type, found {}", self.peek()));
-                // Do not consume: the offending token may close an
-                // enclosing construct or start the next statement.
+                // Do not consume. The offending token may close an enclosing
+                // construct or start the next statement.
                 Type::Error(span)
             }
         }
@@ -236,7 +235,7 @@ impl Parser<'_> {
 
     fn parse_typeof_type(&mut self) -> Type {
         let typeof_token = self.advance_span();
-        self.advance_span(); // `(` - guaranteed by the caller's lookahead
+        self.advance_span(); // `(`, guaranteed by the caller's lookahead
         let expr = self.parse_expression(0);
         let close = self.expect(&TokenKind::RightParen);
         let span = typeof_token.merge(close);
@@ -427,9 +426,9 @@ impl Parser<'_> {
             }
         }
 
-        // Grammar: `TableType ::= '{' Type '}' | '{' [PropList] '}'` -
-        // an array table holds exactly one type, and a PropList holds at
-        // most one indexer.
+        // Grammar: `TableType ::= '{' Type '}' | '{' [PropList] '}'`. An array
+        // table holds exactly one type, and a PropList holds at most one
+        // indexer.
         let mut seen_indexer = false;
         let field_count = fields.len();
         for (idx, field) in fields.items.iter().enumerate() {
@@ -520,8 +519,8 @@ impl Parser<'_> {
     }
 
     /// `(` opened: either a parenthesized type `(T)`, a pack `(T, U)`/`()`,
-    /// or function-type params `(a: T, ...U) -> R` - decided by the `->`
-    /// after the closing paren.
+    /// or function-type params `(a: T, ...U) -> R`. The `->` after the
+    /// closing paren decides which.
     fn parse_paren_or_function_type(&mut self) -> Type {
         let open = self.advance_span(); // `(`
         let mut params = Punctuated::<FunctionTypeParam>::empty();
@@ -630,7 +629,7 @@ impl Parser<'_> {
                 Type::Function(function_type)
             }
             other => {
-                // `<T>` followed by a paren type with no `->` - the generics
+                // `<T>` followed by a paren type with no `->`, so the generics
                 // have nothing to attach to.
                 self.error(
                     other.span(),

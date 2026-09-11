@@ -143,12 +143,11 @@ fn minify_is_idempotent_and_reparses() {
         let Ok(second) = luck_minifier::minify(&first, target, &config, "gen.lua") else {
             panic!("{label}: second minify errored.\nfirst output:\n{first}");
         };
-        // Naming isn't byte-stable yet: lift/merge run AFTER rename, so
-        // the second pass ranks slots against a different shape and may
-        // permute short names. Until the binding-ID rework makes
-        // renaming canonical, require structural idempotency: identical
-        // length (no growth, no further shrinkage) and a byte-exact
-        // fixpoint from the second pass onward.
+        // Naming is not byte-stable: lift/merge run AFTER rename, so the
+        // second pass ranks slots against a different shape and may permute
+        // short names. The guarantee is therefore structural: identical
+        // length (no growth, no further shrinkage) and a byte-exact fixpoint
+        // from the second pass onward.
         assert_eq!(
             first.len(),
             second.len(),

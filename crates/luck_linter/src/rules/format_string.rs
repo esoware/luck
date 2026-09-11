@@ -40,13 +40,13 @@ impl Rule for FormatString {
 /// Which validator applies to a stdlib call.
 #[derive(Debug, Clone, Copy)]
 enum DslKind {
-    /// `string.format` - `%`-style printf specifiers.
+    /// `string.format`, with `%`-style printf specifiers.
     Format,
-    /// `string.match`, `gmatch`, `find`, `gsub` - Lua pattern grammar.
+    /// `string.match`, `gmatch`, `find`, `gsub`, in the Lua pattern grammar.
     LuaPattern,
-    /// `string.pack`/`packsize`/`unpack` - fixed-width binary spec.
+    /// `string.pack`/`packsize`/`unpack`, a fixed-width binary spec.
     Pack,
-    /// `os.date` - strftime-style specifiers.
+    /// `os.date`, with strftime-style specifiers.
     OsDate,
 }
 
@@ -57,11 +57,12 @@ enum ArgCount {
     /// Format's spec-count equals the number of trailing args after the
     /// format string.
     ExactFormat,
-    /// Pack: every value option consumes one trailing arg. Same shape
-    /// as `ExactFormat`, just a different validator output.
+    /// Every pack value option consumes one trailing arg. Same shape as
+    /// `ExactFormat`, reading a different validator's output.
     ExactPack,
     /// Pattern-based functions take auxiliary args (the haystack, plus
-    /// possibly an init and a replacement) - arg-count check is skipped.
+    /// possibly an init and a replacement), so the arg-count check is
+    /// skipped.
     None,
 }
 
@@ -97,10 +98,10 @@ impl<'src> FormatChecker<'src, '_> {
             FunctionArgs::TableConstructor(_) => return,
         };
 
-        // Extract the raw pattern body - the substring between the
-        // surrounding quotes/brackets - and the offset of the body in
-        // source. Long-bracket strings are skipped because escape
-        // handling makes raw-content mapping unreliable there.
+        // Extract the raw pattern body, the substring between the
+        // surrounding quotes or brackets, plus its offset in source.
+        // Long-bracket strings are skipped because escape handling makes
+        // raw-content mapping unreliable there.
         let Some((body, body_offset)) = pattern_body(self.source, literal_token_span) else {
             return;
         };
@@ -134,13 +135,12 @@ impl<'src> FormatChecker<'src, '_> {
     /// Identify the callee shape and return (DSL kind, arg-count
     /// policy, index of the literal pattern within `args`).
     fn classify_callee(&self, call: &FunctionCall) -> Option<(DslKind, ArgCount, usize)> {
-        // Method form `receiver:method(...)`. We only handle the case
-        // where the receiver is a literal - `"hello":format(x)`. Any
-        // variable receiver could be any kind of value, so we cannot
-        // tell whether the method is `string.*` or a user method. For the
-        // method form the "literal" is the receiver, not an entry in
-        // `call.args`; `check_method_literal_receiver` handles that shape,
-        // so this dotted-callee resolver bows out.
+        // In the method form `receiver:method(...)` the pattern is the
+        // receiver rather than an entry in `call.args`, and only a
+        // literal receiver (`"hello":format(x)`) is resolvable. A
+        // variable receiver could hold any value, so the method could be
+        // `string.*` or a user method. `check_method_literal_receiver`
+        // owns that shape, so this dotted-callee resolver bows out.
         if call.method.is_some() {
             return None;
         }
@@ -214,9 +214,9 @@ impl<'src> FormatChecker<'src, '_> {
             FunctionArgs::StringLiteral(_) | FunctionArgs::TableConstructor(_) => None,
         };
 
-        // Note: for the method form, the literal is the RECEIVER and is
-        // NOT counted as a positional arg - so substitution-count
-        // expectations apply to the raw `args` punctuation as-is.
+        // In the method form the literal is the RECEIVER and does NOT
+        // count as a positional arg, so substitution-count expectations
+        // apply to the raw `args` punctuation as-is.
         match dsl {
             DslKind::Format => match validate_format(body) {
                 Ok(specifier_count) => {
@@ -235,8 +235,8 @@ impl<'src> FormatChecker<'src, '_> {
                 }
                 Err(err) => self.report_pattern_error(err, body_offset, "pack format"),
             },
-            // `classify_string_function` never yields `OsDate`; `os.date`
-            // has no method form.
+            // `classify_string_function` never yields `OsDate`, since
+            // `os.date` has no method form.
             DslKind::OsDate => {}
         }
     }
@@ -255,19 +255,19 @@ impl<'src> FormatChecker<'src, '_> {
             ArgCount::None => return,
         }
         let Some(args) = args else {
-            // The method form passed `args_ref = None` to indicate the
-            // receiver was the pattern. We still want to count the
-            // method args directly; punt that path back to the caller.
+            // The method form passes `args_ref = None` to signal that
+            // the receiver was the pattern. Counting those method args
+            // is the caller's job.
             return;
         };
-        // The literal itself sits at args index 0 in the dotted form;
+        // The literal itself sits at args index 0 in the dotted form, so
         // skip it for the count. In the method form the receiver is the
         // pattern, so EVERY positional arg counts.
         let arg_list: Vec<&Expression> = args.iter().collect();
         let literal_idx = arg_list.iter().position(|expr| expr.span() == literal_span);
 
         // Bail if any trailing arg is a vararg (`...`) or a function
-        // call - these expand to an unknown count at runtime.
+        // call, since those expand to an unknown count at runtime.
         let trailing_iter = match literal_idx {
             Some(idx) => &arg_list[idx + 1..],
             None => &arg_list[..],
@@ -390,15 +390,15 @@ impl NodeRule for FormatString {
 fn classify_string_function(name: &str) -> Option<(DslKind, ArgCount, usize)> {
     match name {
         "format" => Some((DslKind::Format, ArgCount::ExactFormat, 0)),
-        // Pattern-based: arg-count varies (extra `init`, replacement,
-        // etc.) so we don't enforce.
+        // Pattern-based arg counts vary (extra `init`, replacement, and
+        // so on), so this rule does not enforce one.
         "match" | "gmatch" | "find" | "gsub" => Some((DslKind::LuaPattern, ArgCount::None, 1)),
         "pack" | "packsize" | "unpack" => Some((DslKind::Pack, ArgCount::ExactPack, 0)),
         _ => None,
     }
 }
 
-/// Walk past any parens wrapping an expression - `("x"):format(...)`.
+/// Walk past any parens wrapping an expression, as in `("x"):format(...)`.
 fn unwrap_parens(expr: &Expression) -> &Expression {
     let mut current = expr;
     while let Expression::Parenthesized(node) = current {
@@ -409,8 +409,8 @@ fn unwrap_parens(expr: &Expression) -> &Expression {
 
 /// Extract the raw body of a string literal token. Returns the body
 /// slice and the byte offset (into source) where that body starts.
-/// Returns `None` for long-bracket strings - escape rules make the
-/// raw-body mapping unreliable for those.
+/// Returns `None` for long-bracket strings, whose escape rules make the
+/// raw-body mapping unreliable.
 fn pattern_body(source: &str, span: Span) -> Option<(&str, u32)> {
     let start = span.start as usize;
     let end = span.end as usize;
@@ -431,10 +431,11 @@ fn pattern_body(source: &str, span: Span) -> Option<(&str, u32)> {
     }
 }
 
-/// Count capture groups in a Lua pattern: unescaped `(`, including
-/// position captures `()`. Character sets are skipped so `[(]` does not
-/// count. `%b()` parens are counted even though they are not captures -
-/// overcounting only suppresses diagnostics, never invents them.
+/// Count capture groups in a Lua pattern, meaning unescaped `(`
+/// including position captures `()`. Character sets are skipped so `[(]`
+/// does not count. `%b()` parens count even though they are not
+/// captures, because overcounting only suppresses diagnostics and never
+/// invents them.
 fn count_pattern_captures(pattern: &str) -> usize {
     let bytes = pattern.as_bytes();
     let mut count = 0;
@@ -636,8 +637,8 @@ mod tests {
 
     #[test]
     fn ignores_method_form_correct_format() {
-        // The receiver `"hello"` IS the format string; arg count should
-        // match the spec count (one `%d`, one trailing arg).
+        // The receiver IS the format string, so the arg count must match
+        // the spec count: one `%d`, one trailing arg.
         let diags = run("(\"%d\"):format(1)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -650,7 +651,7 @@ mod tests {
 
     #[test]
     fn ignores_nonliteral_format() {
-        // We can't validate a variable's content; no diagnostic.
+        // A variable's content is not statically known.
         let diags = run("local fmt = \"%d\"\nstring.format(fmt, 1)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -663,14 +664,15 @@ mod tests {
 
     #[test]
     fn ignores_function_call_args() {
-        // `f()` expands to an unknown count at runtime, so we can't tell.
+        // `f()` expands to an unknown count at runtime.
         let diags = run("local function f() end\nstring.format(\"%d %d\", f())");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_long_bracket_strings() {
-        // Long brackets aren't validated (escape mapping is unreliable).
+        // Long brackets go unvalidated, since escape mapping into them
+        // is unreliable.
         let diags = run("string.format([[%z]], 1)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -713,7 +715,7 @@ mod tests {
 
     #[test]
     fn ignores_gsub_nonliteral_pattern_index() {
-        // Unknown capture count: index checking is disabled.
+        // An unknown capture count disables the index check.
         let diags = run("local p = \"(a)\"\nstring.gsub(\"x\", p, \"%9\")");
         assert!(diags.is_empty(), "got: {diags:?}");
     }

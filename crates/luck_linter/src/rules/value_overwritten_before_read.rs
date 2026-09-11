@@ -10,13 +10,12 @@ use crate::rule::{LintContext, Rule};
 /// written before the first is ever read. The earlier assignment is
 /// dead.
 ///
-/// Why this is intentionally conservative: a full reaching-definitions
-/// analysis would require a CFG. We only look at references that occur
-/// in the same lexical scope as the symbol's declaration, walking them
-/// in source order. That catches the obvious linear `x = 1; x = 2`
-/// pattern while sidestepping false positives from branching:
-/// `local x = 1; if c then x = 2 end; return x` keeps both writes in
-/// distinct scopes, so we treat the second as untracked.
+/// Why this is conservative: a full reaching-definitions analysis would
+/// require a CFG. The rule only walks references in the same lexical
+/// scope as the symbol's declaration, in source order. That catches the
+/// linear `x = 1; x = 2` pattern while sidestepping false positives from
+/// branching. In `local x = 1; if c then x = 2 end; return x` the two
+/// writes sit in distinct scopes, so the second stays untracked.
 pub struct ValueOverwrittenBeforeRead;
 
 #[derive(Clone, Copy)]
@@ -44,8 +43,8 @@ impl Rule for ValueOverwrittenBeforeRead {
         let block = ctx.block;
         let semantic = ctx.semantic;
         // Determine which locals have an initializer (Init event at the
-        // declaration site). The reference list does not include the
-        // declaration itself, so we need an AST pass to find this.
+        // declaration site). The reference list omits the declaration
+        // itself, so only an AST pass can find this.
         let mut initialized = InitializedCollector::default();
         initialized.visit_block(block);
 
@@ -59,16 +58,16 @@ impl Rule for ValueOverwrittenBeforeRead {
                 continue;
             }
             // A closure can read the captured value at any time between
-            // the textual write positions - source order proves nothing
-            // for upvalues, so stay silent.
+            // the textual write positions, so source order proves
+            // nothing for upvalues.
             if symbol.is_upvalue {
                 continue;
             }
 
             // All references, sorted by source position. References from
-            // nested scopes are conservatively downgraded to reads: a
-            // nested read really is a read, and a nested write is
-            // conditional (branch/loop) so it proves no overwrite.
+            // nested scopes downgrade to reads. A nested read really is
+            // a read, and a nested write is conditional on a branch or
+            // loop, so it proves no overwrite.
             let mut refs: Vec<(u32, ReferenceKind)> = symbol
                 .reference_ids
                 .iter()
@@ -114,9 +113,9 @@ impl Rule for ValueOverwrittenBeforeRead {
                         }
                     },
                     ReferenceKind::ReadWrite => {
-                        // Compound assignment: reads then writes. The
-                        // read clears any pending Init/Write before the
-                        // write registers.
+                        // A compound assignment reads then writes. The
+                        // read clears any pending Init or Write before
+                        // the write registers.
                         last = Some(LastEvent::Write { span: ref_span });
                     }
                 }
@@ -136,9 +135,9 @@ fn make_diagnostic(name: &str, span: Span) -> LintDiagnostic {
     .with_help("remove the earlier assignment or read it first")
 }
 
-/// The scope tree records reads and writes but not whether an initializer
-/// accompanies the declaration itself, so we cannot tell from the scope tree
-/// alone whether a local started life with a value.
+/// The scope tree records reads and writes but not whether an
+/// initializer accompanies the declaration, so it alone cannot say
+/// whether a local started life with a value.
 #[derive(Default)]
 struct InitializedCollector {
     /// Sorted `(definition_span.start, definition_span.end)` for every
@@ -207,7 +206,7 @@ mod tests {
 
     #[test]
     fn flags_two_post_decl_writes() {
-        // Write then write, no read between: the first write is dead.
+        // Write then write with no read between, so the first is dead.
         let diags = run("local x\nx = 1\nx = 2\nreturn x");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }

@@ -5,11 +5,10 @@
 //! `SyntheticComment`s keyed by the anchor node's span start. Both resolve
 //! to owned text at construction, so emission never slices source.
 //!
-//! The sourced store is a cursor over the sorted array (same model the old
-//! formatter used). The synthetic store is a map keyed by anchor, because
-//! synthesis order does not guarantee document order and a synthesizer may
-//! attach comments to every statement - per-anchor lookup has to stay cheap
-//! at that density. The synthetic store additionally carries the set of
+//! The sourced store is a cursor over the sorted array. The synthetic store
+//! is a map keyed by anchor, because synthesis order does not guarantee
+//! document order and a synthesizer may attach comments to every statement,
+//! so per-anchor lookup has to stay cheap at that density. It also carries the
 //! anchors that want a blank line before them ([`Comments::with_blank_before`]),
 //! the source-less replacement for blank-line preservation.
 
@@ -171,9 +170,9 @@ impl Comments {
     }
 
     /// Request a blank line before each statement whose span start is in
-    /// `anchors` - the source-less way to separate logical regions.
-    ///  Only meaningful for synthetic input; on
-    /// the parsed path blank lines come from the source itself.
+    /// `anchors`, the source-less way to separate logical regions. Synthetic
+    /// input only; on the parsed path blank lines come from the source
+    /// itself.
     #[must_use]
     pub fn with_blank_before(mut self, anchors: impl IntoIterator<Item = u32>) -> Self {
         if matches!(self.store, Store::Empty) {

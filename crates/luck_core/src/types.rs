@@ -11,7 +11,7 @@ pub enum LuaTarget {
     Lua54,
     Lua55,
     Luau,
-    /// Roblox-hosted Luau - same parser dialect as `Luau` but distinct target identity.
+    /// Roblox-hosted Luau. Same parser dialect as `Luau`, distinct target identity.
     LuauRoblox,
 }
 

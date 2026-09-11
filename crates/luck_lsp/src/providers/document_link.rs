@@ -1,5 +1,5 @@
 //! Document links. Every `require("path")` literal string becomes a
-//! clickable link resolved through [`luck_resolver`] - the same resolver the
+//! clickable link resolved through [`luck_resolver`], the same resolver the
 //! bundler uses, so links honor Lua template search paths, Luau relative and
 //! `@alias` imports, and the `init` parent-parent rule identically.
 

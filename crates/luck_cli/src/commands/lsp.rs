@@ -13,7 +13,7 @@ pub(crate) struct LspArgs {
 
 impl LspArgs {
     pub(crate) fn run(self) -> ExitCode {
-        // Match the CLI's existing 16 MB worker-stack budget for deep parses.
+        // Match the CLI's 16 MB worker-stack budget for deep parses.
         let runtime = match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .thread_stack_size(16 * 1024 * 1024)

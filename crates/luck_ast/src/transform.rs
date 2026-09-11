@@ -366,7 +366,7 @@ pub trait AstTransform {
                 });
                 Type::Named(named)
             }
-            // typeof embeds a real expression - semantic passes must see it
+            // typeof embeds a real expression, so semantic passes must see it.
             Type::Typeof(mut typeof_type) => {
                 typeof_type.expr = self.transform_expression(typeof_type.expr);
                 Type::Typeof(typeof_type)

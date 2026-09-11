@@ -134,11 +134,11 @@ async function findOnPath(name: string): Promise<string | null> {
 }
 
 /**
- * Not implemented yet: points the user at manual installation instead of
- * downloading. Registered anyway because the walkthrough and the missing-
- * binary prompt both target this command.
+ * Points the user at manual installation rather than downloading anything.
+ * Registered because the walkthrough and the missing-binary prompt both
+ * target this command.
  */
-// oxlint-disable-next-line require-await -- stub keeps the Promise shape the future downloader needs.
+// oxlint-disable-next-line require-await -- async keeps the Promise shape callers await.
 export async function downloadServer(context: vscode.ExtensionContext): Promise<string | null> {
 	const platform = vsixPlatform();
 	if (!platform) {

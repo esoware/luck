@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn flags_paren_on_next_line() {
         // Parses as `local x = f(3)` even though it reads as two
-        // statements - exactly the ambiguity being flagged.
+        // statements, which is the ambiguity this rule flags.
         let diags = run("local f = print\nlocal x = f\n(3)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }

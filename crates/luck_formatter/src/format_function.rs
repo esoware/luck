@@ -1,9 +1,8 @@
 //! Function bodies, calls, and their argument/parameter lists.
 //!
 //! [`FormatFunctionBody`] is the shared entry the statement- and
-//! expression-level function emitters call into; the call/argument layout
-//! ports the old formatter's hugging and parameter-breaking heuristics onto
-//! the combinator IR.
+//! expression-level function emitters call into. Call and argument layout
+//! adds the hugging and parameter-breaking heuristics on top of it.
 
 use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Literal};
 use luck_ast::shared::{FunctionBody, Parameter, Punctuated, VarArgParam};
@@ -18,8 +17,8 @@ use crate::{CallParentheses, SpaceAfterFunction};
 /// A function body without the leading `function` keyword or name: generics,
 /// parameter parens, optional return type, block, and `end`.
 ///
-/// The name and shape are a pinned contract - the statement and expression
-/// emitters construct this and call [`Format::fmt`].
+/// The statement and expression emitters both construct this and call
+/// [`Format::fmt`], so the name and shape are fixed.
 pub(crate) struct FormatFunctionBody<'a> {
     pub body: &'a FunctionBody,
 }
@@ -59,8 +58,8 @@ impl Format for FormatFunctionBody<'_> {
             hard_line().fmt(f);
             token("end").fmt(f);
         } else if is_empty {
-            // An empty body still puts `end` on its own line, matching the old
-            // layout (`function()` then `end`) rather than an indented blank.
+            // An empty body still puts `end` on its own line, `function()`
+            // then `end`, rather than an indented blank.
             hard_line().fmt(f);
             token("end").fmt(f);
         } else {

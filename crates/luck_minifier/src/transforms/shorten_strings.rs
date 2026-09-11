@@ -5,12 +5,13 @@ use luck_token::{LuaVersion, Span};
 
 use crate::expr::{decode_string_literal, encode_string_literal};
 
-/// Shorten string literals by re-encoding their decoded byte value in
+/// Shortens string literals by re-encoding their decoded byte value in
 /// canonical quoted form and keeping whichever spelling is shorter.
 ///
-/// Decode -> encode is exact (full escape semantics, UTF-8 and arbitrary
-/// bytes preserved), replacing the old textual scanner that reinterpreted
-/// bytes as chars and mis-tracked escape state.
+/// The decode-then-encode round trip is exact: it honours full escape
+/// semantics and preserves UTF-8 and arbitrary bytes alike. A textual scanner
+/// could not, since it would have to reinterpret bytes as chars and track
+/// escape state itself.
 pub fn shorten(block: Block, version: LuaVersion) -> Block {
     StringShortener { version }.transform_block(block)
 }
@@ -77,8 +78,8 @@ mod tests {
 
     #[test]
     fn long_bracket_with_quotes_kept_when_not_shorter() {
-        // Escaping the quotes makes the candidate the same length -
-        // no rewrite, no churn.
+        // Escaping the quotes makes the candidate the same length, so there
+        // is no rewrite and no churn.
         let result = apply("local x = [[say \"hi\"]]");
         assert_eq!(result, "local x=[[say \"hi\"]]");
     }
@@ -110,8 +111,7 @@ mod tests {
 
     #[test]
     fn escaped_backslash_before_digits_stays_escaped() {
-        // `\\097` is a literal backslash followed by "097" - the old
-        // scanner ate it down to "a".
+        // `\\097` is a literal backslash followed by "097", not the byte 97.
         let result = apply("local x = \"\\\\097\"");
         assert!(
             result.contains("\\\\097"),
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn single_quoted_string_unchanged() {
-        // Same length re-encoded - no churn.
+        // The re-encoded form is the same length, so nothing changes.
         let result = apply("local x = 'hello'");
         assert_eq!(result, "local x='hello'");
     }

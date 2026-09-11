@@ -233,7 +233,6 @@ pub enum StdlibEnvironment {
 }
 
 impl StdlibEnvironment {
-    /// Whether this is the Roblox environment.
     #[must_use]
     pub fn is_roblox(self) -> bool {
         matches!(self, StdlibEnvironment::Roblox)

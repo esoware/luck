@@ -176,8 +176,8 @@ fn global_declaration_with_initializer() {
 
 #[test]
 fn leading_attribute_formats_as_distributed_trailing() {
-    // The leading attribute applies to all names (5.5 §3.3.7); the
-    // formatter canonicalizes to the equivalent per-name trailing form.
+    // Lua 5.5 section 3.3.7: a leading attribute applies to every name, and
+    // the formatter canonicalizes it to the per-name trailing form.
     assert_format_with(
         "local <const> x, y = 1, 2\n",
         "local x <const>, y <const> = 1, 2\n",

@@ -3,18 +3,18 @@
 //! Builds `luck_ast` nodes without any source text. Hand-writing the node
 //! structs means spelling out every `Token { kind, span }`; this module hides
 //! that behind small constructors. The intended consumer is a tool that emits
-//! an AST directly - so the constructors also take over the output-validity duties
-//! such a tool would otherwise have to reimplement.
+//! an AST directly, so the constructors also take over the output-validity
+//! duties such a tool would otherwise reimplement.
 //!
 //! # Spans
 //!
 //! Every synthesized node gets a fresh single-point span `Span::new(n, n)`
-//! with `n` strictly increasing. The spans do not index into any source -
-//! they exist only to keep nodes distinguishable for comment anchoring and
+//! with `n` strictly increasing. The spans do not index into any source. They
+//! exist only to keep nodes distinguishable for comment anchoring and
 //! diagnostics. Spans are unique within one `Synth` and within any family
 //! created from it with [`Synth::share`]; when several synthesizers feed one
 //! tree (parallel decompilation of function protos), share one counter and
-//! collisions become impossible. [`Synth::starting_at`] remains for splicing
+//! collisions become impossible. Use [`Synth::starting_at`] to splice
 //! synthetic nodes into a parsed AST, where the synthetic range must sit
 //! above the source's byte offsets or comment anchors will collide.
 //!
@@ -49,8 +49,8 @@
 //!   literal; other integers may round to the target's nearest double.
 //!   NaN sign and payload are not preserved.
 //! - **Loud failure on invalid names.** [`Synth::ident`] asserts (in release
-//!   builds too) that its argument is an identifier, so hostile input -
-//!   bytecode debug info, obfuscated names - fails fast instead of emitting
+//!   builds too) that its argument is an identifier, so hostile input such as
+//!   bytecode debug info or obfuscated names fails fast instead of emitting
 //!   output that will not re-parse.
 //!
 //! # What the caller still owes
@@ -166,7 +166,7 @@ pub struct FnSig {
     /// Luau `<T, U...>` list before the parameter parens.
     pub generics: Option<GenericTypeList>,
     pub params: Vec<Parameter>,
-    /// Trailing `...`, optionally typed - see [`Synth::vararg_param`].
+    /// Trailing `...`, optionally typed. See [`Synth::vararg_param`].
     pub vararg: Option<VarArgParam>,
     /// Luau `: T` return annotation.
     pub return_type: Option<Type>,
@@ -379,7 +379,7 @@ impl Synth {
         Token::new(kind, self.next_span())
     }
 
-    /// An identifier token. Asserts validity - in release builds too, so
+    /// An identifier token. Asserts validity in release builds too, so
     /// untrusted names (bytecode debug info) fail loudly instead of emitting
     /// output that will not re-parse. For names that may not be identifiers,
     /// use [`Synth::field_or_index`] / [`Synth::record`] / [`Synth::string`]
@@ -575,7 +575,7 @@ impl Synth {
         })
     }
 
-    /// String literal from arbitrary bytes - Lua strings are byte arrays and
+    /// String literal from arbitrary bytes. Lua strings are byte arrays and
     /// bytecode constants need not be UTF-8. Bytes outside printable ASCII
     /// render as decimal escapes, so the token text is always valid UTF-8.
     #[must_use]
@@ -686,7 +686,7 @@ impl Synth {
 
     /// Truncate a multi-value expression to exactly one value: calls and
     /// `...` (the only multi-value forms) are parenthesized, everything else
-    /// passes through untouched. Use in single-result positions - the last
+    /// passes through untouched. Use in single-result positions, the last
     /// expression of a call, return, or assignment list where exactly one
     /// value is meant (a bytecode `CALL` requesting one result).
     #[must_use]
@@ -698,7 +698,7 @@ impl Synth {
     }
 
     /// Luau type cast: `expr :: T`. The cast binds to a simple expression, so
-    /// binary, unary, and if-expression operands are parenthesized - as are
+    /// binary, unary, and if-expression operands are parenthesized, as are
     /// cast operands, because chained casts (`a :: T :: U`) are a parse error
     /// in Luau.
     #[must_use]
@@ -809,14 +809,14 @@ impl Synth {
         self.call_node_with_types(receiver, Some(name), Some(type_args), args)
     }
 
-    /// `callee{ fields }` - table-constructor argument form.
+    /// `callee{ fields }`, the table-constructor argument form.
     #[must_use]
     pub fn call_table(&self, callee: Expression, fields: Vec<SynthField<'_>>) -> Expression {
         let args = FunctionArgs::TableConstructor(Box::new(self.table_ctor(fields)));
         self.call_node(callee, None, args)
     }
 
-    /// `callee"content"` - string argument form (content is unquoted).
+    /// `callee"content"`, the string argument form (content is unquoted).
     #[must_use]
     pub fn call_string(&self, callee: Expression, content: &str) -> Expression {
         let args = FunctionArgs::StringLiteral(Literal {
@@ -888,13 +888,13 @@ impl Synth {
         Expression::TableConstructor(Box::new(self.table_ctor(fields)))
     }
 
-    /// `{ v1, v2, ... }` - all-positional table.
+    /// `{ v1, v2, ... }`, an all-positional table.
     #[must_use]
     pub fn array(&self, values: Vec<Expression>) -> Expression {
         self.table(values.into_iter().map(SynthField::Positional).collect())
     }
 
-    /// `{ k = v, ... }` - named-field table. Keys that are not safe
+    /// `{ k = v, ... }`, a named-field table. Keys that are not safe
     /// identifiers fall back to the bracketed string form.
     #[must_use]
     pub fn record(&self, fields: Vec<(&str, Expression)>) -> Expression {
@@ -1040,7 +1040,7 @@ impl Synth {
         self.local_function_node(name, attributes, sig, body, false, false)
     }
 
-    /// Luau `const function name(params) body end` - a read-only local
+    /// Luau `const function name(params) body end`, a read-only local
     /// function binding.
     #[must_use]
     pub fn const_function(
@@ -1217,7 +1217,7 @@ impl Synth {
         self.local_assignment(names, exprs, false, false)
     }
 
-    /// Luau `const names = exprs` - a `local` whose names are read-only.
+    /// Luau `const names = exprs`, a `local` whose names are read-only.
     /// Asserts a non-empty initializer list; the grammar requires one.
     #[must_use]
     pub fn const_local(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
@@ -1462,7 +1462,7 @@ impl Synth {
     }
 
     /// Mid-block `break` (Lua 5.2+; 5.1 and Luau restrict `break` to the
-    /// last statement - use [`Synth::break_`] there).
+    /// last statement, so use [`Synth::break_`] there).
     #[must_use]
     pub fn break_stmt(&self) -> Statement {
         Statement::Break(self.next_span())
@@ -1522,7 +1522,7 @@ impl Synth {
     }
 
     /// A trailing `...` parameter, optionally with a Luau pack annotation. The
-    /// name stays `None` - Lua 5.5's `...name` form is not synthesized here.
+    /// name stays `None` because Lua 5.5's `...name` form is not synthesized here.
     #[must_use]
     pub fn vararg_param(&self, type_annotation: Option<Type>) -> VarArgParam {
         VarArgParam {
@@ -1831,7 +1831,7 @@ impl Synth {
         }))
     }
 
-    /// Luau `[export] type function Name(params) body end` - a compile-time
+    /// Luau `[export] type function Name(params) body end`, a compile-time
     /// type function whose body is ordinary Luau.
     #[must_use]
     pub fn type_function(&self, export: bool, name: &str, sig: FnSig, body: Block) -> Statement {
@@ -2089,21 +2089,21 @@ mod tests {
     #[test]
     fn prefix_positions_wrap_non_prefix_expressions() {
         let synth = Synth::new();
-        // ("s"):rep(2) - a string receiver must be parenthesized.
+        // A string receiver must be parenthesized: ("s"):rep(2).
         let called = synth.method_call(synth.string("s"), "rep", vec![synth.number("2")]);
         let Expression::FunctionCall(call) = &called else {
             panic!("expected call");
         };
         assert!(matches!(call.callee, Expression::Parenthesized(_)));
 
-        // ({}).x - a table prefix must be parenthesized.
+        // A table prefix must be parenthesized: ({}).x.
         let accessed = synth.field(synth.table(vec![]), "x");
         let Expression::Var(Var::FieldAccess(access)) = &accessed else {
             panic!("expected field access");
         };
         assert!(matches!(access.prefix, Expression::Parenthesized(_)));
 
-        // f().x - a call prefix stays bare.
+        // A call prefix stays bare: f().x.
         let chained = synth.field(synth.call(synth.name_expr("f"), vec![]), "x");
         let Expression::Var(Var::FieldAccess(access)) = &chained else {
             panic!("expected field access");
@@ -3069,7 +3069,7 @@ mod tests {
         };
         assert_eq!(literal.text.as_str(), "1e2");
 
-        // Short plain forms win ties and stay readable.
+        // Plain forms win ties.
         let Expression::Number(literal) = synth.number_f64(3.0) else {
             panic!("expected number");
         };

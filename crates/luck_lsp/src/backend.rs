@@ -61,9 +61,9 @@ pub struct DocumentState {
     pub line_index: LineIndex,
     /// Eagerly-parsed AST + comments + parse errors for the current text.
     pub parsed: Arc<luck_parser::ParseResult>,
-    /// Semantic analysis over `parsed`, shared by every provider -
-    /// recomputing it per request made document_highlight and friends
-    /// re-walk the whole file on cursor idle.
+    /// Semantic analysis over `parsed`, shared by every provider.
+    /// Recomputing it per request would make document_highlight and
+    /// friends re-walk the whole file on cursor idle.
     pub semantic: Arc<luck_semantic::SemanticAnalysis>,
 }
 
@@ -139,7 +139,7 @@ pub struct Backend<N: Notifier = Client> {
     config_cache: Arc<ConfigCache>,
     /// Last lint result per document, keyed by version. VS Code fires
     /// codeAction on nearly every cursor move; without this each request
-    /// re-ran the full rule set.
+    /// would re-run the full rule set.
     lint_cache: Arc<RwLock<HashMap<Url, VersionedLints>>>,
 }
 
@@ -197,7 +197,7 @@ impl<N: Notifier> Backend<N> {
         // Opt-in: with no `lint` section, lint with all rules off so only
         // parse errors surface (luck_linter returns parse errors first).
         let lint_config = settings.effective_lint_config();
-        // The document's parse is already cached - lint it directly
+        // The document's parse is already cached, so lint it directly
         // instead of handing the linter raw text to re-parse.
         let lint_diags = Arc::new(luck_linter::lint_parsed(
             &doc.parsed,
@@ -227,7 +227,7 @@ impl<N: Notifier> Backend<N> {
         // tower-lsp dispatches notifications concurrently: two rapid
         // didChange batches can arrive out of order. Applying version
         // N+2's ranges against version N's text silently corrupts the
-        // document FOREVER - reject stale/duplicate versions outright.
+        // document FOREVER, so reject stale/duplicate versions outright.
         if params.text_document.version <= doc.version {
             return false;
         }
@@ -350,9 +350,10 @@ impl<N: Notifier> LanguageServer for Backend<N> {
     }
 
     async fn initialized(&self, _params: InitializedParams) {
-        // Watch config files: without this, ConfigCache entries (including
-        // cached "no config here" negatives) lived until server restart -
-        // editing or CREATING luck.json changed nothing for open editors.
+        // Watch config files. Without this, ConfigCache entries (including
+        // cached "no config here" negatives) would live until server restart,
+        // so editing or CREATING luck.json would change nothing for open
+        // editors.
         let watcher = Registration {
             id: "luck-config-watch".to_string(),
             method: "workspace/didChangeWatchedFiles".to_string(),
@@ -444,8 +445,8 @@ impl<N: Notifier> LanguageServer for Backend<N> {
             if let Some(doc) = documents.get_mut(&uri) {
                 // didSave is unversioned (the params carry no document version),
                 // so the saved on-disk text belongs to the document's CURRENT
-                // version - reusing `doc.version` is correct, not stale. Only
-                // re-sync when the text actually differs from our in-memory copy.
+                // version. Reusing `doc.version` is correct, not stale. Only
+                // re-sync when the text differs from our in-memory copy.
                 if doc.text != text {
                     let version = doc.version;
                     doc.update(text, version);
@@ -545,8 +546,8 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         }
         // `format_range` returns the full reformatted file (statements outside
         // the range are emitted verbatim), so we still emit a whole-file edit.
-        // The "limit to range" guarantee comes from the formatter itself -
-        // text outside the range is preserved byte-for-byte.
+        // The "limit to range" guarantee comes from the formatter itself,
+        // which preserves text outside the range byte-for-byte.
         let edit = TextEdit {
             range: doc.line_index.full_document_range(&doc.text),
             new_text: result.output,
@@ -779,8 +780,8 @@ impl<N: Notifier> Backend<N> {
         documents.get(uri).cloned()
     }
 
-    /// Handler for the `luck/syntaxTree` custom request - returns a
-    /// pretty-printed AST dump for the requested document.
+    /// Serves the `luck/syntaxTree` custom request with a pretty-printed
+    /// AST dump of the requested document.
     pub async fn syntax_tree_request(
         &self,
         params: serde_json::Value,
@@ -798,8 +799,8 @@ impl<N: Notifier> Backend<N> {
         Ok(serde_json::Value::String(syntax_tree::syntax_tree(&doc)))
     }
 
-    /// Handler for `luck/fixAllWorkspace` - applies every available fix
-    /// across every open document and returns a single WorkspaceEdit.
+    /// Serves `luck/fixAllWorkspace` by applying every available fix across
+    /// every open document and returning a single WorkspaceEdit.
     pub async fn fix_all_workspace_request(
         &self,
         _params: serde_json::Value,
@@ -857,8 +858,8 @@ impl CapturedNotifier {
     }
 }
 
-/// Compute the byte length of a text edit's replacement, for tests that want
-/// to verify a range edit didn't touch the whole document.
+/// The span a set of text edits covers, earliest start to latest end. Tests
+/// use it to verify that a range edit did not touch the whole document.
 #[must_use]
 pub fn edit_replacement_span_lines(edits: &[TextEdit]) -> (Position, Position) {
     let start = edits

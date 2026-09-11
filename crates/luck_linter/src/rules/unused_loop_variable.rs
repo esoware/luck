@@ -6,11 +6,11 @@ use crate::rule::{LintContext, Rule};
 /// Luacheck 213: a for-loop induction variable is declared but never
 /// read inside the loop body.
 ///
-/// Why this rule exists in addition to `unused_variable`: the catch-all
-/// `unused_variable` already covers `IteratorVariable` and
-/// `NumericForVariable`. Splitting it out lets users keep loud unused
-/// detection elsewhere while accepting loops that only care about the
-/// iteration count. Both rules firing on the same symbol is acceptable.
+/// Why this is distinct from `unused_variable`: a separate toggle lets
+/// users keep loud unused detection elsewhere while accepting loops that
+/// only care about the iteration count. `unused_variable` skips
+/// `IteratorVariable` and `NumericForVariable`, so the two never
+/// double-fire.
 pub struct UnusedLoopVariable;
 
 impl Rule for UnusedLoopVariable {

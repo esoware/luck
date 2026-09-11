@@ -82,7 +82,7 @@ fn check_file(file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
     let mut result = luck_parser::parse(source, target.lua_version());
     if result.errors.is_empty() {
         // Compile-time checks real Lua performs beyond the grammar (const
-        // writes, goto resolution). Opt-in here only - transform pipelines
+        // writes, goto resolution). Opt-in here only; transform pipelines
         // skip the cost.
         result.errors = luck_parser::validate(&result.block, target.lua_version());
     }
@@ -138,8 +138,6 @@ mod tests {
 
     #[test]
     fn check_reports_parse_errors_via_formatter_path() {
-        // A syntactically broken file must produce at least one error, while a
-        // clean file produces none.
         let broken = luck_formatter::format(
             "local x =",
             LuaTarget::Lua54.lua_version(),

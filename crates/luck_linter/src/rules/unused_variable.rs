@@ -35,8 +35,8 @@ impl Rule for UnusedVariable {
                 continue;
             }
 
-            // Parameters and loop variables are owned by unused_argument and
-            // unused_loop_variable; reporting them here would double-fire.
+            // unused_argument and unused_loop_variable own parameters and
+            // loop variables. Reporting them here would double-fire.
             let kind_str = match symbol.kind {
                 SymbolKind::Local => "variable",
                 SymbolKind::FunctionName => "function",
@@ -56,9 +56,10 @@ impl Rule for UnusedVariable {
                 continue;
             }
 
-            // Write-only symbols get a diagnostic but no fix: renaming only
-            // the declaration turns every later write into a global write.
-            // The `_` rename is safe only when nothing references it at all.
+            // Write-only symbols get a diagnostic but no fix, because
+            // renaming only the declaration turns every later write into
+            // a global write. The `_` rename is safe only when nothing
+            // references the symbol at all.
             let fix = if symbol.reference_ids.is_empty() {
                 Some(Fix {
                     description: format!("prefix `{}` with `_`", symbol.name),

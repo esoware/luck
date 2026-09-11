@@ -75,14 +75,11 @@ fn check_local(local: &LocalAssignment, out: &mut Vec<LintDiagnostic>) {
         return;
     }
 
-    // Mixed case. Lua's multi-return rule: an expression in the
-    // last position of a value list expands to all its return
-    // values; in any earlier position it's truncated to one. So
-    // dropping a trailing `nil` is only safe if the new last
-    // expression isn't a multi-return-capable form that wasn't
-    // already truncated. We require the expression that would
-    // become the new last value to be neither a function call nor
-    // a vararg.
+    // Mixed case. Lua's multi-return rule expands an expression in the
+    // last position of a value list to all its return values, and
+    // truncates it to one anywhere earlier. Dropping a trailing `nil` is
+    // therefore safe only when the expression that becomes the new last
+    // value is neither a function call nor a vararg.
     let target_keep = values.len() - trailing_nils;
     if target_keep == 0 {
         // Handled by the all-nil branch above.
@@ -96,8 +93,8 @@ fn check_local(local: &LocalAssignment, out: &mut Vec<LintDiagnostic>) {
         return;
     }
 
-    // Range to delete: from just past the last kept value (which eats
-    // the separating comma) through the end of the last value.
+    // Delete from just past the last kept value, which eats the
+    // separating comma, through the end of the last value.
     let delete_start = exprs.items[target_keep - 1].span().end;
     let total_end = exprs.last().map(|e| e.span().end).unwrap_or(delete_start);
 

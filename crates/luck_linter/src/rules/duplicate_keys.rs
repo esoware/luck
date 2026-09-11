@@ -52,8 +52,9 @@ impl NodeRule for DuplicateKeys {
                     }
                     Field::Bracketed { key, .. } => {
                         if let luck_ast::Expression::StringLiteral(literal) = key {
-                            // Compare decoded VALUES: `["\97"]` and `["a"]`
-                            // are the same key; raw text says otherwise.
+                            // Compare decoded VALUES. `["\97"]` and
+                            // `["a"]` are the same key even though their
+                            // raw text differs.
                             luck_token::literal::decode_string_literal(
                                 &literal.text,
                                 ctx.semantic.version,

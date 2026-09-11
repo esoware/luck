@@ -6,9 +6,9 @@ use crate::diagnostic::*;
 use crate::rule::{LintContext, NodeRule, Rule};
 use luck_ast::node::{AstTypesBitset, NodeType};
 
-/// Warns when a stdlib call that is marked `must_use` (because it
-/// returns a value with no observable side effects) is invoked in
-/// statement position - i.e. the return value is discarded.
+/// Warns when a stdlib call marked `must_use` (because it returns a
+/// value with no observable side effects) appears in statement position,
+/// which discards its return value.
 pub struct MustUse;
 
 impl Rule for MustUse {
@@ -46,8 +46,8 @@ impl NodeRule for MustUse {
         static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::FunctionCallStmt]);
         Some(&TYPES)
     }
-    // Only function-call *statements* discard the return; expression
-    // contexts (assignments, args, returns, etc.) are fine.
+    // Only function-call *statements* discard the return. Expression
+    // contexts (assignments, args, returns) all consume it.
     fn on_statement(
         &self,
         stmt: &luck_ast::Statement,
@@ -99,8 +99,8 @@ mod tests {
 
     #[test]
     fn flags_discarded_pcall() {
-        // pcall is newly marked must_use - discarding it usually loses
-        // the success bool, which is the whole point of pcall.
+        // Discarding a pcall loses the success bool, which is the whole
+        // point of calling it.
         let messages = warnings("pcall(f)", LuaVersion::Lua54);
         assert!(messages.iter().any(|m| m.contains("pcall")), "{messages:?}");
     }
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn ignores_table_insert() {
-        // table.insert mutates - discarding the result is fine.
+        // table.insert mutates, so discarding the result is fine.
         let messages = warnings("table.insert(t, 1)", LuaVersion::Lua54);
         assert!(messages.is_empty(), "{messages:?}");
     }
@@ -145,8 +145,7 @@ mod tests {
         );
     }
 
-    // A bare f:seek('set') rewind is idiomatic; seek is deliberately
-    // not must_use.
+    // A bare f:seek('set') rewind is idiomatic, so seek is not must_use.
     #[test]
     fn ignores_discarded_file_seek() {
         let messages = warnings("local f = io.open('x')\nf:seek('set')", LuaVersion::Lua54);

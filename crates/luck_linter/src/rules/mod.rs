@@ -70,101 +70,59 @@ use crate::rule::Rule;
 pub enum RuleEntry {
     /// Walks the whole tree itself in `Rule::check`.
     Whole(&'static dyn Rule),
-    /// Driven by the shared single-pass bus walk. Carries both vtables
-    /// because dyn-upcasting needs Rust 1.86 and MSRV is 1.85.
-    Node(&'static dyn Rule, &'static dyn crate::rule::NodeRule),
+    /// Driven by the shared single-pass bus walk.
+    Node(&'static dyn crate::rule::NodeRule),
 }
 
 impl RuleEntry {
     pub fn rule(&self) -> &'static dyn Rule {
         match self {
-            RuleEntry::Whole(rule) | RuleEntry::Node(rule, _) => *rule,
+            RuleEntry::Whole(rule) => *rule,
+            RuleEntry::Node(rule) => *rule,
         }
     }
 }
 
 /// Every registered rule, in registration order. Rules are stateless
-/// units (configuration reaches them through `LintContext::config`),
-/// so the registry is a static: no per-lint boxing or cloning.
+/// units (configuration reaches them through `LintContext::config`), so
+/// the registry is a static with no per-lint boxing or cloning.
 pub static RULES: &[RuleEntry] = &[
     RuleEntry::Whole(&undefined_variable::UndefinedVariable),
     RuleEntry::Whole(&unused_variable::UnusedVariable),
     RuleEntry::Whole(&setting_global::SettingGlobal),
-    RuleEntry::Node(
-        &duplicate_keys::DuplicateKeys,
-        &duplicate_keys::DuplicateKeys,
-    ),
-    RuleEntry::Node(&compare_nan::CompareNan, &compare_nan::CompareNan),
-    RuleEntry::Node(
-        &constant_table_comparison::ConstantTableComparison,
-        &constant_table_comparison::ConstantTableComparison,
-    ),
+    RuleEntry::Node(&duplicate_keys::DuplicateKeys),
+    RuleEntry::Node(&compare_nan::CompareNan),
+    RuleEntry::Node(&constant_table_comparison::ConstantTableComparison),
     RuleEntry::Whole(&almost_swapped::AlmostSwapped),
-    RuleEntry::Node(
-        &type_check_inside_call::TypeCheckInsideCall,
-        &type_check_inside_call::TypeCheckInsideCall,
-    ),
-    RuleEntry::Node(
-        &incorrect_stdlib_use::IncorrectStdlibUse,
-        &incorrect_stdlib_use::IncorrectStdlibUse,
-    ),
-    RuleEntry::Node(&deprecated::Deprecated, &deprecated::Deprecated),
-    RuleEntry::Node(
-        &duplicate_conditions::DuplicateConditions,
-        &duplicate_conditions::DuplicateConditions,
-    ),
+    RuleEntry::Node(&type_check_inside_call::TypeCheckInsideCall),
+    RuleEntry::Node(&incorrect_stdlib_use::IncorrectStdlibUse),
+    RuleEntry::Node(&deprecated::Deprecated),
+    RuleEntry::Node(&duplicate_conditions::DuplicateConditions),
     RuleEntry::Whole(&invalid_lint_filter::InvalidLintFilter),
-    RuleEntry::Node(&for_range::ForRange, &for_range::ForRange),
+    RuleEntry::Node(&for_range::ForRange),
     RuleEntry::Whole(&bad_string_escape::BadStringEscape),
-    RuleEntry::Node(
-        &comparison_precedence::ComparisonPrecedence,
-        &comparison_precedence::ComparisonPrecedence,
-    ),
-    RuleEntry::Node(
-        &integer_parsing::IntegerParsing,
-        &integer_parsing::IntegerParsing,
-    ),
-    RuleEntry::Node(&divide_by_zero::DivideByZero, &divide_by_zero::DivideByZero),
-    RuleEntry::Node(
-        &misleading_and_or::MisleadingAndOr,
-        &misleading_and_or::MisleadingAndOr,
-    ),
+    RuleEntry::Node(&comparison_precedence::ComparisonPrecedence),
+    RuleEntry::Node(&integer_parsing::IntegerParsing),
+    RuleEntry::Node(&divide_by_zero::DivideByZero),
+    RuleEntry::Node(&misleading_and_or::MisleadingAndOr),
     RuleEntry::Whole(&implicit_return::ImplicitReturn),
-    RuleEntry::Node(&format_string::FormatString, &format_string::FormatString),
+    RuleEntry::Node(&format_string::FormatString),
     RuleEntry::Whole(&value_overwritten_before_read::ValueOverwrittenBeforeRead),
     RuleEntry::Whole(&accessing_uninitialized::AccessingUninitialized),
     RuleEntry::Whole(&mutating_uninitialized::MutatingUninitialized),
-    RuleEntry::Node(
-        &restricted_module_paths::RestrictedModulePaths,
-        &restricted_module_paths::RestrictedModulePaths,
-    ),
-    RuleEntry::Node(&empty_block::EmptyBlock, &empty_block::EmptyBlock),
-    RuleEntry::Node(
-        &reversed_for_loop::ReversedForLoop,
-        &reversed_for_loop::ReversedForLoop,
-    ),
-    RuleEntry::Node(
-        &unbalanced_assignment::UnbalancedAssignment,
-        &unbalanced_assignment::UnbalancedAssignment,
-    ),
-    RuleEntry::Node(
-        &if_same_then_else::IfSameThenElse,
-        &if_same_then_else::IfSameThenElse,
-    ),
+    RuleEntry::Node(&restricted_module_paths::RestrictedModulePaths),
+    RuleEntry::Node(&empty_block::EmptyBlock),
+    RuleEntry::Node(&reversed_for_loop::ReversedForLoop),
+    RuleEntry::Node(&unbalanced_assignment::UnbalancedAssignment),
+    RuleEntry::Node(&if_same_then_else::IfSameThenElse),
     RuleEntry::Whole(&unreachable_code::UnreachableCode),
-    RuleEntry::Node(&must_use::MustUse, &must_use::MustUse),
+    RuleEntry::Node(&must_use::MustUse),
     RuleEntry::Whole(&placeholder_read::PlaceholderRead),
-    RuleEntry::Node(&mixed_table::MixedTable, &mixed_table::MixedTable),
+    RuleEntry::Node(&mixed_table::MixedTable),
     RuleEntry::Whole(&loop_executes_once::LoopExecutesOnce),
     RuleEntry::Whole(&shadowing::Shadowing),
-    RuleEntry::Node(
-        &parenthesized_conditions::ParenthesizedConditions,
-        &parenthesized_conditions::ParenthesizedConditions,
-    ),
-    RuleEntry::Node(
-        &redundant_nil_init::RedundantNilInit,
-        &redundant_nil_init::RedundantNilInit,
-    ),
+    RuleEntry::Node(&parenthesized_conditions::ParenthesizedConditions),
+    RuleEntry::Node(&redundant_nil_init::RedundantNilInit),
     RuleEntry::Whole(&string_index_to_field::StringIndexToField),
     RuleEntry::Whole(&merge_adjacent_locals::MergeAdjacentLocals),
     RuleEntry::Whole(&unused_label::UnusedLabel),
@@ -183,47 +141,17 @@ pub static RULES: &[RuleEntry] = &[
     RuleEntry::Whole(&duplicate_function::DuplicateFunction),
     RuleEntry::Whole(&redundant_return::RedundantReturn),
     RuleEntry::Whole(&comment_directive::CommentDirective),
-    RuleEntry::Node(
-        &redundant_native_attribute::RedundantNativeAttribute,
-        &redundant_native_attribute::RedundantNativeAttribute,
-    ),
-    RuleEntry::Node(
-        &unnecessary_negation::UnnecessaryNegation,
-        &unnecessary_negation::UnnecessaryNegation,
-    ),
-    RuleEntry::Node(
-        &duplicate_parameter::DuplicateParameter,
-        &duplicate_parameter::DuplicateParameter,
-    ),
-    RuleEntry::Node(
-        &table_operations::TableOperations,
-        &table_operations::TableOperations,
-    ),
-    RuleEntry::Node(
-        &unnecessary_assert::UnnecessaryAssert,
-        &unnecessary_assert::UnnecessaryAssert,
-    ),
-    RuleEntry::Node(
-        &ambiguous_newline_call::AmbiguousNewlineCall,
-        &ambiguous_newline_call::AmbiguousNewlineCall,
-    ),
-    RuleEntry::Node(&unknown_type::UnknownType, &unknown_type::UnknownType),
-    RuleEntry::Node(
-        &roblox_incorrect_color3_new_bounds::RobloxIncorrectColor3NewBounds,
-        &roblox_incorrect_color3_new_bounds::RobloxIncorrectColor3NewBounds,
-    ),
-    RuleEntry::Node(
-        &roblox_suspicious_udim2_new::RobloxSuspiciousUdim2New,
-        &roblox_suspicious_udim2_new::RobloxSuspiciousUdim2New,
-    ),
-    RuleEntry::Node(
-        &roblox_manual_fromscale_or_fromoffset::RobloxManualFromScaleOrFromOffset,
-        &roblox_manual_fromscale_or_fromoffset::RobloxManualFromScaleOrFromOffset,
-    ),
-    RuleEntry::Node(
-        &roblox_unknown_enum_member::RobloxUnknownEnumMember,
-        &roblox_unknown_enum_member::RobloxUnknownEnumMember,
-    ),
+    RuleEntry::Node(&redundant_native_attribute::RedundantNativeAttribute),
+    RuleEntry::Node(&unnecessary_negation::UnnecessaryNegation),
+    RuleEntry::Node(&duplicate_parameter::DuplicateParameter),
+    RuleEntry::Node(&table_operations::TableOperations),
+    RuleEntry::Node(&unnecessary_assert::UnnecessaryAssert),
+    RuleEntry::Node(&ambiguous_newline_call::AmbiguousNewlineCall),
+    RuleEntry::Node(&unknown_type::UnknownType),
+    RuleEntry::Node(&roblox_incorrect_color3_new_bounds::RobloxIncorrectColor3NewBounds),
+    RuleEntry::Node(&roblox_suspicious_udim2_new::RobloxSuspiciousUdim2New),
+    RuleEntry::Node(&roblox_manual_fromscale_or_fromoffset::RobloxManualFromScaleOrFromOffset),
+    RuleEntry::Node(&roblox_unknown_enum_member::RobloxUnknownEnumMember),
 ];
 
 pub fn all_rules() -> Vec<&'static dyn Rule> {
@@ -237,11 +165,9 @@ const PARSE_ERROR_PSEUDO_RULE: &str = "parse_error";
 
 /// Names of every rule the linter knows about, in registration order,
 /// plus the synthetic `parse_error` pseudo-rule. Derived from
-/// `all_rules` so the two lists cannot drift. The full set is enumerated
-/// with a default config; `all_rules` only filters on config-driven
-/// fields (not presence of a rule), so every rule object is always
-/// constructed regardless of config. Used by `invalid_lint_filter` and
-/// `unknown_rule_names` to validate suppression directives and overrides.
+/// `all_rules` so the two lists cannot drift. `invalid_lint_filter` and
+/// `unknown_rule_names` check suppression directives and config
+/// overrides against this set.
 pub fn registered_rule_names() -> Vec<&'static str> {
     let mut names: Vec<&'static str> = all_rules().iter().map(|rule| rule.name()).collect();
     names.push(PARSE_ERROR_PSEUDO_RULE);
@@ -254,10 +180,8 @@ mod tests {
 
     #[test]
     fn registered_names_match_all_rules() {
-        // `registered_rule_names` is derived from `all_rules`, so the two
-        // cannot drift; this asserts the relationship explicitly. Every
-        // `all_rules` name must appear, and the only extra entry is the
-        // synthetic `parse_error` pseudo-rule.
+        // Every `all_rules` name must appear, and the only extra entry
+        // is the synthetic `parse_error` pseudo-rule.
         let live: Vec<&str> = all_rules().iter().map(|r| r.name()).collect();
         let listed = registered_rule_names();
         for name in &live {

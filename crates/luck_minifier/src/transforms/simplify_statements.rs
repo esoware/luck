@@ -7,7 +7,8 @@ use luck_token::BinOp;
 use crate::expr::is_always_truthy;
 use crate::tokens::default_span as sp;
 
-/// Flatten nested if-statements and convert if-return guard chains to ternary expressions.
+/// Flattens nested if-statements and converts if-return guard chains into
+/// `and`/`or` expressions.
 pub fn simplify(block: Block) -> Block {
     StatementSimplifier.transform_block(block)
 }
@@ -17,7 +18,7 @@ struct StatementSimplifier;
 impl AstTransform for StatementSimplifier {
     fn transform_statement(&mut self, stmt: Statement) -> Statement {
         match stmt {
-            // if a then if b then X end end -> if a and b then X end
+            // `if a then if b then X end end` becomes `if a and b then X end`.
             Statement::IfStatement(ref outer_if)
                 if outer_if.elseif_clauses.is_empty()
                     && outer_if.else_clause.is_none()
@@ -68,9 +69,9 @@ fn try_convert_if_return_chain(block: Block) -> Block {
     if return_values.len() != 1 {
         return block;
     }
-    // `return f()` expands all of f's returns; as the `or` fallback it
-    // would truncate to one value. Parenthesizing doesn't help (`or`
-    // truncates regardless) - reject multi-value fallbacks outright.
+    // `return f()` expands all of f's returns; as the `or` fallback it would
+    // truncate to one value. Parenthesizing does not help, since `or`
+    // truncates regardless, so reject multi-value fallbacks outright.
     if matches!(
         return_values[0],
         Expression::FunctionCall(_) | Expression::VarArg(_)
@@ -229,7 +230,8 @@ mod tests {
 
     #[test]
     fn if_return_ternary_with_semicolons() {
-        // Lua 5.2+ parses semicolons as EmptyStatement - must not break the chain
+        // Lua 5.2+ parses semicolons as EmptyStatement, which must not break
+        // the chain.
         let r = apply("if x then return 1 end;\nif y then return 2 end;\nreturn 0\n");
         assert!(
             r.contains("and") && r.contains("or"),
@@ -239,7 +241,8 @@ mod tests {
 
     #[test]
     fn if_return_ternary_variable_return() {
-        // Return value is a variable - is_always_truthy returns false, so no conversion
+        // The return value is a variable, so is_always_truthy says no and the
+        // chain stays an if.
         let r = apply("if x then return y end\nreturn 0\n");
         assert!(
             r.contains("if"),

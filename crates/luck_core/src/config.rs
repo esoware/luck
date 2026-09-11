@@ -2,8 +2,8 @@
 //! merge semantics, file loading and discovery, build-target resolution, and
 //! project file filtering.
 //!
-//! The four concerns live in focused submodules and are re-exported here, so
-//! the whole surface remains reachable as `luck_core::config::*`.
+//! Each concern lives in its own submodule, re-exported here so everything
+//! stays reachable as `luck_core::config::*`.
 
 mod filter;
 mod load;

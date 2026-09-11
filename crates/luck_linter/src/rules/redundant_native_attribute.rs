@@ -73,8 +73,8 @@ impl AttributeChecker<'_, '_> {
                 continue;
             }
             // Eat one trailing whitespace byte so deleting the attribute
-            // leaves no doubled separator; the remaining text re-parses
-            // either way, this just keeps the output tidy.
+            // leaves no doubled separator. The text re-parses either
+            // way, so this is only about tidy output.
             let mut edit_end = attribute.name.span.end;
             if matches!(
                 self.source.as_bytes().get(edit_end as usize),
@@ -112,8 +112,9 @@ impl NodeRule for RedundantNativeAttribute {
             Statement::LocalFunction(local) => &local.attributes,
             _ => return,
         };
-        // Attribute check first: the directive scan walks the comment
-        // list, so only pay for it on functions that carry attributes.
+        // The attribute check comes first because the directive scan
+        // walks the whole comment list. Only functions that carry
+        // attributes pay for it.
         if attributes.is_empty() || !ctx.semantic.version.is_luau() || !has_native_directive(ctx) {
             return;
         }

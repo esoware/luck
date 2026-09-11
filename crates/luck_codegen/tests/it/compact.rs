@@ -353,7 +353,7 @@ fn luau_interpolated_string_with_trailing_text() {
 
 #[test]
 fn luau_local_type_annotation() {
-    // Annotations are part of the AST now and must survive round-tripping.
+    // Type annotations live in the AST and must survive round-tripping.
     vluau("local  x :  number  =  5", "local x:number=5");
 }
 
@@ -612,7 +612,6 @@ fn adjacency_end_if() {
 
 #[test]
 fn adjacency_end_call() {
-    // `end` followed by `f()` - end is a keyword, f is identifier, needs space
     let out = audit_reparse("do end\nf()", LuaVersion::Lua51);
     assert!(
         !out.contains("endf"),
@@ -828,7 +827,6 @@ fn adjacency_else_return() {
 
 #[test]
 fn adjacency_paren_close_do() {
-    // `pairs(t)do` - `)` then `do` - no space needed since `)` is not a word
     let out = audit_reparse("for k,v in pairs(t) do end", LuaVersion::Lua51);
     assert!(out.contains(")do"), "paren/do no space needed: {:?}", out);
 }
@@ -850,7 +848,7 @@ fn adjacency_hash_paren() {
 
 #[test]
 fn adjacency_tilde_tilde() {
-    // bitwise not: ~(~x) in Lua 5.3+
+    // Lua 5.3+: `~` is bitwise not, so `~(~y)` nests two of them.
     audit_reparse("x = ~(~y)", LuaVersion::Lua53);
 }
 
@@ -859,8 +857,8 @@ fn adjacency_double_colon_identifier() {
     audit_reparse("::lbl:: x = 1", LuaVersion::Lua52);
 }
 
-/// Parse, compact, reparse, compact again - the two compact outputs must be identical.
-/// This catches cases where the output parses but with DIFFERENT semantics.
+/// Parse, compact, reparse, compact again. The two compact outputs must be
+/// identical, which catches output that re-parses but with different meaning.
 fn verify_semantic_identity(source: &str, version: LuaVersion) {
     let first_compact = roundtrip_compact(source, version);
     let second_compact = roundtrip_compact(&first_compact, version);
@@ -991,7 +989,7 @@ fn exact_output_float_dotdot() {
 
 #[test]
 fn exact_output_dotnum_dotdot() {
-    // `return` is a word, `.5` is a number (word) - needs space between them
+    // `.5` is a number, so it is word-like and cannot glue to `return`.
     v51("return .5 .. 'x'", "return .5 ..'x'");
 }
 
@@ -1007,8 +1005,7 @@ fn exact_output_end_if() {
 
 #[test]
 fn exact_output_return_string() {
-    // return followed by string literal - return is a word, "hello" starts with quote
-    // quote is not a word, so no space needed between return and "
+    // A quote is not word-like, so `return` glues straight onto the literal.
     v51(
         "function f() return 'hello' end",
         "function f()return'hello'end",
@@ -1042,7 +1039,7 @@ fn exact_output_attribute_equal() {
 
 #[test]
 fn exact_output_hash_hash() {
-    // ## - hash followed by hash. Hash is not a "word", so no space needed
+    // `#` is not word-like, so `##` needs no separator.
     v51("x = ##t", "x=##t");
 }
 
@@ -1053,20 +1050,17 @@ fn exact_output_label_label() {
 
 #[test]
 fn exact_output_end_paren() {
-    // end followed by ; then (f)() - the semicolon (EmptyStatement) is preserved
-    // In Lua 5.1, empty statements aren't supported, so this uses 5.2+
+    // Lua 5.2+: a bare `;` is an EmptyStatement, which survives the round trip.
     verify_roundtrip("do end\n;(f)()", "do end;(f)()", LuaVersion::Lua52);
-    // In Lua 5.1 (no empty stmts), the parser treats ; differently -
-    // the input `do end\n;(f)()` may not parse the same way.
-    // Semicolon needed: `do end;(f)()` - without it, `end(f)` would be ambiguous
+    // Lua 5.1 has no empty statement, so the input carries no `;` and the
+    // printer must insert one. Without it `end(f)` reads as a call.
     verify_roundtrip("do end\n(f)()", "do end;(f)()", LuaVersion::Lua51);
 }
 
 #[test]
 fn semicolon_preserved_between_calls() {
-    // f(x);(g)(y) - the semicolon separates two call statements.
-    // Without it, it would be f(x)(g)(y) - a chained call.
-    // The semicolon appears as EmptyStatement in the AST.
+    // The `;` separates two call statements. Dropping it would leave the
+    // chained call `f(x)(g)(y)`.
     verify_roundtrip("f(x);(g)(y)", "f(x);(g)(y)", LuaVersion::Lua52);
 }
 
@@ -1077,19 +1071,17 @@ fn semicolon_identity_call_paren() {
 
 #[test]
 fn no_semicolon_chained() {
-    // f(x)(g)(y) without semicolon - single chained call
+    // Without the `;` this is one chained call, and must stay one.
     verify_semantic_identity("f(x)(g)(y)", LuaVersion::Lua51);
 }
 
 #[test]
 fn exact_output_not_paren() {
-    // `not` is a word, `(` is not - no space needed
     v51("x = not(y)", "x=not(y)");
 }
 
 #[test]
 fn exact_output_not_string() {
-    // `not` followed by string literal - word then quote, no space needed
     v51("x = not 'hello'", "x=not'hello'");
 }
 
@@ -1100,12 +1092,11 @@ fn exact_output_not_table() {
 
 #[test]
 fn adjacency_end_left_paren_call() {
-    // (f)() after end - this is a valid separate statement
     audit_reparse("do end\n(f)()", LuaVersion::Lua51);
 }
 
-// Note: `end"foo"` can't occur in valid ASTs - bare string literals aren't statements,
-// and `end` is a keyword that can't be a call prefix.
+// `end"foo"` cannot occur in a valid AST. A bare string literal is not a
+// statement, and `end` is a keyword, so it can never be a call prefix.
 
 #[test]
 fn adjacency_stress() {
@@ -1129,7 +1120,7 @@ fn adjacency_stress() {
 
 #[test]
 fn semicolon_after_number_before_paren_call() {
-    // `x = 1\n(f)()` - two statements; without semicolon, `1(f)` looks like a call
+    // Two statements. Without the `;`, `1(f)` reads as a call.
     v51("x = 1\n(f)()", "x=1;(f)()");
 }
 
@@ -1146,13 +1137,12 @@ fn bug_dotdot_before_dot_number_semantic() {
 
 #[test]
 fn exact_output_dotdot_dot_number() {
-    // ".." followed by ".5" - needs space to prevent "...5"
     v51(r#"x = "a" .. .5"#, r#"x="a".. .5"#);
 }
 
 #[test]
 fn bug_number_dotdot_dot_number() {
-    // number .. .5 - both number-before-dotdot and dotdot-before-dotnumber apply
+    // Both hazards at once: number before `..`, and `..` before a dot number.
     audit_reparse("x = 1 .. .5", LuaVersion::Lua51);
 }
 
@@ -1168,7 +1158,6 @@ fn exact_output_number_dotdot_dot_number() {
 
 #[test]
 fn audit_bracket_long_string_key() {
-    // {[ [[key]] ] = 1} - bracket field with long string key
     audit_reparse("x = {[ [[key]] ] = 1}", LuaVersion::Lua51);
 }
 

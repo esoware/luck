@@ -89,7 +89,7 @@ impl<'src> Parser<'src> {
         &self.current.kind
     }
 
-    /// One token of lookahead - all the Lua grammar ever needs.
+    /// One token of lookahead, all the Lua grammar ever needs.
     #[inline]
     pub(crate) fn peek_next(&self) -> &TokenKind {
         &self.next.kind
@@ -110,7 +110,7 @@ impl<'src> Parser<'src> {
         self.advance().span
     }
 
-    /// `expect` for fixed-spelling tokens: returns only the span.
+    /// `expect` for fixed-spelling tokens, returning only the span.
     #[inline]
     pub(crate) fn expect_span(&mut self, kind: &TokenKind) -> Result<Span, ParseError> {
         if std::mem::discriminant(self.peek()) == std::mem::discriminant(kind) {
@@ -314,7 +314,7 @@ impl<'src> Parser<'src> {
                     }
                     break;
                 }
-                // Block-ending tokens: don't consume, let caller handle
+                // Block-ending tokens, left for the caller to consume
                 TokenKind::End
                 | TokenKind::Else
                 | TokenKind::ElseIf
@@ -342,7 +342,6 @@ impl<'src> Parser<'src> {
                 }
                 _ => {
                     // Unknown token that doesn't start a statement and isn't a block-ender.
-                    // Error-recover: record the error, synchronize, and keep parsing.
                     let span = self.current_span();
                     self.error(span, format!("unexpected token {}", self.peek()));
                     self.synchronize();
@@ -379,9 +378,9 @@ impl<'src> Parser<'src> {
     }
 
     /// Consume a closing `>` in type context, recovering if absent.
-    /// Adjacent tokens lex greedily - `Foo<Bar<T>>` produces `ShiftRight`,
-    /// `Foo<T>=x` produces `GreaterEqual` - so those are split: the first
-    /// `>`'s span is returned and the remainder stays current.
+    /// Adjacent tokens lex greedily, so `Foo<Bar<T>>` produces `ShiftRight`
+    /// and `Foo<T>=x` produces `GreaterEqual`. Both are split here, returning
+    /// the first `>`'s span and leaving the remainder current.
     pub(crate) fn consume_type_close_angle(&mut self) -> Span {
         match self.peek() {
             TokenKind::Greater => self.advance_span(),
@@ -404,7 +403,6 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Parse a comma-separated list of expressions.
     pub(crate) fn parse_expression_list(&mut self) -> Punctuated<luck_ast::Expression> {
         let mut exprs = vec![self.parse_expression(0)];
 
