@@ -28,8 +28,7 @@ just bench --bench parser                # criterion benches, one per stage
 ```
 
 Pre-commit gate: `just fmt && just lint`, plus `just test -p <crate-you-touched>`.
-Run full `just ready` only for cross-cutting changes. (In Claude Code, a
-PostToolUse hook already runs `cargo fmt` after every `.rs` edit.)
+Run full `just ready` only for cross-cutting changes.
 
 ## Invariants
 
@@ -111,9 +110,10 @@ Multi-step task recipes live in `.agents/skills/*/SKILL.md`: adding a lint
 rule, formatter rule, minifier transform, config option, LSP provider, or
 Lua-version feature, bumping versions, and releasing. When a task matches
 one, read and follow it - each encodes registration steps and cross-crate
-plumbing that is easy to miss. (`.claude/skills/` holds discovery stubs that
-inline the `.agents/skills/` copy when invoked; always edit the
-`.agents/skills/` copies.)
+plumbing that is easy to miss. `.claude/skills` is a directory symlink to
+`../.agents/skills`, so both harnesses use the same files. Always edit the
+`.agents/skills/` copies. On Windows, enable Developer Mode or use an elevated
+shell and set `git config core.symlinks true` before checking out symlinks.
 
 Versioning is lockstep: every publishable crate and the VS Code extension
 share one workspace version. Follow `.agents/skills/bump-versions/SKILL.md`;
