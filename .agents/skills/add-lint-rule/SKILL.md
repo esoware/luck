@@ -1,38 +1,38 @@
 ---
 name: add-lint-rule
-description: Adds a new lint rule to luck_linter end-to-end - rule file, category choice, bus vs whole-tree shape, registration, auto-fix policy, and required tests. Use when asked to add a lint, warn when X, flag Y, detect a pattern, or for any edit under crates/luck_linter/src/rules/.
+description: Adds a new lint rule to luck_linter end-to-end, covering the rule file, category choice, bus vs whole-tree shape, registration, auto-fix policy, and required tests. Use when asked to add a lint, warn when X, flag Y, detect a pattern, or for any edit under crates/luck_linter/src/rules/.
 ---
 
 # Add a lint rule
 
 Rules are stateless `Rule` impls emitting `LintDiagnostic`s; everything they
 see arrives through `LintContext`. Before writing anything, read one existing
-rule of similar shape from `crates/luck_linter/src/rules/` and mirror it -
-the code is the source of truth, not this file.
+rule of similar shape from `crates/luck_linter/src/rules/` and mirror it.
+The code is the source of truth, not this file.
 
 ## 1. Pick a category
 
 `Category` lives in `luck_core` (re-exported from `luck_linter::diagnostic`):
 `Correctness` (the only default-on category; requires zero false positives on
 valid, idiomatic Lua), `Suspicious` (off; intentional false positives
-allowed), `Style`, `Performance`. If you can't prove zero false positives -
-including on the module pattern (`local t = {} function t:m() end return t`),
-branch initialization (`local x if c then x = 1 end`), and closures - the
-rule goes in `Suspicious`.
+allowed), `Style`, `Performance`. The rule goes in `Suspicious` unless you
+can prove zero false positives, including on the module pattern
+(`local t = {} function t:m() end return t`), branch initialization
+(`local x if c then x = 1 end`), and closures.
 
 ## 2. Pick the shape
 
-- **Node-local (preferred)**: the rule fires by matching a single statement
+- **Node-local (preferred).** The rule fires by matching a single statement
   or expression with no traversal state. Implement the `NodeRule` hooks and
-  declare `node_types()` - omitting a type the hooks match would silently
-  disable the rule for it; the debug-build dual-dispatch verifier catches the
-  mismatch in any test run. `Rule::check` delegates to `bus::run_single`.
-  Never recurse inside hooks - the bus walks, hooks fire once per node. If a
-  hook needs the enclosing node, use `ctx.nodes` (parent links) instead of
-  promoting the rule to whole-tree.
-- **Whole-tree**: the rule needs traversal state (scope stacks,
+  declare `node_types()`; omitting a type the hooks match would silently
+  disable the rule for it, though the debug-build dual-dispatch verifier
+  catches the mismatch in any test run. `Rule::check` delegates to
+  `bus::run_single`. Never recurse inside hooks: the bus walks, and hooks
+  fire once per node. If a hook needs the enclosing node, use `ctx.nodes`
+  (parent links) instead of promoting the rule to whole-tree.
+- **Whole-tree.** The rule needs traversal state (scope stacks,
   statement-sequence windows, CFG). Implement `check` directly with an
-  internal `Visitor` - never hand-rolled recursion, which misses nested
+  internal `Visitor`, never hand-rolled recursion, which misses nested
   blocks.
 
 Cross-cutting rules:
@@ -43,11 +43,11 @@ Cross-cutting rules:
   constructor state.
 - Build diagnostics with `LintDiagnostic::new(self.name(), "message", span)`
   plus optional `.with_help(..)`. Rules never set category or severity per
-  diagnostic - the driver stamps them.
+  diagnostic; the driver stamps them.
 
 ## 3. Auto-fix (optional)
 
-Attach a `Fix` only when the rewrite is **always** safe - there is no
+Attach a `Fix` only when the rewrite is **always** safe. There is no
 unsafe-fix tier; if it is sometimes wrong, don't ship it. Edit spans cover
 exactly the replaced tokens, the edited output must re-parse, and a symbol
 rename must edit every reference, not just the declaration.
@@ -56,18 +56,18 @@ rename must edit every reference, not just the declaration.
 
 In `crates/luck_linter/src/rules/mod.rs`: add the `pub mod` and a `RULES`
 entry, keeping category grouping and mirroring neighboring entries (node
-rules pass the same value twice - two vtables). The `rule_count_locked` test
+rules pass the same value twice, for two vtables). The `rule_count_locked` test
 hard-codes the rule count; bump it and update the files its message names.
 
 ## 5. Tests
 
 Inline `#[cfg(test)]` module in the rule's own file using the shared
 `run_rule` helper: positive cases named `flags_*`, negatives `ignores_*`,
-count assertions carrying a `"{diags:?}"` message, plus - only if a fix
-ships - a fix test that applies the edit and asserts the result re-parses.
+count assertions carrying a `"{diags:?}"` message. If a fix ships, add a fix
+test that applies the edit and asserts the result re-parses.
 
-Do NOT write a per-rule suppression test: suppression is applied by the
-`lint()` driver, not `Rule::check`, and is covered centrally. Add a
+Do NOT write a per-rule suppression test. The `lint()` driver applies
+suppression, not `Rule::check`, and central tests already cover it. Add a
 driver-level test in `src/lib.rs` only if the rule emits diagnostics whose
 spans don't sit on the offending statement.
 

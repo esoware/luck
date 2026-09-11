@@ -1,12 +1,12 @@
 ---
 name: add-lsp-provider
-description: Adds or extends a language-server feature in luck_lsp - hover, completion, references, rename, semantic tokens, code actions, or any new capability - through the provider/export/handler/capability four-site pattern. Use when asked to add LSP or editor-feature support, or for any edit under crates/luck_lsp/src/providers/.
+description: Adds or extends a language-server feature in luck_lsp through the provider/export/handler/capability four-site pattern, whether that is hover, completion, references, rename, semantic tokens, code actions, or any new capability. Use when asked to add LSP or editor-feature support, or for any edit under crates/luck_lsp/src/providers/.
 ---
 
 # Add an LSP provider
 
 luck_lsp is a library-only tower-lsp backend served via `luck lsp`. Every
-feature follows the same four-site pattern - miss the last site and the
+feature follows the same four-site pattern. Miss the last site and the
 handler is dead code:
 
 1. **Provider module** (`src/providers/<feature>.rs`): a pure function taking
@@ -19,16 +19,16 @@ handler is dead code:
 3. **Backend handler** in `backend.rs`: snapshot the document, call the
    provider, map errors. Mirror a neighboring handler for the lock/snapshot
    pattern; don't hold the documents lock across heavy work.
-4. **Capability registration** in `initialize()` - the step that gets
-   forgotten; without it clients never call the handler.
+4. **Capability registration** in `initialize()`. This is the step that gets
+   forgotten, and without it clients never call the handler.
 
 Provider correctness rules:
 
 - LSP positions are UTF-16 line/character. Convert at the boundary via
-  `LineIndex` (`src/line_index.rs`) - never byte arithmetic on protocol
+  `LineIndex` (`src/line_index.rs`), never byte arithmetic on protocol
   positions.
-- Reuse `DocumentState`'s cached parse/analysis - re-running
-  `parse`/`analyze` per keystroke is this crate's known perf trap.
+- Reuse `DocumentState`'s cached parse/analysis. Re-running
+  `parse`/`analyze` per keystroke is this crate's known performance trap.
 - Name resolution goes through `luck_semantic`'s scope tree, not text
   matching.
 - Reuse span/walk helpers from `providers/cursor.rs` before writing a new

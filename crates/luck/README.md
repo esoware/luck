@@ -5,11 +5,11 @@ Umbrella crate re-exporting the luck toolchain as a single dependency.
 ## Overview
 
 `luck` is the facade. Add it once instead of tracking each `luck_*` crate
-individually. The crate carries no logic of its own — everything is a
+individually. The crate carries no logic of its own. Everything is a
 re-export of the underlying `luck_*` crates.
 
-The parse core — `token`, `lexer`, `ast`, `parser`, `core` — is always
-present. Every downstream stage is behind its own Cargo feature, off by
+The parse core, `token`, `lexer`, `ast`, `parser`, and `core`, is always
+present. Every downstream stage sits behind its own Cargo feature, off by
 default; the `full` feature turns all of them on.
 
 ## Re-exports
@@ -50,4 +50,4 @@ let bundled = bundler::bundle(&entry_path, target, &search_paths, &project_root)
 let minified = minifier::minify(&bundled.output, target, &Default::default(), "bundle.lua")?;
 ```
 
-The underlying crates remain published and can still be depended on individually if you only need one piece.
+The underlying crates stay published, so you can depend on a single one if that is all you need.

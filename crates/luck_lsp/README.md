@@ -28,9 +28,9 @@ Text-document features:
   the `init` parent-parent rule all match the bundler)
 
 Custom requests:
-- `luck/syntaxTree` — debug AST dump for the requested document
-- `luck/fixAllWorkspace` — server-computed WorkspaceEdit applying every
-  available fix across every open document
+- `luck/syntaxTree` returns a debug AST dump for the requested document
+- `luck/fixAllWorkspace` returns a server-computed WorkspaceEdit applying
+  every available fix across every open document
 
 ## Config
 
@@ -55,17 +55,17 @@ cargo build -p luck_cli --release
 ## Transports
 
 ```sh
-luck lsp                    # stdio (default — what every editor uses)
-luck lsp --socket 9257      # TCP on 127.0.0.1:9257 — useful for debugging
+luck lsp                    # stdio (the default, and what every editor uses)
+luck lsp --socket 9257      # TCP on 127.0.0.1:9257, useful for debugging
 ```
 
 ## Editor integration
 
 ### VS Code
 
-Use the bundled `luck.luck` extension under `editors/vscode/` — it ships the
+Use the bundled `luck.luck` extension under `editors/vscode/`. It ships the
 server binary, wires every capability above, and registers commands for
-restart / show output / view syntax tree / apply-all-fixes / etc.
+restart, show output, view syntax tree, and apply-all-fixes.
 
 ### Neovim (nvim-lspconfig)
 

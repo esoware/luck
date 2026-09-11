@@ -32,23 +32,23 @@ wall-clock drift.
 
 ### Stable IDs are a contract
 
-Criterion benchmark IDs (`parser/roact`, `minifier/gen_full_lua54.lua`, …)
+Criterion benchmark IDs (`parser/roact`, `minifier/gen_full_lua54.lua`, ...)
 are the join key for CodSpeed history and saved baselines. **Do not rename
-or restructure them** - the group name plus the `BenchmarkId` parameter
-must stay exactly comparable across commits. Internals are free to change
-under stable IDs.
+or restructure them.** The group name plus the `BenchmarkId` parameter must
+stay exactly comparable across commits. Internals are free to change under
+stable IDs.
 
 ## Corpus
 
 `corpus.rs` assembles deterministic bench inputs of three kinds:
 
-- **Generated** - full-grammar `luck_testgen` output at fixed seeds, so the
+- **Generated.** Full-grammar `luck_testgen` output at fixed seeds, so the
   corpus tracks the current grammar, plus the idiomatic fixtures as a small
   hand-written sample.
-- **Real single files** - mirrored in `esoware/luck-bench-corpus`, fetched
+- **Real single files.** Mirrored in `esoware/luck-bench-corpus`, fetched
   by pinned commit SHA (a 13k-line Roblox admin script; a 2.2 MB
   single-line obfuscated VM as an adversarial case).
-- **Real projects** - Roact (~80 Luau files) and Penlight (~40 Lua 5.1
+- **Real projects.** Roact (~80 Luau files) and Penlight (~40 Lua 5.1
   files), fetched as pinned upstream tarballs.
 
 Everything network-fetched lands in the gitignored `corpus/` cache and is
@@ -75,7 +75,7 @@ Benches install `NeverGrowInPlaceAllocator`, a thin wrapper over
 [`MiMalloc`] (the CLI's production allocator) that deliberately omits
 `realloc`. A native `realloc` may grow in place or move depending on the
 allocator's internal state, which is nondeterministic and adds large
-variance; omitting it forces the default never-grow-in-place path - the
+variance; omitting it forces the default never-grow-in-place path, the
 consistent worst case, so results are stable.
 
 [`MiMalloc`]: https://docs.rs/mimalloc-safe

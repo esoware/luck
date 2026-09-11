@@ -3,7 +3,7 @@
 luck is a Lua/Luau bundler, minifier, formatter, linter, and language server:
 multi-file Lua in, single bundled file out. Supports Lua 5.1-5.5 and Luau
 (standalone and Roblox). Rust workspace, edition 2024, MSRV 1.88; lexer,
-parser, AST, and codegen are hand-written - no external parser dependency.
+parser, AST, and codegen are hand-written, with no external parser dependency.
 
 Read `ARCHITECTURE.md` for the pipeline, the crate map, the three target
 axes, and design rationale before cross-crate work. Each crate's README
@@ -38,14 +38,15 @@ Rules that look optional but are backed by tests or hard-won bugs:
   `StdlibEnvironment` (standalone vs Roblox stdlib), `LuaTarget` (user-facing
   dialect; projects onto the other two once at each entry boundary).
   Codegen-side crates take `LuaVersion` only, so `-t roblox` and `-t luau`
-  minify identically - correct, not a bug. Details in `ARCHITECTURE.md`.
+  minify identically. That is correct, not a bug. Details in
+  `ARCHITECTURE.md`.
 - **Version gating goes through `LuaVersion::has_<feature>` predicates**,
   never direct variant comparison (the only `is_` forms are
   `is_luau`/`is_roblox`).
 - **Emitters never read source text.** Leaf text comes from token-carried
-  values; source is consulted only for trivia fidelity and must degrade
-  gracefully when absent - synthetic ASTs must stay printable.
-- **Exhaustive matches in transforms and visitors** - no `_ =>` catch-alls,
+  values; emitters consult source only for trivia fidelity and must degrade
+  gracefully when it is absent, because synthetic ASTs must stay printable.
+- **Exhaustive matches in transforms and visitors.** No `_ =>` catch-alls,
   so a new variant makes the compiler point at every consumer.
 - **Purity analysis assumes metamethods.** Only literal arithmetic is pure;
   variable reads, indexing, arithmetic, comparison, and concat may all invoke
@@ -56,11 +57,11 @@ Rules that look optional but are backed by tests or hard-won bugs:
   `luck_core::diagnostics::errors`; build with `error_at`/`warning_at`, never
   inline literal codes. Parse failures are always E008.
 - **Config is one typed source of truth**: `luck.json`, types in `luck_core`,
-  `deny_unknown_fields` everywhere. The VS Code schema is generated - never
+  `deny_unknown_fields` everywhere. The VS Code schema is generated. Never
   hand-edit `editors/vscode/schemas/luckrc.schema.json`; run `just schema`.
   Format-option precedence: defaults < `.editorconfig` < `luck.json` `format`.
-- **No global string interner** - a shared interner's lock serializes rayon
-  workers; identifiers stay per-token `CompactString`.
+- **No global string interner.** A shared interner's lock serializes rayon
+  workers, so identifiers stay per-token `CompactString`.
 
 ## Source directives (tests need the exact syntax)
 
@@ -93,23 +94,23 @@ lint-clean.
   are required, not optional: `stmt`, `expr`, `ast`, `ir`, `span`, `lhs`,
   `rhs`, `args`, `params`. `ctx`/`cfg` are banned except three grandfathered
   uses (formatter `Ctx`, linter `LintContext`, control-flow graph in
-  `luck_linter/src/cfg.rs`) - and never `cfg` for "config". Bools start with
+  `luck_linter/src/cfg.rs`), and never `cfg` for "config". Bools start with
   `is_`/`has_`/`should_`/`can_`; collections are plural.
-- Comments: default to none - match the sparse density of the file. Write one
-  only for what code can't say: a why, a non-obvious invariant, an external
+- Comments: default to none, matching the sparse density of the file. Write
+  one only for what code can't say: a why, a non-obvious invariant, an external
   fact. Version markers on match arms (`// Lua 5.2+`, `// Luau`) are
   mandatory. Plain ASCII, complete sentences. No TODO/FIXME, no step
   narration, no banners, no comments describing the edit itself.
-- Scope: no overengineering - three similar lines beat a premature helper; no
-  speculative config or single-caller helpers. No `unwrap()` on parser/lexer
-  input; produce `SourceError`.
+- Scope: no overengineering. Three similar lines beat a premature helper, and
+  there is no speculative config or single-caller helpers. No `unwrap()` on
+  parser/lexer input; produce `SourceError`.
 
 ## Workflows
 
 Multi-step task recipes live in `.agents/skills/*/SKILL.md`: adding a lint
 rule, formatter rule, minifier transform, config option, LSP provider, or
 Lua-version feature, bumping versions, and releasing. When a task matches
-one, read and follow it - each encodes registration steps and cross-crate
+one, read and follow it. Each encodes registration steps and cross-crate
 plumbing that is easy to miss. `.claude/skills` is a directory symlink to
 `../.agents/skills`, so both harnesses use the same files. Always edit the
 `.agents/skills/` copies. On Windows, enable Developer Mode or use an elevated

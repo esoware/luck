@@ -7,10 +7,10 @@ version `0.0.0`).
 ## Overview
 
 Two generators turn a `(seed, LuaVersion, statement_budget)` triple into a
-source string. Both are fully deterministic - same inputs, byte-identical
-output, on every platform - which is what lets the generated programs seed
-benchmark corpora and fuzz corpora without committing large files. The two
-profiles trade off differently:
+source string. Both are fully deterministic: same inputs, byte-identical
+output, on every platform. That is what lets the generated programs seed
+benchmark and fuzz corpora without committing large files. The two profiles
+trade off differently:
 
 | Generator | Entry | Guarantee | Purpose |
 |-----------|-------|-----------|---------|
@@ -31,7 +31,7 @@ no calling a number, no division by a literal zero, no reads of an
 uninitialized variable. Loops are counter-bounded and library calls avoid
 observable nondeterminism (`pairs` order, time, GC). Every top-level
 binding is `print`ed at the end, so a transform that wrongly eliminates or
-reorders an assignment changes stdout - the signal the differential
+reorders an assignment changes stdout, the signal the differential
 harness keys on. A small name pool with a deliberate 30% bare-stem
 shadowing rate exercises the shadowing bug class that flat analyses miss.
 
@@ -41,25 +41,24 @@ shadowing rate exercises the shadowing bug class that flat analyses miss.
 table with a constructor and methods, then a call- and table-heavy body,
 then a module return) rather than statement soup. Output is **not**
 runtime-safe: it may index nil, divide strings, or call numbers. In
-exchange it reaches constructs the runtime profile cannot - `goto`/labels,
+exchange it reaches constructs the runtime profile cannot: `goto`/labels,
 Luau type annotations and casts, named varargs, string interpolation,
-compound assignment, attributes, hex/binary literals - each gated behind
-the matching `LuaVersion::has_*` predicate so a program never contains a
-construct its version rejects.
+compound assignment, attributes, and hex/binary literals. Each is gated
+behind the matching `LuaVersion::has_*` predicate, so a program never
+contains a construct its version rejects.
 
 ## Property tests
 
 `tests/roundtrip.rs` runs the workspace's hard invariants over both
 generators, across every version and many seeds:
 
-- **Parse cleanliness** - every generated program parses with zero errors.
-- **Compact round-trip** - `compact` output re-parses cleanly.
-- **Format idempotency + structure** - `format(format(x)) == format(x)`,
-  the output re-parses, and the AST structure is preserved
-  (`blocks_equiv`), on both the source-in and AST-in (`format_block`)
-  paths.
-- **Minify idempotency** - minified output re-parses, size is stable
-  across passes, and a byte-exact fixpoint is reached from the second pass
+- **Parse cleanliness.** Every generated program parses with zero errors.
+- **Compact round-trip.** `compact` output re-parses cleanly.
+- **Format idempotency and structure.** `format(format(x)) == format(x)`,
+  the output re-parses, and the AST structure survives (`blocks_equiv`),
+  on both the source-in and AST-in (`format_block`) paths.
+- **Minify idempotency.** Minified output re-parses, size is stable
+  across passes, and a byte-exact fixpoint arrives from the second pass
   onward.
 
 These sweeps are the enforcement mechanism behind the formatter and
