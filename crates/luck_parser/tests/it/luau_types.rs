@@ -97,25 +97,20 @@ fn optional_type() {
 }
 
 #[test]
-fn negation_type_binds_tightly() {
-    assert!(matches!(alias_type("type X = ~nil"), Type::Negation(_)));
-    let Type::Negation(negation) = alias_type("type X = ~nil?") else {
-        panic!("expected negated optional");
-    };
-    assert!(matches!(negation.type_value, Type::Optional(_)));
-
-    let Type::Negation(outer) = alias_type("type X = ~~nil") else {
-        panic!("expected outer negation");
-    };
-    assert!(matches!(outer.type_value, Type::Negation(_)));
-    let Type::Union(union) = alias_type("type X = ~string | nil") else {
-        panic!("expected union");
-    };
-    assert!(matches!(union.types.first(), Some(Type::Negation(_))));
-    assert!(matches!(
-        alias_type("type X = ~(string | nil)"),
-        Type::Negation(_)
-    ));
+fn rejects_negation_syntax() {
+    for source in [
+        "return ~1",
+        "type X = ~nil",
+        "type X = ~nil?",
+        "type X = ~~nil",
+        "type X = ~string | nil",
+        "type X = ~(string | nil)",
+    ] {
+        let result = crate::common::parse_luau(source);
+        assert!(!result.errors.is_empty(), "{source}");
+    }
+    let result = crate::common::parse_luau("return 1 ~= 2");
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
 }
 
 #[test]

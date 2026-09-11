@@ -5,15 +5,16 @@ use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_ast::visitor::Visitor;
-use luck_token::{BinOp, CompactString, UnOp};
+use luck_token::{BinOp, CompactString, LuaVersion, UnOp};
 
-use crate::expr::{extract_boolean, ident_name, is_nil, is_pure_expression};
+use crate::expr::{extract_boolean, ident_name, is_env_binding, is_nil, is_pure_expression};
 use crate::tokens::default_span as sp;
 
-/// Remove unused locals, dead branches, and trivial statements, looping until fixed-point.
-pub fn remove(mut block: Block) -> Block {
+/// Removes unused locals, dead branches, and trivial statements, looping to a
+/// fixpoint.
+pub fn remove(mut block: Block, version: LuaVersion) -> Block {
     loop {
-        let (new_block, changed) = remove_unused_locals(block);
+        let (new_block, changed) = remove_unused_locals(block, version);
         block = new_block;
         if !changed {
             break;
@@ -22,10 +23,11 @@ pub fn remove(mut block: Block) -> Block {
     block
 }
 
-fn remove_unused_locals(block: Block) -> (Block, bool) {
+fn remove_unused_locals(block: Block, version: LuaVersion) -> (Block, bool) {
     let referenced = collect_all_references(&block);
     let mut transform = DeadCodeTransform {
         referenced,
+        version,
         changed: false,
     };
     let block = transform.transform_block(block);
@@ -109,12 +111,13 @@ impl<'ast> Visitor<'ast> for ReferenceCollector {
 
 /// The fused DCE rebuild: one traversal applies both the unused-local
 /// removal (driven by the pre-collected `referenced` set) and the dead-
-/// branch elimination. The two used to be separate full rebuilds; local
-/// rewrites compose per-statement, and both `remove()`'s inner loop and
-/// the pipeline's outer loop run to fixpoint, so interleaving them
-/// reaches the same result in half the traversals.
+/// branch elimination. Local rewrites compose per-statement, and both
+/// `remove()`'s inner loop and the pipeline's outer loop run to fixpoint,
+/// so interleaving the two reaches the same result in half the traversals
+/// that separate rebuilds would take.
 struct DeadCodeTransform {
     referenced: FxHashSet<CompactString>,
+    version: LuaVersion,
     changed: bool,
 }
 
@@ -141,7 +144,7 @@ impl AstTransform for DeadCodeTransform {
             let stmt = self.transform_statement(stmt);
             // Unused-local removal first: a dropped/extracted statement
             // never reaches the branch checks below.
-            let replacements = match simplify_dead_local(stmt, &self.referenced) {
+            let replacements = match simplify_dead_local(stmt, &self.referenced, self.version) {
                 None => {
                     self.changed = true;
                     continue;
@@ -164,8 +167,8 @@ impl AstTransform for DeadCodeTransform {
                         self.changed = true;
                         continue;
                     }
-                    // Empty-body `if` can only go when evaluating the condition
-                    // is side-effect free - `if f() then end` calls f.
+                    // An empty-body `if` can only go when evaluating the
+                    // condition is side-effect free: `if f() then end` calls f.
                     Statement::IfStatement(if_stmt)
                         if if_stmt.block.stmts.is_empty()
                             && if_stmt.block.last_stmt.is_none()
@@ -176,10 +179,10 @@ impl AstTransform for DeadCodeTransform {
                         self.changed = true;
                         continue;
                     }
-                    // NOTE: `x = x` self-assignment is NOT removed. Without
-                    // binding resolution we can't prove `x` is a local; for a
-                    // global under a metatabled environment the statement fires
-                    // __index + __newindex.
+                    // `x = x` self-assignment is NOT removed. Without binding
+                    // resolution this pass cannot prove `x` is a local, and for
+                    // a global under a metatabled environment the statement
+                    // fires __index and __newindex.
                     _ => new_stmts.push(stmt),
                 }
             }
@@ -201,9 +204,8 @@ impl AstTransform for DeadCodeTransform {
         let new_block = if let Some(last) = &new_block.last_stmt {
             match last.as_ref() {
                 LastStatement::Return(ret) => {
-                    // Only a bare `return` is removable. `return nil`
-                    // returns ONE value - `select('#', f())` observes the
-                    // difference.
+                    // Only a bare `return` is removable. `return nil` returns
+                    // ONE value, and `select('#', f())` observes the difference.
                     let returns: Vec<_> = ret.exprs.iter().collect();
                     if returns.is_empty() {
                         self.changed = true;
@@ -318,7 +320,7 @@ impl AstTransform for DeadCodeTransform {
                     block: new_block,
                 }))
             }
-            // step=1 is the default; stripping it saves bytes
+            // A step of 1 is the default, so stripping it saves bytes.
             Statement::NumericFor(mut numeric_for) => {
                 if let Some(step) = &numeric_for.step
                     && let Expression::Number(literal) = step
@@ -329,7 +331,7 @@ impl AstTransform for DeadCodeTransform {
                 }
                 self.walk_statement(Statement::NumericFor(numeric_for))
             }
-            // `local x = nil` -> `local x` (nil is the default)
+            // `local x = nil` becomes `local x`, since nil is the default.
             Statement::LocalAssignment(mut local) => {
                 // Const declarations keep their mandatory initializer.
                 let single_nil = !local.is_const
@@ -351,7 +353,8 @@ impl AstTransform for DeadCodeTransform {
 
     fn transform_expression(&mut self, expr: Expression) -> Expression {
         let expr = self.walk_expression(expr);
-        // `cond and X or X` -> `X` when both branches identical and cond is pure
+        // `cond and X or X` folds to `X` when both branches are identical and
+        // the condition is pure.
         if let Expression::BinaryOp(ref outer) = expr
             && matches!(outer.op, BinOp::Or)
             && let Expression::BinaryOp(ref inner) = outer.left
@@ -373,8 +376,8 @@ impl AstTransform for DeadCodeTransform {
 }
 
 fn negate_expression(expr: Expression) -> Expression {
-    // Only wrap in `not` - never invert comparison operators, as that changes
-    // which metamethod is called (__lt vs __le, etc.)
+    // Only wrap in `not`. Inverting a comparison operator would change which
+    // metamethod is called, __lt instead of __le and so on.
     Expression::UnaryOp(Box::new(UnaryOp {
         span: sp(),
         op: UnOp::Not,
@@ -388,16 +391,20 @@ enum DeadLocalAction {
     ExtractCalls,
 }
 
-fn classify_dead_local(stmt: &Statement, referenced: &FxHashSet<CompactString>) -> DeadLocalAction {
+fn classify_dead_local(
+    stmt: &Statement,
+    referenced: &FxHashSet<CompactString>,
+    version: LuaVersion,
+) -> DeadLocalAction {
     match stmt {
         Statement::LocalAssignment(local) => {
             // `<close>` runs __close at scope exit and `<const>` affects
-            // validity - an attributed local is never dead.
+            // validity, so an attributed local is never dead.
             if local.is_exported
-                || local
-                    .names
-                    .iter()
-                    .any(|attributed| attributed.attrib.is_some())
+                || local.names.iter().any(|attributed| {
+                    attributed.attrib.is_some()
+                        || is_env_binding(ident_name(&attributed.name), version)
+                })
             {
                 return DeadLocalAction::Keep;
             }
@@ -426,7 +433,7 @@ fn classify_dead_local(stmt: &Statement, referenced: &FxHashSet<CompactString>) 
             }
         }
         Statement::LocalFunction(local_func) => {
-            if local_func.is_exported {
+            if local_func.is_exported || is_env_binding(ident_name(&local_func.name), version) {
                 return DeadLocalAction::Keep;
             }
             let name = ident_name(&local_func.name);
@@ -451,8 +458,9 @@ fn classify_dead_local(stmt: &Statement, referenced: &FxHashSet<CompactString>) 
 fn simplify_dead_local(
     stmt: Statement,
     referenced: &FxHashSet<CompactString>,
+    version: LuaVersion,
 ) -> Option<Vec<Statement>> {
-    match classify_dead_local(&stmt, referenced) {
+    match classify_dead_local(&stmt, referenced, version) {
         DeadLocalAction::Keep => Some(vec![stmt]),
         DeadLocalAction::Remove => None,
         DeadLocalAction::ExtractCalls => {
@@ -490,7 +498,7 @@ mod tests {
     fn apply(source: &str) -> String {
         let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
         assert!(result.errors.is_empty(), "parse failed");
-        let block = remove(result.block);
+        let block = remove(result.block, luck_token::LuaVersion::Lua54);
         luck_codegen::compact(&block, source)
     }
 
@@ -499,6 +507,24 @@ mod tests {
         let r = apply("local unused = 42\nlocal used = 1\nreturn used\n");
         assert!(!r.contains("unused"), "Unused local not removed: {r}");
         assert!(r.contains("used"), "Used local was removed: {r}");
+    }
+
+    #[test]
+    fn keeps_unused_env_only_where_it_redirects_globals() {
+        let source = "local _ENV = {}\nreturn 1\n";
+        let kept = apply(source);
+        assert!(kept.contains("_ENV"), "5.4 must pin _ENV: {kept}");
+
+        for version in [luck_token::LuaVersion::Lua51, luck_token::LuaVersion::Luau] {
+            let result = luck_parser::parse(source, version);
+            assert!(result.errors.is_empty(), "parse failed");
+            let block = remove(result.block, version);
+            let removed = luck_codegen::compact(&block, source);
+            assert!(
+                !removed.contains("_ENV"),
+                "{version:?} binds _ENV like any other local: {removed}"
+            );
+        }
     }
 
     #[test]
@@ -554,9 +580,9 @@ mod tests {
 
     #[test]
     fn global_self_assignment_kept() {
-        // `x = x` on a global fires __index + __newindex under a
-        // metatabled environment - removal is only sound for proven
-        // locals, which this pass can't prove without binding info.
+        // `x = x` on a global fires __index and __newindex under a metatabled
+        // environment. Removal is sound only for proven locals, which this
+        // pass cannot prove without binding info.
         let r = apply("x = x\nreturn 1\n");
         assert!(
             r.contains("x=x") || r.contains("x = x"),

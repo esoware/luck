@@ -5,6 +5,8 @@ use rustc_hash::FxHashSet;
 
 use crate::ParseError;
 
+const MAX_NESTING_DEPTH: u32 = 256;
+
 /// Whether the next token after `continue` confirms it's a continue statement
 /// (not a function call like `continue()` or assignment like `continue = 5`).
 fn is_continue_context(next: &TokenKind) -> bool {
@@ -31,7 +33,6 @@ pub(crate) struct Parser<'src> {
     prev_span: Span,
     pub(crate) version: LuaVersion,
     depth: u32,
-    max_depth: u32,
     /// Lexical block depth. The root module block is 1.
     pub(crate) block_depth: u32,
     /// Function nesting depth, used to distinguish module returns.
@@ -63,7 +64,6 @@ impl<'src> Parser<'src> {
             prev_span: Span::new(0, 0),
             version,
             depth: 0,
-            max_depth: 256,
             block_depth: 0,
             function_depth: 0,
             has_module_return: false,
@@ -89,7 +89,7 @@ impl<'src> Parser<'src> {
         &self.current.kind
     }
 
-    /// One token of lookahead - all the Lua grammar ever needs.
+    /// One token of lookahead, all the Lua grammar ever needs.
     #[inline]
     pub(crate) fn peek_next(&self) -> &TokenKind {
         &self.next.kind
@@ -110,7 +110,7 @@ impl<'src> Parser<'src> {
         self.advance().span
     }
 
-    /// `expect` for fixed-spelling tokens: returns only the span.
+    /// `expect` for fixed-spelling tokens, returning only the span.
     #[inline]
     pub(crate) fn expect_span(&mut self, kind: &TokenKind) -> Result<Span, ParseError> {
         if std::mem::discriminant(self.peek()) == std::mem::discriminant(kind) {
@@ -176,14 +176,17 @@ impl<'src> Parser<'src> {
     }
 
     pub(crate) fn enter_depth(&mut self) -> Result<(), ParseError> {
-        self.depth += 1;
-        if self.depth > self.max_depth {
+        // A host-stack budget, independent of target VM compiler limits.
+        if self.depth >= MAX_NESTING_DEPTH {
             let span = self.current_span();
             Err(Self::make_error(
                 span,
-                "maximum nesting depth exceeded".to_string(),
+                format!(
+                    "maximum nesting depth exceeded (luck parser resource limit: {MAX_NESTING_DEPTH})"
+                ),
             ))
         } else {
+            self.depth += 1;
             Ok(())
         }
     }
@@ -311,7 +314,7 @@ impl<'src> Parser<'src> {
                     }
                     break;
                 }
-                // Block-ending tokens: don't consume, let caller handle
+                // Block-ending tokens, left for the caller to consume
                 TokenKind::End
                 | TokenKind::Else
                 | TokenKind::ElseIf
@@ -339,7 +342,6 @@ impl<'src> Parser<'src> {
                 }
                 _ => {
                     // Unknown token that doesn't start a statement and isn't a block-ender.
-                    // Error-recover: record the error, synchronize, and keep parsing.
                     let span = self.current_span();
                     self.error(span, format!("unexpected token {}", self.peek()));
                     self.synchronize();
@@ -376,9 +378,9 @@ impl<'src> Parser<'src> {
     }
 
     /// Consume a closing `>` in type context, recovering if absent.
-    /// Adjacent tokens lex greedily - `Foo<Bar<T>>` produces `ShiftRight`,
-    /// `Foo<T>=x` produces `GreaterEqual` - so those are split: the first
-    /// `>`'s span is returned and the remainder stays current.
+    /// Adjacent tokens lex greedily, so `Foo<Bar<T>>` produces `ShiftRight`
+    /// and `Foo<T>=x` produces `GreaterEqual`. Both are split here, returning
+    /// the first `>`'s span and leaving the remainder current.
     pub(crate) fn consume_type_close_angle(&mut self) -> Span {
         match self.peek() {
             TokenKind::Greater => self.advance_span(),
@@ -401,7 +403,6 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Parse a comma-separated list of expressions.
     pub(crate) fn parse_expression_list(&mut self) -> Punctuated<luck_ast::Expression> {
         let mut exprs = vec![self.parse_expression(0)];
 

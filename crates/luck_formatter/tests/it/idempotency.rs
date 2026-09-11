@@ -81,11 +81,10 @@ return M -- done
 #[test]
 fn comment_inside_statement_then_blank_line() {
     // The comment sits between the callee and its argument list, so no
-    // sub-emitter claims it and it is relocated onto its own line after the
-    // statement. A blank line then separates it from the next statement.
-    // First pass emitted that blank as a statement gap; reparse read the
-    // relocated comment as a leading comment of the next statement and
-    // dropped the blank - a format-idempotency violation (found by fuzzing).
+    // sub-emitter claims it and it lands on its own line after the statement.
+    // Emitting the following blank as a statement gap would break
+    // idempotency: a reparse reads the relocated comment as the next
+    // statement's leading comment and drops the blank.
     assert_idempotent("goto l x\n--\n(\"\")\n\nc = x\n");
 }
 

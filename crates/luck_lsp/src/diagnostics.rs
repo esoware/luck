@@ -8,7 +8,7 @@ use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString};
 
 use crate::line_index::LineIndex;
 
-/// The source string in `Diagnostic.source` - VS Code surfaces this in tooltips.
+/// The source string in `Diagnostic.source`; VS Code shows it in tooltips.
 pub const DIAGNOSTIC_SOURCE: &str = "luck";
 
 #[must_use]

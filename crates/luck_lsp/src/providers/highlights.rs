@@ -30,9 +30,8 @@ pub fn document_highlight(
         return Vec::new();
     }
 
-    // Semantic analysis is computed once per edit and cached on the
-    // document - re-running it here made every cursor-idle highlight
-    // re-walk the whole file.
+    // The document caches one semantic analysis per edit. Re-running it
+    // here would make every cursor-idle highlight re-walk the whole file.
     doc.semantic
         .scope_tree
         .references

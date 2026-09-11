@@ -1,9 +1,9 @@
-//! The deserialized `luck.json` surface and its merge semantics.
+//! The deserialized `luck.json` types and their merge semantics.
 //!
 //! Every type here derives `Deserialize` with `deny_unknown_fields` and
 //! `schemars::JsonSchema`; the committed VS Code schema is generated from
 //! [`LuckConfig`]. Merge (`extends` chains, profile layering) is pure
-//! value-to-value transformation - no filesystem access lives here.
+//! value-to-value transformation. No filesystem access lives here.
 
 use crate::diagnostics::{Category, DiagnosticSeverity};
 use crate::format_options::{
@@ -35,8 +35,6 @@ pub struct ProfileOverrides {
 /// Per-rule override slot. `enabled` toggles a rule on/off; `severity`
 /// overrides the default severity (`"error"` or `"warning"`). Both are
 /// optional so the user can override one without touching the other.
-///
-/// This is the single lint rule-override type; `luck_linter` re-exports it.
 #[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RuleSetting {
@@ -44,8 +42,7 @@ pub struct RuleSetting {
     pub severity: Option<DiagnosticSeverity>,
 }
 
-/// Linter settings from luck.json. This is the single source of truth for
-/// lint configuration; `luck_linter` re-exports it and reads it directly.
+/// Linter settings from luck.json.
 #[derive(Debug, Clone, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LintConfig {
@@ -63,8 +60,8 @@ pub struct LintConfig {
     /// `cyclomatic_complexity` rule.
     #[serde(default)]
     pub max_cyclomatic_complexity: Option<u32>,
-    /// When true, only rules explicitly enabled via `rule_overrides`
-    /// run - even correctness defaults are silenced.
+    /// When true, only rules explicitly enabled via `rule_overrides` run.
+    /// Even correctness defaults are silenced.
     #[serde(default)]
     pub disable_default_rules: bool,
     /// Rule categories to enable as a group (e.g. `suspicious`, `style`).
@@ -95,9 +92,11 @@ pub struct FormatConfig {
     /// `"never"` (default) / `"definitions"` / `"calls"` / `"always"`.
     /// Inserts a space before `(` in function definitions, calls, or both.
     pub space_after_function_names: Option<SpaceAfterFunction>,
-    /// When true, a trailing comma in a table or call argument list forces
-    /// the surrounding group to break across multiple lines (Black/Prettier
-    /// convention). Defaults to `false` to preserve existing pack/hug behavior.
+    /// When true, a trailing comma in a table constructor forces the
+    /// surrounding group to break across multiple lines (Black/Prettier
+    /// convention). This applies to table constructors only. No dialect's
+    /// grammar allows a trailing comma in a call argument list. Defaults to
+    /// `false`, which leaves the normal pack and hug rules in charge.
     pub magic_trailing_comma: Option<bool>,
 }
 
@@ -132,7 +131,7 @@ pub struct LuckConfig {
 impl LuckConfig {
     /// Resolves the target for `.lua` files. Defaults to Lua 5.4.
     ///
-    /// The key names a dialect, not a language family: extension and dialect
+    /// The key names a dialect, not a language family. Extension and dialect
     /// are independent axes, so `"lua": "roblox"` is how a Roblox or Rojo tree
     /// declares that its `.lua` files are Luau.
     pub fn lua_target(&self) -> Result<LuaTarget, String> {

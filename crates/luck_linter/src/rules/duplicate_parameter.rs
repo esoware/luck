@@ -100,7 +100,7 @@ mod tests {
         let diags = run(source);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`a`"));
-        // The SECOND occurrence is flagged.
+        // The rule flags the SECOND occurrence.
         assert_eq!(diags[0].span.start as usize, source.rfind('a').unwrap());
     }
 

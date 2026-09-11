@@ -18,8 +18,8 @@ pub struct ScopeTreeBuilder {
     /// declarations (innermost last). Sequential shadowing is stack order;
     /// resolution is one O(1) lookup. A flat scan-backwards `actives` array
     /// benchmarked quadratic on files with hundreds of live module-level
-    /// locals, and per-scope maps cost an allocation per block - this keeps
-    /// one map whose per-name stacks (and their capacity) are reused.
+    /// locals, and per-scope maps cost an allocation per block. One map whose
+    /// per-name stacks keep their capacity avoids both.
     bindings: rustc_hash::FxHashMap<CompactString, Vec<SymbolId>>,
     /// Undo log: names declared since each scope entry, popped on exit.
     declared_names: Vec<CompactString>,
@@ -257,11 +257,11 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
                 self.visit_function_body(&func.body);
             }
             luck_ast::Statement::FunctionDecl(decl) => {
-                // `function f()` writes `f`, but `function t.m()` /
-                // `function t:m()` READS `t` and writes only the field -
-                // recording a write here made the canonical module pattern
-                // (`local M = {} function M.f() end return M`) light up
-                // unused/overwritten warnings on every real module.
+                // `function f()` writes `f`, but `function t.m()` and
+                // `function t:m()` READ `t` and write only the field.
+                // Recording a write here would light up unused/overwritten
+                // warnings on the canonical module pattern
+                // (`local M = {} function M.f() end return M`).
                 if let Some(first) = decl.name.names.first()
                     && let TokenKind::Identifier(name) = &first.kind
                 {

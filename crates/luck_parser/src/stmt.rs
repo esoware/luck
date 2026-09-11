@@ -6,7 +6,6 @@ use luck_token::{CompoundOp, Span, Token, TokenKind};
 
 use crate::parser::Parser;
 
-/// Build a loop-binding `Parameter` from its name and optional annotation.
 fn binding_param(name: Token, type_annotation: Option<luck_ast::Type>) -> Parameter {
     let end_span = type_annotation
         .as_ref()
@@ -391,7 +390,6 @@ impl Parser<'_> {
         }
 
         if let Some(attr) = attributes.first() {
-            // Luau only allows attributes on function declarations.
             self.error(
                 attr.span,
                 "attributes are only allowed on function declarations".to_string(),
@@ -466,7 +464,7 @@ impl Parser<'_> {
             self.advance_span();
             Some(self.parse_expression_list())
         } else {
-            // Grammar: `const bindinglist '=' explist` - the initializer
+            // Grammar: `const bindinglist '=' explist`, so the initializer
             // is not optional.
             if is_const {
                 let span = self.current_span();
@@ -529,8 +527,8 @@ impl Parser<'_> {
             return Statement::GlobalStar(Box::new(GlobalStar { span, attrib: None }));
         }
 
-        // `global <attrib> *` - attribute before star; otherwise the
-        // attribute leads an attnamelist and the shared parser handles it.
+        // `global <attrib> *` puts the attribute before the star. Otherwise
+        // the attribute leads an attnamelist and the shared parser takes it.
         if matches!(self.peek(), TokenKind::Less) {
             let attrib = self.parse_attribute();
             if matches!(self.peek(), TokenKind::Star) {
@@ -555,7 +553,7 @@ impl Parser<'_> {
             return self.finish_global_declaration(global_token, names);
         }
 
-        // `global name [, name]* [= explist]` - variable declarations
+        // `global name [, name]* [= explist]` declares variables
         let names = self.parse_attname_list();
         self.finish_global_declaration(global_token, names)
     }
@@ -631,8 +629,8 @@ impl Parser<'_> {
         // 5.5 §3.3.7: a prefixed attribute applies to ALL names in the
         // list, so it is distributed onto every name that lacks its own
         // trailing attribute (the emitted trailing form is equivalent).
-        // A name carrying both is an error - consume the trailing one so
-        // parsing recovers instead of silently dropping it.
+        // A name carrying both is an error, so consume the trailing one and
+        // recover instead of silently dropping it.
         let resolve_attrib =
             |parser: &mut Self, leading: Option<&Attribute>, trailing: Option<Attribute>| match (
                 leading, trailing,
@@ -700,7 +698,7 @@ impl Parser<'_> {
             }));
         }
 
-        // Check for assignment: `varlist = explist`
+        // Assignment: `varlist = explist`
         if matches!(self.peek(), TokenKind::Comma | TokenKind::Equal) {
             let mut target_exprs = vec![expr];
             while matches!(self.peek(), TokenKind::Comma) {
@@ -751,7 +749,8 @@ impl Parser<'_> {
         let type_token = self.advance_span(); // `type` identifier
         let start_span = export_token.unwrap_or(type_token);
 
-        // `type function Name funcbody` - no `=`; the body is ordinary Luau
+        // `type function Name funcbody` takes no `=`, and the body is
+        // ordinary Luau
         if matches!(self.peek(), TokenKind::Function) {
             self.advance_span(); // `function`
             let name = self.expect_identifier_recover();
@@ -959,7 +958,6 @@ fn expression_to_var(expr: Expression, parser: &mut Parser) -> Var {
     }
 }
 
-/// Whether this token ends a block.
 fn is_block_end(kind: &TokenKind) -> bool {
     matches!(
         kind,
@@ -967,12 +965,10 @@ fn is_block_end(kind: &TokenKind) -> bool {
     )
 }
 
-/// Get the span of the last expression in a Punctuated list.
 pub(crate) fn punctuated_last_span(punct: &Punctuated<Expression>) -> Option<Span> {
     punct.last().map(|e| e.span())
 }
 
-/// Get the span of the last declared name in an attname list.
 fn punctuated_last_name_span(punct: &Punctuated<AttributedName>) -> Option<Span> {
     punct.last().map(|attributed| attributed.name.span)
 }

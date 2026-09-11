@@ -7,10 +7,10 @@ use crate::cfg::{Exit, analyze_full_block};
 use crate::diagnostic::*;
 use crate::rule::{LintContext, Rule};
 
-/// Detects `while`/`repeat`/`for` loops whose body unconditionally
-/// terminates on every path - making the loop body execute at most
-/// once. A loop that always `break`s, `return`s, or `error`s is almost
-/// certainly a typo (likely an `if`/`do` block was intended).
+/// Detects `while`/`repeat`/`for` loops whose body terminates on every
+/// path, so the body runs at most once. A loop that always `break`s,
+/// `return`s, or `error`s is almost certainly a typo for an `if` or `do`
+/// block.
 pub struct LoopExecutesOnce;
 
 impl Rule for LoopExecutesOnce {
@@ -44,7 +44,7 @@ struct LoopChecker {
 impl LoopChecker {
     fn check_loop_body(&mut self, body: &Block, loop_span: Span, kind: &'static str) {
         let summary = analyze_full_block(body);
-        // The body must terminate on every path - that means the
+        // The body must terminate on every path, which means the
         // analyzer pinned a non-Normal exit on the sequence.
         let label = match summary.exit {
             Exit::Return => "always returns",

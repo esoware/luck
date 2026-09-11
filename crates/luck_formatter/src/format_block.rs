@@ -1,14 +1,16 @@
 //! Block emission: the statement loop that threads the comment/verbatim
 //! protocol and blank-line preservation between statements.
 //!
-//! Per statement the loop: (1) emits leading comments, learning whether a
-//! `luck: ignore` directive applies; (2) emits the `(`-guard when needed;
-//! (3) emits the statement verbatim (ignore / `format off` regions) or via
-//! `Format`; (4) emits trailing comments. Separators between statements are
-//! blank-line aware.
+//! Per statement the loop: (1) flushes comments stalled before it and emits
+//! its leading comments, learning whether a `luck: ignore` directive applies;
+//! (2) emits the `(`-guard when needed; (3) emits the statement verbatim
+//! (ignore / `format off` regions) or via `Format`; (4) emits trailing
+//! comments. Separators between statements are blank-line aware.
 
+use compact_str::CompactString;
 use luck_ast::shared::Block;
 use luck_ast::stmt::{LastStatement, Statement};
+use luck_token::{LuaVersion, Span};
 
 use crate::ir::*;
 
@@ -59,6 +61,7 @@ impl Format for Block {
                 );
             }
 
+            f.emit_stalled_comments(start);
             let is_ignored = f.emit_leading_comments(start);
 
             // A `(`-starting statement after another re-parses as a chained
@@ -95,6 +98,7 @@ impl Format for Block {
                     emit_separator(f, previous_end, start, previous_wants, previous_own_line);
                 }
 
+                f.emit_stalled_comments(start);
                 let is_ignored = f.emit_leading_comments(start);
                 let is_outside_range = f
                     .format_range
@@ -257,13 +261,128 @@ fn emit_verbatim_or(
     };
     match verbatim {
         Some(slice) => {
+            // An opted-out statement keeps its original layout down to the
+            // column, so the slice goes out as one multi-line text.
             crate::write!(f, [text(slice)]);
             // The slice already contains the statement's inner comments;
             // without this they would re-emit as trailing own-line runs.
-            f.comments.mark_printed_through(end);
+            f.comments.mark_printed_range(start, end);
         }
-        None => format(f),
+        None => {
+            let checkpoint = f.checkpoint();
+            format(f);
+            if f.comments.has_unhandled_in(start, end)
+                && let Some(source) = f.comments.source_text()
+                && let Some(version) = f.comments.source_version()
+            {
+                // An interior comment no emitter claimed stays in its own
+                // statement, never drifting across lexical boundaries. The
+                // statement did not opt out of formatting, so the formatter's
+                // own layout rules still reach it where they can: it is
+                // re-anchored to the block's indentation, and a run of blank
+                // lines inside it collapses to one like everywhere else.
+                let lines = reindented_lines(source, start, end, version);
+                f.restore(checkpoint);
+                for (index, line) in lines.into_iter().enumerate() {
+                    if index > 0 {
+                        crate::write!(f, [hard_line()]);
+                    }
+                    if !line.is_empty() {
+                        crate::write!(f, [text(line)]);
+                    }
+                }
+                f.comments.mark_printed_range(start, end);
+            }
+        }
     }
+}
+
+/// `source[start..end]` split into lines, with the statement's own line
+/// indentation stripped from the continuations so the printer's indent
+/// applies instead of the original file's column. Line content is otherwise
+/// untouched - this is a statement the emitters could not format.
+///
+/// Only the newlines between tokens split a line. One inside a long string or
+/// long comment is that token's content, so it stays inside the line it
+/// opened and goes out as written; re-anchoring around it would rewrite the
+/// literal.
+fn reindented_lines(source: &str, start: u32, end: u32, version: LuaVersion) -> Vec<CompactString> {
+    let text = &source[start as usize..end as usize];
+    let line_start = source[..start as usize]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let base_indent = &source[line_start..start as usize];
+    // Anything but whitespace before the statement means it shares a line
+    // with earlier code, so there is no indentation of its own to strip.
+    let base_indent = if base_indent
+        .bytes()
+        .all(|byte| byte == b' ' || byte == b'\t')
+    {
+        base_indent
+    } else {
+        ""
+    };
+
+    let mut lines = Vec::new();
+    let mut cursor = 0;
+    let separators = separable_newlines(text, version);
+    for offset in separators.into_iter().chain(std::iter::once(text.len())) {
+        let raw = &text[cursor..offset];
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        lines.push(CompactString::from(if lines.is_empty() {
+            line
+        } else {
+            line.strip_prefix(base_indent).unwrap_or(line)
+        }));
+        cursor = offset + 1;
+    }
+    lines
+}
+
+/// The offsets of the newlines in `text` that separate lines rather than
+/// sitting inside a token. A long string or long comment carries its newlines
+/// as content, and a `\` continues a short string across one.
+///
+/// The lexer answers that exactly: every newline outside a token span and
+/// outside a comment span is one written between two tokens.
+fn separable_newlines(text: &str, version: LuaVersion) -> Vec<usize> {
+    let lexed = luck_lexer::lex(text, version);
+    // A statement that parsed always lexes, but if a caller ever hands over
+    // text that does not, joining its lines is the safe answer: whatever the
+    // lexer could not close may be a literal, and re-anchoring would rewrite
+    // its content.
+    if !lexed.errors.is_empty() {
+        return Vec::new();
+    }
+    let mut spans: Vec<Span> = lexed
+        .tokens
+        .iter()
+        .map(|token| token.span)
+        .chain(lexed.comments.iter().map(|comment| comment.span))
+        .filter(|span| span.end > span.start)
+        .collect();
+    spans.sort_unstable_by_key(|span| span.start);
+
+    let mut separators = Vec::new();
+    let mut next_span = 0;
+    for (offset, byte) in text.bytes().enumerate() {
+        if byte != b'\n' {
+            continue;
+        }
+        while spans
+            .get(next_span)
+            .is_some_and(|span| (span.end as usize) <= offset)
+        {
+            next_span += 1;
+        }
+        let is_inside = spans
+            .get(next_span)
+            .is_some_and(|span| (span.start as usize) <= offset);
+        if !is_inside {
+            separators.push(offset);
+        }
+    }
+    separators
 }
 
 /// Declarations that read better with a blank line around them when the input
@@ -309,7 +428,7 @@ mod tests {
             "parse errors: {:?}",
             parsed.errors
         );
-        let comments = Comments::from_source(&parsed.comments, source);
+        let comments = Comments::from_source(&parsed.comments, source, version);
         let mut formatter = Formatter::with_context(crate::FormatOptions::default(), comments);
         formatter.emit_shebang();
         parsed.block.fmt(&mut formatter);
@@ -357,6 +476,27 @@ mod tests {
         assert!(output.contains("return"));
         assert!(output.contains('1'));
         assert!(output.contains('2'));
+    }
+
+    #[test]
+    fn newlines_inside_a_token_do_not_separate_lines() {
+        let separable = |text| super::separable_newlines(text, LuaVersion::Lua54);
+        assert_eq!(separable("a\nb\nc"), vec![1, 3]);
+        // Long string, long comment, and level-1 bracket.
+        assert_eq!(separable("a\n[[b\nc]]\nd"), vec![1, 9]);
+        assert_eq!(separable("a\n--[[b\nc]]\nd"), vec![1, 11]);
+        assert_eq!(separable("a\n[==[b\nc]==]\nd"), vec![1, 13]);
+        // A level mismatch does not close the bracket.
+        assert_eq!(separable("[==[a\nb]=]\nc"), Vec::<usize>::new());
+        // `]]` without an opener is just two tokens.
+        assert_eq!(separable("a]]\nb"), vec![3]);
+        // A short string continued across the break, and `\z`.
+        assert_eq!(separable("\"a\\\nb\"\nc"), vec![6]);
+        assert_eq!(separable("\"a\\z\n  b\"\nc"), vec![9]);
+        // A trailing `\` in a comment escapes nothing, and `[[` inside a
+        // short string opens nothing.
+        assert_eq!(separable("a -- see C:\\\nb"), vec![12]);
+        assert_eq!(separable("\"[[\"\nb"), vec![4]);
     }
 
     #[test]

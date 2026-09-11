@@ -87,8 +87,8 @@ params = [
   { kind = "any", required = false },
 ]
 
-# Removed in 5.2 — Lua continued to ship it as a backwards-compat alias,
-# so we keep it visible but force users toward `load`.
+# Removed in 5.2, but Lua kept shipping it as a backwards-compat alias, so it
+# stays visible here with a deprecation pointing at `load`.
 [globals.loadstring]
 kind = "function"
 min_args = 1
@@ -849,7 +849,7 @@ is_pure = true
 must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
-# ---- io / os / coroutine / debug / package — same as 5.1 (with small deltas) ----
+# io, os, coroutine, debug, and package match 5.1 apart from small deltas.
 
 [globals.io]
 kind = "namespace"

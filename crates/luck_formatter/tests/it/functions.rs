@@ -11,6 +11,21 @@ fn function_def_flat() {
 }
 
 #[test]
+fn trailing_callback_uses_uniform_argument_expansion() {
+    let source = "subscribe(event, function(value) consume(value) end)\n";
+    let expected = "subscribe(\n\tevent,\n\tfunction(value)\n\t\tconsume(value)\n\tend\n)\n";
+    for width in [60, 80, 120] {
+        let options = FormatOptions {
+            line_width: width,
+            ..FormatOptions::default()
+        };
+        assert_format_with(source, expected, LuaVersion::Lua54, &options);
+        luck_formatter::format_and_verify(source, LuaVersion::Lua54, &options)
+            .expect("layout verifies");
+    }
+}
+
+#[test]
 fn function_call_flat() {
     assert_format("foo(a,b,c)\n", "foo(a, b, c)\n");
 }

@@ -56,8 +56,8 @@ struct FunctionSignature {
 }
 
 /// Maps local symbols to the function signature they are bound to.
-/// Only single-write symbols qualify: a reassigned `f` could hold any
-/// function by the time a call runs.
+/// Only single-write symbols qualify, since a reassigned `f` could hold
+/// any function by the time a call runs.
 struct DefinitionCollector<'a> {
     ctx: &'a LintContext<'a>,
     functions: HashMap<SymbolId, FunctionSignature>,

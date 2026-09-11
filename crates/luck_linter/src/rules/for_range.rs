@@ -10,10 +10,10 @@ use crate::rule::{LintContext, NodeRule, Rule};
 /// mistakes (zero step, negative step with start < end, start > end with
 /// no negative step, 0-based iteration of a 1-based sequence length).
 ///
-/// Relationship to `reversed_for_loop`: the older rule fires only when
-/// start > end without any step. This rule fires in the strictly larger
-/// set of impossible-iteration cases - including the "0, #t" off-by-one.
-/// The "start > end, no step" case is left to `reversed_for_loop` so the
+/// Relationship to `reversed_for_loop`: that rule fires only when
+/// start > end without any step. This rule covers the strictly larger
+/// set of impossible-iteration cases, including the "0, #t" off-by-one.
+/// The "start > end, no step" case belongs to `reversed_for_loop` so the
 /// two rules do not double-fire on the same source. Other shapes (zero
 /// step, negative step with start < end, 0, #t) are unique to this rule.
 pub struct ForRange;
@@ -52,8 +52,8 @@ fn literal_number(expr: &Expression) -> Option<f64> {
     }
 }
 
-/// Recognize `#identifier` - the length of an obviously-positional table
-/// or string. Used for the 0,#t off-by-one heuristic.
+/// Recognize `#identifier`, the length of a positional table or string.
+/// The 0,#t off-by-one heuristic uses this.
 fn is_length_of_identifier(expr: &Expression) -> bool {
     if let Expression::UnaryOp(unop) = expr
         && unop.op == UnOp::Len
@@ -98,8 +98,8 @@ impl RangeChecker<'_> {
         }
 
         // Start > limit with no explicit negative step never iterates.
-        // `reversed_for_loop` already covers the no-step case; we only
-        // fire here when the step is present and non-negative.
+        // `reversed_for_loop` already covers the no-step case, so this
+        // fires only when the step is present and non-negative.
         if let (Some(start_value), Some(limit_value)) = (start, limit)
             && start_value > limit_value
             && let Some(step_value) = step
@@ -111,9 +111,9 @@ impl RangeChecker<'_> {
             return;
         }
 
-        // 0,#t - Lua sequences are 1-indexed, iterating from 0 reads an
-        // out-of-band entry and skips `t[#t]`. Only fire when the limit
-        // is a `#name` expression, since `0, n` may be intentional.
+        // Lua sequences are 1-indexed, so `0,#t` reads an out-of-band
+        // entry and skips `t[#t]`. Only fire when the limit is a `#name`
+        // expression, since `0, n` may be intentional.
         if let Some(start_value) = start
             && start_value == 0.0
             && is_length_of_identifier(&num_for.limit)
@@ -129,9 +129,10 @@ impl RangeChecker<'_> {
             return;
         }
 
-        // #t,0 and #t,1 - iterating a sequence from its length needs a -1
-        // step, and a 0 limit also misses that sequences are 1-indexed.
-        // reversed_for_loop needs a literal start, so it never fires here.
+        // In `#t,0` and `#t,1`, iterating a sequence from its length
+        // needs a -1 step, and a 0 limit also misses that sequences are
+        // 1-indexed. reversed_for_loop needs a literal start, so it
+        // never fires here.
         if is_length_of_identifier(&num_for.start)
             && let Some(limit_value) = limit
         {
@@ -162,9 +163,9 @@ impl RangeChecker<'_> {
             }
         }
 
-        // A limit the step never lands on makes the loop stop short:
-        // `for i = 1, 8.75` ends at 8. Only fractional mismatches fire -
-        // integer strides like `for i = 1, 10, 2` are idiomatic.
+        // A limit the step never lands on makes the loop stop short, so
+        // `for i = 1, 8.75` ends at 8. Only fractional mismatches fire,
+        // since integer strides like `for i = 1, 10, 2` are idiomatic.
         let effective_step = match &num_for.step {
             None => Some(1.0),
             Some(_) => step,

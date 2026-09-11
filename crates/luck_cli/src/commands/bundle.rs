@@ -2,7 +2,7 @@
 
 use crate::minify_flags::MinifyFlags;
 use crate::output::{build_file_cache, current_dir_or_exit, fail_with_diagnostics, write_output};
-use crate::project::resolve_explicit_target;
+use crate::project::{config_for_one_shot, resolve_configured_target};
 use crate::render::render_diagnostics;
 use crate::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE, Verbosity};
 use clap::Args;
@@ -23,6 +23,10 @@ pub(crate) struct BundleArgs {
     #[arg(short, long, value_name = "PATH")]
     output: Option<String>,
 
+    /// Project config [default: discovered from entry directory]
+    #[arg(short = 'c', long = "config", value_name = "PATH")]
+    config: Option<PathBuf>,
+
     /// Search path template (repeatable)
     #[arg(short = 's', long = "search-path", value_name = "PATTERN")]
     search_path: Vec<String>,
@@ -42,8 +46,11 @@ pub(crate) struct BundleArgs {
 
 impl BundleArgs {
     pub(crate) fn run(self, verbosity: Verbosity) -> ExitCode {
-        let target = resolve_explicit_target(self.target.as_deref(), &self.entry);
-        let transforms = self.minify_flags.to_transform_config();
+        let project = config_for_one_shot(self.config.as_deref(), &self.entry);
+        let target = resolve_configured_target(self.target.as_deref(), &self.entry, &project);
+        let transforms = self
+            .minify_flags
+            .apply_to(project.transforms.unwrap_or_default());
 
         let entry_path = PathBuf::from(&self.entry);
         if !entry_path.is_file() {

@@ -11,7 +11,7 @@ pub struct LineIndex {
     /// Byte offset of the first character on each line. Line N starts at
     /// `line_starts[N]` and ends just before `line_starts[N + 1]` (or end-of-file).
     line_starts: Vec<u32>,
-    /// Total source length in bytes - kept so we can clamp out-of-bounds requests.
+    /// Total source length in bytes, kept to clamp out-of-bounds requests.
     total_len: u32,
 }
 
@@ -22,7 +22,6 @@ impl LineIndex {
         line_starts.push(0);
         for (idx, byte) in source.bytes().enumerate() {
             if byte == b'\n' {
-                // The next line begins after the newline byte.
                 line_starts.push((idx as u32) + 1);
             }
         }
@@ -52,7 +51,7 @@ impl LineIndex {
         // up to `clamped`, counting UTF-16 code units.
         let upper = clamped.min(line_byte_end);
         let line_slice = &source.as_bytes()[line_start as usize..upper as usize];
-        // Should not happen for valid source, but degrade gracefully on bad UTF-8.
+        // Valid source always decodes; bad UTF-8 degrades to an empty line.
         let line_str = std::str::from_utf8(line_slice).unwrap_or_default();
         let utf16_units: u32 = line_str.chars().map(|ch| ch.len_utf16() as u32).sum();
         Position {
@@ -83,12 +82,11 @@ impl LineIndex {
         // LSP: a character offset past the line's end clamps TO the line
         // end. The walked slice must therefore exclude the terminator, or
         // an overshooting column consumes the `\n` and lands on the NEXT
-        // line - flipping range-overlap results by one byte.
+        // line, flipping range-overlap results by one byte.
         let line_str = line_str
             .strip_suffix('\n')
             .map(|without_lf| without_lf.strip_suffix('\r').unwrap_or(without_lf))
             .unwrap_or(line_str);
-        // Walk characters, accumulating UTF-16 units until we hit `position.character`.
         let mut remaining_units = position.character;
         let mut bytes_consumed: u32 = 0;
         for ch in line_str.chars() {

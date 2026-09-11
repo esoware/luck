@@ -3,8 +3,6 @@ use luck_token::{BinOp, CompactString, Span, Token, UnOp};
 use crate::shared::{Field, FunctionBody, Punctuated};
 use crate::types::Type;
 
-/// A Lua expression node.
-///
 /// Fixed-spelling leaves (`nil`, `true`, `false`, `...`) carry only their
 /// span; literal leaves carry a [`Literal`] because the text is the
 /// payload.
@@ -41,7 +39,6 @@ pub struct Literal {
     pub span: Span,
 }
 
-/// A variable reference: simple name, index expression, or field access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Var {
     Name(Token),
@@ -49,7 +46,6 @@ pub enum Var {
     FieldAccess(Box<FieldAccess>),
 }
 
-/// A function call: `callee(args)` or `callee:method(args)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCall {
     pub span: Span,
@@ -63,7 +59,6 @@ pub struct FunctionCall {
     pub explicit_type_args: Option<Box<crate::types::TypeArgs>>,
 }
 
-/// Function call arguments: parenthesized list, table literal, or string literal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionArgs {
     Parenthesized {
@@ -75,7 +70,6 @@ pub enum FunctionArgs {
     StringLiteral(Literal),
 }
 
-/// Binary operator expression: `left op right`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinaryOp {
     pub span: Span,
@@ -84,7 +78,6 @@ pub struct BinaryOp {
     pub right: Expression,
 }
 
-/// Unary operator expression: `op operand`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnaryOp {
     pub span: Span,
@@ -92,21 +85,18 @@ pub struct UnaryOp {
     pub operand: Expression,
 }
 
-/// Parenthesized expression: `(expr)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParenExpression {
     pub span: Span,
     pub expr: Expression,
 }
 
-/// Table constructor: `{ fields }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableConstructor {
     pub span: Span,
     pub fields: Punctuated<Field>,
 }
 
-/// Index expression: `prefix[index]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexExpression {
     pub span: Span,
@@ -114,7 +104,6 @@ pub struct IndexExpression {
     pub index: Expression,
 }
 
-/// Field access: `prefix.name`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldAccess {
     pub span: Span,
@@ -156,14 +145,13 @@ pub struct InterpolatedString {
     pub segments: Vec<InterpSegment>,
 }
 
-/// A segment of an interpolated string: literal text followed by an optional expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterpSegment {
     pub literal: Token,
     pub expr: Option<Expression>,
 }
 
-/// Luau type cast (`expr :: Type`)
+/// Luau type cast (`expr :: Type`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeCast {
     pub span: Span,

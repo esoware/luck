@@ -75,7 +75,6 @@ impl<T> Punctuated<T> {
     }
 }
 
-/// Function body: params + optional return type + block, closed by `end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionBody {
     pub span: Span,
@@ -117,7 +116,6 @@ pub struct VarArgParam {
     pub type_annotation: Option<Type>,
 }
 
-/// Block of statements with optional last statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
     pub span: Span,
@@ -125,7 +123,6 @@ pub struct Block {
     pub last_stmt: Option<Box<LastStatement>>,
 }
 
-/// A table field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Field {
     Bracketed {

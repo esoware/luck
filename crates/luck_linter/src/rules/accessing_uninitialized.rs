@@ -7,12 +7,12 @@ use crate::rule::{LintContext, Rule};
 
 /// Luacheck 321: a local is declared without an initializer, then read
 /// before any value is assigned to it. Lua semantics make the read
-/// produce `nil` - almost always a bug.
+/// produce `nil`, which is almost always a bug.
 ///
 /// Why this is distinct from `unused_variable`: the local *is* used,
-/// it's just used too early. We require the declaration to have no RHS
-/// (`local x` rather than `local x = nil` or `local x = ...`) so that
-/// `redundant_nil_init` and this rule are orthogonal.
+/// just too early. The declaration must have no RHS (`local x` rather
+/// than `local x = nil` or `local x = ...`) so that `redundant_nil_init`
+/// and this rule stay orthogonal.
 pub struct AccessingUninitialized;
 
 impl Rule for AccessingUninitialized {
@@ -49,9 +49,9 @@ impl Rule for AccessingUninitialized {
             }
 
             // First reference ANYWHERE, by source order. Filtering to the
-            // declaration scope made writes inside `if`/loop bodies
-            // invisible and flagged the ubiquitous branch-initialization
-            // idiom (`local x if c then x = 1 end print(x)`).
+            // declaration scope would hide writes inside `if` and loop
+            // bodies and flag the common branch-initialization idiom
+            // (`local x if c then x = 1 end print(x)`).
             let mut refs: Vec<_> = symbol
                 .reference_ids
                 .iter()

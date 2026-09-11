@@ -12,8 +12,8 @@ use crate::rule::{LintContext, Rule};
 ///
 /// Why this is distinct from `shadowing`: `shadowing` covers outer-scope
 /// shadowing (`local x = 1; do local x = 2 end`). Redefining within the
-/// same block is a different pattern - most often a copy-paste bug -
-/// and benefits from its own toggle.
+/// same block is a different pattern, most often a copy-paste bug, and
+/// gets its own toggle.
 pub struct RedefiningLocal;
 
 impl Rule for RedefiningLocal {
@@ -49,7 +49,8 @@ struct RedefineChecker<'a> {
 impl RedefineChecker<'_> {
     fn check_block(&mut self, block: &Block) {
         // (name, definition_span) for every local already declared in
-        // this block. Order matters - we report later declarations.
+        // this block. Order matters, since the later declaration is the
+        // one reported.
         let mut declared: Vec<(String, Span)> = Vec::new();
 
         for stmt in &block.stmts {
@@ -71,7 +72,7 @@ impl RedefineChecker<'_> {
         let TokenKind::Identifier(name) = &name_token.kind else {
             return;
         };
-        // Underscore convention: don't flag intentional throwaway names.
+        // The underscore convention marks intentional throwaway names.
         if name == "_" || name.starts_with('_') {
             declared.push((name.to_string(), name_token.span));
             return;

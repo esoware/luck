@@ -1,4 +1,4 @@
-//! Black-box tests for the documented exit-code contract in `src/cli.rs`:
+//! Black-box tests for the documented exit-code contract in `src/lib.rs`:
 //! 0 = success, 1 = the operation ran but found problems, 2 = usage/config
 //! error (`EXIT_SUCCESS`/`EXIT_FAILURE`/`EXIT_USAGE`). These spawn the real
 //! `luck` binary so they exercise `main.rs`'s worker thread and clap's own
@@ -145,10 +145,10 @@ fn invalid_config_unknown_key_exits_usage() {
 
 /// Populate `dir` with a config naming a dialect that does not exist plus
 /// enough sources that rayon spreads them across worker threads. Target
-/// resolution used to run inside the workers, whose error path (eprintln +
-/// exit) deadlocked against the stdio locks the main thread holds during the
-/// parallel section; the timeout in these tests turns a regression back into
-/// a failure instead of a hang.
+/// resolution must stay outside the workers. A worker error path prints to
+/// stderr and exits, which deadlocks against the stdio locks the main thread
+/// holds during the parallel section, and the timeout in these tests turns
+/// that hang back into a failure.
 fn write_bad_dialect_project(dir: &Path) {
     write_file(dir, "luck.json", "{ \"lua\": \"lua99\" }\n");
     for name in ["a.lua", "b.lua", "c.lua", "d.lua"] {

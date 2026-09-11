@@ -2,13 +2,13 @@
 //!
 //! Maps the string argument of a `require()` call to a filesystem path.
 //!
-//! **Lua 5.x** - template-based search paths. `require("foo.bar")` substitutes
-//! `foo/bar` into each template (`./?.lua`, `./?/init.lua`, ...) and returns the
+//! Lua 5.x searches path templates. `require("foo.bar")` substitutes `foo/bar`
+//! into each template (`./?.lua`, `./?/init.lua`, and so on) and returns the
 //! first candidate that exists on disk.
 //!
-//! **Luau** - relative imports (`./module`, `../module`) resolved from the
-//! requiring file's directory, plus `@alias` prefixes read from `.luaurc` files
-//! discovered up the directory tree.
+//! Luau resolves relative imports (`./module`, `../module`) from the requiring
+//! file's directory, and `@alias` prefixes from the `.luaurc` files found up
+//! the directory tree.
 //!
 //! A [`Resolver`] owns the `.luaurc` alias cache. Create one per build so alias
 //! edits are always observed; the cache never outlives the resolver.
@@ -74,8 +74,8 @@ pub struct ResolveRequest<'a> {
 /// Resolves `require()` strings to filesystem paths, caching the `.luaurc`
 /// alias tables discovered during Luau resolution.
 ///
-/// The cache is owned by the resolver, not global: drop the resolver (or make a
-/// fresh one per build) and stale alias data goes with it.
+/// The resolver owns the cache, rather than a global owning it. Drop the
+/// resolver, or make a fresh one per build, and stale alias data goes with it.
 #[derive(Debug, Default)]
 pub struct Resolver {
     luaurc_cache: FxHashMap<PathBuf, Option<FxHashMap<String, String>>>,
@@ -137,8 +137,8 @@ pub fn normalize_path_str(path: &Path) -> String {
     // Windows extended-length prefixes after backslash replacement:
     //   \\?\C:\x        -> //?/C:/x        -> C:/x
     //   \\?\UNC\srv\sh  -> //?/UNC/srv/sh  -> //srv/sh (network path!)
-    // Blindly stripping `//?/` turned network paths into RELATIVE
-    // garbage (`UNC/srv/share/...`).
+    // Stripping `//?/` blindly would turn a network path into a RELATIVE
+    // one (`UNC/srv/share/...`).
     if let Some(unc) = normalized.strip_prefix("//?/UNC/") {
         return format!("//{unc}");
     }

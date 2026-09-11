@@ -281,7 +281,7 @@ fn lint_file(
                 "Error: cannot read {}: {error}",
                 file_path.display()
             ));
-            // A skipped file must fail the run - CI going green while files
+            // A skipped file must fail the run. CI going green while files
             // silently went unlinted is worse than a hard stop.
             outcome.errors += 1;
             return outcome;
@@ -724,7 +724,7 @@ mod tests {
             "roblox global `game` should not be undefined"
         );
 
-        // Standalone Luau (default) would flag it - sanity check the contrast.
+        // Standalone Luau (the default) does flag it; that contrast is the point.
         let standalone = luck_linter::lint_target("print(game)", LuaTarget::Luau, &lint_config);
         assert!(
             standalone

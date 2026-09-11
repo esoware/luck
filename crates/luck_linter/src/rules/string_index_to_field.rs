@@ -7,7 +7,7 @@ use crate::diagnostic::*;
 use crate::rule::{LintContext, Rule};
 
 /// `t["foo"]` where `foo` is a valid Lua identifier (not a keyword) is
-/// the same as `t.foo` - the dot form reads cleaner.
+/// the same as `t.foo`, and the dot form reads better.
 pub struct StringIndexToField;
 
 impl Rule for StringIndexToField {
@@ -59,8 +59,9 @@ impl IndexChecker {
         }
 
         // The fix replaces from the end of the prefix through the end of
-        // the index expression - `[ "name" ]` including the brackets,
-        // which start right after the prefix and close the span.
+        // the index expression, covering `[ "name" ]` including the
+        // brackets, which start right after the prefix and close the
+        // span.
         let open_byte = idx.prefix.span().end;
         let close_byte = idx.span.end;
         let replacement = format!(".{name}");

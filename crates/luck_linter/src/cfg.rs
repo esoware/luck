@@ -2,14 +2,14 @@
 //!
 //! Downstream lint rules use this to answer questions like "does this
 //! function always return", "does this branch fall through", and
-//! "what is the cyclomatic complexity of this body". The walker is
-//! intentionally a pure function over `&[Statement]`: it builds no
-//! persistent graph and allocates nothing beyond stack frames.
+//! "what is the cyclomatic complexity of this body". The walker is a
+//! pure function over `&[Statement]`. It builds no persistent graph and
+//! allocates nothing beyond stack frames.
 //!
-//! Function literals (`Expression::FunctionDef`, `Statement::FunctionDecl`,
-//! `Statement::LocalFunction`) are walked into for completeness but their
-//! exits do NOT propagate into the enclosing block: a function value
-//! defined inline does not change the surrounding control flow.
+//! The walker descends into function literals (`Expression::FunctionDef`,
+//! `Statement::FunctionDecl`, `Statement::LocalFunction`), but their exits
+//! do NOT propagate into the enclosing block. A function value defined
+//! inline does not change the surrounding control flow.
 
 use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Var};
 use luck_ast::shared::Block;
@@ -30,7 +30,6 @@ pub enum Exit {
     Error,
 }
 
-/// Per-branch information for control-flow analysis.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BranchSummary {
     pub exit: Exit,
@@ -220,7 +219,7 @@ fn analyze_statement(stmt: &Statement) -> BranchSummary {
             summary.decision_points += body.decision_points;
             summary.exit = Exit::Normal;
         }
-        // Function declarations are isolated control-flow units: their
+        // Function declarations are isolated control-flow units. Their
         // exits and decision points belong to the function, not the
         // enclosing block. Callers that need per-function complexity
         // run `analyze_full_block` on the body directly.
@@ -275,8 +274,8 @@ fn combine_branches(exits: &[Exit]) -> Exit {
         .iter()
         .all(|exit| matches!(exit, Exit::Return | Exit::Error));
     if all_returnish {
-        // Prefer Return as the dominant label - Error is rare and merging
-        // it into Return preserves "always_returns" without losing info.
+        // Return is the dominant label. Error is rare, and merging it
+        // into Return still preserves "always_returns".
         return if exits.iter().all(|exit| matches!(exit, Exit::Error)) {
             Exit::Error
         } else {
@@ -286,10 +285,10 @@ fn combine_branches(exits: &[Exit]) -> Exit {
     if exits.iter().all(|exit| *exit == first) {
         return first;
     }
-    // Mixed non-Normal exits (e.g. one branch breaks, another returns):
-    // the caller can't pick a single label, so report the weakest
-    // observable property. Treat as Normal since the enclosing sequence
-    // may continue along the break path once consumed by a loop.
+    // Mixed non-Normal exits (e.g. one branch breaks, another returns)
+    // have no single label, so report the weakest observable property.
+    // Normal, since the enclosing sequence may continue along the break
+    // path once a loop consumes it.
     Exit::Normal
 }
 
@@ -546,7 +545,6 @@ mod tests {
     #[test]
     fn decision_points_single_if() {
         let summary = summarize("local c = 1\nif c then end");
-        // +1 for the if statement.
         assert_eq!(summary.decision_points, 1);
     }
 

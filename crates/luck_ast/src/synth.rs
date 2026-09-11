@@ -3,18 +3,18 @@
 //! Builds `luck_ast` nodes without any source text. Hand-writing the node
 //! structs means spelling out every `Token { kind, span }`; this module hides
 //! that behind small constructors. The intended consumer is a tool that emits
-//! an AST directly - so the constructors also take over the output-validity duties
-//! such a tool would otherwise have to reimplement.
+//! an AST directly, so the constructors also take over the output-validity
+//! duties such a tool would otherwise reimplement.
 //!
 //! # Spans
 //!
 //! Every synthesized node gets a fresh single-point span `Span::new(n, n)`
-//! with `n` strictly increasing. The spans do not index into any source -
-//! they exist only to keep nodes distinguishable for comment anchoring and
+//! with `n` strictly increasing. The spans do not index into any source. They
+//! exist only to keep nodes distinguishable for comment anchoring and
 //! diagnostics. Spans are unique within one `Synth` and within any family
 //! created from it with [`Synth::share`]; when several synthesizers feed one
 //! tree (parallel decompilation of function protos), share one counter and
-//! collisions become impossible. [`Synth::starting_at`] remains for splicing
+//! collisions become impossible. Use [`Synth::starting_at`] to splice
 //! synthetic nodes into a parsed AST, where the synthetic range must sit
 //! above the source's byte offsets or comment anchors will collide.
 //!
@@ -27,6 +27,9 @@
 //!   `(a + b) :: T`, chained casts (`(a :: T) :: U`), and casts printed
 //!   before `<`, `&`, or `|`, which the type grammar would otherwise
 //!   swallow (`(a :: T) < b`).
+//! - **Type composition.** Optional, union, and intersection constructors
+//!   parenthesize composite children to preserve meaning and avoid Luau's
+//!   prohibition on mixing union and intersection suffixes.
 //! - **Prefix positions.** Call callees, method receivers, and index/field
 //!   prefixes that are not already a var, call, or parenthesized expression
 //!   are wrapped: `("s"):rep(2)`, `({}).x`, `(function() end)()`.
@@ -34,18 +37,20 @@
 //!   quoted token text (decimal escapes are always three digits so a
 //!   following literal digit cannot extend them); interpolated-string
 //!   segments escape `` ` ``, `{`, and `\`. [`Synth::long_string`] falls
-//!   back to the quoted form for content long brackets cannot carry (`\r`).
+//!   back to quoted form for carriage returns and NUL bytes.
 //! - **Numeric literals.** [`Synth::number_f64`] and [`Synth::number_int`]
 //!   render any value, including the ones with no literal form: negatives
 //!   (unary minus node), infinities (`1/0`), NaN (`0/0`), and `i64::MIN`
 //!   (hex, which wraps to the intended integer on Lua 5.3+). Magnitudes
 //!   whose plain decimal form is long render in exponent form (`1e300`).
 //!   Under a version pinned to a single-number dialect (5.1, 5.2, Luau),
-//!   integral floats render as plain digits (`100`, not `1e2` or `100.0`)
-//!   and `i64::MIN` as a negated decimal literal, both exact in f64.
+//!   integral floats omit the unnecessary `.0` suffix and use exponent
+//!   notation when shorter. `i64::MIN` uses an exact negated decimal
+//!   literal; other integers may round to the target's nearest double.
+//!   NaN sign and payload are not preserved.
 //! - **Loud failure on invalid names.** [`Synth::ident`] asserts (in release
-//!   builds too) that its argument is an identifier, so hostile input -
-//!   bytecode debug info, obfuscated names - fails fast instead of emitting
+//!   builds too) that its argument is an identifier, so hostile input such as
+//!   bytecode debug info or obfuscated names fails fast instead of emitting
 //!   output that will not re-parse.
 //!
 //! # What the caller still owes
@@ -106,6 +111,10 @@ use crate::types::*;
 
 /// Monotonic span allocator + node constructors. Methods take `&self` so
 /// calls nest: `synth.call(synth.name_expr("f"), vec![synth.nil()])`.
+/// `u32::MAX` is reserved as the exhausted sentinel: once the shared span
+/// counter reaches it every later node repeats it, so an exhausted range
+/// costs span distinctness rather than wrapping onto the offsets it
+/// started from.
 #[derive(Debug, Default)]
 pub struct Synth {
     next_offset: Arc<AtomicU32>,
@@ -157,7 +166,7 @@ pub struct FnSig {
     /// Luau `<T, U...>` list before the parameter parens.
     pub generics: Option<GenericTypeList>,
     pub params: Vec<Parameter>,
-    /// Trailing `...`, optionally typed - see [`Synth::vararg_param`].
+    /// Trailing `...`, optionally typed. See [`Synth::vararg_param`].
     pub vararg: Option<VarArgParam>,
     /// Luau `: T` return annotation.
     pub return_type: Option<Type>,
@@ -344,11 +353,24 @@ impl Synth {
         self
     }
 
-    /// A fresh single-point span. Distinct per node; never slices source.
+    /// A fresh single-point span, distinct per node until the range runs
+    /// out; never slices source.
     fn next_span(&self) -> Span {
-        // Relaxed suffices: spans need only uniqueness, which the atomic
-        // increment alone provides; no cross-thread ordering is implied.
-        let offset = self.next_offset.fetch_add(1, Ordering::Relaxed);
+        // Uniqueness needs atomicity, not cross-thread ordering. Saturating
+        // at the sentinel rather than incrementing past it is what keeps the
+        // counter from wrapping to zero and handing a concurrent allocator
+        // offsets that collide with the range's earliest nodes. Every node
+        // past the sentinel repeats it: synthesis stays infallible, and a
+        // repeated synthetic offset only costs trivia fidelity where a
+        // wrapped one would claim real source positions.
+        let offset = self
+            .next_offset
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                // `then`, not `then_some`: the increment must not be
+                // evaluated at the sentinel, where it overflows.
+                (current < u32::MAX).then(|| current + 1)
+            })
+            .unwrap_or(u32::MAX);
         Span::new(offset, offset)
     }
 
@@ -357,7 +379,7 @@ impl Synth {
         Token::new(kind, self.next_span())
     }
 
-    /// An identifier token. Asserts validity - in release builds too, so
+    /// An identifier token. Asserts validity in release builds too, so
     /// untrusted names (bytecode debug info) fail loudly instead of emitting
     /// output that will not re-parse. For names that may not be identifiers,
     /// use [`Synth::field_or_index`] / [`Synth::record`] / [`Synth::string`]
@@ -473,14 +495,16 @@ impl Synth {
         }
     }
 
-    /// Any `f64` as an expression that evaluates back to exactly `value`.
-    /// Finite integral values render with a `.0` suffix so the float subtype
-    /// survives on Lua 5.3+ (use [`Synth::number_int`] where an integer is
-    /// meant); under a version pinned to a single-number dialect (5.1, 5.2,
-    /// Luau) the suffix marks nothing and they render as plain digits.
-    /// Negatives become a unary-minus node, infinities `1/0`, NaN `0/0`,
-    /// and magnitudes whose plain decimal form is longer render in exponent
-    /// form (`1e300`, not a 300-digit literal).
+    /// An `f64` as a numeric expression, assuming the target uses IEEE-754
+    /// doubles. Finite values and infinities round-trip, including signed
+    /// zero. NaNs become `0/0`: their sign, payload, and signaling state
+    /// are deliberately not preserved. Bit-exact NaNs require a
+    /// target-specific runtime construction, not a portable Lua literal.
+    ///
+    /// Integral floats retain a `.0` suffix or exponent on Lua 5.3+ to
+    /// preserve the float subtype. On single-number dialects (5.1, 5.2,
+    /// Luau), the suffix is omitted. Exponent notation wins when shorter.
+    /// Negatives use unary minus and infinities use `1/0`.
     #[must_use]
     pub fn number_f64(&self, value: f64) -> Expression {
         if value.is_nan() {
@@ -514,7 +538,11 @@ impl Synth {
         self.number(&text)
     }
 
-    /// Any `i64` as an expression that evaluates back to exactly `value`.
+    /// An `i64` as an ordinary Lua number. Exact on Lua 5.3+ with 64-bit
+    /// integers (also the unpinned default). On single-number targets
+    /// (5.1, 5.2, Luau), conversion to double can round integers outside
+    /// `[-2^53, 2^53]`. Use [`Synth::integer_i64`] for Luau's distinct,
+    /// exact integer type rather than its ordinary number type.
     #[must_use]
     pub fn number_int(&self, value: i64) -> Expression {
         if value == i64::MIN {
@@ -547,7 +575,7 @@ impl Synth {
         })
     }
 
-    /// String literal from arbitrary bytes - Lua strings are byte arrays and
+    /// String literal from arbitrary bytes. Lua strings are byte arrays and
     /// bytecode constants need not be UTF-8. Bytes outside printable ASCII
     /// render as decimal escapes, so the token text is always valid UTF-8.
     #[must_use]
@@ -559,20 +587,21 @@ impl Synth {
     }
 
     /// `[[...]]` long-bracket string, picking the smallest `=` level whose
-    /// closer cannot occur early. Long brackets cannot represent `\r` (Lua
-    /// normalizes line endings inside them), so such content falls back to
-    /// the escaped quoted form of [`Synth::string`].
+    /// closer cannot occur early, including across the closing boundary.
+    /// Carriage returns (normalized by Lua) and NUL bytes (rejected by
+    /// Luau) fall back to the escaped quoted form of [`Synth::string`].
     #[must_use]
     pub fn long_string(&self, content: &str) -> Expression {
-        if content.contains('\r') {
+        if content.contains(['\r', '\0']) {
             return self.string(content);
         }
         let mut level = 0;
         let equals = loop {
             let equals = "=".repeat(level);
             let closer = format!("]{equals}]");
-            // At level 0 a trailing `]` merges with the closer one byte early.
-            let collides = content.contains(&closer) || (level == 0 && content.ends_with(']'));
+            // The closer's first byte can finish a delimiter begun in content.
+            let collides =
+                content.contains(&closer) || content.ends_with(&closer[..closer.len() - 1]);
             if !collides {
                 break equals;
             }
@@ -657,7 +686,7 @@ impl Synth {
 
     /// Truncate a multi-value expression to exactly one value: calls and
     /// `...` (the only multi-value forms) are parenthesized, everything else
-    /// passes through untouched. Use in single-result positions - the last
+    /// passes through untouched. Use in single-result positions, the last
     /// expression of a call, return, or assignment list where exactly one
     /// value is meant (a bytecode `CALL` requesting one result).
     #[must_use]
@@ -669,7 +698,7 @@ impl Synth {
     }
 
     /// Luau type cast: `expr :: T`. The cast binds to a simple expression, so
-    /// binary, unary, and if-expression operands are parenthesized - as are
+    /// binary, unary, and if-expression operands are parenthesized, as are
     /// cast operands, because chained casts (`a :: T :: U`) are a parse error
     /// in Luau.
     #[must_use]
@@ -780,14 +809,14 @@ impl Synth {
         self.call_node_with_types(receiver, Some(name), Some(type_args), args)
     }
 
-    /// `callee{ fields }` - table-constructor argument form.
+    /// `callee{ fields }`, the table-constructor argument form.
     #[must_use]
     pub fn call_table(&self, callee: Expression, fields: Vec<SynthField<'_>>) -> Expression {
         let args = FunctionArgs::TableConstructor(Box::new(self.table_ctor(fields)));
         self.call_node(callee, None, args)
     }
 
-    /// `callee"content"` - string argument form (content is unquoted).
+    /// `callee"content"`, the string argument form (content is unquoted).
     #[must_use]
     pub fn call_string(&self, callee: Expression, content: &str) -> Expression {
         let args = FunctionArgs::StringLiteral(Literal {
@@ -859,13 +888,13 @@ impl Synth {
         Expression::TableConstructor(Box::new(self.table_ctor(fields)))
     }
 
-    /// `{ v1, v2, ... }` - all-positional table.
+    /// `{ v1, v2, ... }`, an all-positional table.
     #[must_use]
     pub fn array(&self, values: Vec<Expression>) -> Expression {
         self.table(values.into_iter().map(SynthField::Positional).collect())
     }
 
-    /// `{ k = v, ... }` - named-field table. Keys that are not safe
+    /// `{ k = v, ... }`, a named-field table. Keys that are not safe
     /// identifiers fall back to the bracketed string form.
     #[must_use]
     pub fn record(&self, fields: Vec<(&str, Expression)>) -> Expression {
@@ -1011,7 +1040,7 @@ impl Synth {
         self.local_function_node(name, attributes, sig, body, false, false)
     }
 
-    /// Luau `const function name(params) body end` - a read-only local
+    /// Luau `const function name(params) body end`, a read-only local
     /// function binding.
     #[must_use]
     pub fn const_function(
@@ -1188,7 +1217,7 @@ impl Synth {
         self.local_assignment(names, exprs, false, false)
     }
 
-    /// Luau `const names = exprs` - a `local` whose names are read-only.
+    /// Luau `const names = exprs`, a `local` whose names are read-only.
     /// Asserts a non-empty initializer list; the grammar requires one.
     #[must_use]
     pub fn const_local(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
@@ -1433,7 +1462,7 @@ impl Synth {
     }
 
     /// Mid-block `break` (Lua 5.2+; 5.1 and Luau restrict `break` to the
-    /// last statement - use [`Synth::break_`] there).
+    /// last statement, so use [`Synth::break_`] there).
     #[must_use]
     pub fn break_stmt(&self) -> Statement {
         Statement::Break(self.next_span())
@@ -1493,7 +1522,7 @@ impl Synth {
     }
 
     /// A trailing `...` parameter, optionally with a Luau pack annotation. The
-    /// name stays `None` - Lua 5.5's `...name` form is not synthesized here.
+    /// name stays `None` because Lua 5.5's `...name` form is not synthesized here.
     #[must_use]
     pub fn vararg_param(&self, type_annotation: Option<Type>) -> VarArgParam {
         VarArgParam {
@@ -1552,11 +1581,22 @@ impl Synth {
         }))
     }
 
+    /// Parenthesize a child whose own suffix would otherwise bind loosely
+    /// enough to swallow, or be swallowed by, the composite being built.
+    fn ty_paren_if_composite(&self, inner: Type) -> Type {
+        match inner {
+            value @ (Type::Union(_) | Type::Intersection(_) | Type::Function(_)) => {
+                self.ty_paren(value)
+            }
+            value => value,
+        }
+    }
+
     #[must_use]
     pub fn ty_optional(&self, inner: Type) -> Type {
         Type::Optional(Box::new(OptionalType {
             span: self.next_span(),
-            type_value: inner,
+            type_value: self.ty_paren_if_composite(inner),
         }))
     }
 
@@ -1565,7 +1605,12 @@ impl Synth {
         Type::Union(Box::new(UnionType {
             span: self.next_span(),
             has_leading_pipe: false,
-            types: self.punctuated(types),
+            types: self.punctuated(
+                types
+                    .into_iter()
+                    .map(|inner| self.ty_paren_if_composite(inner))
+                    .collect(),
+            ),
         }))
     }
 
@@ -1574,22 +1619,17 @@ impl Synth {
         Type::Intersection(Box::new(IntersectionType {
             span: self.next_span(),
             has_leading_ampersand: false,
-            types: self.punctuated(types),
-        }))
-    }
-
-    /// Luau type negation: `~T`.
-    #[must_use]
-    pub fn ty_negation(&self, inner: Type) -> Type {
-        let inner = match inner {
-            value @ (Type::Union(_) | Type::Intersection(_) | Type::Function(_)) => {
-                self.ty_paren(value)
-            }
-            value => value,
-        };
-        Type::Negation(Box::new(NegationType {
-            span: self.next_span(),
-            type_value: inner,
+            types: self.punctuated(
+                types
+                    .into_iter()
+                    // Luau rejects a `?` suffix beside `&`, so an optional
+                    // member needs parens here but not in a union.
+                    .map(|inner| match inner {
+                        value @ Type::Optional(_) => self.ty_paren(value),
+                        value => self.ty_paren_if_composite(value),
+                    })
+                    .collect(),
+            ),
         }))
     }
 
@@ -1791,7 +1831,7 @@ impl Synth {
         }))
     }
 
-    /// Luau `[export] type function Name(params) body end` - a compile-time
+    /// Luau `[export] type function Name(params) body end`, a compile-time
     /// type function whose body is ordinary Luau.
     #[must_use]
     pub fn type_function(&self, export: bool, name: &str, sig: FnSig, body: Block) -> Statement {
@@ -2049,21 +2089,21 @@ mod tests {
     #[test]
     fn prefix_positions_wrap_non_prefix_expressions() {
         let synth = Synth::new();
-        // ("s"):rep(2) - a string receiver must be parenthesized.
+        // A string receiver must be parenthesized: ("s"):rep(2).
         let called = synth.method_call(synth.string("s"), "rep", vec![synth.number("2")]);
         let Expression::FunctionCall(call) = &called else {
             panic!("expected call");
         };
         assert!(matches!(call.callee, Expression::Parenthesized(_)));
 
-        // ({}).x - a table prefix must be parenthesized.
+        // A table prefix must be parenthesized: ({}).x.
         let accessed = synth.field(synth.table(vec![]), "x");
         let Expression::Var(Var::FieldAccess(access)) = &accessed else {
             panic!("expected field access");
         };
         assert!(matches!(access.prefix, Expression::Parenthesized(_)));
 
-        // f().x - a call prefix stays bare.
+        // A call prefix stays bare: f().x.
         let chained = synth.field(synth.call(synth.name_expr("f"), vec![]), "x");
         let Expression::Var(Var::FieldAccess(access)) = &chained else {
             panic!("expected field access");
@@ -2398,6 +2438,53 @@ mod tests {
         let third = synth.number("3");
         assert!(second.span().start > first.span().start);
         assert!(third.span().start > second.span().start);
+    }
+
+    #[test]
+    fn exhausted_spans_never_wrap_even_when_shared() {
+        let synth = Synth::starting_at(u32::MAX - 1);
+        let shared = synth.share();
+        assert_eq!(synth.nil().span().start, u32::MAX - 1);
+        for allocator in [&synth, &shared, &synth] {
+            assert_eq!(allocator.nil().span().start, u32::MAX);
+            assert_eq!(allocator.next_offset.load(Ordering::Relaxed), u32::MAX);
+        }
+    }
+
+    #[test]
+    fn exhaustion_under_contention_never_restarts_the_range() {
+        // A non-atomic guard lets one thread wrap the counter to zero while
+        // another is still inside the same allocation, so the losers hand out
+        // offsets that collide with the range's earliest nodes.
+        let start = u32::MAX - 4;
+        let synth = Synth::starting_at(start);
+        let mut offsets: Vec<u32> = Vec::new();
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    let shared = synth.share();
+                    scope.spawn(move || {
+                        (0..4)
+                            .map(|_| shared.nil().span().start)
+                            .collect::<Vec<u32>>()
+                    })
+                })
+                .collect();
+            for handle in handles {
+                offsets.extend(handle.join().unwrap());
+            }
+        });
+        assert!(offsets.iter().all(|&offset| offset >= start), "{offsets:?}");
+        // Only the sentinel repeats; everything the range did hand out is
+        // distinct however the threads interleaved.
+        let allocated: Vec<u32> = offsets
+            .iter()
+            .copied()
+            .filter(|&offset| offset < u32::MAX)
+            .collect();
+        let unique: std::collections::HashSet<u32> = allocated.iter().copied().collect();
+        assert_eq!(unique.len(), allocated.len(), "{offsets:?}");
+        assert_eq!(synth.next_offset.load(Ordering::Relaxed), u32::MAX);
     }
 
     #[test]
@@ -2982,7 +3069,7 @@ mod tests {
         };
         assert_eq!(literal.text.as_str(), "1e2");
 
-        // Short plain forms win ties and stay readable.
+        // Plain forms win ties.
         let Expression::Number(literal) = synth.number_f64(3.0) else {
             panic!("expected number");
         };
@@ -2995,10 +3082,16 @@ mod tests {
 
     #[test]
     fn number_rendering_respects_pinned_number_model() {
-        // A single-number dialect needs no float-subtype markers: integral
-        // values stay plain digits, and 100 beats 1e2 on the length tie.
+        // Plain digits win ties; exponent notation wins when shorter.
         let synth = Synth::new().with_version(LuaVersion::Luau);
-        for (value, expected) in [(100.0, "100"), (3.0, "3"), (1.5, "1.5"), (1e300, "1e300")] {
+        for (value, expected) in [
+            (100.0, "100"),
+            (1000.0, "1e3"),
+            (10000.0, "1e4"),
+            (3.0, "3"),
+            (1.5, "1.5"),
+            (1e300, "1e300"),
+        ] {
             let Expression::Number(literal) = synth.number_f64(value) else {
                 panic!("expected number for {value}");
             };
@@ -3030,6 +3123,42 @@ mod tests {
             panic!("expected number");
         };
         assert_eq!(literal.text.as_str(), "0x8000000000000000");
+    }
+
+    #[test]
+    fn nan_encoding_is_deliberately_not_bit_exact() {
+        let synth = Synth::new();
+        for bits in [
+            0x7ff8_0000_0000_0000,
+            0xfff8_0000_0000_0000,
+            0x7ff8_0000_dead_beef,
+            0x7ff0_0000_0000_0001,
+        ] {
+            let Expression::BinaryOp(expr) = synth.number_f64(f64::from_bits(bits)) else {
+                panic!("expected NaN expression");
+            };
+            assert_eq!(expr.op, BinOp::Div);
+            assert!(matches!(&expr.left, Expression::Number(literal) if literal.text == "0"));
+            assert!(matches!(&expr.right, Expression::Number(literal) if literal.text == "0"));
+        }
+    }
+
+    #[test]
+    fn ordinary_luau_numbers_and_exact_integers_are_distinct() {
+        let synth = Synth::new().with_version(LuaVersion::Luau);
+        let value = 9_007_199_254_740_993;
+        let Expression::Number(literal) = synth.number_int(value) else {
+            panic!("ordinary number")
+        };
+        assert_eq!(literal.text, "9007199254740993");
+        assert_eq!(
+            literal.text.parse::<f64>().expect("double") as i64,
+            value - 1
+        );
+        let Expression::Integer(literal) = synth.integer_i64(value) else {
+            panic!("exact integer")
+        };
+        assert_eq!(literal.text, "9007199254740993i");
     }
 
     #[test]
@@ -3106,11 +3235,6 @@ mod tests {
                 .len(),
             1
         );
-
-        assert!(matches!(
-            synth.ty_negation(synth.ty_singleton_nil()),
-            Type::Negation(_)
-        ));
 
         let exported = synth.export_local(
             vec![synth.attributed_name("value", Some(synth.ty_named("integer")), None)],

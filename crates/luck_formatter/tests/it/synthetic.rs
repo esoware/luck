@@ -1,7 +1,8 @@
-//! End-to-end proof of the AST-in path (`format_block`), format a programmatically
-//! built tree with no source text, then re-parse the output and require it be error-free and structurally
-//! identical to the tree we started from. This is the guarantee source-based tests can't
-//! give - there is no original text to lean on, only the AST.
+//! End-to-end coverage of the AST-in path (`format_block`). Each test formats
+//! a programmatically built tree with no source text, re-parses the output,
+//! and requires it to be error-free and structurally identical to the tree it
+//! started from. Source-based tests cannot prove this, since they always have
+//! an original text to lean on.
 
 use luck_ast::Block;
 use luck_ast::synth::{FnSig, Synth, SynthField, SynthInterpPart, SynthTypeField, TypeFieldAccess};
@@ -31,6 +32,102 @@ fn assert_roundtrips(block: &Block) -> String {
 }
 
 #[test]
+fn long_string_delimiters_and_bytes_roundtrip() {
+    let synth = Synth::new();
+    let mut contents = vec![
+        String::new(),
+        "]]=".to_string(),
+        "a\0b".to_string(),
+        "\n\0\r".to_string(),
+    ];
+    for level in 0..8 {
+        let mut content = String::new();
+        for preceding in 0..level {
+            content.push_str(&format!("]{}]", "=".repeat(preceding)));
+        }
+        content.push_str(&format!("]{}", "=".repeat(level)));
+        contents.push(content);
+    }
+    for content in contents {
+        let block = synth.block(
+            vec![],
+            Some(synth.return_(vec![synth.long_string(&content)])),
+        );
+        for version in [
+            LuaVersion::Lua51,
+            LuaVersion::Lua52,
+            LuaVersion::Lua53,
+            LuaVersion::Lua54,
+            LuaVersion::Lua55,
+            LuaVersion::Luau,
+        ] {
+            let output = assert_roundtrips_in(&block, version);
+            let lexed = luck_lexer::lex(&output, version);
+            let literal = lexed
+                .tokens
+                .iter()
+                .find_map(|token| match &token.kind {
+                    luck_token::TokenKind::StringLiteral(text) => Some(text),
+                    _ => None,
+                })
+                .expect("string literal");
+            assert_eq!(
+                luck_token::literal::decode_string_literal(literal, version).as_deref(),
+                Some(content.as_bytes()),
+                "{version:?}: {output}"
+            );
+            assert!(!output.contains('\0'));
+        }
+    }
+}
+
+#[test]
+fn composite_types_preserve_grouping() {
+    let synth = Synth::new();
+    let children = [
+        synth.ty_union(vec![synth.ty_named("A"), synth.ty_named("B")]),
+        synth.ty_intersection(vec![synth.ty_named("A"), synth.ty_named("B")]),
+        synth.ty_function(vec![], synth.ty_named("A")),
+        synth.ty_optional(synth.ty_named("A")),
+    ];
+    for child in children {
+        let types = [
+            synth.ty_optional(child.clone()),
+            synth.ty_union(vec![child.clone(), synth.ty_named("C")]),
+            synth.ty_union(vec![synth.ty_named("C"), child.clone()]),
+            synth.ty_intersection(vec![child.clone(), synth.ty_named("C")]),
+            synth.ty_intersection(vec![synth.ty_named("C"), child]),
+        ];
+        for type_value in types {
+            let block = synth.block(
+                vec![synth.type_declaration(false, "Result", None, type_value)],
+                None,
+            );
+            for width in [1, 60, 80, 120] {
+                let options = FormatOptions {
+                    line_width: width,
+                    ..FormatOptions::default()
+                };
+                let output = format_block(&block, Comments::none(), &options);
+                let parsed = luck_parser::parse(&output, LuaVersion::Luau);
+                assert!(parsed.errors.is_empty(), "{output}: {:?}", parsed.errors);
+                blocks_equiv(&block, &parsed.block).expect("type meaning preserved");
+                let verified =
+                    luck_formatter::format_and_verify(&output, LuaVersion::Luau, &options)
+                        .expect("type formatting verifies");
+                assert_eq!(verified.output, output);
+            }
+        }
+    }
+    let optional_function = synth.ty_optional(synth.ty_function(vec![], synth.ty_named("A")));
+    let block = synth.block(
+        vec![synth.type_declaration(false, "Callback", None, optional_function)],
+        None,
+    );
+    assert_eq!(assert_roundtrips(&block), "type Callback = (() -> A)?\n");
+}
+
+#[test]
 fn typed_local_roundtrips() {
     let synth = Synth::new();
     let optional = synth.ty_optional(synth.ty_named("number"));
@@ -41,8 +138,7 @@ fn typed_local_roundtrips() {
     let block = synth.block(vec![stmt], None);
 
     let output = assert_roundtrips(&block);
-    // The annotation must survive; losing it is the data-loss bug the rewrite
-    // set out to fix.
+    // Dropping the annotation is silent data loss, so it has to survive.
     assert!(
         output.contains("value: number?"),
         "type annotation dropped: {output}"

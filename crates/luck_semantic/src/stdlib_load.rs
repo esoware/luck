@@ -105,9 +105,9 @@ struct RawFunction {
     params: Option<Vec<RawParam>>,
     #[serde(default)]
     min_args: Option<usize>,
-    /// `-1` (or any negative) encodes "unbounded" - corresponds to
-    /// `Option::None` in `StdlibSignature::max_args`. TOML has no
-    /// native nullable so this sentinel keeps authoring ergonomic.
+    /// `-1` (or any negative) encodes "unbounded", which becomes
+    /// `Option::None` in `StdlibSignature::max_args`. TOML has no native
+    /// null, so the sentinel keeps the data files easy to write.
     #[serde(default)]
     max_args: Option<i32>,
     #[serde(default)]
@@ -135,7 +135,7 @@ struct RawSignature {
     max_args: i32,
 }
 
-// No `deny_unknown_fields` here: serde cannot combine it with the
+// No `deny_unknown_fields` here, because serde cannot combine it with the
 // flattened kind tag.
 #[derive(Debug, Deserialize)]
 struct RawParam {
@@ -471,10 +471,9 @@ pub(crate) fn parse_library(
     version: LuaVersion,
     environment: StdlibEnvironment,
 ) -> StdlibLibrary {
-    // unwrap is acceptable here: these TOML files ship inside the
-    // binary via include_str!. A parse failure means a bug in our
-    // ship - not user input - so we'd rather fail loudly at first
-    // call.
+    // These TOML files ship inside the binary via include_str!, so a parse
+    // failure is a bug in luck rather than bad user input. Panic loudly on
+    // the first access instead of degrading.
     let mut raws: Vec<RawLibrary> = sources
         .iter()
         .map(|toml_src| {
@@ -644,7 +643,7 @@ fn resolve_shape_extends(
 }
 
 /// Every shape referenced by a `returns` or `shape` field must exist in
-/// the library's registry - a dangling name is an authoring typo.
+/// the library's registry. A dangling name is an authoring typo.
 fn verify_shape_references(library: &StdlibLibrary) {
     fn check(library: &StdlibLibrary, entry: &StdlibEntry, path: &str) {
         let referenced = match entry {

@@ -35,15 +35,14 @@ use builder::ScopeTreeBuilder;
 use scope::{ScopeTree, SymbolId};
 use stdlib_model::{StdlibDeprecation, StdlibEntry, StdlibLibrary, library_for};
 
-/// Complete semantic analysis result for a Lua chunk.
+/// Semantic analysis result for one Lua chunk.
 #[derive(Debug)]
 pub struct SemanticAnalysis {
     pub scope_tree: ScopeTree,
     /// Names treated as globals beyond what the stdlib defines. The
     /// linter driver fills this from the user's `extra_globals` config
-    /// (e.g. `vim`, project-specific runtime names). Stdlib names are
-    /// not duplicated here - query them via `is_known_global` or
-    /// `stdlib()` directly.
+    /// (e.g. `vim`, project-specific runtime names). Stdlib names are not
+    /// duplicated here; query those with `is_known_global` or `stdlib()`.
     pub extra_globals: HashSet<String>,
     pub version: LuaVersion,
     /// Selects which stdlib library answers queries. Only meaningful
@@ -56,7 +55,7 @@ pub struct SemanticAnalysis {
 }
 
 /// Analyze a parsed Lua block, building the scope tree. Defaults to the
-/// [`StdlibEnvironment::Standalone`] environment - the correct default for
+/// [`StdlibEnvironment::Standalone`] environment, which is correct for
 /// vanilla Lua and standalone Luau. Luau callers targeting Roblox must use
 /// [`analyze_with_environment`] with [`StdlibEnvironment::Roblox`].
 pub fn analyze(block: &Block, version: LuaVersion) -> SemanticAnalysis {
@@ -84,8 +83,7 @@ pub fn analyze_with_environment(
 }
 
 impl SemanticAnalysis {
-    /// The rich, typed library for this analysis's version and
-    /// environment.
+    /// The typed library for this analysis's version and environment.
     #[must_use]
     pub fn stdlib(&self) -> &'static StdlibLibrary {
         library_for(self.version, self.environment)
@@ -116,8 +114,8 @@ impl SemanticAnalysis {
             .is_some_and(|reference| reference.resolved.is_some())
     }
 
-    /// Whether `name` is recognized as a global - either a stdlib entry
-    /// for this environment, or an entry in `extra_globals`.
+    /// Whether `name` is recognized as a global, either a stdlib entry for
+    /// this environment or an entry in `extra_globals`.
     #[must_use]
     pub fn is_known_global(&self, name: &str) -> bool {
         self.stdlib().globals.contains_key(name) || self.extra_globals.contains(name)

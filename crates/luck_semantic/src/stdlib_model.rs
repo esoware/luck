@@ -4,10 +4,10 @@
 //!
 //! Each supported environment ships as one fully self-contained TOML
 //! file under `stdlib_data/`: `lua51`..`lua55`, `luau` (standalone
-//! Luau), and `luau_roblox` (the Roblox runtime). The files are
-//! deliberately independent - no inheritance or tier layering - because
-//! the environments diverge in both directions; shared entries are
-//! duplicated and kept honest by drift-guard tests. A library is
+//! Luau), and `luau_roblox` (the Roblox runtime). The files are deliberately
+//! independent, with no inheritance or tier layering, because the
+//! environments diverge in both directions. Shared entries are duplicated,
+//! and the drift-guard tests keep the copies honest. A library is
 //! selected by `(LuaVersion, StdlibEnvironment)`; the environment only
 //! matters for Luau. Data is parsed once via `include_str!` +
 //! `LazyLock`; extra generated sources (services, enums) splice into a
@@ -171,7 +171,7 @@ pub enum StdlibArgKind {
     /// Restricted set of literal string constants the argument must
     /// take. Used by e.g. `collectgarbage("collect")`.
     Constant(Vec<StdlibConstant>),
-    /// `...` - variadic; matches zero or more values of any type.
+    /// `...`, matching zero or more values of any type.
     Vararg,
 }
 
@@ -221,7 +221,7 @@ pub struct StdlibShape {
     pub members: BTreeMap<CompactString, StdlibEntry>,
 }
 
-/// Top-level library: the complete global surface of one environment.
+/// Top-level library: every global and shape of one environment.
 #[derive(Debug, Clone)]
 pub struct StdlibLibrary {
     pub version: LuaVersion,
@@ -240,8 +240,8 @@ impl StdlibLibrary {
         self.lookup_segments(path.iter().map(CompactString::as_str))
     }
 
-    /// Same as [`Self::lookup`] but accepts borrowed `&str` segments -
-    /// preferred entry point for callers that have raw source slices.
+    /// Same as [`Self::lookup`] but accepts borrowed `&str` segments. This is
+    /// the preferred entry point for callers that have raw source slices.
     #[must_use]
     pub fn lookup_str(&self, path: &[&str]) -> Option<&StdlibEntry> {
         self.lookup_segments(path.iter().copied())
@@ -293,8 +293,8 @@ const LUA54_TOML: &str = include_str!("../stdlib_data/lua54.toml");
 const LUA55_TOML: &str = include_str!("../stdlib_data/lua55.toml");
 const LUAU_TOML: &str = include_str!("../stdlib_data/luau.toml");
 const LUAU_ROBLOX_TOML: &str = include_str!("../stdlib_data/luau_roblox.toml");
-/// Generated from the Roblox API dump - see the file headers for the
-/// regen command. Both splice into the Roblox library.
+/// Generated from the Roblox API dump; the file headers carry the regen
+/// command. Both splice into the Roblox library.
 const ROBLOX_API_TOML: &str = include_str!("../stdlib_data/roblox_api.toml");
 const ROBLOX_ENUMS_TOML: &str = include_str!("../stdlib_data/roblox_enums.toml");
 
@@ -369,8 +369,8 @@ pub fn library_for(version: LuaVersion, environment: StdlibEnvironment) -> &'sta
 
 /// Expand a deprecation `replace_template` against positional argument
 /// source slices. `%1`, `%2`, ..., `%9` refer to args[0..=8]; `%%` is a
-/// literal percent. Missing arguments expand to an empty string - the
-/// caller decides whether that constitutes a useful fix.
+/// literal percent. Missing arguments expand to an empty string, and the
+/// caller decides whether that still makes a useful fix.
 #[must_use]
 pub fn expand_replace_template(template: &str, args: &[&str]) -> String {
     let mut output = String::with_capacity(template.len());

@@ -11,16 +11,16 @@ bumping and no dependency fan-out analysis.
 
 ## Where the version lives
 
-- `[workspace.package] version` in the root `Cargo.toml` - inherited by
+- `[workspace.package] version` in the root `Cargo.toml`, inherited by
   every crate via `version.workspace = true`.
 - Every `luck*` entry in `[workspace.dependencies]` in the root `Cargo.toml`
   carries the same `version = "..."` (required for publishing path deps).
 - `editors/vscode/package.json` and the two root `version` fields in its
-  `package-lock.json` - the extension version must match the
+  `package-lock.json`. The extension version must match the
   `serverInfo.version` the LSP reports.
 
 `luck_testgen` and `luck_benchmark` are internal (`publish = false`) and stay
-at `0.0.0` forever - never bump them.
+at `0.0.0` forever. Never bump them.
 
 ## Choosing the bump (0.x rules)
 

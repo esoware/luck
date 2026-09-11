@@ -1,5 +1,5 @@
 export type Identifier = integer | string
-type NonNil = ~nil
+type NonNil = number | string
 
 export const MAX_ID: integer = 0x7fffffffffffffffi
 export local current: Identifier = 1i

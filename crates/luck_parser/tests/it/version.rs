@@ -21,22 +21,22 @@ fn goto_in_lua51_is_identifier() {
     // a function call or assignment, not a goto statement.
     let result = parse("goto = 1", LuaVersion::Lua51);
     assert_no_errors(&result);
-    // `goto` is an identifier so `goto = 1` is assignment
     assert!(matches!(&result.block.stmts[0], Statement::Assignment(_)));
 }
 
 #[test]
 fn double_colon_label_in_lua51() {
-    // `::label::` in Lua 5.1 - lexer produces DoubleColon which is unexpected
+    // In Lua 5.1 the lexer still produces DoubleColon, which the parser
+    // has nowhere to put.
     let result = parse("::label::", LuaVersion::Lua51);
     assert_has_errors(&result);
 }
 
 #[test]
 fn attribute_in_lua53_not_parsed() {
-    // `local x <const> = 5` in Lua 5.3 - `<` is not an attribute syntax.
-    // The parser sees `local x` then stops (no `=` or `,`), so `<const> = 5` is left unparsed.
-    // No attribute is attached to the local.
+    // Lua 5.3 has no attribute syntax, so `<` ends the name list. The parser
+    // sees `local x`, stops there for want of a `=` or `,`, and leaves
+    // `<const> = 5` unparsed.
     let result = parse("local x <const> = 5", LuaVersion::Lua53);
     if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
         assert!(
@@ -52,7 +52,6 @@ fn attribute_in_lua53_not_parsed() {
 #[test]
 fn global_in_lua54_is_identifier() {
     // In Lua 5.4, `global` is an identifier, not a keyword.
-    // `global = 1` should parse as assignment.
     let result = parse("global = 1", LuaVersion::Lua54);
     assert_no_errors(&result);
     assert!(matches!(&result.block.stmts[0], Statement::Assignment(_)));
@@ -60,7 +59,7 @@ fn global_in_lua54_is_identifier() {
 
 #[test]
 fn bitwise_and_in_lua51_is_error() {
-    // The lexer rejects `&` in Lua 5.1, so we get lex errors
+    // The lexer rejects `&` in Lua 5.1, so the errors are lex errors.
     let result = parse("local x = a & b", LuaVersion::Lua51);
     assert_has_errors(&result);
 }
@@ -74,7 +73,7 @@ fn bitwise_pipe_in_lua52_is_error() {
 
 #[test]
 fn named_vararg_in_lua54_not_consumed() {
-    // In Lua 5.4, `...args` - the `args` after `...` is not consumed as vararg name
+    // Lua 5.4 has no named varargs, so `args` after `...` stays a separate name
     let result = parse("function f(...) return args end", LuaVersion::Lua54);
     assert_no_errors(&result);
     if let Statement::FunctionDecl(f) = &result.block.stmts[0] {

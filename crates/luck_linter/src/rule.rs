@@ -17,7 +17,6 @@ pub struct LintContext<'a> {
     pub config: &'a LintConfig,
 }
 
-/// A lint rule that checks code for issues.
 pub trait Rule: Send + Sync {
     /// Unique name of this rule (e.g. "unused_variable").
     fn name(&self) -> &'static str;
@@ -31,8 +30,8 @@ pub trait Rule: Send + Sync {
     fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic>;
 }
 
-/// A rule driven by the shared single-pass walk (`bus::run`): instead of
-/// walking the AST itself, it receives one callback per node. Rules whose
+/// A rule driven by the shared single-pass walk (`bus::run`). It receives
+/// one callback per node instead of walking the AST itself. Rules whose
 /// logic is node-local implement this and delegate `Rule::check` to
 /// [`crate::bus::run_single`]; rules that need traversal state (scope
 /// stacks, statement sequences, CFG) stay whole-tree `Rule`s.

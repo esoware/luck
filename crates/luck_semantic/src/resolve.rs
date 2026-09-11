@@ -2,7 +2,7 @@
 //! value reads to `StdlibEntry`s, including colon-method calls on shaped
 //! values (`game:GetService(...)`, `f:read()` where `f = io.open(...)`).
 //!
-//! Resolution is deliberately shallow - no type inference. A value has a
+//! Resolution is deliberately shallow, with no type inference. A value has a
 //! known shape only when it flows directly: a global that declares a
 //! shape, a call whose stdlib entry declares a return shape, or a local
 //! initialized from one of those and never reassigned.
@@ -64,8 +64,8 @@ impl SemanticAnalysis {
             return None;
         }
         let entry = lib.lookup_str(&segments)?;
-        // A method-flagged function reached with `.` takes an explicit
-        // self, so its declared arity would be off by one - skip.
+        // A method-flagged function reached with `.` takes an explicit self,
+        // so its declared arity would be off by one. Skip it.
         if let StdlibEntry::Function(func) = entry
             && func.is_method
         {

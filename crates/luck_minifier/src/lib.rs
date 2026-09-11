@@ -6,14 +6,13 @@
 //! via [`luck_codegen::compact`]. Each transform is a standalone `fn(Block) -> Block`
 //! implementing [`AstTransform`](luck_ast::transform::AstTransform).
 //!
-//! ## Pipeline Order
+//! ## Pipeline order
 //!
-//! The authoritative order is the body of [`minify`] - read it there.
-//! Structural facts: `fold_constants` runs before AND after
-//! `inline_locals` (inlining exposes folds); `remove_dead_code` runs
-//! again after the second fold (folds expose dead branches);
-//! `rename_locals` is followed by `lift_locals` and a final
-//! `merge_locals` that fuses lifted declarations.
+//! The body of [`minify`] is authoritative. The orderings that matter:
+//! `fold_constants` runs before and after `inline_locals` (inlining exposes
+//! folds), `remove_dead_code` runs again after the second fold (folds expose
+//! dead branches), and `rename_locals` is followed by `lift_locals` and a
+//! final `merge_locals` that fuses lifted declarations.
 //!
 //! # Usage
 //!
@@ -33,19 +32,18 @@ use luck_core::TransformConfig;
 use luck_core::diagnostics::{Diagnostic, errors};
 use luck_core::types::LuaTarget;
 
-/// Convergence cap for the outer pipeline loop and the tail's inner
-/// loop. Measured corpora converge in two outer rounds now that the
-/// tail fixpoints internally; the cap only bounds pathological
+/// Convergence cap for the outer pipeline loop and the tail's inner loop.
+/// Measured corpora converge in two outer rounds because the tail reaches
+/// its own fixpoint internally, so the cap only bounds pathological
 /// oscillation.
 const MAX_PIPELINE_ROUNDS: usize = 8;
 
-/// Run the full minification pipeline on Lua source code.
+/// Minifies Lua source, returning the compact output or the parse
+/// diagnostics.
 ///
 /// The transform chain iterates to a FIXPOINT: every pass can expose
 /// work for the others (folding opens dead branches, inlining opens
-/// folds, lift+merge reshape declarations for the next round). The old
-/// hardcoded run-twice schedule demonstrably left bytes on the table -
-/// a second `minify` call used to shrink its own output further.
+/// folds, lift+merge reshape declarations for the next round).
 pub fn minify(
     source: &str,
     target: LuaTarget,
@@ -93,16 +91,16 @@ pub fn minify(
     // fixpoint inside apply_tail_transforms (rename/lift/merge unblock
     // each other over several steps), so on measured corpora the outer
     // loop converges in two rounds: one that does the work and one that
-    // proves it stable. The core passes find nothing after round one -
-    // the extra outer rounds only guard cross-stage interactions.
+    // proves it stable. The core passes find nothing after round one, so the
+    // extra outer rounds only guard cross-stage interactions.
     //
     // Each improving round re-parses its own output before the next one.
     // Transform-built nodes are not always shaped like their parsed
     // equivalents (paren wrappers, span-less tokens), and a pass that
     // matches on the parsed shape can miss work that would be visible
-    // after a round trip - the idempotency invariant (minify(minify(x)) ==
-    // minify(x)) held only by luck before this. Judging the fixpoint on
-    // freshly parsed ASTs makes the emitted text the convergence domain.
+    // after a round trip. Judging the fixpoint on freshly parsed ASTs makes
+    // the emitted text the convergence domain, which is what keeps
+    // minify(minify(x)) == minify(x) true.
     let mut current_source = source.to_string();
     let mut previous_output = luck_codegen::compact(&block, &current_source);
     for _ in 0..MAX_PIPELINE_ROUNDS {
@@ -142,7 +140,7 @@ fn apply_core_transforms(
     let version = target.lua_version();
 
     let block = if config.remove_dead_code {
-        transforms::remove_dead_code::remove(block)
+        transforms::remove_dead_code::remove(block, version)
     } else {
         block
     };
@@ -157,25 +155,25 @@ fn apply_core_transforms(
         block
     };
     let block = if config.inline_locals {
-        transforms::inline_locals::inline(block)
+        transforms::inline_locals::inline(block, version)
     } else {
         block
     };
-    // Inlining may create new foldable constants...
+    // Inlining exposes new foldable constants.
     let block = if config.fold_constants {
         transforms::fold_constants::fold(block, version)
     } else {
         block
     };
-    // ...and folding those (`local DEBUG = false` inlined into
-    // `if DEBUG then`) exposes new dead branches within the same round.
+    // Folding those (`local DEBUG = false` inlined into `if DEBUG then`)
+    // exposes new dead branches within the same round.
     let block = if config.remove_dead_code {
-        transforms::remove_dead_code::remove(block)
+        transforms::remove_dead_code::remove(block, version)
     } else {
         block
     };
     let block = if config.merge_locals {
-        transforms::merge_locals::merge(block)
+        transforms::merge_locals::merge(block, version)
     } else {
         block
     };
@@ -216,8 +214,9 @@ fn apply_tail_transforms(
     if !config.rename_locals && !config.lift_locals {
         return block;
     }
+    let version = target.lua_version();
 
-    // explicit self before rename so the renamer can shorten the parameter
+    // Explicit self goes before rename so the renamer can shorten the parameter.
     let mut block = if config.rename_locals {
         transforms::explicit_self::rewrite(block)
     } else {
@@ -227,9 +226,9 @@ fn apply_tail_transforms(
     // The loop can wander between name/lift configurations instead of
     // improving monotonically; judging by equality alone would then
     // return whatever iteration the cap lands on. Tracking the smallest
-    // emit seen makes the result the best configuration visited, not the
-    // last - and since the common trajectory ends on its best iteration,
-    // the recovery reparse below almost never runs.
+    // emit seen makes the result the best configuration visited rather than
+    // the last. The common trajectory ends on its best iteration, so the
+    // recovery reparse below almost never runs.
     let mut previous_output = luck_codegen::compact(&block, "");
     let mut last_output = String::new();
     let mut best_output = String::new();
@@ -242,14 +241,14 @@ fn apply_tail_transforms(
         };
 
         block = if config.lift_locals {
-            transforms::lift_locals::lift(block)
+            transforms::lift_locals::lift(block, version)
         } else {
             block
         };
 
-        // fuse `local X\nX=Y` back into `local X=Y` after lifting
+        // Fuse `local X\nX=Y` back into `local X=Y` after lifting.
         block = if config.rename_locals && config.merge_locals {
-            transforms::merge_locals::merge(block)
+            transforms::merge_locals::merge(block, version)
         } else {
             block
         };
@@ -382,7 +381,8 @@ mod tests {
 
     #[test]
     fn hash_string_not_folded() {
-        // #"str" must not be folded - escape sequences make raw length unreliable
+        // #"str" must not be folded: escape sequences make the raw length
+        // unreliable.
         let result = minify_lua54("local x = #\"hello\"\nreturn x\n");
         assert!(result.contains("#"), "Got: {result}");
     }
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn keeps_parens_around_function_call() {
-        // Parens around func call affect multi-return truncation
+        // Parens around a call truncate its multiple returns.
         let result = minify_lua54("local x = (foo())\nreturn x\n");
         let paren_count = result.matches('(').count();
         assert!(
@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn minus_does_not_become_comment() {
-        // `x - -y` must not become `x--y` (that's a comment)
+        // `x - -y` must not become `x--y`, which lexes as a comment.
         let result = minify_lua54("local x = 5\nlocal y = 3\nreturn x - -y\n");
         assert!(!result.contains("--"), "Minus became comment: {result}");
     }
@@ -536,7 +536,7 @@ mod tests {
         let source = "\
 export local public = 129312i
 export const mask = 0xffffffffffffffffi
-export function apply<T>(value: ~nil)
+export function apply<T>(value: T)
     return identity<<T>>(value), public, mask
 end
 ";
@@ -548,7 +548,7 @@ end
         );
         assert!(result.contains("export function apply"), "{result}");
         assert!(result.contains("identity<<T>>"), "{result}");
-        assert!(result.contains(":~nil"), "{result}");
+        assert!(result.contains(":T"), "{result}");
         let reparsed = luck_parser::parse(result.clone(), luck_token::LuaVersion::Luau);
         assert!(
             reparsed.errors.is_empty(),
@@ -634,8 +634,8 @@ end
         let src = "local function add(a, b)\n  return a + b\nend\nlocal x = add(1, 2)\nprint(x)\n";
         let first = minify_lua54(src);
         let second = minify_lua54(&first);
-        // Re-minification may rename locals differently (frequency-based),
-        // but output length should not grow
+        // Re-minification may rename locals differently (naming is
+        // frequency-based), but the output length must not grow.
         assert!(
             second.len() <= first.len(),
             "Re-minification should not grow output: first={}, second={}",
@@ -677,7 +677,7 @@ end
 
     #[test]
     fn metamethod_safe_dead_code_preserves_variable_ops() {
-        // x + 1 is not pure when x could have a side-effectful __add metamethod
+        // x + 1 is not pure: x may carry a side-effecting __add metamethod.
         let result = minify_lua54("local unused = x + 1\n");
         assert!(
             result.contains("+"),
@@ -687,7 +687,7 @@ end
 
     #[test]
     fn metamethod_safe_dead_code_removes_literal_ops() {
-        // 1 + 2 is pure - no metamethods on literal numbers
+        // 1 + 2 is pure: literal numbers carry no metamethods.
         let result = minify_lua54("local unused = 1 + 2\n");
         assert!(
             !result.contains("+"),
@@ -697,7 +697,7 @@ end
 
     #[test]
     fn metamethod_safe_truthiness_preserves_variable_ops() {
-        // x + 1 is not guaranteed truthy when x could have __add returning nil
+        // x + 1 is not guaranteed truthy: x's __add may return nil.
         let src = "local x = setmetatable({}, {__add = function() return nil end})\nif true then return x + 1 end\nreturn 0\n";
         let result = minify_lua54(src);
         assert!(
@@ -734,8 +734,8 @@ end
 
     #[test]
     fn concat_right_associativity_preserved() {
-        // a .. (b .. c) is right-associative and should NOT become a .. b .. c
-        // because Lua concat is right-associative, (a .. b) .. c IS different
+        // Concat is right-associative, so (a .. b) .. c differs from
+        // a .. b .. c and the parens must survive.
         let result = minify_lua54("return (a .. b) .. c\n");
         assert!(reparses(&result), "Parse errors\nOutput: {result}");
         assert!(
@@ -759,7 +759,7 @@ end
 
     #[test]
     fn vararg_in_last_position_parens_preserved() {
-        // (f()) truncates multi-return; parens must be kept
+        // (f()) truncates f's multiple returns, so the parens must be kept.
         let result = minify_lua54("return (f())\n");
         assert!(
             result.contains("(f())"),

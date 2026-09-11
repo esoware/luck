@@ -1,6 +1,6 @@
 //! Rename. Local symbols only: globals and stdlib names are refused in
 //! `prepare_rename`, and the new name is rejected whenever the rename
-//! could change meaning - invalid identifier, reserved word, a name
+//! could change meaning: an invalid identifier, a reserved word, a name
 //! already used anywhere in the document, or a known global. Rejecting
 //! ambiguity beats silently capturing a shadowed name.
 

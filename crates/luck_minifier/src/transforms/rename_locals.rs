@@ -5,15 +5,15 @@ use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_core::types::LuaTarget;
-use luck_token::CompactString;
+use luck_token::{CompactString, LuaVersion};
 
-use crate::expr::ident_name;
+use crate::expr::{ident_name, is_env_binding};
 use crate::name_gen::name_for_index;
 use crate::tokens::make_ident;
 
 pub fn rename(block: Block, target: LuaTarget, rename_globals: bool) -> Block {
-    // Renaming file-defined globals pollutes `_G` under different keys -
-    // strictly opt-in (TransformConfig::rename_globals).
+    // Renaming file-defined globals pollutes `_G` under different keys, so it
+    // is strictly opt-in (TransformConfig::rename_globals).
     let (func_globals, assign_globals) = if rename_globals {
         let func_globals = collect_toplevel_function_globals(&block);
         let assign_globals = collect_assignfirst_globals(&block, &func_globals);
@@ -26,10 +26,9 @@ pub fn rename(block: Block, target: LuaTarget, rename_globals: bool) -> Block {
     // the same positional scoping rules as the renamer (declaration
     // order, shadowing, repeat-until conditions, function name scoping),
     // so any reference that resolves to no binding is a global. A flat
-    // name-set that excluded any name used as a local ANYWHERE in the
-    // file let a global read be captured by a renamed local sharing its
-    // name.
-    let mut analyzer = Analyzer::new(&func_globals, &assign_globals);
+    // name-set would not do, because it cannot tell a global read apart
+    // from a same-named local somewhere else in the file.
+    let mut analyzer = Analyzer::new(&func_globals, &assign_globals, target.lua_version());
     analyzer.analyze_block(&block);
     analyzer.propagate_globals();
 
@@ -100,7 +99,8 @@ struct ScopeNode {
     parent: Option<usize>,
     children: Vec<usize>,
     binding_ids: Vec<usize>,
-    // after propagate_globals: includes globals from all descendant scopes too
+    // After propagate_globals this also holds globals from every descendant
+    // scope.
     global_refs: FxHashSet<CompactString>,
 }
 
@@ -110,7 +110,8 @@ struct BindingInfo {
     ref_count: usize,
     slot: u32,
     is_fixed: bool,
-    // declaring scope + reference scopes + all scopes on the path between them
+    // The declaring scope, the reference scopes, and every scope on the path
+    // between them.
     live_scopes: ScopeSet,
 }
 
@@ -121,16 +122,18 @@ struct Analyzer<'globals> {
     // it is branchless; `outer_scope_ids` holds only the enclosing scopes.
     current_scope_id: usize,
     outer_scope_ids: Vec<usize>,
-    // original name -> stack of binding IDs; innermost binding on top
+    // Original name to its stack of binding IDs, innermost binding on top.
     name_stack: FxHashMap<CompactString, Vec<usize>>,
     func_globals: &'globals FxHashSet<CompactString>,
     assign_globals: &'globals FxHashSet<CompactString>,
+    version: LuaVersion,
 }
 
 impl<'globals> Analyzer<'globals> {
     fn new(
         func_globals: &'globals FxHashSet<CompactString>,
         assign_globals: &'globals FxHashSet<CompactString>,
+        version: LuaVersion,
     ) -> Self {
         let root_scope = ScopeNode {
             parent: None,
@@ -146,6 +149,7 @@ impl<'globals> Analyzer<'globals> {
             name_stack: FxHashMap::default(),
             func_globals,
             assign_globals,
+            version,
         }
     }
 
@@ -210,7 +214,7 @@ impl<'globals> Analyzer<'globals> {
     fn reference_name(&mut self, name: &str) {
         if let Some(&binding_id) = self.name_stack.get(name).and_then(|s| s.last()) {
             self.bindings[binding_id].ref_count += 1;
-            // mark every scope from here up to the declaration as live
+            // Mark every scope from here up to the declaration as live.
             let declaring_scope = self.bindings[binding_id].scope_id;
             let mut scope = self.current_scope();
             loop {
@@ -275,7 +279,7 @@ impl<'globals> Analyzer<'globals> {
     fn analyze_stmt(&mut self, stmt: &Statement) {
         match stmt {
             Statement::LocalAssignment(local) => {
-                // RHS before LHS: `local x = x` reads the outer x
+                // RHS before LHS: `local x = x` reads the outer x.
                 if let Some(exprs) = &local.exprs {
                     for expr in exprs.iter() {
                         self.analyze_expr(expr);
@@ -283,13 +287,15 @@ impl<'globals> Analyzer<'globals> {
                 }
                 for name_tok in local.names.iter() {
                     let name = ident_name(&name_tok.name);
-                    let is_fixed = name == "self" || name == "_ENV" || local.is_exported;
+                    let is_fixed =
+                        name == "self" || is_env_binding(name, self.version) || local.is_exported;
                     self.declare_binding(name, is_fixed);
                 }
             }
             Statement::LocalFunction(local_func) => {
                 let name = ident_name(&local_func.name);
-                let is_fixed = name == "self" || name == "_ENV" || local_func.is_exported;
+                let is_fixed =
+                    name == "self" || is_env_binding(name, self.version) || local_func.is_exported;
                 self.declare_binding(name, is_fixed);
                 self.analyze_function_body(&local_func.body);
             }
@@ -502,11 +508,11 @@ impl<'globals> Analyzer<'globals> {
 
     fn analyze_function_body(&mut self, body: &FunctionBody) {
         self.enter_scope();
-        // explicit params are always renameable - implicit `self` from `:` syntax
-        // never appears in the params list
+        // Explicit params are always renameable. The implicit `self` of `:`
+        // syntax never appears in the params list.
         for param in body.params.iter() {
             let name = ident_name(&param.name);
-            self.declare_binding(name, name == "_ENV");
+            self.declare_binding(name, is_env_binding(name, self.version));
         }
         self.analyze_block(&body.block);
         self.exit_scope();
@@ -533,7 +539,7 @@ impl Analyzer<'_> {
                 continue;
             }
 
-            // Find a reusable slot: one not live in this scope
+            // Find a reusable slot, one not live in this scope.
             let mut found_slot = None;
             for (slot_idx, liveness) in slot_liveness.iter().enumerate() {
                 if !liveness.contains(scope_id) {
@@ -566,7 +572,7 @@ impl Analyzer<'_> {
 
 impl Analyzer<'_> {
     fn propagate_globals(&mut self) {
-        // reverse order so children are processed before parents
+        // Reverse order, so children are processed before parents.
         for scope_id in (0..self.scopes.len()).rev() {
             for child_idx in 0..self.scopes[scope_id].children.len() {
                 let child_id = self.scopes[scope_id].children[child_idx];
@@ -630,11 +636,11 @@ impl Analyzer<'_> {
             );
         }
 
-        // Zero-frequency slots (declared but never referenced) still wear
-        // a name in the output, so they run through the same liveness
-        // conflict check: handing them the first short name regardless
-        // captured co-live slots (an unreferenced param stole the name of
-        // an upvalue used inside the same function body).
+        // Zero-frequency slots (declared but never referenced) still wear a
+        // name in the output, so they run through the same liveness conflict
+        // check. Handing them the first short name regardless would capture a
+        // co-live slot, letting an unreferenced param take the name of an
+        // upvalue read inside the same function body.
         for slot in 0..slot_count {
             if slot_to_name[slot].is_empty() {
                 slot_to_name[slot] = pool.pick(&slot_liveness[slot], &slot_forbidden[slot]);
@@ -760,7 +766,7 @@ impl<'globals> AstRenamer<'globals> {
         original.into()
     }
 
-    // must match Analyzer::pre_declare_root_bindings exactly
+    // Must match Analyzer::pre_declare_root_bindings exactly.
     fn pre_declare_root_block(&mut self, block: &Block) {
         for stmt in &block.stmts {
             if let Statement::FunctionDecl(func_decl) = stmt
@@ -809,7 +815,7 @@ impl AstTransform for AstRenamer<'_> {
     fn transform_statement(&mut self, stmt: Statement) -> Statement {
         match stmt {
             Statement::LocalAssignment(mut local) => {
-                // Transform expressions first (in outer scope)
+                // Transform the expressions first, in the outer scope.
                 local.exprs = local.exprs.map(|exprs| self.walk_punctuated_exprs(exprs));
                 local.names =
                     rename_attributed_names(&mut |orig| self.declare_binding(orig), local.names);
@@ -988,7 +994,7 @@ fn rename_attributed_names(
         let new_name = declare(ident_name(&attributed.name));
         AttributedName {
             name: make_ident(&new_name),
-            // Renaming a local never changes its declared type
+            // Renaming a local never changes its declared type.
             type_annotation: attributed.type_annotation,
             attrib: attributed.attrib,
         }
@@ -1007,7 +1013,7 @@ fn rename_punctuated_names(
         .into_iter()
         .map(|mut binding| {
             let new_name = declare(ident_name(&binding.name));
-            // Renaming a loop binding never changes its declared type
+            // Renaming a loop binding never changes its declared type.
             binding.name = make_ident(&new_name);
             binding
         })
@@ -1543,7 +1549,7 @@ mod tests {
 
     #[test]
     fn locals_can_shadow_unused_globals() {
-        // 'l' and 'u' are globals at top level but not inside f
+        // 'l' and 'u' are globals at top level but not inside f.
         let result = apply(concat!(
             "l(1)\nu(2)\n",
             "local function f()\n",
@@ -1560,7 +1566,7 @@ mod tests {
 
     #[test]
     fn locals_avoid_globals_used_in_same_scope() {
-        // 'l' is a global called inside f - locals must not shadow it
+        // 'l' is a global called inside f, so locals must not shadow it.
         let result = apply(concat!(
             "local function f()\n",
             "  local longvar = 1\n  l(longvar)\n  return longvar\n",
@@ -1590,9 +1596,9 @@ mod tests {
 
     #[test]
     fn renames_inside_global_function_body() {
-        // Regression: the analyzer skipped `global function` bodies while the
-        // renamer walked them, leaving binding indices out of sync - the renamer
-        // then panicked with an out-of-bounds binding lookup.
+        // The analyzer and the renamer must both walk `global function` bodies.
+        // If only one does, the binding indices fall out of sync and the
+        // renamer panics on an out-of-bounds binding lookup.
         let result = apply_lua55("global function f(longparam)\n  return longparam\nend\n");
         let reparsed = luck_parser::parse(&result, luck_token::LuaVersion::Lua55);
         assert!(reparsed.errors.is_empty(), "must reparse: {result}");
@@ -1619,10 +1625,10 @@ mod tests {
 
     #[test]
     fn global_read_via_typecast_is_not_assign_first() {
-        // `g` is read (inside a type cast) before being assigned, so it is a real
-        // global and must not be reclassified as an assign-first pseudo-local and
-        // renamed. Regression: the assign-first read collector skipped TypeCast,
-        // miscompiling `h=(g::any)g=1 print(h,g)` into renamed locals.
+        // `g` is read inside a type cast before being assigned, so it is a real
+        // global and must not be reclassified as an assign-first pseudo-local
+        // and renamed. A read collector that skips TypeCast miscompiles
+        // `h=(g::any)g=1 print(h,g)` into renamed locals.
         let result = apply_luau("h = (g :: any)\ng = 1\nprint(h, g)\n");
         let reparsed = luck_parser::parse(&result, luck_token::LuaVersion::Luau);
         assert!(reparsed.errors.is_empty(), "must reparse: {result}");
@@ -1634,9 +1640,9 @@ mod tests {
 
     #[test]
     fn unreferenced_param_never_captures_live_upvalue() {
-        // The zero-frequency name fallback used to hand an unreferenced
-        // param the same short name as an upvalue read inside the body,
-        // capturing it.
+        // The zero-frequency name fallback must not hand an unreferenced param
+        // the same short name as an upvalue read inside the body, which would
+        // capture it.
         let result = apply(
             "local cache = string.rep
 function W.new(p)
@@ -1647,8 +1653,8 @@ cache = f()
         );
         let reparsed = luck_parser::parse(&result, luck_token::LuaVersion::Lua54);
         assert!(reparsed.errors.is_empty(), "must reparse: {result}");
-        // The upvalue read inside the body and the outer local must
-        // still be the SAME name, and the param a different one.
+        // The upvalue read inside the body and the outer local must share a
+        // name, and the param must get a different one.
         let body_start = result.find("function W.new(").expect("decl kept") + 15;
         let param = &result[body_start..body_start + 1];
         let outer = &result[6..7];

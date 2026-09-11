@@ -11,8 +11,8 @@ use crate::rule::{LintContext, Rule};
 /// `local x = 1`. This rule targets the case where the user *does*
 /// reach for the variable later (`x = 1`) but no code ever reads it.
 /// The signal is "the assignment is dead", not "the declaration is
-/// dead". We avoid overlap by requiring at least one post-declaration
-/// Write - `local x = 1` with no further references is left to
+/// dead". Requiring at least one post-declaration Write avoids the
+/// overlap, so `local x = 1` with no further references belongs to
 /// `unused_variable`.
 pub struct SetButNeverRead;
 

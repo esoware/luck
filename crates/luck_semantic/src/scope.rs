@@ -54,16 +54,15 @@ pub struct Scope {
     pub children: Vec<ScopeId>,
 }
 
-/// What kind of scope this is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeKind {
     /// Top-level block of a file.
     Module,
-    /// Function body - introduces an upvalue boundary.
+    /// Function body, which introduces an upvalue boundary.
     Function,
     /// do...end, if body, else body.
     Block,
-    /// while/repeat/for - controls break/continue semantics.
+    /// while/repeat/for, which controls break/continue semantics.
     Loop,
 }
 
@@ -85,11 +84,9 @@ pub struct Symbol {
     /// bindings. The identifier is a key of the module's export table,
     /// so it is read externally even with zero in-module references.
     pub is_exported: bool,
-    /// The symbol this one shadows, if any.
     pub shadows: Option<SymbolId>,
 }
 
-/// What kind of symbol declaration this is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
     Local,
@@ -106,7 +103,6 @@ pub struct Reference {
     pub span: Span,
     pub name: CompactString,
     pub kind: ReferenceKind,
-    /// The scope this reference occurs in.
     pub scope: ScopeId,
     /// The resolved symbol, if any. None means it's a global.
     pub resolved: Option<SymbolId>,
@@ -240,7 +236,6 @@ impl ScopeTree {
         id
     }
 
-    /// Check if traversing from `from` scope to `to` scope crosses a function boundary.
     fn crosses_function_boundary(&self, from: ScopeId, to: ScopeId) -> bool {
         let mut current = Some(from);
         while let Some(scope_id) = current {
@@ -255,12 +250,12 @@ impl ScopeTree {
         false
     }
 
-    /// Get all unresolved references (globals).
+    /// All unresolved references, which are the globals.
     pub fn unresolved_references(&self) -> impl Iterator<Item = &Reference> {
         self.references.iter().filter(|r| r.resolved.is_none())
     }
 
-    /// Get all symbols that have zero read references.
+    /// Symbols with zero read references.
     pub fn unused_symbols(&self) -> impl Iterator<Item = &Symbol> {
         self.symbols.iter().filter(|sym| {
             !sym.reference_ids.iter().any(|&ref_id| {

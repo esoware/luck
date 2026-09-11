@@ -5,13 +5,11 @@ use crate::rule::{LintContext, Rule};
 
 /// Luacheck 212: a function parameter is declared but never referenced.
 ///
-/// Why this rule exists in addition to `unused_variable`: the existing
-/// `unused_variable` rule already fires on `Parameter` symbols, but it
-/// is a catch-all. Splitting parameter-unused out gives users a separate
-/// toggle - methods often take parameters they ignore for protocol
-/// reasons, and silencing the broader rule should not silence this one
-/// too. Both rules firing on the same symbol is acceptable; users
-/// disable whichever they don't want.
+/// Why this is distinct from `unused_variable`: parameters get their own
+/// toggle, because methods often take parameters they ignore for
+/// protocol reasons and silencing the broader rule should not silence
+/// this one too. `unused_variable` skips `Parameter` symbols, so the two
+/// never double-fire.
 pub struct UnusedArgument;
 
 impl Rule for UnusedArgument {
@@ -36,9 +34,9 @@ impl Rule for UnusedArgument {
             if symbol.kind != SymbolKind::Parameter {
                 continue;
             }
-            // The implicit `self` parameter on `obj:method()` is
-            // synthesized by the scope builder. Lua users have no way to
-            // mark it unused, so we never flag it.
+            // The scope builder synthesizes the implicit `self`
+            // parameter on `obj:method()`. Lua offers no way to mark it
+            // unused, so it never fires.
             if symbol.name == "self" {
                 continue;
             }

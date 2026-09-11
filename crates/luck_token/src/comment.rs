@@ -9,9 +9,7 @@ pub struct Comment {
     /// For leading comments: start of the next token.
     /// For trailing comments: start of the preceding token.
     pub attached_to: u32,
-    /// Line comment vs block comment vs shebang.
     pub kind: CommentKind,
-    /// Whether this comment leads or trails its attached token.
     pub position: CommentPosition,
     /// Whether a newline appears before this comment (since the last token).
     pub preceded_by_newline: bool,
@@ -19,7 +17,6 @@ pub struct Comment {
     pub followed_by_newline: bool,
 }
 
-/// The kind of comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommentKind {
     /// `-- single line comment` (to end of line)

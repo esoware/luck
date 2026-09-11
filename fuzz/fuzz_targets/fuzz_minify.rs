@@ -26,8 +26,8 @@ fuzz_target!(|data: &[u8]| {
 
     let config = TransformConfig::default();
     let Ok(first) = luck_minifier::minify(source, target, &config, "fuzz.lua") else {
-        // Parse was clean, so minify erroring is itself suspect — but
-        // some inputs legitimately hit resource guards; don't assert.
+        // The parse was clean, so an error here is suspect, but some inputs
+        // hit a resource guard. Bail rather than assert.
         return;
     };
 

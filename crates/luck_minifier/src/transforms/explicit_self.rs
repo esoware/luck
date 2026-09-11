@@ -39,7 +39,7 @@ impl<'ast> Visitor<'ast> for SelfCounter {
         self.walk_expression(expr);
     }
 
-    // don't descend into nested function bodies - their `self` is separate
+    // A nested function body binds its own `self`, so stop here.
     fn visit_function_body(&mut self, _body: &'ast FunctionBody) {}
 }
 
@@ -49,8 +49,8 @@ impl AstTransform for ExplicitSelfRewriter {
             Statement::FunctionDecl(mut func_decl) => {
                 if let Some(method_name) = func_decl.name.method.take() {
                     let self_refs = count_self_refs(&func_decl.body);
-                    // cost: adding "X," to params = 2 bytes
-                    // saving: 3 bytes per self reference (4 -> 1 after rename)
+                    // The added "X," parameter costs 2 bytes; each `self`
+                    // reference saves 3 (4 chars down to 1 after rename).
                     if self_refs >= 2 {
                         func_decl.name.names.push(method_name);
 

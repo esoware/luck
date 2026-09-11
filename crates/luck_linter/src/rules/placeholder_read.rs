@@ -91,12 +91,12 @@ impl<'ast> Visitor<'ast> for PlaceholderChecker {
 
     fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
         match stmt {
-            // Assignment LHS: skip the targets (they're writes), visit
-            // values (they may contain reads).
+            // Assignment targets are writes, so skip them and visit the
+            // values, which may contain reads.
             luck_ast::Statement::Assignment(assignment) => {
                 for var in assignment.targets.iter() {
-                    // Still walk into Index/FieldAccess prefixes - those
-                    // are reads even on the LHS of an assignment.
+                    // Index and FieldAccess prefixes are reads even on
+                    // the LHS of an assignment.
                     if let Var::Index(idx) = var {
                         self.visit_expression(&idx.prefix);
                         self.visit_expression(&idx.index);
@@ -117,9 +117,9 @@ impl<'ast> Visitor<'ast> for PlaceholderChecker {
                     }
                 }
             }
-            // Compound assignment (`x += y`): the var is read-then-write,
-            // but we still skip it for placeholder semantics - `_ += 1`
-            // is rare and clearly self-referential.
+            // A compound assignment (`x += y`) reads then writes the var,
+            // but placeholder semantics skip it anyway, since `_ += 1` is
+            // rare and clearly self-referential.
             luck_ast::Statement::CompoundAssignment(compound) => {
                 if let Var::Index(idx) = &compound.var {
                     self.visit_expression(&idx.prefix);
@@ -129,8 +129,8 @@ impl<'ast> Visitor<'ast> for PlaceholderChecker {
                 }
                 self.visit_expression(&compound.expr);
             }
-            // Generic-for binding names are declarations; visit the
-            // iterator expressions and body only.
+            // Generic-for binding names are declarations, so visit only
+            // the iterator expressions and the body.
             luck_ast::Statement::GenericFor(generic_for) => {
                 for expr in generic_for.exprs.iter() {
                     self.visit_expression(expr);
@@ -147,14 +147,14 @@ impl<'ast> Visitor<'ast> for PlaceholderChecker {
                 self.visit_block(&num_for.block);
             }
             // Function parameters in any declaration form are bindings,
-            // not reads; the body is recursed by the default walker.
+            // not reads. The default walker recurses into the body.
             luck_ast::Statement::LocalFunction(_)
             | luck_ast::Statement::FunctionDecl(_)
             | luck_ast::Statement::GlobalFunction(_) => {
                 self.walk_statement(stmt);
             }
-            // All other shapes have no special "skip these tokens"
-            // logic - fall back to the default traversal.
+            // All other shapes need no "skip these tokens" logic and use
+            // the default traversal.
             luck_ast::Statement::FunctionCall(_)
             | luck_ast::Statement::DoBlock(_)
             | luck_ast::Statement::WhileLoop(_)

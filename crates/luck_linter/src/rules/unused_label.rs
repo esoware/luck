@@ -47,10 +47,9 @@ fn check_scope<'ast>(block: &'ast Block, diagnostics: &mut Vec<LintDiagnostic>) 
 
     for (name, span) in &labels {
         // A label is reachable if any goto in the same function uses it.
-        // We don't try to enforce Lua's own scoping rules (the parser
-        // already validates them); presence anywhere in the same function
-        // suffices to mute this lint and avoid false positives on
-        // cross-block jumps.
+        // The parser already validates Lua's own label scoping rules, so
+        // presence anywhere in the same function mutes this lint and
+        // avoids false positives on cross-block jumps.
         if !goto_names.iter().any(|goto| goto == name) {
             diagnostics.push(
                 LintDiagnostic::new(
@@ -95,8 +94,8 @@ fn walk_statement<'ast>(
     goto_names: &mut Vec<&'ast str>,
     nested: &mut Vec<&'ast FunctionBody>,
 ) {
-    // Exhaustive match, no catch-alls: a new Statement variant must
-    // surface here as a compile error.
+    // Exhaustive match, no catch-alls, so a new Statement variant
+    // surfaces here as a compile error.
     match stmt {
         Statement::Label(label) => {
             if let Some(name) = token_identifier(&label.name.kind) {
@@ -230,10 +229,9 @@ fn walk_expression<'ast>(
     goto_names: &mut Vec<&'ast str>,
     nested: &mut Vec<&'ast FunctionBody>,
 ) {
-    // Exhaustive match, no catch-alls.
     match expr {
-        // Function definitions open a new scope - collected here and
-        // processed separately by `check_scope` to honor the
+        // Function definitions open a new scope. They are collected
+        // here and processed separately by `check_scope` to honor the
         // "goto cannot cross function boundaries" rule.
         Expression::FunctionDef(func_def) => {
             nested.push(&func_def.body);

@@ -29,9 +29,9 @@ fn error_invalid_escape() {
 
 #[test]
 fn error_invalid_multibyte_escape_recovers_on_char_boundary() {
-    // Fuzz-found: the invalid-escape error path used to advance one byte
-    // past a multi-byte escaped char, leaving the cursor mid-sequence and
-    // panicking on the next token's source slice.
+    // The invalid-escape error path must consume the whole escaped char.
+    // Stopping mid-sequence leaves the cursor off a char boundary and panics
+    // when the next token slices the source.
     let result = luck_lexer::lex("\"\\\u{7C5}\" y", luck_token::LuaVersion::Lua55);
     assert!(!result.errors.is_empty(), "{:?}", result.errors);
     assert!(result.errors[0].message.contains("invalid escape"));

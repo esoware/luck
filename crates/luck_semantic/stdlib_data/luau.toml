@@ -1892,7 +1892,7 @@ params = [{ kind = "display", display = "vector" }]
 kind = "constant"
 
 # Luau exposes a sandboxed subset of the os library (clock/date/difftime/
-# time) in BOTH standalone and Roblox environments — its absence here made
+# time) in BOTH standalone and Roblox environments. Omitting it here makes
 # `os.time()` an undefined-variable Error on every Luau target.
 [globals.os]
 kind = "namespace"

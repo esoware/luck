@@ -2,11 +2,13 @@
 //!
 //! Simple all-positional tables pack with `fill` (as many entries per line as
 //! fit); tables with keyed fields group + indent and break one field per line.
-//! Comments inside a table are drained at the block level after the statement.
+//! A table whose comments all sit between fields claims them itself and
+//! breaks one field per line; anything else leaves them to the block level.
 
 use luck_ast::expr::{Expression, TableConstructor};
 use luck_ast::shared::Field;
 
+use crate::comments::ListSeparator;
 use crate::ir::*;
 use crate::tokens::write_token;
 
@@ -31,6 +33,20 @@ fn use_fill_mode(table: &TableConstructor) -> bool {
 
 impl Format for TableConstructor {
     fn fmt(&self, f: &mut Formatter) {
+        if f.comments.has_claimable_comments(
+            self.span,
+            self.fields.items.iter().map(|field| field.span()),
+        ) {
+            f.write_commented_list(
+                ("{", "}"),
+                self.span,
+                &self.fields.items,
+                Field::span,
+                ListSeparator::AfterEachItem,
+            );
+            return;
+        }
+
         if self.fields.is_empty() {
             // Any dangling comments were drained at the block level.
             token("{}").fmt(f);

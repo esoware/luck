@@ -1,7 +1,8 @@
 //! Expression layout: `impl Format` over `luck_ast` expression nodes.
 //!
-//! Leaf text never slices source - identifiers/numbers/strings come from the
-//! token-carried values via `tokens::write_token`, so synthetic ASTs format.
+//! Leaf text never slices source. Identifiers, numbers, and strings come from
+//! the token-carried values via `tokens::write_token`, which is what makes
+//! synthetic ASTs printable.
 
 use luck_ast::expr::{
     BinaryOp, Expression, FieldAccess, IfExpression, InterpolatedString, Literal, ParenExpression,
@@ -34,8 +35,8 @@ impl Format for Expression {
             Expression::Parenthesized(paren) => paren.fmt(f),
             Expression::TableConstructor(table) => table.fmt(f),
 
-            // Call/def bodies are owned by format_function.rs (another module);
-            // an anonymous def is the `function` keyword plus its body.
+            // `format_function` owns call and definition bodies; an anonymous
+            // def is the `function` keyword plus its body.
             Expression::FunctionCall(call) => call.fmt(f),
             Expression::FunctionDef(def) => {
                 // Luau attributes on a function expression stay inline;

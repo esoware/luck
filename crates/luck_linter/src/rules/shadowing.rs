@@ -23,7 +23,7 @@ impl Rule for Shadowing {
 
         for symbol in &semantic.scope_tree.symbols {
             if let Some(shadowed_id) = symbol.shadows {
-                // Underscore-prefixed names are a deliberate discard convention, not real shadowing.
+                // Underscore-prefixed names are a discard convention.
                 if symbol.name == "_" || symbol.name.starts_with('_') {
                     continue;
                 }

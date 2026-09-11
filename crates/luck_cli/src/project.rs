@@ -13,10 +13,18 @@ use std::process;
 ///
 /// An explicit `-t/--target` is parsed via the alias-rich `FromStr`; a bad
 /// value exits with code 2. When omitted, the project's `luck.json` decides
-/// per extension - an extension alone cannot say which dialect a `.lua` file
-/// is written in. With no config in scope the defaults reproduce plain
-/// inference: `.luau` is Luau, everything else Lua 5.4.
+/// per extension, because an extension alone cannot say which dialect a
+/// `.lua` file is written in. With no config in scope the defaults
+/// reproduce plain inference: `.luau` is Luau, everything else Lua 5.4.
 pub(crate) fn resolve_explicit_target(target: Option<&str>, input_path: &str) -> LuaTarget {
+    resolve_configured_target(target, input_path, &config_governing(input_path))
+}
+
+pub(crate) fn resolve_configured_target(
+    target: Option<&str>,
+    input_path: &str,
+    config: &LuckConfig,
+) -> LuaTarget {
     if let Some(target_str) = target {
         return target_str.parse::<LuaTarget>().unwrap_or_else(|error| {
             eprintln!("Error: {error}");
@@ -24,7 +32,7 @@ pub(crate) fn resolve_explicit_target(target: Option<&str>, input_path: &str) ->
         });
     }
 
-    config_governing(input_path)
+    config
         .target_for_path(Path::new(input_path))
         .unwrap_or_else(|message| {
             eprintln!("Error: {message}");
@@ -35,7 +43,7 @@ pub(crate) fn resolve_explicit_target(target: Option<&str>, input_path: &str) ->
 /// The `luck.json` governing a one-shot input, discovered upward from the
 /// input file's own directory rather than from cwd, so `luck bundle
 /// path/to/project/src/main.lua` still sees that project's config.
-fn config_governing(input_path: &str) -> LuckConfig {
+pub(crate) fn config_governing(input_path: &str) -> LuckConfig {
     let start_dir = match Path::new(input_path)
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -54,6 +62,17 @@ fn config_governing(input_path: &str) -> LuckConfig {
             eprintln!("Error: {message}");
             process::exit(EXIT_USAGE as i32);
         }
+    }
+}
+
+/// The config a one-shot `bundle`/`minify` run answers to: an explicit `-c`
+/// resolved through `extends`, otherwise the one governing the input file.
+/// The config directory is not returned, because a one-shot run names its
+/// input directly, so no include/exclude filter is rooted anywhere.
+pub(crate) fn config_for_one_shot(config: Option<&Path>, input_path: &str) -> LuckConfig {
+    match config {
+        Some(path) => resolve_project_config(Some(path)).0,
+        None => config_governing(input_path),
     }
 }
 

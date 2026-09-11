@@ -15,7 +15,8 @@ fn bench_formatter(criterion: &mut Criterion) {
             // `format_block` consumes its `Comments`, so rebuild them in
             // setup each iteration; the measured section is formatting only.
             b.iter_with_setup_wrapper(|runner| {
-                let comments = Comments::from_source(&parse_result.comments, source_text);
+                let comments =
+                    Comments::from_source(&parse_result.comments, source_text, file.version);
                 runner.run(|| format_block(&parse_result.block, comments, &options));
             });
         });
@@ -43,7 +44,7 @@ fn bench_formatter(criterion: &mut Criterion) {
                 let per_file_comments: Vec<Comments> = parses
                     .iter()
                     .map(|parse_result| {
-                        Comments::from_source(&parse_result.comments, &parse_result.source)
+                        Comments::from_source(&parse_result.comments, &parse_result.source, version)
                     })
                     .collect();
                 runner.run(|| {

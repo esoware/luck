@@ -73,13 +73,13 @@ impl NodeRule for UnnecessaryNegation {
         ) else {
             return;
         };
-        // Only ==/~= get an autofix: that inversion is exact (~= is defined
-        // as the negation of ==, sharing __eq), while relational flips
-        // differ for NaN and __lt/__le metamethods.
+        // Only ==/~= get an autofix, because that inversion is exact:
+        // ~= is defined as the negation of == and shares __eq. Flipping
+        // a relational operator differs for NaN and for __lt/__le.
         let is_equality = matches!(comparison.op, BinOp::Eq | BinOp::Ne);
         let fix = is_equality.then(|| Fix {
             description: "invert the comparison operator".to_string(),
-            // The parens stay: with no parent context here, a bare
+            // The parens stay. With no parent context here, a bare
             // comparison could regroup under a tighter-binding neighbor
             // (`..`, arithmetic, or an adjacent comparison).
             edits: vec![TextEdit {

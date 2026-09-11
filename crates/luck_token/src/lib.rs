@@ -4,7 +4,8 @@
 //! [`LuaVersion`] (version-gated feature flags), [`TokenKind`]/[`Token`] (all Lua/Luau
 //! token types), and [`Comment`] (extracted comments with position metadata).
 //!
-//! This crate has zero internal dependencies - every other luck crate depends on it.
+//! This crate has zero internal dependencies, and every other luck crate
+//! depends on it.
 //!
 //! # Usage
 //!

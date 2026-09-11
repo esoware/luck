@@ -1,7 +1,7 @@
 //! Workspace symbols. Flattens each open document's outline and filters
-//! by a case-insensitive substring query. Only open documents are
-//! searched - there is no on-disk index - which matches how the rest of
-//! the server scopes its analysis.
+//! by a case-insensitive substring query. There is no on-disk index, so
+//! only open documents are searched, matching how the rest of the server
+//! scopes its analysis.
 
 #![allow(deprecated)]
 

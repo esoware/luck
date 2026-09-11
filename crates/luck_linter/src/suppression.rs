@@ -13,8 +13,8 @@ pub enum SuppressionKind {
     Warn,
 }
 
-/// One resolved suppression directive: covers `[start, end)` byte range
-/// for `rule` (or `*` wildcard) with the given verb.
+/// One resolved suppression directive, covering the `[start, end)` byte
+/// range for `rule` (or the `*` wildcard) with the given verb.
 #[derive(Debug, Clone)]
 pub struct Directive {
     pub rule: String,
@@ -31,27 +31,27 @@ pub struct DirectiveSite {
     pub kind: SuppressionKind,
     /// Span of the rule-name token inside the comment.
     pub name_span: Span,
-    /// File-level prefix (`-- #luck:`) doesn't have a target statement -
-    /// invalid filters still get flagged but we won't double-count them
-    /// against statement-level region tracking.
+    /// A file-level prefix (`-- #luck:`) has no target statement.
+    /// Invalid filters still get flagged, but they do not count against
+    /// statement-level region tracking.
     pub is_file_level: bool,
 }
 
-/// Manages lint suppression via comments.
+/// Lint suppression parsed from a file's comments.
 #[derive(Default)]
 pub struct Suppression {
     directives: Vec<Directive>,
-    /// Every rule-name reference we saw, regardless of whether it
-    /// produced a directive (file-level too). The meta-rule consumes this.
+    /// Every rule-name reference in the file, including file-level ones
+    /// and any that produced no directive. The meta-rule consumes this.
     sites: Vec<DirectiveSite>,
 }
 
 impl Suppression {
     /// Parse `-- luck:` and `-- #luck:` directives.
     ///
-    /// `statement_spans` is a sorted list of `(start, end)` byte offsets for every
-    /// statement in the file (including nested ones). Used to resolve the end
-    /// of single-statement (non-region) suppressions.
+    /// `statement_spans` is a sorted list of `(start, end)` byte offsets
+    /// for every statement in the file, nested ones included. It resolves
+    /// the end of single-statement (non-region) suppressions.
     pub fn from_comments(
         comments: &[Comment],
         source: &str,
@@ -80,8 +80,8 @@ impl Suppression {
                 });
             }
 
-            // File-level directives ignore region/single semantics - they
-            // cover the entire file.
+            // File-level directives ignore region and single-statement
+            // semantics and cover the entire file.
             if parsed.is_file_level {
                 for entry in parsed.entries {
                     directives.push(Directive {
@@ -152,8 +152,8 @@ impl Suppression {
             }
         }
 
-        // Unclosed regions extend to the end of the file - matches the
-        // intent of "I forgot the end" rather than silently dropping it.
+        // Unclosed regions extend to the end of the file, which matches
+        // the intent of "I forgot the end" better than dropping them.
         for (rule, kind, start) in region_starts {
             directives.push(Directive {
                 rule,
@@ -177,15 +177,15 @@ impl Suppression {
         &self.sites
     }
 
-    /// Apply suppression to diagnostics: drop those covered by `allow`,
-    /// adjust severity for those covered by `deny`/`warn`.
+    /// Apply suppression to diagnostics. Drops those covered by `allow`
+    /// and adjusts severity for those covered by `deny` or `warn`.
     pub fn apply(&self, diagnostics: &mut Vec<LintDiagnostic>) {
         diagnostics.retain_mut(|diag| {
-            // Narrowest covering directive wins: a statement-level marker
-            // beats a region, a region beats file-level - regardless of
-            // where each was parsed. Parse order settled collisions
-            // before, which let an unclosed region (appended last)
-            // override every narrower directive in the file.
+            // The narrowest covering directive wins, so a statement-level
+            // marker beats a region and a region beats file-level, no
+            // matter what order they were parsed in. Settling collisions
+            // by parse order would let an unclosed region, which is
+            // appended last, override every narrower directive.
             let winner = self
                 .directives
                 .iter()
@@ -237,11 +237,11 @@ enum Modifier {
 /// Parse `-- luck: <verb>(rule, ...)` or `-- #luck: <verb>(rule, ...)`.
 ///
 /// `comment_base` is the absolute byte offset of the comment's first
-/// character - we need it to compute name spans for the meta-rule.
+/// character, which the name spans for the meta-rule are measured from.
 fn parse_directive(text: &str, comment_base: u32) -> Option<Parsed> {
     // Strip leading dashes (line comment) or block-comment delimiters.
-    // We don't care about the comment kind here; we only need to find the
-    // `luck:` or `#luck:` marker inside.
+    // The comment kind does not matter here, only the `luck:` or
+    // `#luck:` marker inside it.
     let trimmed = text.trim_start_matches('-');
     let trimmed = trimmed.trim_start_matches('[').trim_start_matches('[');
     let body = trimmed.trim_start();
@@ -273,8 +273,9 @@ fn parse_directive(text: &str, comment_base: u32) -> Option<Parsed> {
         })?;
 
     let (verb_kind, after_verb, verb_str) = kind;
-    // Measure the gap BEFORE trimming - shadowing first made the
-    // whitespace term always zero, skewing name spans in `allow (rule)`.
+    // Measure the gap BEFORE trimming. Trimming into the same binding
+    // first would zero the whitespace term and skew the name spans in
+    // `allow (rule)`.
     let after_verb_trimmed = after_verb.trim_start();
     let after_verb_offset =
         verb_offset + verb_str.len() as u32 + (after_verb.len() - after_verb_trimmed.len()) as u32;
@@ -294,7 +295,7 @@ fn parse_directive(text: &str, comment_base: u32) -> Option<Parsed> {
         let raw_len = raw.len();
         let trimmed = raw.trim();
         if trimmed.is_empty() {
-            // `allow()` is a syntax error; skip and let validation note it
+            // `allow()` is a syntax error, left for validation to note
             // elsewhere. Returning None would silently drop the comment.
             cursor += raw_len + 1;
             continue;
@@ -317,9 +318,10 @@ fn parse_directive(text: &str, comment_base: u32) -> Option<Parsed> {
         "end" => Modifier::End,
         "" => Modifier::None,
         // Block comments may have a trailing `]]`. Strip it. Anything
-        // else (`strat`, `ned`, stray words) rejects the whole directive:
-        // silently downgrading a typo'd region marker to statement-level
-        // changes what gets suppressed without any signal to the user.
+        // else (`strat`, `ned`, stray words) rejects the whole
+        // directive, because silently downgrading a typo'd region marker
+        // to statement-level would change what gets suppressed with no
+        // signal to the user.
         other => {
             let stripped = other.trim_end_matches(']').trim();
             match stripped {

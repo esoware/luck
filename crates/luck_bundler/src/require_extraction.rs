@@ -8,7 +8,6 @@ use luck_token::token::TokenKind;
 use luck_token::{LuaVersion, Span};
 use std::ops::Range;
 
-/// Information about a single `require()` call extracted from a module.
 #[derive(Debug, Clone)]
 pub struct RequireInfo {
     /// The decoded runtime value of the require string (escape sequences
@@ -21,14 +20,13 @@ pub struct RequireInfo {
     pub call_span: Range<usize>,
 }
 
-/// Result of scanning a module for `require()` calls.
 #[derive(Debug, Clone)]
 pub struct ExtractResult {
     pub requires: Vec<RequireInfo>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Scans the ENTIRE module tree for `require()` calls - any statement,
+/// Scans the ENTIRE module tree for `require()` calls, in any statement,
 /// any expression position, any function body. The lazy loader makes
 /// require position-independent, exactly like real Lua. Scope analysis
 /// filters out calls through local bindings named `require` (they keep
@@ -345,7 +343,7 @@ mod tests {
 
     #[test]
     fn require_after_code_is_not_flagged() {
-        // Position-independent with the lazy loader - no E001.
+        // Position-independent with the lazy loader, so no E001.
         let result = extract("print(\"hello\")\nlocal x = require(\"x\")\n");
         assert_eq!(result.requires.len(), 1);
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
@@ -428,7 +426,7 @@ mod tests {
     #[test]
     fn package_loaded_write_is_allowed_on_lua_targets() {
         // The bundle cache is package.loaded itself on Lua targets, so
-        // manipulating it behaves exactly as in real Lua - no E006.
+        // manipulating it behaves exactly as in real Lua, so no E006.
         let result = extract("package.loaded[\"mymod\"] = {}\npackage.loaded.other = {}\n");
         assert!(
             codes(&result, "E006").is_empty(),
@@ -459,7 +457,7 @@ mod tests {
     #[test]
     fn top_level_vararg_is_not_flagged() {
         // The loader calls each module with its real module name, so the
-        // `local modname = ...` idiom keeps working - no W002.
+        // `local modname = ...` idiom keeps working, so no W002.
         let result = extract("local modname = ...\nreturn modname\n");
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     }

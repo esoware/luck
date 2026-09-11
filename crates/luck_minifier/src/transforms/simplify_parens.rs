@@ -5,7 +5,8 @@ use luck_token::BinOp;
 
 use crate::tokens::default_span as sp;
 
-/// Remove unnecessary parentheses using operator precedence and expression type analysis.
+/// Removes parentheses that operator precedence and the operand's expression
+/// kind already make redundant.
 pub fn simplify(block: Block) -> Block {
     ParenSimplifier.transform_block(block)
 }
@@ -55,7 +56,7 @@ impl AstTransform for ParenSimplifier {
         }
     }
 
-    // f("str") -> f"str", f({...}) -> f{...}
+    // f("str") becomes f"str", and f({...}) becomes f{...}.
     fn walk_function_args(&mut self, args: FunctionArgs) -> FunctionArgs {
         match args {
             FunctionArgs::Parenthesized { span, args } => {
@@ -85,7 +86,7 @@ impl AstTransform for ParenSimplifier {
 
     fn transform_var(&mut self, var: Var) -> Var {
         match var {
-            // Prefix parens required for `("str"):method()`
+            // A literal prefix keeps its parens, as in `("str"):method()`.
             Var::FieldAccess(mut field_access) => {
                 field_access.prefix = match field_access.prefix {
                     Expression::Parenthesized(paren) => {
@@ -139,7 +140,7 @@ fn can_remove_parens(inner: &Expression) -> bool {
         Expression::TableConstructor(_) => true,
         Expression::Parenthesized(_) => true,
         Expression::FunctionDef(_) => true,
-        // Function calls - NOT safe (changes multi-return behavior)
+        // Calls are NOT safe: dropping the parens restores multiple returns.
         Expression::FunctionCall(_) => false,
         Expression::BinaryOp(_) | Expression::UnaryOp(_) => false,
         Expression::IfExpression(_) => false,
@@ -167,7 +168,7 @@ fn can_unwrap_in_binop_lhs(inner: &Expression, outer: BinOp) -> bool {
         | Expression::TableConstructor(_)
         | Expression::FunctionDef(_) => true,
         Expression::FunctionCall(_) => false,
-        // Unary ops have lower precedence than ^, so (-a)^b needs parens
+        // Unary ops bind looser than ^, so (-a)^b needs its parens.
         Expression::UnaryOp(_) => outer != BinOp::Pow,
         Expression::BinaryOp(binop) => {
             let inner_prec = binop_precedence(binop.op);
@@ -224,7 +225,7 @@ fn can_unwrap_in_unary(inner: &Expression) -> bool {
         | Expression::TableConstructor(_)
         | Expression::FunctionDef(_) => true,
         Expression::UnaryOp(_) => true,
-        // NOT safe: -a+b != -(a+b)
+        // NOT safe: -a+b is not -(a+b).
         Expression::BinaryOp(_) => false,
         Expression::FunctionCall(_) => false,
         _ => false,
@@ -323,7 +324,7 @@ mod tests {
 
     #[test]
     fn keeps_parens_left_concat_in_concat() {
-        // (a .. b) .. c != a .. b .. c because concat is right-associative
+        // Concat is right-associative, so (a .. b) .. c is not a .. b .. c.
         let r = apply("return (a .. b) .. c\n");
         assert!(
             r.contains("("),
@@ -333,7 +334,7 @@ mod tests {
 
     #[test]
     fn removes_parens_right_concat_in_concat() {
-        // a .. (b .. c) == a .. b .. c because concat is right-associative
+        // Concat is right-associative, so a .. (b .. c) is a .. b .. c.
         let r = apply("return a .. (b .. c)\n");
         assert!(
             !r.contains("("),
@@ -343,7 +344,7 @@ mod tests {
 
     #[test]
     fn keeps_parens_func_call_in_binop() {
-        // (f()) + 1 - parens change multi-return truncation
+        // The parens in (f()) + 1 truncate f's multiple returns.
         let r = apply("return (f()) + 1\n");
         assert!(
             r.contains("(f())"),

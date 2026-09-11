@@ -165,7 +165,6 @@ fn is_number_literal(expr: &Expression, want: f64) -> bool {
     literal.text.parse::<f64>() == Ok(want)
 }
 
-/// Recognize `#operand` and return the operand.
 fn length_operand(expr: &Expression) -> Option<&Expression> {
     let Expression::UnaryOp(unop) = expr else {
         return None;
@@ -173,7 +172,6 @@ fn length_operand(expr: &Expression) -> Option<&Expression> {
     (unop.op == UnOp::Len).then_some(&unop.operand)
 }
 
-/// Recognize `#operand + 1` and return the operand.
 fn length_plus_one_operand(expr: &Expression) -> Option<&Expression> {
     let Expression::BinaryOp(binop) = expr else {
         return None;
@@ -184,7 +182,6 @@ fn length_plus_one_operand(expr: &Expression) -> Option<&Expression> {
     length_operand(&binop.left)
 }
 
-/// Recognize `#operand - 1` and return the operand.
 fn length_minus_one_operand(expr: &Expression) -> Option<&Expression> {
     let Expression::BinaryOp(binop) = expr else {
         return None;
@@ -195,8 +192,8 @@ fn length_minus_one_operand(expr: &Expression) -> Option<&Expression> {
     length_operand(&binop.left)
 }
 
-/// Structural identity for the length-operand checks: the same bare
-/// identifier or the same dotted path. Anything dynamic (indexing,
+/// Structural identity for the length-operand checks, meaning the same
+/// bare identifier or the same dotted path. Anything dynamic (indexing,
 /// calls) is not comparable, so it never matches.
 fn same_target(a: &Expression, b: &Expression) -> bool {
     let (Expression::Var(a), Expression::Var(b)) = (a, b) else {

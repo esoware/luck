@@ -44,9 +44,9 @@ fn has_64bit_integers(version: LuaVersion) -> bool {
 }
 
 /// Number text classification. Floats (anything with `.`, `p`, `P`, `e`,
-/// or `E` in the relevant position) are not integers and we let them
-/// through - even though they lose precision differently, that's a
-/// separate concern from "is this *intended* as an exact integer".
+/// or `E` in the relevant position) are not integers and pass through.
+/// They lose precision differently, which is a separate concern from
+/// "is this *intended* as an exact integer".
 enum LiteralShape<'a> {
     Hex(&'a str),
     Decimal(&'a str),
@@ -85,7 +85,7 @@ impl LiteralChecker<'_> {
                             self.push_double_precision(span, raw);
                         }
                     } else {
-                        // Too large even for u128 -> clearly over budget.
+                        // Too large even for u128, so it is over budget.
                         self.push_double_precision(span, raw);
                     }
                     return;

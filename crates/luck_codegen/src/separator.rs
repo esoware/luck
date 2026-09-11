@@ -1,12 +1,12 @@
 //! Token-boundary ambiguity rules for compact output.
 //!
 //! The printer tracks the previously emitted piece as a one-byte
-//! [`PrevClass`] instead of a cloned `TokenKind`; a space is inserted
-//! only when the previous class and the next piece's first byte would
-//! otherwise merge into a different token.
+//! [`PrevClass`] instead of a cloned `TokenKind`, and inserts a space only
+//! when the previous class and the next piece's first byte would otherwise
+//! merge into a different token.
 
-/// Class of the last emitted piece. Only the distinctions the merge
-/// rules need are represented; everything else is `Other`.
+/// Class of the last emitted piece. Carries only the distinctions the merge
+/// rules need; everything else is `Other`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrevClass {
     None,
@@ -52,7 +52,7 @@ pub fn classify_str(text: &str) -> PrevClass {
 /// for identifiers, keywords, and numbers.
 pub fn needs_space(prev: PrevClass, next_first: u8, next_is_wordlike: bool) -> bool {
     match prev {
-        // Word followed by word: identifier/keyword/number adjacent would merge.
+        // Two adjacent words, whether identifier, keyword, or number, merge.
         PrevClass::Word => next_is_wordlike,
         // Number before a word merges; number before `.` extends the literal.
         PrevClass::Number => next_is_wordlike || next_first == b'.',
@@ -98,11 +98,9 @@ mod tests {
     #[test]
     fn number_dot_needs_space() {
         assert!(needs_space(PrevClass::Number, b'.', false));
-        // Number before number (word-like) needs a space too.
         assert!(needs_space(PrevClass::Number, b'1', true));
-        // `..` before `.5` - number starting with a dot.
+        // A number starting with a dot, `.5`, is the DotDot hazard.
         assert!(needs_space(PrevClass::DotDot, b'.', true));
-        // `..` before a plain number does not.
         assert!(!needs_space(PrevClass::DotDot, b'5', true));
     }
 
@@ -121,9 +119,8 @@ mod tests {
     #[test]
     fn bracket_bracket_needs_space() {
         assert!(sep_str("[", "["));
-        // `[` before a long-string literal starting with `[`.
+        // A long-string literal also starts with `[`, so it is the same hazard.
         assert!(needs_space(PrevClass::LeftBracket, b'[', false));
-        // `[` before a quoted string does not.
         assert!(!needs_space(PrevClass::LeftBracket, b'"', false));
     }
 

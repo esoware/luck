@@ -1,14 +1,14 @@
 use rustc_hash::FxHashMap;
 
-use crate::expr::ident_name;
+use crate::expr::{has_fixed_binding, ident_name};
 use crate::tokens::default_span as sp;
 use luck_ast::expr::*;
 use luck_ast::shared::*;
 use luck_ast::stmt::*;
 use luck_ast::transform::AstTransform;
 use luck_ast::visitor::Visitor;
-use luck_token::CompactString;
 use luck_token::token::TokenKind;
+use luck_token::{CompactString, LuaVersion};
 
 /// Inline single-use local variables whose initializer is a CLOSED
 /// LITERAL expression, removing the declaration.
@@ -16,14 +16,14 @@ use luck_token::token::TokenKind;
 /// This pass works on names, not bindings, so every candidate must be
 /// position-insensitive:
 /// - the name must not be bound by ANY other binder in the file (another
-///   local, a parameter, a loop variable, a function name) - otherwise a
-///   use of the shadowing binding gets the wrong value;
-/// - the value must carry no identity (no tables, no closures - moving
-///   one into a loop mints a fresh object per iteration), capture nothing,
-///   and not be `...` (whose meaning changes across function boundaries).
-pub fn inline(mut block: Block) -> Block {
+///   local, a parameter, a loop variable, a function name), or a use of the
+///   shadowing binding gets the wrong value;
+/// - the value must carry no identity (a table or closure moved into a loop
+///   mints a fresh object per iteration), capture nothing, and not be `...`,
+///   whose meaning changes across function boundaries.
+pub fn inline(mut block: Block, version: LuaVersion) -> Block {
     loop {
-        let candidates = find_inline_candidates(&block);
+        let candidates = find_inline_candidates(&block, version);
         if candidates.is_empty() {
             break;
         }
@@ -37,9 +37,9 @@ struct InlineCandidate {
     expr: Expression,
 }
 
-/// Closed literal expression: literals and operators over literals.
-/// No vars, no varargs, no calls, no tables, no closures - nothing whose
-/// value or identity depends on WHERE it is evaluated.
+/// Closed literal expression: literals and operators over literals. No vars,
+/// varargs, calls, tables, or closures, nothing whose value or identity
+/// depends on WHERE it is evaluated.
 fn is_closed_literal_expr(expr: &Expression) -> bool {
     match expr {
         Expression::Number(_)
@@ -62,7 +62,10 @@ fn is_closed_literal_expr(expr: &Expression) -> bool {
     }
 }
 
-fn find_inline_candidates(block: &Block) -> FxHashMap<CompactString, InlineCandidate> {
+fn find_inline_candidates(
+    block: &Block,
+    version: LuaVersion,
+) -> FxHashMap<CompactString, InlineCandidate> {
     // One walk gathers everything the candidate filter needs:
     // declarations, disqualifying binders, and reference counts.
     let mut scanner = CandidateScanner {
@@ -70,6 +73,7 @@ fn find_inline_candidates(block: &Block) -> FxHashMap<CompactString, InlineCandi
         declared_names: rustc_hash::FxHashSet::default(),
         shadowed: rustc_hash::FxHashSet::default(),
         ref_counts: FxHashMap::default(),
+        version,
     };
     scanner.visit_block(block);
 
@@ -91,7 +95,7 @@ fn find_inline_candidates(block: &Block) -> FxHashMap<CompactString, InlineCandi
 /// Single-walk scanner behind `find_inline_candidates`: single-name
 /// literal declarations, every disqualifying binder (a parameter, loop
 /// variable, or function name that shadows a candidate would receive
-/// the candidate's value at its use sites - Lua 5.5 `global function`
+/// the candidate's value at its use sites, Lua 5.5 `global function`
 /// bodies included), and per-name reference counts.
 struct CandidateScanner {
     declarations: FxHashMap<CompactString, Expression>,
@@ -101,13 +105,14 @@ struct CandidateScanner {
     declared_names: rustc_hash::FxHashSet<CompactString>,
     shadowed: rustc_hash::FxHashSet<CompactString>,
     ref_counts: FxHashMap<CompactString, usize>,
+    version: LuaVersion,
 }
 
 impl<'ast> Visitor<'ast> for CandidateScanner {
     fn visit_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalAssignment(local) => {
-                if local.is_exported {
+                if has_fixed_binding(local, self.version) {
                     for attributed in local.names.iter() {
                         self.shadowed.insert(ident_name(&attributed.name).into());
                     }
@@ -127,7 +132,7 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
                         self.shadowed.insert(name.into());
                     } else {
                         self.declared_names.insert(name.into());
-                        // Only closed literals can ever inline - skip the
+                        // Only closed literals can ever inline, so skip the
                         // clone for everything else.
                         if is_closed_literal_expr(expr) {
                             self.declarations.insert(name.into(), expr.clone());
@@ -262,8 +267,8 @@ impl AstTransform for Inliner {
             let var_name = ident_name(name);
             if let Some(candidate) = self.candidates.get(var_name) {
                 let replacement = candidate.expr.clone();
-                // Bare FunctionDef can't be a call prefix without parens:
-                // function() end() is invalid, needs (function() end)()
+                // A bare FunctionDef cannot be a call prefix: `function() end()`
+                // is invalid and has to be `(function() end)()`.
                 if matches!(replacement, Expression::FunctionDef(_)) {
                     return Expression::Parenthesized(Box::new(ParenExpression {
                         span: sp(),
@@ -310,7 +315,7 @@ mod tests {
     fn apply(source: &str) -> String {
         let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
         assert!(result.errors.is_empty(), "parse failed");
-        let block = inline(result.block);
+        let block = inline(result.block, luck_token::LuaVersion::Lua54);
         luck_codegen::compact(&block, source)
     }
 
@@ -403,8 +408,8 @@ mod tests {
 
     #[test]
     fn inlines_chained_single_use() {
-        // Pass 1: x is inlined into y's expr -> local y = 42 + 1; return y
-        // Pass 2: y = 42 + 1 is now pure -> inlined -> return 42 + 1
+        // Pass 1 inlines x into y's initializer, giving `local y = 42 + 1`.
+        // Pass 2 finds that closed literal and inlines y, giving `return 42 + 1`.
         let r = apply("local x = 42\nlocal y = x + 1\nreturn y\n");
         assert!(!r.contains("local"), "Both should be inlined: {r}");
     }
@@ -433,13 +438,13 @@ mod tests {
             "parse failed: {:?}",
             result.errors
         );
-        let block = inline(result.block);
+        let block = inline(result.block, luck_token::LuaVersion::Luau);
         luck_codegen::compact(&block, source)
     }
 
     #[test]
     fn no_inline_typecast_var_read() {
-        // TypeCast is transparent - inner expression (variable read) is impure
+        // TypeCast is transparent, and the inner variable read is impure.
         let r = apply_luau("local x = foo :: Bar\nreturn x\n");
         assert!(
             r.contains("local"),
@@ -454,7 +459,7 @@ mod tests {
             "parse failed: {:?}",
             result.errors
         );
-        let block = inline(result.block);
+        let block = inline(result.block, luck_token::LuaVersion::Lua55);
         luck_codegen::compact(&block, source)
     }
 
@@ -462,9 +467,8 @@ mod tests {
     fn no_inline_across_global_function_shadow() {
         // The outer `local x` has zero reads at top level; the inner
         // `global function` body declares its own `local x` with one read.
-        // The inner shadow must be recorded so the outer x is NOT inlined into
-        // the inner scope. Regression: collect_declarations used to skip the
-        // global-function body, producing `global function g()return 1 end`.
+        // The scan must record that inner shadow, or the outer value leaks
+        // into the inner scope as `global function g()return 1 end`.
         let r = apply_lua55(
             "local x = 1\nglobal function g()\n  local x = 2\n  return x\nend\nreturn g\n",
         );

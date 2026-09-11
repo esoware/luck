@@ -6,9 +6,9 @@ use crate::rule::{LintContext, NodeRule, Rule};
 use luck_ast::node::{AstTypesBitset, NodeType};
 
 /// Mixing positional fields and identifier-keyed record fields in one
-/// table constructor confuses readers and breaks `ipairs` expectations:
-/// the positional entries land in the sequence half, the record entries
-/// in the hash half, and only the sequence half iterates predictably.
+/// table constructor breaks `ipairs` expectations. The positional
+/// entries land in the sequence half, the record entries in the hash
+/// half, and only the sequence half iterates predictably.
 /// Explicit bracket-indexed keys are exempt because those are the
 /// documented way to put arbitrary keys alongside sequence entries.
 pub struct MixedTable;
@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn ignores_positional_with_bracketed_key() {
-        // `[3] = "x"` is explicit numeric placement - author opted in.
+        // `[3] = "x"` is explicit numeric placement the author opted into.
         let diags = run(r#"local t = {1, 2, [3] = "x"}"#);
         assert!(diags.is_empty(), "{diags:?}");
     }

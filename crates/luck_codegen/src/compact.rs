@@ -12,8 +12,8 @@ use luck_ast::stmt::{
 };
 use luck_ast::types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
-    IntersectionType, NamedType, NegationType, OptionalType, ParenType, TableType, Type, TypeArgs,
-    TypeField, TypePack, TypeofType, UnionType, VariadicType,
+    IntersectionType, NamedType, OptionalType, ParenType, TableType, Type, TypeArgs, TypeField,
+    TypePack, TypeofType, UnionType, VariadicType,
 };
 use luck_token::code_buffer::CodeBuffer;
 use luck_token::token::{Token, TokenKind};
@@ -29,8 +29,8 @@ pub struct CompactPrinter {
 impl CompactPrinter {
     pub fn new(source: &str) -> Self {
         Self {
-            // Capacity hint only: compact output stays at or under source
-            // length, and synthetic ASTs (empty source) just start empty.
+            // Capacity hint only. Compact output stays at or under source
+            // length, and a synthetic AST has no source, so it starts empty.
             output: CodeBuffer::with_capacity(source.len()),
             prev: PrevClass::None,
         }
@@ -444,7 +444,8 @@ impl CompactPrinter {
 
     fn emit_table_constructor(&mut self, table: &TableConstructor) {
         self.emit_str("{");
-        // Trailing separators are dropped: compact output has no use for them.
+        // A trailing separator the source carried is dropped; it costs bytes
+        // and changes nothing.
         for (idx, field) in table.fields.items.iter().enumerate() {
             self.emit_field(field);
             if idx + 1 < table.fields.len() {
@@ -632,13 +633,13 @@ impl CompactPrinter {
             Type::Optional(optional) => self.emit_optional_type(optional),
             Type::Union(union) => self.emit_union_type(union),
             Type::Intersection(intersection) => self.emit_intersection_type(intersection),
-            Type::Negation(negation) => self.emit_negation_type(negation),
             Type::Parenthesized(paren) => self.emit_paren_type(paren),
             Type::Pack(pack) => self.emit_type_pack(pack),
             Type::Singleton(token) => self.emit_token(token),
             Type::Variadic(variadic) => self.emit_variadic_type(variadic),
             Type::GenericPack(generic_pack) => self.emit_generic_pack_type(generic_pack),
-            // Mirrors `Statement::Error` / `Expression::Error`: emit nothing.
+            // Mirrors `Statement::Error` and `Expression::Error`, which also
+            // emit nothing.
             Type::Error(_) => {}
         }
     }
@@ -658,11 +659,6 @@ impl CompactPrinter {
         self.emit_str("<");
         self.emit_punctuated_types(&args.args);
         self.emit_str(">");
-    }
-
-    fn emit_negation_type(&mut self, negation: &NegationType) {
-        self.emit_str("~");
-        self.emit_type(&negation.type_value);
     }
 
     fn emit_typeof_type(&mut self, typeof_type: &TypeofType) {

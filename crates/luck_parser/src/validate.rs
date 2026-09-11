@@ -47,7 +47,7 @@ fn ident_text(token: &luck_token::Token) -> Option<&str> {
 
 /// Rejects writes to read-only bindings: 5.4/5.5 `<const>`/`<close>`
 /// locals, Luau `const` bindings, and 5.5 for-loop control variables.
-/// Function boundaries do NOT reset the scope stack - real Lua also
+/// Function boundaries do NOT reset the scope stack, because real Lua also
 /// rejects upvalue writes to const bindings.
 struct ConstWriteChecker<'a> {
     version: LuaVersion,
@@ -130,8 +130,8 @@ impl ConstWriteChecker<'_> {
                 for target in assign.targets.iter() {
                     match target {
                         Var::Name(token) => self.check_write(token, token.span),
-                        // `t.x = 1` / `t[k] = 1` mutate the table, not the
-                        // binding - const does not freeze contents.
+                        // `t.x = 1` and `t[k] = 1` mutate the table, not the
+                        // binding, and const does not freeze contents.
                         Var::FieldAccess(_) | Var::Index(_) => self.check_var_reads(target),
                     }
                 }

@@ -1,7 +1,7 @@
 //! Find references. Resolves the symbol at the cursor through the scope
-//! tree and returns every reference span - span-exact, so shadowed names
-//! never bleed into each other. Locals cannot cross files in Lua, so a
-//! single-document answer is complete for them.
+//! tree and returns every reference span. Matching is span-exact, so
+//! shadowed names never bleed into each other. Locals cannot cross files
+//! in Lua, so a single-document answer is complete for them.
 
 use tower_lsp::lsp_types::{Location, ReferenceParams, Url};
 

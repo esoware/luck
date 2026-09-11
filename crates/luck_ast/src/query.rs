@@ -4,8 +4,9 @@ use crate::expr::Var;
 use crate::{Expression, Statement};
 
 /// Whether a reprinted statement's first token is `(`. Both printers must
-/// guard these statements: after a call, `(...)` glues onto the previous
-/// expression and re-parses as a chained call - a silent semantics change.
+/// guard these statements. Printed after a call, `(...)` glues onto the
+/// previous expression and re-parses as a chained call, silently changing
+/// the semantics.
 pub fn stmt_starts_with_paren(stmt: &Statement) -> bool {
     match stmt {
         Statement::FunctionCall(call) => expr_starts_with_paren(&call.call.callee),
@@ -40,7 +41,7 @@ pub fn var_starts_with_paren(var: &Var) -> bool {
 
 /// Whether a reprinted expression's first token is `{`. Inside an
 /// interpolated string, `{` directly after the interpolation opener
-/// forms `{{`, which Luau rejects - printers must separate them.
+/// forms `{{`, which Luau rejects, so printers must separate them.
 pub fn expr_starts_with_brace(expr: &Expression) -> bool {
     match expr {
         Expression::TableConstructor(_) => true,

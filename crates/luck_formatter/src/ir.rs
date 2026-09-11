@@ -82,8 +82,8 @@ pub enum FormatElement {
     /// Flush pending line suffixes here even without a line break.
     LineSuffixBoundary,
     /// Layout variants ordered most-flat first; the printer takes the first
-    /// variant that fits, or the last if none fit. Acts as an expansion
-    /// boundary: breaks inside variants don't force outer groups.
+    /// variant that fits, or the last if none fit. This is an expansion
+    /// boundary, so breaks inside a variant do not force outer groups.
     BestFitting(Vec<Vec<FormatElement>>),
     Tag(Tag),
 }
@@ -149,7 +149,7 @@ macro_rules! write {
 #[derive(Debug, Clone, Copy)]
 pub struct Checkpoint {
     element_len: usize,
-    comments: usize,
+    comments: crate::comments::CommentsCheckpoint,
 }
 
 /// The document builder threaded through every emitter. Carries the
@@ -401,11 +401,28 @@ impl Format for BestFitting<'_> {
             self.variants.len() >= 2,
             "best_fitting needs at least two variants"
         );
+        // Every variant formats the same node, so each is written from the
+        // comment state the first one saw: without the rewind a variant that
+        // claims interior comments would leave the later ones nothing to
+        // print, and the printer picks by width, not by comment count.
+        let entry = f.checkpoint();
         let mut captured = Vec::with_capacity(self.variants.len());
+        let mut printed: Option<crate::comments::CommentsCheckpoint> = None;
         for variant in self.variants {
-            let checkpoint = f.checkpoint();
+            f.comments.restore(entry.comments);
             variant.fmt(f);
-            captured.push(f.take_since(checkpoint));
+            let after = f.comments.checkpoint();
+            debug_assert!(
+                printed.is_none_or(|first| first == after),
+                "best_fitting variants disagree on which comments they print"
+            );
+            printed = Some(after);
+            captured.push(f.take_since(entry));
+        }
+        // Whichever variant the printer takes prints that same set, so the
+        // cursor moves past them exactly once.
+        if let Some(after) = printed {
+            f.comments.restore(after);
         }
         f.push(FormatElement::BestFitting(captured));
     }
@@ -413,4 +430,45 @@ impl Format for BestFitting<'_> {
 
 pub fn best_fitting<'a>(variants: &'a [&'a dyn Format]) -> BestFitting<'a> {
     BestFitting { variants }
+}
+
+#[cfg(test)]
+mod tests {
+    use luck_token::Span;
+    use luck_token::comment::{Comment, CommentKind, CommentPosition};
+
+    use super::*;
+    use crate::comments::Comments;
+    use luck_token::LuaVersion;
+
+    #[test]
+    fn best_fitting_variants_each_see_the_same_comments() {
+        let source = "{ --[[ why ]] }";
+        let comment = Comment {
+            span: Span::new(2, 13),
+            attached_to: 14,
+            kind: CommentKind::SingleLineBlock,
+            position: CommentPosition::Leading,
+            preceded_by_newline: false,
+            followed_by_newline: false,
+        };
+        let mut formatter = Formatter::with_context(
+            crate::FormatOptions::default(),
+            Comments::from_source(&[comment], source, LuaVersion::Lua54),
+        );
+
+        let variant = format_with(|f: &mut Formatter| f.emit_own_line_comments_in(0, 14));
+        best_fitting(&[&variant, &variant]).fmt(&mut formatter);
+
+        let [FormatElement::BestFitting(variants)] = formatter.elements() else {
+            panic!("expected a single best-fitting element");
+        };
+        assert!(
+            !variants[1].is_empty(),
+            "the second variant printed no comment"
+        );
+        assert_eq!(variants[0], variants[1]);
+        // Printed once for the run, not once per variant.
+        assert!(!formatter.comments.has_unhandled_in(0, 14));
+    }
 }

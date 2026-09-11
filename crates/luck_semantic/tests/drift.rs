@@ -1,13 +1,12 @@
 //! Drift guards for the split stdlib data files.
 //!
-//! The seven per-environment files are deliberately independent - no
-//! inheritance or layering - so nothing structural stops two copies of
-//! a shared entry from drifting apart. These tests are the enforcement:
-//! every surface shared between files must agree exactly unless the
-//! divergence is listed here with its justification. The original
-//! stdlib audit found exactly the class of bugs this suite mechanizes
-//! (signatures diverging across versions with no manual basis, markers
-//! present on some siblings and missing on others).
+//! The seven per-environment files are deliberately independent, with no
+//! inheritance or layering, so nothing structural stops two copies of a
+//! shared entry from drifting apart. These tests are the enforcement. Every
+//! entry shared between files must agree exactly unless the divergence is
+//! listed here with its justification. The bugs that catches are signatures
+//! diverging across versions with no basis in the manuals, and markers
+//! present on some siblings but missing on others.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -35,7 +34,7 @@ fn roblox() -> &'static StdlibLibrary {
     library_for(LuaVersion::Luau, StdlibEnvironment::Roblox)
 }
 
-/// Flatten a library's dotted global surface: `("math.floor", entry)`.
+/// Flatten a library's globals into dotted paths: `("math.floor", entry)`.
 fn global_paths(lib: &'static StdlibLibrary) -> BTreeMap<String, &'static StdlibEntry> {
     let mut out = BTreeMap::new();
     for (name, entry) in &lib.globals {
@@ -44,7 +43,7 @@ fn global_paths(lib: &'static StdlibLibrary) -> BTreeMap<String, &'static Stdlib
     out
 }
 
-/// Flatten a library's shape surface: `("file:read", entry)`.
+/// Flatten a library's shape members: `("file:read", entry)`.
 fn shape_paths(lib: &'static StdlibLibrary) -> BTreeMap<String, &'static StdlibEntry> {
     let mut out = BTreeMap::new();
     for (shape_name, shape) in &lib.shapes {
@@ -162,16 +161,15 @@ fn deprecation_fingerprint(entry: &StdlibEntry) -> String {
     }
 }
 
-/// Shared Luau surface: identical in both environments except the
-/// explicit allowlists below.
+/// Entries present in both Luau environments must be identical, except for
+/// the allowlists below.
 #[test]
 fn luau_and_roblox_shared_surface_agrees() {
     // Signature divergence: Roblox vectors are 3-wide, standalone Luau
     // additionally ships the LUA_VECTOR_SIZE=4 build's 4-arg form.
     const SIGNATURE_ALLOWLIST: [&str; 1] = ["vector.create"];
-    // Deprecation divergence: Roblox deprecates these while they stay
-    // fully supported in standalone Luau; the split files express what
-    // tier scoping used to.
+    // Deprecation divergence: Roblox deprecates these while they stay fully
+    // supported in standalone Luau.
     const DEPRECATION_ALLOWLIST: [&str; 3] = ["collectgarbage", "getfenv", "setfenv"];
 
     let standalone_globals = global_paths(luau());

@@ -103,14 +103,14 @@ pub enum CursorTarget {
     Call {
         path: Vec<String>,
         /// Span of the root `Name` token, when the callee is a plain
-        /// dotted chain - lets consumers resolve shaped/shadowed roots.
+        /// dotted chain. Lets consumers resolve shaped/shadowed roots.
         base_span: Option<Span>,
         full_span: Span,
     },
 }
 
 impl CursorTarget {
-    /// Convenience: the textual path segments (single entry for plain identifier).
+    /// The textual path segments; a single entry for a plain identifier.
     #[must_use]
     pub fn path(&self) -> Vec<&str> {
         match self {
@@ -311,8 +311,7 @@ impl<'ast> CallSiteFinder<'_, 'ast> {
         }
         // Active parameter = number of argument expressions that END
         // before the cursor. Spans come from the parser, so commas inside
-        // strings, long brackets, and comments can never miscount (the
-        // old byte rescanner was fooled by all three).
+        // strings, long brackets, and comments can never miscount.
         let commas = match &call.args {
             luck_ast::expr::FunctionArgs::Parenthesized { args, .. } => {
                 args.iter()
@@ -425,9 +424,9 @@ impl<'ast> StringArgFinder<'ast> {
 }
 
 /// Resolve the local symbol at a byte offset: a reference to it or its
-/// declaration site. `None` for globals, keywords, and non-names -
-/// span-exact resolution through the scope tree, so shadowed names map
-/// to the right declaration (name matching cannot).
+/// declaration site. `None` for globals, keywords, and non-names.
+/// Resolution is span-exact through the scope tree, so shadowed names map
+/// to the right declaration, which name matching cannot do.
 #[must_use]
 pub fn symbol_at(
     tree: &luck_semantic::scope::ScopeTree,

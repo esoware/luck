@@ -1,15 +1,15 @@
-//! Terminal rendering for [`Diagnostic`]s via ariadne. Lives in the CLI -
-//! library crates produce diagnostics, only the CLI prints them.
+//! Terminal rendering for [`Diagnostic`]s via ariadne. This lives in the
+//! CLI because library crates produce diagnostics and only the CLI prints
+//! them.
 
 use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
 use luck_core::diagnostics::{Diagnostic, DiagnosticSeverity};
 use std::collections::HashMap;
 use std::fmt;
 
-/// Above this line length (bytes), ariadne's caret rendering degrades from
-/// slow to effectively hung - a minified/obfuscated file is a single
-/// multi-megabyte line. Such diagnostics get a compact, snippet-free
-/// rendering instead.
+/// Above this line length (bytes), ariadne's caret rendering effectively
+/// hangs, and a minified or obfuscated file is one multi-megabyte line.
+/// Such diagnostics get a compact, snippet-free rendering instead.
 const MAX_RENDERABLE_LINE: usize = 10_000;
 
 /// Holds source text keyed by file path, used by ariadne to render diagnostics.
@@ -110,7 +110,7 @@ fn build_report<'a>(diag: &'a Diagnostic) -> Report<'a, (&'a str, std::ops::Rang
     builder.finish()
 }
 
-/// A compact one-line diagnostic with no source snippet - the fallback for
+/// A compact one-line diagnostic with no source snippet, the fallback for
 /// files whose relevant line is too long for ariadne to render.
 fn write_compact(diag: &Diagnostic, out: &mut impl std::io::Write) {
     let severity = match diag.severity {
@@ -140,7 +140,6 @@ pub(crate) fn render_diagnostic(diag: &Diagnostic, cache: &mut FileCache) {
     let _ = build_report(diag).eprint(cache);
 }
 
-/// Prints all diagnostics to stderr.
 pub(crate) fn render_diagnostics(diagnostics: &[Diagnostic], cache: &mut FileCache) {
     for diag in diagnostics {
         render_diagnostic(diag, cache);

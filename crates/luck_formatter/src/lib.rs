@@ -42,9 +42,9 @@ pub use ast_equiv::{AstDiff, blocks_equiv};
 pub use comments::Comments;
 use ir::Format;
 
-// The format-option enums live in `luck_core` so config parsing can deserialize
-// directly into them. Re-exported here so existing `luck_formatter::Xxx` paths
-// keep resolving.
+// The format-option enums live in `luck_core` so config parsing can
+// deserialize directly into them, and are re-exported here so callers can name
+// them as `luck_formatter::Xxx`.
 pub use luck_core::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, HexCase, IndentStyle, LineEndings,
     QuoteStyle, SpaceAfterFunction,
@@ -63,8 +63,10 @@ pub struct FormatOptions {
     pub block_newline_gaps: BlockNewlineGaps,
     pub sort_requires: bool,
     pub space_after_function_names: SpaceAfterFunction,
-    /// When true, a trailing comma in a table or call argument list forces
-    /// the surrounding group to break across multiple lines (Black/Prettier style).
+    /// When true, a trailing comma in a table constructor forces the
+    /// surrounding group to break across multiple lines (Black/Prettier
+    /// style). Argument lists cannot carry one: no dialect's grammar allows
+    /// a comma after the last argument.
     pub magic_trailing_comma: bool,
 }
 
@@ -82,10 +84,9 @@ impl Default for FormatOptions {
             block_newline_gaps: BlockNewlineGaps::default(),
             sort_requires: false,
             space_after_function_names: SpaceAfterFunction::default(),
-            // Default false to preserve existing fill/hug behavior; users opt in
-            // for Black/Prettier semantics. (We pick false rather than true so
-            // that existing fixtures with trailing commas keep their packed
-            // layout - flipping a default mid-release breaks downstreams.)
+            // Off by default, so a table written with a trailing comma keeps
+            // the packed fill/hug layout. Turning it on opts into
+            // Black/Prettier semantics.
             magic_trailing_comma: false,
         }
     }
@@ -196,7 +197,7 @@ pub fn format_block(block: &Block, comments: Comments, options: &FormatOptions) 
 /// Parse errors are collected into `FormatResult::errors`.
 #[must_use]
 pub fn format(source: &str, version: LuaVersion, options: &FormatOptions) -> FormatResult {
-    format_source(source, version, options, None)
+    format_source(source, version, options, None).0
 }
 
 /// Format only the statements overlapping with a byte range.
@@ -216,14 +217,21 @@ pub fn format_range(
         options,
         Some(range.start as u32..range.end as u32),
     )
+    .0
 }
 
+/// Shared body of the public entry points. The parse the output was produced
+/// from comes back alongside it, so [`format_and_verify`] need not repeat it;
+/// its `source` is the buffer the formatter actually read - `sort_requires`
+/// may have rewritten it, and verification has to compare against that buffer
+/// rather than the original text. Input that failed to parse yields an
+/// errors-only result and no parse to verify against.
 fn format_source(
     source: &str,
     version: LuaVersion,
     options: &FormatOptions,
     format_range: Option<std::ops::Range<u32>>,
-) -> FormatResult {
+) -> (FormatResult, Option<luck_parser::ParseResult>) {
     let parse_result = luck_parser::parse(source, version);
 
     let errors: Vec<FormatError> = parse_result
@@ -235,10 +243,13 @@ fn format_source(
         })
         .collect();
     if !errors.is_empty() {
-        return FormatResult {
-            output: String::new(),
-            errors,
-        };
+        return (
+            FormatResult {
+                output: String::new(),
+                errors,
+            },
+            None,
+        );
     }
 
     // sort_requires runs as a source-level pre-pass before IR construction:
@@ -255,38 +266,48 @@ fn format_source(
         source
     };
 
-    // If we rewrote, re-parse so spans match the new buffer.
+    // A rewrite invalidates the spans, so re-parse against the new buffer.
     let parse_result = if std::ptr::eq(working_source.as_ptr(), source.as_ptr()) {
         parse_result
     } else {
         luck_parser::parse(working_source, version)
     };
 
-    let comments = Comments::from_source(&parse_result.comments, working_source);
+    let comments = Comments::from_source(&parse_result.comments, working_source, version);
     let mut formatter = ir::Formatter::with_context(options.clone(), comments);
     formatter.format_range = format_range;
 
-    FormatResult {
-        output: run_pipeline(&parse_result.block, formatter),
-        errors: vec![],
-    }
+    let output = run_pipeline(&parse_result.block, formatter);
+    (
+        FormatResult {
+            output,
+            errors: vec![],
+        },
+        Some(parse_result),
+    )
 }
 
-/// Verify that formatting was structure-preserving by re-parsing the output
-/// and comparing the new block to the original.
+/// Verify syntax, AST equivalence, comment text and token-boundary placement,
+/// and formatting idempotency. This is not a target VM compilation check.
 ///
-/// Returns `Ok(formatted)` when the AST is equivalent, or `Err((formatted, diff))`
-/// otherwise so callers can show a diagnostic.
+/// Returns `Ok(formatted)` when verification succeeds, or
+/// `Err((formatted, diff))` for a verification failure. As with [`format`],
+/// invalid original input is reported in `FormatResult::errors`, not `Err`.
+///
+/// Every check is a second opinion on work already done, so this costs about
+/// two formats and three parses; a commented file pays two more lexes to
+/// place its comments against both token streams.
 pub fn format_and_verify(
     source: &str,
     version: LuaVersion,
     options: &FormatOptions,
 ) -> Result<FormatResult, (FormatResult, AstDiff)> {
-    let result = format(source, version, options);
-    if !result.errors.is_empty() {
+    // `sort_requires` may have reordered statements before the formatter ran,
+    // so the text to compare against is the one it read, not `source`.
+    let (result, original) = format_source(source, version, options, None);
+    let Some(original) = original else {
         return Ok(result);
-    }
-    let original = luck_parser::parse(source, version);
+    };
     let reformatted = luck_parser::parse(&result.output, version);
     if !reformatted.errors.is_empty() {
         let diff = AstDiff {
@@ -302,8 +323,35 @@ pub fn format_and_verify(
         };
         return Err((result, diff));
     }
-    match blocks_equiv(&original.block, &reformatted.block) {
-        Ok(()) => Ok(result),
-        Err(diff) => Err((result, diff)),
+    if let Err(diff) = blocks_equiv(&original.block, &reformatted.block) {
+        return Err((result, diff));
     }
+    // Two comment-free texts trivially agree; skip the lexes that would
+    // prove it.
+    let has_comments = !original.comments.is_empty() || !reformatted.comments.is_empty();
+    if has_comments && !comments::comments_kept_in_place(&original.source, &result.output, version)
+    {
+        return Err((
+            result,
+            AstDiff {
+                path: "<comments>".to_string(),
+                reason: "formatting changed comment text or its position among tokens".to_string(),
+            },
+        ));
+    }
+    // The second pass goes through the same entry point as the first, not
+    // `format_block` on the parse above: `sort_requires` runs as a source
+    // pre-pass, and a pass that skipped it could not observe a sort that
+    // reorders again on its second run.
+    let second = format(&result.output, version, options).output;
+    if second != result.output {
+        return Err((
+            result,
+            AstDiff {
+                path: "<format>".to_string(),
+                reason: "formatting is not idempotent".to_string(),
+            },
+        ));
+    }
+    Ok(result)
 }

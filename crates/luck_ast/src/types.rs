@@ -9,7 +9,6 @@ use luck_token::{Span, Token};
 use crate::expr::Expression;
 use crate::shared::Punctuated;
 
-/// A Luau type node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Named(Box<NamedType>),
@@ -19,15 +18,13 @@ pub enum Type {
     Optional(Box<OptionalType>),
     Union(Box<UnionType>),
     Intersection(Box<IntersectionType>),
-    /// Luau: complement of a type (`~T`).
-    Negation(Box<NegationType>),
     Parenthesized(Box<ParenType>),
-    /// `(T, U)` / `()` - only valid where a type pack is expected
+    /// `(T, U)` or `()`, valid only where a type pack is expected
     /// (return positions, generic argument lists).
     Pack(Box<TypePack>),
     /// Literal singleton type: string literal, `true`, `false`, or `nil`.
-    /// Number tokens are also accepted permissively so historically-parsed
-    /// sources keep round-tripping, even though Luau proper rejects them.
+    /// The parser also accepts number tokens so sources that once parsed
+    /// keep round-tripping, even though Luau proper rejects them.
     Singleton(Token),
     /// `...T` variadic pack element.
     Variadic(Box<VariadicType>),
@@ -53,7 +50,6 @@ pub struct TypeArgs {
     pub args: Punctuated<Type>,
 }
 
-/// `typeof(expr)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeofType {
     pub span: Span,
@@ -67,7 +63,6 @@ pub struct TableType {
     pub fields: Punctuated<TypeField>,
 }
 
-/// One entry in a table type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeField {
     Named {
@@ -84,11 +79,10 @@ pub enum TypeField {
         key: Type,
         value: Type,
     },
-    /// Array shorthand `{ T }` - a bare element type.
+    /// Array shorthand `{ T }`, a bare element type.
     Array { span: Span, value: Type },
 }
 
-/// Function type: `<T>(params) -> return_type`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionType {
     pub span: Span,
@@ -97,7 +91,6 @@ pub struct FunctionType {
     pub return_type: Type,
 }
 
-/// One parameter in a function type, optionally named: `x: number`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionTypeParam {
     pub span: Span,
@@ -128,13 +121,6 @@ pub struct IntersectionType {
     /// Leading `&` (allowed in multiline definitions).
     pub has_leading_ampersand: bool,
     pub types: Punctuated<Type>,
-}
-
-/// Luau negation type: `~T`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NegationType {
-    pub span: Span,
-    pub type_value: Type,
 }
 
 /// Parenthesized type: `(T)`.
@@ -173,7 +159,6 @@ pub struct GenericTypeList {
     pub params: Punctuated<GenericTypeParam>,
 }
 
-/// One declared generic parameter, optionally a pack and/or defaulted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericTypeParam {
     pub span: Span,

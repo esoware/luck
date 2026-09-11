@@ -3,7 +3,7 @@
 //! Command-line interface for the luck bundler and minifier.
 //!
 //! Subcommands: `init`, `build`, `check`, `lint`, `fmt`, `lsp`, and per-target
-//! `bundle`/`minify`/`graph`. Built with [`clap`]. The parse surface and
+//! `bundle`/`minify`/`graph`. Built with [`clap`]. Argument parsing and
 //! dispatch live in [`args`]; each subcommand's arguments and handler live in
 //! its own module under [`commands`].
 

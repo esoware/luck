@@ -9,13 +9,13 @@ use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Control, DfsEvent, depth_first_search};
 use rustc_hash::FxHashMap;
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::path::Path;
 
 const MAX_MODULE_COUNT: usize = 10_000;
 const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
 
-/// The resolved module dependency graph: modules in topological order with the entry point identified.
 pub struct DependencyGraph {
     pub modules: Vec<ModuleInfo>,
     pub topo_order: Vec<ModuleId>,
@@ -47,7 +47,7 @@ pub fn build_graph(
     builder.finish(&entry_normalized)
 }
 
-/// Accumulates modules, edges, and diagnostics as the BFS walk discovers
+/// Accumulates modules, edges, and diagnostics as the walk discovers
 /// them. Owning the whole in-progress graph on one struct keeps
 /// [`GraphBuilder::process_module`] a plain method instead of a function
 /// threading a dozen `&mut` scratch buffers.
@@ -61,7 +61,7 @@ struct GraphBuilder<'a> {
     path_to_id: FxHashMap<String, ModuleId>,
     graph: DiGraph<ModuleId, ()>,
     node_indices: Vec<NodeIndex>,
-    queue: Vec<String>,
+    queue: VecDeque<String>,
     errors: Vec<Diagnostic>,
     warnings: Vec<Diagnostic>,
 }
@@ -78,17 +78,17 @@ impl<'a> GraphBuilder<'a> {
             path_to_id: FxHashMap::default(),
             graph: DiGraph::new(),
             node_indices: Vec::new(),
-            queue: Vec::new(),
+            queue: VecDeque::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
         }
     }
 
-    /// Breadth-first walk from the entry module, resolving and enqueuing
-    /// each newly discovered dependency until the queue drains.
+    /// Walks out from the entry module, resolving and enqueuing each
+    /// newly discovered dependency until the queue drains.
     fn discover(&mut self, entry_normalized: String) {
-        self.queue.push(entry_normalized);
-        while let Some(file_path) = self.queue.pop() {
+        self.queue.push_back(entry_normalized);
+        while let Some(file_path) = self.queue.pop_front() {
             if self.path_to_id.contains_key(&file_path) {
                 continue;
             }
@@ -153,7 +153,7 @@ impl<'a> GraphBuilder<'a> {
                     // graph keys on its string form, so derive it here at the boundary.
                     let resolved_path = resolved.path.to_string_lossy().into_owned();
                     if !self.path_to_id.contains_key(&resolved_path) {
-                        self.queue.push(resolved_path.clone());
+                        self.queue.push_back(resolved_path.clone());
                     }
                     dependencies.push(Dependency {
                         require_string: req.require_string.clone(),
@@ -242,8 +242,8 @@ impl<'a> GraphBuilder<'a> {
     }
 
     /// Topological order (leaves first). The lazy loader is
-    /// registration-order independent, so a cycle no longer blocks
-    /// bundling: deferred cycles (mutual requires inside function bodies)
+    /// registration-order independent, so a cycle does not block
+    /// bundling. Deferred cycles (mutual requires inside function bodies)
     /// work exactly like real Lua, and a load-time cycle raises at runtime
     /// with a clear loader error. On a cycle, warn and fall back to
     /// discovery order.

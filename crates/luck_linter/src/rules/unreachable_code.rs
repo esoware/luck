@@ -37,7 +37,7 @@ impl<'ast> Visitor<'ast> for UnreachableChecker {
     fn visit_block(&mut self, block: &'ast Block) {
         // Break is ordinarily a LastStatement, but Lua 5.2+ also allows it as
         // a regular Statement mid-block, leaving whatever follows it in the
-        // same block unreachable. Only the first such statement is reported.
+        // same block unreachable. This reports only the first such statement.
         for pair in block.stmts.windows(2) {
             if matches!(pair[0], luck_ast::Statement::Break(_)) {
                 self.diagnostics.push(LintDiagnostic::new(

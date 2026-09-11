@@ -95,16 +95,16 @@ impl Parser<'_> {
         let primary = self.parse_primary_expression();
         // Luau type assertions (`expr :: Type`) apply to ANY simpleexp, not just
         // prefix expressions, so they're handled here rather than inside the
-        // prefix-only suffix loop. This lets `1 :: number`, `{} :: Foo`,
-        // `f() :: T`, etc. parse - matching Luau's `asexp = simpleexp ['::' Type]`.
+        // prefix-only suffix loop. This lets `1 :: number`, `{} :: Foo`, and
+        // `f() :: T` parse, matching Luau's `asexp = simpleexp ['::' Type]`.
         self.parse_type_assertions(primary)
     }
 
     /// Wrap a just-parsed primary in a trailing Luau `:: Type` assertion.
     /// A no-op outside Luau. Exactly one cast per simpleexp, matching the
-    /// grammar's `asexp ::= simpleexp ['::' Type]` - `x :: A :: B` is a
-    /// parse error in real Luau, so a second `::` is left for the caller
-    /// to reject as an unexpected token.
+    /// grammar's `asexp ::= simpleexp ['::' Type]`. `x :: A :: B` is a parse
+    /// error in real Luau, so a second `::` is left for the caller to reject
+    /// as an unexpected token.
     fn parse_type_assertions(&mut self, expr: Expression) -> Expression {
         if self.version.is_luau() && matches!(self.peek(), TokenKind::DoubleColon) {
             self.advance_span();
@@ -358,14 +358,12 @@ impl Parser<'_> {
                 Expression::InterpolatedString(Box::new(InterpolatedString { span, segments }))
             }
             _ => {
-                // Has interpolation expressions
                 let expr = self.parse_expression(0);
                 segments.push(InterpSegment {
                     literal: begin_token,
                     expr: Some(expr),
                 });
 
-                // Parse InterpMid segments
                 loop {
                     match self.peek() {
                         TokenKind::InterpMid(_) => {
@@ -389,7 +387,6 @@ impl Parser<'_> {
                             }));
                         }
                         _ => {
-                            // Error: unexpected token in interpolated string
                             let span = self.current_span();
                             self.error(
                                 span,
@@ -472,7 +469,7 @@ impl Parser<'_> {
 
     /// Parse function body: `[<generics>] (params) block end`.
     pub(crate) fn parse_function_body(&mut self) -> FunctionBody {
-        // Luau: generic list before the parens - `function f<T>(x: T)`
+        // Luau puts the generic list before the parens: `function f<T>(x: T)`
         let generics = if self.version.is_luau() && matches!(self.peek(), TokenKind::Less) {
             Some(Box::new(self.parse_generic_type_list(false)))
         } else {
@@ -652,7 +649,6 @@ impl Parser<'_> {
         Expression::TableConstructor(Box::new(table))
     }
 
-    /// Parse a single table field.
     fn parse_field(&mut self) -> Field {
         // `[expr] = expr`
         if matches!(self.peek(), TokenKind::LeftBracket) {
@@ -665,7 +661,7 @@ impl Parser<'_> {
             return Field::Bracketed { span, key, value };
         }
 
-        // `Name = expr` - need lookahead: identifier followed by `=`
+        // `Name = expr`, which needs one token of lookahead for the `=`
         if self.check_identifier() && matches!(self.peek_next(), TokenKind::Equal) {
             let name = self.advance();
             self.advance_span();
@@ -674,14 +670,13 @@ impl Parser<'_> {
             return Field::Named { span, name, value };
         }
 
-        // Positional: just an expression
+        // Positional field
         let value = self.parse_expression(0);
         let span = value.span();
         Field::Positional { span, value }
     }
 }
 
-/// Get the ending span of function arguments.
 fn function_args_span(args: &FunctionArgs) -> Span {
     match args {
         FunctionArgs::Parenthesized { span, .. } => *span,

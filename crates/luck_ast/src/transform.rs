@@ -366,7 +366,7 @@ pub trait AstTransform {
                 });
                 Type::Named(named)
             }
-            // typeof embeds a real expression - semantic passes must see it
+            // typeof embeds a real expression, so semantic passes must see it.
             Type::Typeof(mut typeof_type) => {
                 typeof_type.expr = self.transform_expression(typeof_type.expr);
                 Type::Typeof(typeof_type)
@@ -434,10 +434,6 @@ pub trait AstTransform {
             Type::Intersection(mut intersection) => {
                 intersection.types = self.walk_punctuated_types(intersection.types);
                 Type::Intersection(intersection)
-            }
-            Type::Negation(mut negation) => {
-                negation.type_value = self.transform_type(negation.type_value);
-                Type::Negation(negation)
             }
             Type::Parenthesized(mut paren) => {
                 paren.type_value = self.transform_type(paren.type_value);

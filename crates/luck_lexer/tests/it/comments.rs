@@ -63,7 +63,6 @@ fn leading_comment_attachment() {
     assert_eq!(result.comments.len(), 1);
     let comment = &result.comments[0];
     assert_eq!(comment.position, CommentPosition::Leading);
-    // attached_to should be the start of `local`
     let local_token = &result.tokens[0];
     assert_eq!(comment.attached_to, local_token.span.start);
 }

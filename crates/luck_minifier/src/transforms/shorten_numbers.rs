@@ -3,11 +3,11 @@ use luck_ast::shared::Block;
 use luck_ast::transform::AstTransform;
 use luck_token::{LuaVersion, NumberSubtypes, Span};
 
-/// Shorten numeric literals using scientific notation, decimal trimming,
-/// and hex-to-decimal - version-aware: on Lua 5.3+ the integer/float
-/// subtype of every literal is preserved (`1.0` never becomes `1`, an
-/// integer never becomes `1e6`), and every candidate must parse back to
-/// the identical value before it is accepted.
+/// Shortens numeric literals using scientific notation, decimal trimming, and
+/// hex-to-decimal. On Lua 5.3+ the integer/float subtype of every literal is
+/// preserved (`1.0` never becomes `1`, an integer never becomes `1e6`), and
+/// every candidate must parse back to the identical value before it is
+/// accepted.
 pub fn shorten(block: Block, version: LuaVersion) -> Block {
     NumberShortener {
         subtypes: crate::expr::number_subtypes(version),
@@ -50,7 +50,7 @@ impl AstTransform for NumberShortener {
     }
 }
 
-/// Shorten a Luau integer literal (`i` suffix). The value is an exact
+/// Shortens a Luau integer literal (`i` suffix). The value is an exact
 /// 64-bit pattern, so respelling is lossless. Hex covers every pattern;
 /// decimal only up to i64::MAX, since larger values would need a unary
 /// minus, which is a different AST shape.
@@ -111,8 +111,8 @@ fn roundtrips(candidate: &str, value: f64) -> bool {
 }
 
 fn shorten_number(text: &str, subtypes: NumberSubtypes) -> String {
-    // A one-character literal can never shrink - and single digits are
-    // the most common literals in already-minified rounds.
+    // A one-character literal can never shrink, and single digits are the
+    // most common literals in already-minified rounds.
     if text.len() == 1 {
         return text.to_string();
     }
@@ -123,7 +123,7 @@ fn shorten_number(text: &str, subtypes: NumberSubtypes) -> String {
     if bytes.len() > 2 && bytes[0] == b'0' && (bytes[1] | 0x20) == b'x' {
         let hex = &text[2..];
         if hex.bytes().any(|b| b == b'.' || (b | 0x20) == b'p') {
-            // Hex floats are rare and precision-delicate - leave them.
+            // Hex floats are rare and precision-delicate, so leave them.
             return text.to_string();
         }
         // Hex integers: the decimal spelling denotes the same integer
@@ -154,8 +154,8 @@ fn shorten_number(text: &str, subtypes: NumberSubtypes) -> String {
     let float_form = is_float_form(text);
     let mut candidates: Vec<String> = Vec::new();
 
-    // Integer spelling - only when the literal already IS an integer on
-    // 5.3+ (or subtypes don't exist). `1.0` -> `1` flips math.type.
+    // Integer spelling, only when the literal already IS an integer on 5.3+
+    // (or subtypes do not exist). `1.0` shortened to `1` flips math.type.
     if value == value.floor() && value.abs() < 1e15 && (!int_subtype || !float_form) {
         candidates.push(itoa::Buffer::new().format(value as i64).to_string());
     }
@@ -197,10 +197,10 @@ fn format_shortest_decimal(value: f64, must_stay_float_formed: bool) -> String {
         return if must_stay_float_formed { "0." } else { "0" }.to_string();
     }
 
-    // Shortest-roundtrip digits without the fmt machinery. ryu uses
-    // exponent form for extreme magnitudes where Display does not; the
-    // 'e'-aware paths below handle both, and every candidate still passes
-    // the roundtrips() gate.
+    // Shortest-roundtrip digits without the fmt machinery. ryu uses exponent
+    // form for extreme magnitudes where Display does not; the 'e'-aware paths
+    // below handle both, and every candidate still passes the roundtrips()
+    // gate.
     let mut ryu_buffer = ryu::Buffer::new();
     let formatted = ryu_buffer.format(value);
 
@@ -243,7 +243,8 @@ mod tests {
 
     #[test]
     fn subtype_float_keeps_float_form() {
-        // On 5.3+, `1.0` -> `1` flips math.type - `1.` keeps it float.
+        // On 5.3+, `1.0` shortened to `1` flips math.type, while `1.` keeps
+        // it float.
         assert_eq!(shorten_number("1.0", NumberSubtypes::IntFloat), "1.");
         assert_eq!(shorten_number("10.0", NumberSubtypes::IntFloat), "10.");
     }

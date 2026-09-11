@@ -28,28 +28,28 @@ publishable crate at a different version, stop.
 
 Registry naming (decided 2026-07, do not revisit): the crate name `luck` is
 taken on crates.io, so the facade publishes as package `luck-lua` with
-`[lib] name = "luck"` - users still write `use luck::...`. All `luck_*`
+`[lib] name = "luck"`, so users still write `use luck::...`. All `luck_*`
 crates publish under their real names; `luck_cli` keeps its `luck` binary.
 
 ## 2. Dependency-ordered publish list
 
 Crates must publish in dependency order (path deps must already exist on the
-registry at the required version). Derive the current order from reality -
-dependencies change, so never reuse a remembered order:
+registry at the required version). Derive the current order from reality.
+Dependencies change, so never reuse a remembered order:
 
 ```sh
 cargo metadata --format-version=1 --no-deps
 ```
 
 Topologically sort the publishable crates by their `luck*` dependencies.
-Versions move in lockstep, so every publishable crate ships every release -
-no skipping. For each crate the human runs `cargo publish -p <crate>` and
+Versions move in lockstep, so every publishable crate ships every release.
+No skipping. For each crate the human runs `cargo publish -p <crate>` and
 waits for the registry to index before the next dependent.
 
 ## 3. Tag
 
 After publishing: annotated `git tag v<workspace-version>`, push the tag.
-The VS Code build workflow triggers on `vscode-v*` tags - also tag
+The VS Code build workflow triggers on `vscode-v*` tags, so also tag
 `vscode-v<workspace-version>` when the extension should ship.
 
 ## 4. VS Code extension

@@ -46,14 +46,14 @@ pub struct FullGenerator {
     out: String,
     indent: usize,
     stmt_depth: usize,
-    /// Luau: this program exports values instead of returning a table.
-    /// The two mechanisms are mutually exclusive, so the choice is made
-    /// once per program.
+    /// Luau: this program exports values rather than returning a table. The
+    /// two mechanisms are mutually exclusive, so the generator picks one per
+    /// program.
     uses_value_exports: bool,
     vararg_fns: Vec<bool>,
     names: Vec<String>,
     /// Names the validator treats as read-only (const bindings, 5.5 for
-    /// control variables) - never used as assignment targets.
+    /// control variables). They never appear as assignment targets.
     readonly_names: Vec<String>,
     callables: Vec<String>,
     type_aliases: Vec<(String, usize)>,
@@ -869,7 +869,6 @@ impl FullGenerator {
             return self.leaf_type();
         }
         match self.rng.below(11) {
-            9 if self.version.has_negation_types() => format!("~{}", self.leaf_type()),
             0..=2 => self.leaf_type(),
             3 => {
                 let inner = BUILTIN_TYPES[self.rng.below(BUILTIN_TYPES.len())];
@@ -987,7 +986,6 @@ mod tests {
             "export function",
             "1_000_000i",
             "<<",
-            "= ~",
         ] {
             assert!(all.contains(needle), "expected generated {needle}");
         }

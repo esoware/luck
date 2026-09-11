@@ -1,19 +1,13 @@
 //! # luck_ast
 //!
-//! AST node types and traversal infrastructure for Lua/Luau.
+//! AST node types and traversal infrastructure for Lua/Luau. A [`Block`] holds
+//! [`Statement`]s and an optional last statement; every value position is an
+//! [`Expression`].
 //!
-//! ## Key Types
-//!
-//! - [`Expression`] - All expression variants (binary, unary, call, index, literal, etc.)
-//! - [`Statement`] - All statement variants (assign, local, if, while, for, etc.)
-//! - [`Block`] - A sequence of statements with an optional last statement
-//!
-//! ## Traversal
-//!
-//! - [`Visitor`](visitor::Visitor) - Read-only AST traversal
-//! - [`AstTransform`](transform::AstTransform) - Mutable `fn(Node) -> Node` transforms (used by the minifier)
-//!
-//! Both patterns: override `visit_*`/`transform_*` methods, call `self.walk_*` for default recursion.
+//! Two traversals share one shape: [`Visitor`](visitor::Visitor) borrows the
+//! tree, [`AstTransform`](transform::AstTransform) consumes and returns it
+//! (`fn(Node) -> Node`, what the minifier's passes use). Override the `visit_*`
+//! or `transform_*` method you care about and call `self.walk_*` to recurse.
 //!
 //! # Usage
 //!
@@ -147,7 +141,6 @@ mod tests {
             types::OptionalType => 48,
             types::UnionType => 48,
             types::IntersectionType => 48,
-            types::NegationType => 48,
             types::ParenType => 48,
             types::TypePack => 40,
             types::VariadicType => 48,

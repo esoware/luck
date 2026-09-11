@@ -1,5 +1,5 @@
 //! `span()` accessors for the node enums, kept together so span extraction
-//! is one greppable surface rather than scattered across the node modules.
+//! stays greppable in one place rather than scattered across the node modules.
 
 use luck_token::Span;
 
@@ -101,7 +101,6 @@ impl Type {
             Type::Optional(t) => t.span,
             Type::Union(t) => t.span,
             Type::Intersection(t) => t.span,
-            Type::Negation(t) => t.span, // Luau
             Type::Parenthesized(t) => t.span,
             Type::Pack(t) => t.span,
             Type::Singleton(t) => t.span,

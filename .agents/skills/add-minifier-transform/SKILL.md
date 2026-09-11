@@ -12,11 +12,11 @@ config flag, wire it into the ordered pipeline, prove it preserves meaning.
 
 ## 1. Write the pass
 
-Always recurse through `self.walk_*` - hand-rolled recursion misses nested
-cases. Exhaustive matches only, no `_ =>` arms. If the pass needs
-scope/binding information, do **not** build a flat name-to-value map - that
-miscompiles shadowed names; use a scope-aware analysis (see `rename_locals`'s
-Analyzer for the reference implementation) or don't write the pass yet.
+Always recurse through `self.walk_*`; hand-rolled recursion misses nested
+cases. Exhaustive matches only, no `_ =>` arms. If the pass needs scope or
+binding information, do **not** build a flat name-to-value map, which
+miscompiles shadowed names. Use a scope-aware analysis (see `rename_locals`'s
+Analyzer for the reference implementation), or don't write the pass yet.
 Purity questions go through `is_pure_expression` in `src/expr.rs`.
 
 ## 2. Config flag
@@ -28,12 +28,12 @@ fails if skipped).
 ## 3. Wire into the pipeline
 
 `pub mod` in `transforms/mod.rs`, slot in `lib.rs::minify()`. **Read the
-current pipeline order from `minify()` before choosing a slot - do not trust
+current pipeline order from `minify()` before choosing a slot. Do not trust
 any written snapshot of it.** Structural facts that hold: `fold_constants`
 runs twice because inlining exposes new folds (if your pass exposes
 opportunities for an earlier pass, re-run that pass after yours);
 `rename_locals` is not last, so a pass touching user-visible names must run
-before it. Pipeline-order interactions are a known bug source - if your pass
+before it. Pipeline-order interactions are a known bug source. If your pass
 reorders or merges declarations, add a test combining it with `lift_locals`
 and `merge_locals`.
 
@@ -45,7 +45,7 @@ only safe on operands that cannot metamethod:
 
 - `is_pure_expression(_, allow_var_reads=true)` rejects variable arithmetic;
   only literal arithmetic is pure.
-- `#"str"` must not be folded - escape sequences make raw length unreliable.
+- `#"str"` must not be folded; escape sequences make raw length unreliable.
 - `-a + b != -(a + b)` for variable `a`; sign folding works only on literals.
 - `__lt` vs `__le` differ: never invert comparisons, only wrap in `not`.
 - `a == nil` != `not a` (falsy is broader); don't fold equality with nil.
@@ -53,18 +53,18 @@ only safe on operands that cannot metamethod:
 
 Other recurring miscompile classes:
 
-- **Multi-return truncation**: a call or `...` in tail position expands;
+- **Multi-return truncation.** A call or `...` in tail position expands;
   parenthesized or moved to non-tail position it truncates to one value.
-- **Integer/float subtype (5.3+)**: `1` and `1.0` differ observably
-  (`math.type`, `tostring`, `//`); no version-blind numeric rewrites.
-- **String escapes**: token payloads are raw source text, not decoded values;
+- **Integer/float subtype (5.3+).** `1` and `1.0` differ observably
+  (`math.type`, `tostring`, `//`), so no version-blind numeric rewrites.
+- **String escapes.** Token payloads are raw source text, not decoded values;
   never compare or concatenate string literals textually.
-- **Attributes**: `<close>` locals have scope-exit side effects and `<const>`
+- **Attributes.** `<close>` locals have scope-exit side effects and `<const>`
   affects validity; never remove, merge, or move an attributed local.
 
 ## 5. Tests (all four)
 
-1. Output shorter or equal - never longer - on a representative fixture.
+1. Output shorter or equal, never longer, on a representative fixture.
 2. Re-parses: `parse(&minified).errors.is_empty()`.
 3. Idempotent: `minify(minify(src)) == minify(src)`.
 4. Metamethod-safe: a `setmetatable` fixture the transform must leave alone.

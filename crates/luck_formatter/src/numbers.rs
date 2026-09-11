@@ -20,7 +20,6 @@ pub(crate) fn normalize_number(text: &str, hex_case: HexCase) -> String {
 
     let mut result = String::with_capacity(text.len());
     result.push('0');
-    // Prefix letter is always lowercase.
     result.push(bytes[1].to_ascii_lowercase() as char);
 
     for &byte in &bytes[2..] {
@@ -82,7 +81,6 @@ mod tests {
     fn decimal_exponent_lowered() {
         assert_eq!(normalize_number("1E10", HexCase::Preserve), "1e10");
         assert_eq!(normalize_number("1.5E-3", HexCase::Upper), "1.5e-3");
-        // A plain integer is returned unchanged.
         assert_eq!(normalize_number("42", HexCase::Upper), "42");
     }
 

@@ -8,12 +8,11 @@ use crate::rule::{LintContext, Rule};
 
 /// Luau lint #5: more than one statement starting on the same line.
 ///
-/// Why we flag the semicolon-separated form too: some style guides
-/// permit `a = 1; b = 2` as a deliberate dense format, but most
-/// projects reserve a line per statement to keep diffs and stack
-/// traces clean. Treating both the implicit and explicit separator
-/// the same gives users a single, predictable rule - disable it if
-/// you prefer the dense style.
+/// Why the semicolon-separated form fires too: some style guides permit
+/// `a = 1; b = 2` as a deliberate dense format, but most projects
+/// reserve a line per statement to keep diffs and stack traces clean.
+/// Treating the implicit and explicit separator the same gives one
+/// predictable rule. Disable it if you prefer the dense style.
 pub struct MultipleStatementsPerLine;
 
 impl Rule for MultipleStatementsPerLine {
@@ -79,8 +78,8 @@ impl MultiStmtChecker {
     fn check_block(&mut self, block: &Block) {
         let mut spans: Vec<Span> = Vec::with_capacity(block.stmts.len() + 1);
         for stmt in &block.stmts {
-            // Skip empty statements (bare `;`) - they don't carry user
-            // intent, just punctuation.
+            // A bare `;` is punctuation, not a statement the author
+            // placed on the line.
             if matches!(stmt, Statement::EmptyStatement(_)) {
                 continue;
             }

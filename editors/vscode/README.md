@@ -10,7 +10,7 @@ Lua/Luau language support powered by the luck toolchain:
 - **Document symbols** outline
 - **Code actions**: per-fix quickfix, `source.fixAll.luck`, "disable rule for this line"
 - **Semantic highlighting** limited to stdlib names (deprecated entries get
-  strikethrough); everything else is colored by the TextMate grammar
+  strikethrough); the TextMate grammar colors everything else
 - **Document highlights**, folding ranges, selection ranges, document links
 - **Snippets** for common Lua patterns
 - **TextMate grammar** for both Lua and Luau (type annotations, string interpolation, attributes, generics)
@@ -44,6 +44,6 @@ All commands are under the `Luck:` prefix in the command palette:
 - Formatter style, lint rules, target version, and globals are all read
   from `luck.json` / `.editorconfig` by the server (`.luau` files always
   use Luau); there are no editor settings for them.
-- `luck.server.path` — explicit path to the `luck` binary (overrides
-  the bundled one).
-- `luck.trace.server` — trace LSP messages for debugging.
+- `luck.server.path` is an explicit path to the `luck` binary, overriding
+  the bundled one.
+- `luck.trace.server` traces LSP messages for debugging.
