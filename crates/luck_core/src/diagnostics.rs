@@ -375,6 +375,43 @@ pub mod errors {
                 .to_string(),
         )
     }
+
+    /// A `require(expr)` kept in the bundle and routed through the loader, so
+    /// bundled names still resolve from it. Lua targets only - their cache is
+    /// keyed by module name, so a runtime-computed name can be looked up.
+    pub fn w007_loader_fallback(file_path: &str, span: Range<usize>) -> Diagnostic {
+        Diagnostic::warning(
+            "W007",
+            "require argument is not a string literal, so the module is resolved at runtime"
+                .to_string(),
+            file_path.to_string(),
+            span,
+        )
+        .with_help(
+            "The call goes to the bundle's loader: a name registered in the bundle loads from \
+             it, anything else falls through to the runtime's own require. Use a string \
+             literal to bundle the module itself."
+                .to_string(),
+        )
+    }
+
+    /// A `require(expr)` left exactly as written. Luau targets only - the
+    /// bundle's cache is keyed by resolved file, and Roblox requires take an
+    /// Instance, so a runtime argument cannot name a bundled module.
+    pub fn w007_runtime(file_path: &str, span: Range<usize>) -> Diagnostic {
+        Diagnostic::warning(
+            "W007",
+            "require argument is not a string literal, so the module is resolved at runtime"
+                .to_string(),
+            file_path.to_string(),
+            span,
+        )
+        .with_help(
+            "The call is left exactly as written and resolves against the runtime, not the \
+             bundle. Use a string literal to bundle the module itself."
+                .to_string(),
+        )
+    }
 }
 
 #[cfg(test)]

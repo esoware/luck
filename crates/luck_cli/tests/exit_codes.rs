@@ -234,3 +234,85 @@ fn fmt_range_reversed_bounds_exits_usage() {
         .code(2)
         .stderr(predicate::str::contains("invalid format range"));
 }
+
+/// A `require(expr)` used to abort the whole bundle. It now warns, emits a
+/// bundle that resolves the call at runtime, and only fails when the project
+/// (or the flag) asks for strictness.
+#[test]
+fn bundle_with_dynamic_require_succeeds_and_warns() {
+    let dir = TempDir::new().unwrap();
+    write_file(dir.path(), "helper.lua", "return { value = 1 }\n");
+    write_file(
+        dir.path(),
+        "main.lua",
+        "local helper = require(\"helper\")\nlocal name = \"helper\"\nreturn helper.value + require(name).value\n",
+    );
+
+    let assert = luck_in(dir.path())
+        .args(["bundle", "main.lua"])
+        .assert()
+        .code(0)
+        .stderr(predicate::str::contains("W007"));
+    let bundle = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(bundle.contains("__luck_dynamic("), "{bundle}");
+}
+
+#[test]
+fn bundle_with_dynamic_require_fails_in_error_mode() {
+    let dir = TempDir::new().unwrap();
+    write_file(dir.path(), "helper.lua", "return { value = 1 }\n");
+    write_file(
+        dir.path(),
+        "main.lua",
+        "local helper = require(\"helper\")\nlocal name = \"helper\"\nreturn helper.value + require(name).value\n",
+    );
+
+    luck_in(dir.path())
+        .args(["bundle", "main.lua", "--dynamic-require", "error"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("E002"));
+
+    // The project setting reaches the one-shot command too.
+    write_file(
+        dir.path(),
+        "luck.json",
+        "{ \"dynamic_require\": \"error\" }\n",
+    );
+    luck_in(dir.path())
+        .args(["bundle", "main.lua"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("E002"));
+}
+
+/// `luck bundle main.lua` passes the entry's parent as the project root, which
+/// for a bare file name is empty - it used to leave every emitted path
+/// absolute, shipping the build host's directory layout inside the bundle.
+#[test]
+fn bundle_of_a_bare_entry_name_emits_no_absolute_paths() {
+    let dir = TempDir::new().unwrap();
+    write_file(dir.path(), "helper.lua", "return { value = 1 }\n");
+    write_file(
+        dir.path(),
+        "main.lua",
+        "local helper = require(\"helper\")\nreturn helper.value\n",
+    );
+
+    let assert = luck_in(dir.path())
+        .args(["bundle", "main.lua"])
+        .assert()
+        .code(0);
+    let bundle = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    let native_root = dir.path().to_string_lossy().to_string();
+    let slash_root = native_root.replace('\\', "/");
+    assert!(
+        !bundle.contains(&native_root) && !bundle.contains(&slash_root),
+        "absolute path leaked into the bundle:\n{bundle}"
+    );
+    assert!(
+        bundle.contains("-- module \"helper\": helper.lua"),
+        "{bundle}"
+    );
+}

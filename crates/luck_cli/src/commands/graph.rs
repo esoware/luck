@@ -1,7 +1,7 @@
 //! `luck graph` - print the dependency graph as JSON or Graphviz DOT.
 
 use crate::output::{build_file_cache, current_dir_or_exit, fail_with_diagnostics};
-use crate::project::resolve_explicit_target;
+use crate::project::{config_governing, resolve_configured_target, resolve_dynamic_require};
 use crate::render::render_diagnostics;
 use crate::{EXIT_SUCCESS, EXIT_USAGE, Verbosity};
 use clap::{Args, ValueEnum};
@@ -31,11 +31,17 @@ pub(crate) struct GraphArgs {
     /// Output format
     #[arg(long, value_enum, default_value_t = GraphFormat::Json)]
     format: GraphFormat,
+
+    /// How to treat require(expr): error, warn, or allow
+    #[arg(long = "dynamic-require", value_name = "MODE")]
+    dynamic_require: Option<String>,
 }
 
 impl GraphArgs {
     pub(crate) fn run(self, verbosity: Verbosity) -> ExitCode {
-        let target = resolve_explicit_target(self.target.as_deref(), &self.entry);
+        let config = config_governing(&self.entry);
+        let target = resolve_configured_target(self.target.as_deref(), &self.entry, &config);
+        let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require.as_deref());
 
         let entry_path = PathBuf::from(&self.entry);
         if !entry_path.is_file() {
@@ -45,7 +51,13 @@ impl GraphArgs {
 
         let cwd = current_dir_or_exit();
 
-        match build_graph(&entry_path, target, &self.search_path, &cwd) {
+        match build_graph(
+            &entry_path,
+            target,
+            &self.search_path,
+            &cwd,
+            dynamic_require,
+        ) {
             Ok(dep_graph) => {
                 if !dep_graph.warnings.is_empty() && verbosity != Verbosity::Quiet {
                     let mut cache = build_file_cache(&dep_graph.warnings);

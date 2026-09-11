@@ -23,7 +23,7 @@ value=__luck_result(__luck_modules[id]())
 __luck_loaded[id]=value
 return value
 end
--- module #1: __luck_components_button
+-- module #1: components/button.luau
 __luck_modules[1]=function(...)
 local button = {}
 
@@ -31,7 +31,7 @@ button.label = "Click Me"
 
 return button
 end
--- module #2: __luck_components_init
+-- module #2: components/init.luau
 __luck_modules[2]=function(...)
 local button = __luck_require(1)
 

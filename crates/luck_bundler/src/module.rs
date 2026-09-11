@@ -25,62 +25,15 @@ pub struct ModuleInfo {
     pub path: String,
     pub source: String,
     pub dependencies: Vec<Dependency>,
-    pub sanitized_name: String,
-    /// Project-relative path, used for provenance comments and as the
-    /// loader data real 5.2+ chunks receive (absolute paths would leak
-    /// build-host details into the output).
+    /// Project-relative path: every path the bundle carries - provenance
+    /// comments and the loader data real 5.2+ chunks receive - comes from
+    /// here, so an absolute one would leak the build host's layout into
+    /// shipped output. Built by `graph::make_relative`.
     pub relative_path: String,
+    /// Byte ranges of the `require` identifier in this module's
+    /// `require(expr)` calls, which the emitter retargets at the loader's
+    /// dynamic entry point. Always empty on Luau targets.
+    pub dynamic_callees: Vec<Range<usize>>,
     /// Parsed AST block, cached during graph construction to avoid re-parsing in the emitter.
     pub parsed_block: Option<Block>,
-}
-
-/// Converts a file path into a valid Lua identifier prefixed with `__luck_`.
-pub fn sanitize_module_name(path: &str) -> String {
-    let stem = path
-        .strip_suffix(".luau")
-        .or_else(|| path.strip_suffix(".lua"))
-        .unwrap_or(path);
-
-    let mut sanitized = String::with_capacity("__luck_".len() + stem.len());
-    sanitized.push_str("__luck_");
-    for byte in stem.chars() {
-        if byte.is_ascii_alphanumeric() || byte == '_' {
-            sanitized.push(byte);
-        } else {
-            sanitized.push('_');
-        }
-    }
-    sanitized
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sanitizes_path_separators_and_strips_extension() {
-        assert_eq!(
-            sanitize_module_name("foo/bar/baz.lua"),
-            "__luck_foo_bar_baz"
-        );
-        assert_eq!(sanitize_module_name("src/utils.lua"), "__luck_src_utils");
-        assert_eq!(
-            sanitize_module_name("lib/my-module.lua"),
-            "__luck_lib_my_module"
-        );
-        assert_eq!(sanitize_module_name("init.luau"), "__luck_init");
-        assert_eq!(
-            sanitize_module_name("foo.bar.baz.lua"),
-            "__luck_foo_bar_baz"
-        );
-    }
-
-    #[test]
-    fn sanitizes_backslash_paths() {
-        assert_eq!(sanitize_module_name("src\\utils.lua"), "__luck_src_utils");
-        assert_eq!(
-            sanitize_module_name("C:\\project\\lib\\mod.luau"),
-            "__luck_C__project_lib_mod"
-        );
-    }
 }

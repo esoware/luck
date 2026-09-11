@@ -1,0 +1,51 @@
+---
+source: crates/luck_bundler/tests/integration.rs
+expression: result.output
+---
+do
+local __luck_modules={}
+local __luck_loaded=type(package)=="table" and type(package.loaded)=="table" and package.loaded or {}
+local __luck_preload=type(package)=="table" and type(package.preload)=="table" and package.preload or {}
+local __luck_paths={}
+local function __luck_require(name)
+local value=__luck_loaded[name]
+if value then return value end
+local loaderdata
+local loader=__luck_preload[name]
+if loader then
+loaderdata=":preload:"
+else
+loader=__luck_modules[name]
+loaderdata=__luck_paths[name]
+end
+value=loader(name,loaderdata)
+if value~=nil then __luck_loaded[name]=value end
+value=__luck_loaded[name]
+if value==nil then
+value=true
+__luck_loaded[name]=value
+end
+return value,loaderdata
+end
+local function __luck_dynamic(name)
+if __luck_modules[name]~=nil or __luck_preload[name]~=nil then return __luck_require(name)end
+if type(require)=="function" then return require(name)end
+error("luck bundle: dynamic require of '"..tostring(name).."' is not in the bundle and this runtime has no require",2)
+end
+-- module "helper": helper.lua
+__luck_modules["helper"]=function(...)
+return { value = 1 }
+end
+__luck_paths["helper"]="helper.lua"
+local __luck_entry=function(...)
+local helper = __luck_require("helper")
+
+-- Resolved at runtime: the name is only known then, but "helper" is in the
+-- bundle, so the loader still serves it from there.
+local name = "helper"
+local same = __luck_dynamic(name)
+
+return helper.value + same.value
+end
+return __luck_entry(...)
+end

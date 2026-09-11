@@ -31,4 +31,4 @@ pub use format_options::{
     QuoteStyle, SpaceAfterFunction,
 };
 pub use transform_config::TransformConfig;
-pub use types::LuaTarget;
+pub use types::{DynamicRequire, LuaTarget};
