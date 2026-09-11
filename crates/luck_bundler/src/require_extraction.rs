@@ -3,6 +3,7 @@ use luck_ast::shared::Block;
 use luck_ast::stmt::Statement;
 use luck_ast::visitor::Visitor;
 use luck_core::diagnostics::{Diagnostic, errors};
+use luck_core::types::DynamicRequire;
 use luck_semantic::SemanticAnalysis;
 use luck_token::token::TokenKind;
 use luck_token::{LuaVersion, Span};
@@ -23,6 +24,10 @@ pub struct RequireInfo {
 #[derive(Debug, Clone)]
 pub struct ExtractResult {
     pub requires: Vec<RequireInfo>,
+    /// Byte ranges of the `require` identifier in calls whose argument is not
+    /// a string literal. The emitter retargets exactly this token, leaving the
+    /// argument expression (and any static require nested in it) untouched.
+    pub dynamic_callees: Vec<Range<usize>>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -32,13 +37,23 @@ pub struct ExtractResult {
 /// filters out calls through local bindings named `require` (they keep
 /// their user semantics, W005), and references to the global `require`
 /// that are not direct calls warn too: those call sites escape bundling.
-pub fn extract_requires(block: &Block, file_path: &str, version: LuaVersion) -> ExtractResult {
+///
+/// A `require(expr)` cannot name a module at build time; `dynamic_require`
+/// decides whether that aborts the bundle or is kept for the runtime.
+pub fn extract_requires(
+    block: &Block,
+    file_path: &str,
+    version: LuaVersion,
+    dynamic_require: DynamicRequire,
+) -> ExtractResult {
     let analysis = luck_semantic::analyze(block, version);
     let mut finder = RequireFinder {
         file_path,
         version,
+        dynamic_require,
         analysis: &analysis,
         requires: Vec::new(),
+        dynamic_callees: Vec::new(),
         diagnostics: Vec::new(),
         seen_require_strings: rustc_hash::FxHashSet::default(),
         direct_callee_spans: rustc_hash::FxHashSet::default(),
@@ -47,6 +62,7 @@ pub fn extract_requires(block: &Block, file_path: &str, version: LuaVersion) -> 
 
     let RequireFinder {
         mut requires,
+        dynamic_callees,
         mut diagnostics,
         direct_callee_spans,
         ..
@@ -72,6 +88,7 @@ pub fn extract_requires(block: &Block, file_path: &str, version: LuaVersion) -> 
 
     ExtractResult {
         requires,
+        dynamic_callees,
         diagnostics,
     }
 }
@@ -79,8 +96,10 @@ pub fn extract_requires(block: &Block, file_path: &str, version: LuaVersion) -> 
 struct RequireFinder<'a> {
     file_path: &'a str,
     version: LuaVersion,
+    dynamic_require: DynamicRequire,
     analysis: &'a SemanticAnalysis,
     requires: Vec<RequireInfo>,
+    dynamic_callees: Vec<Range<usize>>,
     diagnostics: Vec<Diagnostic>,
     seen_require_strings: rustc_hash::FxHashSet<String>,
     direct_callee_spans: rustc_hash::FxHashSet<Span>,
@@ -115,11 +134,34 @@ impl RequireFinder<'_> {
                     call_span,
                 });
             }
-            // `require(expr)` can't be resolved statically.
-            None => {
+            // `require(expr)` can't be resolved statically. Aborting the whole
+            // bundle over one such call is rarely what the author wants, so by
+            // default it stays and resolves at runtime.
+            None => self.handle_dynamic_call(func_call, callee_span),
+        }
+    }
+
+    fn handle_dynamic_call(&mut self, func_call: &FunctionCall, callee_span: Span) {
+        let call_range = span_to_range(func_call.span);
+        match self.dynamic_require {
+            DynamicRequire::Error => {
                 self.diagnostics
-                    .push(errors::e002(self.file_path, span_to_range(func_call.span)));
+                    .push(errors::e002(self.file_path, call_range));
+                return;
             }
+            DynamicRequire::Warn if self.version.is_luau() => self
+                .diagnostics
+                .push(errors::w007_runtime(self.file_path, call_range)),
+            DynamicRequire::Warn => self
+                .diagnostics
+                .push(errors::w007_loader_fallback(self.file_path, call_range)),
+            DynamicRequire::Allow => {}
+        }
+        // Luau keys its cache by resolved file, and a Roblox require takes an
+        // Instance, so there is nothing a runtime argument could look up
+        // there: the call stays exactly as written.
+        if !self.version.is_luau() {
+            self.dynamic_callees.push(span_to_range(callee_span));
         }
     }
 }
@@ -298,10 +340,15 @@ mod tests {
     }
 
     fn extract(source: &str) -> ExtractResult {
+        extract_with(source, DynamicRequire::default())
+    }
+
+    fn extract_with(source: &str, dynamic_require: DynamicRequire) -> ExtractResult {
         extract_requires(
             &parse(source, LuaVersion::Lua54),
             "test.lua",
             LuaVersion::Lua54,
+            dynamic_require,
         )
     }
 
@@ -310,6 +357,7 @@ mod tests {
             &parse(source, LuaVersion::Luau),
             "test.luau",
             LuaVersion::Luau,
+            DynamicRequire::default(),
         )
     }
 
@@ -350,10 +398,53 @@ mod tests {
     }
 
     #[test]
-    fn non_literal_require_flags_e002() {
+    fn non_literal_require_flags_e002_in_error_mode() {
+        let result = extract_with("local x = require(varname)\n", DynamicRequire::Error);
+        assert_eq!(result.requires.len(), 0);
+        assert!(result.dynamic_callees.is_empty());
+        assert_eq!(codes(&result, "E002").len(), 1);
+    }
+
+    /// The default: one runtime-resolved require must not abort the bundle.
+    #[test]
+    fn non_literal_require_warns_and_is_kept_by_default() {
         let result = extract("local x = require(varname)\n");
         assert_eq!(result.requires.len(), 0);
-        assert_eq!(codes(&result, "E002").len(), 1);
+        assert!(
+            codes(&result, "E002").is_empty(),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(codes(&result, "W007").len(), 1, "{:?}", result.diagnostics);
+        // The callee token alone, so the argument expression is left intact.
+        assert_eq!(result.dynamic_callees, vec![10..17]);
+    }
+
+    #[test]
+    fn allow_mode_keeps_the_call_without_warning() {
+        let result = extract_with("local x = require(varname)\n", DynamicRequire::Allow);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(result.dynamic_callees, vec![10..17]);
+    }
+
+    /// Luau keys its cache by resolved file and Roblox requires take an
+    /// Instance, so there is nothing for a runtime argument to look up: the
+    /// call is warned about but never retargeted.
+    #[test]
+    fn luau_dynamic_require_is_warned_but_not_retargeted() {
+        let result = extract_luau("local x = require(varname)\n");
+        assert_eq!(codes(&result, "W007").len(), 1, "{:?}", result.diagnostics);
+        assert!(result.dynamic_callees.is_empty());
+    }
+
+    /// A static require nested inside a dynamic one still bundles: the
+    /// retargeted span is the outer callee only.
+    #[test]
+    fn static_require_nested_in_a_dynamic_one_still_bundles() {
+        let result = extract("local x = require(require(\"names\").first)\n");
+        assert_eq!(result.requires.len(), 1);
+        assert_eq!(result.requires[0].require_string, "names");
+        assert_eq!(result.dynamic_callees, vec![10..17]);
     }
 
     #[test]

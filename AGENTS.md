@@ -46,6 +46,12 @@ Rules that look optional but are backed by tests or hard-won bugs:
 - **Emitters never read source text.** Leaf text comes from token-carried
   values; emitters consult source only for trivia fidelity and must degrade
   gracefully when it is absent, because synthetic ASTs must stay printable.
+- **Bundle output names no host paths.** Every path the emitted bundle
+  carries, in provenance comments and 5.2+ loader data, comes from
+  `ModuleInfo::relative_path`, which is project-relative (`..` segments above
+  the root, file name only when there is no shared root). `ModuleInfo::path`,
+  `source_files`, and the line map stay canonical. They are local build data
+  and never reach the output.
 - **Exhaustive matches in transforms and visitors.** No `_ =>` catch-alls,
   so a new variant makes the compiler point at every consumer.
 - **Purity analysis assumes metamethods.** Only literal arithmetic is pure;

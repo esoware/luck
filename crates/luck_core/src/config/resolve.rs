@@ -6,7 +6,7 @@
 use super::CONFIG_FILE_NAME;
 use super::load::{discover_config, load_with_extends};
 use crate::transform_config::TransformConfig;
-use crate::types::LuaTarget;
+use crate::types::{DynamicRequire, LuaTarget};
 use std::path::{Path, PathBuf};
 
 /// Default Lua 5.x search path templates when none are configured.
@@ -19,6 +19,7 @@ pub struct BuildConfig {
     pub entry: PathBuf,
     pub output: PathBuf,
     pub minify: bool,
+    pub dynamic_require: DynamicRequire,
     pub search_paths: Vec<String>,
     pub rc_dir: PathBuf,
     pub transforms: TransformConfig,
@@ -80,6 +81,8 @@ pub fn resolve_build_config(
         .or(file_config.transforms.clone())
         .unwrap_or_default();
 
+    let dynamic_require = file_config.dynamic_require.unwrap_or_default();
+
     let search_paths = file_config
         .search_paths
         .clone()
@@ -108,6 +111,7 @@ pub fn resolve_build_config(
                 entry,
                 output,
                 minify,
+                dynamic_require,
                 search_paths: search_paths.clone(),
                 rc_dir: rc_dir.clone(),
                 transforms: transforms.clone(),
@@ -145,6 +149,7 @@ pub fn resolve_build_config(
             entry,
             output,
             minify,
+            dynamic_require,
             search_paths,
             rc_dir,
             transforms,

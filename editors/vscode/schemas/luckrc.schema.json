@@ -4,6 +4,17 @@
   "description": "Top-level luck.json configuration.",
   "type": "object",
   "properties": {
+    "dynamic_require": {
+      "description": "How `require(expr)` - an argument that is not a string literal - is\ntreated when bundling: `\"error\"`, `\"warn\"` (default), or `\"allow\"`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DynamicRequire"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "entries": {
       "type": [
         "array",
@@ -248,6 +259,26 @@
       "enum": [
         "error",
         "warning"
+      ]
+    },
+    "DynamicRequire": {
+      "description": "How the bundler treats `require(expr)` - a require whose argument is not a\nstring literal, so no module can be resolved for it at build time.",
+      "oneOf": [
+        {
+          "description": "Abort the bundle.",
+          "type": "string",
+          "const": "error"
+        },
+        {
+          "description": "Keep the call, resolving it at runtime, and warn (W007).",
+          "type": "string",
+          "const": "warn"
+        },
+        {
+          "description": "Keep the call silently - for trees where runtime-resolved requires are\nthe norm, such as Roblox `require(script.Parent.Child)`.",
+          "type": "string",
+          "const": "allow"
+        }
       ]
     },
     "EntryConfig": {

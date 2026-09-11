@@ -1,6 +1,6 @@
 use luck_benchmark::corpus::bundle_project_root;
 use luck_benchmark::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use luck_core::types::LuaTarget;
+use luck_core::types::{DynamicRequire, LuaTarget};
 
 fn bench_bundler(criterion: &mut Criterion) {
     let root = bundle_project_root();
@@ -13,8 +13,14 @@ fn bench_bundler(criterion: &mut Criterion) {
     // 40-module diamond DAG of generated code.
     group.bench_function(BenchmarkId::from_parameter("gen_modules"), |b| {
         b.iter(|| {
-            luck_bundler::bundle(&entry_path, LuaTarget::Lua54, &search_paths, &root)
-                .expect("bench corpus must bundle")
+            luck_bundler::bundle(
+                &entry_path,
+                LuaTarget::Lua54,
+                &search_paths,
+                &root,
+                DynamicRequire::default(),
+            )
+            .expect("bench corpus must bundle")
         });
     });
     group.finish();

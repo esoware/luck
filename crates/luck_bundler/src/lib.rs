@@ -10,10 +10,17 @@
 //! # Usage
 //!
 //! ```no_run
-//! use luck_core::LuaTarget;
+//! use luck_core::{DynamicRequire, LuaTarget};
 //! use std::path::Path;
 //!
-//! let bundle = luck_bundler::bundle(Path::new("main.lua"), LuaTarget::Lua54, &[], Path::new(".")).unwrap();
+//! let bundle = luck_bundler::bundle(
+//!     Path::new("main.lua"),
+//!     LuaTarget::Lua54,
+//!     &[],
+//!     Path::new("."),
+//!     DynamicRequire::default(),
+//! )
+//! .unwrap();
 //! assert!(!bundle.output.is_empty());
 //! ```
 
@@ -23,9 +30,10 @@ pub mod module;
 mod require_extraction;
 
 use luck_core::diagnostics::Diagnostic;
-use luck_core::types::LuaTarget;
+use luck_core::types::{DynamicRequire, LuaTarget};
 use std::path::Path;
 
+#[derive(Debug)]
 pub struct BundleResult {
     pub output: String,
     pub warnings: Vec<Diagnostic>,
@@ -39,8 +47,9 @@ pub fn bundle(
     target: LuaTarget,
     search_paths: &[String],
     rc_dir: &Path,
+    dynamic_require: DynamicRequire,
 ) -> Result<BundleResult, Vec<Diagnostic>> {
-    let dep_graph = graph::build_graph(entry_path, target, search_paths, rc_dir)?;
+    let dep_graph = graph::build_graph(entry_path, target, search_paths, rc_dir, dynamic_require)?;
 
     let source_files: Vec<String> = dep_graph.modules.iter().map(|m| m.path.clone()).collect();
     let (output, line_map) = emitter::emit_with_line_map(&dep_graph, target.lua_version());
