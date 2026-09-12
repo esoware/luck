@@ -3,6 +3,43 @@ use luck_token::LuaVersion;
 use crate::common::{roundtrip_compact, v51, v54, v55, verify_roundtrip};
 
 #[test]
+fn output_capacity_hint_never_changes_output() {
+    for version in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+        LuaVersion::Luau,
+    ] {
+        let source = format!(
+            "--{}\nlocal value = - -1; return value .. 'é'",
+            "comment ".repeat(8192)
+        );
+        let parsed = luck_parser::parse(&source, version);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let expected = luck_codegen::compact(&parsed.block, "");
+        for capacity in [0, 1, expected.len(), expected.len() + 1, source.len()] {
+            let output = luck_codegen::compact_with_capacity(&parsed.block, capacity);
+            assert_eq!(output, expected);
+            verify_roundtrip(&output, &expected, version);
+        }
+    }
+    let synth = luck_ast::synth::Synth::new();
+    let block = synth.block(
+        Vec::new(),
+        Some(synth.return_(vec![synth.string("source-free")])),
+    );
+    let expected = luck_codegen::compact(&block, "");
+    for capacity in [0, 1, expected.len(), 1024] {
+        assert_eq!(
+            luck_codegen::compact_with_capacity(&block, capacity),
+            expected
+        );
+    }
+}
+
+#[test]
 fn local_assignment() {
     v51("local  x  =  1", "local x=1");
 }

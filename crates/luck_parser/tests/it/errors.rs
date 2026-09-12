@@ -8,6 +8,37 @@ fn parse(source: &str) -> ParseResult {
 }
 
 #[test]
+fn expectation_errors_preserve_message_and_span() {
+    for (source, span, message) in [
+        (
+            "local = 5",
+            luck_token::Span::new(6, 7),
+            "expected identifier, found '='",
+        ),
+        (
+            "if true end",
+            luck_token::Span::new(8, 11),
+            "missing ''then'' to close if-statement",
+        ),
+        (
+            "function f()",
+            luck_token::Span::new(12, 12),
+            "expected 'end', found end of file",
+        ),
+    ] {
+        let result = parse(source);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.span == span && error.message == message),
+            "{source}: {:?}",
+            result.errors
+        );
+    }
+}
+
+#[test]
 fn missing_variable_name_in_local() {
     let result = parse("local = 5");
     assert!(

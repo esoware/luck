@@ -22,7 +22,7 @@ The cache lives on the resolver, not in global state. Create a fresh `Resolver` 
 - **Lua 5.x template paths.** Substitutes the dotted module name into template strings (`./?.lua`, `./lib/?/init.lua`, ...) and returns the first hit.
 - **Luau relative imports.** `./module`, `../module`, with init-file resolution and `.luau` / `.lua` extension probing.
 - **Luau aliases.** `@utils` and similar prefixes resolve through `.luaurc` files discovered up the directory tree, with the closest definition winning.
-- **`@self`** is a built-in Luau alias resolving to the current file's directory, or the parent's parent for init files, with no `.luaurc` entry needed.
+- **`@self`** is a built-in Luau alias resolving to the current file's own directory, including for init files, with no `.luaurc` entry needed.
 - **Ambiguity detection.** When both `.luau` and `.lua` exist, or both a file and `dir/init.luau` exist, the resolver emits diagnostic E007 rather than silently picking one.
 
 ## Architecture
@@ -43,7 +43,7 @@ The cache lives on the resolver, not in global state. Create a fresh `Resolver` 
 
 **Init file rule.** When the requiring file is itself an `init.lua` or `init.luau`, relative paths resolve from the parent's parent directory, the one containing the folder that holds the init file. This matches Roblox's resolver semantics.
 
-**Alias prefixes.** Aliases like `@utils` map to directories defined in `.luaurc` files. The resolver walks upward from the requiring file, discovering and caching `.luaurc` files per directory. When multiple `.luaurc` files define the same alias, the closest one wins. Alias matching is case-insensitive.
+**Alias prefixes.** Aliases like `@utils` map to directories defined in `.luaurc` files. The resolver walks upward from the requiring file, discovering and caching `.luaurc` files per directory. When multiple `.luaurc` files define the same alias, the closest one wins. Alias matching is case-insensitive. The merged alias map is cached only for directories that actually receive alias requests, not eagerly for every ancestor. Cold requests merge borrowed raw tables without cloning the chain; warm requests, including `@self` shadow warnings, borrow the merged map. Both caches share the resolver's per-build lifetime, including cached missing or malformed files.
 
 ### Extension preference
 

@@ -81,7 +81,7 @@ pub struct FunctionBody {
     /// Luau: `<T, U...>` generic list before the parameter parens.
     pub generics: Option<Box<GenericTypeList>>,
     pub params: Punctuated<Parameter>,
-    pub vararg: Option<VarArgParam>,
+    pub vararg: Option<Box<VarArgParam>>,
     /// Luau: `: T` return annotation after `)`.
     pub return_type: Option<Type>,
     pub block: Block,

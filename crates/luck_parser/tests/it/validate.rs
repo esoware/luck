@@ -76,6 +76,50 @@ fn assignment_to_luau_const_rejected() {
 }
 
 #[test]
+fn const_bindings_restore_after_nested_scopes() {
+    for version in [LuaVersion::Lua54, LuaVersion::Lua55, LuaVersion::Luau] {
+        let declaration = if version.is_luau() {
+            "const value = 1"
+        } else {
+            "local value <const> = 1"
+        };
+        for scoped in [
+            "do local value = 0 value = 1 end",
+            "while false do local value = 0 value = 1 end",
+            "repeat local value = 0 value = 1 until true",
+            "if a then local value = 0 value = 1 elseif b then local value = 0 value = 1 else local value = 0 value = 1 end",
+            "for value = 1, 2 do print(value) end",
+            "for value in pairs({}) do print(value) end",
+            "local function f(value) value = 1 end",
+            "local f = function(value) value = 1 end",
+        ] {
+            let source = format!("{declaration}\n{scoped}\nvalue = 2");
+            let result = parse(&source, version);
+            assert_eq!(
+                result.errors.len(),
+                1,
+                "{version:?} {source}: {:?}",
+                result.errors
+            );
+            assert_eq!(
+                result.errors[0].message,
+                "attempt to assign to const variable 'value'"
+            );
+            assert_eq!(
+                result.errors[0].span.start as usize,
+                source.rfind("value = 2").expect("final assignment")
+            );
+        }
+        let source = format!("local value = 0\ndo {declaration} end\nvalue = 2");
+        assert_no_errors(&parse(&source, version));
+    }
+    assert_no_errors(&parse(
+        "local value <const> = 1\nlocal function f(...value) value = 2 end",
+        LuaVersion::Lua55,
+    ));
+}
+
+#[test]
 fn lua55_for_variables_are_readonly() {
     assert_has_errors(
         &parse("for i = 1, 3 do i = 5 end", LuaVersion::Lua55),
@@ -152,6 +196,41 @@ fn goto_into_local_scope_rejected() {
         ),
         "jump over local visible to until",
     );
+}
+
+#[test]
+fn goto_trailing_labels_and_empty_statements() {
+    for version in [
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        for source in [
+            "",
+            "; ::first:: ; ::second:: ;",
+            "goto skip local value = 1 ::skip:: ; ::last:: ;",
+            "do goto skip end local value = 1 ::skip:: ; ::last:: ;",
+        ] {
+            assert_no_errors(&parse(source, version));
+        }
+        for source in [
+            "goto skip local value = 1 ::skip:: ; print(value) ::last:: ;",
+            "repeat goto skip local value = 1 ::skip:: ; ::last:: ; until value",
+        ] {
+            let result = parse(source, version);
+            assert_eq!(
+                result.errors.len(),
+                1,
+                "{version:?} {source}: {:?}",
+                result.errors
+            );
+            assert_eq!(
+                result.errors[0].message,
+                "goto 'skip' jumps into the scope of a local"
+            );
+        }
+    }
 }
 
 #[test]

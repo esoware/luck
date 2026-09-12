@@ -79,6 +79,7 @@ pub struct ResolveRequest<'a> {
 #[derive(Debug, Default)]
 pub struct Resolver {
     luaurc_cache: FxHashMap<PathBuf, Option<FxHashMap<String, String>>>,
+    merged_aliases_cache: FxHashMap<PathBuf, FxHashMap<String, PathBuf>>,
 }
 
 impl Resolver {

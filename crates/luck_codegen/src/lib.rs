@@ -22,9 +22,21 @@ mod separator;
 use luck_ast::Block;
 
 /// Emit AST as minimal compact Lua code (no comments, minimal whitespace).
+///
+/// Only `source.len()` is used, as an output capacity hint. Pass `""` for
+/// synthetic ASTs or comment-heavy input, or use [`compact_with_capacity`]
+/// with an estimate such as a previous emitted length.
 #[must_use]
 pub fn compact(block: &Block, source: &str) -> String {
-    let mut printer = compact::CompactPrinter::new(source);
+    compact_with_capacity(block, source.len())
+}
+
+/// Emit compact Lua code with an explicit initial output capacity in bytes.
+/// The hint affects allocation only; it never limits or changes the output.
+/// Use zero when no useful estimate is available.
+#[must_use]
+pub fn compact_with_capacity(block: &Block, capacity: usize) -> String {
+    let mut printer = compact::CompactPrinter::new(capacity);
     printer.emit_block(block);
     printer.output()
 }

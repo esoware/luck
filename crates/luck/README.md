@@ -32,14 +32,14 @@ default; the `full` feature turns all of them on.
 
 ## Usage
 
-The package publishes as `luck-lua` (the `luck` name on crates.io
+The package publishes as `luck_lua` (the `luck` name on crates.io
 belongs to an unrelated project), but the library it ships is named
 `luck`, so imports are unaffected. Enable the features for the stages
 you need, or `full` for all of them:
 
 ```toml
 [dependencies]
-luck-lua = { version = "0.1", features = ["bundler", "minifier"] }
+luck = { package = "luck_lua", version = "0.3", features = ["bundler", "minifier"] }
 ```
 
 ```rust

@@ -652,7 +652,7 @@ impl Parser<'_> {
         let mut names = vec![AttributedName {
             name: first,
             type_annotation: first_type_annotation,
-            attrib: first_attrib,
+            attrib: first_attrib.map(Box::new),
         }];
 
         while matches!(self.peek(), TokenKind::Comma) {
@@ -666,7 +666,7 @@ impl Parser<'_> {
                     names.push(AttributedName {
                         name,
                         type_annotation,
-                        attrib,
+                        attrib: attrib.map(Box::new),
                     });
                 }
                 Err(err) => {

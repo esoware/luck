@@ -1,5 +1,5 @@
 [package]
-name = "luck-lua"
+name = "luck_lua"
 version.workspace = true
 authors.workspace = true
 categories.workspace = true
@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 # The `luck` package name is taken on crates.io by an unrelated crate, so
-# the package publishes as `luck-lua` while the library stays `luck`.
+# the package publishes as `luck_lua` while the library stays `luck`.
 [lib]
 name = "luck"
 

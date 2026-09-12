@@ -249,6 +249,47 @@ fn paren_type_is_not_pack() {
 }
 
 #[test]
+fn parenthesized_types_preserve_pack_and_function_shapes() {
+    for (source, count, has_trailing_separator) in [
+        ("type X = ()", 0, false),
+        ("type X = (number,)", 1, true),
+        ("type X = (number, string)", 2, false),
+        ("type X = (number, string,)", 2, true),
+    ] {
+        let Type::Pack(pack) = alias_type(source) else {
+            panic!("expected pack for {source}");
+        };
+        assert_eq!(pack.types.len(), count);
+        assert_eq!(pack.types.has_trailing_separator, has_trailing_separator);
+    }
+    for source in [
+        "type X = (number) -> string",
+        "type X = (value: number) -> string",
+        "type X = (number,) -> string",
+    ] {
+        let Type::Function(function) = alias_type(source) else {
+            panic!("expected function for {source}");
+        };
+        assert_eq!(function.params.len(), 1);
+    }
+    let Type::Parenthesized(outer) = alias_type("type X = ((number))") else {
+        panic!("expected nested parentheses");
+    };
+    assert!(matches!(outer.type_value, Type::Parenthesized(_)));
+}
+
+#[test]
+fn named_parenthesized_type_still_reports_error() {
+    let parsed = parse_luau("type X = (value: number)");
+    assert_eq!(parsed.errors.len(), 1, "{:?}", parsed.errors);
+    assert_eq!(parsed.errors[0].span, luck_token::Span::new(10, 15));
+    assert_eq!(
+        parsed.errors[0].message,
+        "named parameters are only valid in function types"
+    );
+}
+
+#[test]
 fn typeof_type() {
     let Type::Typeof(typeof_type) = alias_type("type X = typeof(game.Workspace)") else {
         panic!("expected Typeof");

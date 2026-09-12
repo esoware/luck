@@ -17,7 +17,7 @@ Code generation from Lua ASTs back to source text. Supports Lua 5.1-5.5 and Luau
 
 ### Compact printer
 
-`compact.rs` is a tree-walking printer. Each AST variant has an emitter that calls the printer's spacing primitives and recurses into children. The printer builds output into a `luck_token::code_buffer::CodeBuffer` (a byte buffer with an ASCII fast path), sized to the source length as a capacity hint since compact output is never longer than its input.
+`compact.rs` is a tree-walking printer. Each AST variant has an emitter that calls the printer's spacing primitives and recurses into children. The printer builds output into a `luck_token::code_buffer::CodeBuffer` (a byte buffer with an ASCII fast path). `compact(block, source)` retains its source-length capacity hint; `compact_with_capacity(block, capacity)` accepts an explicit byte estimate without source text. Use a previous emitted length in fixpoint loops, or zero when no useful estimate exists. Source length can badly over-reserve for comment-heavy inputs, and transformed or synthetic ASTs can emit more bytes than their original source.
 
 ### Separator logic
 

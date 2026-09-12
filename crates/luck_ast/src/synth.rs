@@ -1123,7 +1123,7 @@ impl Synth {
             span: self.next_span(),
             generics: sig.generics.map(Box::new),
             params: self.punctuated(sig.params),
-            vararg: sig.vararg,
+            vararg: sig.vararg.map(Box::new),
             return_type: sig.return_type,
             block,
         }
@@ -1280,9 +1280,11 @@ impl Synth {
         AttributedName {
             name: self.ident(name),
             type_annotation: ty,
-            attrib: attrib.map(|attribute| Attribute {
-                span: self.next_span(),
-                name: self.ident(attribute),
+            attrib: attrib.map(|attribute| {
+                Box::new(Attribute {
+                    span: self.next_span(),
+                    name: self.ident(attribute),
+                })
             }),
         }
     }

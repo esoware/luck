@@ -27,11 +27,9 @@ pub struct CompactPrinter {
 }
 
 impl CompactPrinter {
-    pub fn new(source: &str) -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
-            // Capacity hint only. Compact output stays at or under source
-            // length, and a synthetic AST has no source, so it starts empty.
-            output: CodeBuffer::with_capacity(source.len()),
+            output: CodeBuffer::with_capacity(capacity),
             prev: PrevClass::None,
         }
     }
@@ -54,6 +52,7 @@ impl CompactPrinter {
     }
 
     /// Emit a fixed-spelling piece (keyword, operator, punctuation).
+    #[inline]
     fn emit_str(&mut self, text: &'static str) {
         let class = classify_str(text);
         self.emit_piece(text, matches!(class, PrevClass::Word), class);

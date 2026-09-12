@@ -21,7 +21,7 @@ wall-clock drift.
 | Bench | Measures |
 |-------|----------|
 | `lexer` | `luck_lexer::lex` |
-| `parser` | `luck_parser::parse` |
+| `parser` | `luck_parser::parse` with borrowed and recycled owned source |
 | `semantic` | `luck_semantic::analyze` (parse excluded) |
 | `linter` | `luck_linter::lint_parsed` (parse excluded) |
 | `codegen` | `luck_codegen::compact` (parse excluded) |
@@ -37,6 +37,14 @@ are the join key for CodSpeed history and saved baselines. **Do not rename
 or restructure them.** The group name plus the `BenchmarkId` parameter must
 stay exactly comparable across commits. Internals are free to change under
 stable IDs.
+
+The existing `parser/<input>` IDs measure the borrowed public entry point,
+including allocation and copying into `ParseResult.source`. The separate
+`parser_owned_source/<input>` group moves a `String` into `parse` and recycles
+the returned source for the next iteration, without cloning inside the timed
+operation. Both include lexing, parsing, and destruction of the resulting AST,
+comments, and diagnostics. The owned group isolates source ownership costs;
+it does not redefine the historical borrowed-source measurements.
 
 ## Corpus
 

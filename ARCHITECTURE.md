@@ -32,7 +32,7 @@ programs and one for benches.
 | `luck_semantic` | Scope tree, refs (R/W/RW), upvalues; typed `NonZeroU32` ids; flat node table with parent links; per-environment stdlib catalog TOMLs (5.1-5.5, luau, luau_roblox) with overloads, shapes, deprecations; generated Roblox API data | `builder.rs`, `stdlib_model.rs`, `resolve.rs` |
 | `luck_lsp` | Library-only LSP backend (no binary); served via `luck lsp` | `backend.rs`, `serve.rs`, `providers/` |
 | `luck_cli` | Flat Clap commands, one module per command; rayon-parallel lint/fmt/check; ariadne rendering; `ExitCode` 0/1/2; 16 MB-stack worker thread | `args.rs`, `commands/`, `render.rs` |
-| `luck` | Facade re-exports (no logic); publishes as package `luck-lua` with `[lib] name = "luck"`, so imports stay `luck::` | `lib.rs` |
+| `luck` | Facade re-exports (no logic); publishes as package `luck_lua` with `[lib] name = "luck"`, so imports stay `luck::` | `lib.rs` |
 | `luck_testgen` | Internal (`publish = false`): deterministic program generators (runtime-safe and full-grammar/parse-only) + round-trip property tests | `src/lib.rs`, `src/full.rs` |
 | `luck_benchmark` | Internal (`publish = false`): per-stage criterion benches run on CodSpeed; corpus cached in gitignored `corpus/`; committed `minsize.snap` size tracking | `benches/`, `src/corpus.rs`, `tests/metrics.rs` |
 

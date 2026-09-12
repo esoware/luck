@@ -27,7 +27,7 @@ A zero-copy forward-only byte cursor: `peek`, `peek_at`, `advance`, `rest`, and 
 
 ### Batched scanning (`search.rs`)
 
-String and comment bodies are scanned through a 256-entry stop-byte table (`ByteMatchTable`, built at compile time by `byte_match_table!`). `find_match` walks a scalar prefix, then fixed-size batches that vectorize, so long runs stay branch-light. This is the crate's hot path and exists for measured reasons.
+String and comment bodies are scanned through a 256-entry stop-byte table (`ByteMatchTable`, built at compile time by `byte_match_table!`). `find_match` walks a scalar prefix, then fixed-size batches of scalar table lookups, so long runs stay branch-light without relying on vectorization. This is the crate's hot path and exists for measured reasons.
 
 ### Token production
 
