@@ -60,13 +60,20 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - name: Install Linux ARM cross-compiler
+      # mimalloc builds C and C++ through CMake, so the C++ cross-compiler is
+      # required alongside the linker.
+      - name: Install Linux ARM cross-compilers
         if: matrix.label == 'linux-arm64'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
           mkdir -p .cargo
           printf '[target.aarch64-unknown-linux-gnu]\nlinker = "aarch64-linux-gnu-gcc"\n' >> .cargo/config.toml
+          {
+            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc"
+            echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++"
+            echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar"
+          } >> "$GITHUB_ENV"
 
       - name: Cargo build
         run: cargo build -p luck_cli --release --target ${{ matrix.rust_target }}
