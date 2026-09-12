@@ -278,7 +278,9 @@ mod tests {
     #[test]
     fn caches_only_requested_merged_maps_and_reuses_them() {
         let dir = setup_luau_project();
-        let src = dir.path().join("src");
+        // Cache keys derive from canonical `from_file` paths, so the direct
+        // lookups must use the canonical directory too.
+        let src = normalize_path(&dir.path().join("src"));
         let aliases: serde_json::Map<String, serde_json::Value> = (0..64)
             .map(|index| (format!("alias{index}"), serde_json::json!(".")))
             .collect();
@@ -400,7 +402,9 @@ mod tests {
             Some(r#"{"aliases":{"cache_test":"."}}"#),
         ] {
             let dir = setup_luau_project();
-            let src = dir.path().join("src");
+            // `nested/main.luau` never exists, so its path cannot canonicalize
+            // on its own and must start from the canonical `src`.
+            let src = normalize_path(&dir.path().join("src"));
             let nested = src.join("nested");
             fs::create_dir(&nested).expect("create nested directory");
             let current = normalize_path_str(&src.join("main.luau"));
