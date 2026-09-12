@@ -16,7 +16,7 @@ pub(crate) fn validate(block: &Block, version: LuaVersion, errors: &mut Vec<Pars
     if version.has_attributes() || version.is_luau() {
         let mut checker = ConstWriteChecker {
             version,
-            scopes: vec![Vec::new()],
+            bindings: Vec::new(),
             errors,
         };
         checker.check_block(block);
@@ -49,32 +49,24 @@ fn ident_text(token: &luck_token::Token) -> Option<&str> {
 /// locals, Luau `const` bindings, and 5.5 for-loop control variables.
 /// Function boundaries do NOT reset the scope stack, because real Lua also
 /// rejects upvalue writes to const bindings.
-struct ConstWriteChecker<'a> {
+struct ConstWriteChecker<'ast, 'errors> {
     version: LuaVersion,
-    /// One frame per block/function scope: (name, is_readonly).
-    scopes: Vec<Vec<(String, bool)>>,
-    errors: &'a mut Vec<ParseError>,
+    bindings: Vec<(&'ast str, bool)>,
+    errors: &'errors mut Vec<ParseError>,
 }
 
-impl ConstWriteChecker<'_> {
-    fn declare(&mut self, token: &luck_token::Token, readonly: bool) {
+impl<'ast> ConstWriteChecker<'ast, '_> {
+    fn declare(&mut self, token: &'ast luck_token::Token, is_readonly: bool) {
         if let Some(name) = ident_text(token) {
-            self.scopes
-                .last_mut()
-                .expect("scope stack is never empty")
-                .push((name.to_string(), readonly));
+            self.bindings.push((name, is_readonly));
         }
     }
 
     fn is_readonly(&self, name: &str) -> Option<bool> {
-        for frame in self.scopes.iter().rev() {
-            for (declared, readonly) in frame.iter().rev() {
-                if declared == name {
-                    return Some(*readonly);
-                }
-            }
-        }
-        None
+        self.bindings
+            .iter()
+            .rev()
+            .find_map(|(declared, is_readonly)| (*declared == name).then_some(*is_readonly))
     }
 
     fn check_write(&mut self, token: &luck_token::Token, span: Span) {
@@ -102,13 +94,13 @@ impl ConstWriteChecker<'_> {
             .is_some_and(|attrib| matches!(ident_text(&attrib.name), Some("const") | Some("close")))
     }
 
-    fn check_block(&mut self, block: &Block) {
-        self.scopes.push(Vec::new());
+    fn check_block(&mut self, block: &'ast Block) {
+        let bindings_base = self.bindings.len();
         self.check_block_in_current_scope(block);
-        self.scopes.pop();
+        self.bindings.truncate(bindings_base);
     }
 
-    fn check_block_in_current_scope(&mut self, block: &Block) {
+    fn check_block_in_current_scope(&mut self, block: &'ast Block) {
         for stmt in &block.stmts {
             self.check_statement(stmt);
         }
@@ -121,7 +113,7 @@ impl ConstWriteChecker<'_> {
         }
     }
 
-    fn check_statement(&mut self, stmt: &Statement) {
+    fn check_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::Assignment(assign) => {
                 for expr in assign.values.iter() {
@@ -170,23 +162,23 @@ impl ConstWriteChecker<'_> {
                 if let Some(step) = &numeric_for.step {
                     self.check_expression(step);
                 }
-                self.scopes.push(Vec::new());
+                let bindings_base = self.bindings.len();
                 // Lua 5.5 makes for control variables read-only.
                 self.declare(&numeric_for.name, self.version.has_const_for_variables());
                 self.check_block_in_current_scope(&numeric_for.block);
-                self.scopes.pop();
+                self.bindings.truncate(bindings_base);
             }
             Statement::GenericFor(generic_for) => {
                 for expr in generic_for.exprs.iter() {
                     self.check_expression(expr);
                 }
-                self.scopes.push(Vec::new());
-                let readonly = self.version.has_const_for_variables();
+                let bindings_base = self.bindings.len();
+                let is_readonly = self.version.has_const_for_variables();
                 for binding in generic_for.names.iter() {
-                    self.declare(&binding.name, readonly);
+                    self.declare(&binding.name, is_readonly);
                 }
                 self.check_block_in_current_scope(&generic_for.block);
-                self.scopes.pop();
+                self.bindings.truncate(bindings_base);
             }
             Statement::FunctionDecl(decl) => {
                 // `function a.b.c()` writes a field; `function a()` writes
@@ -238,8 +230,8 @@ impl ConstWriteChecker<'_> {
         }
     }
 
-    fn check_function_body(&mut self, body: &FunctionBody) {
-        self.scopes.push(Vec::new());
+    fn check_function_body(&mut self, body: &'ast FunctionBody) {
+        let bindings_base = self.bindings.len();
         for param in body.params.iter() {
             self.declare(&param.name, false);
         }
@@ -249,10 +241,10 @@ impl ConstWriteChecker<'_> {
             self.declare(name, false);
         }
         self.check_block_in_current_scope(&body.block);
-        self.scopes.pop();
+        self.bindings.truncate(bindings_base);
     }
 
-    fn check_var_reads(&mut self, var: &Var) {
+    fn check_var_reads(&mut self, var: &'ast Var) {
         match var {
             Var::Name(_) => {}
             Var::FieldAccess(access) => self.check_expression(&access.prefix),
@@ -263,7 +255,7 @@ impl ConstWriteChecker<'_> {
         }
     }
 
-    fn check_call(&mut self, call: &FunctionCall) {
+    fn check_call(&mut self, call: &'ast FunctionCall) {
         self.check_expression(&call.callee);
         match &call.args {
             FunctionArgs::Parenthesized { args, .. } => {
@@ -276,7 +268,7 @@ impl ConstWriteChecker<'_> {
         }
     }
 
-    fn check_table(&mut self, table: &TableConstructor) {
+    fn check_table(&mut self, table: &'ast TableConstructor) {
         for field in table.fields.iter() {
             match field {
                 Field::Bracketed { key, value, .. } => {
@@ -290,7 +282,7 @@ impl ConstWriteChecker<'_> {
         }
     }
 
-    fn check_expression(&mut self, expr: &Expression) {
+    fn check_expression(&mut self, expr: &'ast Expression) {
         match expr {
             Expression::Nil(_)
             | Expression::False(_)
@@ -383,19 +375,17 @@ fn validate_goto_block(
     let mut labels_here: Vec<(String, usize, usize)> = Vec::new();
     let mut pending: Vec<PendingGoto> = Vec::new();
 
-    // suffix_void[i]: statements i.. are all labels/`;` (so a label at i
-    // is "at the end of the block" per PUC's skipnoopstat rule). A repeat
-    // block's trailing label still precedes `until`, which CAN see the
-    // block's locals, so it never counts as at-the-end there.
-    let mut suffix_void = vec![false; block.stmts.len() + 1];
-    suffix_void[block.stmts.len()] = !is_repeat_block;
-    for idx in (0..block.stmts.len()).rev() {
-        suffix_void[idx] = suffix_void[idx + 1]
-            && matches!(
-                block.stmts[idx],
-                Statement::Label(_) | Statement::EmptyStatement(_)
-            );
-    }
+    // A repeat block's trailing labels still precede `until`, which can
+    // see the block's locals, so they do not escape local scope.
+    let trailing_void_start = if is_repeat_block {
+        block.stmts.len()
+    } else {
+        block
+            .stmts
+            .iter()
+            .rposition(|stmt| !matches!(stmt, Statement::Label(_) | Statement::EmptyStatement(_)))
+            .map_or(0, |index| index + 1)
+    };
 
     for (idx, stmt) in block.stmts.iter().enumerate() {
         match stmt {
@@ -416,7 +406,7 @@ fn validate_goto_block(
                         if goto.name != name {
                             return true;
                         }
-                        if goto.locals_below < locals_count && !suffix_void[idx] {
+                        if goto.locals_below < locals_count && idx < trailing_void_start {
                             errors.push(ParseError {
                                 span: goto.span,
                                 message: format!("goto '{name}' jumps into the scope of a local"),

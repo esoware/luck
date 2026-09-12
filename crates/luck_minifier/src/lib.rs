@@ -101,21 +101,19 @@ pub fn minify(
     // after a round trip. Judging the fixpoint on freshly parsed ASTs makes
     // the emitted text the convergence domain, which is what keeps
     // minify(minify(x)) == minify(x) true.
-    let mut current_source = source.to_string();
-    let mut previous_output = luck_codegen::compact(&block, &current_source);
+    let mut previous_output = luck_codegen::compact_with_capacity(&block, 0);
     for _ in 0..MAX_PIPELINE_ROUNDS {
         block = apply_core_transforms(block, config, target);
-        block = apply_tail_transforms(block, config, target);
-        let output = luck_codegen::compact(&block, &current_source);
+        block = apply_tail_transforms(block, config, target, previous_output.len());
+        let output = luck_codegen::compact_with_capacity(&block, previous_output.len());
         if output == previous_output {
             break;
         }
         previous_output = output;
-        current_source.clone_from(&previous_output);
-        let reparsed = luck_parser::parse(&current_source, version);
+        let reparsed = luck_parser::parse(previous_output.as_str(), version);
         debug_assert!(
             reparsed.errors.is_empty(),
-            "minified round output failed to reparse: {:?}\noutput:\n{current_source}",
+            "minified round output failed to reparse: {:?}\noutput:\n{previous_output}",
             reparsed.errors
         );
         if !reparsed.errors.is_empty() {
@@ -210,6 +208,7 @@ fn apply_tail_transforms(
     block: luck_ast::shared::Block,
     config: &TransformConfig,
     target: LuaTarget,
+    output_capacity: usize,
 ) -> luck_ast::shared::Block {
     if !config.rename_locals && !config.lift_locals {
         return block;
@@ -229,7 +228,7 @@ fn apply_tail_transforms(
     // emit seen makes the result the best configuration visited rather than
     // the last. The common trajectory ends on its best iteration, so the
     // recovery reparse below almost never runs.
-    let mut previous_output = luck_codegen::compact(&block, "");
+    let mut previous_output = luck_codegen::compact_with_capacity(&block, output_capacity);
     let mut last_output = String::new();
     let mut best_output = String::new();
     let mut best_len = usize::MAX;
@@ -253,7 +252,7 @@ fn apply_tail_transforms(
             block
         };
 
-        let output = luck_codegen::compact(&block, "");
+        let output = luck_codegen::compact_with_capacity(&block, previous_output.len());
         if output.len() < best_len {
             best_len = output.len();
             best_output.clone_from(&output);
@@ -309,6 +308,20 @@ mod tests {
     fn reparses(source: &str) -> bool {
         let result = luck_parser::parse(source, LuaTarget::Lua54.lua_version());
         result.errors.is_empty()
+    }
+
+    #[test]
+    fn comment_heavy_input_does_not_reserve_source_sized_output() {
+        let source = format!("--{}\nreturn 1", "comment ".repeat(8192));
+        let output = minify_lua54(&source);
+        assert_eq!(output, "return 1");
+        assert!(
+            output.capacity() < source.len() / 16,
+            "output capacity: {}",
+            output.capacity()
+        );
+        assert_eq!(minify_lua54(&output), output);
+        assert!(reparses(&output));
     }
 
     #[test]

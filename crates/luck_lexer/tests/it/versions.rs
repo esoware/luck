@@ -65,6 +65,54 @@ fn luau_integer_literal_suffix_and_range() {
 }
 
 #[test]
+fn integer_range_normalization_preserves_boundaries_and_spans() {
+    for (digits, radix, is_valid) in [
+        ("9223372036854775807", "", true),
+        ("9223372036854775808", "", false),
+        ("FFFFFFFFFFFFFFFF", "0X", true),
+        ("10000000000000000", "0x", false),
+        (
+            "1111111111111111111111111111111111111111111111111111111111111111",
+            "0B",
+            true,
+        ),
+        (
+            "10000000000000000000000000000000000000000000000000000000000000000",
+            "0b",
+            false,
+        ),
+    ] {
+        let separated = digits
+            .chars()
+            .map(|digit| format!("{digit}_"))
+            .collect::<String>();
+        for digits in [digits, separated.as_str()] {
+            let literal = format!("{radix}{digits}i");
+            let source = format!("  {literal}");
+            let result = lex(&source, LuaVersion::Luau);
+            assert_eq!(
+                result.errors.is_empty(),
+                is_valid,
+                "{source}: {:?}",
+                result.errors
+            );
+            let span = Span::new(2, source.len() as u32);
+            if is_valid {
+                assert_eq!(result.tokens[0].kind, TokenKind::Number(literal.into()));
+                assert_eq!(result.tokens[0].span, span);
+            } else {
+                assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+                assert_eq!(result.errors[0].span, span);
+                assert_eq!(
+                    result.errors[0].message,
+                    "integer literal is outside the 64-bit range"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn goto_version_gating() {
     for version in [
         LuaVersion::Lua52,

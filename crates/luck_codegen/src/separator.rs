@@ -30,6 +30,7 @@ pub enum PrevClass {
 /// Classify a fixed-spelling piece (keyword, operator, punctuation). A
 /// piece is word-like exactly when this returns [`PrevClass::Word`], so the
 /// caller derives word-likeness from the class rather than rescanning.
+#[inline]
 pub fn classify_str(text: &str) -> PrevClass {
     match text {
         "-" => PrevClass::Minus,

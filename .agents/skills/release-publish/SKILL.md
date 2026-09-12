@@ -27,7 +27,7 @@ VS Code extension share one version. If `cargo metadata` shows any
 publishable crate at a different version, stop.
 
 Registry naming (decided 2026-07, do not revisit): the crate name `luck` is
-taken on crates.io, so the facade publishes as package `luck-lua` with
+taken on crates.io, so the facade publishes as package `luck_lua` with
 `[lib] name = "luck"`, so users still write `use luck::...`. All `luck_*`
 crates publish under their real names; `luck_cli` keeps its `luck` binary.
 

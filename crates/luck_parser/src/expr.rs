@@ -500,7 +500,7 @@ impl Parser<'_> {
 
         if !matches!(self.peek(), TokenKind::RightParen) {
             if matches!(self.peek(), TokenKind::DotDotDot) {
-                vararg = Some(self.parse_vararg_param());
+                vararg = Some(Box::new(self.parse_vararg_param()));
             } else if self.check_identifier() {
                 let first_name = self.advance();
                 let type_ann = self.try_parse_type_annotation();
@@ -519,7 +519,7 @@ impl Parser<'_> {
                     self.advance_span();
                     if matches!(self.peek(), TokenKind::DotDotDot) {
                         // Vararg after last named param
-                        vararg = Some(self.parse_vararg_param());
+                        vararg = Some(Box::new(self.parse_vararg_param()));
                         break;
                     }
                     let name = self.expect_identifier_recover();

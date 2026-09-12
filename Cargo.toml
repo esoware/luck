@@ -32,7 +32,7 @@ insta = { version = "1", features = ["glob"] }
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
-luck = { version = "0.3.0", path = "crates/luck", package = "luck-lua" }
+luck = { version = "0.3.0", path = "crates/luck", package = "luck_lua" }
 luck_core = { version = "0.3.0", path = "crates/luck_core" }
 luck_resolver = { version = "0.3.0", path = "crates/luck_resolver" }
 luck_bundler = { version = "0.3.0", path = "crates/luck_bundler" }

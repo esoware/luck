@@ -179,7 +179,7 @@ pub struct AttributedName {
     /// Luau: `: T` annotation. Mutually exclusive with `attrib` in
     /// practice, since attributes are Lua 5.4+ and annotations Luau.
     pub type_annotation: Option<Type>,
-    pub attrib: Option<Attribute>,
+    pub attrib: Option<Box<Attribute>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

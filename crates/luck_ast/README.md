@@ -23,7 +23,7 @@ A `Block` is the fundamental unit: a sequence of `Statement`s followed by an opt
 
 `Expression` covers literals (`Nil`, `False`, `True`, `Number`, Luau `Integer`, `StringLiteral`, `VarArg`), compound forms (`BinaryOp`, `UnaryOp`, `Parenthesized`, `TableConstructor`, `FunctionDef`, `FunctionCall`, `Var`), and Luau extensions (`IfExpression`, `InterpolatedString`, `TypeCast`, `TypeInstantiation`).
 
-`Statement` covers the imperative side: `Assignment`, `FunctionCall`, `DoBlock`, `WhileLoop`, `RepeatLoop`, `IfStatement`, `NumericFor`, `GenericFor`, `FunctionDecl`, `LocalFunction`, `LocalAssignment`, plus the version-gated statements `Goto` / `Label` (5.2+), attribute-bearing `LocalAssignment` (5.4), `GlobalDeclaration` / `GlobalFunction` / `GlobalStar` (5.5), `CompoundAssignment` and `TypeDeclaration` (Luau). Flags on the declaration nodes mark exported Luau locals and functions.
+`Statement` covers the imperative side: `Assignment`, `FunctionCall`, `DoBlock`, `WhileLoop`, `RepeatLoop`, `IfStatement`, `NumericFor`, `GenericFor`, `FunctionDecl`, `LocalFunction`, `LocalAssignment`, plus the version-gated statements `Goto` / `Label` (5.2+), attribute-bearing `LocalAssignment` (5.4+), `GlobalDeclaration` / `GlobalFunction` / `GlobalStar` (5.5), `CompoundAssignment` and `TypeDeclaration` (Luau). Flags on the declaration nodes mark exported Luau locals and functions.
 
 `LastStatement` has four variants: `Return`, `Break`, `Continue` (Luau), `Error`.
 
@@ -31,7 +31,8 @@ A `Block` is the fundamental unit: a sequence of `Statement`s followed by an opt
 
 - **`Punctuated<T>`** is a comma-separated list: a `Vec<T>` plus a `has_trailing_separator` flag. Context implies separator spelling and position, so the type stores no separator tokens or spans. Argument lists, variable lists, and field lists all use it.
 - **`FunctionBody`** holds parameters, body block, and optional return type annotation, plus an optional Luau generic list (`<T, U...>`), shared across the four function-bearing variants.
-- **`Parameter`** is a name with an optional Luau type annotation. It covers both function parameters and generic-for loop bindings; the trailing `...` rides in a separate `VarArgParam`.
+- **`Parameter`** is a name with an optional Luau type annotation. It covers both function parameters and generic-for loop bindings; the trailing `...` rides in a separately boxed `VarArgParam`.
+- **Optional payload layout.** `FunctionBody.vararg` is `Option<Box<VarArgParam>>`, and `AttributedName.attrib` is `Option<Box<Attribute>>`. This reduces the common attribute-free, non-vararg AST footprint, but each present payload needs an allocation. Vararg-heavy and attribute-heavy programs can request more total bytes than inline storage. `FnSig` and the synthesis constructors still accept unboxed values and box them when constructing AST nodes.
 - **`Field`** is a table constructor entry: keyed (`[expr] = expr`), named (`name = expr`), or positional (`expr`).
 
 ### Types

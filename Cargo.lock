@@ -994,24 +994,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "luck-lua"
-version = "0.3.0"
-dependencies = [
- "luck_ast",
- "luck_bundler",
- "luck_codegen",
- "luck_core",
- "luck_formatter",
- "luck_lexer",
- "luck_linter",
- "luck_minifier",
- "luck_parser",
- "luck_resolver",
- "luck_semantic",
- "luck_token",
-]
-
-[[package]]
 name = "luck_ast"
 version = "0.3.0"
 dependencies = [
@@ -1065,12 +1047,12 @@ dependencies = [
  "assert_cmd",
  "clap",
  "ignore",
- "luck-lua",
  "luck_bundler",
  "luck_core",
  "luck_formatter",
  "luck_linter",
  "luck_lsp",
+ "luck_lua",
  "luck_minifier",
  "luck_parser",
  "luck_token",
@@ -1162,6 +1144,24 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower-lsp",
+]
+
+[[package]]
+name = "luck_lua"
+version = "0.3.0"
+dependencies = [
+ "luck_ast",
+ "luck_bundler",
+ "luck_codegen",
+ "luck_core",
+ "luck_formatter",
+ "luck_lexer",
+ "luck_linter",
+ "luck_minifier",
+ "luck_parser",
+ "luck_resolver",
+ "luck_semantic",
+ "luck_token",
 ]
 
 [[package]]

@@ -116,9 +116,7 @@ impl<'src> Parser<'src> {
         if std::mem::discriminant(self.peek()) == std::mem::discriminant(kind) {
             Ok(self.advance_span())
         } else {
-            let span = self.current_span();
-            let message = format!("expected {}, found {}", kind, self.peek());
-            Err(Self::make_error(span, message))
+            Err(self.expected_token_error(kind))
         }
     }
 
@@ -131,10 +129,26 @@ impl<'src> Parser<'src> {
         if self.check_identifier() {
             Ok(self.advance())
         } else {
-            let span = self.current_span();
-            let message = format!("expected identifier, found {}", self.peek());
-            Err(Self::make_error(span, message))
+            Err(self.expected_identifier_error())
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn expected_token_error(&self, kind: &TokenKind) -> ParseError {
+        Self::make_error(
+            self.current_span(),
+            format!("expected {}, found {}", kind, self.peek()),
+        )
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn expected_identifier_error(&self) -> ParseError {
+        Self::make_error(
+            self.current_span(),
+            format!("expected identifier, found {}", self.peek()),
+        )
     }
 
     /// Expect `kind`; on mismatch record the default "expected X, found Y"

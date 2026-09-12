@@ -285,14 +285,20 @@ fn validate_integer_range(
         10 => raw,
         _ => unreachable!("Luau integer literals use radix 2, 10, or 16"),
     };
-    let normalized: String = digits.chars().filter(|ch| *ch != '_').collect();
-    let valid = if radix == 10 {
-        normalized.parse::<i64>().is_ok()
+    let normalized;
+    let digits = if digits.contains('_') {
+        normalized = digits.chars().filter(|ch| *ch != '_').collect::<String>();
+        normalized.as_str()
     } else {
-        u64::from_str_radix(&normalized, radix).is_ok()
+        digits
+    };
+    let is_valid = if radix == 10 {
+        digits.parse::<i64>().is_ok()
+    } else {
+        u64::from_str_radix(digits, radix).is_ok()
     };
 
-    if valid {
+    if is_valid {
         Ok(())
     } else {
         Err(crate::lex_error(

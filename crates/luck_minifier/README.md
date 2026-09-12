@@ -18,7 +18,7 @@ AST-level minification for Lua and Luau.
 
 ### Pipeline
 
-`minify()` runs the chain to a fixpoint, not a single fixed pass: each outer round runs the core passes below in order, then the tail, re-emits, and reparses its own output; the loop stops once the emitted text stops changing (bounded by a small round cap for pathological oscillation). Each pass is individually toggleable through `TransformConfig`.
+`minify()` runs the chain to a fixpoint, not a single fixed pass: each outer round runs the core passes below in order, then the tail, re-emits, and reparses its own output; the loop stops once the emitted text stops changing (bounded by a small round cap for pathological oscillation). Each pass is individually toggleable through `TransformConfig`. Compact emission uses previous emitted lengths as capacity estimates, including in the tail loop; the first emit grows from zero rather than reserving the original source length, which can be dominated by comments.
 
 Core passes, one round, in order:
 

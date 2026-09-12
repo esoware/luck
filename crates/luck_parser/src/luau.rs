@@ -586,24 +586,27 @@ impl Parser<'_> {
 
         let span = open.merge(close);
         let has_trailing_separator = params.has_trailing_separator;
-        let mut type_items: Vec<Type> = params
-            .items
-            .into_iter()
-            .map(|param| param.type_value)
-            .collect();
-        // `(T)` is a parenthesized type; `()`, `(T,)`, and `(T, U)` are packs
-        if type_items.len() == 1 && !has_trailing_separator {
-            let type_value = type_items.remove(0);
-            Type::Parenthesized(Box::new(ParenType { span, type_value }))
-        } else {
-            Type::Pack(Box::new(TypePack {
+        // `(T)` is a parenthesized type; `()`, `(T,)`, and `(T, U)` are packs.
+        if params.len() == 1
+            && !has_trailing_separator
+            && let Some(param) = params.items.pop()
+        {
+            return Type::Parenthesized(Box::new(ParenType {
                 span,
-                types: Punctuated {
-                    items: type_items,
-                    has_trailing_separator,
-                },
-            }))
+                type_value: param.type_value,
+            }));
         }
+        Type::Pack(Box::new(TypePack {
+            span,
+            types: Punctuated {
+                items: params
+                    .items
+                    .into_iter()
+                    .map(|param| param.type_value)
+                    .collect(),
+                has_trailing_separator,
+            },
+        }))
     }
 
     /// Function type whose generics were already consumed: `(params) -> R`.

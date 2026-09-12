@@ -26,9 +26,8 @@ pub fn parse_lua_number(text: &str, subtypes: NumberSubtypes) -> Option<LuaNumbe
     if subtypes == NumberSubtypes::Unified {
         return text.parse::<f64>().ok().map(LuaNumber::Float);
     }
-    let lower = text.to_ascii_lowercase();
-    if let Some(hex) = lower.strip_prefix("0x") {
-        if hex.contains('.') || hex.contains('p') {
+    if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        if hex.contains(['.', 'p', 'P']) {
             // Hex floats are rare, and never folded.
             return None;
         }
@@ -37,8 +36,8 @@ pub fn parse_lua_number(text: &str, subtypes: NumberSubtypes) -> Option<LuaNumbe
             .ok()
             .map(|value| LuaNumber::Int(value as i64));
     }
-    if lower.contains('.') || lower.contains('e') {
-        return lower.parse::<f64>().ok().map(LuaNumber::Float);
+    if text.contains(['.', 'e', 'E']) {
+        return text.parse::<f64>().ok().map(LuaNumber::Float);
     }
     match text.parse::<i64>() {
         Ok(value) => Some(LuaNumber::Int(value)),
@@ -69,7 +68,13 @@ pub fn decode_string_literal(raw: &str, version: LuaVersion) -> Option<Vec<u8>> 
         // PUC recognizes CR, LF, CRLF, and LFCR; Luau only LF and CRLF,
         // keeping a lone CR as a literal byte (Lexer::fixupMultilineString).
         let mut out = Vec::with_capacity(content.len());
-        let mut idx = 0;
+        let mut idx = match content {
+            [b'\r', b'\n', ..] => 2,
+            [b'\n', b'\r', ..] if !version.is_luau() => 2,
+            [b'\r', ..] if !version.is_luau() => 1,
+            [b'\n', ..] => 1,
+            _ => 0,
+        };
         while idx < content.len() {
             let byte = content[idx];
             let next = content.get(idx + 1).copied();
@@ -91,9 +96,6 @@ pub fn decode_string_literal(raw: &str, version: LuaVersion) -> Option<Vec<u8>> 
                     idx += 1;
                 }
             }
-        }
-        if out.first() == Some(&b'\n') {
-            out.remove(0);
         }
         return Some(out);
     }
@@ -348,6 +350,48 @@ mod tests {
     }
 
     #[test]
+    fn number_case_variants_preserve_subtypes() {
+        for text in ["0xDeAd", "0XDEAD", "0XdEaD"] {
+            assert_eq!(
+                parse_lua_number(text, NumberSubtypes::IntFloat),
+                Some(LuaNumber::Int(0xdead)),
+                "{text}"
+            );
+            assert_eq!(
+                parse_lua_number(text, NumberSubtypes::Unified),
+                None,
+                "{text}"
+            );
+        }
+        for text in ["0x1p4", "0X1P4", "0x1.8P1", "0X1.8p1"] {
+            for subtypes in [NumberSubtypes::IntFloat, NumberSubtypes::Unified] {
+                assert_eq!(
+                    parse_lua_number(text, subtypes),
+                    None,
+                    "{text} {subtypes:?}"
+                );
+            }
+        }
+        for text in ["1e3", "1E3", "1.0e+3", "1.0E+3"] {
+            for subtypes in [NumberSubtypes::IntFloat, NumberSubtypes::Unified] {
+                assert_eq!(
+                    parse_lua_number(text, subtypes),
+                    Some(LuaNumber::Float(1000.0)),
+                    "{text} {subtypes:?}"
+                );
+            }
+        }
+        assert_eq!(
+            parse_lua_number("0XFFFFFFFFFFFFFFFF", NumberSubtypes::IntFloat),
+            Some(LuaNumber::Int(-1))
+        );
+        assert_eq!(
+            parse_lua_number("0X10000000000000000", NumberSubtypes::IntFloat),
+            None
+        );
+    }
+
+    #[test]
     fn number_decimal_overflow_promotes_to_float() {
         let parsed = parse_lua_number("99999999999999999999", NumberSubtypes::IntFloat);
         assert!(matches!(parsed, Some(LuaNumber::Float(_))));
@@ -518,6 +562,48 @@ mod tests {
             decode_string_literal("[[\rhi]]", luau),
             Some(b"\rhi".to_vec())
         );
+    }
+
+    #[test]
+    fn decode_long_bracket_leading_eols_all_versions() {
+        for version in [
+            LuaVersion::Lua51,
+            LuaVersion::Lua52,
+            LuaVersion::Lua53,
+            LuaVersion::Lua54,
+            LuaVersion::Lua55,
+            LuaVersion::Luau,
+        ] {
+            for (prefix, lua_expected, luau_expected) in [
+                ("", "", ""),
+                ("\n", "", ""),
+                ("\r", "", "\r"),
+                ("\r\n", "", ""),
+                ("\n\r", "", "\r"),
+                ("\n\n", "\n", "\n"),
+                ("\r\r", "\n", "\r\r"),
+                ("\r\n\r\n", "\n", "\n"),
+                ("\n\r\n\r", "\n", "\n\r"),
+                ("\n\r\r\n", "\n", "\r\n"),
+            ] {
+                let expected = if version.is_luau() {
+                    luau_expected
+                } else {
+                    lua_expected
+                };
+                for payload in ["", "payload", "é漢字"] {
+                    for equals in ["", "=="] {
+                        let raw = format!("[{equals}[{prefix}{payload}]{equals}]");
+                        let expected = format!("{expected}{payload}");
+                        assert_eq!(
+                            decode_string_literal(&raw, version).as_deref(),
+                            Some(expected.as_bytes()),
+                            "{version:?} {raw:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
