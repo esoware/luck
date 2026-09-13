@@ -206,7 +206,7 @@ impl NodeRule for IncorrectStdlibUse {
                 semantic: ctx.semantic,
                 out,
             }
-            .check_call(&call_stmt.call);
+            .check_call(call_stmt);
         }
     }
     fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {

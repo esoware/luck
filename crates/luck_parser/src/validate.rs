@@ -135,7 +135,7 @@ impl<'ast> ConstWriteChecker<'ast, '_> {
                     other => self.check_var_reads(other),
                 }
             }
-            Statement::FunctionCall(call) => self.check_call(&call.call),
+            Statement::FunctionCall(call) => self.check_call(call),
             Statement::DoBlock(do_block) => self.check_block(&do_block.block),
             Statement::WhileLoop(while_loop) => {
                 self.check_expression(&while_loop.condition);

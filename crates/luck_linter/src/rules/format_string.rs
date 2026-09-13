@@ -368,9 +368,9 @@ impl NodeRule for FormatString {
                 semantic: ctx.semantic,
                 out,
             };
-            checker.check_call(&call_stmt.call);
-            checker.check_method_literal_receiver(&call_stmt.call);
-            checker.check_gsub_replacement(&call_stmt.call);
+            checker.check_call(call_stmt);
+            checker.check_method_literal_receiver(call_stmt);
+            checker.check_gsub_replacement(call_stmt);
         }
     }
     fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {

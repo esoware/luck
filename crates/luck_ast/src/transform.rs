@@ -35,7 +35,10 @@ pub trait AstTransform {
             .into_iter()
             .map(|stmt| self.transform_statement(stmt))
             .collect();
-        let last_stmt = last_stmt.map(|last| Box::new(self.transform_last_statement(*last)));
+        let last_stmt = last_stmt.map(|mut last| {
+            *last = self.transform_last_statement(*last);
+            last
+        });
         Block {
             span,
             stmts,
@@ -50,9 +53,9 @@ pub trait AstTransform {
                 assignment.values = self.walk_punctuated_exprs(assignment.values);
                 Statement::Assignment(assignment)
             }
-            Statement::FunctionCall(mut call_stmt) => {
-                call_stmt.call = self.walk_function_call(call_stmt.call);
-                Statement::FunctionCall(call_stmt)
+            Statement::FunctionCall(mut call) => {
+                *call = self.walk_function_call(*call);
+                Statement::FunctionCall(call)
             }
             Statement::DoBlock(mut do_block) => {
                 let block = self.transform_block(do_block.block);
@@ -135,15 +138,17 @@ pub trait AstTransform {
                 Statement::GlobalDeclaration(global_decl)
             }
             Statement::TypeDeclaration(mut type_decl) => {
-                type_decl.generics = type_decl
-                    .generics
-                    .map(|generics| Box::new(self.walk_generic_type_list(*generics)));
+                type_decl.generics = type_decl.generics.map(|mut generics| {
+                    *generics = self.walk_generic_type_list(*generics);
+                    generics
+                });
                 type_decl.type_value = match type_decl.type_value {
                     TypeDeclarationValue::Alias(alias_type) => {
                         TypeDeclarationValue::Alias(self.transform_type(alias_type))
                     }
-                    TypeDeclarationValue::TypeFunction(body) => {
-                        TypeDeclarationValue::TypeFunction(Box::new(self.walk_function_body(*body)))
+                    TypeDeclarationValue::TypeFunction(mut body) => {
+                        *body = self.walk_function_body(*body);
+                        TypeDeclarationValue::TypeFunction(body)
                     }
                 };
                 Statement::TypeDeclaration(type_decl)
@@ -172,17 +177,17 @@ pub trait AstTransform {
                 Expression::FunctionDef(func_def)
             }
             Expression::Var(var) => Expression::Var(self.transform_var(var)),
-            Expression::FunctionCall(call) => {
-                let call = self.walk_function_call(*call);
-                Expression::FunctionCall(Box::new(call))
+            Expression::FunctionCall(mut call) => {
+                *call = self.walk_function_call(*call);
+                Expression::FunctionCall(call)
             }
             Expression::Parenthesized(mut paren) => {
                 paren.expr = self.transform_expression(paren.expr);
                 Expression::Parenthesized(paren)
             }
-            Expression::TableConstructor(table) => {
-                let table = self.walk_table_constructor(*table);
-                Expression::TableConstructor(Box::new(table))
+            Expression::TableConstructor(mut table) => {
+                *table = self.walk_table_constructor(*table);
+                Expression::TableConstructor(table)
             }
             Expression::BinaryOp(mut binop) => {
                 binop.left = self.transform_expression(binop.left);
@@ -249,9 +254,10 @@ pub trait AstTransform {
     }
 
     fn walk_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
-        body.generics = body
-            .generics
-            .map(|generics| Box::new(self.walk_generic_type_list(*generics)));
+        body.generics = body.generics.map(|mut generics| {
+            *generics = self.walk_generic_type_list(*generics);
+            generics
+        });
         body.params = self.walk_punctuated_params(body.params);
         body.vararg = body.vararg.map(|mut vararg| {
             vararg.type_annotation = vararg
@@ -281,9 +287,10 @@ pub trait AstTransform {
     fn walk_function_call(&mut self, call: FunctionCall) -> FunctionCall {
         let callee = self.transform_expression(call.callee);
         let args = self.walk_function_args(call.args);
-        let explicit_type_args = call
-            .explicit_type_args
-            .map(|type_args| Box::new(self.walk_type_args(*type_args)));
+        let explicit_type_args = call.explicit_type_args.map(|mut type_args| {
+            *type_args = self.walk_type_args(*type_args);
+            type_args
+        });
         FunctionCall {
             callee,
             args,
@@ -303,9 +310,9 @@ pub trait AstTransform {
                 let args = self.walk_punctuated_exprs(args);
                 FunctionArgs::Parenthesized { span, args }
             }
-            FunctionArgs::TableConstructor(table) => {
-                let table = self.walk_table_constructor(*table);
-                FunctionArgs::TableConstructor(Box::new(table))
+            FunctionArgs::TableConstructor(mut table) => {
+                *table = self.walk_table_constructor(*table);
+                FunctionArgs::TableConstructor(table)
             }
             FunctionArgs::StringLiteral(_) => args,
         }
@@ -447,7 +454,10 @@ pub trait AstTransform {
                 variadic.type_value = self.transform_type(variadic.type_value);
                 Type::Variadic(variadic)
             }
-            type_value @ (Type::Singleton(_) | Type::GenericPack(_) | Type::Error(_)) => type_value,
+            type_value @ (Type::Name { .. }
+            | Type::Singleton(_)
+            | Type::GenericPack(_)
+            | Type::Error(_)) => type_value,
         }
     }
 

@@ -25,9 +25,9 @@ Two entry points share the same machine:
 
 A zero-copy forward-only byte cursor: `peek`, `peek_at`, `advance`, `rest`, and batched `advance_until_match`, all tracking a single byte position.
 
-### Batched scanning (`search.rs`)
+### Body scanning (`search.rs`, `string.rs`)
 
-String and comment bodies are scanned through a 256-entry stop-byte table (`ByteMatchTable`, built at compile time by `byte_match_table!`). `find_match` walks a scalar prefix, then fixed-size batches of scalar table lookups, so long runs stay branch-light without relying on vectorization. This is the crate's hot path and exists for measured reasons.
+Interpolated-string text is scanned through a 256-entry stop-byte table (`ByteMatchTable`, built at compile time by `byte_match_table!`). `find_match` walks a scalar prefix, then fixed-size batches of scalar table lookups, so long runs stay branch-light without relying on vectorization. Short strings check the same kind of table over their first 8 bytes, where most strings end, then switch to `memchr` for the closing quote, escape, or line feed, with a second `memchr` for a carriage return bounded to that run. Comments and long brackets scan with `memchr` directly. This is the crate's hot path and exists for measured reasons.
 
 ### Token production
 

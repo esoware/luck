@@ -12,6 +12,7 @@ use crate::tokens::FormatToken;
 impl Format for Type {
     fn fmt(&self, f: &mut Formatter) {
         match self {
+            Type::Name { name, .. } => text(name.clone()).fmt(f),
             Type::Named(named) => write_named(f, named),
             Type::Typeof(typeof_type) => write_typeof(f, typeof_type),
             Type::Table(table) => write_table(f, table),

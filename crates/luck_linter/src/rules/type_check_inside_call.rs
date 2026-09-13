@@ -73,7 +73,7 @@ impl NodeRule for TypeCheckInsideCall {
         out: &mut Vec<LintDiagnostic>,
     ) {
         if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
-            check_call(&call_stmt.call, ctx, out);
+            check_call(call_stmt, ctx, out);
         }
     }
     fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {

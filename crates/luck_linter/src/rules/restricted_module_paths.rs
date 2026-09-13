@@ -151,7 +151,7 @@ impl NodeRule for RestrictedModulePaths {
         if let luck_ast::Statement::FunctionCall(call_stmt) = stmt
             && let Some(mut checker) = checker(ctx, out)
         {
-            checker.check_call(&call_stmt.call);
+            checker.check_call(call_stmt);
         }
     }
     fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {

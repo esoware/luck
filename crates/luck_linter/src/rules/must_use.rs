@@ -55,7 +55,7 @@ impl NodeRule for MustUse {
         out: &mut Vec<LintDiagnostic>,
     ) {
         if let luck_ast::Statement::FunctionCall(call_stmt) = stmt
-            && let Some(name) = must_use_name(ctx.semantic, &call_stmt.call)
+            && let Some(name) = must_use_name(ctx.semantic, call_stmt)
         {
             out.push(
                 LintDiagnostic::new(

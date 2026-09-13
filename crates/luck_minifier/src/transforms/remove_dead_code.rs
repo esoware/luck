@@ -188,9 +188,10 @@ impl AstTransform for DeadCodeTransform {
             }
         }
 
-        let last_stmt = block
-            .last_stmt
-            .map(|last| Box::new(self.transform_last_statement(*last)));
+        let last_stmt = block.last_stmt.map(|mut last| {
+            *last = self.transform_last_statement(*last);
+            last
+        });
 
         Block {
             span: block.span,
@@ -471,10 +472,7 @@ fn simplify_dead_local(
                         .into_iter()
                         .filter_map(|expr| {
                             if let Expression::FunctionCall(call) = expr {
-                                Some(Statement::FunctionCall(Box::new(FunctionCallStmt {
-                                    span: call.span,
-                                    call: *call,
-                                })))
+                                Some(Statement::FunctionCall(call))
                             } else {
                                 None
                             }

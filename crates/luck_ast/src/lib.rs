@@ -105,7 +105,6 @@ mod tests {
             Statement => 16,
             LastStatement => 16,
             stmt::Assignment => 72,
-            stmt::FunctionCallStmt => 144,
             stmt::DoBlock => 48,
             stmt::WhileLoop => 88,
             stmt::RepeatLoop => 88,

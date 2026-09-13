@@ -48,7 +48,7 @@ pub trait Visitor<'ast> {
                 }
             }
             Statement::FunctionCall(call_stmt) => {
-                self.walk_function_call(&call_stmt.call);
+                self.walk_function_call(call_stmt);
             }
             Statement::DoBlock(do_block) => {
                 self.visit_block(&do_block.block);
@@ -339,7 +339,7 @@ pub trait Visitor<'ast> {
                 }
             }
             Type::Variadic(variadic) => self.visit_type(&variadic.type_value),
-            Type::Singleton(_) | Type::GenericPack(_) | Type::Error(_) => {}
+            Type::Name { .. } | Type::Singleton(_) | Type::GenericPack(_) | Type::Error(_) => {}
         }
     }
 
@@ -640,10 +640,7 @@ mod tests {
         };
         let block = Block {
             span: span(),
-            stmts: vec![Statement::FunctionCall(Box::new(FunctionCallStmt {
-                span: span(),
-                call,
-            }))],
+            stmts: vec![Statement::FunctionCall(Box::new(call))],
             last_stmt: None,
         };
         let mut counter = ExprCounter(0);

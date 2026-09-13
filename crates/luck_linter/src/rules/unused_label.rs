@@ -125,7 +125,7 @@ fn walk_statement<'ast>(
             }
         }
         Statement::FunctionCall(call_stmt) => {
-            walk_function_call(&call_stmt.call, labels, goto_names, nested);
+            walk_function_call(call_stmt, labels, goto_names, nested);
         }
         Statement::DoBlock(do_block) => {
             walk_block(&do_block.block, labels, goto_names, nested);

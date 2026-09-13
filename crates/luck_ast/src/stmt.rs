@@ -7,7 +7,7 @@ use crate::types::{GenericTypeList, Type};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
     Assignment(Box<Assignment>),
-    FunctionCall(Box<FunctionCallStmt>),
+    FunctionCall(Box<FunctionCall>),
     DoBlock(Box<DoBlock>),
     WhileLoop(Box<WhileLoop>),
     RepeatLoop(Box<RepeatLoop>),
@@ -44,12 +44,6 @@ pub struct Assignment {
     pub span: Span,
     pub targets: Punctuated<Var>,
     pub values: Punctuated<Expression>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionCallStmt {
-    pub span: Span,
-    pub call: FunctionCall,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

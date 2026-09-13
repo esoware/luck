@@ -2,7 +2,8 @@ use crate::cursor::Cursor;
 use crate::number::lex_number;
 use crate::search::{ByteMatchTable, byte_match_table};
 use crate::string::{
-    lex_short_string, long_bracket_level, scan_to_long_bracket_close, skip_long_bracket_open,
+    lex_escape, lex_short_string, long_bracket_level, scan_to_long_bracket_close,
+    skip_long_bracket_open,
 };
 use crate::{LexError, LexResult};
 use luck_token::{
@@ -648,12 +649,11 @@ impl<'src> Lexer<'src> {
     }
 
     /// Scan raw interpolated-string text up to an interpolation opener `{`
-    /// or the closing backtick. Text is accumulated as source slices, never
-    /// byte-by-byte, so multi-byte UTF-8 stays intact. Returns `None` after
+    /// or the closing backtick. Raw escapes stay intact, so the validated
+    /// segment can be copied once from the source. Returns `None` after
     /// pushing an error.
     fn scan_interp_segment(&mut self, start: usize) -> Option<(CompactString, InterpSegmentEnd)> {
-        let mut text = CompactString::default();
-        let mut segment_start = self.cursor.position();
+        let segment_start = self.cursor.position();
         loop {
             match self.cursor.peek() {
                 None => {
@@ -673,63 +673,28 @@ impl<'src> Lexer<'src> {
                     return None;
                 }
                 Some(b'\\') => {
-                    text.push_str(&self.source[segment_start..self.cursor.position()]);
-                    text.push('\\');
                     self.cursor.advance();
-                    // `\u{...}` is a unicode escape; without this the `{`
-                    // would be mis-lexed as an interpolation opener.
-                    if self.cursor.peek() == Some(b'u') && self.cursor.peek_at(1) == Some(b'{') {
-                        text.push('u');
-                        self.cursor.advance();
-                        text.push('{');
-                        self.cursor.advance();
-                        loop {
-                            match self.cursor.peek() {
-                                Some(b'}') => {
-                                    text.push('}');
-                                    self.cursor.advance();
-                                    break;
-                                }
-                                Some(digit) if digit.is_ascii_hexdigit() => {
-                                    text.push(digit as char);
-                                    self.cursor.advance();
-                                }
-                                _ => {
-                                    self.errors.push(crate::lex_error(
-                                        Span::new(start as u32, self.cursor.position() as u32),
-                                        "malformed \\u{...} escape in interpolated string",
-                                    ));
-                                    return None;
-                                }
-                            }
-                        }
-                    } else if let Some(escaped) = self.cursor.peek() {
-                        // Copy the escaped character whole (it may be
-                        // multi-byte); continuation bytes are 0b10xxxxxx.
-                        let escaped_start = self.cursor.position();
-                        self.cursor.advance();
-                        while self.cursor.peek().is_some_and(|byte| (byte & 0xC0) == 0x80) {
+                    match self.cursor.peek() {
+                        // Escaped braces and backticks stay literal text.
+                        Some(b'{' | b'}' | b'`') => {
                             self.cursor.advance();
                         }
-                        // `\z` skips following whitespace, including line
-                        // breaks; keep the raw run so payloads re-emit as-is.
-                        if escaped == b'z' {
-                            while self
-                                .cursor
-                                .peek()
-                                .is_some_and(|byte| byte.is_ascii_whitespace())
+                        // Consuming `\u{...}` whole also keeps its `{` from
+                        // opening an interpolation.
+                        Some(escaped) => {
+                            if let Err(error) =
+                                lex_escape(&mut self.cursor, self.source, self.version, escaped)
                             {
-                                self.cursor.advance();
+                                self.errors.push(error);
+                                return None;
                             }
-                        } else if escaped == b'\r' && self.cursor.peek() == Some(b'\n') {
-                            self.cursor.advance();
                         }
-                        text.push_str(&self.source[escaped_start..self.cursor.position()]);
+                        // The next iteration reports the unterminated string.
+                        None => {}
                     }
-                    segment_start = self.cursor.position();
                 }
                 Some(b'{') => {
-                    text.push_str(&self.source[segment_start..self.cursor.position()]);
+                    let text = self.source[segment_start..self.cursor.position()].into();
                     self.cursor.advance();
                     if self.cursor.peek() == Some(b'{') {
                         self.errors.push(crate::lex_error(Span::new(
@@ -741,7 +706,7 @@ impl<'src> Lexer<'src> {
                     return Some((text, InterpSegmentEnd::OpenBrace));
                 }
                 Some(b'`') => {
-                    text.push_str(&self.source[segment_start..self.cursor.position()]);
+                    let text = self.source[segment_start..self.cursor.position()].into();
                     self.cursor.advance();
                     return Some((text, InterpSegmentEnd::Backtick));
                 }
