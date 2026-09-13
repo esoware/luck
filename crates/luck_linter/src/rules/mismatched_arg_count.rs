@@ -203,7 +203,7 @@ impl<'ast> Visitor<'ast> for CallChecker<'_> {
 
     fn visit_statement(&mut self, stmt: &'ast Statement) {
         if let Statement::FunctionCall(call_stmt) = stmt {
-            self.check_call(&call_stmt.call);
+            self.check_call(call_stmt);
         }
         self.walk_statement(stmt);
     }

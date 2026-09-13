@@ -243,6 +243,15 @@ impl Parser<'_> {
     }
 
     fn parse_named_type(&mut self, first_name: Token) -> Type {
+        if !matches!(self.peek(), TokenKind::Dot | TokenKind::Less) {
+            let TokenKind::Identifier(name) = first_name.kind else {
+                unreachable!("caller matched an identifier");
+            };
+            return Type::Name {
+                name,
+                span: first_name.span,
+            };
+        }
         let (prefix, name) = if matches!(self.peek(), TokenKind::Dot) {
             self.advance_span();
             let name = self.expect_identifier_recover();

@@ -4,13 +4,18 @@
 //! types, local/loop bindings, casts) and in `type` declarations. Outside
 //! Luau these nodes never occur; the parser gates on `LuaVersion::is_luau`.
 
-use luck_token::{Span, Token};
+use luck_token::{CompactString, Span, Token};
 
 use crate::expr::Expression;
 use crate::shared::Punctuated;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
+    /// Unqualified name without generic arguments.
+    Name {
+        name: CompactString,
+        span: Span,
+    },
     Named(Box<NamedType>),
     Typeof(Box<TypeofType>),
     Table(Box<TableType>),
@@ -33,7 +38,9 @@ pub enum Type {
     Error(Span),
 }
 
-/// Type reference: `Name`, `module.Name`, `Name<args>`.
+/// Qualified or generic type reference: `module.Name`, `Name<args>`. A bare
+/// `Name` is [`Type::Name`], which keeps the most common type allocation-free;
+/// the parser and `Synth` never build this node without a prefix or generics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamedType {
     pub span: Span,

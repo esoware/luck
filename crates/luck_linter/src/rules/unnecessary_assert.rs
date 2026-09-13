@@ -43,7 +43,7 @@ impl NodeRule for UnnecessaryAssert {
         out: &mut Vec<LintDiagnostic>,
     ) {
         if let luck_ast::stmt::Statement::FunctionCall(call_stmt) = stmt {
-            check_call(&call_stmt.call, ctx, out);
+            check_call(call_stmt, ctx, out);
         }
     }
 

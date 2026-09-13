@@ -387,12 +387,16 @@ impl Synth {
     /// [`sanitize_identifier`] / [`sanitize_identifier_in`].
     #[must_use]
     pub fn ident(&self, name: &str) -> Token {
+        self.token(TokenKind::Identifier(self.identifier_name(name)))
+    }
+
+    fn identifier_name(&self, name: &str) -> CompactString {
         let is_valid = match self.version {
             Some(version) => is_valid_identifier_in(name, version),
             None => is_valid_identifier(name),
         };
         assert!(is_valid, "synth: {name:?} is not a valid identifier");
-        self.token(TokenKind::Identifier(CompactString::from(name)))
+        CompactString::from(name)
     }
 
     /// Identifier-shaped and safe as a `.name` field / `name =` key: under a
@@ -1340,14 +1344,16 @@ impl Synth {
     /// A call expression as a statement. Panics on a non-call expression.
     #[must_use]
     pub fn call_stmt(&self, call_expr: Expression) -> Statement {
-        let call = match call_expr {
-            Expression::FunctionCall(call) => *call,
+        match call_expr {
+            // The statement shares the call's span, so re-span it: a cloned
+            // call wrapped twice must still give each statement its own
+            // comment anchor.
+            Expression::FunctionCall(mut call) => {
+                call.span = self.next_span();
+                Statement::FunctionCall(call)
+            }
             other => panic!("synth: call_stmt requires a function-call expression, got {other:?}"),
-        };
-        Statement::FunctionCall(Box::new(FunctionCallStmt {
-            span: self.next_span(),
-            call,
-        }))
+        }
     }
 
     #[must_use]
@@ -1540,12 +1546,10 @@ impl Synth {
 
     #[must_use]
     pub fn ty_named(&self, name: &str) -> Type {
-        Type::Named(Box::new(NamedType {
+        Type::Name {
+            name: self.identifier_name(name),
             span: self.next_span(),
-            prefix: None,
-            name: self.ident(name),
-            generics: None,
-        }))
+        }
     }
 
     #[must_use]
@@ -2507,6 +2511,16 @@ mod tests {
         ];
         let unique: std::collections::HashSet<u32> = spans.iter().copied().collect();
         assert_eq!(unique.len(), spans.len(), "{spans:?}");
+    }
+
+    #[test]
+    fn call_stmt_spans_stay_unique_for_cloned_calls() {
+        let synth = Synth::new();
+        let call = synth.call(synth.name_expr("f"), vec![]);
+        let first = synth.call_stmt(call.clone());
+        let second = synth.call_stmt(call.clone());
+        assert_ne!(first.span(), second.span());
+        assert_ne!(first.span(), call.span());
     }
 
     #[test]

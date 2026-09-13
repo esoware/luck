@@ -315,7 +315,7 @@ impl<'globals> Analyzer<'globals> {
                 }
             }
             Statement::FunctionCall(call_stmt) => {
-                self.analyze_function_call(&call_stmt.call);
+                self.analyze_function_call(call_stmt);
             }
             Statement::DoBlock(do_block) => {
                 self.enter_scope();
@@ -802,9 +802,10 @@ impl AstTransform for AstRenamer<'_> {
             .into_iter()
             .map(|stmt| self.transform_statement(stmt))
             .collect();
-        let new_last = block
-            .last_stmt
-            .map(|last| Box::new(self.transform_last_statement(*last)));
+        let new_last = block.last_stmt.map(|mut last| {
+            *last = self.transform_last_statement(*last);
+            last
+        });
         Block {
             span: block.span,
             stmts: new_stmts,
@@ -977,9 +978,10 @@ impl AstTransform for AstRenamer<'_> {
             | Expression::TypeInstantiation(_)
             | Expression::Error(_)) => self.transform_expression(callee),
         };
-        call.explicit_type_args = call
-            .explicit_type_args
-            .map(|type_args| Box::new(self.walk_type_args(*type_args)));
+        call.explicit_type_args = call.explicit_type_args.map(|mut type_args| {
+            *type_args = self.walk_type_args(*type_args);
+            type_args
+        });
         call.args = self.walk_function_args(call.args);
         call
     }
@@ -1320,8 +1322,8 @@ fn collect_name_reads_from_stmt(
 ) {
     match stmt {
         Statement::FunctionCall(call_stmt) => {
-            collect_name_reads_from_expr(&call_stmt.call.callee, locals, reads);
-            collect_name_reads_from_func_args(&call_stmt.call.args, locals, reads);
+            collect_name_reads_from_expr(&call_stmt.callee, locals, reads);
+            collect_name_reads_from_func_args(&call_stmt.args, locals, reads);
         }
         Statement::LocalAssignment(local) => {
             if let Some(exprs) = &local.exprs {

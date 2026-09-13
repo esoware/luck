@@ -1,5 +1,5 @@
 use crate::cursor::Cursor;
-use crate::search::{ByteMatchTable, byte_match_table};
+use crate::search::{ByteMatchTable, byte_match_table, find_match};
 use crate::{LexError, lex_error};
 use luck_token::{LuaVersion, Span, TokenKind};
 
@@ -30,151 +30,13 @@ pub fn lex_short_string(
             }
             Some(b'\\') => {
                 cursor.advance();
-                match cursor.peek() {
-                    None => {
-                        return Err(crate::lex_error(
-                            Span::new(start as u32, cursor.position() as u32),
-                            "unterminated string",
-                        ));
-                    }
-                    Some(b'\n') => {
-                        cursor.advance();
-                        // PUC treats LFCR as one EOL sequence after `\`.
-                        if !version.is_luau() && cursor.peek() == Some(b'\r') {
-                            cursor.advance();
-                        }
-                    }
-                    Some(b'\r') => {
-                        cursor.advance();
-                        if cursor.peek() == Some(b'\n') {
-                            cursor.advance();
-                        }
-                    }
-                    Some(ch) if ch.is_ascii_digit() => {
-                        let escape_start = cursor.position() - 1;
-                        let mut value: u32 = 0;
-                        let mut count = 0;
-                        while count < 3 {
-                            match cursor.peek() {
-                                Some(d) if d.is_ascii_digit() => {
-                                    value = value * 10 + (d - b'0') as u32;
-                                    cursor.advance();
-                                    count += 1;
-                                }
-                                _ => break,
-                            }
-                        }
-                        if value > 255 {
-                            return Err(crate::lex_error(
-                                Span::new(escape_start as u32, cursor.position() as u32),
-                                format!("decimal escape too large (\\{value}), maximum is \\255"),
-                            ));
-                        }
-                    }
-                    Some(b'x') if version.has_hex_escape() => {
-                        let escape_start = cursor.position() - 1;
-                        cursor.advance();
-                        for i in 0..2 {
-                            match cursor.peek() {
-                                Some(d) if d.is_ascii_hexdigit() => {
-                                    cursor.advance();
-                                }
-                                _ => {
-                                    return Err(crate::lex_error(
-                                        Span::new(escape_start as u32, cursor.position() as u32),
-                                        format!(
-                                            "\\x escape requires exactly 2 hex digits, got {}",
-                                            i
-                                        ),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    Some(b'z') if version.has_whitespace_escape() => {
-                        cursor.advance();
-                        while let Some(b) = cursor.peek() {
-                            if matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'\x0B' | b'\x0C') {
-                                cursor.advance();
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                    Some(b'u') if version.has_unicode_escape() => {
-                        let escape_start = cursor.position() - 1;
-                        cursor.advance();
-                        if cursor.peek() != Some(b'{') {
-                            return Err(crate::lex_error(
-                                Span::new(escape_start as u32, cursor.position() as u32),
-                                "\\u escape requires '{'",
-                            ));
-                        }
-                        cursor.advance();
-                        let hex_start = cursor.position();
-                        let mut hex_count = 0;
-                        while let Some(d) = cursor.peek() {
-                            if d.is_ascii_hexdigit() {
-                                cursor.advance();
-                                hex_count += 1;
-                            } else {
-                                break;
-                            }
-                        }
-                        if hex_count == 0 {
-                            return Err(crate::lex_error(
-                                Span::new(escape_start as u32, cursor.position() as u32),
-                                "\\u{} requires at least one hex digit",
-                            ));
-                        }
-                        let hex_str = &source[hex_start..cursor.position()];
-                        if let Ok(codepoint) = u64::from_str_radix(hex_str, 16) {
-                            if codepoint >= 0x80000000 {
-                                return Err(crate::lex_error(
-                                    Span::new(escape_start as u32, cursor.position() as u32),
-                                    "\\u codepoint too large (must be less than 2^31)",
-                                ));
-                            }
-                        } else {
-                            return Err(crate::lex_error(
-                                Span::new(escape_start as u32, cursor.position() as u32),
-                                "\\u codepoint too large (must be less than 2^31)",
-                            ));
-                        }
-                        if cursor.peek() != Some(b'}') {
-                            return Err(crate::lex_error(
-                                Span::new(escape_start as u32, cursor.position() as u32),
-                                "\\u escape missing closing '}'",
-                            ));
-                        }
-                        cursor.advance();
-                    }
-                    Some(b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'\'' | b'"') => {
-                        cursor.advance();
-                    }
-                    // Lua 5.1 accepts any other escaped character as that
-                    // literal character; 5.2+ and Luau reject it.
-                    Some(_) if !version.has_strict_escapes() => {
-                        cursor.advance();
-                    }
-                    Some(ch) => {
-                        let escape_start = cursor.position() - 1;
-                        cursor.advance();
-                        // Consume the full UTF-8 sequence so recovery resumes
-                        // on a char boundary; continuation bytes are 0b10xxxxxx.
-                        while cursor.peek().is_some_and(|byte| (byte & 0xC0) == 0x80) {
-                            cursor.advance();
-                        }
-                        let escaped = source[escape_start + 1..]
-                            .chars()
-                            .next()
-                            .unwrap_or(ch as char);
-                        return Err(crate::lex_error(
-                            Span::new(escape_start as u32, cursor.position() as u32),
-                            format!("invalid escape sequence '\\{escaped}'"),
-                        ));
-                    }
-                }
+                let Some(escaped) = cursor.peek() else {
+                    return Err(crate::lex_error(
+                        Span::new(start as u32, cursor.position() as u32),
+                        "unterminated string",
+                    ));
+                };
+                lex_escape(cursor, source, version, escaped)?;
             }
             Some(ch) if ch == quote => {
                 cursor.advance();
@@ -183,10 +45,170 @@ pub fn lex_short_string(
             }
             Some(_) => {
                 cursor.advance();
-                cursor.advance_until_match(&SHORT_STRING_STOP);
+                let bytes = cursor.rest();
+                let prefix_length = bytes.len().min(8);
+                let offset = find_match(&bytes[..prefix_length], &SHORT_STRING_STOP);
+                let offset = if offset < prefix_length {
+                    offset
+                } else {
+                    // Stopping at LF bounds an unterminated string to its
+                    // line; the second scan finds any CR before that stop.
+                    let rest = &bytes[prefix_length..];
+                    let end = memchr::memchr3(quote, b'\\', b'\n', rest).unwrap_or(rest.len());
+                    prefix_length + memchr::memchr(b'\r', &rest[..end]).unwrap_or(end)
+                };
+                cursor.advance_by(offset);
             }
         }
     }
+}
+
+/// Consume one escape sequence, with the cursor on the byte after `\`,
+/// rejecting the forms `version` does not define. Shared by short strings
+/// and Luau interpolated strings.
+pub fn lex_escape(
+    cursor: &mut Cursor,
+    source: &str,
+    version: LuaVersion,
+    escaped: u8,
+) -> Result<(), LexError> {
+    match escaped {
+        b'\n' => {
+            cursor.advance();
+            // PUC treats LFCR as one EOL sequence after `\`.
+            if !version.is_luau() && cursor.peek() == Some(b'\r') {
+                cursor.advance();
+            }
+        }
+        b'\r' => {
+            cursor.advance();
+            if cursor.peek() == Some(b'\n') {
+                cursor.advance();
+            }
+        }
+        ch if ch.is_ascii_digit() => {
+            let escape_start = cursor.position() - 1;
+            let mut value: u32 = 0;
+            let mut count = 0;
+            while count < 3 {
+                match cursor.peek() {
+                    Some(d) if d.is_ascii_digit() => {
+                        value = value * 10 + (d - b'0') as u32;
+                        cursor.advance();
+                        count += 1;
+                    }
+                    _ => break,
+                }
+            }
+            if value > 255 {
+                return Err(crate::lex_error(
+                    Span::new(escape_start as u32, cursor.position() as u32),
+                    format!("decimal escape too large (\\{value}), maximum is \\255"),
+                ));
+            }
+        }
+        b'x' if version.has_hex_escape() => {
+            let escape_start = cursor.position() - 1;
+            cursor.advance();
+            for i in 0..2 {
+                match cursor.peek() {
+                    Some(d) if d.is_ascii_hexdigit() => {
+                        cursor.advance();
+                    }
+                    _ => {
+                        return Err(crate::lex_error(
+                            Span::new(escape_start as u32, cursor.position() as u32),
+                            format!("\\x escape requires exactly 2 hex digits, got {}", i),
+                        ));
+                    }
+                }
+            }
+        }
+        b'z' if version.has_whitespace_escape() => {
+            cursor.advance();
+            while let Some(b) = cursor.peek() {
+                if matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'\x0B' | b'\x0C') {
+                    cursor.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        b'u' if version.has_unicode_escape() => {
+            let escape_start = cursor.position() - 1;
+            cursor.advance();
+            if cursor.peek() != Some(b'{') {
+                return Err(crate::lex_error(
+                    Span::new(escape_start as u32, cursor.position() as u32),
+                    "\\u escape requires '{'",
+                ));
+            }
+            cursor.advance();
+            let hex_start = cursor.position();
+            let mut hex_count = 0;
+            while let Some(d) = cursor.peek() {
+                if d.is_ascii_hexdigit() {
+                    cursor.advance();
+                    hex_count += 1;
+                } else {
+                    break;
+                }
+            }
+            if hex_count == 0 {
+                return Err(crate::lex_error(
+                    Span::new(escape_start as u32, cursor.position() as u32),
+                    "\\u{} requires at least one hex digit",
+                ));
+            }
+            let hex_str = &source[hex_start..cursor.position()];
+            if let Ok(codepoint) = u64::from_str_radix(hex_str, 16) {
+                if codepoint >= 0x80000000 {
+                    return Err(crate::lex_error(
+                        Span::new(escape_start as u32, cursor.position() as u32),
+                        "\\u codepoint too large (must be less than 2^31)",
+                    ));
+                }
+            } else {
+                return Err(crate::lex_error(
+                    Span::new(escape_start as u32, cursor.position() as u32),
+                    "\\u codepoint too large (must be less than 2^31)",
+                ));
+            }
+            if cursor.peek() != Some(b'}') {
+                return Err(crate::lex_error(
+                    Span::new(escape_start as u32, cursor.position() as u32),
+                    "\\u escape missing closing '}'",
+                ));
+            }
+            cursor.advance();
+        }
+        b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'\'' | b'"' => {
+            cursor.advance();
+        }
+        // Lua 5.1 accepts any other escaped character as that
+        // literal character; 5.2+ and Luau reject it.
+        _ if !version.has_strict_escapes() => {
+            cursor.advance();
+        }
+        ch => {
+            let escape_start = cursor.position() - 1;
+            cursor.advance();
+            // Consume the full UTF-8 sequence so recovery resumes
+            // on a char boundary; continuation bytes are 0b10xxxxxx.
+            while cursor.peek().is_some_and(|byte| (byte & 0xC0) == 0x80) {
+                cursor.advance();
+            }
+            let escaped = source[escape_start + 1..]
+                .chars()
+                .next()
+                .unwrap_or(ch as char);
+            return Err(crate::lex_error(
+                Span::new(escape_start as u32, cursor.position() as u32),
+                format!("invalid escape sequence '\\{escaped}'"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Level of a long-bracket opener at the cursor (`[==[` is level 2),

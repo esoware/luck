@@ -277,7 +277,7 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
                 self.visit_function_body_with_method(&decl.body, is_method);
             }
             luck_ast::Statement::FunctionCall(call) => {
-                self.visit_call(&call.call);
+                self.visit_call(call);
             }
             luck_ast::Statement::DoBlock(do_block) => {
                 self.push_scope(ScopeKind::Block, do_block.span);

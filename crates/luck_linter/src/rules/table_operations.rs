@@ -40,7 +40,7 @@ impl NodeRule for TableOperations {
     }
     fn on_statement(&self, stmt: &Statement, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
         if let Statement::FunctionCall(call_stmt) = stmt {
-            check_call(&call_stmt.call, ctx, out);
+            check_call(call_stmt, ctx, out);
         }
     }
 

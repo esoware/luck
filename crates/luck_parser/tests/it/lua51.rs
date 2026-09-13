@@ -265,7 +265,7 @@ fn method_call_statement() {
     let result = parse_lua51("obj:method(1, 2)");
     assert_no_errors(&result);
     if let Statement::FunctionCall(fc) = &result.block.stmts[0] {
-        assert!(fc.call.method.is_some());
+        assert!(fc.method.is_some());
     } else {
         panic!("expected FunctionCall");
     }
@@ -276,7 +276,7 @@ fn call_with_string_arg() {
     let result = parse_lua51("require \"foo\"");
     assert_no_errors(&result);
     if let Statement::FunctionCall(fc) = &result.block.stmts[0] {
-        assert!(matches!(&fc.call.args, FunctionArgs::StringLiteral(_)));
+        assert!(matches!(&fc.args, FunctionArgs::StringLiteral(_)));
     } else {
         panic!("expected FunctionCall");
     }
@@ -287,7 +287,7 @@ fn call_with_table_arg() {
     let result = parse_lua51("f{1, 2, 3}");
     assert_no_errors(&result);
     if let Statement::FunctionCall(fc) = &result.block.stmts[0] {
-        assert!(matches!(&fc.call.args, FunctionArgs::TableConstructor(_)));
+        assert!(matches!(&fc.args, FunctionArgs::TableConstructor(_)));
     } else {
         panic!("expected FunctionCall");
     }
@@ -638,7 +638,7 @@ fn chained_method_calls() {
     let result = parse_lua51("a:b(1):c(2)");
     assert_no_errors(&result);
     if let Statement::FunctionCall(fc) = &result.block.stmts[0] {
-        assert!(fc.call.method.is_some());
+        assert!(fc.method.is_some());
     } else {
         panic!("expected FunctionCall");
     }
@@ -649,7 +649,7 @@ fn chained_function_calls() {
     let result = parse_lua51("f(1)(2)");
     assert_no_errors(&result);
     if let Statement::FunctionCall(fc) = &result.block.stmts[0] {
-        assert!(matches!(&fc.call.callee, Expression::FunctionCall(_)));
+        assert!(matches!(&fc.callee, Expression::FunctionCall(_)));
     } else {
         panic!("expected FunctionCall");
     }
@@ -902,8 +902,8 @@ fn consecutive_method_calls_four_deep() {
     let result = parse_lua51("a:b():c():d()");
     assert_no_errors(&result);
     if let Statement::FunctionCall(fc) = &result.block.stmts[0] {
-        assert!(fc.call.method.is_some());
-        assert!(matches!(&fc.call.callee, Expression::FunctionCall(_)));
+        assert!(fc.method.is_some());
+        assert!(matches!(&fc.callee, Expression::FunctionCall(_)));
     } else {
         panic!("expected FunctionCall");
     }
@@ -915,9 +915,9 @@ fn call_on_parenthesized_expression() {
     assert_no_errors(&result);
     if let Statement::FunctionCall(fc) = &result.block.stmts[0] {
         assert!(
-            matches!(&fc.call.callee, Expression::Parenthesized(_)),
+            matches!(&fc.callee, Expression::Parenthesized(_)),
             "expected Parenthesized callee, got {:?}",
-            fc.call.callee
+            fc.callee
         );
     } else {
         panic!("expected FunctionCall");

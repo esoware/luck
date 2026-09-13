@@ -1373,7 +1373,7 @@ mod roblox_api {
     /// initializer of a local assignment.
     fn last_call(parsed: &luck_parser::ParseResult) -> &luck_ast::expr::FunctionCall {
         match parsed.block.stmts.last().expect("statement") {
-            luck_ast::Statement::FunctionCall(stmt) => &stmt.call,
+            luck_ast::Statement::FunctionCall(stmt) => stmt,
             luck_ast::Statement::LocalAssignment(local) => {
                 match local.exprs.as_ref().and_then(|exprs| exprs.iter().last()) {
                     Some(luck_ast::Expression::FunctionCall(call)) => call,

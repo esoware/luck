@@ -104,7 +104,10 @@ pub fn decode_string_literal(raw: &str, version: LuaVersion) -> Option<Vec<u8>> 
     if quote != b'"' && quote != b'\'' {
         return None;
     }
-    let inner = &bytes[1..bytes.len().checked_sub(1)?];
+    let inner = bytes.get(1..bytes.len() - 1)?;
+    if !inner.contains(&b'\\') {
+        return Some(inner.to_vec());
+    }
     let mut out = Vec::with_capacity(inner.len());
     let mut idx = 0;
     while idx < inner.len() {
@@ -205,51 +208,70 @@ pub fn decode_string_literal(raw: &str, version: LuaVersion) -> Option<Vec<u8>> 
 pub fn encode_string_literal(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() + 2);
     out.push('"');
-    let push_decimal_escape = |out: &mut String, byte: u8, next_is_digit: bool| {
-        // Pad to 3 digits when a digit follows so the escape can't
-        // absorb it (`\9` + `9` must not read as `\99`).
-        if next_is_digit {
-            out.push_str(&format!("\\{byte:03}"));
-        } else {
-            out.push_str(&format!("\\{byte}"));
-        }
-    };
-
-    let mut offset = 0usize;
-    for chunk in bytes.utf8_chunks() {
-        let valid = chunk.valid();
-        for (char_offset, ch) in valid.char_indices() {
-            let absolute = offset + char_offset;
-            match ch {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\u{7}' => out.push_str("\\a"),
-                '\u{8}' => out.push_str("\\b"),
-                '\u{C}' => out.push_str("\\f"),
-                '\t' => out.push_str("\\t"),
-                '\u{B}' => out.push_str("\\v"),
-                '\0'..='\u{1F}' | '\u{7F}' => {
-                    let next_is_digit = bytes
-                        .get(absolute + ch.len_utf8())
-                        .is_some_and(|b| b.is_ascii_digit());
-                    push_decimal_escape(&mut out, ch as u8, next_is_digit);
-                }
-                _ => out.push(ch),
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        push_escaped_text(&mut out, text);
+    } else {
+        let mut offset = 0usize;
+        for chunk in bytes.utf8_chunks() {
+            push_escaped_text(&mut out, chunk.valid());
+            offset += chunk.valid().len();
+            for (invalid_offset, &byte) in chunk.invalid().iter().enumerate() {
+                let next_is_digit = bytes
+                    .get(offset + invalid_offset + 1)
+                    .is_some_and(u8::is_ascii_digit);
+                push_decimal_escape(&mut out, byte, next_is_digit);
             }
+            offset += chunk.invalid().len();
         }
-        offset += valid.len();
-        for (invalid_offset, &byte) in chunk.invalid().iter().enumerate() {
-            let next_is_digit = bytes
-                .get(offset + invalid_offset + 1)
-                .is_some_and(|b| b.is_ascii_digit());
-            push_decimal_escape(&mut out, byte, next_is_digit);
-        }
-        offset += chunk.invalid().len();
     }
     out.push('"');
     out
+}
+
+/// Append valid UTF-8, copying the runs between bytes that need escaping.
+/// Those bytes are all ASCII, so every split lands on a char boundary, and
+/// a valid run ends at an invalid byte or the input end, never a digit.
+fn push_escaped_text(out: &mut String, mut text: &str) {
+    while let Some(index) = text
+        .bytes()
+        .position(|byte| matches!(byte, 0..=0x1F | 0x7F | b'"' | b'\\'))
+    {
+        out.push_str(&text[..index]);
+        let byte = text.as_bytes()[index];
+        match byte {
+            b'"' => out.push_str("\\\""),
+            b'\\' => out.push_str("\\\\"),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            0x07 => out.push_str("\\a"),
+            0x08 => out.push_str("\\b"),
+            0x0C => out.push_str("\\f"),
+            b'\t' => out.push_str("\\t"),
+            0x0B => out.push_str("\\v"),
+            _ => {
+                let next_is_digit = text
+                    .as_bytes()
+                    .get(index + 1)
+                    .is_some_and(u8::is_ascii_digit);
+                push_decimal_escape(out, byte, next_is_digit);
+            }
+        }
+        text = &text[index + 1..];
+    }
+    out.push_str(text);
+}
+
+fn push_decimal_escape(out: &mut String, byte: u8, next_is_digit: bool) {
+    // Pad to 3 digits when a digit follows so the escape can't
+    // absorb it (`\9` + `9` must not read as `\99`).
+    out.push('\\');
+    if byte >= 100 || next_is_digit {
+        out.push(char::from(b'0' + byte / 100));
+    }
+    if byte >= 10 || next_is_digit {
+        out.push(char::from(b'0' + byte / 10 % 10));
+    }
+    out.push(char::from(b'0' + byte % 10));
 }
 
 #[cfg(test)]
@@ -475,6 +497,12 @@ mod tests {
     }
 
     #[test]
+    fn decode_lone_quote_is_none() {
+        assert_eq!(decode("\""), None);
+        assert_eq!(decode("'"), None);
+    }
+
+    #[test]
     fn decode_lua51_lax_escapes_are_literal() {
         // Real 5.1 saves any escaped non-digit as that character, so
         // \m, \x, \z, \u are content, not escapes (5.2 §8.1 tightened this).
@@ -633,12 +661,40 @@ mod tests {
     fn encode_pads_when_digit_follows() {
         // `\1` followed by `2` must pad to `\001` so it can't read as `\12`.
         assert_eq!(encode_string_literal(&[0x01, b'2']), r#""\0012""#);
+        assert_eq!(encode_string_literal(&[0x01, 0xFF, b'2']), r#""\1\2552""#);
+    }
+
+    #[test]
+    fn encode_every_byte_with_and_without_a_following_digit() {
+        for byte in 0..=u8::MAX {
+            for suffix in [None, Some(b'0'), Some(b'9'), Some(b'x')] {
+                let mut bytes = vec![byte];
+                bytes.extend(suffix);
+                let encoded = encode_string_literal(&bytes);
+                for version in [
+                    LuaVersion::Lua51,
+                    LuaVersion::Lua52,
+                    LuaVersion::Lua53,
+                    LuaVersion::Lua54,
+                    LuaVersion::Lua55,
+                    LuaVersion::Luau,
+                ] {
+                    assert_eq!(
+                        decode_string_literal(&encoded, version).as_deref(),
+                        Some(bytes.as_slice()),
+                        "{bytes:?} {encoded:?} {version:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
     fn encode_then_decode_round_trips() {
         let cases: &[&[u8]] = &[
             b"hello",
+            "\u{e9}\u{6f22}\u{1f600}".as_bytes(),
+            "\u{e9}\"\u{6f22}\n\u{1f600}\\".as_bytes(),
             b"a\nb\tc",
             b"quote\"here",
             b"back\\slash",
@@ -646,6 +702,7 @@ mod tests {
             &[1, 2, 3],
             b"mix\x07\x08\x0c\x0b",
             &[0x01, b'2'],
+            &[b'a', 0x01, 0xFF, b'7', 0x7F, 0xC3, b'3', b'"', 0x02],
         ];
         for bytes in cases {
             let encoded = encode_string_literal(bytes);

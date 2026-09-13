@@ -9,7 +9,7 @@ use crate::{Expression, Statement};
 /// the semantics.
 pub fn stmt_starts_with_paren(stmt: &Statement) -> bool {
     match stmt {
-        Statement::FunctionCall(call) => expr_starts_with_paren(&call.call.callee),
+        Statement::FunctionCall(call) => expr_starts_with_paren(&call.callee),
         Statement::Assignment(assign) => {
             let first_var = assign.targets.first();
             first_var.is_some_and(var_starts_with_paren)

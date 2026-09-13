@@ -179,7 +179,7 @@ impl<'ast> Visitor<'ast> for RequireFinder<'_> {
         // in the walk; a bare `require("side_effects")` statement is legal
         // and rewrites to a bare loader call.
         if let Statement::FunctionCall(call_stmt) = stmt {
-            self.handle_call(&call_stmt.call);
+            self.handle_call(call_stmt);
         }
         self.walk_statement(stmt);
     }

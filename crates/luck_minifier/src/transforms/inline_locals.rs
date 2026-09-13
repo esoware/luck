@@ -221,9 +221,10 @@ impl AstTransform for Inliner {
             })
             .collect();
 
-        let last_stmt = block
-            .last_stmt
-            .map(|last| Box::new(self.transform_last_statement(*last)));
+        let last_stmt = block.last_stmt.map(|mut last| {
+            *last = self.transform_last_statement(*last);
+            last
+        });
 
         Block {
             span: block.span,
@@ -237,7 +238,7 @@ impl AstTransform for Inliner {
         // Statement-level calls hold their FunctionCall directly, outside
         // any Expression, so the expression-level callee guard never runs.
         if let Statement::FunctionCall(mut call_stmt) = stmt {
-            call_stmt.call.callee = ensure_prefix(call_stmt.call.callee);
+            call_stmt.callee = ensure_prefix(call_stmt.callee);
             return Statement::FunctionCall(call_stmt);
         }
         stmt

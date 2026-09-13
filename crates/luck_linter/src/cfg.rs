@@ -100,8 +100,8 @@ fn analyze_statement(stmt: &Statement) -> BranchSummary {
             summary.decision_points += count_decision_points_punctuated_exprs(&node.values);
         }
         Statement::FunctionCall(node) => {
-            let is_unconditional_error = call_is_error(&node.call);
-            summary.decision_points += count_decision_points_call(&node.call);
+            let is_unconditional_error = call_is_error(node);
+            summary.decision_points += count_decision_points_call(node);
             if is_unconditional_error {
                 summary.exit = Exit::Error;
             }

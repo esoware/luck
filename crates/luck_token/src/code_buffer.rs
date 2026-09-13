@@ -82,8 +82,10 @@ impl CodeBuffer {
     /// boundary (always true when the removed bytes are ASCII).
     #[inline]
     pub fn truncate(&mut self, new_len: usize) {
-        debug_assert!(
-            std::str::from_utf8(&self.bytes[..new_len.min(self.bytes.len())]).is_ok(),
+        assert!(
+            self.bytes
+                .get(new_len)
+                .is_none_or(|byte| byte & 0xC0 != 0x80),
             "truncation must land on a UTF-8 boundary"
         );
         self.bytes.truncate(new_len);
@@ -95,9 +97,8 @@ impl CodeBuffer {
         if cfg!(debug_assertions) {
             String::from_utf8(self.bytes).expect("CodeBuffer must hold valid UTF-8")
         } else {
-            // SAFETY: every safe method preserves the UTF-8 invariant, and
-            // `truncate` debug-asserts its cut point, so `bytes` is valid
-            // UTF-8 here.
+            // SAFETY: Every safe method preserves the UTF-8 invariant,
+            // including the boundary assertion in `truncate`.
             unsafe { String::from_utf8_unchecked(self.bytes) }
         }
     }
@@ -125,6 +126,37 @@ mod tests {
         assert_eq!(buffer.last_byte(), Some(b' '));
         buffer.truncate(3);
         assert_eq!(buffer.into_string(), "abc");
+    }
+
+    #[test]
+    fn truncate_accepts_every_character_boundary() {
+        let text = "a\u{e9}\u{6f22}\u{1f600}z";
+        for offset in (0..=text.len()).filter(|offset| text.is_char_boundary(*offset)) {
+            let mut buffer = CodeBuffer::default();
+            buffer.print_str(text);
+            buffer.truncate(offset);
+            assert_eq!(buffer.into_string(), &text[..offset]);
+        }
+        for offset in [text.len() + 1, usize::MAX] {
+            let mut buffer = CodeBuffer::default();
+            buffer.print_str(text);
+            buffer.truncate(offset);
+            assert_eq!(buffer.into_string(), text);
+        }
+    }
+
+    #[test]
+    fn truncate_rejects_splitting_a_character_without_changing_output() {
+        let text = "a\u{e9}\u{6f22}\u{1f600}z";
+        for offset in (0..text.len()).filter(|offset| !text.is_char_boundary(*offset)) {
+            let mut buffer = CodeBuffer::default();
+            buffer.print_str(text);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                buffer.truncate(offset);
+            }));
+            assert!(result.is_err(), "offset {offset}");
+            assert_eq!(buffer.into_string(), text);
+        }
     }
 
     #[test]

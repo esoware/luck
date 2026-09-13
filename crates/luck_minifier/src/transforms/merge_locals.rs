@@ -205,9 +205,10 @@ impl AstTransform for LocalMerger {
         // Fuse `local a,b` plus `a,b=X,Y` into `local a,b=X,Y`.
         let merged = fuse_bare_locals(merged, self.version);
 
-        let last_stmt = block
-            .last_stmt
-            .map(|last| Box::new(self.transform_last_statement(*last)));
+        let last_stmt = block.last_stmt.map(|mut last| {
+            *last = self.transform_last_statement(*last);
+            last
+        });
 
         Block {
             span: block.span,

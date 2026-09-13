@@ -155,7 +155,7 @@ fn walk_nested_blocks<'a>(
             }
         }
         Statement::Assignment(node) => walk_exprs(source, &node.values, disabled, out),
-        Statement::FunctionCall(call) => walk_call(source, &call.call, disabled, out),
+        Statement::FunctionCall(call) => walk_call(source, call, disabled, out),
         Statement::CompoundAssignment(node) => walk_expr(source, &node.expr, disabled, out),
         Statement::GlobalDeclaration(global) => {
             if let Some(exprs) = &global.exprs {

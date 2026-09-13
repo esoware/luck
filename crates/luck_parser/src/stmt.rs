@@ -727,10 +727,7 @@ impl Parser<'_> {
         }
 
         match expr {
-            Expression::FunctionCall(call) => {
-                let span = call.span;
-                Statement::FunctionCall(Box::new(FunctionCallStmt { span, call: *call }))
-            }
+            Expression::FunctionCall(call) => Statement::FunctionCall(call),
             _ => {
                 let span = expr.span();
                 self.error(

@@ -1017,7 +1017,7 @@ fn interp_string_preserves_utf8() {
 #[test]
 fn interp_string_unicode_escape_is_not_interpolation() {
     // `\u{41}` is a unicode escape; the `{` must not open an expression.
-    let result = lex("`a\u{41}b`", LuaVersion::Luau);
+    let result = lex(r"`a\u{41}b`", LuaVersion::Luau);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     let TokenKind::InterpBegin(begin_text) = &result.tokens[0].kind else {
         panic!("expected InterpBegin, got {:?}", result.tokens[0].kind);
@@ -1027,7 +1027,44 @@ fn interp_string_unicode_escape_is_not_interpolation() {
     let TokenKind::InterpEnd(end_text) = &result.tokens[1].kind else {
         panic!("expected InterpEnd, got {:?}", result.tokens[1].kind);
     };
-    assert_eq!(end_text.as_str(), "a\u{41}b");
+    assert_eq!(end_text.as_str(), r"a\u{41}b");
+}
+
+#[test]
+fn interp_segments_preserve_raw_escapes_and_spans() {
+    for count in [1, 64] {
+        let text = "\u{e9}\\n\\u{41}\\{\\`\\\\\\z \r\n \u{6f22}".repeat(count);
+        let source = format!("`{text}{{x}}{text}{{y}}{text}`");
+        let result = lex(&source, LuaVersion::Luau);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(
+            result.tokens[0].kind,
+            TokenKind::InterpBegin(text.as_str().into())
+        );
+        assert_eq!(
+            result.tokens[2].kind,
+            TokenKind::InterpMid(text.as_str().into())
+        );
+        assert_eq!(
+            result.tokens[4].kind,
+            TokenKind::InterpEnd(text.as_str().into())
+        );
+        for (index, expected) in [
+            (0, format!("`{text}{{")),
+            (2, format!("}}{text}{{")),
+            (4, format!("}}{text}`")),
+        ] {
+            let span = result.tokens[index].span;
+            assert_eq!(&source[span.start as usize..span.end as usize], expected);
+        }
+        let mut lexer = luck_lexer::Lexer::new(&source, LuaVersion::Luau);
+        for token in &result.tokens {
+            assert_eq!(&lexer.next_token(), token);
+        }
+        let (comments, errors) = lexer.finish();
+        assert!(comments.is_empty());
+        assert!(errors.is_empty(), "{errors:?}");
+    }
 }
 
 #[test]
@@ -1087,6 +1124,35 @@ fn interp_string_rejects_unescaped_line_breaks() {
                 result.errors
             );
         }
+    }
+}
+
+#[test]
+fn interp_string_validates_escapes_like_short_strings() {
+    for source in [
+        r"`\u{}`",
+        r"`\u41`",
+        r"`\u{41`",
+        r"`\999`",
+        r"`\xZZ`",
+        r"`\q`",
+        r"`{n} \256`",
+    ] {
+        let result = lex(source, LuaVersion::Luau);
+        assert!(!result.errors.is_empty(), "{source:?} must be rejected");
+    }
+    for source in [
+        r"`\{`",
+        r"`\}`",
+        r"`\``",
+        r"`\u{41}`",
+        r"`\x41\65\255\a\z  x`",
+        "`\\\n`",
+        "`\\\r\n`",
+        r"`{n} \n {m}`",
+    ] {
+        let result = lex(source, LuaVersion::Luau);
+        assert!(result.errors.is_empty(), "{source:?}: {:?}", result.errors);
     }
 }
 

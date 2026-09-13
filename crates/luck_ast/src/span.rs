@@ -94,6 +94,7 @@ impl Field {
 impl Type {
     pub fn span(&self) -> Span {
         match self {
+            Type::Name { span, .. } => *span,
             Type::Named(t) => t.span,
             Type::Typeof(t) => t.span,
             Type::Table(t) => t.span,

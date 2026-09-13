@@ -5,10 +5,10 @@ use luck_ast::expr::{
 };
 use luck_ast::shared::{Block, Field, FunctionBody, Parameter, Punctuated};
 use luck_ast::stmt::{
-    Assignment, AttributedName, CompoundAssignment, DoBlock, FunctionCallStmt, FunctionDecl,
-    GenericFor, GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfStatement,
-    LabelStatement, LastStatement, LocalAssignment, LocalFunction, NumericFor, RepeatLoop,
-    ReturnStatement, Statement, TypeDeclaration, TypeDeclarationValue, WhileLoop,
+    Assignment, AttributedName, CompoundAssignment, DoBlock, FunctionDecl, GenericFor,
+    GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfStatement, LabelStatement,
+    LastStatement, LocalAssignment, LocalFunction, NumericFor, RepeatLoop, ReturnStatement,
+    Statement, TypeDeclaration, TypeDeclarationValue, WhileLoop,
 };
 use luck_ast::types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
@@ -39,7 +39,9 @@ impl CompactPrinter {
     }
 
     /// Print one piece with its separator decision. Every emit path funnels
-    /// through here so `prev` stays a single byte of state.
+    /// through here so `prev` stays a single byte of state. Inlining keeps
+    /// fixed spellings constant through spacing and buffer operations.
+    #[inline(always)]
     fn emit_piece(&mut self, text: &str, is_wordlike: bool, class: PrevClass) {
         let Some(&first) = text.as_bytes().first() else {
             return;
@@ -97,7 +99,7 @@ impl CompactPrinter {
     fn emit_statement(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Assignment(assign) => self.emit_assignment(assign),
-            Statement::FunctionCall(call) => self.emit_function_call_stmt(call),
+            Statement::FunctionCall(call) => self.emit_function_call(call),
             Statement::DoBlock(block) => self.emit_do_block(block),
             Statement::WhileLoop(while_loop) => self.emit_while_loop(while_loop),
             Statement::RepeatLoop(repeat_loop) => self.emit_repeat_loop(repeat_loop),
@@ -133,10 +135,6 @@ impl CompactPrinter {
         self.emit_punctuated_vars(&assign.targets);
         self.emit_str("=");
         self.emit_punctuated_exprs(&assign.values);
-    }
-
-    fn emit_function_call_stmt(&mut self, call: &FunctionCallStmt) {
-        self.emit_function_call(&call.call);
     }
 
     fn emit_do_block(&mut self, block: &DoBlock) {
@@ -625,6 +623,7 @@ impl CompactPrinter {
 
     fn emit_type(&mut self, ty: &Type) {
         match ty {
+            Type::Name { name, .. } => self.emit_piece(name, true, PrevClass::Word),
             Type::Named(named) => self.emit_named_type(named),
             Type::Typeof(typeof_type) => self.emit_typeof_type(typeof_type),
             Type::Table(table) => self.emit_table_type(table),

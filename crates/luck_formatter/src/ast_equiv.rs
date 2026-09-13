@@ -101,7 +101,7 @@ fn stmt_eq(left: &Statement, right: &Statement, path: &str) -> Result<(), AstDif
             )
         }
         (Statement::FunctionCall(l), Statement::FunctionCall(r)) => {
-            function_call_eq(&l.call, &r.call, &child(path, "FunctionCall"))
+            function_call_eq(l, r, &child(path, "FunctionCall"))
         }
         (Statement::DoBlock(l), Statement::DoBlock(r)) => {
             block_eq(&l.block, &r.block, &child(path, "DoBlock"))
@@ -574,7 +574,14 @@ fn types_equiv(left: &Type, right: &Type, path: &str) -> Result<(), AstDiff> {
         // Unreachable after `unwrap_type_parens`, but keeps the match
         // exhaustive; recurse rather than panic.
         Type::Parenthesized(inner) => types_equiv(&inner.type_value, right, path),
+        Type::Name { name, .. } => match right {
+            Type::Name { name: other, .. } if name == other => Ok(()),
+            Type::Name { .. } => Err(AstDiff::new(child(path, "name"), "type name differs")),
+            Type::Named(named) => simple_named_type_eq(name, named, path),
+            _ => Err(type_kind_diff(left, right, path)),
+        },
         Type::Named(a) => match right {
+            Type::Name { name, .. } => simple_named_type_eq(name, a, path),
             Type::Named(b) => named_type_eq(a, b, path),
             _ => Err(type_kind_diff(left, right, path)),
         },
@@ -817,6 +824,24 @@ fn generic_param_eq(
     }
 }
 
+/// A bare `Type::Name` against a `NamedType`, reporting differences the way
+/// `named_type_eq` does.
+fn simple_named_type_eq(name: &str, named: &NamedType, path: &str) -> Result<(), AstDiff> {
+    if named.prefix.is_some() {
+        return Err(AstDiff::new(path, "named type module presence differs"));
+    }
+    if !matches!(&named.name.kind, luck_token::TokenKind::Identifier(other) if other == name) {
+        return Err(AstDiff::new(child(path, "name"), "type name differs"));
+    }
+    if named.generics.is_some() {
+        return Err(AstDiff::new(
+            child(path, "generics"),
+            "type argument list presence differs",
+        ));
+    }
+    Ok(())
+}
+
 fn type_kind_diff(left: &Type, right: &Type, path: &str) -> AstDiff {
     AstDiff::new(
         path,
@@ -830,7 +855,7 @@ fn type_kind_diff(left: &Type, right: &Type, path: &str) -> AstDiff {
 
 fn type_kind(ty: &Type) -> &'static str {
     match ty {
-        Type::Named(_) => "Named",
+        Type::Name { .. } | Type::Named(_) => "Named",
         Type::Typeof(_) => "Typeof",
         Type::Table(_) => "Table",
         Type::Function(_) => "Function",
@@ -1215,6 +1240,28 @@ mod tests {
         let a = parse_luau("type Pair = { first: number, second: string }");
         let b = parse_luau("type Pair = { first: number, second: string }");
         assert!(blocks_equiv(&a, &b).is_ok());
+    }
+
+    #[test]
+    fn compact_and_general_type_names_are_equivalent() {
+        let synth = luck_ast::synth::Synth::new();
+        let compact = synth.ty_named("number");
+        let general = Type::Named(Box::new(NamedType {
+            span: luck_token::Span::new(0, 0),
+            prefix: None,
+            name: synth.ident("number"),
+            generics: None,
+        }));
+        assert!(types_equiv(&compact, &general, "type").is_ok());
+        assert!(types_equiv(&general, &compact, "type").is_ok());
+        for different in [
+            synth.ty_named("string"),
+            synth.ty_qualified("module", "number"),
+            synth.ty_generic("number", vec![synth.ty_named("T")]),
+        ] {
+            assert!(types_equiv(&compact, &different, "type").is_err());
+            assert!(types_equiv(&different, &compact, "type").is_err());
+        }
     }
 
     #[test]

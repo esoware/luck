@@ -422,7 +422,7 @@ impl IneligibleScanner {
                 }
             }
             Statement::FunctionCall(call_stmt) => {
-                self.scan_call(&call_stmt.call);
+                self.scan_call(call_stmt);
             }
             Statement::DoBlock(do_block) => {
                 self.scan_scoped_block(&do_block.block);

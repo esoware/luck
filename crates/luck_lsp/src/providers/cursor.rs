@@ -283,7 +283,7 @@ impl<'ast> Visitor<'ast> for CallSiteFinder<'_, 'ast> {
     // an expression visit, so hook them here too.
     fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
         if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
-            self.try_record(&call_stmt.call);
+            self.try_record(call_stmt);
         }
         self.walk_statement(stmt);
     }
@@ -383,7 +383,7 @@ impl<'ast> Visitor<'ast> for StringArgFinder<'ast> {
     // an expression visit, so hook them here too.
     fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
         if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
-            self.try_record(&call_stmt.call);
+            self.try_record(call_stmt);
         }
         self.walk_statement(stmt);
     }

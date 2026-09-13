@@ -77,8 +77,9 @@ impl AstTransform for ParenSimplifier {
                 let args = self.walk_punctuated_exprs(args);
                 FunctionArgs::Parenthesized { span, args }
             }
-            FunctionArgs::TableConstructor(table) => {
-                FunctionArgs::TableConstructor(Box::new(self.walk_table_constructor(*table)))
+            FunctionArgs::TableConstructor(mut table) => {
+                *table = self.walk_table_constructor(*table);
+                FunctionArgs::TableConstructor(table)
             }
             other => other,
         }
@@ -120,9 +121,10 @@ impl AstTransform for ParenSimplifier {
             }
             other => self.transform_expression(other),
         };
-        call.explicit_type_args = call
-            .explicit_type_args
-            .map(|type_args| Box::new(self.walk_type_args(*type_args)));
+        call.explicit_type_args = call.explicit_type_args.map(|mut type_args| {
+            *type_args = self.walk_type_args(*type_args);
+            type_args
+        });
         call.args = self.walk_function_args(call.args);
         call
     }

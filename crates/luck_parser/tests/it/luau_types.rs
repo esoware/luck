@@ -22,7 +22,14 @@ fn alias_type(source: &str) -> Type {
 
 #[test]
 fn named_type() {
-    assert!(matches!(alias_type("type X = number"), Type::Named(_)));
+    for expected in ["number", "LongTypeNameThatExceedsInlineStringStorage"] {
+        let source = format!("type X = {expected}");
+        let Type::Name { name, span } = alias_type(&source) else {
+            panic!("expected inline Name");
+        };
+        assert_eq!(name, expected);
+        assert_eq!(&source[span.start as usize..span.end as usize], expected);
+    }
 }
 
 #[test]
