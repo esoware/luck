@@ -995,7 +995,7 @@ dependencies = [
 
 [[package]]
 name = "luck_ast"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "luck_token",
 ]
@@ -1025,7 +1025,7 @@ dependencies = [
 
 [[package]]
 name = "luck_bundler"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "insta",
  "luck_ast",
@@ -1041,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "luck_cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ariadne",
  "assert_cmd",
@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "luck_codegen"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "luck_ast",
  "luck_lexer",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "luck_core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ec4rs",
  "globset",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "luck_formatter"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "compact_str",
  "luck_ast",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "luck_lexer"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "luck_token",
  "memchr",
@@ -1114,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "luck_linter"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "luck_ast",
  "luck_core",
@@ -1126,7 +1126,7 @@ dependencies = [
 
 [[package]]
 name = "luck_lsp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "compact_str",
@@ -1148,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "luck_lua"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "luck_ast",
  "luck_bundler",
@@ -1166,7 +1166,7 @@ dependencies = [
 
 [[package]]
 name = "luck_minifier"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "itoa",
  "luck_ast",
@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "luck_parser"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "luck_ast",
  "luck_lexer",
@@ -1190,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "luck_resolver"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "luck_core",
  "luck_token",
@@ -1201,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "luck_semantic"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "compact_str",
  "luck_ast",
@@ -1228,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "luck_token"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "compact_str",
 ]
