@@ -1,3 +1,5 @@
+mod codes;
+
 use luck_token::Span;
 
 /// An error or warning with a code, source span, and optional help.
@@ -23,29 +25,45 @@ pub enum DiagnosticSeverity {
 }
 
 impl Diagnostic {
-    #[must_use]
-    pub const fn error_at(
+    fn error_at<Message>(code: &'static str, message: Message, file_path: &str, span: Span) -> Self
+    where
+        Message: Into<String>,
+    {
+        Self {
+            code,
+            message: message.into(),
+            severity: DiagnosticSeverity::Error,
+            file_path: file_path.to_owned(),
+            span,
+            help: None,
+        }
+    }
+
+    fn warning_at<Message>(
         code: &'static str,
-        message: String,
-        file_path: String,
+        message: Message,
+        file_path: &str,
         span: Span,
-    ) -> Self {
-        Self { code, message, severity: DiagnosticSeverity::Error, file_path, span, help: None }
+    ) -> Self
+    where
+        Message: Into<String>,
+    {
+        Self {
+            code,
+            message: message.into(),
+            severity: DiagnosticSeverity::Warning,
+            file_path: file_path.to_owned(),
+            span,
+            help: None,
+        }
     }
 
     #[must_use]
-    pub const fn warning_at(
-        code: &'static str,
-        message: String,
-        file_path: String,
-        span: Span,
-    ) -> Self {
-        Self { code, message, severity: DiagnosticSeverity::Warning, file_path, span, help: None }
-    }
-
-    #[must_use]
-    pub(crate) fn with_help(mut self, help: String) -> Self {
-        self.help = Some(help);
+    fn with_help<Help>(mut self, help: Help) -> Self
+    where
+        Help: Into<String>,
+    {
+        self.help = Some(help.into());
         self
     }
 
@@ -58,27 +76,6 @@ impl Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn is_error_follows_the_constructor_severity() {
-        let error = Diagnostic::error_at(
-            "E001",
-            "test message".to_owned(),
-            "test.lua".to_owned(),
-            Span::new(0, 10),
-        );
-        assert!(error.is_error());
-        assert_eq!(error.code, "E001");
-
-        let warning = Diagnostic::warning_at(
-            "W001",
-            "test warning".to_owned(),
-            "test.lua".to_owned(),
-            Span::new(0, 5),
-        );
-        assert!(!warning.is_error());
-        assert_eq!(warning.severity, DiagnosticSeverity::Warning);
-    }
 
     #[test]
     fn stays_below_result_large_err_threshold() {

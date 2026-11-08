@@ -66,7 +66,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn project_filter_includes_and_excludes() {
+    fn takes_included_files_unless_excluded() {
         let root = Path::new("/proj");
         let filter = ProjectFilter::new(
             root,
@@ -80,7 +80,7 @@ mod tests {
     }
 
     #[test]
-    fn project_filter_default_includes_lua_luau() {
+    fn default_include_takes_lua_and_luau_files_at_any_depth() {
         let filter = ProjectFilter::new(Path::new("/proj"), None, None).expect("valid globs");
         assert!(filter.is_included(Path::new("/proj/x.lua")));
         assert!(filter.is_included(Path::new("/proj/sub/y.luau")));

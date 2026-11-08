@@ -287,19 +287,13 @@ impl LintArgs {
             LintFormat::Default => {
                 let renderable_diags: Vec<Diagnostic> = diags
                     .iter()
-                    .map(|diag| match diag.severity {
-                        Severity::Error => Diagnostic::error_at(
-                            diag.rule,
-                            diag.message.clone(),
-                            file_label.to_owned(),
-                            diag.span,
-                        ),
-                        Severity::Warning => Diagnostic::warning_at(
-                            diag.rule,
-                            diag.message.clone(),
-                            file_label.to_owned(),
-                            diag.span,
-                        ),
+                    .map(|diag| Diagnostic {
+                        code: diag.rule,
+                        message: diag.message.clone(),
+                        severity: diag.severity,
+                        file_path: file_label.to_owned(),
+                        span: diag.span,
+                        help: None,
                     })
                     .collect();
                 Rendered::Pretty(render_document_diags(

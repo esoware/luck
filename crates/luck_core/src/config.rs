@@ -1,23 +1,38 @@
-//! `luck.json` project configuration: the typed schema and its `extends`
-//! merging, file loading and discovery, build resolution, `.editorconfig`
+//! `luck.json` project configuration: one module of typed schema per section,
+//! file loading and `extends` resolution, build resolution, `.editorconfig`
 //! layering, and project file filtering.
+//!
+//! Every config struct denies unknown fields, and every config type derives
+//! `schemars::JsonSchema`. The VS Code schema is generated from
+//! [`LuckConfig`], with the type names as its `$defs` keys and the doc
+//! comments as its descriptions.
 
+mod dynamic_require;
 mod editorconfig;
 mod filter;
+mod format_config;
+mod lint_config;
 mod load;
+mod luck_config;
 mod resolve;
-mod schema;
+mod transform_config;
 
+pub use dynamic_require::DynamicRequire;
 pub use editorconfig::resolved_format_config;
 pub use filter::ProjectFilter;
+pub use format_config::{
+    BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatConfig, HexCase, IndentStyle,
+    LineEndings, QuoteStyle, SpaceAfterFunction,
+};
+pub use lint_config::{Category, LintConfig, RuleSetting};
 pub use load::{
     ProjectConfig, discover_config, load_or_discover_config, load_with_extends, parse_luck_config,
 };
-pub use resolve::{BuildConfig, resolve_build_config};
-pub use schema::{
-    Category, DEFAULT_SEARCH_PATHS, DialectKey, EntryConfig, FormatConfig, LintConfig, LuckConfig,
-    ProfileOverrides, RuleSetting,
+pub use luck_config::{
+    DEFAULT_SEARCH_PATHS, DialectKey, EntryConfig, LuckConfig, ProfileOverrides,
 };
+pub use resolve::{BuildConfig, resolve_build_config};
+pub use transform_config::TransformConfig;
 
 const CONFIG_FILE_NAME: &str = "luck.json";
 

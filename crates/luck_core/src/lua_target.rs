@@ -41,15 +41,15 @@ impl FromStr for LuaTarget {
 
 impl fmt::Display for LuaTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Lua51 => write!(f, "Lua51"),
-            Self::Lua52 => write!(f, "Lua52"),
-            Self::Lua53 => write!(f, "Lua53"),
-            Self::Lua54 => write!(f, "Lua54"),
-            Self::Lua55 => write!(f, "Lua55"),
-            Self::Luau => write!(f, "Luau"),
-            Self::LuauRoblox => write!(f, "Roblox"),
-        }
+        f.write_str(match self {
+            Self::Lua51 => "Lua51",
+            Self::Lua52 => "Lua52",
+            Self::Lua53 => "Lua53",
+            Self::Lua54 => "Lua54",
+            Self::Lua55 => "Lua55",
+            Self::Luau => "Luau",
+            Self::LuauRoblox => "Roblox",
+        })
     }
 }
 
@@ -81,57 +81,44 @@ impl LuaTarget {
 mod tests {
     use super::*;
 
-    #[test]
-    fn lua_target_from_str_case_insensitive() {
-        assert_eq!("lua54".parse::<LuaTarget>().unwrap(), LuaTarget::Lua54);
-        assert_eq!("LUA54".parse::<LuaTarget>().unwrap(), LuaTarget::Lua54);
-        assert_eq!("Lua54".parse::<LuaTarget>().unwrap(), LuaTarget::Lua54);
-        assert_eq!("luau".parse::<LuaTarget>().unwrap(), LuaTarget::Luau);
-        assert_eq!("LUAU".parse::<LuaTarget>().unwrap(), LuaTarget::Luau);
-        assert_eq!("5.4".parse::<LuaTarget>().unwrap(), LuaTarget::Lua54);
-        assert_eq!("5.1".parse::<LuaTarget>().unwrap(), LuaTarget::Lua51);
-        "invalid".parse::<LuaTarget>().unwrap_err();
-    }
+    /// Every target with every name it parses from, in lowercase.
+    const ALIASES: [(LuaTarget, &[&str]); 7] = [
+        (LuaTarget::Lua51, &["lua51", "5.1", "51"]),
+        (LuaTarget::Lua52, &["lua52", "5.2", "52"]),
+        (LuaTarget::Lua53, &["lua53", "5.3", "53"]),
+        (LuaTarget::Lua54, &["lua54", "5.4", "54"]),
+        (LuaTarget::Lua55, &["lua55", "5.5", "55"]),
+        (LuaTarget::Luau, &["luau"]),
+        (LuaTarget::LuauRoblox, &["roblox", "roblox-luau", "luau-roblox"]),
+    ];
 
     #[test]
-    fn lua_target_short_and_bare_number_aliases() {
-        for alias in ["54", "5.4", "Lua54", "LUA54", "lua54"] {
-            assert_eq!(
-                alias.parse::<LuaTarget>().unwrap(),
-                LuaTarget::Lua54,
-                "alias {alias} should parse to Lua54"
-            );
+    fn parses_every_alias_in_lowercase_and_uppercase() {
+        for (target, aliases) in ALIASES {
+            for alias in aliases {
+                assert_eq!(alias.parse::<LuaTarget>(), Ok(target), "{alias}");
+                let uppercase = alias.to_uppercase();
+                assert_eq!(uppercase.parse::<LuaTarget>(), Ok(target), "{uppercase}");
+            }
         }
-        assert_eq!("51".parse::<LuaTarget>().unwrap(), LuaTarget::Lua51);
-        assert_eq!("52".parse::<LuaTarget>().unwrap(), LuaTarget::Lua52);
-        assert_eq!("53".parse::<LuaTarget>().unwrap(), LuaTarget::Lua53);
-        assert_eq!("55".parse::<LuaTarget>().unwrap(), LuaTarget::Lua55);
-        assert_eq!("roblox".parse::<LuaTarget>().unwrap(), LuaTarget::LuauRoblox);
-        assert_eq!("Roblox".parse::<LuaTarget>().unwrap(), LuaTarget::LuauRoblox);
     }
 
     #[test]
-    fn lua_target_display_roundtrip() {
-        for target in [
-            LuaTarget::Lua51,
-            LuaTarget::Lua52,
-            LuaTarget::Lua53,
-            LuaTarget::Lua54,
-            LuaTarget::Lua55,
-            LuaTarget::Luau,
-            LuaTarget::LuauRoblox,
-        ] {
+    fn rejects_an_unknown_name() {
+        let error = "invalid".parse::<LuaTarget>().unwrap_err();
+        assert!(error.starts_with("invalid target `invalid`"), "{error}");
+    }
+
+    #[test]
+    fn display_round_trips_through_from_str() {
+        for (target, _) in ALIASES {
             let displayed = target.to_string();
-            let parsed: LuaTarget = displayed.parse().unwrap();
-            assert_eq!(parsed, target);
+            assert_eq!(displayed.parse::<LuaTarget>(), Ok(target), "{displayed}");
         }
     }
 
     #[test]
-    fn luau_roblox_parses_and_projects_onto_luau_syntax_and_roblox_stdlib() {
-        assert_eq!("roblox".parse::<LuaTarget>().unwrap(), LuaTarget::LuauRoblox);
-        assert_eq!("roblox-luau".parse::<LuaTarget>().unwrap(), LuaTarget::LuauRoblox);
-        assert_eq!("luau-roblox".parse::<LuaTarget>().unwrap(), LuaTarget::LuauRoblox);
+    fn luau_roblox_projects_onto_luau_syntax_and_roblox_stdlib() {
         assert_eq!(LuaTarget::LuauRoblox.lua_version(), LuaVersion::Luau);
         assert_eq!(LuaTarget::LuauRoblox.stdlib_environment(), StdlibEnvironment::Roblox);
         assert_eq!(LuaTarget::Luau.stdlib_environment(), StdlibEnvironment::Standalone);

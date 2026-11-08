@@ -186,12 +186,9 @@ fn collect_lua_files(directory: &Path, filter: &ProjectFilter) -> Vec<PathBuf> {
         if path.is_file()
             && let Some(extension) = path.extension()
             && (extension == "lua" || extension == "luau")
+            && filter.is_included(path)
         {
-            // The filter compares canonical paths against its canonical root.
-            let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-            if filter.is_included(&canonical) {
-                files.push(path.to_path_buf());
-            }
+            files.push(path.to_path_buf());
         }
     }
     files.sort();

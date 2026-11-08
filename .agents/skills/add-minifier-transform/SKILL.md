@@ -13,7 +13,7 @@ Always recurse through `self.walk_*`, because hand-rolled recursion misses neste
 
 ## 2. Config flag
 
-Every pass gets a bool on `TransformConfig` (`luck_core/src/transform_config.rs`), then `just schema` (the drift test fails if skipped).
+Every pass gets a bool on `TransformConfig` (`luck_core/src/config/transform_config.rs`), then `just schema` (the drift test fails if skipped).
 
 ## 3. Wire into the pipeline
 

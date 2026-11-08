@@ -33,27 +33,19 @@ extern crate alloc;
 
 mod config;
 mod diagnostic;
-mod dynamic_require;
-mod errors;
-mod format_options;
 mod lua_target;
 mod path;
 mod source_io;
-mod transform_config;
 
 pub use config::{
-    BuildConfig, Category, DEFAULT_SEARCH_PATHS, DialectKey, EntryConfig, FormatConfig, LintConfig,
-    LuckConfig, ProfileOverrides, ProjectConfig, ProjectFilter, RuleSetting, discover_config,
+    BlockNewlineGaps, BuildConfig, CallParentheses, Category, CollapseSimpleStatement,
+    DEFAULT_SEARCH_PATHS, DialectKey, DynamicRequire, EntryConfig, FormatConfig, HexCase,
+    IndentStyle, LineEndings, LintConfig, LuckConfig, ProfileOverrides, ProjectConfig,
+    ProjectFilter, QuoteStyle, RuleSetting, SpaceAfterFunction, TransformConfig, discover_config,
     load_or_discover_config, load_with_extends, parse_luck_config, resolve_build_config,
     resolved_format_config,
 };
 pub use diagnostic::{Diagnostic, DiagnosticSeverity};
-pub use dynamic_require::DynamicRequire;
-pub use format_options::{
-    BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, HexCase, IndentStyle, LineEndings,
-    QuoteStyle, SpaceAfterFunction,
-};
 pub use lua_target::LuaTarget;
 pub use path::{native_path, normalize_path};
 pub use source_io::read_source_file;
-pub use transform_config::TransformConfig;

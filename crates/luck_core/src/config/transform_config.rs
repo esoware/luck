@@ -1,8 +1,6 @@
-use serde::Deserialize;
-
 /// Turns individual minifier passes on or off. Every pass except
 /// `rename_globals` is on by default.
-#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, serde::Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 #[expect(
     clippy::struct_excessive_bools,

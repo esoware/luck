@@ -5,7 +5,7 @@ description: Adds or changes a luck.json configuration field end-to-end, coverin
 
 # Add a config option
 
-Config is one typed source of truth in `luck_core` (`src/config/*.rs`, `src/format_options.rs`, `src/transform_config.rs`), deserialized with `deny_unknown_fields`, projected into a generated JSON schema, and layered under a strict precedence. Skipping the schema regen fails a test. Skipping the precedence or CLI/LSP plumbing fails **silently**. Those are the steps this checklist exists for.
+Config is one typed source of truth in `luck_core` (`src/config/*.rs`, one module per `luck.json` section), deserialized with `deny_unknown_fields`, projected into a generated JSON schema, and layered under a strict precedence. Skipping the schema regen fails a test. Skipping the precedence or CLI/LSP plumbing fails **silently**. Those are the steps this checklist exists for.
 
 ## 1. Add the typed field
 

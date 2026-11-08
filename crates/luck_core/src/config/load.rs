@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use rustc_hash::FxHashSet;
 
 use super::CONFIG_FILE_NAME;
-use super::schema::LuckConfig;
+use super::luck_config::LuckConfig;
 
 /// A loaded `luck.json` and the directory holding it, which roots the
 /// project's relative paths and `include`/`exclude` globs.
@@ -140,7 +140,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn invalid_json5_returns_a_parse_error() {
+    fn rejects_invalid_json5() {
         for bad_json in ["{ target: }", "not json at all !!!"] {
             let error = parse_luck_config(bad_json).unwrap_err();
             assert!(
@@ -151,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn json5_features_supported() {
+    fn parses_json5_comments_unquoted_keys_and_trailing_commas() {
         let json5 = r#"{
             // this is a comment
             lua: "lua54",
@@ -165,17 +165,18 @@ mod tests {
     }
 
     #[test]
-    fn extends_cycle_errors() {
+    fn rejects_a_circular_extends_chain() {
         let directory = tempfile::tempdir().unwrap();
         let first = directory.path().join("a.json");
         let second = directory.path().join("b.json");
         fs::write(&first, r#"{ "extends": ["b.json"], "lua": "lua54" }"#).unwrap();
         fs::write(&second, r#"{ "extends": ["a.json"] }"#).unwrap();
-        load_with_extends(&first).unwrap_err();
+        let message = load_with_extends(&first).unwrap_err();
+        assert!(message.starts_with("circular `extends` chain"), "unexpected error: {message}");
     }
 
     #[test]
-    fn root_extends_within_boundary_ok() {
+    fn root_config_extends_a_file_inside_its_directory() {
         let directory = tempfile::tempdir().unwrap();
         let root_config = directory.path().join("luck.json");
         let base_config = directory.path().join("base.json");
@@ -188,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn root_extends_escaping_boundary_errors() {
+    fn rejects_a_root_config_extending_outside_its_directory() {
         let directory = tempfile::tempdir().unwrap();
         let inner = directory.path().join("project");
         fs::create_dir_all(&inner).unwrap();
@@ -203,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn non_root_extends_parent_ok() {
+    fn non_root_config_extends_a_file_in_a_parent_directory() {
         let directory = tempfile::tempdir().unwrap();
         let inner = directory.path().join("project");
         fs::create_dir_all(&inner).unwrap();

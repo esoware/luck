@@ -17,7 +17,7 @@ Everything else consumes the parsed AST. `luck_minifier`, `luck_formatter`, and 
 | `luck_ast` | `Expression`/`Statement`/`Type` <=64 B, `Visitor`, `Transform`, `Synth` builder (source-free AST construction), `NodeType`/`NodeKind`/`NodeTypeSet` for node-table dispatch | `expr.rs`, `stmt.rs`, `types.rs`, `transform.rs`, `synth.rs`, `node.rs` |
 | `luck_parser` | Pratt expressions + recursive-descent statements + full Luau type grammar, version-gated | `parser.rs`, `parser/expr.rs`, `parser/stmt.rs`, `parser/types.rs` |
 | `luck_codegen` | Compact printer (ambiguity cases live in `separator.rs` + its tests) | `compact.rs`, `separator.rs` |
-| `luck_core` | `LuaTarget`, typed config, `TransformConfig`, diagnostic codes, schemars schema, `read_source_file` (SIMD-validated file reads), `normalize_path`/`native_path` (the forward-slash path form modules are keyed on) | `config.rs`, `errors.rs`, `lua_target.rs` |
+| `luck_core` | `LuaTarget`, typed config, `TransformConfig`, diagnostic codes, schemars schema, `read_source_file` (SIMD-validated file reads), `normalize_path`/`native_path` (the forward-slash path form modules are keyed on) | `config.rs`, `diagnostic/codes.rs`, `lua_target.rs` |
 | `luck_resolver` | Lua search paths, Luau `@aliases`, `.luaurc` chain | `lib.rs`, `lua.rs`, `luau.rs`, `luaurc.rs` |
 | `luck_bundler` | Scope-aware require extraction (via `luck_semantic`), dep graph with cycle detection, version-exact lazy loader emit + line maps, collision-proof `__luck` prefix, runtime-resolved `require(expr)` kept via the loader's dynamic entry point (`dynamic_require`) | `require_extraction.rs`, `graph.rs`, `emitter.rs`, `loader.rs`, `module.rs` |
 | `luck_minifier` | AST transform pipeline, with `TransformConfig` flags turning passes on and off | `lib.rs` `minify()`, `transforms/` |
@@ -46,7 +46,7 @@ One typed source of truth: `luck.json`, discovered by walking up from cwd for pr
 
 ## Diagnostics
 
-One scheme: codes live in `luck_core`'s `errors.rs` as numbered `Diagnostic` constructors (`Diagnostic::e008`), and consumers build them with the `Span`-accepting `error_at`/`warning_at` constructors, never inline literal codes. Parse failures are always E008. Lint diagnostics render with the rule name as the code, and the driver stamps category and severity from the rule's `category()` and the resolved severity. The CLI exits 0 (success), 1 (problems found), or 2 (usage/config error).
+One scheme: codes live in `luck_core`'s `diagnostic/codes.rs` as numbered `Diagnostic` constructors (`Diagnostic::e008`), the only way to build a coded diagnostic, so consumers never inline literal codes. Parse failures are always E008. Lint diagnostics render with the rule name as the code, and the driver stamps category and severity from the rule's `category()` and the resolved severity. The CLI exits 0 (success), 1 (problems found), or 2 (usage/config error).
 
 ## Design decisions
 

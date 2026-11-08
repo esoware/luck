@@ -34,10 +34,10 @@ impl Default for FormatOptions {
             hexadecimal_case: HexCase::Preserve,
             call_parentheses: CallParentheses::Always,
             collapse_simple_statement: CollapseSimpleStatement::Never,
-            line_endings: LineEndings::default(),
-            block_newline_gaps: BlockNewlineGaps::default(),
+            line_endings: LineEndings::Unix,
+            block_newline_gaps: BlockNewlineGaps::Never,
             sort_requires: false,
-            space_after_function_names: SpaceAfterFunction::default(),
+            space_after_function_names: SpaceAfterFunction::Never,
             magic_trailing_comma: false,
         }
     }

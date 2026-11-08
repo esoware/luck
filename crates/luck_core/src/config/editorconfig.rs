@@ -12,8 +12,7 @@ use ec4rs::property::{
     EndOfLine, IndentSize, IndentStyle as EditorconfigIndentStyle, MaxLineLen, TabWidth,
 };
 
-use super::schema::FormatConfig;
-use crate::format_options::{IndentStyle, LineEndings};
+use super::format_config::{FormatConfig, IndentStyle, LineEndings};
 
 /// Resolves the [`FormatConfig`] for a file, with the luck.json `format`
 /// section winning over the `.editorconfig` chain of `file_path`.
@@ -43,13 +42,11 @@ fn format_config_for(file_path: &Path) -> FormatConfig {
         return FormatConfig::default();
     };
 
-    let mut config = FormatConfig::default();
-
-    match properties.get::<EditorconfigIndentStyle>() {
-        Ok(EditorconfigIndentStyle::Tabs) => config.indent_style = Some(IndentStyle::Tabs),
-        Ok(EditorconfigIndentStyle::Spaces) => config.indent_style = Some(IndentStyle::Spaces),
-        Err(_) => {}
-    }
+    let indent_style = match properties.get::<EditorconfigIndentStyle>() {
+        Ok(EditorconfigIndentStyle::Tabs) => Some(IndentStyle::Tabs),
+        Ok(EditorconfigIndentStyle::Spaces) => Some(IndentStyle::Spaces),
+        Err(_) => None,
+    };
 
     // `indent_size` takes precedence over `tab_width`; either alone works.
     let indent_width = match properties.get::<IndentSize>() {
@@ -59,22 +56,27 @@ fn format_config_for(file_path: &Path) -> FormatConfig {
             Err(_) => None,
         },
     };
-    config.indent_width = indent_width.and_then(|width| u8::try_from(width).ok());
 
-    match properties.get::<EndOfLine>() {
-        Ok(EndOfLine::Lf) => config.line_endings = Some(LineEndings::Unix),
-        Ok(EndOfLine::CrLf) => config.line_endings = Some(LineEndings::Windows),
+    let line_endings = match properties.get::<EndOfLine>() {
+        Ok(EndOfLine::Lf) => Some(LineEndings::Unix),
+        Ok(EndOfLine::CrLf) => Some(LineEndings::Windows),
         // `LineEndings` has no bare-CR option.
-        Ok(EndOfLine::Cr) | Err(_) => {}
-    }
+        Ok(EndOfLine::Cr) | Err(_) => None,
+    };
 
-    match properties.get::<MaxLineLen>() {
-        Ok(MaxLineLen::Value(length)) => config.line_width = u16::try_from(length).ok(),
+    let line_width = match properties.get::<MaxLineLen>() {
+        Ok(MaxLineLen::Value(length)) => u16::try_from(length).ok(),
         // `off` disables the limit; leave `line_width` unset.
-        Ok(MaxLineLen::Off) | Err(_) => {}
-    }
+        Ok(MaxLineLen::Off) | Err(_) => None,
+    };
 
-    config
+    FormatConfig {
+        line_width,
+        indent_style,
+        indent_width: indent_width.and_then(|width| u8::try_from(width).ok()),
+        line_endings,
+        ..FormatConfig::default()
+    }
 }
 
 #[cfg(test)]
@@ -100,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_style_maps_to_tabs() {
+    fn tab_style_and_crlf_map_to_tabs_and_windows() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join(".editorconfig"),

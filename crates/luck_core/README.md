@@ -10,8 +10,8 @@ Shared types, configuration parsing, and diagnostics for the luck toolchain.
 
 - **Build targets.** `LuaTarget` enumerates the supported flavors (Lua 5.1 through 5.5, standalone Luau, and Roblox Luau) and parses from common string forms (`"lua54"`, `"5.4"`, `"luau"`, `"roblox"`). It projects onto the two independent axes the rest of the workspace keys off: `lua_version()` (syntax) and `stdlib_environment()` (stdlib).
 - **Transform toggles.** `TransformConfig` enables and disables individual minifier passes, with serde-driven partial overrides from JSON.
-- **Format options.** The option enums (`IndentStyle`, `QuoteStyle`, `HexCase`, `CallParentheses`, `CollapseSimpleStatement`, `LineEndings`, `BlockNewlineGaps`, `SpaceAfterFunction`) live here so `FormatConfig` deserializes directly into them, and `luck_formatter` re-exports every type.
-- **Diagnostics.** `Diagnostic` carries a code, message, severity, file path, span, and help text. Its numbered `E002`-`E012` / `W001`-`W007` constructors, such as `Diagnostic::e008`, live in `errors.rs` and are the single entry point for building one.
+- **Format options.** The option enums (`IndentStyle`, `QuoteStyle`, `HexCase`, `CallParentheses`, `CollapseSimpleStatement`, `LineEndings`, `BlockNewlineGaps`, `SpaceAfterFunction`) live here so `FormatConfig` deserializes directly into them, and `luck_formatter` re-exports every type. Their defaults live in `luck_formatter`'s `FormatOptions`.
+- **Diagnostics.** `Diagnostic` carries a code, message, severity, file path, span, and help text. Its numbered `E002`-`E012` / `W001`-`W007` constructors, such as `Diagnostic::e008`, live in `diagnostic/codes.rs` and are the only way to build one with an `E` or `W` code.
 - **Project configuration.** `luck.json` (parsed as JSON5), profile overrides, `extends` chains, config discovery up the directory tree, and `.editorconfig` layering.
 - **Source loading.** `read_source_file` reads a file with SIMD UTF-8 validation, matching `fs::read_to_string`'s error behavior.
 - **Path form.** `normalize_path` gives the canonical, forward-slash form the resolver and bundler key modules on, and `native_path` turns such a path back into the platform's separators for filesystem calls.
@@ -30,9 +30,12 @@ Every item is exported once, from the crate root.
 
 ### Project configuration
 
-The `config` module handles project configuration, split into focused submodules:
+The `config` module handles project configuration, split into focused submodules. The deserialized `luck.json` types come first, one module per section. Every struct uses `#[serde(deny_unknown_fields)]` and every type derives `schemars::JsonSchema`, and unknown keys and invalid enum values are hard errors.
 
-- **`schema`** holds the deserialized `luck.json` types (`LuckConfig`, `FormatConfig`, `LintConfig`, `RuleSetting`, `Category`, `EntryConfig`, `ProfileOverrides`) and the `extends` merge. Every type uses `#[serde(deny_unknown_fields)]` and derives `schemars::JsonSchema`, and unknown keys and invalid enum values are hard errors. `DialectKey` picks the `lua` or `luau` key for a file by its extension and holds each key's default, and `LuckConfig::target_for_path` resolves through it, so the CLI and the LSP pick a file's dialect the same way.
+- **`luck_config`** holds `LuckConfig`, its build sub-objects `EntryConfig` and `ProfileOverrides`, and the `extends` merge. `DialectKey` picks the `lua` or `luau` key for a file by its extension and holds each key's default, and `LuckConfig::target_for_path` resolves through it, so the CLI and the LSP pick a file's dialect the same way.
+- **`format_config`** holds the `format` section's `FormatConfig` and the formatter option enums.
+- **`lint_config`** holds the `lint` section's `LintConfig`, `RuleSetting`, and `Category`, which `luck_linter` re-exports.
+- **`transform_config`** and **`dynamic_require`** hold `TransformConfig` and `DynamicRequire`, the `transforms` and `dynamic_require` values.
 - **`load`** owns `parse_luck_config` (JSON5), the recursive `extends` chain with cycle and `root`-boundary checks, upward `discover_config`, and `load_or_discover_config`, which loads an explicit `-c` path or else discovers. Both return a `ProjectConfig`: the config and the directory holding it, which roots the project's relative paths and globs.
 - **`resolve`** turns a loaded `LuckConfig` into `BuildConfig`s, applying the selected profile and resolving entry/output paths for the single-entry or multi-entry (`entries`) form.
 - **`filter`** holds `ProjectFilter`, which decides from `include`/`exclude` globs whether a file belongs to the project (exclude wins).
@@ -40,11 +43,11 @@ The `config` module handles project configuration, split into focused submodules
 
 `.luaurc` files belong to `luck_resolver`, which parses and caches them for Luau alias resolution.
 
-The VS Code schema at `editors/vscode/schemas/luckrc.schema.json` is **generated** from `LuckConfig`, and a test checks it for drift. Regenerate it with `cargo test -p luck_core regenerate_luckrc_schema -- --ignored`.
+The VS Code schema at `editors/vscode/schemas/luckrc.schema.json` is **generated** from `LuckConfig`, and a test checks it for drift. The type names are its `$defs` keys and the doc comments its descriptions, so renaming a config type or editing one of its doc comments changes the schema. Regenerate it with `cargo test -p luck_core regenerate_luckrc_schema -- --ignored`.
 
 ### Diagnostics
 
-`Diagnostic` carries a code, message, severity, file path, source `Span`, and optional help text. `error_at` and `warning_at` build one. Consumers never inline literal codes. They call the numbered constructors in `errors.rs`, such as `Diagnostic::e004`. Codes marked "not emitted" have no constructor, and their numbers stay reserved:
+`Diagnostic` carries a code, message, severity, file path, source `Span`, and optional help text. Consumers never inline literal codes. They call the numbered constructors in `diagnostic/codes.rs`, such as `Diagnostic::e004`. Only a lint diagnostic, whose code is its rule's name, is built field by field. Codes marked "not emitted" have no constructor, and their numbers stay reserved:
 
 | Code | Meaning |
 |------|---------|
