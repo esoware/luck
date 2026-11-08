@@ -1,4 +1,4 @@
-use luck_semantic::{Reference, ReferenceKind, ScopeId, ScopeKind, ScopeTree};
+use luck_semantic::{Reference, ScopeId, ScopeKind, ScopeTree};
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
@@ -39,9 +39,7 @@ impl WholeRule for GlobalUsedAsLocal {
             if name == "_" || context.semantic.is_known_global(name) {
                 continue;
             }
-            let is_assigned = references.iter().any(|reference| {
-                matches!(reference.kind, ReferenceKind::Write | ReferenceKind::ReadWrite)
-            });
+            let is_assigned = references.iter().any(|reference| reference.kind.is_write());
             if !is_assigned {
                 continue;
             }

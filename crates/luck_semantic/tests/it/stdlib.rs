@@ -10,7 +10,17 @@ use luck_semantic::{
 };
 use luck_token::{LuaVersion, StdlibEnvironment};
 
-use crate::common::{all_libraries, luau, roblox, standalone_library};
+use crate::common::{NUMBERED_VERSIONS, all_libraries, luau, roblox, standalone_library};
+
+fn function_at<'library>(
+    library: &'library StdlibLibrary,
+    path: &[&str],
+) -> &'library StdlibFunction {
+    let Some(StdlibEntry::Function(function)) = library.lookup(path) else {
+        panic!("{:?}/{:?}: {path:?} should be a function", library.version, library.environment);
+    };
+    function
+}
 
 #[test]
 fn every_library_loads() {
@@ -30,24 +40,14 @@ fn numbered_lua_environment_is_ignored() {
 }
 
 #[test]
-fn table_getn_only_deprecated_in_52_plus() {
-    let lua51 = standalone_library(LuaVersion::Lua51);
-    let getn_51 = lua51.lookup(&["table", "getn"]).expect("table.getn present in 5.1");
-    let StdlibEntry::Function(function_51) = getn_51 else {
-        panic!("table.getn should be a function");
-    };
+fn table_getn_deprecated_in_51_and_fixes_to_length_from_52() {
     assert!(
-        function_51.deprecated.is_some(),
+        function_at(standalone_library(LuaVersion::Lua51), &["table", "getn"]).deprecated.is_some(),
         "Lua 5.1 marks table.getn deprecated in luck since it's already replaced by '#'"
     );
 
     for newer in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54] {
-        let entry = standalone_library(newer)
-            .lookup(&["table", "getn"])
-            .expect("table.getn still visible in newer versions");
-        let StdlibEntry::Function(function) = entry else {
-            panic!("table.getn should be a function");
-        };
+        let function = function_at(standalone_library(newer), &["table", "getn"]);
         let deprecation =
             function.deprecated.as_ref().expect("table.getn must be deprecated in 5.2+");
         let template = deprecation
@@ -60,18 +60,12 @@ fn table_getn_only_deprecated_in_52_plus() {
 
 #[test]
 fn unpack_deprecated_from_52() {
-    let lua51 = standalone_library(LuaVersion::Lua51);
-    let unpack_51 = lua51.lookup(&["unpack"]).expect("unpack in 5.1");
-    if let StdlibEntry::Function(function) = unpack_51 {
-        assert!(function.deprecated.is_none(), "unpack is current in 5.1");
-    }
+    assert!(
+        function_at(standalone_library(LuaVersion::Lua51), &["unpack"]).deprecated.is_none(),
+        "unpack is current in 5.1"
+    );
     for newer in [LuaVersion::Lua52, LuaVersion::Lua53] {
-        let entry = standalone_library(newer)
-            .lookup(&["unpack"])
-            .expect("unpack kept as compat in 5.2/5.3");
-        let StdlibEntry::Function(function) = entry else {
-            panic!("unpack should be a function");
-        };
+        let function = function_at(standalone_library(newer), &["unpack"]);
         let deprecation = function.deprecated.as_ref().expect("unpack deprecated in 5.2+");
         let template =
             deprecation.replace_template.as_ref().expect("unpack has a replace template");
@@ -111,35 +105,27 @@ fn utf8_only_53_plus() {
 }
 
 #[test]
-fn loadstring_replace_template_round_trip() {
-    let entry =
-        standalone_library(LuaVersion::Lua52).lookup(&["loadstring"]).expect("loadstring in 5.2");
-    if let StdlibEntry::Function(function) = entry {
-        let deprecation = function.deprecated.as_ref().expect("loadstring is deprecated");
-        let template =
-            deprecation.replace_template.as_ref().expect("loadstring has a replace template");
-        assert_eq!(template.as_str(), "load(%1)");
-    } else {
-        panic!("loadstring must be a function");
-    }
+fn loadstring_deprecated_in_52_fixes_to_load() {
+    let function = function_at(standalone_library(LuaVersion::Lua52), &["loadstring"]);
+    let deprecation = function.deprecated.as_ref().expect("loadstring is deprecated");
+    let template =
+        deprecation.replace_template.as_ref().expect("loadstring has a replace template");
+    assert_eq!(template.as_str(), "load(%1)");
 }
 
 #[test]
 fn must_use_markers_present() {
     let lua54 = standalone_library(LuaVersion::Lua54);
-    for name in ["pcall", "tostring", "tonumber", "type", "select"] {
-        let entry = lua54.lookup(&[name]).expect(name);
-        if let StdlibEntry::Function(function) = entry {
-            assert!(function.is_must_use, "{name} should be must_use");
-        }
-    }
-    let table_concat = lua54.lookup(&["table", "concat"]).unwrap();
-    if let StdlibEntry::Function(function) = table_concat {
-        assert!(function.is_must_use);
-    }
-    let coroutine_create = lua54.lookup(&["coroutine", "create"]).unwrap();
-    if let StdlibEntry::Function(function) = coroutine_create {
-        assert!(function.is_must_use);
+    for path in [
+        &["pcall"][..],
+        &["tostring"][..],
+        &["tonumber"][..],
+        &["type"][..],
+        &["select"][..],
+        &["table", "concat"][..],
+        &["coroutine", "create"][..],
+    ] {
+        assert!(function_at(lua54, path).is_must_use, "{path:?} should be must_use");
     }
 }
 
@@ -236,11 +222,11 @@ fn luau_math_has_predicates_and_new_constants() {
 #[test]
 fn luau_string_rep_has_no_separator() {
     for library in [luau(), roblox()] {
-        let entry = library.lookup(&["string", "rep"]).expect("string.rep");
-        let StdlibEntry::Function(function) = entry else {
-            panic!("string.rep should be a function");
-        };
-        assert_eq!(function.max_args(), Some(2), "Luau rep has no separator arg");
+        assert_eq!(
+            function_at(library, &["string", "rep"]).max_args(),
+            Some(2),
+            "Luau rep has no separator arg"
+        );
     }
 }
 
@@ -255,17 +241,11 @@ fn luau_buffer_bit_functions_present() {
 
 #[test]
 fn vector_create_wide_mode_standalone_only() {
-    let standalone = luau().lookup(&["vector", "create"]).expect("vector.create standalone");
-    let StdlibEntry::Function(standalone_function) = standalone else {
-        panic!("vector.create should be a function");
-    };
+    let standalone_function = function_at(luau(), &["vector", "create"]);
     assert!(standalone_function.accepts_arg_count(3));
     assert!(standalone_function.accepts_arg_count(4), "standalone wide mode takes w");
 
-    let entry = roblox().lookup(&["vector", "create"]).expect("vector.create roblox");
-    let StdlibEntry::Function(roblox_function) = entry else {
-        panic!("vector.create should be a function");
-    };
+    let roblox_function = function_at(roblox(), &["vector", "create"]);
     assert!(roblox_function.accepts_arg_count(3));
     assert!(!roblox_function.accepts_arg_count(4), "roblox vectors are 3-wide");
 }
@@ -298,11 +278,7 @@ fn luau_table_clone_present_in_luau_only() {
 
 #[test]
 fn string_constant_arg_set_for_io_open_mode() {
-    let io_open = standalone_library(LuaVersion::Lua54).lookup(&["io", "open"]).unwrap();
-    let StdlibEntry::Function(function) = io_open else {
-        panic!("io.open should be a function");
-    };
-    let second = function
+    let second = function_at(standalone_library(LuaVersion::Lua54), &["io", "open"])
         .primary_signature()
         .params
         .get(1)
@@ -315,16 +291,10 @@ fn string_constant_arg_set_for_io_open_mode() {
 }
 
 #[test]
-fn pure_markers_preserved() {
+fn pure_markers_present() {
     let lua54 = standalone_library(LuaVersion::Lua54);
-    let math_abs = lua54.lookup(&["math", "abs"]).unwrap();
-    if let StdlibEntry::Function(function) = math_abs {
-        assert!(function.is_pure);
-    }
-    let print = lua54.lookup(&["print"]).unwrap();
-    if let StdlibEntry::Function(function) = print {
-        assert!(!function.is_pure);
-    }
+    assert!(function_at(lua54, &["math", "abs"]).is_pure);
+    assert!(!function_at(lua54, &["print"]).is_pure);
 }
 
 #[test]
@@ -414,11 +384,8 @@ fn legacy_roblox_globals_are_deprecated() {
         let entry = roblox().lookup(&[name]).unwrap_or_else(|| panic!("{name} present"));
         assert!(entry.deprecation().is_some(), "{name} must carry a deprecation marker");
     }
-    let ypcall = roblox().lookup(&["ypcall"]).expect("ypcall present");
-    let StdlibEntry::Function(function) = ypcall else {
-        panic!("ypcall must be a function");
-    };
-    let deprecation = function.deprecated.as_ref().expect("ypcall deprecated");
+    let deprecation =
+        function_at(roblox(), &["ypcall"]).deprecated.as_ref().expect("ypcall deprecated");
     assert_eq!(deprecation.replace_template.as_deref(), Some("pcall(%1)"), "ypcall fixes to pcall");
 }
 
@@ -465,10 +432,7 @@ fn core_luau_entries_in_both_environments() {
 
 #[test]
 fn lua51_xpcall_strictly_two_args() {
-    let xpcall = standalone_library(LuaVersion::Lua51).lookup(&["xpcall"]).expect("xpcall in 5.1");
-    let StdlibEntry::Function(function) = xpcall else {
-        panic!("xpcall must be a function");
-    };
+    let function = function_at(standalone_library(LuaVersion::Lua51), &["xpcall"]);
     assert_eq!(function.min_args(), 2);
     assert_eq!(
         function.max_args(),
@@ -489,29 +453,26 @@ fn lua52_package_searchers_replaces_loaders() {
 
 #[test]
 fn lua53_randomseed_single_arg() {
-    let randomseed = standalone_library(LuaVersion::Lua53)
-        .lookup(&["math", "randomseed"])
-        .expect("math.randomseed in 5.3");
-    if let StdlibEntry::Function(function) = randomseed {
-        assert_eq!(
-            function.max_args(),
-            Some(1),
-            "5.3 randomseed takes at most one arg; two-seed form is 5.4+"
-        );
-    }
+    assert_eq!(
+        function_at(standalone_library(LuaVersion::Lua53), &["math", "randomseed"]).max_args(),
+        Some(1),
+        "5.3 randomseed takes at most one arg; two-seed form is 5.4+"
+    );
 }
 
 #[test]
 fn lua54_debug_uservalue_optional_index() {
     let lua54 = standalone_library(LuaVersion::Lua54);
-    let getuservalue = lua54.lookup(&["debug", "getuservalue"]).unwrap();
-    if let StdlibEntry::Function(function) = getuservalue {
-        assert_eq!(function.max_args(), Some(2), "5.4 added optional n index");
-    }
-    let setuservalue = lua54.lookup(&["debug", "setuservalue"]).unwrap();
-    if let StdlibEntry::Function(function) = setuservalue {
-        assert_eq!(function.max_args(), Some(3), "5.4 added optional n index");
-    }
+    assert_eq!(
+        function_at(lua54, &["debug", "getuservalue"]).max_args(),
+        Some(2),
+        "5.4 added optional n index"
+    );
+    assert_eq!(
+        function_at(lua54, &["debug", "setuservalue"]).max_args(),
+        Some(3),
+        "5.4 added optional n index"
+    );
 }
 
 #[test]
@@ -520,12 +481,7 @@ fn lua52_debug_uservalue_and_upvalue_functions_present() {
     for (name, min, max) in
         [("getuservalue", 1, 1), ("setuservalue", 2, 2), ("upvalueid", 2, 2), ("upvaluejoin", 4, 4)]
     {
-        let entry = lua52
-            .lookup(&["debug", name])
-            .unwrap_or_else(|| panic!("debug.{name} was added in 5.2"));
-        let StdlibEntry::Function(function) = entry else {
-            panic!("debug.{name} should be a function");
-        };
+        let function = function_at(lua52, &["debug", name]);
         assert_eq!(function.min_args(), min, "debug.{name} min");
         assert_eq!(function.max_args(), Some(max), "debug.{name} max");
     }
@@ -536,40 +492,30 @@ fn lua52_debug_uservalue_and_upvalue_functions_present() {
 }
 
 #[test]
-fn lua52_math_compat_functions_not_deprecated() {
+fn math_compat_functions_not_deprecated_before_53() {
     // No early warnings: these are standard in 5.2 and deprecated only from
     // 5.3.
     for name in ["atan2", "cosh", "sinh", "tanh", "frexp", "ldexp", "pow"] {
         for version in [LuaVersion::Lua51, LuaVersion::Lua52] {
-            let entry = standalone_library(version)
-                .lookup(&["math", name])
-                .unwrap_or_else(|| panic!("math.{name} in {version:?}"));
-            let StdlibEntry::Function(function) = entry else {
-                panic!("math.{name} should be a function");
-            };
             assert!(
-                function.deprecated.is_none(),
+                function_at(standalone_library(version), &["math", name]).deprecated.is_none(),
                 "math.{name} is standard in {version:?}; no early-warning deprecation"
             );
         }
     }
     // math.log10 is different: 5.2 deprecates it and has its replacement.
-    let log10 = standalone_library(LuaVersion::Lua52).lookup(&["math", "log10"]).unwrap();
-    if let StdlibEntry::Function(function) = log10 {
-        assert!(function.deprecated.is_some());
-    }
+    assert!(
+        function_at(standalone_library(LuaVersion::Lua52), &["math", "log10"]).deprecated.is_some()
+    );
 }
 
 #[test]
 fn lua52_math_mod_present_deprecated_like_neighbors() {
     for version in [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Lua53] {
-        let entry = standalone_library(version)
-            .lookup(&["math", "mod"])
-            .unwrap_or_else(|| panic!("math.mod compat entry in {version:?}"));
-        let StdlibEntry::Function(function) = entry else {
-            panic!("math.mod should be a function");
-        };
-        assert!(function.deprecated.is_some(), "math.mod deprecated in {version:?}");
+        assert!(
+            function_at(standalone_library(version), &["math", "mod"]).deprecated.is_some(),
+            "math.mod deprecated in {version:?}"
+        );
     }
 }
 
@@ -593,49 +539,37 @@ fn lua53_bit32_members_all_deprecated() {
 #[test]
 fn randomseed_required_before_54_optional_after() {
     for version in [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Lua53] {
-        let entry = standalone_library(version).lookup(&["math", "randomseed"]).unwrap();
-        if let StdlibEntry::Function(function) = entry {
-            assert_eq!(function.min_args(), 1, "seed is required in {version:?}");
-        }
+        assert_eq!(
+            function_at(standalone_library(version), &["math", "randomseed"]).min_args(),
+            1,
+            "seed is required in {version:?}"
+        );
     }
     for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
-        let entry = standalone_library(version).lookup(&["math", "randomseed"]).unwrap();
-        if let StdlibEntry::Function(function) = entry {
-            assert_eq!(function.min_args(), 0, "seed is optional in {version:?}");
-            assert_eq!(function.max_args(), Some(2));
-        }
+        let function = function_at(standalone_library(version), &["math", "randomseed"]);
+        assert_eq!(function.min_args(), 0, "seed is optional in {version:?}");
+        assert_eq!(function.max_args(), Some(2));
     }
 }
 
 #[test]
 fn lua51_io_lines_filename_only() {
-    let entry = standalone_library(LuaVersion::Lua51).lookup(&["io", "lines"]).unwrap();
-    if let StdlibEntry::Function(function) = entry {
-        assert_eq!(
-            function.max_args(),
-            Some(1),
-            "read formats as io.lines arguments arrived in 5.2"
-        );
-    }
-    let entry_52 = standalone_library(LuaVersion::Lua52).lookup(&["io", "lines"]).unwrap();
-    if let StdlibEntry::Function(function) = entry_52 {
-        assert_eq!(function.max_args(), None, "5.2+ io.lines accepts read formats");
-    }
+    assert_eq!(
+        function_at(standalone_library(LuaVersion::Lua51), &["io", "lines"]).max_args(),
+        Some(1),
+        "read formats as io.lines arguments arrived in 5.2"
+    );
+    assert_eq!(
+        function_at(standalone_library(LuaVersion::Lua52), &["io", "lines"]).max_args(),
+        None,
+        "5.2+ io.lines accepts read formats"
+    );
 }
 
 #[test]
 fn io_popen_mode_is_r_or_w_only() {
-    for version in [
-        LuaVersion::Lua51,
-        LuaVersion::Lua52,
-        LuaVersion::Lua53,
-        LuaVersion::Lua54,
-        LuaVersion::Lua55,
-    ] {
-        let entry = standalone_library(version).lookup(&["io", "popen"]).unwrap();
-        let StdlibEntry::Function(function) = entry else {
-            panic!("io.popen should be a function");
-        };
+    for version in NUMBERED_VERSIONS {
+        let function = function_at(standalone_library(version), &["io", "popen"]);
         let mode = &function.primary_signature().params[1];
         let StdlibArgKind::Constant(values) = &mode.kind else {
             panic!("io.popen mode should be a constant set");
@@ -648,10 +582,7 @@ fn io_popen_mode_is_r_or_w_only() {
 
 #[test]
 fn lua54_collectgarbage_overloads_and_constant_deprecation() {
-    let entry = standalone_library(LuaVersion::Lua54).lookup(&["collectgarbage"]).unwrap();
-    let StdlibEntry::Function(function) = entry else {
-        panic!("collectgarbage should be a function");
-    };
+    let function = function_at(standalone_library(LuaVersion::Lua54), &["collectgarbage"]);
     assert!(
         function.accepts_arg_count(4),
         "collectgarbage('incremental', p, s, sz) is valid in 5.4"
@@ -680,10 +611,7 @@ fn lua54_collectgarbage_overloads_and_constant_deprecation() {
 
 #[test]
 fn lua55_collectgarbage_param_form_replaces_setpause() {
-    let entry = standalone_library(LuaVersion::Lua55).lookup(&["collectgarbage"]).unwrap();
-    let StdlibEntry::Function(function) = entry else {
-        panic!("collectgarbage should be a function");
-    };
+    let function = function_at(standalone_library(LuaVersion::Lua55), &["collectgarbage"]);
     assert!(function.accepts_arg_count(3), "collectgarbage('param', 'pause', n) is valid in 5.5");
     for signature in &function.signatures {
         let StdlibArgKind::Constant(values) = &signature.params[0].kind else {
@@ -707,10 +635,7 @@ fn lua55_collectgarbage_param_form_replaces_setpause() {
 
 #[test]
 fn allowed_constants_need_every_matching_signature_constrained() {
-    let entry = standalone_library(LuaVersion::Lua55).lookup(&["collectgarbage"]).unwrap();
-    let StdlibEntry::Function(function) = entry else {
-        panic!("collectgarbage should be a function");
-    };
+    let function = function_at(standalone_library(LuaVersion::Lua55), &["collectgarbage"]);
     let names =
         function.allowed_constants(1, 3).expect("the 3-arg `param` form takes a constant name");
     assert_eq!(names.len(), 1);
@@ -718,10 +643,7 @@ fn allowed_constants_need_every_matching_signature_constrained() {
     assert!(function.allowed_constants(2, 3).is_none(), "the `param` value is a number");
     assert!(function.allowed_constants(0, 9).is_none(), "no signature takes 9");
 
-    let tostring_entry = standalone_library(LuaVersion::Lua54).lookup(&["tostring"]).unwrap();
-    let StdlibEntry::Function(tostring) = tostring_entry else {
-        panic!("tostring should be a function");
-    };
+    let tostring = function_at(standalone_library(LuaVersion::Lua54), &["tostring"]);
     assert!(tostring.allowed_constants(0, 1).is_none());
 }
 
@@ -730,27 +652,24 @@ fn utf8_lax_flag_only_in_54_plus() {
     for (version, expected_len_max) in
         [(LuaVersion::Lua53, Some(3)), (LuaVersion::Lua54, Some(4)), (LuaVersion::Lua55, Some(4))]
     {
-        let entry = standalone_library(version).lookup(&["utf8", "len"]).unwrap();
-        if let StdlibEntry::Function(function) = entry {
-            assert_eq!(function.max_args(), expected_len_max, "utf8.len in {version:?}");
-        }
-        let codes = standalone_library(version).lookup(&["utf8", "codes"]).unwrap();
-        if let StdlibEntry::Function(function) = codes {
-            let expected = if version == LuaVersion::Lua53 { 1 } else { 2 };
-            assert_eq!(function.max_args(), Some(expected), "utf8.codes in {version:?}");
-        }
+        let library = standalone_library(version);
+        assert_eq!(
+            function_at(library, &["utf8", "len"]).max_args(),
+            expected_len_max,
+            "utf8.len in {version:?}"
+        );
+        let expected = if version == LuaVersion::Lua53 { 1 } else { 2 };
+        assert_eq!(
+            function_at(library, &["utf8", "codes"]).max_args(),
+            Some(expected),
+            "utf8.codes in {version:?}"
+        );
     }
 }
 
 #[test]
 fn arg_global_present_in_all_numbered_versions() {
-    for version in [
-        LuaVersion::Lua51,
-        LuaVersion::Lua52,
-        LuaVersion::Lua53,
-        LuaVersion::Lua54,
-        LuaVersion::Lua55,
-    ] {
+    for version in NUMBERED_VERSIONS {
         assert!(
             standalone_library(version).lookup(&["arg"]).is_some(),
             "the standalone interpreter defines arg in {version:?}"
@@ -773,10 +692,7 @@ fn prompt_globals_follow_manual_documentation() {
 
 #[test]
 fn lua55_table_create_nrec_is_a_number_hint() {
-    let entry = standalone_library(LuaVersion::Lua55).lookup(&["table", "create"]).unwrap();
-    let StdlibEntry::Function(function) = entry else {
-        panic!("table.create should be a function");
-    };
+    let function = function_at(standalone_library(LuaVersion::Lua55), &["table", "create"]);
     let nrec = &function.primary_signature().params[1];
     assert!(
         matches!(nrec.kind, StdlibArgKind::Number),
@@ -789,14 +705,14 @@ fn lua55_table_create_nrec_is_a_number_hint() {
 fn lua55_table_create_present_and_frexp_undeprecated() {
     let lua55 = standalone_library(LuaVersion::Lua55);
     assert!(lua55.lookup(&["table", "create"]).is_some(), "table.create was added in 5.5");
-    let frexp = lua55.lookup(&["math", "frexp"]).unwrap();
-    if let StdlibEntry::Function(function) = frexp {
-        assert!(function.deprecated.is_none(), "5.5 made math.frexp standard again");
-    }
-    let ldexp = lua55.lookup(&["math", "ldexp"]).unwrap();
-    if let StdlibEntry::Function(function) = ldexp {
-        assert!(function.deprecated.is_none(), "5.5 made math.ldexp standard again");
-    }
+    assert!(
+        function_at(lua55, &["math", "frexp"]).deprecated.is_none(),
+        "5.5 made math.frexp standard again"
+    );
+    assert!(
+        function_at(lua55, &["math", "ldexp"]).deprecated.is_none(),
+        "5.5 made math.ldexp standard again"
+    );
 }
 
 #[test]
@@ -875,20 +791,14 @@ fn datetime_has_no_new_constructor() {
 
 #[test]
 fn region3_requires_both_corners() {
-    let entry = roblox().lookup(&["Region3", "new"]).unwrap();
-    let StdlibEntry::Function(function) = entry else {
-        panic!("Region3.new should be a function");
-    };
+    let function = function_at(roblox(), &["Region3", "new"]);
     assert_eq!(function.min_args(), 2);
     assert_eq!(function.max_args(), Some(2));
 }
 
 #[test]
 fn cframe_new_overloads_accept_documented_arities_only() {
-    let entry = roblox().lookup(&["CFrame", "new"]).unwrap();
-    let StdlibEntry::Function(function) = entry else {
-        panic!("CFrame.new should be a function");
-    };
+    let function = function_at(roblox(), &["CFrame", "new"]);
     for count in [0, 1, 2, 3, 7, 12] {
         assert!(function.accepts_arg_count(count), "CFrame.new must accept {count} args");
     }
@@ -899,11 +809,7 @@ fn cframe_new_overloads_accept_documented_arities_only() {
 
 #[test]
 fn instance_new_parent_param_is_deprecated() {
-    let entry = roblox().lookup(&["Instance", "new"]).unwrap();
-    let StdlibEntry::Function(function) = entry else {
-        panic!("Instance.new should be a function");
-    };
-    let parent = &function.primary_signature().params[1];
+    let parent = &function_at(roblox(), &["Instance", "new"]).primary_signature().params[1];
     assert!(
         parent.deprecated.is_some(),
         "Instance.new's parent arg carries a per-param deprecation"
@@ -912,10 +818,7 @@ fn instance_new_parent_param_is_deprecated() {
 
 #[test]
 fn physical_properties_overloads_match_docs() {
-    let entry = roblox().lookup(&["PhysicalProperties", "new"]).unwrap();
-    let StdlibEntry::Function(function) = entry else {
-        panic!("PhysicalProperties.new should be a function");
-    };
+    let function = function_at(roblox(), &["PhysicalProperties", "new"]);
     for count in [1, 3, 5, 6] {
         assert!(
             function.accepts_arg_count(count),
@@ -946,13 +849,7 @@ fn shape_function<'library>(
 
 #[test]
 fn file_shape_present_in_all_numbered_versions() {
-    for version in [
-        LuaVersion::Lua51,
-        LuaVersion::Lua52,
-        LuaVersion::Lua53,
-        LuaVersion::Lua54,
-        LuaVersion::Lua55,
-    ] {
+    for version in NUMBERED_VERSIONS {
         let library = standalone_library(version);
         for member in ["read", "lines", "write", "seek", "setvbuf", "close", "flush"] {
             let function = shape_function(library, "file", member);
@@ -965,11 +862,8 @@ fn file_shape_present_in_all_numbered_versions() {
             &["io", "input"][..],
             &["io", "output"][..],
         ] {
-            let Some(StdlibEntry::Function(function)) = library.lookup(opener) else {
-                panic!("{version:?}: {opener:?} missing");
-            };
             assert_eq!(
-                function.returns_shape.as_deref(),
+                function_at(library, opener).returns_shape.as_deref(),
                 Some("file"),
                 "{version:?}: {opener:?} returns a file"
             );
@@ -1046,22 +940,12 @@ fn luau_files_have_no_file_shape() {
     assert!(!roblox().shapes.contains_key("file"));
 }
 
-fn lookup_function<'library>(
-    library: &'library StdlibLibrary,
-    segments: &[&str],
-) -> Option<&'library StdlibFunction> {
-    let Some(StdlibEntry::Function(function)) = library.lookup(segments) else {
-        return None;
-    };
-    Some(function)
-}
-
 fn constant_set<'library>(
     library: &'library StdlibLibrary,
     segments: &[&str],
     param_index: usize,
 ) -> Option<&'library [StdlibConstant]> {
-    let params = &lookup_function(library, segments)?.primary_signature().params;
+    let params = &function_at(library, segments).primary_signature().params;
     let StdlibArgKind::Constant(values) = &params.get(param_index)?.kind else {
         return None;
     };
@@ -1074,8 +958,7 @@ fn find<'values>(values: &'values [StdlibConstant], name: &str) -> Option<&'valu
 
 #[test]
 fn game_is_a_shaped_datamodel() {
-    let get_service =
-        lookup_function(roblox(), &["game", "GetService"]).expect("game:GetService is a function");
+    let get_service = function_at(roblox(), &["game", "GetService"]);
     assert!(get_service.is_method);
     assert!(get_service.is_must_use);
     assert_eq!(get_service.returns_shape.as_deref(), Some("Instance"));
@@ -1138,8 +1021,7 @@ fn class_set_sentinels() {
 
 #[test]
 fn brickcolor_name_set() {
-    let function =
-        lookup_function(roblox(), &["BrickColor", "new"]).expect("BrickColor.new is a function");
+    let function = function_at(roblox(), &["BrickColor", "new"]);
     let StdlibArgKind::Constant(names) = &function.signatures[0].params[0].kind else {
         panic!("BrickColor.new arg 0 should be the name set");
     };
@@ -1150,21 +1032,13 @@ fn brickcolor_name_set() {
 
 #[test]
 fn settings_provider_shapes() {
-    let global =
-        roblox().shape_member("GlobalSettings", "GetService").expect("GlobalSettings:GetService");
-    let StdlibEntry::Function(function) = global else {
-        panic!("expected function");
-    };
+    let function = shape_function(roblox(), "GlobalSettings", "GetService");
     let StdlibArgKind::Constant(values) = &function.primary_signature().params[0].kind else {
         panic!("expected constant set");
     };
     assert!(find(values, "Studio").is_some());
     assert!(find(values, "RenderSettings").is_some());
-    let user =
-        roblox().shape_member("UserSettings", "GetService").expect("UserSettings:GetService");
-    let StdlibEntry::Function(user_function) = user else {
-        panic!("expected function");
-    };
+    let user_function = shape_function(roblox(), "UserSettings", "GetService");
     let StdlibArgKind::Constant(user_values) = &user_function.primary_signature().params[0].kind
     else {
         panic!("expected constant set");
@@ -1243,8 +1117,9 @@ fn enum_get_enum_items_resolves() {
 
 #[test]
 fn enum_from_name_resolves() {
-    resolve_last_call("local item = Enum.Material:FromName('Grass')")
+    let name = resolve_last_call("local item = Enum.Material:FromName('Grass')")
         .expect("Enum.Material:FromName resolves");
+    assert_eq!(name, "Enum:FromName");
 }
 
 #[test]
@@ -1257,8 +1132,9 @@ fn enum_global_get_enums_resolves() {
 fn enum_item_name_is_string_shaped() {
     // EnumItem.Name carries the string shape, so string methods
     // chain off it.
-    resolve_last_call("local upper = Enum.Material.Grass.Name:upper()")
+    let name = resolve_last_call("local upper = Enum.Material.Grass.Name:upper()")
         .expect("Name:upper() resolves through the string shape");
+    assert_eq!(name, "string:upper");
 }
 
 #[test]

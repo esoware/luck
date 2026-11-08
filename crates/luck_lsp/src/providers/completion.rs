@@ -42,18 +42,14 @@ pub(crate) fn completion(document: &DocumentState, position: Position) -> Comple
             }
         };
         let shape = if let Some(entry) = stdlib.lookup(&prefix.segments) {
-            match entry {
-                StdlibEntry::Namespace(namespace) => {
-                    if !prefix.is_colon {
-                        for (name, member) in &namespace.members {
-                            push(name.as_str(), member);
-                        }
-                    }
-                    namespace.shape.as_ref()
+            if let StdlibEntry::Namespace(namespace) = entry
+                && !prefix.is_colon
+            {
+                for (name, member) in &namespace.members {
+                    push(name.as_str(), member);
                 }
-                StdlibEntry::Constant(value) | StdlibEntry::Property(value) => value.shape.as_ref(),
-                StdlibEntry::Function(_) => None,
             }
+            entry.shape()
         } else if let [root] = prefix.segments.as_slice() {
             // A shaped local: `local f = io.open(...); f:` offers the
             // file methods, `local g = game; g:` the DataModel ones. It

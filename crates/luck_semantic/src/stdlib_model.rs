@@ -1,20 +1,10 @@
-//! The stdlib catalog: overloaded signatures, typed parameters, colon
+//! The stdlib catalog model: overloaded signatures, typed parameters, colon
 //! methods on named shapes, and deprecation on entries, parameters, and
 //! constant values.
-//!
-//! Each environment has its own TOML file under `stdlib_data/`: `lua51`
-//! through `lua55`, `luau` (standalone Luau), and `luau_roblox`. The
-//! environments diverge in both directions, so the files don't inherit from
-//! each other. Shared entries are duplicated, and `tests/it/drift.rs` keeps
-//! the copies in sync. The Roblox library also splices in the generated
-//! service and enum files. Each library is parsed on first use.
 
 use alloc::collections::BTreeMap;
-use std::sync::LazyLock;
 
 use luck_token::{CompactString, LuaVersion, StdlibEnvironment, offset_to_index};
-
-use crate::stdlib_load::parse_library;
 
 /// A global, namespace member, or shape member.
 #[derive(Debug, Clone)]
@@ -44,6 +34,17 @@ impl StdlibEntry {
             Self::Function(function) => function.is_read_only,
             Self::Constant(value) | Self::Property(value) => value.is_read_only,
             Self::Namespace(_) => true,
+        }
+    }
+
+    /// The shape of the value this entry names. A function's value has
+    /// none; `returns_shape` is the shape of its call's result.
+    #[must_use]
+    pub const fn shape(&self) -> Option<&CompactString> {
+        match self {
+            Self::Constant(value) | Self::Property(value) => value.shape.as_ref(),
+            Self::Namespace(namespace) => namespace.shape.as_ref(),
+            Self::Function(_) => None,
         }
     }
 }
@@ -269,78 +270,19 @@ impl StdlibLibrary {
         entry: &'library StdlibEntry,
         segment: &str,
     ) -> Option<&'library StdlibEntry> {
-        match entry {
-            StdlibEntry::Namespace(namespace) => namespace.members.get(segment).or_else(|| {
-                // A shaped namespace is also a value, so `Enum.Material`
-                // has the `Enum` shape's methods as well as its items.
-                self.shape_member(namespace.shape.as_ref()?, segment)
-            }),
-            StdlibEntry::Constant(value) | StdlibEntry::Property(value) => {
-                self.shape_member(value.shape.as_ref()?, segment)
-            }
-            StdlibEntry::Function(_) => None,
+        if let StdlibEntry::Namespace(namespace) = entry
+            && let Some(member) = namespace.members.get(segment)
+        {
+            return Some(member);
         }
+        // A shaped namespace is also a value, so `Enum.Material` has the
+        // `Enum` shape's methods as well as its items.
+        self.shape_member(entry.shape()?, segment)
     }
 
     #[must_use]
     pub fn shape_member(&self, shape: &str, name: &str) -> Option<&StdlibEntry> {
         self.shapes.get(shape)?.members.get(name)
-    }
-}
-
-const LUA51_TOML: &str = include_str!("../stdlib_data/lua51.toml");
-const LUA52_TOML: &str = include_str!("../stdlib_data/lua52.toml");
-const LUA53_TOML: &str = include_str!("../stdlib_data/lua53.toml");
-const LUA54_TOML: &str = include_str!("../stdlib_data/lua54.toml");
-const LUA55_TOML: &str = include_str!("../stdlib_data/lua55.toml");
-const LUAU_TOML: &str = include_str!("../stdlib_data/luau.toml");
-const LUAU_ROBLOX_TOML: &str = include_str!("../stdlib_data/luau_roblox.toml");
-// Generated from the Roblox API dump; each file's header gives the regen
-// command.
-const ROBLOX_API_TOML: &str = include_str!("../stdlib_data/roblox_api.toml");
-const ROBLOX_ENUMS_TOML: &str = include_str!("../stdlib_data/roblox_enums.toml");
-
-static LUA51_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
-    parse_library(&[LUA51_TOML], LuaVersion::Lua51, StdlibEnvironment::Standalone)
-});
-static LUA52_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
-    parse_library(&[LUA52_TOML], LuaVersion::Lua52, StdlibEnvironment::Standalone)
-});
-static LUA53_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
-    parse_library(&[LUA53_TOML], LuaVersion::Lua53, StdlibEnvironment::Standalone)
-});
-static LUA54_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
-    parse_library(&[LUA54_TOML], LuaVersion::Lua54, StdlibEnvironment::Standalone)
-});
-static LUA55_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
-    parse_library(&[LUA55_TOML], LuaVersion::Lua55, StdlibEnvironment::Standalone)
-});
-static LUAU_LIBRARY: LazyLock<StdlibLibrary> =
-    LazyLock::new(|| parse_library(&[LUAU_TOML], LuaVersion::Luau, StdlibEnvironment::Standalone));
-static LUAU_ROBLOX_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
-    parse_library(
-        &[LUAU_ROBLOX_TOML, ROBLOX_API_TOML, ROBLOX_ENUMS_TOML],
-        LuaVersion::Luau,
-        StdlibEnvironment::Roblox,
-    )
-});
-
-/// The parsed library for a version and environment.
-///
-/// The environment only matters for Luau; each numbered Lua version has
-/// one library. A library is parsed on first use and shared after that.
-#[must_use]
-pub fn library_for(version: LuaVersion, environment: StdlibEnvironment) -> &'static StdlibLibrary {
-    match version {
-        LuaVersion::Lua51 => &LUA51_LIBRARY,
-        LuaVersion::Lua52 => &LUA52_LIBRARY,
-        LuaVersion::Lua53 => &LUA53_LIBRARY,
-        LuaVersion::Lua54 => &LUA54_LIBRARY,
-        LuaVersion::Lua55 => &LUA55_LIBRARY,
-        LuaVersion::Luau => match environment {
-            StdlibEnvironment::Standalone => &LUAU_LIBRARY,
-            StdlibEnvironment::Roblox => &LUAU_ROBLOX_LIBRARY,
-        },
     }
 }
 
@@ -385,19 +327,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn replace_template_basic() {
+    fn replace_template_substitutes_numbered_args() {
         assert_eq!(expand_replace_template("#%1", &["t"]), "#t");
         assert_eq!(expand_replace_template("%1 ^ %2", &["a", "b"]), "a ^ b");
         assert_eq!(expand_replace_template("load(%1)", &["x"]), "load(x)");
     }
 
     #[test]
-    fn replace_template_escape() {
+    fn replace_template_unescapes_double_percent() {
         assert_eq!(expand_replace_template("100%% %1", &["x"]), "100% x");
     }
 
     #[test]
-    fn replace_template_missing_arg_empty() {
+    fn replace_template_expands_missing_arg_to_nothing() {
         assert_eq!(expand_replace_template("%1 + %2", &["a"]), "a + ");
     }
 }

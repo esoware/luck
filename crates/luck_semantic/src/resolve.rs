@@ -43,11 +43,11 @@ impl<'input> ShapeResolver<'input> {
                 let name = token.identifier()?;
                 match self.tree.resolved_symbol(name, token.span) {
                     Some(symbol_id) => self.symbol_shapes.get(&symbol_id),
-                    None => value_shape(self.library.globals.get(name)?),
+                    None => self.library.globals.get(name)?.shape(),
                 }
             }
             Expression::Var(Var::FieldAccess(_)) => {
-                value_shape(self.library.lookup(&self.global_path(expr)?)?)
+                self.library.lookup(&self.global_path(expr)?)?.shape()
             }
             Expression::FunctionCall(call) => self.call_shape(call),
             Expression::Parenthesized(parenthesized) => self.expression_shape(&parenthesized.expr),
@@ -145,14 +145,6 @@ impl<'input> ShapeResolver<'input> {
 /// callers get a library-lifetime reference.
 fn string_shape(library: &StdlibLibrary) -> Option<&CompactString> {
     library.shapes.get_key_value("string").map(|(name, _shape)| name)
-}
-
-const fn value_shape(entry: &StdlibEntry) -> Option<&CompactString> {
-    match entry {
-        StdlibEntry::Constant(value) | StdlibEntry::Property(value) => value.shape.as_ref(),
-        StdlibEntry::Namespace(namespace) => namespace.shape.as_ref(),
-        StdlibEntry::Function(_) => None,
-    }
 }
 
 /// Compute the shape of every never-reassigned local whose initializer has
@@ -258,6 +250,7 @@ mod tests {
 
     fn shaped_library() -> StdlibLibrary {
         parse_library(&[SHAPED_LIBRARY], LuaVersion::Lua54, StdlibEnvironment::Standalone)
+            .expect("test catalog loads")
     }
 
     fn shapes_for(source: &str, library: &StdlibLibrary) -> (ScopeTree, SymbolShapes) {

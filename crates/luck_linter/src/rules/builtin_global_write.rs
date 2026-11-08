@@ -1,5 +1,5 @@
 use luck_ast::{Expression, FunctionName, Statement, Var, Visitor};
-use luck_semantic::{ReferenceKind, SemanticAnalysis};
+use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, Token};
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
@@ -33,7 +33,7 @@ impl WholeRule for BuiltinGlobalWrite {
         let mut diags = Vec::new();
 
         for reference in semantic.scope_tree.unresolved_references() {
-            if !matches!(reference.kind, ReferenceKind::Write | ReferenceKind::ReadWrite) {
+            if !reference.kind.is_write() {
                 continue;
             }
             if !is_overwritable_builtin(semantic, &reference.name) {

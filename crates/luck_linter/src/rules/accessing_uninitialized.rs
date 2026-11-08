@@ -1,5 +1,3 @@
-use luck_semantic::ReferenceKind;
-
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 use crate::uninitialized::{UninitializedLocals, first_reference};
@@ -36,7 +34,7 @@ impl WholeRule for AccessingUninitialized {
             .filter(|symbol| uninitialized_locals.contains(symbol) && !symbol.name.starts_with('_'))
             .filter_map(|symbol| {
                 let first = first_reference(symbol, tree)?;
-                matches!(first.kind, ReferenceKind::Read | ReferenceKind::ReadWrite).then(|| {
+                first.kind.is_read().then(|| {
                     LintDiagnostic::new(
                         "accessing_uninitialized",
                         format!(

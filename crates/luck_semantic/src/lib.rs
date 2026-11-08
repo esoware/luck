@@ -42,8 +42,9 @@ pub use scope::{
     Reference, ReferenceId, ReferenceKind, Scope, ScopeId, ScopeKind, ScopeTree, Symbol, SymbolId,
     SymbolKind,
 };
+pub use stdlib_load::library_for;
 pub use stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
     StdlibNamespace, StdlibParam, StdlibShape, StdlibSignature, StdlibValue,
-    expand_replace_template, library_for,
+    expand_replace_template,
 };

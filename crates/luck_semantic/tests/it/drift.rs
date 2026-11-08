@@ -35,6 +35,12 @@ fn shape_paths(library: &'static StdlibLibrary) -> BTreeMap<String, &'static Std
     paths
 }
 
+fn all_entries(library: &'static StdlibLibrary) -> BTreeMap<String, &'static StdlibEntry> {
+    let mut entries = global_paths(library);
+    entries.extend(shape_paths(library));
+    entries
+}
+
 fn collect(
     path: &str,
     entry: &'static StdlibEntry,
@@ -261,12 +267,8 @@ fn numbered_lua_adjacent_versions_agree() {
         let &[older, newer] = pair else {
             continue;
         };
-        let older_library = standalone_library(older);
-        let newer_library = standalone_library(newer);
-        let older_paths: BTreeMap<String, &StdlibEntry> =
-            global_paths(older_library).into_iter().chain(shape_paths(older_library)).collect();
-        let newer_paths: BTreeMap<String, &StdlibEntry> =
-            global_paths(newer_library).into_iter().chain(shape_paths(newer_library)).collect();
+        let older_paths = all_entries(standalone_library(older));
+        let newer_paths = all_entries(standalone_library(newer));
         for (path, older_entry) in &older_paths {
             let Some(newer_entry) = newer_paths.get(path) else {
                 continue;
@@ -287,12 +289,6 @@ fn numbered_lua_adjacent_versions_agree() {
         "adjacent numbered-Lua versions drifted without an allowlisted manual delta:\n{}",
         mismatches.join("\n")
     );
-}
-
-fn all_entries(library: &'static StdlibLibrary) -> BTreeMap<String, &'static StdlibEntry> {
-    let mut entries = global_paths(library);
-    entries.extend(shape_paths(library));
-    entries
 }
 
 /// Highest `%n` placeholder in a replace template.

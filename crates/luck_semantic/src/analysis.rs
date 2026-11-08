@@ -5,7 +5,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::builder;
 use crate::resolve::{ShapeResolver, symbol_shapes};
 use crate::scope::{ScopeTree, SymbolId};
-use crate::stdlib_model::{StdlibEntry, StdlibLibrary, library_for};
+use crate::stdlib_load::library_for;
+use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
 /// Semantic analysis result for one Lua chunk.
 #[derive(Debug)]

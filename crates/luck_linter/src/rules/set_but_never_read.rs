@@ -1,4 +1,4 @@
-use luck_semantic::{ReferenceKind, SymbolKind};
+use luck_semantic::SymbolKind;
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
@@ -48,14 +48,9 @@ impl WholeRule for SetButNeverRead {
             let mut has_write = false;
             let mut has_read = false;
             for &reference_id in &symbol.reference_ids {
-                match semantic.scope_tree.reference(reference_id).kind {
-                    ReferenceKind::Read => has_read = true,
-                    ReferenceKind::Write => has_write = true,
-                    ReferenceKind::ReadWrite => {
-                        has_read = true;
-                        has_write = true;
-                    }
-                }
+                let kind = semantic.scope_tree.reference(reference_id).kind;
+                has_read |= kind.is_read();
+                has_write |= kind.is_write();
             }
 
             if !has_write || has_read {

@@ -63,6 +63,6 @@ Entries model:
 | `scope.rs` | Scope tree data structures |
 | `builder.rs` | AST visitor that constructs the scope tree |
 | `resolve.rs` | Conservative shape and callee resolution, and the local-shape pass |
-| `stdlib_model.rs` | Stdlib data model, queries, and the per-environment library instances |
-| `stdlib_load.rs` | TOML deserialization and composition into the `StdlibLibrary` model |
+| `stdlib_model.rs` | Stdlib data model and its queries |
+| `stdlib_load.rs` | TOML deserialization, composition into the `StdlibLibrary` model, and the per-environment library instances |
 | `stdlib_data/` | Per-environment library data (+ generated Roblox data) |

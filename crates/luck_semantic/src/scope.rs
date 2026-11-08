@@ -106,6 +106,24 @@ pub enum ReferenceKind {
     ReadWrite,
 }
 
+impl ReferenceKind {
+    #[must_use]
+    pub const fn is_read(self) -> bool {
+        match self {
+            Self::Read | Self::ReadWrite => true,
+            Self::Write => false,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_write(self) -> bool {
+        match self {
+            Self::Write | Self::ReadWrite => true,
+            Self::Read => false,
+        }
+    }
+}
+
 impl ScopeTree {
     #[must_use]
     #[expect(

@@ -1,5 +1,5 @@
 use luck_ast::{Expression, FunctionBody, FunctionCall, Statement, Var, Visitor};
-use luck_semantic::{ReferenceKind, ScopeTree, SymbolId};
+use luck_semantic::{ScopeTree, SymbolId};
 use luck_token::Span;
 use rustc_hash::FxHashMap;
 
@@ -68,13 +68,7 @@ impl DefinitionCollector<'_> {
         else {
             return;
         };
-        let is_reassigned = symbol.reference_ids.iter().any(|&reference_id| {
-            matches!(
-                self.tree.reference(reference_id).kind,
-                ReferenceKind::Write | ReferenceKind::ReadWrite
-            )
-        });
-        if is_reassigned {
+        if symbol.is_modified {
             return;
         }
         self.functions.insert(

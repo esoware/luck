@@ -1,6 +1,13 @@
 //! Loads the stdlib catalog: `Raw*` types mirror the TOML schema and
 //! convert into the [`StdlibLibrary`] model.
 //!
+//! Each environment has its own TOML file under `stdlib_data/`: `lua51`
+//! through `lua55`, `luau` (standalone Luau), and `luau_roblox`. The
+//! environments diverge in both directions, so the files don't inherit from
+//! each other. Shared entries are duplicated, and `tests/it/drift.rs` keeps
+//! the copies in sync. The Roblox library also splices in the generated
+//! service and enum files. Each library is parsed on first use.
+//!
 //! Loading a library also merges namespaces split across its files,
 //! splices in the enum tree, resolves shape `extends`, and derives the
 //! `string` receiver shape.
@@ -32,13 +39,9 @@
 //!   ...
 //! ```
 
-#![expect(
-    clippy::panic,
-    reason = "the catalog is built in, so a bad entry is a luck bug, not user input"
-)]
-
 use alloc::collections::BTreeMap;
 use core::mem;
+use std::sync::LazyLock;
 
 use luck_token::{CompactString, LuaVersion, StdlibEnvironment};
 use serde::Deserialize;
@@ -264,11 +267,11 @@ impl From<RawValue> for StdlibValue {
     }
 }
 
-/// # Panics
+/// # Errors
 ///
-/// Panics on a constant param that names an unknown set, or that has both
-/// or neither of inline values and a set reference.
-fn convert_param(raw: RawParam, sets: &ConstantSets, path: &str) -> StdlibParam {
+/// Fails on a constant param that names an unknown set, or that has both or
+/// neither of inline values and a set reference.
+fn convert_param(raw: RawParam, path: &str, sets: &ConstantSets) -> Result<StdlibParam, String> {
     let kind = match raw.kind {
         RawParamKind::Any => StdlibArgKind::Any,
         RawParamKind::Bool => StdlibArgKind::Bool,
@@ -282,71 +285,76 @@ fn convert_param(raw: RawParam, sets: &ConstantSets, path: &str) -> StdlibParam 
                 (false, None) => values.into_iter().map(StdlibConstant::from).collect(),
                 (true, Some(set_name)) => sets
                     .get(set_name.as_str())
-                    .unwrap_or_else(|| {
-                        panic!("stdlib entry {path}: unknown constant set '{set_name}'")
-                    })
+                    .ok_or_else(|| {
+                        format!("stdlib entry {path}: unknown constant set '{set_name}'")
+                    })?
                     .clone(),
-                (false, Some(_)) | (true, None) => panic!(
-                    "stdlib entry {path}: constant param needs inline values or a set \
-                     reference, but not both"
-                ),
+                (false, Some(_)) | (true, None) => {
+                    return Err(format!(
+                        "stdlib entry {path}: constant param needs inline values or a set \
+                         reference, but not both"
+                    ));
+                }
             };
             StdlibArgKind::Constant(constants)
         }
         RawParamKind::Vararg => StdlibArgKind::Vararg,
     };
-    StdlibParam {
+    Ok(StdlibParam {
         kind,
         is_required: raw.required,
         deprecated: raw.deprecated.map(StdlibDeprecation::from),
-    }
+    })
 }
 
-fn convert_signature(
-    params: Vec<RawParam>,
-    min_args: usize,
-    max_args: i32,
-    sets: &ConstantSets,
-    path: &str,
-) -> StdlibSignature {
-    StdlibSignature {
-        params: params.into_iter().map(|param| convert_param(param, sets, path)).collect(),
-        min_args,
-        max_args: usize::try_from(max_args).ok(),
-    }
-}
-
-/// # Panics
+/// # Errors
 ///
-/// Panics when a function without overloads lacks `min_args` or
-/// `max_args`, or when one with overloads also has flat signature fields.
-fn convert_function(raw: RawFunction, path: &str, sets: &ConstantSets) -> StdlibFunction {
-    let has_flat_signature =
-        raw.min_args.is_some() || raw.max_args.is_some() || raw.params.is_some();
+/// Fails when a param fails to convert.
+fn convert_signature(
+    raw: RawSignature,
+    path: &str,
+    sets: &ConstantSets,
+) -> Result<StdlibSignature, String> {
+    Ok(StdlibSignature {
+        params: raw
+            .params
+            .into_iter()
+            .map(|param| convert_param(param, path, sets))
+            .collect::<Result<_, _>>()?,
+        min_args: raw.min_args,
+        max_args: usize::try_from(raw.max_args).ok(),
+    })
+}
+
+/// # Errors
+///
+/// Fails when a function without overloads lacks `min_args` or `max_args`,
+/// when one with overloads also has flat signature fields, or when a
+/// signature fails to convert.
+fn convert_function(
+    raw: RawFunction,
+    path: &str,
+    sets: &ConstantSets,
+) -> Result<StdlibFunction, String> {
     let signatures: Vec<StdlibSignature> = if raw.overloads.is_empty() {
         let (Some(min_args), Some(max_args)) = (raw.min_args, raw.max_args) else {
-            panic!("stdlib entry {path}: flat signature requires min_args and max_args");
+            return Err(format!(
+                "stdlib entry {path}: flat signature requires min_args and max_args"
+            ));
         };
-        vec![convert_signature(raw.params.unwrap_or_default(), min_args, max_args, sets, path)]
-    } else {
-        assert!(
-            !has_flat_signature,
+        let params = raw.params.unwrap_or_default();
+        vec![convert_signature(RawSignature { params, min_args, max_args }, path, sets)?]
+    } else if raw.min_args.is_some() || raw.max_args.is_some() || raw.params.is_some() {
+        return Err(format!(
             "stdlib entry {path}: flat signature fields and overloads are mutually exclusive"
-        );
+        ));
+    } else {
         raw.overloads
             .into_iter()
-            .map(|signature| {
-                convert_signature(
-                    signature.params,
-                    signature.min_args,
-                    signature.max_args,
-                    sets,
-                    path,
-                )
-            })
-            .collect()
+            .map(|signature| convert_signature(signature, path, sets))
+            .collect::<Result<_, _>>()?
     };
-    StdlibFunction {
+    Ok(StdlibFunction {
         signatures,
         is_pure: raw.is_pure,
         is_must_use: raw.must_use,
@@ -354,13 +362,16 @@ fn convert_function(raw: RawFunction, path: &str, sets: &ConstantSets) -> Stdlib
         is_read_only: raw.read_only,
         is_method: raw.method,
         returns_shape: raw.returns.map(CompactString::from),
-    }
+    })
 }
 
-fn convert_entry(raw: RawEntry, path: &str, sets: &ConstantSets) -> StdlibEntry {
-    match raw {
+/// # Errors
+///
+/// Fails when the entry or one of its members fails to convert.
+fn convert_entry(raw: RawEntry, path: &str, sets: &ConstantSets) -> Result<StdlibEntry, String> {
+    Ok(match raw {
         RawEntry::Function(function) => {
-            StdlibEntry::Function(Box::new(convert_function(function, path, sets)))
+            StdlibEntry::Function(Box::new(convert_function(function, path, sets)?))
         }
         RawEntry::Constant(value) => StdlibEntry::Constant(value.into()),
         RawEntry::Property(value) => StdlibEntry::Property(value.into()),
@@ -368,7 +379,7 @@ fn convert_entry(raw: RawEntry, path: &str, sets: &ConstantSets) -> StdlibEntry 
             let mut members = BTreeMap::new();
             for (name, child) in namespace.members {
                 let child_path = format!("{path}.{name}");
-                members.insert(name.into(), convert_entry(child, &child_path, sets));
+                members.insert(name.into(), convert_entry(child, &child_path, sets)?);
             }
             StdlibEntry::Namespace(StdlibNamespace {
                 members,
@@ -376,7 +387,7 @@ fn convert_entry(raw: RawEntry, path: &str, sets: &ConstantSets) -> StdlibEntry 
                 deprecated: namespace.deprecated.map(StdlibDeprecation::from),
             })
         }
-    }
+    })
 }
 
 /// String namespace members whose first param isn't the subject string,
@@ -395,15 +406,15 @@ const STRING_RETURNING_MEMBERS: &[&str] =
 /// dropped, mirroring Lua's string metatable. Hand-authored shape members
 /// win over derived ones.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics when a subject-first member declares a signature with no params.
+/// Fails when a subject-first member declares a signature with no params.
 fn derive_string_shape(
     globals: &BTreeMap<CompactString, StdlibEntry>,
     shapes: &mut BTreeMap<CompactString, StdlibShape>,
-) {
+) -> Result<(), String> {
     let Some(StdlibEntry::Namespace(string_namespace)) = globals.get("string") else {
-        return;
+        return Ok(());
     };
     let shape = shapes
         .entry(CompactString::const_new("string"))
@@ -418,10 +429,11 @@ fn derive_string_shape(
         };
         let mut method = (**function).clone();
         for signature in &mut method.signatures {
-            assert!(
-                !signature.params.is_empty(),
-                "string.{name}: receiver derivation requires a leading subject param"
-            );
+            if signature.params.is_empty() {
+                return Err(format!(
+                    "string.{name}: receiver derivation requires a leading subject param"
+                ));
+            }
             signature.params.remove(0);
             signature.min_args = signature.min_args.saturating_sub(1);
             signature.max_args = signature.max_args.map(|max| max.saturating_sub(1));
@@ -437,60 +449,137 @@ fn derive_string_shape(
         }
         shape.members.insert(name.clone(), StdlibEntry::Function(Box::new(method)));
     }
+    Ok(())
 }
 
 /// Deep-merge `incoming` into `existing`. Namespaces merge recursively;
 /// any other collision is a catalog bug.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics when two non-namespace entries collide or two namespaces declare
+/// Fails when two non-namespace entries collide or two namespaces declare
 /// different shapes.
-fn merge_entry(existing: &mut StdlibEntry, incoming: StdlibEntry, path: &str) {
+fn merge_entry(
+    existing: &mut StdlibEntry,
+    incoming: StdlibEntry,
+    path: &str,
+) -> Result<(), String> {
     let (StdlibEntry::Namespace(existing_namespace), StdlibEntry::Namespace(incoming_namespace)) =
         (existing, incoming)
     else {
-        panic!("internal stdlib data conflict at {path}: non-namespace entry defined twice");
+        return Err(format!(
+            "internal stdlib data conflict at {path}: non-namespace entry defined twice"
+        ));
     };
     for (name, child) in incoming_namespace.members {
-        let child_path = format!("{path}.{name}");
         match existing_namespace.members.get_mut(&name) {
-            Some(existing_child) => merge_entry(existing_child, child, &child_path),
+            Some(existing_child) => merge_entry(existing_child, child, &format!("{path}.{name}"))?,
             None => {
                 existing_namespace.members.insert(name, child);
             }
         }
     }
     if let Some(shape) = incoming_namespace.shape {
-        let is_conflicting = existing_namespace
-            .shape
-            .as_ref()
-            .is_some_and(|existing_shape| *existing_shape != shape);
-        assert!(!is_conflicting, "namespace {path}: conflicting shapes");
+        if existing_namespace.shape.as_ref().is_some_and(|existing_shape| *existing_shape != shape)
+        {
+            return Err(format!("namespace {path}: conflicting shapes"));
+        }
         existing_namespace.shape = Some(shape);
     }
     if existing_namespace.deprecated.is_none() {
         existing_namespace.deprecated = incoming_namespace.deprecated;
     }
+    Ok(())
+}
+
+const LUA51_TOML: &str = include_str!("../stdlib_data/lua51.toml");
+const LUA52_TOML: &str = include_str!("../stdlib_data/lua52.toml");
+const LUA53_TOML: &str = include_str!("../stdlib_data/lua53.toml");
+const LUA54_TOML: &str = include_str!("../stdlib_data/lua54.toml");
+const LUA55_TOML: &str = include_str!("../stdlib_data/lua55.toml");
+const LUAU_TOML: &str = include_str!("../stdlib_data/luau.toml");
+const LUAU_ROBLOX_TOML: &str = include_str!("../stdlib_data/luau_roblox.toml");
+// Generated from the Roblox API dump; each file's header gives the regen
+// command.
+const ROBLOX_API_TOML: &str = include_str!("../stdlib_data/roblox_api.toml");
+const ROBLOX_ENUMS_TOML: &str = include_str!("../stdlib_data/roblox_enums.toml");
+
+static LUA51_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
+    load_built_in(&[LUA51_TOML], LuaVersion::Lua51, StdlibEnvironment::Standalone)
+});
+static LUA52_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
+    load_built_in(&[LUA52_TOML], LuaVersion::Lua52, StdlibEnvironment::Standalone)
+});
+static LUA53_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
+    load_built_in(&[LUA53_TOML], LuaVersion::Lua53, StdlibEnvironment::Standalone)
+});
+static LUA54_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
+    load_built_in(&[LUA54_TOML], LuaVersion::Lua54, StdlibEnvironment::Standalone)
+});
+static LUA55_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
+    load_built_in(&[LUA55_TOML], LuaVersion::Lua55, StdlibEnvironment::Standalone)
+});
+static LUAU_LIBRARY: LazyLock<StdlibLibrary> =
+    LazyLock::new(|| load_built_in(&[LUAU_TOML], LuaVersion::Luau, StdlibEnvironment::Standalone));
+static LUAU_ROBLOX_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
+    load_built_in(
+        &[LUAU_ROBLOX_TOML, ROBLOX_API_TOML, ROBLOX_ENUMS_TOML],
+        LuaVersion::Luau,
+        StdlibEnvironment::Roblox,
+    )
+});
+
+/// The parsed library for a version and environment.
+///
+/// The environment only matters for Luau; each numbered Lua version has
+/// one library. A library is parsed on first use and shared after that.
+#[must_use]
+pub fn library_for(version: LuaVersion, environment: StdlibEnvironment) -> &'static StdlibLibrary {
+    match version {
+        LuaVersion::Lua51 => &LUA51_LIBRARY,
+        LuaVersion::Lua52 => &LUA52_LIBRARY,
+        LuaVersion::Lua53 => &LUA53_LIBRARY,
+        LuaVersion::Lua54 => &LUA54_LIBRARY,
+        LuaVersion::Lua55 => &LUA55_LIBRARY,
+        LuaVersion::Luau => match environment {
+            StdlibEnvironment::Standalone => &LUAU_LIBRARY,
+            StdlibEnvironment::Roblox => &LUAU_ROBLOX_LIBRARY,
+        },
+    }
 }
 
 /// # Panics
 ///
-/// Panics when the embedded catalog is malformed or inconsistent: a TOML
-/// error, a duplicate definition, or a dangling reference.
-pub(crate) fn parse_library(
+/// Panics when a built-in catalog file is malformed or inconsistent.
+#[expect(
+    clippy::panic,
+    reason = "the catalog is built in, so a bad entry is a luck bug, not user input"
+)]
+fn load_built_in(
     sources: &[&str],
     version: LuaVersion,
     environment: StdlibEnvironment,
 ) -> StdlibLibrary {
-    let mut raw_libraries: Vec<RawLibrary> = sources
+    parse_library(sources, version, environment).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// # Errors
+///
+/// Fails when the catalog is malformed or inconsistent: a TOML error, a
+/// duplicate definition, or a dangling reference.
+pub(crate) fn parse_library(
+    sources: &[&str],
+    version: LuaVersion,
+    environment: StdlibEnvironment,
+) -> Result<StdlibLibrary, String> {
+    let mut raw_libraries = sources
         .iter()
         .map(|toml_source| {
-            toml::from_str(toml_source).unwrap_or_else(|error| {
-                panic!("internal stdlib TOML parse error for {version:?}/{environment:?}: {error}")
+            toml::from_str::<RawLibrary>(toml_source).map_err(|error| {
+                format!("internal stdlib TOML parse error for {version:?}/{environment:?}: {error}")
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     // Collect constant sets first, since a param in one file can use a set
     // from another (the generated Roblox API file).
     let mut sets: ConstantSets = BTreeMap::new();
@@ -499,13 +588,14 @@ pub(crate) fn parse_library(
         for (name, set) in mem::take(&mut raw.constant_sets) {
             let converted: Vec<StdlibConstant> =
                 set.values.into_iter().map(StdlibConstant::from).collect();
-            assert!(
-                sets.insert(CompactString::from(name.as_str()), converted).is_none(),
-                "duplicate constant set {name}"
-            );
+            if sets.insert(CompactString::from(name.as_str()), converted).is_some() {
+                return Err(format!("duplicate constant set {name}"));
+            }
         }
         for (name, enum_type) in mem::take(&mut raw.enums) {
-            assert!(enums.insert(name.clone(), enum_type).is_none(), "duplicate enum type {name}");
+            if enums.insert(name.clone(), enum_type).is_some() {
+                return Err(format!("duplicate enum type {name}"));
+            }
         }
     }
     let mut globals: BTreeMap<CompactString, StdlibEntry> = BTreeMap::new();
@@ -513,9 +603,9 @@ pub(crate) fn parse_library(
     let mut extends: BTreeMap<CompactString, CompactString> = BTreeMap::new();
     for raw in raw_libraries {
         for (name, entry) in raw.globals {
-            let converted = convert_entry(entry, &name, &sets);
+            let converted = convert_entry(entry, &name, &sets)?;
             match globals.get_mut(name.as_str()) {
-                Some(existing) => merge_entry(existing, converted, &name),
+                Some(existing) => merge_entry(existing, converted, &name)?,
                 None => {
                     globals.insert(name.into(), converted);
                 }
@@ -527,19 +617,18 @@ pub(crate) fn parse_library(
                     CompactString::from(shape_name.as_str()),
                     CompactString::from(base.as_str()),
                 );
-                assert!(
-                    previous.is_none_or(|previous_base| previous_base == base),
-                    "shape {shape_name}: conflicting extends declarations"
-                );
+                if previous.is_some_and(|previous_base| previous_base != base) {
+                    return Err(format!("shape {shape_name}: conflicting extends declarations"));
+                }
             }
             let shape = shapes
                 .entry(CompactString::from(shape_name.as_str()))
                 .or_insert_with(|| StdlibShape { members: BTreeMap::new() });
             for (name, entry) in raw_shape.members {
                 let path = format!("shape {shape_name}.{name}");
-                let converted = convert_entry(entry, &path, &sets);
+                let converted = convert_entry(entry, &path, &sets)?;
                 match shape.members.get_mut(name.as_str()) {
-                    Some(existing) => merge_entry(existing, converted, &path),
+                    Some(existing) => merge_entry(existing, converted, &path)?,
                     None => {
                         shape.members.insert(name.into(), converted);
                     }
@@ -547,12 +636,12 @@ pub(crate) fn parse_library(
             }
         }
     }
-    splice_enums(enums, &mut globals);
-    resolve_shape_extends(&mut shapes, &extends);
-    derive_string_shape(&globals, &mut shapes);
+    splice_enums(enums, &mut globals)?;
+    resolve_shape_extends(&mut shapes, &extends)?;
+    derive_string_shape(&globals, &mut shapes)?;
     let library = StdlibLibrary { version, environment, globals, shapes };
-    verify_shape_references(&library);
-    library
+    verify_shape_references(&library)?;
+    Ok(library)
 }
 
 /// Expand the compact `[enums.<Type>]` section into member namespaces
@@ -562,19 +651,19 @@ pub(crate) fn parse_library(
 /// read-only constant. The `Enum` global and the `Enums`/`Enum`/`EnumItem`
 /// shapes are hand-authored; only the tree of names is generated.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics when the `Enum` global is absent or a type collides with one of
+/// Fails when the `Enum` global is absent or a type collides with one of
 /// its hand-authored members.
 fn splice_enums(
     enums: BTreeMap<String, RawEnumType>,
     globals: &mut BTreeMap<CompactString, StdlibEntry>,
-) {
+) -> Result<(), String> {
     if enums.is_empty() {
-        return;
+        return Ok(());
     }
     let Some(StdlibEntry::Namespace(enum_global)) = globals.get_mut("Enum") else {
-        panic!("enum data requires a hand-authored Enum global namespace");
+        return Err("enum data requires a hand-authored Enum global namespace".to_owned());
     };
     for (type_name, enum_type) in enums {
         let mut members: BTreeMap<CompactString, StdlibEntry> = BTreeMap::new();
@@ -594,82 +683,96 @@ fn splice_enums(
             shape: Some(CompactString::const_new("Enum")),
             deprecated: enum_type.deprecated.map(StdlibDeprecation::from),
         });
-        assert!(
-            enum_global.members.insert(CompactString::from(type_name.as_str()), entry).is_none(),
-            "enum type {type_name} collides with a hand-authored Enum member"
-        );
+        if enum_global.members.insert(CompactString::from(type_name.as_str()), entry).is_some() {
+            return Err(format!("enum type {type_name} collides with a hand-authored Enum member"));
+        }
     }
+    Ok(())
 }
 
 /// Copy each extending shape's base members into it; own members win.
-/// Chains resolve transitively, and a cycle panics.
+/// Chains resolve transitively.
+///
+/// # Errors
+///
+/// Fails on an `extends` cycle or an unknown base shape.
 fn resolve_shape_extends(
     shapes: &mut BTreeMap<CompactString, StdlibShape>,
     extends: &BTreeMap<CompactString, CompactString>,
-) {
-    /// # Panics
+) -> Result<(), String> {
+    /// # Errors
     ///
-    /// Panics on an `extends` cycle or an unknown base shape.
+    /// Fails on an `extends` cycle or an unknown base shape.
     fn collect(
         name: &str,
         shapes: &BTreeMap<CompactString, StdlibShape>,
         extends: &BTreeMap<CompactString, CompactString>,
         chain: &mut Vec<CompactString>,
-    ) -> BTreeMap<CompactString, StdlibEntry> {
-        assert!(!chain.iter().any(|visited| visited == name), "shape extends cycle through {name}");
+    ) -> Result<BTreeMap<CompactString, StdlibEntry>, String> {
+        if chain.iter().any(|visited| visited == name) {
+            return Err(format!("shape extends cycle through {name}"));
+        }
         chain.push(CompactString::from(name));
-        let mut members = extends.get(name).map_or_else(BTreeMap::new, |base| {
-            assert!(
-                shapes.contains_key(base.as_str()),
-                "shape {name} extends unknown shape {base}"
-            );
-            collect(base, shapes, extends, chain)
-        });
+        let mut members = extends.get(name).map_or_else(
+            || Ok(BTreeMap::new()),
+            |base| {
+                if !shapes.contains_key(base.as_str()) {
+                    return Err(format!("shape {name} extends unknown shape {base}"));
+                }
+                collect(base, shapes, extends, chain)
+            },
+        )?;
         if let Some(shape) = shapes.get(name) {
             for (member_name, entry) in &shape.members {
                 members.insert(member_name.clone(), entry.clone());
             }
         }
         chain.pop();
-        members
+        Ok(members)
     }
     for name in extends.keys() {
-        let members = collect(name, shapes, extends, &mut Vec::new());
+        let members = collect(name, shapes, extends, &mut Vec::new())?;
         shapes.insert(name.clone(), StdlibShape { members });
     }
+    Ok(())
 }
 
 /// Check that every `returns` and `shape` names a shape the library has.
-fn verify_shape_references(library: &StdlibLibrary) {
-    /// # Panics
+///
+/// # Errors
+///
+/// Fails on the first entry that names a shape the library lacks.
+fn verify_shape_references(library: &StdlibLibrary) -> Result<(), String> {
+    /// # Errors
     ///
-    /// Panics when `entry` or a child names a shape the library lacks.
-    fn check(library: &StdlibLibrary, entry: &StdlibEntry, path: &str) {
+    /// Fails when `entry` or a child names a shape the library lacks.
+    fn check(library: &StdlibLibrary, entry: &StdlibEntry, path: &str) -> Result<(), String> {
         let referenced = match entry {
             StdlibEntry::Function(function) => function.returns_shape.as_ref(),
             StdlibEntry::Constant(value) | StdlibEntry::Property(value) => value.shape.as_ref(),
             StdlibEntry::Namespace(namespace) => {
                 for (name, child) in &namespace.members {
-                    check(library, child, &format!("{path}.{name}"));
+                    check(library, child, &format!("{path}.{name}"))?;
                 }
                 namespace.shape.as_ref()
             }
         };
-        if let Some(shape) = referenced {
-            assert!(
-                library.shapes.contains_key(shape),
-                "stdlib entry {path} references unknown shape {shape}"
-            );
+        if let Some(shape) = referenced
+            && !library.shapes.contains_key(shape)
+        {
+            return Err(format!("stdlib entry {path} references unknown shape {shape}"));
         }
+        Ok(())
     }
     for (name, entry) in &library.globals {
-        check(library, entry, name);
+        check(library, entry, name)?;
     }
     for (shape_name, shape) in &library.shapes {
         for (name, entry) in &shape.members {
-            check(library, entry, &format!("shape {shape_name}.{name}"));
+            check(library, entry, &format!("shape {shape_name}.{name}"))?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -678,6 +781,7 @@ mod tests {
 
     fn parse_test_library(toml_source: &str) -> StdlibLibrary {
         parse_library(&[toml_source], LuaVersion::Luau, StdlibEnvironment::Standalone)
+            .expect("test catalog loads")
     }
 
     #[test]
@@ -837,21 +941,25 @@ mod tests {
             min_args = 0
             max_args = 0
         "#;
-        let library = parse_library(&[base, extra], LuaVersion::Luau, StdlibEnvironment::Roblox);
+        let library = parse_library(&[base, extra], LuaVersion::Luau, StdlibEnvironment::Roblox)
+            .expect("spliced catalog loads");
         assert!(library.lookup(&["Enum", "Material", "Grass"]).is_some());
         assert!(library.lookup(&["Enum", "KeyCode", "A"]).is_some());
         assert!(library.shape_member("Instance", "GetChildren").is_some());
     }
 
     #[test]
-    #[should_panic(expected = "references unknown shape")]
-    fn dangling_shape_reference_panics() {
-        parse_test_library(
-            r#"
+    fn dangling_shape_reference_is_rejected() {
+        let error = parse_library(
+            &[r#"
             [globals.game]
             kind = "property"
             shape = "Nope"
-            "#,
-        );
+            "#],
+            LuaVersion::Luau,
+            StdlibEnvironment::Standalone,
+        )
+        .expect_err("a shape the library lacks is an error");
+        assert_eq!(error, "stdlib entry game references unknown shape Nope");
     }
 }

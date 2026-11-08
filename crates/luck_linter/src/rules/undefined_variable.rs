@@ -33,9 +33,7 @@ impl WholeRule for UndefinedVariable {
         let assigned_globals: FxHashSet<&str> = semantic
             .scope_tree
             .unresolved_references()
-            .filter(|reference| {
-                matches!(reference.kind, ReferenceKind::Write | ReferenceKind::ReadWrite)
-            })
+            .filter(|reference| reference.kind.is_write())
             .map(|reference| reference.name.as_str())
             .collect();
 

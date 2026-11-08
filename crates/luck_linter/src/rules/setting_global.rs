@@ -1,5 +1,3 @@
-use luck_semantic::ReferenceKind;
-
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 
@@ -27,7 +25,7 @@ impl WholeRule for SettingGlobal {
         let mut diags = Vec::new();
 
         for reference in semantic.scope_tree.unresolved_references() {
-            if !matches!(reference.kind, ReferenceKind::Write | ReferenceKind::ReadWrite) {
+            if !reference.kind.is_write() {
                 continue;
             }
             // Writing a known global like `print` isn't a forgotten `local`.

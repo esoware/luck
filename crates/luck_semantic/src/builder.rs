@@ -119,9 +119,8 @@ impl ScopeTreeBuilder {
                 symbol.is_upvalue = true;
             }
             symbol.reference_ids.push(id);
-            match kind {
-                ReferenceKind::Read => {}
-                ReferenceKind::Write | ReferenceKind::ReadWrite => symbol.is_modified = true,
+            if kind.is_write() {
+                symbol.is_modified = true;
             }
         }
         self.tree.references.push(Reference {
@@ -403,7 +402,7 @@ mod tests {
         let tree = scope_tree("local x = 1\nprint(x)");
         let x_references = references(&tree, "x");
         assert_eq!(x_references.len(), 1);
-        assert!(x_references[0].resolved.is_some());
+        assert_eq!(x_references[0].resolved, Some(symbol(&tree, "x").id));
     }
 
     #[test]
@@ -418,8 +417,10 @@ mod tests {
     #[test]
     fn function_body_creates_scope() {
         let tree = scope_tree("local function f(a, b) return a + b end");
-        assert!(tree.scopes.len() >= 2);
+        assert_eq!(tree.scopes.len(), 2);
+        assert_eq!(tree.scopes[1].kind, ScopeKind::Function);
         assert_eq!(tree.symbols.len(), 3);
+        assert_eq!(symbol(&tree, "a").scope, ScopeId::from_index(1));
     }
 
     #[test]
@@ -447,7 +448,7 @@ mod tests {
         assert_eq!(tree.symbols.len(), 2);
         let inner_x = &tree.symbols[1];
         assert_eq!(inner_x.name, "x");
-        assert!(inner_x.shadows.is_some());
+        assert_eq!(inner_x.shadows, Some(tree.symbols[0].id));
     }
 
     #[test]

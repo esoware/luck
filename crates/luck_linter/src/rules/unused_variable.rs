@@ -1,4 +1,4 @@
-use luck_semantic::{ReferenceKind, SymbolKind};
+use luck_semantic::SymbolKind;
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::fix::{Fix, TextEdit};
@@ -48,12 +48,10 @@ impl WholeRule for UnusedVariable {
                 | SymbolKind::NumericForVariable => continue,
             };
 
-            let has_read = symbol.reference_ids.iter().any(|&reference_id| {
-                matches!(
-                    semantic.scope_tree.reference(reference_id).kind,
-                    ReferenceKind::Read | ReferenceKind::ReadWrite
-                )
-            });
+            let has_read = symbol
+                .reference_ids
+                .iter()
+                .any(|&reference_id| semantic.scope_tree.reference(reference_id).kind.is_read());
 
             if has_read {
                 continue;
