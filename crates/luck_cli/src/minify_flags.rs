@@ -8,24 +8,23 @@ use luck_core::TransformConfig;
 /// ids are generated from the field identifiers, so a flag can only ever
 /// point at its own opposite.
 macro_rules! transform_flags {
-    ($($(#[doc = $doc:expr])* $pass:ident / $no_pass:ident),+ $(,)?) => {
-        /// CLI flags that toggle individual minifier transforms. Every pass
-        /// carries both polarities, so a flag can override whatever
-        /// `luck.json` configured instead of only narrowing it; the flag
+    ($($(#[doc = $documentation:expr])* $pass:ident / $no_pass:ident),+ $(,)?) => {
+        /// Per-pass minifier toggles. Each pass has both polarities, so a flag
+        /// can turn a pass on or off whatever `luck.json` says; the flag
         /// given last wins.
         #[derive(Args, Clone)]
         pub(crate) struct MinifyFlags {
             $(
                 #[arg(long, overrides_with = stringify!($pass))]
                 $no_pass: bool,
-                $(#[doc = $doc])*
+                $(#[doc = $documentation])*
                 #[arg(long, overrides_with = stringify!($no_pass))]
                 $pass: bool,
             )+
         }
 
         impl MinifyFlags {
-            pub(crate) fn apply_to(&self, mut config: TransformConfig) -> TransformConfig {
+            pub(crate) const fn apply_to(&self, mut config: TransformConfig) -> TransformConfig {
                 $(config.$pass = resolve(config.$pass, self.$pass, self.$no_pass);)+
                 config
             }
@@ -45,14 +44,14 @@ transform_flags! {
     simplify_parens / no_simplify_parens,
     rename_locals / no_rename_locals,
     lift_locals / no_lift_locals,
-    /// Rename globals defined in this file (breaks cross-chunk consumers
-    /// that expect the original _G keys; off unless the script is fully
-    /// self-contained).
+    /// Rename globals the file defines (off by default). Only safe for a
+    /// self-contained script, since anything that looks them up by their
+    /// original names breaks.
     rename_globals / no_rename_globals,
 }
 
 /// Project one pass onto its configured value: an explicit flag of either
 /// polarity wins, and `overrides_with` guarantees at most one is set.
-fn resolve(is_configured: bool, should_enable: bool, should_disable: bool) -> bool {
+const fn resolve(is_configured: bool, should_enable: bool, should_disable: bool) -> bool {
     (is_configured || should_enable) && !should_disable
 }

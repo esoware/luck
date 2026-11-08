@@ -1,12 +1,11 @@
-use luck_ast::expr::{Expression, FunctionArgs};
-use luck_token::StdlibEnvironment;
+use luck_ast::{Expression, NodeType, NodeTypeSet};
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
-use crate::roblox::{is_global_new_call, literal_arg_value};
+use crate::roblox::{global_new_call, literal_arg_value};
 use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
 
-pub struct RobloxIncorrectColor3NewBounds;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RobloxIncorrectColor3NewBounds;
 
 impl Rule for RobloxIncorrectColor3NewBounds {
     fn name(&self) -> &'static str {
@@ -22,44 +21,35 @@ impl Rule for RobloxIncorrectColor3NewBounds {
     }
 
     fn description(&self) -> &'static str {
-        "Color3.new component outside the 0 to 1 range"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
+        "`Color3.new` component outside the 0 to 1 range"
     }
 }
 
 impl NodeRule for RobloxIncorrectColor3NewBounds {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::FunctionCallExpr]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::FunctionCallExpr])
     }
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if ctx.semantic.environment != StdlibEnvironment::Roblox {
-            return;
-        }
-        let Expression::FunctionCall(call) = expr else {
-            return;
-        };
-        if !is_global_new_call(call, "Color3", ctx) {
-            return;
-        }
-        let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+    fn on_expression(
+        &self,
+        expr: &Expression,
+        context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
+        let Some((call, args)) = global_new_call(expr, "Color3", context.semantic) else {
             return;
         };
         let has_out_of_bounds = args
             .iter()
             .filter_map(literal_arg_value)
-            .any(|value| !(0.0..=1.0).contains(&value));
+            .any(|value| !(0.0f64..=1.0f64).contains(&value));
         if has_out_of_bounds {
-            out.push(
+            diags.push(
                 LintDiagnostic::new(
                     self.name(),
-                    "Color3.new components are on a 0 to 1 scale",
+                    "`Color3.new` components are on a 0 to 1 scale",
                     call.span,
                 )
-                .with_help("use Color3.fromRGB for 0 to 255 values".to_string()),
+                .with_help("use `Color3.fromRGB` for 0 to 255 values"),
             );
         }
     }
@@ -68,9 +58,10 @@ impl NodeRule for RobloxIncorrectColor3NewBounds {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::{run_rule, run_rule_roblox};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule_roblox(&RobloxIncorrectColor3NewBounds, source)
+        run_rule_roblox(&RobloxIncorrectColor3NewBounds, source)
     }
 
     #[test]
@@ -111,7 +102,7 @@ mod tests {
 
     #[test]
     fn ignores_standalone_environment() {
-        let diags = crate::test_support::run_rule(
+        let diags = run_rule(
             &RobloxIncorrectColor3NewBounds,
             "local c = Color3.new(255, 0, 0)",
             luck_token::LuaVersion::Luau,

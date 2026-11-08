@@ -1,202 +1,177 @@
-use luck_ast::expr::*;
-use luck_ast::shared::*;
-use luck_ast::transform::AstTransform;
+use luck_ast::{Block, Expression, Field, FieldAccess, Literal, TableConstructor, Transform, Var};
+use luck_token::{Span, TokenKind, short_string_body};
 
-use crate::expr::is_valid_identifier;
-use crate::tokens::{default_span as sp, make_ident};
+use crate::binding::identifier_token;
 
 /// Converts bracket indexing to dot notation and simplifies table
 /// constructors.
-pub fn simplify(block: Block) -> Block {
+pub(crate) fn simplify(block: Block) -> Block {
     IndexSimplifier.transform_block(block)
 }
 
 struct IndexSimplifier;
 
-impl AstTransform for IndexSimplifier {
+impl IndexSimplifier {
+    /// `{["foo"] = val}` becomes `{foo = val}`. A key that isn't a plain
+    /// quoted string, such as a long-bracket one, leaves the field as it is.
+    fn simplify_string_key(&mut self, span: Span, literal: Literal, value: Expression) -> Field {
+        let Some(name) = short_string_body(&literal.text) else {
+            return Field::Bracketed { span, key: Expression::StringLiteral(literal), value };
+        };
+        let new_value = self.transform_expression(value);
+        if is_valid_identifier(name) {
+            Field::Named {
+                span: Span::default(),
+                name: identifier_token(name.into()),
+                value: new_value,
+            }
+        } else {
+            Field::Bracketed {
+                span: Span::default(),
+                key: Expression::StringLiteral(literal),
+                value: new_value,
+            }
+        }
+    }
+}
+
+impl Transform for IndexSimplifier {
     fn transform_var(&mut self, var: Var) -> Var {
-        let var = self.walk_var(var);
-        match var {
+        match self.walk_var(var) {
             // t["foo"] becomes t.foo when "foo" is a valid identifier.
             Var::Index(index_expr) => {
-                if let Expression::StringLiteral(ref literal) = index_expr.index
-                    && let Some(s) = strip_simple_quotes(&literal.text)
-                    && is_valid_identifier(&s)
+                if let Expression::StringLiteral(literal) = &index_expr.index
+                    && let Some(name) = short_string_body(&literal.text)
+                    && is_valid_identifier(name)
                 {
                     return Var::FieldAccess(Box::new(FieldAccess {
-                        span: sp(),
+                        span: Span::default(),
                         prefix: index_expr.prefix,
-                        name: make_ident(&s),
+                        name: identifier_token(name.into()),
                     }));
                 }
                 Var::Index(index_expr)
             }
-            other => other,
+            other @ (Var::Name(_) | Var::FieldAccess(_)) => other,
         }
     }
 
-    fn walk_table_constructor(&mut self, mut table: TableConstructor) -> TableConstructor {
+    fn transform_table_constructor(&mut self, mut table: TableConstructor) -> TableConstructor {
         let can_use_implicit = is_sequential_from_one(&table.fields.items);
 
-        let mut implicit_idx = 0usize;
-        table.fields.items = table
-            .fields
-            .items
-            .into_iter()
-            .map(|field| {
-                match field {
-                    // {[1]="a", [2]="b"} becomes {"a", "b"} when the keys run
-                    // sequentially from 1.
-                    Field::Bracketed {
-                        ref key, ref value, ..
-                    } if can_use_implicit => {
-                        if let Expression::Number(literal) = key {
-                            if let Ok(n) = literal.text.parse::<usize>() {
-                                if n == implicit_idx + 1 {
-                                    implicit_idx = n;
-                                    Field::Positional {
-                                        span: sp(),
-                                        value: self.transform_expression(value.clone()),
-                                    }
-                                } else {
-                                    field
-                                }
-                            } else {
-                                field
-                            }
-                        } else {
-                            field
-                        }
-                    }
-                    // {["foo"] = val} becomes {foo = val}.
-                    Field::Bracketed {
-                        key: Expression::StringLiteral(ref literal),
-                        ref value,
-                        ..
-                    } => {
-                        if let Some(s) = strip_simple_quotes(&literal.text) {
-                            if is_valid_identifier(&s) {
-                                Field::Named {
-                                    span: sp(),
-                                    name: make_ident(&s),
-                                    value: self.transform_expression(value.clone()),
-                                }
-                            } else {
-                                let new_val = self.transform_expression(value.clone());
-                                Field::Bracketed {
-                                    span: sp(),
-                                    key: Expression::StringLiteral(literal.clone()),
-                                    value: new_val,
-                                }
-                            }
-                        } else {
-                            field
-                        }
-                    }
-                    Field::Bracketed { span, key, value } => Field::Bracketed {
-                        span,
-                        key: self.transform_expression(key),
-                        value: self.transform_expression(value),
-                    },
-                    Field::Named { span, name, value } => Field::Named {
-                        span,
-                        name,
-                        value: self.transform_expression(value),
-                    },
-                    Field::Positional { span, value } => Field::Positional {
-                        span,
-                        value: self.transform_expression(value),
-                    },
-                }
-            })
-            .collect();
+        table.fields = table.fields.map_items(|field| match field {
+            // {[1]="a", [2]="b"} becomes {"a", "b"} when the keys run
+            // sequentially from 1.
+            Field::Bracketed { value, .. } if can_use_implicit => {
+                Field::Positional { span: Span::default(), value: self.transform_expression(value) }
+            }
+            Field::Bracketed { span, key: Expression::StringLiteral(literal), value } => {
+                self.simplify_string_key(span, literal, value)
+            }
+            Field::Bracketed { span, key, value } => Field::Bracketed {
+                span,
+                key: self.transform_expression(key),
+                value: self.transform_expression(value),
+            },
+            Field::Named { span, name, value } => {
+                Field::Named { span, name, value: self.transform_expression(value) }
+            }
+            Field::Positional { span, value } => {
+                Field::Positional { span, value: self.transform_expression(value) }
+            }
+        });
         table
     }
 }
 
-fn strip_simple_quotes(raw: &str) -> Option<String> {
-    if (raw.starts_with('"') && raw.ends_with('"'))
-        || (raw.starts_with('\'') && raw.ends_with('\''))
-    {
-        Some(raw[1..raw.len() - 1].to_string())
-    } else {
-        None
-    }
+/// The 21 keywords every target reserves, plus `goto` and Luau's
+/// `continue`. One list serves every target, so those two stay bracketed even
+/// where they're plain names.
+const LUA_KEYWORDS: &[&str] = &[
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in",
+    "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+    "continue", // Luau
+];
+
+fn is_valid_identifier(name: &str) -> bool {
+    TokenKind::is_identifier_shaped(name) && !LUA_KEYWORDS.contains(&name)
 }
 
 fn is_sequential_from_one(fields: &[Field]) -> bool {
-    let mut expected = 1usize;
-    for (position, field) in fields.iter().enumerate() {
-        match field {
-            Field::Bracketed {
-                key: Expression::Number(literal),
-                value,
-                ..
-            } => {
-                if let Ok(n) = literal.text.parse::<usize>() {
-                    if n != expected {
-                        return false;
-                    }
-                    expected += 1;
-                } else {
-                    return false;
-                }
-                // `{[1] = f()}` truncates f() to one value, while `{f()}` in
-                // final position expands every return. Refuse when the LAST
-                // field's value is a call or `...`.
-                if position == fields.len() - 1
-                    && matches!(value, Expression::FunctionCall(_) | Expression::VarArg(_))
-                {
-                    return false;
-                }
-            }
-            _ => return false,
-        }
-    }
-    expected > 1
+    let has_sequential_keys = (1usize..).zip(fields).all(|(expected, field)| {
+        matches!(
+            field,
+            Field::Bracketed { key: Expression::Number(literal), .. }
+                if literal.text.parse::<usize>() == Ok(expected)
+        )
+    });
+    // `{[1] = f()}` truncates f() to one value, while `{f()}` in final
+    // position expands every return, so refuse when the last field's value is
+    // a call or `...`.
+    let has_multi_value_tail = matches!(
+        fields.last(),
+        Some(Field::Bracketed { value: Expression::FunctionCall(_) | Expression::VarArg(_), .. })
+    );
+    !fields.is_empty() && has_sequential_keys && !has_multi_value_tail
 }
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
+    use crate::fixtures::run_pass;
 
     fn apply(source: &str) -> String {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
-        assert!(result.errors.is_empty(), "parse failed");
-        let block = simplify(result.block);
-        luck_codegen::compact(&block, source)
+        run_pass(source, LuaVersion::Lua54, simplify)
+    }
+
+    #[test]
+    fn validates_identifiers() {
+        assert!(is_valid_identifier("foo"));
+        assert!(is_valid_identifier("_bar"));
+        assert!(is_valid_identifier("x1"));
+        assert!(is_valid_identifier("_"));
+        assert!(is_valid_identifier("camelCase"));
+
+        assert!(!is_valid_identifier("if"));
+        assert!(!is_valid_identifier("end"));
+        assert!(!is_valid_identifier("and"));
+        assert!(!is_valid_identifier("or"));
+
+        assert!(!is_valid_identifier("a-b"));
+        assert!(!is_valid_identifier("123abc"));
+        assert!(!is_valid_identifier(""));
+        assert!(!is_valid_identifier("foo bar"));
     }
 
     #[test]
     fn bracket_string_to_dot() {
-        let r = apply("return t[\"foo\"]\n");
-        assert!(r.contains("t.foo"), "Expected t.foo, got: {r}");
+        let result = apply("return t[\"foo\"]\n");
+        assert!(result.contains("t.foo"), "Expected t.foo, got: {result}");
     }
 
     #[test]
     fn table_key_string_to_name() {
-        let r = apply("return {[\"foo\"] = 1}\n");
+        let result = apply("return {[\"foo\"] = 1}\n");
         assert!(
-            r.contains("foo") && !r.contains("[\"foo\"]"),
-            "Expected name key, got: {r}"
+            result.contains("foo") && !result.contains("[\"foo\"]"),
+            "Expected name key, got: {result}"
         );
     }
 
     #[test]
     fn table_key_keyword_stays_bracketed() {
-        let r = apply("return {[\"if\"] = 1}\n");
-        assert!(
-            r.contains("[\"if\"]"),
-            "Keyword key should stay bracketed, got: {r}"
-        );
+        let result = apply("return {[\"if\"] = 1}\n");
+        assert!(result.contains("[\"if\"]"), "Keyword key should stay bracketed, got: {result}");
     }
 
     #[test]
     fn sequential_integer_keys_to_implicit() {
-        let r = apply("return {[1]=\"a\", [2]=\"b\", [3]=\"c\"}\n");
+        let result = apply("return {[1]=\"a\", [2]=\"b\", [3]=\"c\"}\n");
         assert!(
-            !r.contains("[1]") && !r.contains("[2]") && !r.contains("[3]"),
-            "Integer keys should be removed, got: {r}"
+            !result.contains("[1]") && !result.contains("[2]") && !result.contains("[3]"),
+            "Integer keys should be removed, got: {result}"
         );
     }
 }

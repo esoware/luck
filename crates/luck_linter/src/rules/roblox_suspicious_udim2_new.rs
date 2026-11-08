@@ -1,12 +1,11 @@
-use luck_ast::expr::{Expression, FunctionArgs};
-use luck_token::StdlibEnvironment;
+use luck_ast::{Expression, NodeType, NodeTypeSet};
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
-use crate::roblox::{is_global_new_call, literal_arg_value};
+use crate::roblox::{global_new_call, literal_arg_value};
 use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
 
-pub struct RobloxSuspiciousUdim2New;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RobloxSuspiciousUdim2New;
 
 impl Rule for RobloxSuspiciousUdim2New {
     fn name(&self) -> &'static str {
@@ -22,30 +21,21 @@ impl Rule for RobloxSuspiciousUdim2New {
     }
 
     fn description(&self) -> &'static str {
-        "UDim2.new called with fewer components than expected"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
+        "`UDim2.new` called with fewer components than expected"
     }
 }
 
 impl NodeRule for RobloxSuspiciousUdim2New {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::FunctionCallExpr]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::FunctionCallExpr])
     }
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if ctx.semantic.environment != StdlibEnvironment::Roblox {
-            return;
-        }
-        let Expression::FunctionCall(call) = expr else {
-            return;
-        };
-        if !is_global_new_call(call, "UDim2", ctx) {
-            return;
-        }
-        let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+    fn on_expression(
+        &self,
+        expr: &Expression,
+        context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
+        let Some((call, args)) = global_new_call(expr, "UDim2", context.semantic) else {
             return;
         };
         if args.is_empty() || args.len() >= 4 {
@@ -55,19 +45,15 @@ impl NodeRule for RobloxSuspiciousUdim2New {
         if values.len() != args.len() {
             return;
         }
-        let all_scale_sized = values.iter().all(|value| (-1.0..=1.0).contains(value));
-        let suggestion = if all_scale_sized {
-            "UDim2.fromScale"
-        } else {
-            "UDim2.fromOffset"
-        };
-        out.push(
+        let is_scale_sized = values.iter().all(|value| (-1.0f64..=1.0f64).contains(value));
+        let suggestion = if is_scale_sized { "UDim2.fromScale" } else { "UDim2.fromOffset" };
+        diags.push(
             LintDiagnostic::new(
                 self.name(),
-                "UDim2.new takes 4 components (xScale, xOffset, yScale, yOffset)",
+                "`UDim2.new` takes 4 components (`xScale`, `xOffset`, `yScale`, `yOffset`)",
                 call.span,
             )
-            .with_help(format!("did you mean to use {suggestion}?")),
+            .with_help(format!("did you mean to use `{suggestion}`?")),
         );
     }
 }
@@ -75,39 +61,31 @@ impl NodeRule for RobloxSuspiciousUdim2New {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::{run_rule, run_rule_roblox};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule_roblox(&RobloxSuspiciousUdim2New, source)
+        run_rule_roblox(&RobloxSuspiciousUdim2New, source)
     }
 
     #[test]
     fn flags_two_scale_args() {
         let diags = run("local u = UDim2.new(0.5, 1)");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            diags[0].help.as_deref().unwrap().contains("fromScale"),
-            "{diags:?}"
-        );
+        assert!(diags[0].help.as_deref().unwrap().contains("fromScale"), "{diags:?}");
     }
 
     #[test]
     fn flags_two_offset_args() {
         let diags = run("local u = UDim2.new(100, 200)");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            diags[0].help.as_deref().unwrap().contains("fromOffset"),
-            "{diags:?}"
-        );
+        assert!(diags[0].help.as_deref().unwrap().contains("fromOffset"), "{diags:?}");
     }
 
     #[test]
     fn flags_single_negative_arg() {
         let diags = run("local u = UDim2.new(-0.5)");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            diags[0].help.as_deref().unwrap().contains("fromScale"),
-            "{diags:?}"
-        );
+        assert!(diags[0].help.as_deref().unwrap().contains("fromScale"), "{diags:?}");
     }
 
     #[test]
@@ -142,7 +120,7 @@ mod tests {
 
     #[test]
     fn ignores_standalone_environment() {
-        let diags = crate::test_support::run_rule(
+        let diags = run_rule(
             &RobloxSuspiciousUdim2New,
             "local u = UDim2.new(1, 2)",
             luck_token::LuaVersion::Luau,

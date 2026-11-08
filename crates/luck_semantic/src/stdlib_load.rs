@@ -1,7 +1,9 @@
-//! TOML deserialization for the stdlib catalog: the `Raw*` mirror of the
-//! on-disk schema, conversion into the queried [`StdlibLibrary`] model,
-//! and the composition steps (namespace merge, enum splice, shape
-//! `extends`, derived `string` receiver) that run once per environment.
+//! Loads the stdlib catalog: `Raw*` types mirror the TOML schema and
+//! convert into the [`StdlibLibrary`] model.
+//!
+//! Loading a library also merges namespaces split across its files,
+//! splices in the enum tree, resolves shape `extends`, and derives the
+//! `string` receiver shape.
 //!
 //! TOML layout:
 //! ```toml
@@ -30,10 +32,15 @@
 //!   ...
 //! ```
 
-use std::collections::BTreeMap;
+#![expect(
+    clippy::panic,
+    reason = "the catalog is built in, so a bad entry is a luck bug, not user input"
+)]
 
-use compact_str::CompactString;
-use luck_token::{LuaVersion, StdlibEnvironment};
+use alloc::collections::BTreeMap;
+use core::mem;
+
+use luck_token::{CompactString, LuaVersion, StdlibEnvironment};
 use serde::Deserialize;
 
 use crate::stdlib_model::{
@@ -48,16 +55,15 @@ struct RawLibrary {
     globals: BTreeMap<String, RawEntry>,
     #[serde(default)]
     shapes: BTreeMap<String, RawShape>,
-    /// Named constant-value lists referencable from any source in the
-    /// same library via `{ kind = "constant", set = "<name>" }`. Lets
-    /// large generated sets (Roblox service and class names) be encoded
-    /// once and shared by several parameters.
+    /// Named value lists that a param in any of the library's files can
+    /// use with `{ kind = "constant", set = "<name>" }`, so the large
+    /// generated Roblox service and class lists are written once.
     #[serde(default)]
     constant_sets: BTreeMap<String, RawConstantSet>,
-    /// Compact enum-tree section for the generated Roblox enum data:
-    /// each `[enums.<Type>]` becomes a member namespace of the `Enum`
-    /// global (shape `Enum`) whose items are read-only constants (shape
-    /// `EnumItem`). Requires a hand-authored `Enum` global namespace.
+    /// The generated Roblox enum tree. Each `[enums.<Type>]` becomes an
+    /// `Enum`-shaped namespace under the `Enum` global, with its items as
+    /// read-only `EnumItem`-shaped constants. The `Enum` global itself must
+    /// be hand-authored.
     #[serde(default)]
     enums: BTreeMap<String, RawEnumType>,
 }
@@ -80,8 +86,8 @@ struct RawConstantSet {
 #[serde(deny_unknown_fields)]
 struct RawShape {
     /// Base shape whose members are copied in at load; own members win.
-    /// Mirrors the one inheritance level real Roblox instances share
-    /// (everything is an Instance) without a class hierarchy.
+    /// Lets Roblox shapes share `Instance`'s members without modeling the
+    /// class hierarchy.
     #[serde(default)]
     extends: Option<String>,
     #[serde(default)]
@@ -99,15 +105,18 @@ enum RawEntry {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the catalog TOML, and all sixteen combinations are legal"
+)]
 struct RawFunction {
     // Flat single-signature form; mutually exclusive with `overloads`.
     #[serde(default)]
     params: Option<Vec<RawParam>>,
     #[serde(default)]
     min_args: Option<usize>,
-    /// `-1` (or any negative) encodes "unbounded", which becomes
-    /// `Option::None` in `StdlibSignature::max_args`. TOML has no native
-    /// null, so the sentinel keeps the data files easy to write.
+    /// Negative (by convention `-1`) means unbounded, since TOML has no
+    /// null.
     #[serde(default)]
     max_args: Option<i32>,
     #[serde(default)]
@@ -135,16 +144,14 @@ struct RawSignature {
     max_args: i32,
 }
 
-// No `deny_unknown_fields` here, because serde cannot combine it with the
-// flattened kind tag.
+// No `deny_unknown_fields`: serde can't combine it with the flattened kind
+// tag.
 #[derive(Debug, Deserialize)]
 struct RawParam {
     #[serde(flatten)]
     kind: RawParamKind,
     #[serde(default = "default_true")]
     required: bool,
-    #[serde(default)]
-    accepts_nil: bool,
     #[serde(default)]
     deprecated: Option<RawDeprecation>,
 }
@@ -161,7 +168,6 @@ enum RawParamKind {
     Display {
         display: String,
     },
-    Nil,
     Constant {
         #[serde(default)]
         values: Vec<RawConstantValue>,
@@ -220,29 +226,48 @@ const fn default_true() -> bool {
     true
 }
 
-/// Named constant sets shared across every source of a library, already
-/// converted; `set = "<name>"` param references clone from here.
+/// Converted constant sets from all of a library's files, which
+/// `set = "<name>"` params clone from.
 type ConstantSets = BTreeMap<CompactString, Vec<StdlibConstant>>;
 
-fn convert_constant(value: RawConstantValue) -> StdlibConstant {
-    match value {
-        RawConstantValue::Plain(value) => StdlibConstant {
-            value: value.into(),
-            deprecated: None,
-            is_common: false,
-        },
-        RawConstantValue::Detailed {
-            value,
-            deprecated,
-            common,
-        } => StdlibConstant {
-            value: value.into(),
-            deprecated: deprecated.map(convert_deprecation),
-            is_common: common,
-        },
+impl From<RawConstantValue> for StdlibConstant {
+    fn from(raw: RawConstantValue) -> Self {
+        match raw {
+            RawConstantValue::Plain(value) => {
+                Self { value: value.into(), deprecated: None, is_common: false }
+            }
+            RawConstantValue::Detailed { value, deprecated, common } => Self {
+                value: value.into(),
+                deprecated: deprecated.map(StdlibDeprecation::from),
+                is_common: common,
+            },
+        }
     }
 }
 
+impl From<RawDeprecation> for StdlibDeprecation {
+    fn from(raw: RawDeprecation) -> Self {
+        Self {
+            message: raw.message.into(),
+            replace_template: raw.replace_template.map(CompactString::from),
+        }
+    }
+}
+
+impl From<RawValue> for StdlibValue {
+    fn from(raw: RawValue) -> Self {
+        Self {
+            is_read_only: raw.read_only,
+            deprecated: raw.deprecated.map(StdlibDeprecation::from),
+            shape: raw.shape.map(CompactString::from),
+        }
+    }
+}
+
+/// # Panics
+///
+/// Panics on a constant param that names an unknown set, or that has both
+/// or neither of inline values and a set reference.
 fn convert_param(raw: RawParam, sets: &ConstantSets, path: &str) -> StdlibParam {
     let kind = match raw.kind {
         RawParamKind::Any => StdlibArgKind::Any,
@@ -252,19 +277,18 @@ fn convert_param(raw: RawParam, sets: &ConstantSets, path: &str) -> StdlibParam 
         RawParamKind::Function => StdlibArgKind::Function,
         RawParamKind::Table => StdlibArgKind::Table,
         RawParamKind::Display { display } => StdlibArgKind::Display(display.into()),
-        RawParamKind::Nil => StdlibArgKind::Nil,
         RawParamKind::Constant { values, set } => {
             let constants = match (values.is_empty(), set) {
-                (false, None) => values.into_iter().map(convert_constant).collect(),
+                (false, None) => values.into_iter().map(StdlibConstant::from).collect(),
                 (true, Some(set_name)) => sets
                     .get(set_name.as_str())
                     .unwrap_or_else(|| {
                         panic!("stdlib entry {path}: unknown constant set '{set_name}'")
                     })
                     .clone(),
-                _ => panic!(
-                    "stdlib entry {path}: constant param takes either inline values or a set \
-                     reference, exactly one"
+                (false, Some(_)) | (true, None) => panic!(
+                    "stdlib entry {path}: constant param needs inline values or a set \
+                     reference, but not both"
                 ),
             };
             StdlibArgKind::Constant(constants)
@@ -273,16 +297,8 @@ fn convert_param(raw: RawParam, sets: &ConstantSets, path: &str) -> StdlibParam 
     };
     StdlibParam {
         kind,
-        required: raw.required,
-        accepts_nil: raw.accepts_nil,
-        deprecated: raw.deprecated.map(convert_deprecation),
-    }
-}
-
-fn convert_deprecation(raw: RawDeprecation) -> StdlibDeprecation {
-    StdlibDeprecation {
-        message: raw.message.into(),
-        replace_template: raw.replace_template.map(CompactString::from),
+        is_required: raw.required,
+        deprecated: raw.deprecated.map(StdlibDeprecation::from),
     }
 }
 
@@ -294,68 +310,60 @@ fn convert_signature(
     path: &str,
 ) -> StdlibSignature {
     StdlibSignature {
-        params: params
-            .into_iter()
-            .map(|param| convert_param(param, sets, path))
-            .collect(),
+        params: params.into_iter().map(|param| convert_param(param, sets, path)).collect(),
         min_args,
-        max_args: if max_args < 0 {
-            None
-        } else {
-            Some(max_args as usize)
-        },
+        max_args: usize::try_from(max_args).ok(),
     }
 }
 
-fn convert_function(func: RawFunction, path: &str, sets: &ConstantSets) -> StdlibFunction {
-    let has_flat = func.min_args.is_some() || func.max_args.is_some() || func.params.is_some();
-    let signatures: Vec<StdlibSignature> = if func.overloads.is_empty() {
-        let (Some(min_args), Some(max_args)) = (func.min_args, func.max_args) else {
+/// # Panics
+///
+/// Panics when a function without overloads lacks `min_args` or
+/// `max_args`, or when one with overloads also has flat signature fields.
+fn convert_function(raw: RawFunction, path: &str, sets: &ConstantSets) -> StdlibFunction {
+    let has_flat_signature =
+        raw.min_args.is_some() || raw.max_args.is_some() || raw.params.is_some();
+    let signatures: Vec<StdlibSignature> = if raw.overloads.is_empty() {
+        let (Some(min_args), Some(max_args)) = (raw.min_args, raw.max_args) else {
             panic!("stdlib entry {path}: flat signature requires min_args and max_args");
         };
-        vec![convert_signature(
-            func.params.unwrap_or_default(),
-            min_args,
-            max_args,
-            sets,
-            path,
-        )]
+        vec![convert_signature(raw.params.unwrap_or_default(), min_args, max_args, sets, path)]
     } else {
         assert!(
-            !has_flat,
+            !has_flat_signature,
             "stdlib entry {path}: flat signature fields and overloads are mutually exclusive"
         );
-        func.overloads
+        raw.overloads
             .into_iter()
-            .map(|sig| convert_signature(sig.params, sig.min_args, sig.max_args, sets, path))
+            .map(|signature| {
+                convert_signature(
+                    signature.params,
+                    signature.min_args,
+                    signature.max_args,
+                    sets,
+                    path,
+                )
+            })
             .collect()
     };
     StdlibFunction {
         signatures,
-        is_pure: func.is_pure,
-        must_use: func.must_use,
-        deprecated: func.deprecated.map(convert_deprecation),
-        read_only: func.read_only,
-        is_method: func.method,
-        returns_shape: func.returns.map(CompactString::from),
+        is_pure: raw.is_pure,
+        is_must_use: raw.must_use,
+        deprecated: raw.deprecated.map(StdlibDeprecation::from),
+        is_read_only: raw.read_only,
+        is_method: raw.method,
+        returns_shape: raw.returns.map(CompactString::from),
     }
 }
 
 fn convert_entry(raw: RawEntry, path: &str, sets: &ConstantSets) -> StdlibEntry {
     match raw {
-        RawEntry::Function(func) => {
-            StdlibEntry::Function(Box::new(convert_function(func, path, sets)))
+        RawEntry::Function(function) => {
+            StdlibEntry::Function(Box::new(convert_function(function, path, sets)))
         }
-        RawEntry::Constant(value) => StdlibEntry::Constant(StdlibValue {
-            read_only: value.read_only,
-            deprecated: value.deprecated.map(convert_deprecation),
-            shape: value.shape.map(CompactString::from),
-        }),
-        RawEntry::Property(value) => StdlibEntry::Property(StdlibValue {
-            read_only: value.read_only,
-            deprecated: value.deprecated.map(convert_deprecation),
-            shape: value.shape.map(CompactString::from),
-        }),
+        RawEntry::Constant(value) => StdlibEntry::Constant(value.into()),
+        RawEntry::Property(value) => StdlibEntry::Property(value.into()),
         RawEntry::Namespace(namespace) => {
             let mut members = BTreeMap::new();
             for (name, child) in namespace.members {
@@ -365,27 +373,31 @@ fn convert_entry(raw: RawEntry, path: &str, sets: &ConstantSets) -> StdlibEntry 
             StdlibEntry::Namespace(StdlibNamespace {
                 members,
                 shape: namespace.shape.map(CompactString::from),
-                deprecated: namespace.deprecated.map(convert_deprecation),
+                deprecated: namespace.deprecated.map(StdlibDeprecation::from),
             })
         }
     }
 }
 
-/// Members of the string namespace that do not take the subject string
-/// as their first parameter and therefore are not colon-callable:
-/// `string.char` takes byte values, `string.dump` a function.
+/// String namespace members whose first param isn't the subject string,
+/// so they aren't methods: `string.char` takes bytes and `string.dump` a
+/// function.
 const NON_RECEIVER_STRING_MEMBERS: &[&str] = &["char", "dump"];
 
 /// Members whose first return value is itself a string, so the derived
 /// methods chain: `("x"):rep(2):upper()`.
-const STRING_RETURNING_MEMBERS: &[&str] = &[
-    "format", "gsub", "lower", "pack", "rep", "reverse", "sub", "upper",
-];
+const STRING_RETURNING_MEMBERS: &[&str] =
+    &["format", "gsub", "lower", "pack", "rep", "reverse", "sub", "upper"];
 
-/// Derive the `string` receiver shape from the string namespace: every
-/// subject-first member becomes a colon-method with the subject param
-/// dropped, mirroring Lua's string metatable. Hand-authored shape
-/// members win over derived ones.
+/// Derive the `string` receiver shape from the string namespace.
+///
+/// Every subject-first member becomes a colon-method with the subject param
+/// dropped, mirroring Lua's string metatable. Hand-authored shape members
+/// win over derived ones.
+///
+/// # Panics
+///
+/// Panics when a subject-first member declares a signature with no params.
 fn derive_string_shape(
     globals: &BTreeMap<CompactString, StdlibEntry>,
     shapes: &mut BTreeMap<CompactString, StdlibShape>,
@@ -395,118 +407,111 @@ fn derive_string_shape(
     };
     let shape = shapes
         .entry(CompactString::const_new("string"))
-        .or_insert_with(|| StdlibShape {
-            members: BTreeMap::new(),
-        });
+        .or_insert_with(|| StdlibShape { members: BTreeMap::new() });
     for (name, entry) in &string_namespace.members {
         if NON_RECEIVER_STRING_MEMBERS.contains(&name.as_str()) || shape.members.contains_key(name)
         {
             continue;
         }
-        let StdlibEntry::Function(func) = entry else {
+        let StdlibEntry::Function(function) = entry else {
             continue;
         };
-        let mut method = (**func).clone();
-        for sig in &mut method.signatures {
+        let mut method = (**function).clone();
+        for signature in &mut method.signatures {
             assert!(
-                !sig.params.is_empty(),
+                !signature.params.is_empty(),
                 "string.{name}: receiver derivation requires a leading subject param"
             );
-            sig.params.remove(0);
-            sig.min_args = sig.min_args.saturating_sub(1);
-            sig.max_args = sig.max_args.map(|max| max.saturating_sub(1));
+            signature.params.remove(0);
+            signature.min_args = signature.min_args.saturating_sub(1);
+            signature.max_args = signature.max_args.map(|max| max.saturating_sub(1));
         }
         method.is_method = true;
-        // Replace templates are written for the free-function form,
-        // where the subject is argument 1; on a colon call the subject
-        // is the receiver, so the positions no longer line up. Keep the
-        // message, drop the auto-fix.
+        // Replace templates number the subject `%1`, but a colon call
+        // passes it as the receiver, so keep the message and drop the fix.
         if let Some(deprecation) = &mut method.deprecated {
             deprecation.replace_template = None;
         }
         if STRING_RETURNING_MEMBERS.contains(&name.as_str()) {
             method.returns_shape = Some(CompactString::const_new("string"));
         }
-        shape
-            .members
-            .insert(name.clone(), StdlibEntry::Function(Box::new(method)));
+        shape.members.insert(name.clone(), StdlibEntry::Function(Box::new(method)));
     }
 }
 
-/// Deep-merge `incoming` into `existing`. Namespaces union recursively;
-/// any other collision is an internal data bug.
+/// Deep-merge `incoming` into `existing`. Namespaces merge recursively;
+/// any other collision is a catalog bug.
+///
+/// # Panics
+///
+/// Panics when two non-namespace entries collide or two namespaces declare
+/// different shapes.
 fn merge_entry(existing: &mut StdlibEntry, incoming: StdlibEntry, path: &str) {
-    match (existing, incoming) {
-        (
-            StdlibEntry::Namespace(existing_namespace),
-            StdlibEntry::Namespace(incoming_namespace),
-        ) => {
-            for (name, child) in incoming_namespace.members {
-                let child_path = format!("{path}.{name}");
-                match existing_namespace.members.get_mut(&name) {
-                    Some(existing_child) => merge_entry(existing_child, child, &child_path),
-                    None => {
-                        existing_namespace.members.insert(name, child);
-                    }
-                }
-            }
-            if let Some(shape) = incoming_namespace.shape {
-                let conflicting = existing_namespace
-                    .shape
-                    .as_ref()
-                    .is_some_and(|existing_shape| *existing_shape != shape);
-                assert!(!conflicting, "namespace {path}: conflicting shapes");
-                existing_namespace.shape = Some(shape);
-            }
-            if existing_namespace.deprecated.is_none() {
-                existing_namespace.deprecated = incoming_namespace.deprecated;
+    let (StdlibEntry::Namespace(existing_namespace), StdlibEntry::Namespace(incoming_namespace)) =
+        (existing, incoming)
+    else {
+        panic!("internal stdlib data conflict at {path}: non-namespace entry defined twice");
+    };
+    for (name, child) in incoming_namespace.members {
+        let child_path = format!("{path}.{name}");
+        match existing_namespace.members.get_mut(&name) {
+            Some(existing_child) => merge_entry(existing_child, child, &child_path),
+            None => {
+                existing_namespace.members.insert(name, child);
             }
         }
-        _ => panic!("internal stdlib data conflict at {path}: non-namespace entry defined twice"),
+    }
+    if let Some(shape) = incoming_namespace.shape {
+        let is_conflicting = existing_namespace
+            .shape
+            .as_ref()
+            .is_some_and(|existing_shape| *existing_shape != shape);
+        assert!(!is_conflicting, "namespace {path}: conflicting shapes");
+        existing_namespace.shape = Some(shape);
+    }
+    if existing_namespace.deprecated.is_none() {
+        existing_namespace.deprecated = incoming_namespace.deprecated;
     }
 }
 
+/// # Panics
+///
+/// Panics when the embedded catalog is malformed or inconsistent: a TOML
+/// error, a duplicate definition, or a dangling reference.
 pub(crate) fn parse_library(
     sources: &[&str],
     version: LuaVersion,
     environment: StdlibEnvironment,
 ) -> StdlibLibrary {
-    // These TOML files ship inside the binary via include_str!, so a parse
-    // failure is a bug in luck rather than bad user input. Panic loudly on
-    // the first access instead of degrading.
-    let mut raws: Vec<RawLibrary> = sources
+    let mut raw_libraries: Vec<RawLibrary> = sources
         .iter()
-        .map(|toml_src| {
-            toml::from_str(toml_src).unwrap_or_else(|err| {
-                panic!("internal stdlib TOML parse error for {version:?}/{environment:?}: {err}")
+        .map(|toml_source| {
+            toml::from_str(toml_source).unwrap_or_else(|error| {
+                panic!("internal stdlib TOML parse error for {version:?}/{environment:?}: {error}")
             })
         })
         .collect();
-    // Constant sets first: params in any source may reference sets
-    // contributed by another (e.g. the generated Roblox API file).
+    // Collect constant sets first, since a param in one file can use a set
+    // from another (the generated Roblox API file).
     let mut sets: ConstantSets = BTreeMap::new();
     let mut enums: BTreeMap<String, RawEnumType> = BTreeMap::new();
-    for raw in &mut raws {
-        for (name, set) in std::mem::take(&mut raw.constant_sets) {
+    for raw in &mut raw_libraries {
+        for (name, set) in mem::take(&mut raw.constant_sets) {
             let converted: Vec<StdlibConstant> =
-                set.values.into_iter().map(convert_constant).collect();
+                set.values.into_iter().map(StdlibConstant::from).collect();
             assert!(
-                sets.insert(CompactString::from(name.as_str()), converted)
-                    .is_none(),
+                sets.insert(CompactString::from(name.as_str()), converted).is_none(),
                 "duplicate constant set {name}"
             );
         }
-        for (name, enum_type) in std::mem::take(&mut raw.enums) {
-            assert!(
-                enums.insert(name.clone(), enum_type).is_none(),
-                "duplicate enum type {name}"
-            );
+        for (name, enum_type) in mem::take(&mut raw.enums) {
+            assert!(enums.insert(name.clone(), enum_type).is_none(), "duplicate enum type {name}");
         }
     }
     let mut globals: BTreeMap<CompactString, StdlibEntry> = BTreeMap::new();
     let mut shapes: BTreeMap<CompactString, StdlibShape> = BTreeMap::new();
     let mut extends: BTreeMap<CompactString, CompactString> = BTreeMap::new();
-    for raw in raws {
+    for raw in raw_libraries {
         for (name, entry) in raw.globals {
             let converted = convert_entry(entry, &name, &sets);
             match globals.get_mut(name.as_str()) {
@@ -523,15 +528,13 @@ pub(crate) fn parse_library(
                     CompactString::from(base.as_str()),
                 );
                 assert!(
-                    previous.is_none_or(|prev| prev == base),
+                    previous.is_none_or(|previous_base| previous_base == base),
                     "shape {shape_name}: conflicting extends declarations"
                 );
             }
             let shape = shapes
                 .entry(CompactString::from(shape_name.as_str()))
-                .or_insert_with(|| StdlibShape {
-                    members: BTreeMap::new(),
-                });
+                .or_insert_with(|| StdlibShape { members: BTreeMap::new() });
             for (name, entry) in raw_shape.members {
                 let path = format!("shape {shape_name}.{name}");
                 let converted = convert_entry(entry, &path, &sets);
@@ -547,21 +550,22 @@ pub(crate) fn parse_library(
     splice_enums(enums, &mut globals);
     resolve_shape_extends(&mut shapes, &extends);
     derive_string_shape(&globals, &mut shapes);
-    let library = StdlibLibrary {
-        version,
-        environment,
-        globals,
-        shapes,
-    };
+    let library = StdlibLibrary { version, environment, globals, shapes };
     verify_shape_references(&library);
     library
 }
 
 /// Expand the compact `[enums.<Type>]` section into member namespaces
-/// of the `Enum` global: each type is an `Enum`-shaped namespace, each
-/// item an `EnumItem`-shaped read-only constant. The `Enum` global and
-/// the `Enums`/`Enum`/`EnumItem` shapes are hand-authored; only the
-/// tree of names is generated.
+/// of the `Enum` global.
+///
+/// Each type is an `Enum`-shaped namespace, each item an `EnumItem`-shaped
+/// read-only constant. The `Enum` global and the `Enums`/`Enum`/`EnumItem`
+/// shapes are hand-authored; only the tree of names is generated.
+///
+/// # Panics
+///
+/// Panics when the `Enum` global is absent or a type collides with one of
+/// its hand-authored members.
 fn splice_enums(
     enums: BTreeMap<String, RawEnumType>,
     globals: &mut BTreeMap<CompactString, StdlibEntry>,
@@ -575,11 +579,11 @@ fn splice_enums(
     for (type_name, enum_type) in enums {
         let mut members: BTreeMap<CompactString, StdlibEntry> = BTreeMap::new();
         for item in enum_type.items {
-            let constant = convert_constant(item);
+            let constant = StdlibConstant::from(item);
             members.insert(
                 constant.value,
                 StdlibEntry::Constant(StdlibValue {
-                    read_only: true,
+                    is_read_only: true,
                     deprecated: constant.deprecated,
                     shape: Some(CompactString::const_new("EnumItem")),
                 }),
@@ -588,46 +592,39 @@ fn splice_enums(
         let entry = StdlibEntry::Namespace(StdlibNamespace {
             members,
             shape: Some(CompactString::const_new("Enum")),
-            deprecated: enum_type.deprecated.map(convert_deprecation),
+            deprecated: enum_type.deprecated.map(StdlibDeprecation::from),
         });
         assert!(
-            enum_global
-                .members
-                .insert(CompactString::from(type_name.as_str()), entry)
-                .is_none(),
+            enum_global.members.insert(CompactString::from(type_name.as_str()), entry).is_none(),
             "enum type {type_name} collides with a hand-authored Enum member"
         );
     }
 }
 
-/// Copy each extending shape's base members in, own members winning.
-/// Transitive chains resolve through recursion; cycles are an authoring
-/// bug and panic.
+/// Copy each extending shape's base members into it; own members win.
+/// Chains resolve transitively, and a cycle panics.
 fn resolve_shape_extends(
     shapes: &mut BTreeMap<CompactString, StdlibShape>,
     extends: &BTreeMap<CompactString, CompactString>,
 ) {
+    /// # Panics
+    ///
+    /// Panics on an `extends` cycle or an unknown base shape.
     fn collect(
         name: &str,
         shapes: &BTreeMap<CompactString, StdlibShape>,
         extends: &BTreeMap<CompactString, CompactString>,
         chain: &mut Vec<CompactString>,
     ) -> BTreeMap<CompactString, StdlibEntry> {
-        assert!(
-            !chain.iter().any(|visited| visited == name),
-            "shape extends cycle through {name}"
-        );
+        assert!(!chain.iter().any(|visited| visited == name), "shape extends cycle through {name}");
         chain.push(CompactString::from(name));
-        let mut members = match extends.get(name) {
-            Some(base) => {
-                assert!(
-                    shapes.contains_key(base.as_str()),
-                    "shape {name} extends unknown shape {base}"
-                );
-                collect(base, shapes, extends, chain)
-            }
-            None => BTreeMap::new(),
-        };
+        let mut members = extends.get(name).map_or_else(BTreeMap::new, |base| {
+            assert!(
+                shapes.contains_key(base.as_str()),
+                "shape {name} extends unknown shape {base}"
+            );
+            collect(base, shapes, extends, chain)
+        });
         if let Some(shape) = shapes.get(name) {
             for (member_name, entry) in &shape.members {
                 members.insert(member_name.clone(), entry.clone());
@@ -642,12 +639,14 @@ fn resolve_shape_extends(
     }
 }
 
-/// Every shape referenced by a `returns` or `shape` field must exist in
-/// the library's registry. A dangling name is an authoring typo.
+/// Check that every `returns` and `shape` names a shape the library has.
 fn verify_shape_references(library: &StdlibLibrary) {
+    /// # Panics
+    ///
+    /// Panics when `entry` or a child names a shape the library lacks.
     fn check(library: &StdlibLibrary, entry: &StdlibEntry, path: &str) {
         let referenced = match entry {
-            StdlibEntry::Function(func) => func.returns_shape.as_ref(),
+            StdlibEntry::Function(function) => function.returns_shape.as_ref(),
             StdlibEntry::Constant(value) | StdlibEntry::Property(value) => value.shape.as_ref(),
             StdlibEntry::Namespace(namespace) => {
                 for (name, child) in &namespace.members {
@@ -677,13 +676,13 @@ fn verify_shape_references(library: &StdlibLibrary) {
 mod tests {
     use super::*;
 
-    fn parse_test_library(toml_src: &str) -> StdlibLibrary {
-        parse_library(&[toml_src], LuaVersion::Luau, StdlibEnvironment::Standalone)
+    fn parse_test_library(toml_source: &str) -> StdlibLibrary {
+        parse_library(&[toml_source], LuaVersion::Luau, StdlibEnvironment::Standalone)
     }
 
     #[test]
     fn flat_signature_parses() {
-        let lib = parse_test_library(
+        let library = parse_test_library(
             r#"
             [globals.f]
             kind = "function"
@@ -692,17 +691,17 @@ mod tests {
             params = [{ kind = "string" }, { kind = "number", required = false }]
             "#,
         );
-        let StdlibEntry::Function(func) = lib.lookup_str(&["f"]).expect("f") else {
+        let StdlibEntry::Function(function) = library.lookup(&["f"]).expect("f") else {
             panic!("expected function");
         };
-        assert_eq!(func.signatures.len(), 1);
-        assert_eq!(func.min_args(), 1);
-        assert_eq!(func.max_args(), Some(2));
+        assert_eq!(function.signatures.len(), 1);
+        assert_eq!(function.min_args(), 1);
+        assert_eq!(function.max_args(), Some(2));
     }
 
     #[test]
     fn overloads_parse_and_match() {
-        let lib = parse_test_library(
+        let library = parse_test_library(
             r#"
             [globals.f]
             kind = "function"
@@ -716,24 +715,24 @@ mod tests {
             ]
             "#,
         );
-        let StdlibEntry::Function(func) = lib.lookup_str(&["f"]).expect("f") else {
+        let StdlibEntry::Function(function) = library.lookup(&["f"]).expect("f") else {
             panic!("expected function");
         };
-        assert_eq!(func.signatures.len(), 2);
-        assert_eq!(func.min_args(), 0);
-        assert_eq!(func.max_args(), Some(3));
-        assert!(func.accepts_arg_count(0));
-        assert!(!func.accepts_arg_count(1));
-        assert!(func.accepts_arg_count(2));
-        assert!(func.accepts_arg_count(3));
-        assert!(!func.accepts_arg_count(4));
-        assert_eq!(func.matching_signatures(2).count(), 1);
-        assert_eq!(func.signature_index_for_active_param(1), 1);
+        assert_eq!(function.signatures.len(), 2);
+        assert_eq!(function.min_args(), 0);
+        assert_eq!(function.max_args(), Some(3));
+        assert!(function.accepts_arg_count(0));
+        assert!(!function.accepts_arg_count(1));
+        assert!(function.accepts_arg_count(2));
+        assert!(function.accepts_arg_count(3));
+        assert!(!function.accepts_arg_count(4));
+        assert_eq!(function.matching_signatures(2).count(), 1);
+        assert_eq!(function.signature_index_for_active_param(1), 1);
     }
 
     #[test]
     fn per_constant_deprecation_parses() {
-        let lib = parse_test_library(
+        let library = parse_test_library(
             r#"
             [globals.gc]
             kind = "function"
@@ -745,23 +744,23 @@ mod tests {
             ] }]
             "#,
         );
-        let StdlibEntry::Function(func) = lib.lookup_str(&["gc"]).expect("gc") else {
+        let StdlibEntry::Function(function) = library.lookup(&["gc"]).expect("gc") else {
             panic!("expected function");
         };
-        let StdlibArgKind::Constant(values) = &func.primary_signature().params[0].kind else {
+        let StdlibArgKind::Constant(values) = &function.primary_signature().params[0].kind else {
             panic!("expected constant param");
         };
         assert_eq!(values.len(), 2);
         assert!(values[0].deprecated.is_none());
         assert_eq!(
-            values[1].deprecated.as_ref().map(|d| d.message.as_str()),
+            values[1].deprecated.as_ref().map(|deprecation| deprecation.message.as_str()),
             Some("gone")
         );
     }
 
     #[test]
     fn shapes_resolve_through_properties() {
-        let lib = parse_test_library(
+        let library = parse_test_library(
             r#"
             [globals.game]
             kind = "property"
@@ -784,20 +783,18 @@ mod tests {
             params = [{ kind = "string" }, { kind = "bool", required = false }]
             "#,
         );
-        let entry = lib
-            .lookup_str(&["game", "GetService"])
-            .expect("shape traversal");
-        let StdlibEntry::Function(func) = entry else {
+        let entry = library.lookup(&["game", "GetService"]).expect("shape traversal");
+        let StdlibEntry::Function(function) = entry else {
             panic!("expected function");
         };
-        assert!(func.is_method);
-        assert_eq!(func.returns_shape.as_deref(), Some("Instance"));
-        assert!(lib.shape_member("Instance", "FindFirstChild").is_some());
+        assert!(function.is_method);
+        assert_eq!(function.returns_shape.as_deref(), Some("Instance"));
+        assert!(library.shape_member("Instance", "FindFirstChild").is_some());
     }
 
     #[test]
     fn per_param_deprecation_parses() {
-        let lib = parse_test_library(
+        let library = parse_test_library(
             r#"
             [globals.f]
             kind = "function"
@@ -809,10 +806,10 @@ mod tests {
             ]
             "#,
         );
-        let StdlibEntry::Function(func) = lib.lookup_str(&["f"]).expect("f") else {
+        let StdlibEntry::Function(function) = library.lookup(&["f"]).expect("f") else {
             panic!("expected function");
         };
-        assert!(func.primary_signature().params[1].deprecated.is_some());
+        assert!(function.primary_signature().params[1].deprecated.is_some());
     }
 
     #[test]
@@ -840,10 +837,10 @@ mod tests {
             min_args = 0
             max_args = 0
         "#;
-        let lib = parse_library(&[base, extra], LuaVersion::Luau, StdlibEnvironment::Roblox);
-        assert!(lib.lookup_str(&["Enum", "Material", "Grass"]).is_some());
-        assert!(lib.lookup_str(&["Enum", "KeyCode", "A"]).is_some());
-        assert!(lib.shape_member("Instance", "GetChildren").is_some());
+        let library = parse_library(&[base, extra], LuaVersion::Luau, StdlibEnvironment::Roblox);
+        assert!(library.lookup(&["Enum", "Material", "Grass"]).is_some());
+        assert!(library.lookup(&["Enum", "KeyCode", "A"]).is_some());
+        assert!(library.shape_member("Instance", "GetChildren").is_some());
     }
 
     #[test]

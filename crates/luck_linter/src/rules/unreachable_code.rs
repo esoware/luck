@@ -1,10 +1,10 @@
-use luck_ast::shared::Block;
-use luck_ast::visitor::Visitor;
+use luck_ast::{Block, Statement, Visitor};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::rule::{LintContext, Rule, WholeRule};
 
-pub struct UnreachableCode;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UnreachableCode;
 
 impl Rule for UnreachableCode {
     fn name(&self) -> &'static str {
@@ -17,36 +17,34 @@ impl Rule for UnreachableCode {
         Severity::Warning
     }
     fn description(&self) -> &'static str {
-        "code after return/break/continue is unreachable"
+        "code after a mid-block `break` is unreachable"
     }
+}
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let mut checker = UnreachableChecker {
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(ctx.block);
-        checker.diagnostics
+impl WholeRule for UnreachableCode {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        let mut checker = UnreachableChecker { diags: Vec::new() };
+        checker.visit_block(context.block);
+        checker.diags
     }
 }
 
 struct UnreachableChecker {
-    diagnostics: Vec<LintDiagnostic>,
+    diags: Vec<LintDiagnostic>,
 }
 
 impl<'ast> Visitor<'ast> for UnreachableChecker {
     fn visit_block(&mut self, block: &'ast Block) {
-        // Break is ordinarily a LastStatement, but Lua 5.2+ also allows it as
-        // a regular Statement mid-block, leaving whatever follows it in the
-        // same block unreachable. This reports only the first such statement.
-        for pair in block.stmts.windows(2) {
-            if matches!(pair[0], luck_ast::Statement::Break(_)) {
-                self.diagnostics.push(LintDiagnostic::new(
-                    "unreachable_code",
-                    "unreachable code".to_string(),
-                    pair[1].span(),
-                ));
-                break;
-            }
+        // Lua 5.2+ lets `break` sit mid-block, which leaves the rest of the
+        // block unreachable. Only the first unreachable statement is reported.
+        let first_unreachable =
+            block.stmts.iter().skip_while(|stmt| !matches!(stmt, Statement::Break(_))).nth(1);
+        if let Some(stmt) = first_unreachable {
+            self.diags.push(LintDiagnostic::new(
+                "unreachable_code",
+                "unreachable code",
+                stmt.span(),
+            ));
         }
         self.walk_block(block);
     }
@@ -54,11 +52,13 @@ impl<'ast> Visitor<'ast> for UnreachableChecker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&UnreachableCode, source, LuaVersion::Lua54)
+        run_rule(&UnreachableCode, source, LuaVersion::Lua54)
     }
 
     #[test]

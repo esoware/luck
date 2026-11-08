@@ -1,98 +1,79 @@
 //! Convert `luck_linter::LintDiagnostic` values into LSP `Diagnostic`s.
-//!
-//! Positions come from `LineIndex` so that surrogate-pair handling stays
-//! consistent across formatting and lint diagnostics.
 
-use luck_linter::diagnostic::{LintDiagnostic, Severity};
+use luck_linter::{LintDiagnostic, Severity};
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString};
 
-use crate::line_index::LineIndex;
+use crate::document::DocumentState;
 
 /// The source string in `Diagnostic.source`; VS Code shows it in tooltips.
-pub const DIAGNOSTIC_SOURCE: &str = "luck";
+const DIAGNOSTIC_SOURCE: &str = "luck";
 
-#[must_use]
-pub fn to_lsp_diagnostics(
-    source: &str,
-    line_index: &LineIndex,
-    diags: &[LintDiagnostic],
-) -> Vec<Diagnostic> {
-    diags
+pub(crate) fn to_lsp(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<Diagnostic> {
+    lints
         .iter()
-        .map(|diag| to_lsp_diagnostic(source, line_index, diag))
+        .map(|lint| Diagnostic {
+            range: document.range(lint.span),
+            severity: Some(match lint.severity {
+                Severity::Error => DiagnosticSeverity::ERROR,
+                Severity::Warning => DiagnosticSeverity::WARNING,
+            }),
+            code: Some(NumberOrString::String(lint.rule.to_owned())),
+            code_description: None,
+            source: Some(DIAGNOSTIC_SOURCE.to_owned()),
+            message: lint.help.as_ref().map_or_else(
+                || lint.message.clone(),
+                |help| format!("{}\n\nhelp: {help}", lint.message),
+            ),
+            related_information: None,
+            tags: None,
+            data: None,
+        })
         .collect()
-}
-
-fn to_lsp_diagnostic(source: &str, line_index: &LineIndex, diag: &LintDiagnostic) -> Diagnostic {
-    let range = line_index.range(source, diag.span.start, diag.span.end);
-    let message = match &diag.help {
-        Some(help) => format!("{}\n\nhelp: {help}", diag.message),
-        None => diag.message.clone(),
-    };
-    Diagnostic {
-        range,
-        severity: Some(map_severity(diag.severity)),
-        code: Some(NumberOrString::String(diag.rule.to_string())),
-        code_description: None,
-        source: Some(DIAGNOSTIC_SOURCE.to_string()),
-        message,
-        related_information: None,
-        tags: None,
-        data: None,
-    }
-}
-
-fn map_severity(severity: Severity) -> DiagnosticSeverity {
-    match severity {
-        Severity::Error => DiagnosticSeverity::ERROR,
-        Severity::Warning => DiagnosticSeverity::WARNING,
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use luck_linter::diagnostic::{Category, LintDiagnostic, Severity};
+    use luck_core::LuaTarget;
+    use luck_linter::Category;
     use luck_token::Span;
+
+    use super::*;
+
+    fn convert(lint: LintDiagnostic) -> Diagnostic {
+        let document = DocumentState::new("local x = 1".to_owned(), 1, LuaTarget::Lua54);
+        let mut diagnostics = to_lsp(&document, &[lint]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        diagnostics.remove(0)
+    }
 
     #[test]
     fn maps_error_severity() {
-        let source = "local x = 1";
-        let line_index = LineIndex::new(source);
-        let diag = LintDiagnostic {
+        let diagnostic = convert(LintDiagnostic {
             rule: "test_rule",
             category: Category::Correctness,
             severity: Severity::Error,
-            message: "bad".to_string(),
+            message: "bad".to_owned(),
             span: Span::new(6, 7),
             help: None,
             fix: None,
-        };
-        let lsp = to_lsp_diagnostic(source, &line_index, &diag);
-        assert_eq!(lsp.severity, Some(DiagnosticSeverity::ERROR));
-        assert_eq!(lsp.message, "bad");
-        assert_eq!(
-            lsp.code,
-            Some(NumberOrString::String("test_rule".to_string()))
-        );
+        });
+        assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(diagnostic.message, "bad");
+        assert_eq!(diagnostic.code, Some(NumberOrString::String("test_rule".to_owned())));
     }
 
     #[test]
     fn maps_warning_severity_and_appends_help() {
-        let source = "local x = 1";
-        let line_index = LineIndex::new(source);
-        let diag = LintDiagnostic {
+        let diagnostic = convert(LintDiagnostic {
             rule: "warn_rule",
             category: Category::Style,
             severity: Severity::Warning,
-            message: "stylistic issue".to_string(),
+            message: "stylistic issue".to_owned(),
             span: Span::new(0, 5),
-            help: Some("rename it".to_string()),
+            help: Some("rename it".to_owned()),
             fix: None,
-        };
-        let lsp = to_lsp_diagnostic(source, &line_index, &diag);
-        assert_eq!(lsp.severity, Some(DiagnosticSeverity::WARNING));
-        assert!(lsp.message.contains("stylistic issue"));
-        assert!(lsp.message.contains("rename it"));
+        });
+        assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(diagnostic.message, "stylistic issue\n\nhelp: rename it");
     }
 }

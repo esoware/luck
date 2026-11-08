@@ -1,179 +1,186 @@
-use luck_ast::expr::{Expression, Literal};
-use luck_ast::shared::Block;
-use luck_ast::transform::AstTransform;
+use luck_ast::{Block, Expression, Literal, Transform};
 use luck_token::{LuaVersion, NumberSubtypes, Span};
 
+use crate::expr::int_to_float;
+
 /// Shortens numeric literals using scientific notation, decimal trimming, and
-/// hex-to-decimal. On Lua 5.3+ the integer/float subtype of every literal is
-/// preserved (`1.0` never becomes `1`, an integer never becomes `1e6`), and
-/// every candidate must parse back to the identical value before it is
-/// accepted.
-pub fn shorten(block: Block, version: LuaVersion) -> Block {
-    NumberShortener {
-        subtypes: crate::expr::number_subtypes(version),
-    }
-    .transform_block(block)
+/// hex-to-decimal.
+///
+/// On Lua 5.3+ every literal keeps its integer/float subtype (`1.0` never
+/// becomes `1`, an integer never becomes `1e6`), and a candidate is only used
+/// if it parses back to the same value.
+pub(crate) fn shorten(block: Block, version: LuaVersion) -> Block {
+    NumberShortener { subtypes: NumberSubtypes::from(version) }.transform_block(block)
 }
 
 struct NumberShortener {
     subtypes: NumberSubtypes,
 }
 
-impl AstTransform for NumberShortener {
+impl Transform for NumberShortener {
     fn transform_expression(&mut self, expr: Expression) -> Expression {
-        let expr = self.walk_expression(expr);
-
-        match expr {
-            Expression::Number(ref literal) => {
-                let shortened = shorten_number(&literal.text, self.subtypes);
-                if shortened.len() < literal.text.len() {
+        match self.walk_expression(expr) {
+            Expression::Number(literal) => {
+                if let Some(shortened) = shorten_number(&literal.text, self.subtypes) {
                     return Expression::Number(Literal {
                         text: shortened.into(),
                         span: Span::default(),
                     });
                 }
-                expr
+                Expression::Number(literal)
             }
             // Luau
-            Expression::Integer(ref literal) => {
-                let shortened = shorten_integer(&literal.text);
-                if shortened.len() < literal.text.len() {
+            Expression::Integer(literal) => {
+                if let Some(shortened) = shorten_integer(&literal.text) {
                     return Expression::Integer(Literal {
                         text: shortened.into(),
                         span: Span::default(),
                     });
                 }
-                expr
+                Expression::Integer(literal)
             }
-            other => other,
+            other @ (Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Var(_)
+            | Expression::FunctionCall(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::BinaryOp(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::TypeInstantiation(_)
+            | Expression::Error(_)) => other,
         }
     }
 }
 
-/// Shortens a Luau integer literal (`i` suffix). The value is an exact
-/// 64-bit pattern, so respelling is lossless. Hex covers every pattern;
-/// decimal only up to i64::MAX, since larger values would need a unary
-/// minus, which is a different AST shape.
-fn shorten_integer(text: &str) -> String {
-    let body = &text[..text.len() - 1];
+/// A shorter spelling of a Luau integer literal (`i` suffix), if there is
+/// one.
+///
+/// The value is an exact 64-bit pattern, so respelling is lossless. Hex covers
+/// every pattern; decimal only up to `i64::MAX`, since larger values would
+/// need a unary minus, which is a different AST shape.
+fn shorten_integer(text: &str) -> Option<String> {
+    let body = text.strip_suffix('i').unwrap_or(text);
     let digits: String = body
         .trim_start_matches("0x")
         .trim_start_matches("0X")
         .trim_start_matches("0b")
         .trim_start_matches("0B")
         .chars()
-        .filter(|ch| *ch != '_')
+        .filter(|character| *character != '_')
         .collect();
     let radix = match body.as_bytes().get(1) {
         Some(b'x' | b'X') => 16,
         Some(b'b' | b'B') => 2,
         _ => 10,
     };
-    let Ok(value) = u64::from_str_radix(&digits, radix) else {
-        return text.to_string();
-    };
+    let value = u64::from_str_radix(&digits, radix).ok()?;
 
     let mut best = format!("0x{value:x}i");
-    if value <= i64::MAX as u64 {
+    if i64::try_from(value).is_ok() {
         let decimal = format!("{value}i");
         // Prefer decimal when the spellings tie.
         if decimal.len() <= best.len() {
             best = decimal;
         }
     }
-    if best.len() < text.len() {
-        best
-    } else {
-        text.to_string()
-    }
+    (best.len() < text.len()).then_some(best)
+}
+
+/// The digits after a `0x` or `0X` prefix, if there are any.
+fn hex_digits(text: &str) -> Option<&str> {
+    text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")).filter(|digits| !digits.is_empty())
 }
 
 /// Whether the literal spells a float on 5.3+ (has `.`, `e`, or hex `p`).
 fn is_float_form(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    if bytes.len() > 2 && bytes[0] == b'0' && (bytes[1] | 0x20) == b'x' {
-        bytes[2..].iter().any(|&b| b == b'.' || (b | 0x20) == b'p')
-    } else {
-        bytes.iter().any(|&b| b == b'.' || (b | 0x20) == b'e')
-    }
+    hex_digits(text)
+        .map_or_else(|| text.contains(['.', 'e', 'E']), |digits| digits.contains(['.', 'p', 'P']))
 }
 
-/// Round-trip check: the candidate must parse to exactly `value`.
+/// Whether `candidate` parses to exactly `value`. Rust's float parser accepts
+/// Lua's `.5` and `5.` spellings.
 fn roundtrips(candidate: &str, value: f64) -> bool {
-    let normalized = if let Some(rest) = candidate.strip_prefix('.') {
-        format!("0.{rest}")
-    } else if let Some(rest) = candidate.strip_suffix('.') {
-        format!("{rest}.0")
-    } else {
-        candidate.to_string()
-    };
-    normalized.parse::<f64>() == Ok(value)
+    candidate.parse::<f64>() == Ok(value)
 }
 
-fn shorten_number(text: &str, subtypes: NumberSubtypes) -> String {
+/// A shorter spelling of a number literal, with the same value and subtype,
+/// if there is one.
+fn shorten_number(text: &str, subtypes: NumberSubtypes) -> Option<String> {
     // A one-character literal can never shrink, and single digits are the
     // most common literals in already-minified rounds.
     if text.len() == 1 {
-        return text.to_string();
+        return None;
     }
 
-    let int_subtype = subtypes == NumberSubtypes::IntFloat;
+    let has_int_subtype = subtypes == NumberSubtypes::IntFloat;
 
-    let bytes = text.as_bytes();
-    if bytes.len() > 2 && bytes[0] == b'0' && (bytes[1] | 0x20) == b'x' {
-        let hex = &text[2..];
-        if hex.bytes().any(|b| b == b'.' || (b | 0x20) == b'p') {
+    if let Some(digits) = hex_digits(text) {
+        if digits.contains(['.', 'p', 'P']) {
             // Hex floats are rare and precision-delicate, so leave them.
-            return text.to_string();
+            return None;
         }
         // Hex integers: the decimal spelling denotes the same integer
         // (both are integer-typed on 5.3+, both f64 elsewhere). Values
         // that wrap past i64::MAX have no positive decimal spelling.
-        if let Ok(value) = u64::from_str_radix(hex, 16)
-            && value <= i64::MAX as u64
+        if let Ok(value) = u64::from_str_radix(digits, 16)
+            && let Ok(integer) = i64::try_from(value)
         {
-            let decimal = itoa::Buffer::new().format(value).to_string();
-            if decimal.len() < text.len() && (int_subtype || roundtrips(&decimal, value as f64)) {
-                return decimal;
+            let decimal = itoa::Buffer::new().format(integer).to_owned();
+            if decimal.len() < text.len()
+                && (has_int_subtype || roundtrips(&decimal, int_to_float(integer)))
+            {
+                return Some(decimal);
             }
         }
-        return text.to_string();
+        return None;
     }
 
-    if bytes.len() >= 2 && bytes[0] == b'0' && (bytes[1] | 0x20) == b'b' {
-        return text.to_string();
+    if text.starts_with("0b") || text.starts_with("0B") {
+        return None;
     }
 
-    let Ok(value) = text.parse::<f64>() else {
-        return text.to_string();
-    };
+    let value = text.parse::<f64>().ok()?;
     if !value.is_finite() {
-        return text.to_string();
+        return None;
     }
 
-    let float_form = is_float_form(text);
+    let is_float_formed = is_float_form(text);
     let mut candidates: Vec<String> = Vec::new();
 
-    // Integer spelling, only when the literal already IS an integer on 5.3+
-    // (or subtypes do not exist). `1.0` shortened to `1` flips math.type.
-    if value == value.floor() && value.abs() < 1e15 && (!int_subtype || !float_form) {
-        candidates.push(itoa::Buffer::new().format(value as i64).to_string());
+    // Integer spelling, only when the literal is already an integer on 5.3+
+    // or the target has no subtypes. Shortening `1.0` to `1` flips math.type.
+    if value.fract() == 0.0f64 && value.abs() < 1e15f64 && (!has_int_subtype || !is_float_formed) {
+        candidates.push(format_shortest_decimal(value, false));
     }
 
     // Float-preserving spellings for float-formed literals: `2.0` -> `2.`
     // and `0.5` -> `.5` keep the subtype; scientific keeps it too.
-    if !int_subtype || float_form {
-        let decimal = format_shortest_decimal(value, int_subtype && float_form);
+    if !has_int_subtype || is_float_formed {
+        let decimal = format_shortest_decimal(value, has_int_subtype && is_float_formed);
         candidates.push(decimal);
 
-        if value != 0.0 {
-            let exp = value.abs().log10().floor() as i32;
-            if exp >= 3 || exp <= -2 {
-                let mantissa = value / 10f64.powi(exp);
-                candidates.push(format!(
-                    "{}e{exp}",
-                    format_shortest_decimal(mantissa, false)
-                ));
+        if value != 0.0f64 {
+            #[expect(
+                clippy::as_conversions,
+                clippy::cast_possible_truncation,
+                reason = "bounded to -324..308 for a finite non-zero value, and the log10 rounding picks the output spelling"
+            )]
+            let exponent = value.abs().log10().floor() as i32;
+            if exponent >= 3i32 || exponent <= -2i32 {
+                #[expect(
+                    clippy::float_arithmetic,
+                    reason = "computes the mantissa of a candidate literal"
+                )]
+                let mantissa = value / 10f64.powi(exponent);
+                candidates.push(format!("{}e{exponent}", format_shortest_decimal(mantissa, false)));
             }
         }
         // `0.5` -> `.5`, but never `0.` -> `.` (not a number literal).
@@ -187,47 +194,45 @@ fn shorten_number(text: &str, subtypes: NumberSubtypes) -> String {
     candidates
         .into_iter()
         .filter(|candidate| roundtrips(candidate, value))
-        .min_by_key(|candidate| candidate.len())
+        .min_by_key(String::len)
         .filter(|candidate| candidate.len() < text.len())
-        .unwrap_or_else(|| text.to_string())
 }
 
-fn format_shortest_decimal(value: f64, must_stay_float_formed: bool) -> String {
-    if value == 0.0 {
-        return if must_stay_float_formed { "0." } else { "0" }.to_string();
+fn format_shortest_decimal(value: f64, should_stay_float_formed: bool) -> String {
+    if value == 0.0f64 {
+        return if should_stay_float_formed { "0." } else { "0" }.to_owned();
     }
 
-    // Shortest-roundtrip digits without the fmt machinery. ryu uses exponent
-    // form for extreme magnitudes where Display does not; the 'e'-aware paths
-    // below handle both, and every candidate still passes the roundtrips()
-    // gate.
+    // ryu gives the shortest round-trip digits without the fmt machinery, but
+    // switches to exponent form at extreme magnitudes. Every candidate still
+    // goes through roundtrips().
     let mut ryu_buffer = ryu::Buffer::new();
     let formatted = ryu_buffer.format(value);
 
     // Exponent forms are already float-formed and must skip the trailing-
     // zero trim, which would otherwise eat exponent digits ("1.5e300").
     if formatted.contains('e') || formatted.contains('E') {
-        return formatted.to_string();
+        return formatted.to_owned();
     }
 
     if formatted.contains('.') {
-        let trimmed = formatted.trim_end_matches('0');
-        let trimmed = if must_stay_float_formed {
+        let without_zeros = formatted.trim_end_matches('0');
+        let trimmed = if should_stay_float_formed {
             // Keep the `.` so the literal still spells a float (`2.`).
-            trimmed
+            without_zeros
         } else {
-            trimmed.trim_end_matches('.')
+            without_zeros.trim_end_matches('.')
         };
         if let Some(rest) = trimmed.strip_prefix("0.") {
             return format!(".{rest}");
         }
-        return trimmed.to_string();
+        return trimmed.to_owned();
     }
 
-    if must_stay_float_formed {
+    if should_stay_float_formed {
         return format!("{formatted}.");
     }
-    formatted.to_string()
+    formatted.to_owned()
 }
 
 #[cfg(test)]
@@ -236,93 +241,82 @@ mod tests {
 
     #[test]
     fn no_subtype_trailing_zero_drops() {
-        assert_eq!(shorten_number("1.0", NumberSubtypes::Unified), "1");
-        assert_eq!(shorten_number("2.0", NumberSubtypes::Unified), "2");
-        assert_eq!(shorten_number("10.0", NumberSubtypes::Unified), "10");
+        assert_eq!(shorten_number("1.0", NumberSubtypes::Unified).as_deref(), Some("1"));
+        assert_eq!(shorten_number("2.0", NumberSubtypes::Unified).as_deref(), Some("2"));
+        assert_eq!(shorten_number("10.0", NumberSubtypes::Unified).as_deref(), Some("10"));
     }
 
     #[test]
     fn subtype_float_keeps_float_form() {
         // On 5.3+, `1.0` shortened to `1` flips math.type, while `1.` keeps
         // it float.
-        assert_eq!(shorten_number("1.0", NumberSubtypes::IntFloat), "1.");
-        assert_eq!(shorten_number("10.0", NumberSubtypes::IntFloat), "10.");
+        assert_eq!(shorten_number("1.0", NumberSubtypes::IntFloat).as_deref(), Some("1."));
+        assert_eq!(shorten_number("10.0", NumberSubtypes::IntFloat).as_deref(), Some("10."));
     }
 
     #[test]
     fn subtype_integer_never_goes_scientific() {
         // `1e6` is a float on 5.3+; the integer must stay spelled as one.
-        assert_eq!(
-            shorten_number("1000000", NumberSubtypes::IntFloat),
-            "1000000"
-        );
-        assert_eq!(shorten_number("100000", NumberSubtypes::IntFloat), "100000");
+        assert_eq!(shorten_number("1000000", NumberSubtypes::IntFloat), None);
+        assert_eq!(shorten_number("100000", NumberSubtypes::IntFloat), None);
     }
 
     #[test]
-    fn no_subtype_scientific_ok() {
-        assert_eq!(shorten_number("100000", NumberSubtypes::Unified), "1e5");
-        assert_eq!(shorten_number("1000000", NumberSubtypes::Unified), "1e6");
+    fn no_subtype_goes_scientific() {
+        assert_eq!(shorten_number("100000", NumberSubtypes::Unified).as_deref(), Some("1e5"));
+        assert_eq!(shorten_number("1000000", NumberSubtypes::Unified).as_deref(), Some("1e6"));
     }
 
     #[test]
     fn leading_zero_drops_either_way() {
-        assert_eq!(shorten_number("0.5", NumberSubtypes::Unified), ".5");
-        assert_eq!(shorten_number("0.5", NumberSubtypes::IntFloat), ".5");
-        assert_eq!(shorten_number("0.25", NumberSubtypes::IntFloat), ".25");
+        assert_eq!(shorten_number("0.5", NumberSubtypes::Unified).as_deref(), Some(".5"));
+        assert_eq!(shorten_number("0.5", NumberSubtypes::IntFloat).as_deref(), Some(".5"));
+        assert_eq!(shorten_number("0.25", NumberSubtypes::IntFloat).as_deref(), Some(".25"));
     }
 
     #[test]
-    fn no_change_needed() {
-        assert_eq!(shorten_number("1", NumberSubtypes::IntFloat), "1");
-        assert_eq!(shorten_number("42", NumberSubtypes::Unified), "42");
-        assert_eq!(shorten_number("0", NumberSubtypes::IntFloat), "0");
+    fn shortest_spelling_has_no_rewrite() {
+        assert_eq!(shorten_number("1", NumberSubtypes::IntFloat), None);
+        assert_eq!(shorten_number("42", NumberSubtypes::Unified), None);
+        assert_eq!(shorten_number("0", NumberSubtypes::IntFloat), None);
     }
 
     #[test]
     fn hex_to_decimal_both_models() {
-        assert_eq!(shorten_number("0xFF", NumberSubtypes::IntFloat), "255");
-        assert_eq!(shorten_number("0xFF", NumberSubtypes::Unified), "255");
-        assert_eq!(shorten_number("0x1A", NumberSubtypes::IntFloat), "26");
-        assert_eq!(
-            shorten_number("0xFFFFFFFF", NumberSubtypes::IntFloat),
-            "0xFFFFFFFF"
-        );
+        assert_eq!(shorten_number("0xFF", NumberSubtypes::IntFloat).as_deref(), Some("255"));
+        assert_eq!(shorten_number("0xFF", NumberSubtypes::Unified).as_deref(), Some("255"));
+        assert_eq!(shorten_number("0x1A", NumberSubtypes::IntFloat).as_deref(), Some("26"));
+        assert_eq!(shorten_number("0xFFFFFFFF", NumberSubtypes::IntFloat), None);
     }
 
     #[test]
     fn wrapping_hex_kept() {
         // 0xFFFFFFFFFFFFFFFF is -1 on 5.3+; no positive decimal spelling.
-        assert_eq!(
-            shorten_number("0xFFFFFFFFFFFFFFFF", NumberSubtypes::IntFloat),
-            "0xFFFFFFFFFFFFFFFF"
-        );
+        assert_eq!(shorten_number("0xFFFFFFFFFFFFFFFF", NumberSubtypes::IntFloat), None);
     }
 
     #[test]
     fn integer_literals_shorten_losslessly() {
         // Luau
-        assert_eq!(shorten_integer("1_000_000i"), "1000000i");
-        assert_eq!(shorten_integer("0xffi"), "255i");
-        assert_eq!(shorten_integer("0b1111i"), "15i");
-        assert_eq!(shorten_integer("0XFF_FFi"), "65535i");
+        assert_eq!(shorten_integer("1_000_000i").as_deref(), Some("1000000i"));
+        assert_eq!(shorten_integer("0xffi").as_deref(), Some("255i"));
+        assert_eq!(shorten_integer("0b1111i").as_deref(), Some("15i"));
+        assert_eq!(shorten_integer("0XFF_FFi").as_deref(), Some("65535i"));
         // Bit patterns above i64::MAX have no decimal spelling; hex is
         // still shorter than binary.
         assert_eq!(
-            shorten_integer("0b1111111111111111111111111111111111111111111111111111111111111111i"),
-            "0xffffffffffffffffi"
+            shorten_integer("0b1111111111111111111111111111111111111111111111111111111111111111i")
+                .as_deref(),
+            Some("0xffffffffffffffffi")
         );
         assert_eq!(
-            shorten_integer("0xFFFF_FFFF_FFFF_FFFFi"),
-            "0xffffffffffffffffi"
+            shorten_integer("0xFFFF_FFFF_FFFF_FFFFi").as_deref(),
+            Some("0xffffffffffffffffi")
         );
         // Already-shortest spellings stay put (idempotent).
-        assert_eq!(shorten_integer("255i"), "255i");
-        assert_eq!(shorten_integer("0i"), "0i");
-        assert_eq!(
-            shorten_integer("0xffffffffffffffffi"),
-            "0xffffffffffffffffi"
-        );
-        assert_eq!(shorten_integer("1000000i"), "1000000i");
+        assert_eq!(shorten_integer("255i"), None);
+        assert_eq!(shorten_integer("0i"), None);
+        assert_eq!(shorten_integer("0xffffffffffffffffi"), None);
+        assert_eq!(shorten_integer("1000000i"), None);
     }
 }

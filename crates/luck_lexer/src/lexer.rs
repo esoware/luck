@@ -1,70 +1,106 @@
-use crate::cursor::Cursor;
-use crate::number::lex_number;
-use crate::search::{ByteMatchTable, byte_match_table};
-use crate::string::{
-    lex_escape, lex_short_string, long_bracket_level, scan_to_long_bracket_close,
-    skip_long_bracket_open,
-};
-use crate::{LexError, LexResult};
 use luck_token::{
     Comment, CommentKind, CommentPosition, CompactString, LuaVersion, Span, Token, TokenKind,
 };
 
-// Stop bytes for raw interpolated-string text: escape lead, interpolation
-// opener, closing backtick, and the line breaks Luau rejects.
-static INTERP_STOP: ByteMatchTable =
-    byte_match_table!(|byte| matches!(byte, b'\\' | b'{' | b'`' | b'\n' | b'\r'));
+use crate::cursor::Cursor;
+use crate::lex_error::{LexError, lex_error};
+use crate::lex_result::LexResult;
+use crate::number::scan_number;
+use crate::string::{
+    InterpolatedSegmentEnd, eat_long_bracket_open, scan_interpolated_segment, scan_long_string,
+    scan_short_string, scan_to_long_bracket_close,
+};
 
-/// Stateful lexer that produces tokens, comments, and errors from Lua source.
-pub struct Lexer<'src> {
-    cursor: Cursor<'src>,
-    source: &'src str,
+/// Lex all of `source` at once.
+///
+/// A source over 4 GiB yields only the error [`Lexer::new`] reports, with no
+/// tokens.
+#[must_use]
+pub fn lex(source: &str, version: LuaVersion) -> LexResult {
+    match Lexer::new(source, version) {
+        Ok(lexer) => lexer.tokenize(),
+        Err(error) => LexResult { tokens: Vec::new(), comments: Vec::new(), errors: vec![error] },
+    }
+}
+
+#[derive(Debug)]
+pub struct Lexer<'source> {
+    cursor: Cursor<'source>,
     version: LuaVersion,
-    /// Second token of a double emit (empty interpolated strings produce
-    /// InterpBegin + InterpEnd from one dispatch), handed out first on
-    /// the next `next_token` call.
+    /// Second token of a double emit, handed out first on the next
+    /// `next_token` call. An interpolated string with no expressions produces
+    /// `InterpolatedStringBegin` + `InterpolatedStringEnd` from one dispatch.
     queued: Option<Token>,
     comments: Vec<Comment>,
     errors: Vec<LexError>,
-    last_token_start: u32,
-    has_token: bool,
-    saw_newline_since_last_token: bool,
-    /// Leading comments waiting for their `attached_to` to be set when the next token is found.
+    /// `None` until the first token.
+    last_token_start: Option<u32>,
+    /// The file start counts as a newline.
+    has_newline_since_last_token: bool,
+    /// Leading comments that get their `attached_to` from the next token.
     pending_leading_comments: Vec<PendingComment>,
-    /// Stack of brace depths for nested interpolated strings (Luau).
-    /// Each entry tracks how many unmatched `{` exist within the current interpolation expression.
-    /// When `}` is encountered and the top of the stack is 0, we resume scanning the string.
-    interp_brace_stack: Vec<u32>,
+    /// Unmatched `{` count for each open interpolation expression, innermost
+    /// last (Luau). A `}` at depth 0 closes the expression and resumes the
+    /// string.
+    interpolation_brace_depths: Vec<u32>,
 }
 
+/// A comment whose attachment is not settled yet.
+#[derive(Debug)]
 struct PendingComment {
     span: Span,
     kind: CommentKind,
-    preceded_by_newline: bool,
-    followed_by_newline: bool,
+    is_preceded_by_newline: bool,
+    is_followed_by_newline: bool,
 }
 
-impl<'src> Lexer<'src> {
-    pub fn new(source: &'src str, version: LuaVersion) -> Self {
+impl PendingComment {
+    const fn attach(self, attached_to: u32, position: CommentPosition) -> Comment {
+        Comment {
+            span: self.span,
+            attached_to,
+            kind: self.kind,
+            position,
+            is_preceded_by_newline: self.is_preceded_by_newline,
+            is_followed_by_newline: self.is_followed_by_newline,
+        }
+    }
+}
+
+impl<'source> Lexer<'source> {
+    /// A lexer positioned past any UTF-8 BOM, with a first line that starts
+    /// with `#` already captured as a shebang comment.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`LexError`] for a source over 4 GiB, which `u32` spans can't
+    /// address.
+    pub fn new(source: &'source str, version: LuaVersion) -> Result<Self, LexError> {
+        if u32::try_from(source.len()).is_err() {
+            return Err(lex_error(
+                Span::new(0, 0),
+                format!(
+                    "input is {} bytes, but the maximum supported file size is 4 GiB",
+                    source.len()
+                ),
+            ));
+        }
+
         let mut lexer = Self {
-            cursor: Cursor::new(source.as_bytes()),
-            source,
+            cursor: Cursor::new(source),
             version,
             queued: None,
             comments: Vec::new(),
             errors: Vec::new(),
-            last_token_start: 0,
-            has_token: false,
-            saw_newline_since_last_token: true, // start of file counts as "after newline"
+            last_token_start: None,
+            has_newline_since_last_token: true,
             pending_leading_comments: Vec::new(),
-            interp_brace_stack: Vec::new(),
+            interpolation_brace_depths: Vec::new(),
         };
 
         // UTF-8 BOM: PUC Lua's loadfile and Luau both skip it.
-        if lexer.source.starts_with('\u{FEFF}') {
-            lexer.cursor.advance();
-            lexer.cursor.advance();
-            lexer.cursor.advance();
+        if source.starts_with('\u{FEFF}') {
+            lexer.cursor.advance_by('\u{FEFF}'.len_utf8());
         }
 
         // Lua skips any first line beginning with '#', not just '#!'.
@@ -72,13 +108,42 @@ impl<'src> Lexer<'src> {
             lexer.lex_shebang();
         }
 
-        lexer
+        Ok(lexer)
     }
 
-    pub fn tokenize(&mut self) -> LexResult {
+    /// Lex and return the next token on demand, without materializing the
+    /// whole stream. Comments and errors accumulate on the lexer; collect
+    /// them with [`Lexer::finish`] once the caller has drained to EOF.
+    /// Returns EOF tokens forever once the source is exhausted.
+    pub fn next_token(&mut self) -> Token {
+        if let Some(token) = self.queued.take() {
+            return token;
+        }
+        loop {
+            self.skip_whitespace();
+            let Some(byte) = self.cursor.peek() else {
+                let eof_start = self.cursor.position();
+                return self.make_token(TokenKind::Eof, eof_start);
+            };
+            if let Some(token) = self.dispatch_byte(byte) {
+                return token;
+            }
+        }
+    }
+
+    /// Consume the lexer after streaming, yielding the accumulated
+    /// comments and errors.
+    #[must_use]
+    pub fn finish(self) -> (Vec<Comment>, Vec<LexError>) {
+        (self.comments, self.errors)
+    }
+
+    /// Lex the whole source into one stream ending in EOF. Its own loop
+    /// rather than `next_token` until EOF, so no per-token EOF test.
+    fn tokenize(mut self) -> LexResult {
         let mut tokens = Vec::new();
         loop {
-            self.handle_whitespace();
+            self.skip_whitespace();
             let Some(byte) = self.cursor.peek() else {
                 break;
             };
@@ -93,353 +158,237 @@ impl<'src> Lexer<'src> {
         let eof_start = self.cursor.position();
         tokens.push(self.make_token(TokenKind::Eof, eof_start));
 
-        LexResult {
-            tokens,
-            comments: std::mem::take(&mut self.comments),
-            errors: std::mem::take(&mut self.errors),
-        }
-    }
-
-    /// Lex and return the next token on demand, without materializing the
-    /// whole stream. Comments and errors accumulate on the lexer; collect
-    /// them with [`Lexer::finish`] once the caller has drained to EOF.
-    /// Returns EOF tokens forever once the source is exhausted.
-    pub fn next_token(&mut self) -> Token {
-        if let Some(token) = self.queued.take() {
-            return token;
-        }
-        loop {
-            self.handle_whitespace();
-            let Some(byte) = self.cursor.peek() else {
-                let eof_start = self.cursor.position();
-                return self.make_token(TokenKind::Eof, eof_start);
-            };
-            if let Some(token) = self.dispatch_byte(byte) {
-                return token;
-            }
-        }
-    }
-
-    /// Consume the lexer after streaming, yielding the accumulated
-    /// comments and errors.
-    pub fn finish(self) -> (Vec<Comment>, Vec<LexError>) {
-        (self.comments, self.errors)
+        LexResult { tokens, comments: self.comments, errors: self.errors }
     }
 
     /// Single-jump dispatch on the lead byte. A match compiles to the same
     /// jump table as a fn-pointer array but keeps the small handlers
-    /// inlinable. Whitespace never reaches here, because the tokenize loop
-    /// consumes it before dispatching. Returns `None` when the dispatch
-    /// produced no token (comments, error recovery).
+    /// inlinable. Callers consume whitespace first. Returns `None` when the
+    /// byte produced no token (a comment or an error).
     #[inline]
     fn dispatch_byte(&mut self, byte: u8) -> Option<Token> {
         match byte {
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => Some(self.lex_identifier()),
-            b'0'..=b'9' => self.handle_digit(),
-            b'"' | b'\'' => self.handle_quote(),
-            b'`' => self.handle_backtick(),
-            b'-' => self.handle_minus(),
-            b'[' => self.handle_bracket_open(),
-            b'.' => self.handle_dot(),
+            b'0'..=b'9' => self.lex_number(),
+            b'.' if matches!(self.cursor.peek_at(1), Some(b'0'..=b'9')) => self.lex_number(),
+            b'"' | b'\'' => self.lex_short_string(byte),
+            b'[' => self.lex_long_string_or_bracket(),
+            // Luau
+            b'`' if self.version.has_interpolated_strings() => self.lex_interpolated_string(),
+            b'-' if self.cursor.peek_at(1) == Some(b'-') => {
+                self.lex_comment();
+                None
+            }
             _ => self.lex_symbol(),
         }
     }
 
-    fn handle_whitespace(&mut self) {
+    fn skip_whitespace(&mut self) {
         while let Some(byte) = self.cursor.peek() {
             match byte {
                 b' ' | b'\t' | 0x0B | 0x0C => {
                     self.cursor.advance();
                 }
-                b'\n' => {
+                b'\n' | b'\r' => {
                     self.cursor.advance();
-                    self.saw_newline_since_last_token = true;
-                }
-                b'\r' => {
-                    self.cursor.advance();
-                    if self.cursor.peek() == Some(b'\n') {
-                        self.cursor.advance();
-                    }
-                    self.saw_newline_since_last_token = true;
+                    self.has_newline_since_last_token = true;
                 }
                 _ => break,
             }
-        }
-    }
-
-    fn handle_digit(&mut self) -> Option<Token> {
-        let start = self.cursor.position();
-        match lex_number(&mut self.cursor, self.source, self.version) {
-            Ok(kind) => Some(self.make_token(kind, start)),
-            Err(err) => {
-                self.errors.push(err);
-                None
-            }
-        }
-    }
-
-    fn handle_dot(&mut self) -> Option<Token> {
-        if self.cursor.peek_at(1).is_some_and(|b| b.is_ascii_digit()) {
-            self.handle_digit()
-        } else {
-            self.lex_symbol()
-        }
-    }
-
-    fn handle_quote(&mut self) -> Option<Token> {
-        let start = self.cursor.position();
-        match lex_short_string(&mut self.cursor, self.source, self.version) {
-            Ok(kind) => Some(self.make_token(kind, start)),
-            Err(err) => {
-                self.errors.push(err);
-                None
-            }
-        }
-    }
-
-    fn handle_backtick(&mut self) -> Option<Token> {
-        if self.version.is_luau() {
-            self.lex_interpolated_string()
-        } else {
-            self.lex_symbol()
-        }
-    }
-
-    fn handle_minus(&mut self) -> Option<Token> {
-        if self.cursor.peek_at(1) == Some(b'-') {
-            self.lex_comment();
-            None
-        } else {
-            self.lex_symbol()
-        }
-    }
-
-    fn handle_bracket_open(&mut self) -> Option<Token> {
-        if let Some(level) = long_bracket_level(&self.cursor) {
-            let start = self.cursor.position();
-            skip_long_bracket_open(&mut self.cursor, level);
-            match crate::string::lex_long_bracket_body(&mut self.cursor, self.source, start, level)
-            {
-                Ok(kind) => Some(self.make_token(kind, start)),
-                Err(err) => {
-                    self.errors.push(err);
-                    None
-                }
-            }
-        } else {
-            self.lex_symbol()
         }
     }
 
     #[inline]
     fn make_token(&mut self, kind: TokenKind, start: usize) -> Token {
-        let span = Span::new(start as u32, self.cursor.position() as u32);
+        let span = self.cursor.span_since(start);
 
         for pending in self.pending_leading_comments.drain(..) {
-            self.comments.push(Comment {
-                span: pending.span,
-                attached_to: span.start,
-                kind: pending.kind,
-                position: CommentPosition::Leading,
-                preceded_by_newline: pending.preceded_by_newline,
-                followed_by_newline: pending.followed_by_newline,
-            });
+            self.comments.push(pending.attach(span.start, CommentPosition::Leading));
         }
 
-        self.last_token_start = span.start;
-        self.has_token = true;
-        self.saw_newline_since_last_token = false;
+        self.last_token_start = Some(span.start);
+        self.has_newline_since_last_token = false;
         Token::new(kind, span)
+    }
+
+    /// The value of a sub-scan, or `None` after recording its error so lexing
+    /// resumes past it.
+    #[inline]
+    fn ok_or_record<T>(&mut self, result: Result<T, LexError>) -> Option<T> {
+        match result {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.errors.push(error);
+                None
+            }
+        }
+    }
+
+    /// Record an error spanning `start` to the cursor and yield no token.
+    #[cold]
+    fn reject<T>(&mut self, start: usize, message: impl Into<String>) -> Option<T> {
+        self.errors.push(lex_error(self.cursor.span_since(start), message));
+        None
     }
 
     fn lex_shebang(&mut self) {
         let start = self.cursor.position();
-        let rest = self.cursor.rest();
-        let line_len = memchr::memchr2(b'\n', b'\r', rest).unwrap_or(rest.len());
-        self.cursor.advance_by(line_len);
-        let span = Span::new(start as u32, self.cursor.position() as u32);
-
-        let followed_by_newline = matches!(self.cursor.peek(), Some(b'\n') | Some(b'\r') | None);
-
+        self.cursor.advance_to_line_break();
         self.pending_leading_comments.push(PendingComment {
-            span,
+            span: self.cursor.span_since(start),
             kind: CommentKind::Shebang,
-            preceded_by_newline: false,
-            followed_by_newline,
+            is_preceded_by_newline: false,
+            is_followed_by_newline: self.cursor.is_at_line_end(),
         });
     }
 
     fn lex_comment(&mut self) {
         let start = self.cursor.position();
-        let preceded_by_newline = self.saw_newline_since_last_token;
+        self.cursor.advance_by(2); // `--`
 
-        self.cursor.advance(); // -
-        self.cursor.advance(); // -
-        if let Some(level) = long_bracket_level(&self.cursor) {
-            skip_long_bracket_open(&mut self.cursor, level);
-            match self.lex_block_comment_body(start, level) {
-                Ok(()) => {}
-                Err(err) => {
-                    self.errors.push(err);
-                }
+        let kind = if let Some(level) = eat_long_bracket_open(&mut self.cursor) {
+            if !scan_to_long_bracket_close(&mut self.cursor, level) {
+                self.errors
+                    .push(lex_error(self.cursor.span_since(start), "unterminated block comment"));
+                return;
             }
-            return;
-        }
-
-        let rest = self.cursor.rest();
-        let line_len = memchr::memchr2(b'\n', b'\r', rest).unwrap_or(rest.len());
-        self.cursor.advance_by(line_len);
-
-        let span = Span::new(start as u32, self.cursor.position() as u32);
-        let followed_by_newline = matches!(self.cursor.peek(), Some(b'\n') | Some(b'\r') | None);
-
-        if preceded_by_newline || !self.has_token {
-            self.pending_leading_comments.push(PendingComment {
-                span,
-                kind: CommentKind::Line,
-                preceded_by_newline,
-                followed_by_newline,
-            });
+            // The delimiters (`--[=*[` and `]=*]`) never hold a line break,
+            // so scanning the whole comment is equivalent to scanning only
+            // the body.
+            let comment_bytes = self.cursor.text_since(start).as_bytes();
+            if memchr::memchr2(b'\n', b'\r', comment_bytes).is_some() {
+                CommentKind::MultiLineBlock
+            } else {
+                CommentKind::SingleLineBlock
+            }
         } else {
-            self.comments.push(Comment {
-                span,
-                attached_to: self.last_token_start,
-                kind: CommentKind::Line,
-                position: CommentPosition::Trailing,
-                preceded_by_newline,
-                followed_by_newline,
-            });
-        }
-    }
-
-    fn lex_block_comment_body(&mut self, start: usize, level: usize) -> Result<(), LexError> {
-        let preceded_by_newline = self.saw_newline_since_last_token;
-
-        if !scan_to_long_bracket_close(&mut self.cursor, level) {
-            return Err(crate::lex_error(
-                Span::new(start as u32, self.cursor.position() as u32),
-                "unterminated block comment",
-            ));
-        }
-
-        let span = Span::new(start as u32, self.cursor.position() as u32);
-        // The delimiters (`--[=*[` and `]=*]`) never hold a line break, so
-        // scanning the whole span is equivalent to scanning only the body.
-        let has_newline_in_body = memchr::memchr2(
-            b'\n',
-            b'\r',
-            &self.source.as_bytes()[start..self.cursor.position()],
-        )
-        .is_some();
-        let kind = if has_newline_in_body {
-            CommentKind::MultiLineBlock
-        } else {
-            CommentKind::SingleLineBlock
+            self.cursor.advance_to_line_break();
+            CommentKind::Line
         };
 
-        let mut followed_by_newline = false;
-        let mut temp_offset = 0;
-        loop {
-            match self.cursor.peek_at(temp_offset) {
-                Some(b' ') | Some(b'\t') => temp_offset += 1,
-                Some(b'\n') | Some(b'\r') | None => {
-                    followed_by_newline = true;
-                    break;
-                }
-                _ => break,
-            }
-        }
-
-        if preceded_by_newline || !self.has_token {
-            self.pending_leading_comments.push(PendingComment {
-                span,
-                kind,
-                preceded_by_newline,
-                followed_by_newline,
-            });
+        let comment = PendingComment {
+            span: self.cursor.span_since(start),
+            kind,
+            is_preceded_by_newline: self.has_newline_since_last_token,
+            is_followed_by_newline: self.cursor.is_at_line_end(),
+        };
+        // A comment with no newline since the previous token trails it, and
+        // any other leads the next token.
+        if let Some(token_start) = self.last_token_start
+            && !comment.is_preceded_by_newline
+        {
+            self.comments.push(comment.attach(token_start, CommentPosition::Trailing));
         } else {
-            self.comments.push(Comment {
-                span,
-                attached_to: self.last_token_start,
-                kind,
-                position: CommentPosition::Trailing,
-                preceded_by_newline,
-                followed_by_newline,
-            });
+            self.pending_leading_comments.push(comment);
         }
-
-        Ok(())
     }
 
     fn lex_identifier(&mut self) -> Token {
         let start = self.cursor.position();
-        self.cursor
-            .eat_while(|b| b.is_ascii_alphanumeric() || b == b'_');
-        let text = &self.source[start..self.cursor.position()];
+        self.cursor.eat_while(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+        let text = self.cursor.text_since(start);
 
-        let kind =
-            match_keyword(text, self.version).unwrap_or_else(|| TokenKind::Identifier(text.into()));
+        let kind = TokenKind::keyword(text, self.version)
+            .unwrap_or_else(|| TokenKind::Identifier(text.into()));
         self.make_token(kind, start)
+    }
+
+    fn lex_number(&mut self) -> Option<Token> {
+        let start = self.cursor.position();
+        let result = scan_number(&mut self.cursor, self.version);
+        let kind = self.ok_or_record(result)?;
+        Some(self.make_token(kind, start))
+    }
+
+    fn lex_short_string(&mut self, quote: u8) -> Option<Token> {
+        let start = self.cursor.position();
+        let result = scan_short_string(&mut self.cursor, self.version, quote);
+        let kind = self.ok_or_record(result)?;
+        Some(self.make_token(kind, start))
+    }
+
+    fn lex_long_string_or_bracket(&mut self) -> Option<Token> {
+        let start = self.cursor.position();
+        let Some(level) = eat_long_bracket_open(&mut self.cursor) else {
+            return self.lex_symbol();
+        };
+        let result = scan_long_string(&mut self.cursor, start, level);
+        let kind = self.ok_or_record(result)?;
+        Some(self.make_token(kind, start))
+    }
+
+    /// Lex from an opening backtick to the first `{` or the closing backtick.
+    /// A string with no expressions becomes an empty `InterpolatedStringBegin`
+    /// plus a queued `InterpolatedStringEnd` holding its text, so the parser
+    /// always sees a pair.
+    fn lex_interpolated_string(&mut self) -> Option<Token> {
+        let start = self.cursor.position();
+        self.cursor.advance();
+        let result = scan_interpolated_segment(&mut self.cursor, self.version, start);
+        let token = match self.ok_or_record(result)? {
+            (text, InterpolatedSegmentEnd::OpenBrace) => {
+                let token = self.make_token(TokenKind::InterpolatedStringBegin(text), start);
+                self.interpolation_brace_depths.push(0);
+                token
+            }
+            (text, InterpolatedSegmentEnd::Backtick) => {
+                let closing_backtick = self.cursor.position().saturating_sub(1);
+                let begin = self.make_token(
+                    TokenKind::InterpolatedStringBegin(CompactString::default()),
+                    start,
+                );
+                self.queued =
+                    Some(self.make_token(TokenKind::InterpolatedStringEnd(text), closing_backtick));
+                begin
+            }
+        };
+        Some(token)
+    }
+
+    /// Resume an interpolated string after the `}` that closes an expression,
+    /// producing `InterpolatedStringMiddle` at the next `{` or
+    /// `InterpolatedStringEnd` at the closing backtick.
+    fn lex_interpolated_string_continuation(&mut self, start: usize) -> Option<Token> {
+        let result = scan_interpolated_segment(&mut self.cursor, self.version, start);
+        let token = match self.ok_or_record(result)? {
+            (text, InterpolatedSegmentEnd::OpenBrace) => {
+                let token = self.make_token(TokenKind::InterpolatedStringMiddle(text), start);
+                self.interpolation_brace_depths.push(0);
+                token
+            }
+            (text, InterpolatedSegmentEnd::Backtick) => {
+                self.make_token(TokenKind::InterpolatedStringEnd(text), start)
+            }
+        };
+        Some(token)
     }
 
     fn lex_symbol(&mut self) -> Option<Token> {
         let start = self.cursor.position();
-        let byte = self
-            .cursor
-            .advance()
-            .expect("called after EOF check in tokenize loop");
+        let byte = self.cursor.advance()?;
 
         let kind = match byte {
-            b'+' => {
-                if self.version.is_luau() && self.cursor.peek() == Some(b'=') {
-                    self.cursor.advance();
-                    TokenKind::PlusEqual
-                } else {
-                    TokenKind::Plus
-                }
-            }
-            b'*' => {
-                if self.version.is_luau() && self.cursor.peek() == Some(b'=') {
-                    self.cursor.advance();
-                    TokenKind::StarEqual
-                } else {
-                    TokenKind::Star
-                }
-            }
-            b'%' => {
-                if self.version.is_luau() && self.cursor.peek() == Some(b'=') {
-                    self.cursor.advance();
-                    TokenKind::PercentEqual
-                } else {
-                    TokenKind::Percent
-                }
-            }
-            b'^' => {
-                if self.version.is_luau() && self.cursor.peek() == Some(b'=') {
-                    self.cursor.advance();
-                    TokenKind::CaretEqual
-                } else {
-                    TokenKind::Caret
-                }
-            }
+            b'+' => self.compound_or(TokenKind::PlusEqual, TokenKind::Plus),
+            b'*' => self.compound_or(TokenKind::StarEqual, TokenKind::Star),
+            b'%' => self.compound_or(TokenKind::PercentEqual, TokenKind::Percent),
+            b'^' => self.compound_or(TokenKind::CaretEqual, TokenKind::Caret),
             b'(' => TokenKind::LeftParen,
             b')' => TokenKind::RightParen,
             b'{' => {
-                if let Some(depth) = self.interp_brace_stack.last_mut() {
-                    *depth += 1;
+                if let Some(depth) = self.interpolation_brace_depths.last_mut() {
+                    *depth = depth.saturating_add(1);
                 }
                 TokenKind::LeftBrace
             }
             b'}' => {
-                if let Some(depth) = self.interp_brace_stack.last_mut() {
-                    if *depth == 0 {
+                if let Some(depth) = self.interpolation_brace_depths.last_mut() {
+                    let Some(remaining) = depth.checked_sub(1) else {
                         // Depth 0 means this `}` closes the interpolation, so
                         // string scanning resumes.
-                        self.interp_brace_stack.pop();
-                        return self.lex_interp_continuation(start);
-                    } else {
-                        *depth -= 1;
-                    }
+                        self.interpolation_brace_depths.pop();
+                        return self.lex_interpolated_string_continuation(start);
+                    };
+                    *depth = remaining;
                 }
                 TokenKind::RightBrace
             }
@@ -449,319 +398,130 @@ impl<'src> Lexer<'src> {
             b',' => TokenKind::Comma,
             b'#' => TokenKind::Hash,
             b'-' => {
-                if self.version.is_luau() && self.cursor.peek() == Some(b'=') {
-                    self.cursor.advance();
-                    TokenKind::MinusEqual
-                } else if self.version.is_luau() && self.cursor.peek() == Some(b'>') {
-                    self.cursor.advance();
+                if self.version.is_luau() && self.cursor.eat(b'>') {
                     TokenKind::Arrow
                 } else {
-                    TokenKind::Minus
+                    self.compound_or(TokenKind::MinusEqual, TokenKind::Minus)
                 }
             }
             b'/' => {
-                if self.cursor.peek() == Some(b'/') {
-                    if self.version.has_floor_div() {
-                        self.cursor.advance();
-                        if self.version.is_luau() && self.cursor.peek() == Some(b'=') {
-                            self.cursor.advance();
-                            TokenKind::FloorDivEqual
-                        } else {
-                            TokenKind::FloorDiv
-                        }
-                    } else {
-                        TokenKind::Slash
-                    }
-                } else if self.version.is_luau() && self.cursor.peek() == Some(b'=') {
-                    self.cursor.advance();
-                    TokenKind::SlashEqual
+                if self.version.has_floor_div() && self.cursor.eat(b'/') {
+                    self.compound_or(TokenKind::FloorDivEqual, TokenKind::FloorDiv)
                 } else {
-                    TokenKind::Slash
+                    self.compound_or(TokenKind::SlashEqual, TokenKind::Slash)
                 }
             }
-            b'.' => {
-                if self.cursor.peek() == Some(b'.') {
-                    self.cursor.advance();
-                    if self.cursor.peek() == Some(b'.') {
-                        self.cursor.advance();
-                        TokenKind::DotDotDot
-                    } else if self.version.is_luau() && self.cursor.peek() == Some(b'=') {
-                        self.cursor.advance();
-                        TokenKind::DotDotEqual
-                    } else {
-                        TokenKind::DotDot
-                    }
-                } else {
-                    TokenKind::Dot
-                }
-            }
+            b'.' => self.lex_after_dot(),
             b':' => {
-                if self.cursor.peek() == Some(b':') {
-                    self.cursor.advance();
+                if self.cursor.eat(b':') {
                     TokenKind::DoubleColon
                 } else {
                     TokenKind::Colon
                 }
             }
             b'=' => {
-                if self.cursor.peek() == Some(b'=') {
-                    self.cursor.advance();
+                if self.cursor.eat(b'=') {
                     TokenKind::EqualEqual
                 } else {
                     TokenKind::Equal
                 }
             }
             b'~' => {
-                if self.cursor.peek() == Some(b'=') {
-                    self.cursor.advance();
+                if self.cursor.eat(b'=') {
                     TokenKind::TildeEqual
                 } else if self.version.has_bitwise_ops() {
                     TokenKind::Tilde
                 } else {
-                    self.errors.push(crate::lex_error(Span::new(start as u32, self.cursor.position() as u32), "standalone '~' is not supported in this Lua version (use '~=' for not-equal)"));
-                    return None;
+                    return self.reject(
+                        start,
+                        "standalone `~` is not supported in this Lua version (use `~=` for not-equal)",
+                    );
                 }
             }
-            b'&' => {
-                // Luau uses `&` for intersection types
-                if self.version.has_bitwise_ops() || self.version.is_luau() {
-                    TokenKind::Ampersand
-                } else {
-                    self.errors.push(crate::lex_error(
-                        Span::new(start as u32, self.cursor.position() as u32),
-                        "'&' is not supported in this Lua version",
-                    ));
-                    return None;
-                }
+            // Luau uses `&` and `|` for intersection and union types.
+            b'&' | b'|' if !self.version.has_bitwise_ops() && !self.version.is_luau() => {
+                return self.reject_unsupported_symbol(start, byte);
             }
-            b'|' => {
-                // Luau uses `|` for union types
-                if self.version.has_bitwise_ops() || self.version.is_luau() {
-                    TokenKind::Pipe
-                } else {
-                    self.errors.push(crate::lex_error(
-                        Span::new(start as u32, self.cursor.position() as u32),
-                        "'|' is not supported in this Lua version",
-                    ));
-                    return None;
-                }
+            b'@' | b'?' if !self.version.is_luau() => {
+                return self.reject_unsupported_symbol(start, byte);
             }
-            b'<' => {
-                if self.cursor.peek() == Some(b'=') {
-                    self.cursor.advance();
-                    TokenKind::LessEqual
-                } else if self.cursor.peek() == Some(b'<') && self.version.has_bitwise_ops() {
-                    self.cursor.advance();
-                    TokenKind::ShiftLeft
-                } else {
-                    TokenKind::Less
-                }
-            }
-            b'>' => {
-                if self.cursor.peek() == Some(b'=') {
-                    self.cursor.advance();
-                    TokenKind::GreaterEqual
-                } else if self.cursor.peek() == Some(b'>') && self.version.has_bitwise_ops() {
-                    self.cursor.advance();
-                    TokenKind::ShiftRight
-                } else {
-                    TokenKind::Greater
-                }
-            }
-            b'@' => {
-                if self.version.is_luau() {
-                    TokenKind::At
-                } else {
-                    self.errors.push(crate::lex_error(
-                        Span::new(start as u32, self.cursor.position() as u32),
-                        "'@' is not supported in this Lua version",
-                    ));
-                    return None;
-                }
-            }
-            b'?' => {
-                if self.version.is_luau() {
-                    TokenKind::Question
-                } else {
-                    self.errors.push(crate::lex_error(
-                        Span::new(start as u32, self.cursor.position() as u32),
-                        "'?' is not supported in this Lua version",
-                    ));
-                    return None;
-                }
-            }
-            _ => {
-                // Consume the full UTF-8 sequence so a multi-byte char
-                // yields one error, not one mojibake error per byte.
-                while self.cursor.peek().is_some_and(|next| (next & 0xC0) == 0x80) {
-                    self.cursor.advance();
-                }
-                let unexpected = self.source[start..].chars().next().unwrap_or(byte as char);
-                self.errors.push(crate::lex_error(
-                    Span::new(start as u32, self.cursor.position() as u32),
-                    format!("unexpected character '{unexpected}'"),
-                ));
-                return None;
-            }
+            b'&' => TokenKind::Ampersand,
+            b'|' => TokenKind::Pipe,
+            b'@' => TokenKind::At,
+            b'?' => TokenKind::Question,
+            b'<' => self.lex_after_angle(
+                byte,
+                TokenKind::LessEqual,
+                TokenKind::ShiftLeft,
+                TokenKind::Less,
+            ),
+            b'>' => self.lex_after_angle(
+                byte,
+                TokenKind::GreaterEqual,
+                TokenKind::ShiftRight,
+                TokenKind::Greater,
+            ),
+            _ => return self.reject_unexpected_symbol(start, byte),
         };
 
         Some(self.make_token(kind, start))
     }
 
-    /// Resume scanning an interpolated string after `}` closes an expression.
-    /// Produces InterpMid (if another `{` follows) or InterpEnd (if `` ` `` closes the string).
-    fn lex_interp_continuation(&mut self, start: usize) -> Option<Token> {
-        match self.scan_interp_segment(start) {
-            None => None,
-            Some((text, InterpSegmentEnd::OpenBrace)) => {
-                let token = self.make_token(TokenKind::InterpMid(text), start);
-                self.interp_brace_stack.push(0);
-                Some(token)
-            }
-            Some((text, InterpSegmentEnd::Backtick)) => {
-                Some(self.make_token(TokenKind::InterpEnd(text), start))
-            }
+    /// `compound` when a compound-assignment `=` follows, consuming it, else
+    /// `plain`.
+    #[inline]
+    fn compound_or(&mut self, compound: TokenKind, plain: TokenKind) -> TokenKind {
+        if self.version.has_compound_assignment() && self.cursor.eat(b'=') {
+            compound
+        } else {
+            plain
         }
     }
 
-    /// Lex an interpolated string starting at backtick. Produces InterpBegin + expression
-    /// tokens + InterpMid/InterpEnd sequences. Plain strings emit InterpBegin("") + InterpEnd(text).
-    fn lex_interpolated_string(&mut self) -> Option<Token> {
-        let start = self.cursor.position();
-        self.cursor.advance();
-
-        match self.scan_interp_segment(start) {
-            None => None,
-            Some((text, InterpSegmentEnd::OpenBrace)) => {
-                let token = self.make_token(TokenKind::InterpBegin(text), start);
-                self.interp_brace_stack.push(0);
-                Some(token)
-            }
-            Some((text, InterpSegmentEnd::Backtick)) => {
-                // Emit InterpBegin("") + InterpEnd(text) so parser sees a consistent begin/end pair
-                let end_pos = self.cursor.position();
-                let begin =
-                    self.make_token(TokenKind::InterpBegin(CompactString::default()), start);
-                self.queued = Some(self.make_token(TokenKind::InterpEnd(text), end_pos - 1));
-                Some(begin)
-            }
+    #[inline]
+    fn lex_after_dot(&mut self) -> TokenKind {
+        if !self.cursor.eat(b'.') {
+            return TokenKind::Dot;
+        }
+        if self.cursor.eat(b'.') {
+            TokenKind::DotDotDot
+        } else {
+            self.compound_or(TokenKind::DotDotEqual, TokenKind::DotDot)
         }
     }
 
-    /// Scan raw interpolated-string text up to an interpolation opener `{`
-    /// or the closing backtick. Raw escapes stay intact, so the validated
-    /// segment can be copied once from the source. Returns `None` after
-    /// pushing an error.
-    fn scan_interp_segment(&mut self, start: usize) -> Option<(CompactString, InterpSegmentEnd)> {
-        let segment_start = self.cursor.position();
-        loop {
-            match self.cursor.peek() {
-                None => {
-                    self.errors.push(crate::lex_error(
-                        Span::new(start as u32, self.cursor.position() as u32),
-                        "unterminated interpolated string",
-                    ));
-                    return None;
-                }
-                // Luau rejects unescaped line breaks in backtick strings,
-                // same as in short strings.
-                Some(b'\n' | b'\r') => {
-                    self.errors.push(crate::lex_error(
-                        Span::new(start as u32, self.cursor.position() as u32),
-                        "unterminated interpolated string",
-                    ));
-                    return None;
-                }
-                Some(b'\\') => {
-                    self.cursor.advance();
-                    match self.cursor.peek() {
-                        // Escaped braces and backticks stay literal text.
-                        Some(b'{' | b'}' | b'`') => {
-                            self.cursor.advance();
-                        }
-                        // Consuming `\u{...}` whole also keeps its `{` from
-                        // opening an interpolation.
-                        Some(escaped) => {
-                            if let Err(error) =
-                                lex_escape(&mut self.cursor, self.source, self.version, escaped)
-                            {
-                                self.errors.push(error);
-                                return None;
-                            }
-                        }
-                        // The next iteration reports the unterminated string.
-                        None => {}
-                    }
-                }
-                Some(b'{') => {
-                    let text = self.source[segment_start..self.cursor.position()].into();
-                    self.cursor.advance();
-                    if self.cursor.peek() == Some(b'{') {
-                        self.errors.push(crate::lex_error(Span::new(
-                                (self.cursor.position() - 1) as u32,
-                                (self.cursor.position() + 1) as u32,
-                            ), "'{{' is not allowed in interpolated strings; use '\\{' for a literal brace"));
-                        return None;
-                    }
-                    return Some((text, InterpSegmentEnd::OpenBrace));
-                }
-                Some(b'`') => {
-                    let text = self.source[segment_start..self.cursor.position()].into();
-                    self.cursor.advance();
-                    return Some((text, InterpSegmentEnd::Backtick));
-                }
-                Some(_) => {
-                    self.cursor.advance();
-                    self.cursor.advance_until_match(&INTERP_STOP);
-                }
-            }
+    /// Finish `<` or `>`: `or_equal` before `=`, `shift` before a second
+    /// `angle` where the version has shifts, else `plain`.
+    #[inline]
+    fn lex_after_angle(
+        &mut self,
+        angle: u8,
+        or_equal: TokenKind,
+        shift: TokenKind,
+        plain: TokenKind,
+    ) -> TokenKind {
+        if self.cursor.eat(b'=') {
+            or_equal
+        } else if self.version.has_bitwise_ops() && self.cursor.eat(angle) {
+            shift
+        } else {
+            plain
         }
     }
-}
 
-/// Keyword lookup behind a cheap pre-gate: every Lua keyword is 2-8
-/// bytes of lowercase ASCII, so most identifiers bail on two compares and LLVM
-/// compiles the match into a length-first switch.
-#[inline]
-fn match_keyword(text: &str, version: LuaVersion) -> Option<TokenKind> {
-    if text.len() < 2 || text.len() > 8 || !text.as_bytes()[0].is_ascii_lowercase() {
-        return None;
+    #[cold]
+    fn reject_unsupported_symbol(&mut self, start: usize, byte: u8) -> Option<Token> {
+        let symbol = char::from(byte);
+        self.reject(start, format!("`{symbol}` is not supported in this Lua version"))
     }
-    let kind = match text {
-        "and" => TokenKind::And,
-        "break" => TokenKind::Break,
-        "do" => TokenKind::Do,
-        "else" => TokenKind::Else,
-        "elseif" => TokenKind::ElseIf,
-        "end" => TokenKind::End,
-        "false" => TokenKind::False,
-        "for" => TokenKind::For,
-        "function" => TokenKind::Function,
-        "if" => TokenKind::If,
-        "in" => TokenKind::In,
-        "local" => TokenKind::Local,
-        "nil" => TokenKind::Nil,
-        "not" => TokenKind::Not,
-        "or" => TokenKind::Or,
-        "repeat" => TokenKind::Repeat,
-        "return" => TokenKind::Return,
-        "then" => TokenKind::Then,
-        "true" => TokenKind::True,
-        "until" => TokenKind::Until,
-        "while" => TokenKind::While,
-        // Lua 5.2+
-        "goto" if version.has_goto() => TokenKind::Goto,
-        // Lua 5.5
-        "global" if version.has_global() => TokenKind::Global,
-        _ => return None,
-    };
-    Some(kind)
-}
 
-/// How a raw interpolated-string segment ended.
-enum InterpSegmentEnd {
-    /// `{`, so an interpolation expression follows.
-    OpenBrace,
-    /// `` ` ``, so the string is complete.
-    Backtick,
+    #[cold]
+    fn reject_unexpected_symbol(&mut self, start: usize, byte: u8) -> Option<Token> {
+        // Consume the full UTF-8 sequence so a multi-byte char
+        // yields one error, not one mojibake error per byte.
+        self.cursor.eat_while(|next| (next & 0xC0) == 0x80);
+        let unexpected =
+            self.cursor.text_since(start).chars().next().unwrap_or_else(|| char::from(byte));
+        self.reject(start, format!("unexpected character `{unexpected}`"))
+    }
 }

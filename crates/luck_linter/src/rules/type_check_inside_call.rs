@@ -1,12 +1,13 @@
-use luck_ast::Expression;
-use luck_ast::node::{AstTypesBitset, NodeType};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, NodeType, NodeTypeSet, Statement, Var};
+use luck_semantic::SemanticAnalysis;
 use luck_token::BinOp;
 
-use crate::diagnostic::*;
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
 
-/// Detects `type(x == "string")` instead of `type(x) == "string"`.
-pub struct TypeCheckInsideCall;
+/// Flags `type(x == "string")` written for `type(x) == "string"`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TypeCheckInsideCall;
 
 impl Rule for TypeCheckInsideCall {
     fn name(&self) -> &'static str {
@@ -21,64 +22,97 @@ impl Rule for TypeCheckInsideCall {
     fn description(&self) -> &'static str {
         "type comparison is inside the call instead of outside"
     }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
-
-fn check_call(
-    call: &luck_ast::expr::FunctionCall,
-    ctx: &LintContext,
-    out: &mut Vec<LintDiagnostic>,
-) {
-    let is_type_call = if let Expression::Var(luck_ast::expr::Var::Name(token)) = &call.callee
-        && let luck_token::TokenKind::Identifier(name) = &token.kind
-    {
-        // Shadowed `type` is a user function.
-        (name == "type" || name == "typeof") && !ctx.semantic.resolves_to_local(name, token.span)
-    } else {
-        false
-    };
-
-    if is_type_call && let luck_ast::expr::FunctionArgs::Parenthesized { args, .. } = &call.args {
-        let single_arg = if args.len() == 1 { args.first() } else { None };
-
-        if let Some(Expression::BinaryOp(binop)) = single_arg
-            && matches!(binop.op, BinOp::Eq | BinOp::Ne)
-        {
-            out.push(
-                LintDiagnostic::new(
-                    "type_check_inside_call",
-                    "comparison is inside type() call; did you mean `type(x) == \"string\"`?"
-                        .to_string(),
-                    call.span,
-                )
-                .with_help("move the comparison outside: `type(x) == \"string\"`".to_string()),
-            );
-        }
-    }
 }
 
 impl NodeRule for TypeCheckInsideCall {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset =
-            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
     fn on_statement(
         &self,
-        stmt: &luck_ast::Statement,
-        ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
+        stmt: &Statement,
+        context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
     ) {
-        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
-            check_call(call_stmt, ctx, out);
+        if let Statement::FunctionCall(call) = stmt {
+            diags.extend(check_call(call, context.semantic));
         }
     }
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
+    fn on_expression(
+        &self,
+        expr: &Expression,
+        context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
         if let Expression::FunctionCall(call) = expr {
-            check_call(call, ctx, out);
+            diags.extend(check_call(call, context.semantic));
         }
+    }
+}
+
+fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<LintDiagnostic> {
+    let Expression::Var(Var::Name(token)) = &call.callee else {
+        return None;
+    };
+    let name = token.identifier()?;
+    // A local `type` or `typeof` is a user function.
+    if !matches!(name, "type" | "typeof") || semantic.resolves_to_local(name, token.span) {
+        return None;
+    }
+    let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+        return None;
+    };
+    let [Expression::BinaryOp(binary)] = args.items.as_slice() else {
+        return None;
+    };
+    matches!(binary.op, BinOp::Eq | BinOp::Ne).then(|| {
+        LintDiagnostic::new(
+            "type_check_inside_call",
+            "comparison is inside the `type()` call, did you mean `type(x) == \"string\"`?",
+            call.span,
+        )
+        .with_help("move the comparison outside: `type(x) == \"string\"`")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use luck_token::LuaVersion;
+
+    use super::*;
+    use crate::fixtures::run_rule;
+
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        run_rule(&TypeCheckInsideCall, source, LuaVersion::Lua54)
+    }
+
+    #[test]
+    fn flags_equality_inside_type_call() {
+        let diags = run("if type(x == \"string\") then end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_inequality_inside_typeof_call() {
+        let diags = run("local ok = typeof(x ~= \"Instance\")");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_comparison_outside_call() {
+        let diags = run("local ok = type(x) == \"string\"");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_comparison_among_several_args() {
+        let diags = run("type(x == 1, y)");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_shadowed_type() {
+        let diags = run("local function type(v) return v end\nlocal ok = type(x == 1)");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

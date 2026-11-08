@@ -1,130 +1,133 @@
-use luck_ast::Expression;
-use luck_ast::shared::FunctionBody;
-use luck_ast::stmt::Statement;
-use luck_ast::visitor::Visitor;
+use luck_ast::{Expression, FunctionBody, NodeType, NodeTypeSet, Statement};
 use luck_token::Span;
 
 use crate::cfg::analyze_full_block;
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::rule::{LintContext, NodeRule, Rule};
 
-pub struct CyclomaticComplexity;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CyclomaticComplexity;
 
 impl Rule for CyclomaticComplexity {
     fn name(&self) -> &'static str {
         "cyclomatic_complexity"
     }
     fn category(&self) -> Category {
-        // The diagnostic crate has no `Complexity` variant. `Style` is
-        // the closest fit since complexity warnings are stylistic
-        // pressure to refactor, not correctness or performance bugs.
+        // `Category` has no complexity variant, and `Style` fits pressure
+        // to refactor best.
         Category::Style
     }
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
     fn description(&self) -> &'static str {
-        "function exceeds configured cyclomatic complexity threshold"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let source = ctx.source;
-        let Some(threshold) = ctx.config.max_cyclomatic_complexity else {
-            return Vec::new();
-        };
-        let mut checker = ComplexityChecker {
-            source,
-            threshold,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+        "function exceeds the configured cyclomatic complexity threshold"
     }
 }
 
-struct ComplexityChecker<'src> {
-    source: &'src str,
-    threshold: u32,
-    diagnostics: Vec<LintDiagnostic>,
-}
+impl NodeRule for CyclomaticComplexity {
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[
+            NodeType::FunctionDecl,
+            NodeType::LocalFunction,
+            NodeType::GlobalFunction,
+            NodeType::FunctionDef,
+        ])
+    }
 
-impl<'src> ComplexityChecker<'src> {
-    fn check_function(&mut self, body: &FunctionBody, span: Span, name: Option<&str>) {
-        let summary = analyze_full_block(&body.block);
-        // McCabe baseline of 1 is the single straight-line path; each
-        // decision point adds an independent path.
-        let complexity = summary.decision_points + 1;
-        if complexity <= self.threshold {
+    fn on_statement(
+        &self,
+        stmt: &Statement,
+        context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
+        let Some(threshold) = context.config.max_cyclomatic_complexity else {
             return;
-        }
-        let label = name
-            .map(|n| format!("`{n}`"))
-            .unwrap_or_else(|| "anonymous function".to_string());
-        self.diagnostics.push(
-            LintDiagnostic::new(
-                "cyclomatic_complexity",
-                format!(
-                    "function {label} has cyclomatic complexity {complexity} (threshold: {})",
-                    self.threshold
-                ),
-                span,
-            )
-            .with_help("split this function into smaller helpers".to_string()),
-        );
+        };
+        // Slice the name from source so `mod.f` and `a.b:c` appear whole.
+        let (body, span, name_span) = match stmt {
+            Statement::FunctionDecl(decl) => (&decl.body, decl.span, decl.name.span),
+            Statement::LocalFunction(local_function) => {
+                (&local_function.body, local_function.span, local_function.name.span)
+            }
+            // Lua 5.5
+            Statement::GlobalFunction(global_function) => {
+                (&global_function.body, global_function.span, global_function.name.span)
+            }
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::LocalAssignment(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => return,
+        };
+        diags.extend(check_function(body, span, Some(name_span.text(context.source)), threshold));
     }
 
-    fn slice(&self, span: Span) -> &'src str {
-        &self.source[span.start as usize..span.end as usize]
+    fn on_expression(
+        &self,
+        expr: &Expression,
+        context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
+        let Some(threshold) = context.config.max_cyclomatic_complexity else {
+            return;
+        };
+        if let Expression::FunctionDef(function) = expr {
+            diags.extend(check_function(&function.body, function.span, None, threshold));
+        }
     }
 }
 
-impl<'ast> Visitor<'ast> for ComplexityChecker<'_> {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
-        match stmt {
-            Statement::FunctionDecl(decl) => {
-                // Re-slice the full dotted name from source so methods
-                // like `mod.f` or `a.b:c` appear intact in diagnostics.
-                let name = self.slice(decl.name.span).to_string();
-                self.check_function(&decl.body, decl.span, Some(&name));
-            }
-            Statement::LocalFunction(local) => {
-                let name = self.slice(local.name.span).to_string();
-                self.check_function(&local.body, local.span, Some(&name));
-            }
-            Statement::GlobalFunction(global) => {
-                let name = self.slice(global.name.span).to_string();
-                self.check_function(&global.body, global.span, Some(&name));
-            }
-            _ => {}
-        }
-        self.walk_statement(stmt);
-    }
-
-    fn visit_expression(&mut self, expr: &'ast Expression) {
-        if let Expression::FunctionDef(func_def) = expr {
-            self.check_function(&func_def.body, func_def.span, None);
-        }
-        self.walk_expression(expr);
-    }
+/// Flags the function at `span`, named `name` unless it's anonymous, when
+/// its complexity is over `threshold`.
+fn check_function(
+    body: &FunctionBody,
+    span: Span,
+    name: Option<&str>,
+    threshold: u32,
+) -> Option<LintDiagnostic> {
+    // McCabe: one straight-line path plus one per decision point.
+    let complexity = analyze_full_block(&body.block).decision_points.saturating_add(1);
+    (complexity > threshold).then(|| {
+        let label = name
+            .map_or_else(|| "(anonymous)".to_owned(), |function_name| format!("`{function_name}`"));
+        LintDiagnostic::new(
+            "cyclomatic_complexity",
+            format!(
+                "function {label} has cyclomatic complexity {complexity} (threshold: {threshold})"
+            ),
+            span,
+        )
+        .with_help("split this function into smaller helpers")
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
+
+    use super::*;
+    use crate::fixtures::run_rule_with_config;
 
     fn run(source: &str, threshold: Option<u32>) -> Vec<LintDiagnostic> {
         let config = crate::LintConfig {
             max_cyclomatic_complexity: threshold,
             ..crate::LintConfig::default()
         };
-        crate::test_support::run_rule_with_config(
-            &CyclomaticComplexity,
-            source,
-            LuaVersion::Lua54,
-            &config,
-        )
+        run_rule_with_config(&CyclomaticComplexity, source, LuaVersion::Lua54, &config)
     }
 
     #[test]
@@ -133,11 +136,7 @@ mod tests {
         let source = "function f() if a then end if b then end if c then end if d then end end";
         let diags = run(source, Some(3));
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(
-            diags[0].message.contains("complexity 5"),
-            "msg: {}",
-            diags[0].message
-        );
+        assert!(diags[0].message.contains("complexity 5"), "msg: {}", diags[0].message);
     }
 
     #[test]
@@ -155,31 +154,34 @@ mod tests {
     }
 
     #[test]
-    fn includes_function_name_in_message() {
+    fn flags_named_function_by_name() {
         let source = "function my_func() if a then end if b then end end";
         let diags = run(source, Some(1));
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            diags[0].message.contains("`my_func`"),
-            "msg: {}",
-            diags[0].message
+        assert_eq!(
+            diags[0].message,
+            "function `my_func` has cyclomatic complexity 3 (threshold: 1)"
         );
     }
 
     #[test]
-    fn anonymous_function_labeled_as_such() {
+    fn flags_method_by_its_full_name() {
+        let source = "local m = {}\nfunction m.sub:run() if a then end end";
+        let diags = run(source, Some(1));
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("`m.sub:run`"), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_anonymous_function_as_anonymous() {
         let source = "local f = function() if a then end if b then end end";
         let diags = run(source, Some(1));
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            diags[0].message.contains("anonymous"),
-            "msg: {}",
-            diags[0].message
-        );
+        assert!(diags[0].message.contains("(anonymous)"), "msg: {}", diags[0].message);
     }
 
     #[test]
-    fn empty_function_has_complexity_one() {
+    fn flags_empty_function_over_zero_threshold() {
         let source = "function f() end";
         let diags = run(source, Some(0));
         // Baseline 1 > 0, so the threshold trips.
@@ -187,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn each_function_scanned_independently() {
+    fn flags_each_function_independently() {
         let source = "function f() if a then end if b then end end function g() if c then end end";
         let diags = run(source, Some(1));
         // `f` has complexity 3 (>1); `g` has complexity 2 (>1). Both fire.

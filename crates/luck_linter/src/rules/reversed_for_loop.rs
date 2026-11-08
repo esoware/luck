@@ -1,11 +1,13 @@
-use luck_ast::Expression;
-use luck_ast::node::{AstTypesBitset, NodeType};
+use core::ops::Neg;
+
+use luck_ast::{Expression, NodeType, NodeTypeSet, Statement};
 use luck_token::UnOp;
 
-use crate::diagnostic::*;
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
 
-pub struct ReversedForLoop;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReversedForLoop;
 
 impl Rule for ReversedForLoop {
     fn name(&self) -> &'static str {
@@ -18,54 +20,97 @@ impl Rule for ReversedForLoop {
         Severity::Warning
     }
     fn description(&self) -> &'static str {
-        "numeric for loop counts down without negative step"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
-
-fn extract_number(expr: &Expression) -> Option<f64> {
-    match expr {
-        Expression::Number(literal) => literal.text.parse().ok(),
-        Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
-            extract_number(&unop.operand).map(|value| -value)
-        }
-        _ => None,
+        "numeric `for` loop counts down without a negative step"
     }
 }
 
 impl NodeRule for ReversedForLoop {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::NumericFor]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::NumericFor])
     }
     fn on_statement(
         &self,
-        stmt: &luck_ast::Statement,
-        _ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
+        stmt: &Statement,
+        _context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
     ) {
-        if let luck_ast::Statement::NumericFor(num_for) = stmt {
-            let start = extract_number(&num_for.start);
-            let limit = extract_number(&num_for.limit);
-
-            if let (Some(start), Some(limit)) = (start, limit)
-                && start > limit
-                && num_for.step.is_none()
-            {
-                out.push(
-                    LintDiagnostic::new(
-                        "reversed_for_loop",
-                        format!(
-                            "for loop from {start} to {limit} without step -1 will never execute"
-                        ),
-                        num_for.span,
-                    )
-                    .with_help("add a negative step: `for i = start, limit, -1 do`".to_string()),
-                );
-            }
+        if let Statement::NumericFor(numeric_for) = stmt
+            && let Some(start) = literal_value(&numeric_for.start)
+            && let Some(limit) = literal_value(&numeric_for.limit)
+            && start > limit
+            && numeric_for.step.is_none()
+        {
+            diags.push(
+                LintDiagnostic::new(
+                    "reversed_for_loop",
+                    format!(
+                        "`for` loop from {start} to {limit} without a negative step never runs"
+                    ),
+                    numeric_for.span,
+                )
+                .with_help("add a negative step: `for i = start, limit, -1 do`"),
+            );
         }
+    }
+}
+
+/// The value of a decimal number literal under any number of unary minuses.
+/// Rust's float parser reads the text, so hex literals yield `None`.
+fn literal_value(expr: &Expression) -> Option<f64> {
+    if let Expression::Number(literal) = expr {
+        return literal.text.parse().ok();
+    }
+    let Expression::UnaryOp(unary) = expr else {
+        return None;
+    };
+    if unary.op != UnOp::Neg {
+        return None;
+    }
+    literal_value(&unary.operand).map(Neg::neg)
+}
+
+#[cfg(test)]
+mod tests {
+    use luck_token::LuaVersion;
+
+    use super::*;
+    use crate::fixtures::run_rule;
+
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        run_rule(&ReversedForLoop, source, LuaVersion::Lua54)
+    }
+
+    #[test]
+    fn flags_descending_bounds_without_step() {
+        let diags = run("for i = 10, 1 do print(i) end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(
+            diags[0].message, "`for` loop from 10 to 1 without a negative step never runs",
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_negated_bounds() {
+        let diags = run("for i = -1, -5 do print(i) end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_explicit_step() {
+        let diags = run("for i = 10, 1, -1 do print(i) end");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_ascending_bounds() {
+        let diags = run("for i = 1, 10 do print(i) end");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_non_literal_bounds() {
+        let diags = run("local n = 0\nfor i = 10, n do print(i) end");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

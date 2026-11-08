@@ -10,58 +10,75 @@ alias r := ready
 alias t := test
 alias f := fmt
 
-# Install the cargo tools the recipes below use
+# Install the extension's packages, cargo-nextest, cargo-insta, cargo-deny, cargo-shear, and zizmor
 init:
-  cargo install cargo-nextest cargo-insta --locked
+  npm ci --prefix editors/vscode
+  cargo install --locked cargo-nextest@0.9.148 cargo-insta@1.46.3 cargo-deny@0.20.2 cargo-shear@1.14.0 zizmor@1.31.1
 
-# Run the same checks as CI (fmt, clippy, tests, doctests)
+# Run fmt, clippy, rustdoc, the fuzz crate's check, cargo-shear, zizmor, the extension's type check and oxlint, the tests, the doctests, and cargo-deny
 ready:
-  cargo fmt --all
+  just fmt
   just lint
+  cargo doc --workspace --no-deps --document-private-items --keep-going --config "build.warnings='deny'"
+  cargo check --manifest-path fuzz/Cargo.toml
+  cargo shear
+  zizmor --offline --pedantic .github
+  npm run --prefix editors/vscode check
+  npm run --prefix editors/vscode lint
   just test
   just doctest
+  just deny
   git status
 
-# Build all crates
-build *args:
-  cargo build --workspace {{args}}
-
-# Run all tests; scope with e.g. `just test -p luck_parser goto_statement`
+# Run all tests, or narrow them with nextest args like -p luck_parser goto_statement
 test *args:
-  cargo nextest run --workspace {{args}}
+  cargo nextest run {{args}}
 
-# Run doctests (nextest does not run them)
+# Run the doctests, which nextest skips
 doctest:
   cargo test --doc --workspace
 
-# Format all code
+# Format Rust, the fuzz crate, and the extension
 fmt:
   cargo fmt --all
+  cargo fmt --manifest-path fuzz/Cargo.toml
+  npm run --prefix editors/vscode fmt
 
-# Clippy with zero warnings allowed
+# Run clippy and fail on any warning
 lint *args:
-  cargo clippy --workspace --all-targets {{args}} -- -D warnings
+  cargo clippy --workspace --all-targets --all-features --keep-going --config "build.warnings='deny'" {{args}} -- --cap-lints warn
 
-# Accept pending insta snapshots (non-interactive; `cargo insta review` is for humans)
+# Accept pending insta snapshots, since cargo insta review is interactive
 accept:
   cargo insta accept
 
-# Criterion benches; one stage with e.g. `just bench --bench parser`
+# Check bans, licenses, and sources
+deny:
+  cargo deny check bans licenses sources
+
+# Kept out of ready because a new advisory can fail an unchanged commit. CI runs it daily.
+
+# Check the locked crates and the packages the extension ships against published advisories
+advisories:
+  cargo deny check advisories
+  npm audit --prefix editors/vscode --omit=dev
+
+# Run the criterion benches, or one stage with --bench parser
 bench *args:
   cargo bench -p luck_benchmark {{args}}
 
-# Regenerate the VS Code luck.json schema after config type changes
+# Regenerate editors/vscode/schemas/luckrc.schema.json after a config type changes
 schema:
   cargo test -p luck_core regenerate_luckrc_schema -- --ignored
 
-# Regenerate roblox_api.toml + roblox_enums.toml from the live Roblox API dump
+# Regenerate roblox_api.toml and roblox_enums.toml from the live Roblox API dump
 roblox-api:
   cargo test -p luck_semantic regenerate_roblox_api -- --ignored
 
-# Regenerate the committed minsize.snap after minifier/corpus changes
+# Regenerate the committed minsize.snap after the minifier or the corpus changes
 minsize:
-  cargo test -p luck_benchmark --test metrics regenerate_minsize -- --ignored
+  cargo test -p luck_benchmark --test it regenerate_minsize -- --ignored
 
-# Run a fuzz target (nightly): `just fuzz fuzz_parser`
+# Run a fuzz target on nightly, such as just fuzz fuzz_parser
 fuzz target *args:
   cargo +nightly fuzz run {{target}} --fuzz-dir fuzz {{args}}

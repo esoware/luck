@@ -1,0 +1,6 @@
+---
+source: crates/luck_bundler/tests/it/bundle.rs
+expression: output
+---
+print("hello")
+return 42

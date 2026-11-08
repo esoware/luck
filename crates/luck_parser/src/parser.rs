@@ -1,69 +1,97 @@
-use luck_ast::{Block, shared::Punctuated};
-use luck_lexer::Lexer;
-use luck_token::{Comment, LuaVersion, Span, Token, TokenKind};
-use rustc_hash::FxHashSet;
+mod attributes;
+mod expr;
+mod stmt;
+mod types;
 
-use crate::ParseError;
+use core::mem;
+use core::ops::Range;
+
+use luck_ast::Block;
+use luck_lexer::Lexer;
+use luck_token::{Comment, CompactString, LuaVersion, Span, Token, TokenKind};
+use rustc_hash::FxHashSet;
 
 const MAX_NESTING_DEPTH: u32 = 256;
 
-/// Whether the next token after `continue` confirms it's a continue statement
-/// (not a function call like `continue()` or assignment like `continue = 5`).
-fn is_continue_context(next: &TokenKind) -> bool {
-    matches!(
-        next,
-        TokenKind::End
-            | TokenKind::Else
-            | TokenKind::ElseIf
-            | TokenKind::Until
-            | TokenKind::Eof
-            | TokenKind::Semicolon
-    )
+/// The AST, comments, and errors from one parse, plus the parsed source.
+#[derive(Debug)]
+pub struct ParseResult {
+    pub block: Block,
+    pub comments: Vec<Comment>,
+    pub errors: Vec<ParseError>,
+    pub source: String,
 }
 
-/// Recursive descent parser that consumes tokens straight from the lexer.
-/// Lua needs exactly one token of lookahead, so the parser holds a
-/// two-slot `current`/`next` buffer instead of a materialized token
-/// stream.
-pub(crate) struct Parser<'src> {
-    lexer: Lexer<'src>,
-    source: &'src str,
+pub type ParseError = luck_token::SourceError;
+
+/// Parse `source` as a chunk of `version`.
+///
+/// An owned `String` moves into `ParseResult::source` without a copy; a
+/// `&str` is copied once.
+#[must_use]
+pub fn parse<Source>(source: Source, version: LuaVersion) -> ParseResult
+where
+    Source: Into<String>,
+{
+    parse_owned(source.into(), version)
+}
+
+fn parse_owned(source: String, version: LuaVersion) -> ParseResult {
+    let (block, comments, errors) = match Parser::new(&source, version) {
+        Ok(parser) => parser.parse_chunk(),
+        Err(error) => (
+            Block { span: Span::new(0, 0), stmts: Vec::new(), last_stmt: None },
+            Vec::new(),
+            vec![error],
+        ),
+    };
+    ParseResult { block, comments, errors, source }
+}
+
+/// Recursive descent parser that pulls tokens straight from the lexer.
+///
+/// Lua needs only one token of lookahead, so `current` and `next` stand in
+/// for a materialized token stream.
+pub(crate) struct Parser<'source> {
+    lexer: Lexer<'source>,
+    source: &'source str,
     current: Token,
     next: Token,
-    prev_span: Span,
-    pub(crate) version: LuaVersion,
-    depth: u32,
-    /// Lexical block depth. The root module block is 1.
-    pub(crate) block_depth: u32,
+    previous_span: Span,
+    version: LuaVersion,
+    nesting_depth: u32,
+    /// Lexical block depth. The chunk's own block is 1.
+    block_depth: u32,
     /// Function nesting depth, used to distinguish module returns.
-    pub(crate) function_depth: u32,
-    pub(crate) has_module_return: bool,
-    pub(crate) has_value_exports: bool,
-    pub(crate) exported_names: FxHashSet<luck_token::CompactString>,
-    /// Nesting depth of enclosing loops; reset inside function bodies.
-    /// `break`/`continue` at depth 0 is a compile error in every Lua.
-    pub(crate) loop_depth: u32,
+    function_depth: u32,
+    has_module_return: bool,
+    has_value_exports: bool,
+    exported_names: FxHashSet<CompactString>,
+    /// Number of enclosing loops, reset inside function bodies. `break` or
+    /// `continue` at 0 is a compile error in every Lua.
+    loop_depth: u32,
     /// Whether `...` is valid here. Main chunks are vararg; function
     /// bodies are vararg only when their params end in `...`.
-    pub(crate) is_vararg_scope: bool,
-    pub(crate) errors: Vec<ParseError>,
-    /// Stack tracking what construct is being parsed, for contextual error messages.
-    pub(crate) context_stack: Vec<(&'static str, Span)>,
+    is_vararg_scope: bool,
+    errors: Vec<ParseError>,
 }
 
-impl<'src> Parser<'src> {
-    pub(crate) fn new(source: &'src str, version: LuaVersion) -> Self {
-        let mut lexer = Lexer::new(source, version);
+impl<'source> Parser<'source> {
+    /// # Errors
+    ///
+    /// Returns the lexer's refusal of a source too large for `u32` spans.
+    pub(crate) fn new(source: &'source str, version: LuaVersion) -> Result<Self, ParseError> {
+        let mut lexer = Lexer::new(source, version)?;
         let current = lexer.next_token();
         let next = lexer.next_token();
-        Self {
+        Ok(Self {
             lexer,
             source,
             current,
             next,
-            prev_span: Span::new(0, 0),
+            previous_span: Span::new(0, 0),
             version,
-            depth: 0,
+            nesting_depth: 0,
             block_depth: 0,
             function_depth: 0,
             has_module_return: false,
@@ -72,359 +100,203 @@ impl<'src> Parser<'src> {
             loop_depth: 0,
             is_vararg_scope: true,
             errors: Vec::new(),
-            context_stack: Vec::new(),
+        })
+    }
+
+    /// Parse the whole source as one chunk. Returns its block, every comment,
+    /// and every lex and parse error sorted by position.
+    pub(crate) fn parse_chunk(mut self) -> (Block, Vec<Comment>, Vec<ParseError>) {
+        let block = self.parse_block();
+        // `parse_block` stops at a block boundary such as `return` or a stray
+        // `end`, and anything after it would silently drop out of the AST. After
+        // an earlier error, recovery may already have abandoned the tail.
+        if !self.is_at_eof() && self.errors.is_empty() {
+            let span = self.current_span();
+            let message = format!("expected end of file, found {}", self.peek());
+            self.error(span, message);
         }
+        // Drain the lexer so comments and lex errors past the last parsed
+        // statement are kept.
+        while !matches!(self.lexer.next_token().kind, TokenKind::Eof) {}
+        let (comments, mut errors) = self.lexer.finish();
+        errors.append(&mut self.errors);
+        errors.sort_by_key(|error| error.span.start);
+        (block, comments, errors)
     }
 
     /// Whether the source between the previous token and the current one
     /// contains a line break. Drives the 5.1/Luau "ambiguous syntax"
     /// check for `(` call suffixes.
-    pub(crate) fn newline_before_current(&self) -> bool {
-        let between = &self.source[self.prev_span.end as usize..self.current.span.start as usize];
-        between.bytes().any(|b| b == b'\n' || b == b'\r')
+    fn has_newline_before_current(&self) -> bool {
+        let between = Span::new(self.previous_span.end, self.current.span.start);
+        self.source
+            .get(Range::<usize>::from(between))
+            .is_some_and(|text| text.bytes().any(|byte| byte == b'\n' || byte == b'\r'))
     }
 
     #[inline]
-    pub(crate) fn peek(&self) -> &TokenKind {
+    const fn peek(&self) -> &TokenKind {
         &self.current.kind
     }
 
-    /// One token of lookahead, all the Lua grammar ever needs.
     #[inline]
-    pub(crate) fn peek_next(&self) -> &TokenKind {
+    const fn peek_next(&self) -> &TokenKind {
         &self.next.kind
     }
 
     #[inline]
-    pub(crate) fn advance(&mut self) -> Token {
-        self.prev_span = self.current.span;
-        std::mem::replace(
-            &mut self.current,
-            std::mem::replace(&mut self.next, self.lexer.next_token()),
-        )
-    }
-
-    /// Consume the current token, keeping only its span.
-    #[inline]
-    pub(crate) fn advance_span(&mut self) -> Span {
-        self.advance().span
-    }
-
-    /// `expect` for fixed-spelling tokens, returning only the span.
-    #[inline]
-    pub(crate) fn expect_span(&mut self, kind: &TokenKind) -> Result<Span, ParseError> {
-        if std::mem::discriminant(self.peek()) == std::mem::discriminant(kind) {
-            Ok(self.advance_span())
-        } else {
-            Err(self.expected_token_error(kind))
-        }
-    }
-
-    pub(crate) fn check_identifier(&self) -> bool {
-        matches!(self.peek(), TokenKind::Identifier(_))
+    const fn current_span(&self) -> Span {
+        self.current.span
     }
 
     #[inline]
-    pub(crate) fn expect_identifier(&mut self) -> Result<Token, ParseError> {
-        if self.check_identifier() {
-            Ok(self.advance())
-        } else {
-            Err(self.expected_identifier_error())
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn expected_token_error(&self, kind: &TokenKind) -> ParseError {
-        Self::make_error(
-            self.current_span(),
-            format!("expected {}, found {}", kind, self.peek()),
-        )
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn expected_identifier_error(&self) -> ParseError {
-        Self::make_error(
-            self.current_span(),
-            format!("expected identifier, found {}", self.peek()),
-        )
-    }
-
-    /// Expect `kind`; on mismatch record the default "expected X, found Y"
-    /// error and return the current span so parsing continues past the
-    /// missing token. The recovering counterpart to [`Self::expect_span`].
-    #[inline]
-    pub(crate) fn expect(&mut self, kind: &TokenKind) -> Span {
-        self.expect_span(kind).unwrap_or_else(|err| {
-            self.errors.push(err);
-            self.current_span()
-        })
-    }
-
-    /// The one canonical zero-width identifier placeholder, anchored at
-    /// `span`, that keeps parsing alive after a failed identifier
-    /// expectation or an invalid assignment target.
-    pub(crate) fn recovery_identifier(span: Span) -> Token {
-        Token::new(TokenKind::Identifier(String::new().into()), span)
-    }
-
-    /// Expect an identifier; on mismatch record the error and return a
-    /// zero-width placeholder token so parsing continues.
-    #[inline]
-    pub(crate) fn expect_identifier_recover(&mut self) -> Token {
-        self.expect_identifier().unwrap_or_else(|err| {
-            self.errors.push(err);
-            Self::recovery_identifier(self.current_span())
-        })
-    }
-
-    #[inline]
-    pub(crate) fn at_eof(&self) -> bool {
+    const fn is_at_eof(&self) -> bool {
         matches!(self.peek(), TokenKind::Eof)
     }
 
-    #[inline]
-    pub(crate) fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
+    const fn is_at_identifier(&self) -> bool {
+        matches!(self.peek(), TokenKind::Identifier(_))
     }
 
-    pub(crate) fn enter_depth(&mut self) -> Result<(), ParseError> {
+    /// Whether the current token is a `kind`, whatever its payload.
+    #[inline]
+    fn is_at(&self, kind: &TokenKind) -> bool {
+        mem::discriminant(self.peek()) == mem::discriminant(kind)
+    }
+
+    #[inline]
+    fn advance(&mut self) -> Token {
+        self.previous_span = self.current.span;
+        mem::replace(&mut self.current, mem::replace(&mut self.next, self.lexer.next_token()))
+    }
+
+    #[inline]
+    fn advance_span(&mut self) -> Span {
+        self.advance().span
+    }
+
+    /// Consume a token of `kind` and return its span. On a mismatch, record
+    /// an "expected X, found Y" error, leave the token in place, and return
+    /// its span so parsing can go on.
+    #[inline]
+    fn expect(&mut self, kind: &TokenKind) -> Span {
+        if self.is_at(kind) { self.advance_span() } else { self.report_expected(kind) }
+    }
+
+    /// Consume the current token if it's an identifier. Otherwise record an
+    /// "expected identifier" error and leave the token in place.
+    #[inline]
+    fn expect_identifier(&mut self) -> Option<Token> {
+        if self.is_at_identifier() {
+            Some(self.advance())
+        } else {
+            self.report_expected_identifier();
+            None
+        }
+    }
+
+    /// Like [`Self::expect_identifier`], but a missing name becomes
+    /// [`Self::recovery_identifier`] at the current token.
+    #[inline]
+    fn expect_identifier_recover(&mut self) -> Token {
+        self.expect_identifier().unwrap_or_else(|| Self::recovery_identifier(self.current_span()))
+    }
+
+    /// An identifier with an empty name at `span`, standing in for a missing
+    /// name or an invalid assignment target so parsing can go on.
+    fn recovery_identifier(span: Span) -> Token {
+        Token::new(TokenKind::Identifier(String::new().into()), span)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn report_expected(&mut self, kind: &TokenKind) -> Span {
+        let span = self.current_span();
+        let message = format!("expected {kind}, found {}", self.peek());
+        self.error(span, message);
+        span
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn report_expected_identifier(&mut self) {
+        let span = self.current_span();
+        let message = format!("expected identifier, found {}", self.peek());
+        self.error(span, message);
+    }
+
+    #[cold]
+    fn error(&mut self, span: Span, message: impl Into<String>) {
+        self.errors.push(ParseError { span, message: message.into() });
+    }
+
+    /// Count one more level of nesting. Once nesting has reached
+    /// [`MAX_NESTING_DEPTH`], record the resource-limit error instead and
+    /// return false, leaving the count unchanged.
+    #[must_use]
+    fn enter_depth(&mut self) -> bool {
         // A host-stack budget, independent of target VM compiler limits.
-        if self.depth >= MAX_NESTING_DEPTH {
+        if self.nesting_depth >= MAX_NESTING_DEPTH {
             let span = self.current_span();
-            Err(Self::make_error(
+            self.error(
                 span,
                 format!(
                     "maximum nesting depth exceeded (luck parser resource limit: {MAX_NESTING_DEPTH})"
                 ),
-            ))
-        } else {
-            self.depth += 1;
-            Ok(())
+            );
+            return false;
         }
+        self.nesting_depth = self.nesting_depth.saturating_add(1);
+        true
     }
 
-    pub(crate) fn exit_depth(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+    const fn exit_depth(&mut self) {
+        self.nesting_depth = self.nesting_depth.saturating_sub(1);
     }
 
-    /// Push a parsing context for better error messages (e.g. "in if-statement").
-    #[inline]
-    pub(crate) fn push_context(&mut self, context: &'static str, span: Span) {
-        self.context_stack.push((context, span));
-    }
-
-    #[inline]
-    pub(crate) fn pop_context(&mut self) {
-        self.context_stack.pop();
-    }
-
-    #[cold]
-    pub(crate) fn error(&mut self, span: Span, message: String) {
-        self.errors.push(ParseError { span, message });
-    }
-
-    #[cold]
-    fn make_error(span: Span, message: String) -> ParseError {
-        ParseError { span, message }
-    }
-
-    /// Skip tokens until we reach a statement boundary for error recovery.
-    /// Always consumes at least one token to prevent infinite loops.
-    pub(crate) fn synchronize(&mut self) {
+    /// Skip to the next statement start, block end, or closing bracket.
+    /// Always consumes at least one token, so recovery can't loop forever.
+    fn synchronize(&mut self) {
         self.advance();
-        while !self.at_eof() {
-            if self.peek().is_stat_start() {
+        while !self.is_at_eof() {
+            if stmt::is_statement_start(self.peek())
+                || matches!(
+                    self.peek(),
+                    TokenKind::End
+                        | TokenKind::Else
+                        | TokenKind::ElseIf
+                        | TokenKind::Until
+                        | TokenKind::RightParen
+                        | TokenKind::RightBrace
+                        | TokenKind::RightBracket
+                )
+            {
                 return;
             }
-            match self.peek() {
-                TokenKind::End
-                | TokenKind::Else
-                | TokenKind::ElseIf
-                | TokenKind::Until
-                | TokenKind::RightParen
-                | TokenKind::RightBrace
-                | TokenKind::RightBracket => return,
-                _ => {
-                    self.advance();
-                }
-            }
+            self.advance();
         }
     }
+}
 
-    /// Drain the lexer to EOF (comments and lex errors past the last
-    /// parsed statement must still be collected), then yield the
-    /// comments and all errors merged and sorted by position.
-    pub(crate) fn finish(mut self) -> (Vec<Comment>, Vec<ParseError>) {
-        while !matches!(self.lexer.next_token().kind, TokenKind::Eof) {}
-        let (comments, lex_errors) = self.lexer.finish();
-        let mut errors = lex_errors;
-        errors.append(&mut self.errors);
-        errors.sort_by_key(|e| e.span.start);
-        (comments, errors)
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    /// Parse a loop body: identical to `parse_block` but with
-    /// `break`/`continue` made valid inside it.
-    pub(crate) fn parse_loop_block(&mut self) -> Block {
-        self.loop_depth += 1;
-        let block = self.parse_block();
-        self.loop_depth -= 1;
-        block
-    }
-
-    /// Parse a block (statement list with optional trailing return/break/continue).
-    pub(crate) fn parse_block(&mut self) -> Block {
-        let start_span = self.current_span();
-        self.block_depth += 1;
-
-        if let Err(err) = self.enter_depth() {
-            self.errors.push(err);
-            self.block_depth = self.block_depth.saturating_sub(1);
-            return Block {
-                span: start_span,
-                stmts: Vec::new(),
-                last_stmt: None,
-            };
-        }
-
-        let mut stmts = Vec::new();
-        let mut last_stmt = None;
-        // 5.1 and Luau have no empty statement: a single `;` may only
-        // FOLLOW a statement (block ::= {stat [';']}), so a leading or
-        // doubled `;` is a parse error there. 5.2+ treats `;` as a
-        // statement of its own.
-        let mut can_take_separator = false;
-
-        loop {
-            while matches!(self.peek(), TokenKind::Semicolon) {
-                if self.version.has_empty_statement() {
-                    let span = self.advance_span();
-                    stmts.push(luck_ast::Statement::EmptyStatement(span));
-                } else {
-                    let span = self.current_span();
-                    if !can_take_separator {
-                        self.error(span, "unexpected token ';'".to_string());
-                    }
-                    self.advance_span();
-                    can_take_separator = false;
-                }
-            }
-
-            match self.peek() {
-                TokenKind::Return => {
-                    last_stmt = Some(Box::new(self.parse_return_statement()));
-                    break;
-                }
-                TokenKind::Break if self.version.break_is_last_stat_only() => {
-                    let span = self.advance_span();
-                    if self.loop_depth == 0 {
-                        self.error(span, "break outside a loop".to_string());
-                    }
-                    last_stmt = Some(Box::new(luck_ast::LastStatement::Break(span)));
-                    if matches!(self.peek(), TokenKind::Semicolon) {
-                        self.advance_span();
-                    }
-                    break;
-                }
-                // Block-ending tokens, left for the caller to consume
-                TokenKind::End
-                | TokenKind::Else
-                | TokenKind::ElseIf
-                | TokenKind::Until
-                | TokenKind::Eof => break,
-                // Luau `continue` as last statement (context-sensitive identifier)
-                TokenKind::Identifier(name)
-                    if self.version.is_luau()
-                        && name == "continue"
-                        && is_continue_context(self.peek_next()) =>
-                {
-                    let span = self.advance_span();
-                    if self.loop_depth == 0 {
-                        self.error(span, "continue outside a loop".to_string());
-                    }
-                    last_stmt = Some(Box::new(luck_ast::LastStatement::Continue(span)));
-                    if matches!(self.peek(), TokenKind::Semicolon) {
-                        self.advance_span();
-                    }
-                    break;
-                }
-                kind if kind.is_stat_start() => {
-                    stmts.push(self.parse_statement());
-                    can_take_separator = true;
-                }
-                _ => {
-                    // Unknown token that doesn't start a statement and isn't a block-ender.
-                    let span = self.current_span();
-                    self.error(span, format!("unexpected token {}", self.peek()));
-                    self.synchronize();
-                    stmts.push(luck_ast::Statement::Error(span));
-                    can_take_separator = true;
-                }
+    #[test]
+    fn owned_source_storage_survives_repeated_parsing() {
+        for text in ["return 1", "local = 5"] {
+            let mut source = String::with_capacity(256);
+            source.push_str(text);
+            let pointer = source.as_ptr();
+            let capacity = source.capacity();
+            for _ in 0u8..3 {
+                let parsed = parse(source, LuaVersion::Lua54);
+                assert_eq!(parsed.source.as_ptr(), pointer);
+                assert_eq!(parsed.source.capacity(), capacity);
+                assert_eq!(parsed.source, text);
+                assert_eq!(parsed.errors.is_empty(), text == "return 1", "{:?}", parsed.errors);
+                source = parsed.source;
             }
         }
-
-        self.exit_depth();
-        self.block_depth = self.block_depth.saturating_sub(1);
-
-        let end_span = if stmts.is_empty() && last_stmt.is_none() {
-            start_span
-        } else {
-            self.previous_span()
-        };
-        let span = start_span.merge(end_span);
-
-        Block {
-            span,
-            stmts,
-            last_stmt,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn current_span(&self) -> Span {
-        self.current.span
-    }
-
-    fn previous_span(&self) -> Span {
-        self.prev_span
-    }
-
-    /// Consume a closing `>` in type context, recovering if absent.
-    /// Adjacent tokens lex greedily, so `Foo<Bar<T>>` produces `ShiftRight`
-    /// and `Foo<T>=x` produces `GreaterEqual`. Both are split here, returning
-    /// the first `>`'s span and leaving the remainder current.
-    pub(crate) fn consume_type_close_angle(&mut self) -> Span {
-        match self.peek() {
-            TokenKind::Greater => self.advance_span(),
-            TokenKind::ShiftRight => {
-                let span = self.current.span;
-                self.current = Token::new(TokenKind::Greater, Span::new(span.start + 1, span.end));
-                Span::new(span.start, span.start + 1)
-            }
-            TokenKind::GreaterEqual => {
-                let span = self.current.span;
-                self.current = Token::new(TokenKind::Equal, Span::new(span.start + 1, span.end));
-                Span::new(span.start, span.start + 1)
-            }
-            _ => {
-                let span = self.current_span();
-                let message = format!("expected > to close generics, found {}", self.peek());
-                self.error(span, message);
-                span
-            }
-        }
-    }
-
-    pub(crate) fn parse_expression_list(&mut self) -> Punctuated<luck_ast::Expression> {
-        let mut exprs = vec![self.parse_expression(0)];
-
-        while matches!(self.peek(), TokenKind::Comma) {
-            self.advance_span();
-            exprs.push(self.parse_expression(0));
-        }
-
-        Punctuated::from_items(exprs)
     }
 }

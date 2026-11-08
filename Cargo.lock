@@ -881,11 +881,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86f0f8fee8c926415c58d6ae43a08523a26faccb2323f5e6b644fe7dd4ef6b82"
 dependencies = [
  "console",
- "globset",
  "once_cell",
  "similar",
  "tempfile",
- "walkdir",
 ]
 
 [[package]]
@@ -998,6 +996,7 @@ name = "luck_ast"
 version = "0.4.0"
 dependencies = [
  "luck_token",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -1052,15 +1051,14 @@ dependencies = [
  "luck_formatter",
  "luck_linter",
  "luck_lsp",
- "luck_lua",
  "luck_minifier",
  "luck_parser",
  "luck_token",
  "mimalloc-safe",
- "notify",
  "notify-debouncer-mini",
  "predicates",
  "rayon",
+ "rustc-hash",
  "serde_json",
  "tempfile",
  "tokio",
@@ -1071,7 +1069,6 @@ name = "luck_codegen"
 version = "0.4.0"
 dependencies = [
  "luck_ast",
- "luck_lexer",
  "luck_parser",
  "luck_token",
 ]
@@ -1084,6 +1081,7 @@ dependencies = [
  "globset",
  "json5",
  "luck_token",
+ "rustc-hash",
  "schemars",
  "serde",
  "serde_json",
@@ -1095,12 +1093,12 @@ dependencies = [
 name = "luck_formatter"
 version = "0.4.0"
 dependencies = [
- "compact_str",
  "luck_ast",
  "luck_core",
  "luck_lexer",
  "luck_parser",
  "luck_token",
+ "rustc-hash",
  "unicode-width",
 ]
 
@@ -1122,14 +1120,13 @@ dependencies = [
  "luck_semantic",
  "luck_token",
  "rayon",
+ "rustc-hash",
 ]
 
 [[package]]
 name = "luck_lsp"
 version = "0.4.0"
 dependencies = [
- "async-trait",
- "compact_str",
  "luck_ast",
  "luck_core",
  "luck_formatter",
@@ -1139,7 +1136,7 @@ dependencies = [
  "luck_resolver",
  "luck_semantic",
  "luck_token",
- "serde",
+ "rustc-hash",
  "serde_json",
  "tempfile",
  "tokio",
@@ -1192,9 +1189,11 @@ dependencies = [
 name = "luck_resolver"
 version = "0.4.0"
 dependencies = [
+ "json5",
  "luck_core",
  "luck_token",
  "rustc-hash",
+ "serde",
  "serde_json",
  "tempfile",
 ]
@@ -1203,7 +1202,6 @@ dependencies = [
 name = "luck_semantic"
 version = "0.4.0"
 dependencies = [
- "compact_str",
  "luck_ast",
  "luck_parser",
  "luck_token",

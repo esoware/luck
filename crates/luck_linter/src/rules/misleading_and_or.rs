@@ -1,15 +1,13 @@
-use luck_ast::Expression;
+use luck_ast::{Expression, NodeType, NodeTypeSet};
 use luck_token::BinOp;
 
-use crate::diagnostic::*;
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
 
-/// `(cond and a) or b` is the canonical Lua ternary idiom, but it
-/// collapses to `b` whenever `a` is `false` or `nil`. Writing
-/// `(cond and false) or alt` or `(cond and nil) or alt` therefore always
-/// evaluates to `alt`, defeating the conditional entirely.
-pub struct MisleadingAndOr;
+/// Flags the `(cond and a) or b` ternary idiom when `a` is a literal `false`
+/// or `nil`, which makes it always evaluate to `b`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MisleadingAndOr;
 
 impl Rule for MisleadingAndOr {
     fn name(&self) -> &'static str {
@@ -22,52 +20,48 @@ impl Rule for MisleadingAndOr {
         Severity::Warning
     }
     fn description(&self) -> &'static str {
-        "and/or ternary with a falsy middle operand always returns the right-hand value"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
+        "`and`/`or` ternary with a falsy middle operand always returns the right-hand value"
     }
 }
 
-/// Look through an explicit parenthesized wrapper. The pattern reads
-/// most naturally with parens so users write it both ways.
-fn unparen(expr: &Expression) -> &Expression {
-    if let Expression::Parenthesized(paren) = expr {
-        return &paren.expr;
+/// Strips one layer of parentheses, since people write the idiom both with
+/// and without them.
+fn unparenthesize(expr: &Expression) -> &Expression {
+    if let Expression::Parenthesized(parenthesized) = expr {
+        return &parenthesized.expr;
     }
     expr
 }
 
 fn is_falsy_literal(expr: &Expression) -> bool {
-    matches!(unparen(expr), Expression::Nil(_) | Expression::False(_))
+    matches!(unparenthesize(expr), Expression::Nil(_) | Expression::False(_))
 }
 
 impl NodeRule for MisleadingAndOr {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::BinaryOp]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expression(&self, expr: &Expression, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
+    fn on_expression(
+        &self,
+        expr: &Expression,
+        _context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
         if let Expression::BinaryOp(outer) = expr
-            && matches!(outer.op, BinOp::Or)
+            && outer.op == BinOp::Or
         {
-            let lhs = unparen(&outer.left);
+            let lhs = unparenthesize(&outer.left);
             if let Expression::BinaryOp(inner) = lhs
-                && matches!(inner.op, BinOp::And)
+                && inner.op == BinOp::And
                 && is_falsy_literal(&inner.right)
             {
-                out.push(
+                diags.push(
                     LintDiagnostic::new(
                         "misleading_and_or",
-                        "`(x and FALSY) or y` always evaluates to `y`; the ternary collapses"
-                            .to_string(),
+                        "`(x and FALSY) or y` always evaluates to `y`",
                         outer.span,
                     )
-                    .with_help(
-                        "use an `if` statement or a Luau `if-expression` for a real ternary"
-                            .to_string(),
-                    ),
+                    .with_help("use an `if` statement, or an if-then-else expression in Luau"),
                 );
             }
         }
@@ -76,11 +70,13 @@ impl NodeRule for MisleadingAndOr {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&MisleadingAndOr, source, LuaVersion::Lua54)
+        run_rule(&MisleadingAndOr, source, LuaVersion::Lua54)
     }
 
     #[test]

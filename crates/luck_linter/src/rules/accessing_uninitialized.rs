@@ -1,19 +1,16 @@
-use luck_ast::Statement;
-use luck_ast::visitor::Visitor;
-use luck_semantic::scope::{ReferenceKind, SymbolKind};
+use luck_semantic::ReferenceKind;
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::rule::{LintContext, Rule, WholeRule};
+use crate::uninitialized::{UninitializedLocals, first_reference};
 
-/// Luacheck 321: a local is declared without an initializer, then read
-/// before any value is assigned to it. Lua semantics make the read
-/// produce `nil`, which is almost always a bug.
+/// Luacheck 321: a local declared without a value is read before anything
+/// is assigned to it.
 ///
-/// Why this is distinct from `unused_variable`: the local *is* used,
-/// just too early. The declaration must have no RHS (`local x` rather
-/// than `local x = nil` or `local x = ...`) so that `redundant_nil_init`
-/// and this rule stay orthogonal.
-pub struct AccessingUninitialized;
+/// Only a bare `local x` counts. `local x = nil` is initialized, and
+/// `redundant_nil_init` covers it instead.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AccessingUninitialized;
 
 impl Rule for AccessingUninitialized {
     fn name(&self) -> &'static str {
@@ -28,95 +25,42 @@ impl Rule for AccessingUninitialized {
     fn description(&self) -> &'static str {
         "local is read before any value is assigned to it"
     }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let semantic = ctx.semantic;
-        let mut uninit = UninitCollector::default();
-        uninit.visit_block(block);
-
-        let mut diagnostics = Vec::new();
-
-        for symbol in &semantic.scope_tree.symbols {
-            if symbol.kind != SymbolKind::Local {
-                continue;
-            }
-            if !uninit.is_uninit(symbol.definition_span.start, symbol.definition_span.end) {
-                continue;
-            }
-            if symbol.name == "_" || symbol.name.starts_with('_') {
-                continue;
-            }
-
-            // First reference ANYWHERE, by source order. Filtering to the
-            // declaration scope would hide writes inside `if` and loop
-            // bodies and flag the common branch-initialization idiom
-            // (`local x if c then x = 1 end print(x)`).
-            let mut refs: Vec<_> = symbol
-                .reference_ids
-                .iter()
-                .map(|&ref_id| semantic.scope_tree.reference(ref_id))
-                .collect();
-            refs.sort_by_key(|r| r.span.start);
-
-            let Some(first) = refs.first() else {
-                continue;
-            };
-            if !matches!(first.kind, ReferenceKind::Read | ReferenceKind::ReadWrite) {
-                continue;
-            }
-
-            diagnostics.push(
-                LintDiagnostic::new(
-                    "accessing_uninitialized",
-                    format!(
-                        "`{}` is read before any value is assigned; result is nil",
-                        symbol.name
-                    ),
-                    first.span,
-                )
-                .with_help("initialize at declaration or assign before reading".to_string()),
-            );
-        }
-
-        diagnostics
-    }
 }
 
-/// AST pass that records the definition spans of locals declared
-/// without an initializer.
-#[derive(Default)]
-struct UninitCollector {
-    spans: Vec<(u32, u32)>,
-}
-
-impl UninitCollector {
-    fn is_uninit(&self, start: u32, end: u32) -> bool {
-        self.spans.iter().any(|(s, e)| *s == start && *e == end)
-    }
-}
-
-impl<'ast> Visitor<'ast> for UninitCollector {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
-        if let Statement::LocalAssignment(local) = stmt
-            && local.exprs.is_none()
-        {
-            for attributed in local.names.iter() {
-                self.spans
-                    .push((attributed.name.span.start, attributed.name.span.end));
-            }
-        }
-        self.walk_statement(stmt);
+impl WholeRule for AccessingUninitialized {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        let tree = &context.semantic.scope_tree;
+        let uninitialized_locals = UninitializedLocals::collect(context.block);
+        tree.symbols
+            .iter()
+            .filter(|symbol| uninitialized_locals.contains(symbol) && !symbol.name.starts_with('_'))
+            .filter_map(|symbol| {
+                let first = first_reference(symbol, tree)?;
+                matches!(first.kind, ReferenceKind::Read | ReferenceKind::ReadWrite).then(|| {
+                    LintDiagnostic::new(
+                        "accessing_uninitialized",
+                        format!(
+                            "`{}` is read before any value is assigned, so it is `nil`",
+                            symbol.name
+                        ),
+                        first.span,
+                    )
+                    .with_help("initialize at declaration or assign before reading")
+                })
+            })
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&AccessingUninitialized, source, LuaVersion::Lua54)
+        run_rule(&AccessingUninitialized, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -128,8 +72,7 @@ mod tests {
 
     #[test]
     fn ignores_explicit_nil_init() {
-        // `local x = nil` is explicit; `redundant_nil_init` may comment
-        // on the style choice, but this rule treats it as initialized.
+        // `redundant_nil_init` may flag this, but it counts as initialized.
         let diags = run("local x = nil\nprint(x)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -137,6 +80,12 @@ mod tests {
     #[test]
     fn ignores_write_then_read() {
         let diags = run("local x\nx = 1\nprint(x)");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_write_in_branch_before_read() {
+        let diags = run("local x\nif c then x = 1 end\nprint(x)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 

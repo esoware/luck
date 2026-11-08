@@ -1,9 +1,10 @@
-use luck_semantic::scope::ReferenceKind;
+use luck_semantic::ReferenceKind;
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::rule::{LintContext, Rule, WholeRule};
 
-pub struct SettingGlobal;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SettingGlobal;
 
 impl Rule for SettingGlobal {
     fn name(&self) -> &'static str {
@@ -18,19 +19,18 @@ impl Rule for SettingGlobal {
     fn description(&self) -> &'static str {
         "implicit global variable assignment (missing `local`?)"
     }
+}
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let semantic = ctx.semantic;
-        let mut diagnostics = Vec::new();
+impl WholeRule for SettingGlobal {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        let semantic = context.semantic;
+        let mut diags = Vec::new();
 
         for reference in semantic.scope_tree.unresolved_references() {
-            if !matches!(
-                reference.kind,
-                ReferenceKind::Write | ReferenceKind::ReadWrite
-            ) {
+            if !matches!(reference.kind, ReferenceKind::Write | ReferenceKind::ReadWrite) {
                 continue;
             }
-            // Reassigning a known global (e.g. `print = ...`) is weird but valid Lua.
+            // Writing a known global like `print` isn't a forgotten `local`.
             if semantic.is_known_global(&reference.name) {
                 continue;
             }
@@ -39,19 +39,47 @@ impl Rule for SettingGlobal {
                 continue;
             }
 
-            diagnostics.push(
+            diags.push(
                 LintDiagnostic::new(
                     "setting_global",
-                    format!(
-                        "setting global variable `{}` (missing `local`?)",
-                        reference.name
-                    ),
+                    format!("setting global variable `{}` (missing `local`?)", reference.name),
                     reference.span,
                 )
-                .with_help("add `local` before the first assignment".to_string()),
+                .with_help("add `local` before the first assignment"),
             );
         }
 
-        diagnostics
+        diags
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use luck_token::LuaVersion;
+
+    use super::*;
+    use crate::fixtures::run_rule;
+
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        run_rule(&SettingGlobal, source, LuaVersion::Lua54)
+    }
+
+    #[test]
+    fn flags_assignment_to_undeclared_name() {
+        let diags = run("counter = 1");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("`counter`"), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_known_global_and_discard() {
+        let diags = run("print = print\n_ = 1");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_local_assignment() {
+        let diags = run("local counter\ncounter = 1");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

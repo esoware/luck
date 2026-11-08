@@ -1,25 +1,23 @@
-use luck_ast::Expression;
-use luck_ast::expr::Var;
-use luck_ast::shared::Block;
-use luck_ast::stmt::{Assignment, GenericFor, LocalAssignment, NumericFor, Statement};
-use luck_ast::visitor::Visitor;
+use luck_ast::{
+    Assignment, Block, Expression, GenericFor, LocalAssignment, NumericFor, Statement, Var, Visitor,
+};
 use luck_semantic::SemanticAnalysis;
-use luck_token::UnOp;
-use luck_token::{LuaVersion, Span, TokenKind};
+use luck_token::{LuaVersion, Span, UnOp};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::call::is_global_call;
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::rule::{LintContext, Rule, WholeRule};
 
-/// Detects the two canonical shapes of "hand-rolled `table.clone`":
+/// Flags the two common hand-written table copies:
 ///
 /// 1. `local out = {}; for k, v in pairs(src) do out[k] = v end`
 /// 2. `local out = {}; for i = 1, #src do out[i] = src[i] end`
 ///
-/// The recommended replacement depends on the target's stdlib:
-/// `table.clone(src)` for Luau and Lua 5.5+, `table.move(src, 1, #src,
-/// 1, {})` for Lua 5.3+. Lua 5.1/5.2 have neither helper, so the rule
-/// stays silent there.
-pub struct ManualTableClone;
+/// The help suggests `table.clone(src)` on Luau and Lua 5.5, and
+/// `table.move(src, 1, #src, 1, {})` on Lua 5.3 and 5.4. Lua 5.1 and 5.2
+/// have neither, so the rule stays silent there.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ManualTableClone;
 
 impl Rule for ManualTableClone {
     fn name(&self) -> &'static str {
@@ -33,307 +31,264 @@ impl Rule for ManualTableClone {
         Severity::Warning
     }
     fn description(&self) -> &'static str {
-        "manual table copy; use table.clone or table.move"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let semantic = ctx.semantic;
-        let suggestion = match suggestion_for_version(semantic.version) {
-            Some(label) => label,
-            None => return Vec::new(),
-        };
-        let mut checker = CloneChecker {
-            semantic,
-            suggestion,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(ctx.block);
-        checker.diagnostics
+        "manual table copy; use `table.clone` or `table.move`"
     }
 }
 
-/// What stdlib helper to suggest for the given Lua target. Returns
-/// `None` on versions that have neither helper available (Lua 5.1/5.2).
-fn suggestion_for_version(version: LuaVersion) -> Option<SuggestionKind> {
-    match version {
-        // Luau and Lua 5.5 both expose `table.clone`.
-        LuaVersion::Luau | LuaVersion::Lua55 => Some(SuggestionKind::TableClone),
-        // Lua 5.3 and 5.4 have `table.move` but not `table.clone`.
-        LuaVersion::Lua53 | LuaVersion::Lua54 => Some(SuggestionKind::TableMove),
-        // Lua 5.1 and 5.2 lack both helpers, and the rule must never
-        // suggest something that will not compile.
-        LuaVersion::Lua51 | LuaVersion::Lua52 => None,
+impl WholeRule for ManualTableClone {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        let semantic = context.semantic;
+        let Some(suggestion) = Suggestion::for_version(semantic.version) else {
+            return Vec::new();
+        };
+        let mut checker = CloneChecker { semantic, suggestion, diags: Vec::new() };
+        checker.visit_block(context.block);
+        checker.diags
     }
 }
 
-/// Which idiomatic call to suggest in the diagnostic.
+/// The stdlib call the help suggests.
 #[derive(Debug, Clone, Copy)]
-enum SuggestionKind {
+enum Suggestion {
     TableClone,
     TableMove,
 }
 
-struct CloneChecker<'src> {
-    semantic: &'src SemanticAnalysis,
-    suggestion: SuggestionKind,
-    diagnostics: Vec<LintDiagnostic>,
+impl Suggestion {
+    /// `None` on Lua 5.1 and 5.2, which have neither.
+    const fn for_version(version: LuaVersion) -> Option<Self> {
+        match version {
+            LuaVersion::Luau | LuaVersion::Lua55 => Some(Self::TableClone),
+            LuaVersion::Lua53 | LuaVersion::Lua54 => Some(Self::TableMove),
+            LuaVersion::Lua51 | LuaVersion::Lua52 => None,
+        }
+    }
+
+    /// `src` stands for whichever table the loop copies from.
+    const fn help(self) -> &'static str {
+        match self {
+            Self::TableClone => "use `table.clone(src)` instead",
+            Self::TableMove => "use `table.move(src, 1, #src, 1, {})` instead",
+        }
+    }
+}
+
+struct CloneChecker<'document> {
+    semantic: &'document SemanticAnalysis,
+    suggestion: Suggestion,
+    diags: Vec<LintDiagnostic>,
 }
 
 impl CloneChecker<'_> {
-    fn scan_block(&mut self, block: &Block) {
-        // A clone shape is always two adjacent statements, a local table
-        // declaration followed by a copy loop.
+    fn check_block(&mut self, block: &Block) {
         for window in block.stmts.windows(2) {
-            let Statement::LocalAssignment(decl) = &window[0] else {
+            let [Statement::LocalAssignment(local), next] = window else {
                 continue;
             };
-            let Some(dest_name) = single_empty_table_local(decl) else {
+            let Some(destination) = single_empty_table_local(local) else {
                 continue;
             };
-            let next = &window[1];
-            let span = match next {
+            let loop_span = match next {
                 Statement::GenericFor(loop_node) => {
-                    if !is_generic_clone(loop_node, dest_name, self.semantic) {
+                    if !is_generic_clone(loop_node, destination, self.semantic) {
                         continue;
                     }
-                    // pairs() copies hash keys, but table.move copies only the
-                    // array part, so suggesting table.move here would change
-                    // behavior. Only table.clone targets get the hint.
-                    if matches!(self.suggestion, SuggestionKind::TableMove) {
+                    // `table.move` copies only the array part, so it can't
+                    // stand in for a `pairs` loop.
+                    if matches!(self.suggestion, Suggestion::TableMove) {
                         continue;
                     }
                     loop_node.span
                 }
                 Statement::NumericFor(loop_node) => {
-                    if !is_numeric_clone(loop_node, dest_name) {
+                    if !is_numeric_clone(loop_node, destination) {
                         continue;
                     }
                     loop_node.span
                 }
-                _ => continue,
+                Statement::Assignment(_)
+                | Statement::FunctionCall(_)
+                | Statement::DoBlock(_)
+                | Statement::WhileLoop(_)
+                | Statement::RepeatLoop(_)
+                | Statement::IfStatement(_)
+                | Statement::FunctionDecl(_)
+                | Statement::LocalFunction(_)
+                | Statement::LocalAssignment(_)
+                | Statement::EmptyStatement(_)
+                | Statement::Goto(_)
+                | Statement::Label(_)
+                | Statement::GlobalDeclaration(_)
+                | Statement::GlobalFunction(_)
+                | Statement::GlobalStar(_)
+                | Statement::Break(_)
+                | Statement::CompoundAssignment(_)
+                | Statement::TypeDeclaration(_)
+                | Statement::Error(_) => continue,
             };
-            self.diagnostics.push(
+            self.diags.push(
                 LintDiagnostic::new(
                     "manual_table_clone",
-                    "manual table copy can be replaced with a stdlib call".to_string(),
-                    Span::new(decl.span.start, span.end),
+                    "manual table copy can be replaced with a stdlib call",
+                    Span::new(local.span.start, loop_span.end),
                 )
-                .with_help(self.suggestion_text(dest_name)),
+                .with_help(self.suggestion.help()),
             );
-        }
-    }
-
-    fn suggestion_text(&self, _dest: &str) -> String {
-        // The diagnostic only knows the destination's name. The source
-        // table comes from the loop the caller already matched, so spell
-        // out the canonical replacement form per target instead.
-        match self.suggestion {
-            SuggestionKind::TableClone => "use table.clone(src) instead".to_string(),
-            SuggestionKind::TableMove => "use table.move(src, 1, #src, 1, {}) instead".to_string(),
         }
     }
 }
 
 impl<'ast> Visitor<'ast> for CloneChecker<'_> {
     fn visit_block(&mut self, block: &'ast Block) {
-        self.scan_block(block);
+        self.check_block(block);
         self.walk_block(block);
     }
 }
 
 /// If the local assignment is `local NAME = {}`, return `NAME`.
-fn single_empty_table_local(decl: &LocalAssignment) -> Option<&str> {
-    let names: Vec<_> = decl.names.iter().collect();
-    if names.len() != 1 {
-        return None;
-    }
-    let TokenKind::Identifier(name) = &names[0].name.kind else {
+fn single_empty_table_local(local: &LocalAssignment) -> Option<&str> {
+    let [attributed] = local.names.items.as_slice() else {
         return None;
     };
-    let exprs = decl.exprs.as_ref()?;
-    let values: Vec<&Expression> = exprs.iter().collect();
-    if values.len() != 1 {
-        return None;
-    }
-    let Expression::TableConstructor(table) = &values[0] else {
+    let name = attributed.name.identifier()?;
+    let [Expression::TableConstructor(table)] = local.exprs.as_ref()?.items.as_slice() else {
         return None;
     };
-    if !table.fields.is_empty() {
-        return None;
-    }
-    Some(name.as_str())
+    table.fields.is_empty().then_some(name)
 }
 
 /// Is this `for k, v in pairs(src) do out[k] = v end`?
-fn is_generic_clone(loop_node: &GenericFor, dest: &str, semantic: &SemanticAnalysis) -> bool {
-    let names: Vec<_> = loop_node.names.iter().collect();
-    if names.len() != 2 {
+fn is_generic_clone(
+    loop_node: &GenericFor,
+    destination: &str,
+    semantic: &SemanticAnalysis,
+) -> bool {
+    let [key, value] = loop_node.names.items.as_slice() else {
         return false;
-    }
-    let (TokenKind::Identifier(key_name), TokenKind::Identifier(val_name)) =
-        (&names[0].name.kind, &names[1].name.kind)
+    };
+    let (Some(key_name), Some(value_name)) = (key.name.identifier(), value.name.identifier())
     else {
         return false;
     };
 
-    let exprs: Vec<&Expression> = loop_node.exprs.iter().collect();
-    if exprs.len() != 1 {
+    let [iterator] = loop_node.exprs.items.as_slice() else {
         return false;
-    }
-    if !is_pairs_call(exprs[0], semantic) {
+    };
+    if !is_pairs_call(iterator, semantic) {
         return false;
     }
 
-    if loop_node.block.stmts.len() != 1 || loop_node.block.last_stmt.is_some() {
+    if loop_node.block.last_stmt.is_some() {
         return false;
     }
-    let Statement::Assignment(assign) = &loop_node.block.stmts[0] else {
+    let [Statement::Assignment(assignment)] = loop_node.block.stmts.as_slice() else {
         return false;
     };
-    is_index_copy_assignment(assign, dest, key_name.as_str(), val_name.as_str(), None)
+    is_index_copy_assignment(assignment, destination, key_name, value_name, None)
 }
 
 /// Is this `for i = 1, #src do out[i] = src[i] end`?
-fn is_numeric_clone(loop_node: &NumericFor, dest: &str) -> bool {
-    let TokenKind::Identifier(loop_var) = &loop_node.name.kind else {
+fn is_numeric_clone(loop_node: &NumericFor, destination: &str) -> bool {
+    let Some(loop_variable) = loop_node.name.identifier() else {
         return false;
     };
 
     if !is_number_one(&loop_node.start) {
         return false;
     }
-    let Some(src_name) = length_of_identifier(&loop_node.limit) else {
+    let Some(source_table) = length_of_identifier(&loop_node.limit) else {
         return false;
     };
-    // A step, if present, must also be 1. Only the simple case is modeled.
     if let Some(step) = &loop_node.step
         && !is_number_one(step)
     {
         return false;
     }
 
-    if loop_node.block.stmts.len() != 1 || loop_node.block.last_stmt.is_some() {
+    if loop_node.block.last_stmt.is_some() {
         return false;
     }
-    let Statement::Assignment(assign) = &loop_node.block.stmts[0] else {
+    let [Statement::Assignment(assignment)] = loop_node.block.stmts.as_slice() else {
         return false;
     };
     is_index_copy_assignment(
-        assign,
-        dest,
-        loop_var.as_str(),
-        loop_var.as_str(),
-        Some(src_name),
+        assignment,
+        destination,
+        loop_variable,
+        loop_variable,
+        Some(source_table),
     )
 }
 
-/// Recognize `dest[key] = val` (generic-for shape) or
-/// `dest[idx] = src[idx]` (numeric-for shape, with `src_for_index`
-/// supplied). The key and val identifier names come from the loop's
-/// declared variables.
+/// Matches `dest[key] = value`, or `dest[key] = src[key]` when
+/// `indexed_source` names `src`.
 fn is_index_copy_assignment(
-    assign: &Assignment,
-    dest: &str,
+    assignment: &Assignment,
+    destination: &str,
     key_name: &str,
-    val_name: &str,
-    src_for_index: Option<&str>,
+    value_name: &str,
+    indexed_source: Option<&str>,
 ) -> bool {
-    let targets: Vec<&Var> = assign.targets.iter().collect();
-    let values: Vec<&Expression> = assign.values.iter().collect();
-    if targets.len() != 1 || values.len() != 1 {
-        return false;
-    }
-
-    let Var::Index(index_expr) = targets[0] else {
+    let ([Var::Index(index_expr)], [value]) =
+        (assignment.targets.items.as_slice(), assignment.values.items.as_slice())
+    else {
         return false;
     };
-    if !is_named_prefix(&index_expr.prefix, dest) {
+    if !is_named_var(&index_expr.prefix, destination) {
         return false;
     }
     if !is_named_var(&index_expr.index, key_name) {
         return false;
     }
 
-    match src_for_index {
-        None => is_named_var(values[0], val_name),
-        Some(src) => match values[0] {
-            Expression::Var(Var::Index(rhs_index)) => {
-                is_named_prefix(&rhs_index.prefix, src) && is_named_var(&rhs_index.index, key_name)
-            }
-            _ => false,
+    indexed_source.map_or_else(
+        || is_named_var(value, value_name),
+        |source_table| {
+            matches!(value, Expression::Var(Var::Index(value_index))
+                if is_named_var(&value_index.prefix, source_table)
+                    && is_named_var(&value_index.index, key_name))
         },
-    }
+    )
 }
 
-/// Match `pairs(x)` or `ipairs(x)`; anything else disqualifies.
+/// Matches a call to the global `pairs` or `ipairs`. A shadowed one is a
+/// user iterator, not a table walk.
 fn is_pairs_call(expr: &Expression, semantic: &SemanticAnalysis) -> bool {
     let Expression::FunctionCall(call) = expr else {
         return false;
     };
-    if call.method.is_some() {
-        return false;
-    }
-    let Expression::Var(var) = &call.callee else {
-        return false;
-    };
-    let Var::Name(token) = var else {
-        return false;
-    };
-    let TokenKind::Identifier(name) = &token.kind else {
-        return false;
-    };
-    // Shadowed pairs/ipairs is a user iterator, not a table walk.
-    matches!(name.as_str(), "pairs" | "ipairs")
-        && !semantic.resolves_to_local(name.as_str(), token.span)
+    is_global_call(call, "pairs", semantic) || is_global_call(call, "ipairs", semantic)
 }
 
 /// Recognize `#identifier` and return that identifier.
 fn length_of_identifier(expr: &Expression) -> Option<&str> {
-    let Expression::UnaryOp(unop) = expr else {
+    let Expression::UnaryOp(unary) = expr else {
         return None;
     };
-    if unop.op != UnOp::Len {
+    if unary.op != UnOp::Len {
         return None;
     }
-    let Expression::Var(var) = &unop.operand else {
+    let Expression::Var(Var::Name(token)) = &unary.operand else {
         return None;
     };
-    let Var::Name(token) = var else {
-        return None;
-    };
-    let TokenKind::Identifier(name) = &token.kind else {
-        return None;
-    };
-    Some(name.as_str())
+    token.identifier()
 }
 
 fn is_number_one(expr: &Expression) -> bool {
     matches!(expr, Expression::Number(literal) if literal.text.parse::<f64>() == Ok(1.0))
 }
 
-fn is_named_prefix(expr: &Expression, name: &str) -> bool {
-    is_named_var(expr, name)
-}
-
 fn is_named_var(expr: &Expression, name: &str) -> bool {
-    let Expression::Var(var) = expr else {
-        return false;
-    };
-    let Var::Name(token) = var else {
-        return false;
-    };
-    let TokenKind::Identifier(token_name) = &token.kind else {
-        return false;
-    };
-    token_name.as_str() == name
+    matches!(expr, Expression::Var(Var::Name(token)) if token.identifier() == Some(name))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::run_rule;
 
     fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&ManualTableClone, source, version)
+        run_rule(&ManualTableClone, source, version)
     }
 
     #[test]
@@ -342,11 +297,7 @@ mod tests {
         let diags = run(source, LuaVersion::Luau);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(
-            diags[0]
-                .help
-                .as_deref()
-                .unwrap_or("")
-                .contains("table.clone"),
+            diags[0].help.as_deref().unwrap_or("").contains("table.clone"),
             "help: {:?}",
             diags[0].help
         );
@@ -358,14 +309,18 @@ mod tests {
         let diags = run(source, LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(
-            diags[0]
-                .help
-                .as_deref()
-                .unwrap_or("")
-                .contains("table.move"),
+            diags[0].help.as_deref().unwrap_or("").contains("table.move"),
             "help: {:?}",
             diags[0].help
         );
+    }
+
+    #[test]
+    fn ignores_pairs_copy_on_lua54() {
+        // `table.move` copies only the array part.
+        let source = "local out = {}\nfor k, v in pairs(src) do out[k] = v end";
+        let diags = run(source, LuaVersion::Lua54);
+        assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
@@ -395,6 +350,13 @@ mod tests {
         // The assignment writes to a different table than the one
         // declared above the loop.
         let source = "local out = {}\nfor k, v in pairs(src) do other[k] = v end";
+        let diags = run(source, LuaVersion::Luau);
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_shadowed_pairs() {
+        let source = "local pairs = next\nlocal out = {}\nfor k, v in pairs(src) do out[k] = v end";
         let diags = run(source, LuaVersion::Luau);
         assert!(diags.is_empty(), "got: {diags:?}");
     }

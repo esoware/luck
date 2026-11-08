@@ -1,12 +1,13 @@
 //! Per-variant node discriminants and the borrowed node view used by the
-//! flat node table (`luck_semantic`) and the linter's bucketed dispatch.
+//! linter's flat node table and bucketed dispatch.
 
 use crate::expr::Expression;
 use crate::stmt::{LastStatement, Statement};
 
-/// One variant per `Statement`, `LastStatement`, and `Expression`
-/// variant. `of_stmt`, `of_last_stmt`, and `of_expr` are exhaustive, so
-/// adding an AST variant without a `NodeType` fails to compile.
+/// One variant per `Statement`, `LastStatement`, and `Expression` variant.
+///
+/// `of_stmt`, `of_last_stmt`, and `of_expr` match exhaustively, so a new AST
+/// variant doesn't compile until it has a `NodeType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum NodeType {
@@ -59,73 +60,94 @@ pub enum NodeType {
 }
 
 impl NodeType {
-    pub const COUNT: usize = NodeType::ErrorLastStmt as usize + 1;
+    pub const COUNT: usize = Self::ErrorLastStmt.index() + 1;
 
+    /// Discriminant value, for callers indexing bucket arrays.
     #[must_use]
-    pub fn of_stmt(stmt: &Statement) -> Self {
+    #[expect(
+        clippy::as_conversions,
+        reason = "a const fn has no other way to read a fieldless enum discriminant"
+    )]
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
+    const fn of_stmt(stmt: &Statement) -> Self {
         match stmt {
-            Statement::Assignment(_) => NodeType::Assignment,
-            Statement::FunctionCall(_) => NodeType::FunctionCallStmt,
-            Statement::DoBlock(_) => NodeType::DoBlock,
-            Statement::WhileLoop(_) => NodeType::WhileLoop,
-            Statement::RepeatLoop(_) => NodeType::RepeatLoop,
-            Statement::IfStatement(_) => NodeType::IfStatement,
-            Statement::NumericFor(_) => NodeType::NumericFor,
-            Statement::GenericFor(_) => NodeType::GenericFor,
-            Statement::FunctionDecl(_) => NodeType::FunctionDecl,
-            Statement::LocalFunction(_) => NodeType::LocalFunction,
-            Statement::LocalAssignment(_) => NodeType::LocalAssignment,
-            Statement::EmptyStatement(_) => NodeType::EmptyStatement,
-            Statement::Goto(_) => NodeType::Goto,
-            Statement::Label(_) => NodeType::Label,
-            Statement::GlobalDeclaration(_) => NodeType::GlobalDeclaration,
-            Statement::GlobalFunction(_) => NodeType::GlobalFunction,
-            Statement::GlobalStar(_) => NodeType::GlobalStar,
-            Statement::Break(_) => NodeType::Break,
-            Statement::CompoundAssignment(_) => NodeType::CompoundAssignment,
-            Statement::TypeDeclaration(_) => NodeType::TypeDeclaration,
-            Statement::Error(_) => NodeType::ErrorStmt,
+            Statement::Assignment(_) => Self::Assignment,
+            Statement::FunctionCall(_) => Self::FunctionCallStmt,
+            Statement::DoBlock(_) => Self::DoBlock,
+            Statement::WhileLoop(_) => Self::WhileLoop,
+            Statement::RepeatLoop(_) => Self::RepeatLoop,
+            Statement::IfStatement(_) => Self::IfStatement,
+            Statement::NumericFor(_) => Self::NumericFor,
+            Statement::GenericFor(_) => Self::GenericFor,
+            Statement::FunctionDecl(_) => Self::FunctionDecl,
+            Statement::LocalFunction(_) => Self::LocalFunction,
+            Statement::LocalAssignment(_) => Self::LocalAssignment,
+            Statement::EmptyStatement(_) => Self::EmptyStatement,
+            // Lua 5.2+
+            Statement::Goto(_) => Self::Goto,
+            // Lua 5.2+
+            Statement::Label(_) => Self::Label,
+            // Lua 5.5
+            Statement::GlobalDeclaration(_) => Self::GlobalDeclaration,
+            // Lua 5.5
+            Statement::GlobalFunction(_) => Self::GlobalFunction,
+            // Lua 5.5
+            Statement::GlobalStar(_) => Self::GlobalStar,
+            // Lua 5.2+
+            Statement::Break(_) => Self::Break,
+            // Luau
+            Statement::CompoundAssignment(_) => Self::CompoundAssignment,
+            // Luau
+            Statement::TypeDeclaration(_) => Self::TypeDeclaration,
+            Statement::Error(_) => Self::ErrorStmt,
         }
     }
 
-    #[must_use]
-    pub fn of_last_stmt(last: &LastStatement) -> Self {
+    const fn of_last_stmt(last: &LastStatement) -> Self {
         match last {
-            LastStatement::Return(_) => NodeType::Return,
-            LastStatement::Break(_) => NodeType::LastBreak,
-            LastStatement::Continue(_) => NodeType::LastContinue,
-            LastStatement::Error(_) => NodeType::ErrorLastStmt,
+            LastStatement::Return(_) => Self::Return,
+            LastStatement::Break(_) => Self::LastBreak,
+            // Luau
+            LastStatement::Continue(_) => Self::LastContinue,
+            LastStatement::Error(_) => Self::ErrorLastStmt,
         }
     }
 
-    #[must_use]
-    pub fn of_expr(expr: &Expression) -> Self {
+    const fn of_expr(expr: &Expression) -> Self {
         match expr {
-            Expression::Nil(_) => NodeType::Nil,
-            Expression::False(_) => NodeType::False,
-            Expression::True(_) => NodeType::True,
-            Expression::Number(_) => NodeType::Number,
-            Expression::Integer(_) => NodeType::Integer, // Luau
-            Expression::StringLiteral(_) => NodeType::StringLiteral,
-            Expression::VarArg(_) => NodeType::VarArg,
-            Expression::FunctionDef(_) => NodeType::FunctionDef,
-            Expression::Var(_) => NodeType::Var,
-            Expression::FunctionCall(_) => NodeType::FunctionCallExpr,
-            Expression::Parenthesized(_) => NodeType::Parenthesized,
-            Expression::TableConstructor(_) => NodeType::TableConstructor,
-            Expression::BinaryOp(_) => NodeType::BinaryOp,
-            Expression::UnaryOp(_) => NodeType::UnaryOp,
-            Expression::IfExpression(_) => NodeType::IfExpression,
-            Expression::InterpolatedString(_) => NodeType::InterpolatedString,
-            Expression::TypeCast(_) => NodeType::TypeCast,
-            Expression::TypeInstantiation(_) => NodeType::TypeInstantiation, // Luau
-            Expression::Error(_) => NodeType::ErrorExpr,
+            Expression::Nil(_) => Self::Nil,
+            Expression::False(_) => Self::False,
+            Expression::True(_) => Self::True,
+            Expression::Number(_) => Self::Number,
+            // Luau
+            Expression::Integer(_) => Self::Integer,
+            Expression::StringLiteral(_) => Self::StringLiteral,
+            Expression::VarArg(_) => Self::VarArg,
+            Expression::FunctionDef(_) => Self::FunctionDef,
+            Expression::Var(_) => Self::Var,
+            Expression::FunctionCall(_) => Self::FunctionCallExpr,
+            Expression::Parenthesized(_) => Self::Parenthesized,
+            Expression::TableConstructor(_) => Self::TableConstructor,
+            Expression::BinaryOp(_) => Self::BinaryOp,
+            Expression::UnaryOp(_) => Self::UnaryOp,
+            // Luau
+            Expression::IfExpression(_) => Self::IfExpression,
+            // Luau
+            Expression::InterpolatedString(_) => Self::InterpolatedString,
+            // Luau
+            Expression::TypeCast(_) => Self::TypeCast,
+            // Luau
+            Expression::TypeInstantiation(_) => Self::TypeInstantiation,
+            Expression::Error(_) => Self::ErrorExpr,
         }
     }
 }
 
 /// Borrowed view of one AST node, as dispatched to lint rules.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum NodeKind<'ast> {
     Statement(&'ast Statement),
     LastStatement(&'ast LastStatement),
@@ -134,7 +156,7 @@ pub enum NodeKind<'ast> {
 
 impl NodeKind<'_> {
     #[must_use]
-    pub fn node_type(self) -> NodeType {
+    pub const fn node_type(self) -> NodeType {
         match self {
             NodeKind::Statement(stmt) => NodeType::of_stmt(stmt),
             NodeKind::LastStatement(last) => NodeType::of_last_stmt(last),
@@ -143,61 +165,47 @@ impl NodeKind<'_> {
     }
 }
 
-const WORD_COUNT: usize = NodeType::COUNT.div_ceil(64);
+const _: () = assert!(
+    NodeType::ErrorLastStmt.index() == NodeType::COUNT - 1,
+    "ErrorLastStmt must stay the last NodeType"
+);
+const _: () = assert!(NodeType::COUNT <= 64, "NodeTypeSet holds one bit per NodeType in a u64");
 
-const _: () = assert!(NodeType::ErrorLastStmt as usize == NodeType::COUNT - 1);
-const _: () = assert!(NodeType::COUNT <= WORD_COUNT * 64);
-
-/// Fixed-size set of [`NodeType`]s, const-constructible so rules can
-/// declare the node types they run on in a `static`.
+/// Fixed-size set of [`NodeType`]s, const-constructible so lint rules can
+/// declare the node types they run on as a constant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct AstTypesBitset([u64; WORD_COUNT]);
+pub struct NodeTypeSet(u64);
 
-impl AstTypesBitset {
+impl NodeTypeSet {
     #[must_use]
     pub const fn new() -> Self {
-        Self([0; WORD_COUNT])
+        Self(0)
     }
 
     #[must_use]
     pub const fn from_types(types: &[NodeType]) -> Self {
-        let mut bitset = Self::new();
-        let mut i = 0;
-        while i < types.len() {
-            bitset.set(types[i]);
-            i += 1;
+        let mut set = Self::new();
+        let mut remaining = types;
+        while let [first, rest @ ..] = remaining {
+            set.insert(*first);
+            remaining = rest;
         }
-        bitset
+        set
     }
 
-    const fn index_and_mask(ty: NodeType) -> (usize, u64) {
-        (ty as usize / 64, 1u64 << (ty as usize % 64))
+    /// Membership by [`NodeType::index`], for callers walking bucket arrays.
+    #[must_use]
+    pub const fn has_index(self, type_index: usize) -> bool {
+        self.0 & (1u64 << type_index) != 0
+    }
+
+    pub const fn insert(&mut self, node_type: NodeType) {
+        self.0 |= 1u64 << node_type.index();
     }
 
     #[must_use]
-    pub const fn has(&self, ty: NodeType) -> bool {
-        let (index, mask) = Self::index_and_mask(ty);
-        (self.0[index] & mask) != 0
-    }
-
-    /// `has` by discriminant value, for callers indexing bucket arrays.
-    #[must_use]
-    pub const fn has_index(&self, type_index: usize) -> bool {
-        (self.0[type_index / 64] & (1u64 << (type_index % 64))) != 0
-    }
-
-    pub const fn set(&mut self, ty: NodeType) {
-        let (index, mask) = Self::index_and_mask(ty);
-        self.0[index] |= mask;
-    }
-
-    #[must_use]
-    pub fn intersects(&self, other: &Self) -> bool {
-        let mut intersection = 0;
-        for (a, b) in self.0.iter().zip(other.0.iter()) {
-            intersection |= a & b;
-        }
-        intersection != 0
+    pub const fn intersects(self, other: Self) -> bool {
+        self.0 & other.0 != 0
     }
 }
 
@@ -206,15 +214,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bitset_set_and_intersect() {
-        let binops = AstTypesBitset::from_types(&[NodeType::BinaryOp]);
-        assert!(binops.has(NodeType::BinaryOp));
-        assert!(!binops.has(NodeType::UnaryOp));
+    fn node_type_set_tracks_membership_and_overlap() {
+        let binary_ops = NodeTypeSet::from_types(&[NodeType::BinaryOp]);
+        assert!(binary_ops.has_index(NodeType::BinaryOp.index()));
+        assert!(!binary_ops.has_index(NodeType::UnaryOp.index()));
 
-        let mut present = AstTypesBitset::new();
-        present.set(NodeType::ErrorExpr);
-        assert!(!present.intersects(&binops));
-        present.set(NodeType::BinaryOp);
-        assert!(present.intersects(&binops));
+        let mut present = NodeTypeSet::new();
+        present.insert(NodeType::ErrorExpr);
+        assert!(!present.intersects(binary_ops));
+        present.insert(NodeType::BinaryOp);
+        assert!(present.intersects(binary_ops));
     }
 }

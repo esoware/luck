@@ -1,43 +1,31 @@
-//! Selection ranges. For each requested position, return the chain of
-//! enclosing AST node spans so the editor can expand selection in
-//! semantic increments.
+//! For each requested position, return the chain of enclosing AST node spans
+//! so the editor can expand selection in semantic increments.
 
-use luck_ast::expr::Expression;
-use luck_ast::shared::Block;
-use luck_ast::stmt::Statement;
-use luck_ast::visitor::Visitor;
+use luck_ast::{Expression, Statement, Visitor};
 use luck_token::Span;
-use tower_lsp::lsp_types::{Position, SelectionRange, SelectionRangeParams};
+use tower_lsp::lsp_types::{Position, SelectionRange};
 
-use crate::backend::DocumentState;
+use crate::document::DocumentState;
+use crate::providers::cursor::touches;
 
-#[must_use]
-pub fn selection_ranges(doc: &DocumentState, params: &SelectionRangeParams) -> Vec<SelectionRange> {
-    params
-        .positions
-        .iter()
-        .map(|pos| selection_for(doc, *pos))
-        .collect()
+pub(crate) fn selection_ranges(
+    document: &DocumentState,
+    positions: &[Position],
+) -> Vec<SelectionRange> {
+    positions.iter().map(|&position| selection_for(document, position)).collect()
 }
 
-fn selection_for(doc: &DocumentState, position: Position) -> SelectionRange {
-    let offset = doc.line_index.offset(&doc.text, position);
-    let mut collector = SpanStack {
-        offset,
-        stack: Vec::new(),
-    };
-    collector.visit_block(&doc.parsed.block);
+fn selection_for(document: &DocumentState, position: Position) -> SelectionRange {
+    let offset = document.offset(position);
+    let mut collector = SpanStack { offset, stack: Vec::new() };
+    collector.visit_block(&document.parsed.block);
 
     let mut chain: Option<SelectionRange> = None;
-    for span in collector.stack.iter().rev() {
-        let range = doc.line_index.range(&doc.text, span.start, span.end);
-        chain = Some(SelectionRange {
-            range,
-            parent: chain.map(Box::new),
-        });
+    for &span in collector.stack.iter().rev() {
+        chain = Some(SelectionRange { range: document.range(span), parent: chain.map(Box::new) });
     }
-    chain.unwrap_or(SelectionRange {
-        range: doc.line_index.range(&doc.text, offset, offset),
+    chain.unwrap_or_else(|| SelectionRange {
+        range: document.range(Span::new(offset, offset)),
         parent: None,
     })
 }
@@ -49,7 +37,7 @@ struct SpanStack {
 
 impl SpanStack {
     fn record(&mut self, span: Span) {
-        if self.offset >= span.start && self.offset <= span.end {
+        if touches(span, self.offset) {
             self.stack.push(span);
         }
     }
@@ -57,18 +45,12 @@ impl SpanStack {
 
 impl<'ast> Visitor<'ast> for SpanStack {
     fn visit_statement(&mut self, stmt: &'ast Statement) {
-        let span = stmt.span();
-        self.record(span);
+        self.record(stmt.span());
         self.walk_statement(stmt);
     }
 
     fn visit_expression(&mut self, expr: &'ast Expression) {
-        let span = expr.span();
-        self.record(span);
+        self.record(expr.span());
         self.walk_expression(expr);
-    }
-
-    fn visit_block(&mut self, block: &'ast Block) {
-        self.walk_block(block);
     }
 }

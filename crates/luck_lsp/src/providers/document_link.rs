@@ -1,22 +1,23 @@
-//! Document links. Every `require("path")` literal string becomes a
-//! clickable link resolved through [`luck_resolver`], the same resolver the
-//! bundler uses, so links honor Lua template search paths, Luau relative and
-//! `@alias` imports, and the `init` parent-parent rule identically.
+//! Document links.
+//!
+//! A `require("path")` string becomes a clickable link resolved through
+//! [`luck_resolver`], the resolver the bundler uses, so links follow Lua
+//! template search paths, Luau relative and `@alias` imports, and the `init`
+//! parent-parent rule exactly as a build does.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Var};
-use luck_ast::visitor::Visitor;
-use luck_resolver::{ResolveRequest, Resolver, normalize_path_str};
-use luck_token::TokenKind;
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Var, Visitor};
+use luck_core::normalize_path;
+use luck_resolver::{ResolveRequest, Resolver};
+use luck_token::short_string_body;
 use tower_lsp::lsp_types::{DocumentLink, Url};
 
-use crate::backend::DocumentState;
-use crate::config::ProjectSettings;
+use crate::document::DocumentState;
+use crate::settings::ProjectSettings;
 
-#[must_use]
-pub fn document_links(
-    doc: &DocumentState,
+pub(crate) fn document_links(
+    document: &DocumentState,
     document_uri: &Url,
     settings: &ProjectSettings,
 ) -> Vec<DocumentLink> {
@@ -27,28 +28,28 @@ pub fn document_links(
     // back to the requiring file's own directory so bare siblings still link.
     let project_root = settings
         .root
-        .clone()
-        .or_else(|| document_path.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."));
+        .as_deref()
+        .or_else(|| document_path.parent())
+        .unwrap_or_else(|| Path::new("."));
     let mut collector = LinkCollector {
-        doc,
-        from_file: normalize_path_str(&document_path),
-        project_root,
-        search_paths: &settings.search_paths,
-        resolver: Resolver::new(),
-        out: Vec::new(),
+        document,
+        from_file: normalize_path(&document_path),
+        resolver: Resolver::new(
+            document.target.lua_version(),
+            &settings.search_paths,
+            project_root,
+        ),
+        links: Vec::new(),
     };
-    collector.visit_block(&doc.parsed.block);
-    collector.out
+    collector.visit_block(&document.parsed.block);
+    collector.links
 }
 
-struct LinkCollector<'a> {
-    doc: &'a DocumentState,
+struct LinkCollector<'document> {
+    document: &'document DocumentState,
     from_file: String,
-    project_root: PathBuf,
-    search_paths: &'a [String],
-    resolver: Resolver,
-    out: Vec<DocumentLink>,
+    resolver: Resolver<'document>,
+    links: Vec<DocumentLink>,
 }
 
 impl<'ast> Visitor<'ast> for LinkCollector<'_> {
@@ -68,94 +69,68 @@ impl LinkCollector<'_> {
         let Expression::Var(Var::Name(token)) = &call.callee else {
             return;
         };
-        let TokenKind::Identifier(name) = &token.kind else {
-            return;
-        };
-        if name.as_str() != "require" {
+        if token.identifier() != Some("require") {
             return;
         }
-
         let literal = match &call.args {
-            FunctionArgs::Parenthesized { args, .. } => match args.first() {
-                Some(Expression::StringLiteral(literal)) => literal,
-                _ => return,
-            },
+            FunctionArgs::Parenthesized { args, .. } => {
+                let Some(Expression::StringLiteral(literal)) = args.first() else {
+                    return;
+                };
+                literal
+            }
             FunctionArgs::StringLiteral(literal) => literal,
             FunctionArgs::TableConstructor(_) => return,
         };
-        self.record_string(literal);
-    }
 
-    fn record_string(&mut self, literal: &luck_ast::expr::Literal) {
-        let raw = &self.doc.text[literal.span.start as usize..literal.span.end as usize];
-        let module = trim_string_literal(raw);
-        if module.is_empty() {
+        let Some(module) = short_string_body(&literal.text).filter(|module| !module.is_empty())
+        else {
             return;
-        }
-        let resolved = self.resolver.resolve(&ResolveRequest {
+        };
+        let Ok(resolved) = self.resolver.resolve(&ResolveRequest {
             module,
             from_file: &self.from_file,
-            target: self.doc.target,
-            search_paths: self.search_paths,
-            project_root: &self.project_root,
             span: literal.span,
-        });
-        let Ok(resolved) = resolved else {
+        }) else {
             return;
         };
         let Ok(target) = Url::from_file_path(&resolved.path) else {
             return;
         };
-        let range = self
-            .doc
-            .line_index
-            .range(&self.doc.text, literal.span.start, literal.span.end);
-        self.out.push(DocumentLink {
-            range,
+        self.links.push(DocumentLink {
+            range: self.document.range(literal.span),
             target: Some(target),
-            tooltip: Some(module.to_string()),
+            tooltip: Some(module.to_owned()),
             data: None,
         });
     }
 }
 
-fn trim_string_literal(raw: &str) -> &str {
-    let bytes = raw.as_bytes();
-    if bytes.len() >= 2 {
-        match bytes[0] {
-            b'"' | b'\'' | b'`' => return &raw[1..raw.len() - 1],
-            _ => {}
-        }
-    }
-    raw
-}
-
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use luck_core::LuaTarget;
 
     use super::*;
 
     /// The unrooted fallback, driven from settings the test owns. Going
-    /// through `ConfigCache` instead would let discovery walk above the
+    /// through `SettingsCache` instead would let discovery walk above the
     /// temp directory and pick up whatever `luck.json` sits there.
     #[test]
     fn bare_sibling_resolves_against_the_requiring_file() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
-        let main_path = dir.path().join("main.lua");
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
+        let main_path = directory.path().join("main.lua");
         let text = "local foo = require(\"foo\")\n";
-        std::fs::write(&main_path, text).expect("write main.lua");
+        fs::write(&main_path, text).expect("write main.lua");
         let uri = Url::from_file_path(&main_path).expect("file path URI");
 
         let settings = ProjectSettings::default();
-        assert!(
-            settings.root.is_none(),
-            "the fallback needs no project root"
-        );
-        let doc = DocumentState::new(text.to_string(), 1, LuaTarget::Lua54);
+        assert!(settings.root.is_none(), "the fallback needs no project root");
+        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
 
-        let links = document_links(&doc, &uri, &settings);
+        let links = document_links(&document, &uri, &settings);
         assert_eq!(links.len(), 1, "{links:?}");
         let target = links[0].target.as_ref().expect("link target");
         assert!(target.path().ends_with("foo.lua"), "{target}");

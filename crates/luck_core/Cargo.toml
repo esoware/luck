@@ -1,25 +1,30 @@
 [package]
-name = "luck_core"
-version.workspace = true
-authors.workspace = true
-categories.workspace = true
-description = "Shared types, configuration, and diagnostics for the luck toolchain"
-edition.workspace = true
-homepage.workspace = true
-keywords.workspace = true
-license.workspace = true
-repository.workspace = true
+name                   = "luck_core"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "Shared types, configuration, and diagnostics for the luck toolchain"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
-luck_token.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-schemars.workspace = true
-json5.workspace = true
-globset.workspace = true
-ec4rs.workspace = true
-simdutf8.workspace = true
+luck_token = { workspace = true }
+
+ec4rs      = { workspace = true }
+globset    = { workspace = true }
+json5      = { workspace = true }
+rustc-hash = { workspace = true }
+schemars   = { workspace = true }
+serde      = { workspace = true }
+simdutf8   = { workspace = true }
 
 [dev-dependencies]
-tempfile.workspace = true
+serde_json = { workspace = true }
+tempfile   = { workspace = true }

@@ -1,10 +1,11 @@
 # Lua 5.2 standard library, verified against the 5.2 reference manual
 # (https://www.lua.org/manual/5.2/). Notable vs 5.1:
-#   - getfenv, setfenv, module, newproxy gone; loadstring kept as a
+#   - getfenv, setfenv, gcinfo, newproxy, and module dropped (5.2
+#     deprecates module; the rest are gone); loadstring kept as a
 #     deprecated compat alias for load
 #   - unpack, math.log10, math.mod, string.gfind, table.getn,
-#     table.foreach, table.foreachi kept as deprecated compat entries
-#     (their replacements exist in 5.2 itself)
+#     table.maxn, table.foreach, table.foreachi kept as deprecated compat
+#     entries (their replacements exist in 5.2 itself)
 #   - rawlen, bit32, table.pack, table.unpack, the debug uservalue and
 #     upvalue functions added
 #   - load/loadfile/xpcall/os.exit/io.lines/string.rep/math.log grow
@@ -87,13 +88,13 @@ params = [
   { kind = "any", required = false },
 ]
 
-# Removed in 5.2, but Lua kept shipping it as a backwards-compat alias, so it
-# stays visible here with a deprecation pointing at `load`.
+# Deprecated in 5.2 but still shipped as a compat alias, so it stays here
+# with a fix that rewrites it to load.
 [globals.loadstring]
 kind = "function"
 min_args = 1
 max_args = 2
-deprecated = { message = "removed in Lua 5.2+; use 'load' instead", replace_template = "load(%1)" }
+deprecated = { message = "deprecated since Lua 5.2; use 'load' instead", replace_template = "load(%1)" }
 params = [
   { kind = "string" },
   { kind = "string", required = false },
@@ -184,7 +185,7 @@ min_args = 2
 max_args = 2
 params = [
   { kind = "table" },
-  { kind = "table", accepts_nil = true },
+  { kind = "table" },
 ]
 
 [globals.tonumber]
@@ -443,7 +444,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 must_use = true
-deprecated = { message = "removed in Lua 5.2; use '#' length operator instead", replace_template = "#%1" }
+deprecated = { message = "deprecated since Lua 5.2; use the '#' length operator instead", replace_template = "#%1" }
 params = [{ kind = "table" }]
 
 [globals.table.members.pack]
@@ -646,7 +647,8 @@ params = [
   { kind = "vararg", required = false },
 ]
 
-# 5.0 relic kept by LUA_COMPAT_MOD builds; '%' replaced it.
+# Lua 5.0's name for math.fmod. 5.2 doesn't ship it, but old code still
+# calls it, so it stays with a deprecation pointing at '%'.
 [globals.math.members.mod]
 kind = "function"
 min_args = 2
@@ -849,7 +851,7 @@ is_pure = true
 must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
-# io, os, coroutine, debug, and package match 5.1 apart from small deltas.
+# ---- io / os / coroutine / debug / package ----
 
 [globals.io]
 kind = "namespace"
@@ -865,9 +867,8 @@ kind = "function"
 min_args = 0
 max_args = 0
 
-# With an argument this sets the default input file rather than only
-# returning one; a single entry cannot express both, so the return shape
-# reflects the getter form (the setter also returns the handle in PUC).
+# With an argument this also sets the default input file. PUC Lua returns
+# the current input file either way, so returns = "file" fits both forms.
 [globals.io.members.input]
 kind = "function"
 min_args = 0
@@ -951,9 +952,8 @@ returns = "file"
 
 # ---- file handle shape (io.open and friends) ----
 
-# Read formats ("*l", "*L", "*n", "*a", or a byte count) are variadic
-# and mix string constants with numbers, so they stay a plain vararg - a
-# constant set would reject numeric counts.
+# Read formats ("*l", "*L", "*n", "*a", or a byte count) stay a plain
+# vararg, since a constant set would reject numeric counts.
 [shapes.file.members.read]
 kind = "function"
 method = true
@@ -1312,8 +1312,8 @@ params = [
   { kind = "string", required = false },
 ]
 
-# The environment table (Lua 5.2+). Assignable: `local _ENV = ...` is the
-# sanctioned sandboxing idiom.
+# The chunk's environment (Lua 5.2+). Writable, since assigning it
+# (`_ENV = sandbox`) is the standard sandboxing idiom.
 [globals._ENV]
 kind = "property"
 read_only = false

@@ -1,14 +1,21 @@
-//! Output and diagnostic plumbing shared by the command handlers: writing
-//! results to a file or stdout, reading stdin, and building the ariadne file
-//! cache from a set of diagnostics.
+//! Helpers shared by the command handlers: error reporting, output and stdin
+//! I/O, and size display.
 
-use crate::render::{FileCache, render_diagnostics};
-use crate::{EXIT_FAILURE, EXIT_USAGE};
-use luck_core::diagnostics::Diagnostic;
+use core::fmt::Display;
 use std::path::{Path, PathBuf};
-use std::process;
-use std::process::ExitCode;
+use std::{env, fs, io};
 
+use luck_core::Diagnostic;
+
+use crate::exit::Exit;
+use crate::render::{print_diags, print_document_diags};
+
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
+    clippy::float_arithmetic,
+    reason = "display math, and its exact rounding is part of the output"
+)]
 pub(crate) fn format_size(bytes: usize) -> String {
     if bytes >= 1024 * 1024 {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
@@ -19,73 +26,80 @@ pub(crate) fn format_size(bytes: usize) -> String {
     }
 }
 
-/// Group size for the parallel drivers: a few batches per thread keeps
-/// the pool saturated while bounding how many rendered outcomes are held
-/// in memory at once.
-pub(crate) fn parallel_chunk_size() -> usize {
-    rayon::current_num_threads() * 4
+fn report_error(message: impl Display, exit: Exit) -> Exit {
+    eprintln!("Error: {message}");
+    exit
 }
 
-pub(crate) fn current_dir_or_exit() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|error| {
-        eprintln!("Error: failed to get current directory: {error}");
-        process::exit(EXIT_USAGE as i32);
-    })
+/// Report a bad argument or config and return [`Exit::Usage`].
+pub(crate) fn usage_error(message: impl Display) -> Exit {
+    report_error(message, Exit::Usage)
 }
 
-pub(crate) fn write_output(output: Option<&str>, content: &str) {
-    if let Some(path) = output {
-        write_output_file(&PathBuf::from(path), content);
-    } else {
-        print!("{content}");
+/// Report an operation that ran and failed, and return [`Exit::Failure`].
+pub(crate) fn operation_error(message: impl Display) -> Exit {
+    report_error(message, Exit::Failure)
+}
+
+/// # Errors
+///
+/// Reports the failure and returns [`Exit::Usage`] when the working
+/// directory can't be read.
+pub(crate) fn current_directory() -> Result<PathBuf, Exit> {
+    env::current_dir()
+        .map_err(|error| usage_error(format!("failed to get current directory: {error}")))
+}
+
+/// Writes `content` to the `output_path` file, or to stdout without one.
+///
+/// # Errors
+///
+/// Reports the failure and returns [`Exit::Failure`] when `output_path` can't
+/// be written.
+pub(crate) fn write_output(output_path: Option<&str>, content: &str) -> Result<(), Exit> {
+    if let Some(path) = output_path {
+        return write_output_file(Path::new(path), content);
     }
+    print!("{content}");
+    Ok(())
 }
 
-pub(crate) fn write_output_file(path: &Path, content: &str) {
+/// # Errors
+///
+/// Reports the failure and returns [`Exit::Failure`] when `path` or its
+/// parent directory can't be written.
+pub(crate) fn write_output_file(path: &Path, content: &str) -> Result<(), Exit> {
     if let Some(parent) = path.parent()
         && !parent.exists()
-        && let Err(error) = std::fs::create_dir_all(parent)
     {
-        eprintln!("Error: failed to create output directory: {error}");
-        process::exit(EXIT_FAILURE as i32);
+        fs::create_dir_all(parent).map_err(|error| {
+            operation_error(format!("failed to create output directory: {error}"))
+        })?;
     }
-    if let Err(error) = std::fs::write(path, content) {
-        eprintln!("Error: failed to write output: {error}");
-        process::exit(EXIT_FAILURE as i32);
-    }
+    fs::write(path, content)
+        .map_err(|error| operation_error(format!("failed to write output: {error}")))
 }
 
-/// Read the whole of stdin as UTF-8 text, mapping IO failure to an error
-/// message plus `EXIT_FAILURE`.
-pub(crate) fn read_stdin_source() -> Result<String, ExitCode> {
-    use std::io::Read;
-    let mut source = String::new();
-    if let Err(error) = std::io::stdin().read_to_string(&mut source) {
-        eprintln!("Error: failed to read stdin: {error}");
-        return Err(ExitCode::from(EXIT_FAILURE));
-    }
-    Ok(source)
+/// Read the whole of stdin as UTF-8 text.
+///
+/// # Errors
+///
+/// Reports the failure and returns [`Exit::Failure`] when stdin can't be
+/// read.
+pub(crate) fn read_stdin_source() -> Result<String, Exit> {
+    io::read_to_string(io::stdin())
+        .map_err(|error| operation_error(format!("failed to read stdin: {error}")))
 }
 
-/// Render the diagnostics to stderr and exit with `EXIT_FAILURE`. An optional
-/// `(path, source)` pair seeds the cache for a document not readable from disk
-/// (the minifier's in-memory bundle, stdin).
-pub(crate) fn fail_with_diagnostics(errors: &[Diagnostic], source: Option<(&str, &str)>) -> ! {
-    let mut cache = build_file_cache(errors);
-    if let Some((path, src)) = source {
-        cache.add_file(path.to_string(), src.to_string());
+/// Render the diagnostics to stderr and return [`Exit::Failure`].
+///
+/// `document` is a `(path, text)` document that isn't on disk, such as a
+/// bundle being minified or stdin, that every diagnostic points into. Without
+/// one, the files the diagnostics point into are read from disk.
+pub(crate) fn fail_with_diags(diags: &[Diagnostic], document: Option<(String, String)>) -> Exit {
+    match document {
+        Some((path, source)) => print_document_diags(path, source, diags),
+        None => print_diags(diags),
     }
-    render_diagnostics(errors, &mut cache);
-    process::exit(EXIT_FAILURE as i32);
-}
-
-pub(crate) fn build_file_cache(diagnostics: &[Diagnostic]) -> FileCache {
-    let mut cache = FileCache::new();
-    for diag in diagnostics {
-        let os_path = diag.file_path.replace('/', std::path::MAIN_SEPARATOR_STR);
-        if let Ok(source) = luck_core::source_io::read_source_file(&os_path) {
-            cache.add_file(diag.file_path.clone(), source);
-        }
-    }
-    cache
+    Exit::Failure
 }

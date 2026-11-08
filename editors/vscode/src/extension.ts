@@ -1,32 +1,34 @@
 import * as vscode from "vscode";
 import { LuckClient } from "./client";
-import { StatusBar } from "./status-bar";
 import { registerCommands } from "./commands";
 import { disposeChannels, logExtension } from "./output";
+import { affectsSetting, setting } from "./settings";
+import type { SettingKey } from "./settings";
+import { StatusBar } from "./status-bar";
 
-const RESTART_KEYS = [
-	"luck.server.path",
-	"luck.server.extraEnv",
-	"luck.server.args",
-	"luck.runFromTemporaryLocation",
-];
+const RESTART_SETTINGS = [
+	"server.path",
+	"server.extraEnv",
+	"server.args",
+	"runFromTemporaryLocation",
+] as const satisfies readonly SettingKey[];
 
 let client: LuckClient | undefined;
-let statusBar: StatusBar | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	logExtension("activate");
 
-	statusBar = new StatusBar();
-	context.subscriptions.push(statusBar);
+	const statusBar = new StatusBar();
+	client = new LuckClient(context.extensionPath, statusBar);
+	const { version } = context.extension.packageJSON as { version?: string };
+	context.subscriptions.push(
+		statusBar,
+		client,
+		...registerCommands(client, version),
+		watchServerSettings(client),
+	);
 
-	client = new LuckClient(context, statusBar);
-	context.subscriptions.push(client);
-
-	registerCommands(context, client);
-	context.subscriptions.push(watchConfiguration(client, statusBar));
-
-	if (isEnabled()) {
+	if (setting("enable")) {
 		await client.start();
 	}
 }
@@ -34,34 +36,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 export async function deactivate(): Promise<void> {
 	logExtension("deactivate");
 	await client?.stop();
-	statusBar?.dispose();
 	disposeChannels();
 }
 
-function isEnabled(): boolean {
-	return vscode.workspace.getConfiguration("luck").get<boolean>("enable", true);
-}
-
-function watchConfiguration(luckClient: LuckClient, status: StatusBar): vscode.Disposable {
+function watchServerSettings(luckClient: LuckClient): vscode.Disposable {
 	let restartTimer: NodeJS.Timeout | undefined;
-	return vscode.workspace.onDidChangeConfiguration((event) => {
-		if (!event.affectsConfiguration("luck")) {
+	const listener = vscode.workspace.onDidChangeConfiguration((event) => {
+		if (affectsSetting(event, "enable")) {
+			void (setting("enable") ? luckClient.start() : luckClient.stop());
 			return;
 		}
-
-		if (event.affectsConfiguration("luck.enable")) {
-			void (isEnabled() ? luckClient.start() : luckClient.stop());
-			return;
-		}
-
-		if (RESTART_KEYS.some((key) => event.affectsConfiguration(key))) {
-			if (restartTimer) {
-				clearTimeout(restartTimer);
-			}
+		if (RESTART_SETTINGS.some((key) => affectsSetting(event, key))) {
+			clearTimeout(restartTimer);
 			restartTimer = setTimeout(() => void luckClient.restart(), 500);
-			return;
 		}
-
-		status.refresh();
+	});
+	return new vscode.Disposable(() => {
+		clearTimeout(restartTimer);
+		listener.dispose();
 	});
 }

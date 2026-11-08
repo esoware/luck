@@ -1,15 +1,14 @@
-use luck_ast::Statement;
-use luck_ast::shared::Block;
-use luck_ast::stmt::LocalAssignment;
-use luck_ast::visitor::Visitor;
+use luck_ast::{Attribute, Block, LocalAssignment, Statement, Visitor};
 use luck_token::{Comment, Span};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::fix::{Fix, TextEdit};
+use crate::rule::{LintContext, Rule, WholeRule};
 
-/// Two adjacent single-binding `local NAME = VALUE` statements can be
-/// folded into one `local A, B = X, Y` declaration.
-pub struct MergeAdjacentLocals;
+/// Flags two adjacent `local NAME = VALUE` statements that could be one
+/// `local A, B = X, Y`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MergeAdjacentLocals;
 
 impl Rule for MergeAdjacentLocals {
     fn name(&self) -> &'static str {
@@ -24,256 +23,208 @@ impl Rule for MergeAdjacentLocals {
     fn description(&self) -> &'static str {
         "adjacent simple `local` declarations can be merged"
     }
+}
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let source = ctx.source;
-        let comments = ctx.comments;
-        let mut checker = MergeChecker {
-            source,
-            comments,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+impl WholeRule for MergeAdjacentLocals {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        let mut checker =
+            MergeChecker { source: context.source, comments: context.comments, diags: Vec::new() };
+        checker.visit_block(context.block);
+        checker.diags
     }
 }
 
-struct MergeChecker<'src> {
-    source: &'src str,
-    comments: &'src [Comment],
-    diagnostics: Vec<LintDiagnostic>,
+struct MergeChecker<'document> {
+    source: &'document str,
+    comments: &'document [Comment],
+    diags: Vec<LintDiagnostic>,
 }
 
 impl MergeChecker<'_> {
-    fn process_block(&mut self, block: &Block) {
-        let mut i = 0usize;
-        while i + 1 < block.stmts.len() {
-            let (Statement::LocalAssignment(a), Statement::LocalAssignment(b)) =
-                (&block.stmts[i], &block.stmts[i + 1])
+    fn check_block(&mut self, block: &Block) {
+        let mut pairs = block.stmts.windows(2);
+        while let Some(pair) = pairs.next() {
+            let [Statement::LocalAssignment(first_local), Statement::LocalAssignment(second_local)] =
+                pair
             else {
-                i += 1;
                 continue;
             };
 
-            if !is_simple_single_binding(a) || !is_simple_single_binding(b) {
-                i += 1;
+            let (Some(first), Some(second)) =
+                (simple_binding(first_local), simple_binding(second_local))
+            else {
+                continue;
+            };
+
+            if self.has_comment_between(first_local.span.end, second_local.span.start) {
                 continue;
             }
 
-            if self.comment_between(a.span.end, b.span.start) {
-                i += 1;
+            if !annotations_match(self.source, &first, &second) {
                 continue;
             }
 
-            if !annotations_match(self.source, a, b) {
-                i += 1;
+            // Lua allows only one `<close>` variable per local list.
+            if first.attribute.is_some_and(|attribute| attribute.name.identifier() == Some("close"))
+            {
                 continue;
             }
 
-            // Lua permits only ONE to-be-closed variable per local list;
-            // merging two `<close>` declarations is a syntax error.
-            let attr_is_close = a
-                .names
-                .iter()
-                .filter_map(|attributed| attributed.attrib.as_ref())
-                .next()
-                .is_some_and(|attr| source_for(self.source, attr.name.span) == "close");
-            if attr_is_close {
-                i += 1;
+            // Both values in `local a, b = x, y` are evaluated before either
+            // name is bound, so merging `local a = 1 local b = a` would make
+            // `b` read an outer or global `a`.
+            let first_name = first.name.text(self.source);
+            let second_initializer = second.initializer.text(self.source);
+            if references_identifier(second_initializer, first_name) {
                 continue;
             }
 
-            // In `local a, b = EXPR_A, EXPR_B` both RHS evaluate before
-            // either binding exists, so if b's initializer mentions a's
-            // name it resolves to the OUTER a (or nil), changing
-            // behavior. `local a = 1 local b = a` must not merge.
-            let a_name = source_for(self.source, name_span(a));
-            let b_init = source_for(self.source, init_expr_span(b));
-            if references_identifier(b_init, a_name) {
-                i += 1;
-                continue;
-            }
-
-            let merged = build_merged(self.source, a, b);
-            self.diagnostics.push(
+            self.diags.push(
                 LintDiagnostic::new(
                     "merge_adjacent_locals",
-                    "adjacent `local` declarations can be merged".to_string(),
-                    a.span,
+                    "adjacent `local` declarations can be merged",
+                    first_local.span,
                 )
-                .with_help("combine into a single multi-binding `local`".to_string())
+                .with_help("combine into a single multi-binding `local`")
                 .with_fix(Fix {
-                    description: "merge adjacent `local` declarations".to_string(),
+                    description: "merge adjacent `local` declarations".to_owned(),
                     edits: vec![TextEdit {
-                        span: Span::new(a.span.start, b.span.end),
-                        replacement: merged,
+                        span: Span::new(first_local.span.start, second_local.span.end),
+                        replacement: build_merged(self.source, &first, &second),
                     }],
                 }),
             );
 
-            // Skip the consumed pair so the next iteration cannot
-            // double-fire on the overlap. This also keeps the fix edits
-            // non-overlapping for a single pass of apply_fixes.
-            i += 2;
+            // Skip the window that starts at `second_local`, so no two
+            // fixes touch the same statement.
+            pairs.next();
         }
     }
 
-    fn comment_between(&self, start: u32, end: u32) -> bool {
-        self.comments
-            .iter()
-            .any(|c| c.span.start >= start && c.span.end <= end)
+    fn has_comment_between(&self, start: u32, end: u32) -> bool {
+        self.comments.iter().any(|comment| comment.span.start >= start && comment.span.end <= end)
     }
 }
 
 impl<'ast> Visitor<'ast> for MergeChecker<'_> {
     fn visit_block(&mut self, block: &'ast Block) {
-        self.process_block(block);
+        self.check_block(block);
         self.walk_block(block);
     }
 }
 
-/// A "simple single binding" local is exactly `local NAME [<attrib>] = EXPR`,
-/// with one name, optionally one attribute, and exactly one initializer.
-fn is_simple_single_binding(local: &LocalAssignment) -> bool {
-    if local.names.len() != 1 {
-        return false;
-    }
-    let Some(exprs) = &local.exprs else {
-        return false;
-    };
-    exprs.len() == 1
+/// A `local` with one name and one value: the name, its attribute if any,
+/// and the value.
+struct SimpleBinding<'ast> {
+    name: Span,
+    attribute: Option<&'ast Attribute>,
+    initializer: Span,
 }
 
-/// Annotations match iff both have the same attribute presence and
-/// text. This compares source slices rather than reconstructing the
-/// attribute structurally.
-fn annotations_match(source: &str, a: &LocalAssignment, b: &LocalAssignment) -> bool {
-    let a_attr = a
-        .names
-        .iter()
-        .filter_map(|attributed| attributed.attrib.as_ref())
-        .next();
-    let b_attr = b
-        .names
-        .iter()
-        .filter_map(|attributed| attributed.attrib.as_ref())
-        .next();
-    match (a_attr, b_attr) {
+fn simple_binding(local: &LocalAssignment) -> Option<SimpleBinding<'_>> {
+    let [attributed] = local.names.items.as_slice() else {
+        return None;
+    };
+    let [initializer] = local.exprs.as_ref()?.items.as_slice() else {
+        return None;
+    };
+    Some(SimpleBinding {
+        name: attributed.name.span,
+        attribute: attributed.attribute.as_deref(),
+        initializer: initializer.span(),
+    })
+}
+
+/// Whether both bindings have the same attribute text, or neither has one.
+fn annotations_match(source: &str, first: &SimpleBinding<'_>, second: &SimpleBinding<'_>) -> bool {
+    match (first.attribute, second.attribute) {
         (None, None) => true,
-        (Some(x), Some(y)) => {
-            let xs = &source[x.span.start as usize..x.span.end as usize];
-            let ys = &source[y.span.start as usize..y.span.end as usize];
-            xs == ys
+        (Some(first_attribute), Some(second_attribute)) => {
+            first_attribute.span.text(source) == second_attribute.span.text(source)
         }
-        _ => false,
+        (Some(_), None) | (None, Some(_)) => false,
     }
 }
 
-/// Build the merged replacement text by slicing source. Reconstructing
-/// from tokens would lose the author's original formatting.
-fn build_merged(source: &str, a: &LocalAssignment, b: &LocalAssignment) -> String {
-    // Callers must not reach here with differing annotations. This
-    // re-check bails to a no-op merge identical to the original.
-    if !annotations_match(source, a, b) {
-        return format!(
-            "{}\n{}",
-            &source[a.span.start as usize..a.span.end as usize],
-            &source[b.span.start as usize..b.span.end as usize]
-        );
-    }
+/// Builds the merged statement from source slices, which keeps the
+/// author's formatting.
+fn build_merged(source: &str, first: &SimpleBinding<'_>, second: &SimpleBinding<'_>) -> String {
+    let first_name = first.name.text(source);
+    let second_name = second.name.text(source);
 
-    let a_name = source_for(source, name_span(a));
-    let b_name = source_for(source, name_span(b));
+    let first_expr = first.initializer.text(source);
+    let second_expr = second.initializer.text(source);
 
-    let a_expr = source_for(source, init_expr_span(a));
-    let b_expr = source_for(source, init_expr_span(b));
+    // Attributes are per name: `local a <const>, b <const> = ...`.
+    let attribute_suffix = first
+        .attribute
+        .map_or_else(String::new, |attribute| format!(" {}", attribute.span.text(source)));
 
-    // Attributes go per name, `local a <const>, b <const> = ...`. A
-    // single trailing attribute would silently drop a's.
-    let attr_suffix = match a
-        .names
-        .iter()
-        .filter_map(|attributed| attributed.attrib.as_ref())
-        .next()
-    {
-        Some(at) => format!(" {}", source_for(source, at.span)),
-        None => String::new(),
-    };
-
-    format!("local {a_name}{attr_suffix}, {b_name}{attr_suffix} = {a_expr}, {b_expr}")
+    format!(
+        "local {first_name}{attribute_suffix}, {second_name}{attribute_suffix} = {first_expr}, \
+         {second_expr}"
+    )
 }
 
-/// Whole-word identifier scan. A hit inside a string literal also bails,
-/// which costs nothing beyond a skipped merge.
+/// Whole-word search for `name` in `haystack`. A match inside a string
+/// literal only costs a skipped merge.
 fn references_identifier(haystack: &str, name: &str) -> bool {
-    let bytes = haystack.as_bytes();
-    let mut search_from = 0;
-    while let Some(found) = haystack[search_from..].find(name) {
-        let start = search_from + found;
-        let end = start + name.len();
-        let before_ok = start == 0 || {
-            let b = bytes[start - 1];
-            !b.is_ascii_alphanumeric() && b != b'_'
-        };
-        let after_ok = end == bytes.len() || {
-            let b = bytes[end];
-            !b.is_ascii_alphanumeric() && b != b'_'
-        };
-        if before_ok && after_ok {
-            return true;
-        }
-        search_from = start + 1;
-    }
-    false
-}
-
-fn source_for(source: &str, span: Span) -> &str {
-    &source[span.start as usize..span.end as usize]
-}
-
-fn name_span(local: &LocalAssignment) -> Span {
-    // `is_simple_single_binding` guarantees `names.first` is Some.
-    local
-        .names
-        .first()
-        .map(|attributed| attributed.name.span)
-        .expect("checked single-binding")
-}
-
-fn init_expr_span(local: &LocalAssignment) -> Span {
-    let exprs = local.exprs.as_ref().expect("checked initializer");
-    exprs.first().expect("checked single-expr").span()
+    let is_word_byte = |byte: &u8| byte.is_ascii_alphanumeric() || *byte == b'_';
+    haystack.match_indices(name).any(|(start, _)| {
+        let (before, from_match) = haystack.split_at(start);
+        let after = from_match.strip_prefix(name).unwrap_or_default();
+        !before.as_bytes().last().is_some_and(is_word_byte)
+            && !after.as_bytes().first().is_some_and(is_word_byte)
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&MergeAdjacentLocals, source, LuaVersion::Lua54)
-    }
+    use super::*;
+    use crate::fixtures::{fix_and_reparse, run_rule};
 
-    fn apply(source: &str, diag: &LintDiagnostic) -> String {
-        let fix = diag.fix.as_ref().expect("fix");
-        let edit = &fix.edits[0];
-        let mut out = String::with_capacity(source.len());
-        out.push_str(&source[..edit.span.start as usize]);
-        out.push_str(&edit.replacement);
-        out.push_str(&source[edit.span.end as usize..]);
-        let parse = luck_parser::parse(&out, LuaVersion::Lua54);
-        assert!(parse.errors.is_empty(), "reparse: {:?}", parse.errors);
-        out
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        run_rule(&MergeAdjacentLocals, source, LuaVersion::Lua54)
     }
 
     #[test]
-    fn merges_two_simple_locals() {
+    fn fix_merges_two_simple_locals() {
         let source = "local a = 1\nlocal b = 2";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = apply(source, &diags[0]);
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
         assert_eq!(fixed, "local a, b = 1, 2");
+    }
+
+    #[test]
+    fn fix_repeats_shared_attribute() {
+        let source = "local a <const> = 1\nlocal b <const> = 2";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "local a <const>, b <const> = 1, 2");
+    }
+
+    #[test]
+    fn flags_alternate_pairs_only() {
+        // A merged pair's second local can't start another pair, so no two
+        // fixes overlap.
+        let diags = run("local a = 1\nlocal b = 2\nlocal c = 3");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_close_attribute() {
+        let diags = run("local a <close> = nil\nlocal b <close> = nil");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_second_value_reading_first_name() {
+        let diags = run("local a = 1\nlocal b = a + 1");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]

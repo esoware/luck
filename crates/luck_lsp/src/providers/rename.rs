@@ -1,54 +1,55 @@
-//! Rename. Local symbols only: globals and stdlib names are refused in
-//! `prepare_rename`, and the new name is rejected whenever the rename
-//! could change meaning: an invalid identifier, a reserved word, a name
-//! already used anywhere in the document, or a known global. Rejecting
-//! ambiguity beats silently capturing a shadowed name.
+//! Rename.
+//!
+//! Locals only: [`prepare`] refuses globals and stdlib names, and a rename is
+//! refused whenever the new name could change meaning: an invalid
+//! identifier, a reserved word, a known global, or a name already used
+//! anywhere in the document. Refusing is safer than silently capturing a
+//! shadowed name.
 
-use std::collections::HashMap;
-
+use luck_token::{Span, TokenKind};
+use tower_lsp::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
 use tower_lsp::lsp_types::{
-    PrepareRenameResponse, RenameParams, TextDocumentPositionParams, TextEdit, Url, WorkspaceEdit,
+    Position, PrepareRenameResponse, RenameParams, TextEdit, WorkspaceEdit,
 };
 
-use crate::backend::DocumentState;
-use crate::providers::cursor::{name_span_at, symbol_at};
+use crate::document::DocumentState;
+use crate::providers::cursor::local_at;
 
-#[must_use]
-pub fn prepare_rename(
-    doc: &DocumentState,
-    params: &TextDocumentPositionParams,
+pub(crate) fn prepare(
+    document: &DocumentState,
+    position: Position,
 ) -> Option<PrepareRenameResponse> {
-    let offset = doc.line_index.offset(&doc.text, params.position);
-    let tree = &doc.semantic.scope_tree;
-    symbol_at(tree, offset)?;
-    let span = name_span_at(tree, offset)?;
+    let (_, span) = local_at(&document.semantic.scope_tree, document.offset(position))?;
     Some(PrepareRenameResponse::RangeWithPlaceholder {
-        range: doc.line_index.range(&doc.text, span.start, span.end),
-        placeholder: doc.text[span.start as usize..span.end as usize].to_string(),
+        range: document.range(span),
+        placeholder: span.text(document.text()).to_owned(),
     })
 }
 
-/// Compute the workspace edit for a rename, or a human-readable refusal.
-pub fn rename(
-    doc: &DocumentState,
-    uri: &Url,
+/// Compute the workspace edit for a rename.
+///
+/// # Errors
+///
+/// Returns an invalid-params error carrying the refusal to show the user when
+/// `params.new_name` could change what the document means.
+pub(crate) fn rename(
+    document: &DocumentState,
     params: &RenameParams,
-) -> Result<Option<WorkspaceEdit>, String> {
-    let offset = doc
-        .line_index
-        .offset(&doc.text, params.text_document_position.position);
-    let tree = &doc.semantic.scope_tree;
-    let Some(symbol_id) = symbol_at(tree, offset) else {
+) -> JsonRpcResult<Option<WorkspaceEdit>> {
+    let text_document_position = &params.text_document_position;
+    let tree = &document.semantic.scope_tree;
+    let Some((symbol_id, _)) = local_at(tree, document.offset(text_document_position.position))
+    else {
         return Ok(None);
     };
     let new_name = params.new_name.as_str();
-    validate_new_name(doc, new_name)?;
+    validate_new_name(document, new_name).map_err(JsonRpcError::invalid_params)?;
 
-    let symbol = &tree.symbols[symbol_id.index()];
-    let mut spans: Vec<luck_token::Span> = symbol
+    let symbol = tree.symbol(symbol_id);
+    let mut spans: Vec<Span> = symbol
         .reference_ids
         .iter()
-        .map(|&reference_id| tree.references[reference_id.index()].span)
+        .map(|&reference_id| tree.reference(reference_id).span)
         .collect();
     spans.push(symbol.definition_span);
     spans.sort_by_key(|span| span.start);
@@ -56,48 +57,41 @@ pub fn rename(
 
     let edits: Vec<TextEdit> = spans
         .into_iter()
-        .map(|span| TextEdit {
-            range: doc.line_index.range(&doc.text, span.start, span.end),
-            new_text: new_name.to_string(),
-        })
+        .map(|span| TextEdit { range: document.range(span), new_text: new_name.to_owned() })
         .collect();
-    let mut changes = HashMap::new();
-    changes.insert(uri.clone(), edits);
-    Ok(Some(WorkspaceEdit {
-        changes: Some(changes),
-        ..Default::default()
-    }))
+    let changes = [(text_document_position.text_document.uri.clone(), edits)].into();
+    Ok(Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }))
 }
 
-fn validate_new_name(doc: &DocumentState, new_name: &str) -> Result<(), String> {
+/// Checks that `new_name` is safe to rename a local to.
+///
+/// # Errors
+///
+/// Returns the refusal to show the user when it isn't an identifier, shadows
+/// a built-in global, or is already used in the document.
+fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), String> {
     // Lexing the candidate under the document's Lua version rejects
     // keywords version-accurately (`goto` is an identifier in 5.1).
-    let lexed = luck_lexer::lex(new_name, doc.target.lua_version());
-    let tokens: Vec<_> = lexed
-        .tokens
-        .iter()
-        .filter(|token| token.kind != luck_token::TokenKind::Eof)
-        .collect();
+    let lexed = luck_lexer::lex(new_name, document.target.lua_version());
+    let tokens: Vec<_> = lexed.tokens.iter().filter(|token| token.kind != TokenKind::Eof).collect();
     let is_identifier = lexed.errors.is_empty()
-        && tokens.len() == 1
-        && matches!(tokens[0].kind, luck_token::TokenKind::Identifier(_))
-        && tokens[0].span.start == 0
-        && tokens[0].span.end == new_name.len() as u32;
+        && matches!(
+            tokens.as_slice(),
+            [token] if matches!(token.kind, TokenKind::Identifier(_))
+                && token.span == Span::from_indices(0, new_name.len())
+        );
     if !is_identifier {
-        return Err(format!("'{new_name}' is not a valid identifier"));
+        return Err(format!("`{new_name}` isn't a valid identifier"));
     }
-    if doc.semantic.is_known_global(new_name) {
-        return Err(format!("'{new_name}' would shadow a built-in global"));
+    if document.semantic.is_known_global(new_name) {
+        return Err(format!("`{new_name}` would shadow a built-in global"));
     }
-    let tree = &doc.semantic.scope_tree;
-    let in_use = tree.symbols.iter().any(|symbol| symbol.name == new_name)
-        || tree
-            .references
-            .iter()
-            .any(|reference| reference.name == new_name);
-    if in_use {
+    let tree = &document.semantic.scope_tree;
+    let is_in_use = tree.symbols.iter().any(|symbol| symbol.name == new_name)
+        || tree.references.iter().any(|reference| reference.name == new_name);
+    if is_in_use {
         return Err(format!(
-            "'{new_name}' is already used in this file; renaming could capture it"
+            "`{new_name}` is already used in this file, so renaming could capture it"
         ));
     }
     Ok(())

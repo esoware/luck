@@ -1,10 +1,10 @@
-use luck_ast::node::{AstTypesBitset, NodeType};
-use luck_ast::shared::Block;
+use luck_ast::{NodeType, NodeTypeSet, Statement};
 
-use crate::diagnostic::*;
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
 
-pub struct IfSameThenElse;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IfSameThenElse;
 
 impl Rule for IfSameThenElse {
     fn name(&self) -> &'static str {
@@ -17,62 +17,50 @@ impl Rule for IfSameThenElse {
         Severity::Warning
     }
     fn description(&self) -> &'static str {
-        "if and else branches have identical bodies"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
-
-fn block_source<'a>(source: &'a str, block: &Block) -> &'a str {
-    let start = block.span.start as usize;
-    let end = block.span.end as usize;
-    if start <= end && end <= source.len() {
-        &source[start..end]
-    } else {
-        ""
+        "`if` and `else` branches have identical bodies"
     }
 }
 
 impl NodeRule for IfSameThenElse {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::IfStatement]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::IfStatement])
     }
     fn on_statement(
         &self,
-        stmt: &luck_ast::Statement,
-        ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
+        stmt: &Statement,
+        context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
     ) {
-        if let luck_ast::Statement::IfStatement(if_stmt) = stmt
-            && let Some(else_clause) = &if_stmt.else_clause
-        {
-            let then_src = block_source(ctx.source, &if_stmt.block);
-            let else_src = block_source(ctx.source, &else_clause.block);
-
-            if !then_src.is_empty() && then_src.trim() == else_src.trim() {
-                out.push(
-                    LintDiagnostic::new(
-                        "if_same_then_else",
-                        "if and else branches have identical bodies".to_string(),
-                        if_stmt.span,
-                    )
-                    .with_help("the condition has no effect; consider removing the if".to_string()),
-                );
-            }
+        let Statement::IfStatement(if_stmt) = stmt else {
+            return;
+        };
+        let Some(else_clause) = &if_stmt.else_clause else {
+            return;
+        };
+        let then_text = if_stmt.block.span.text(context.source);
+        let else_text = else_clause.block.span.text(context.source);
+        if !then_text.is_empty() && then_text.trim() == else_text.trim() {
+            diags.push(
+                LintDiagnostic::new(
+                    "if_same_then_else",
+                    "`if` and `else` branches have identical bodies",
+                    if_stmt.span,
+                )
+                .with_help("the condition has no effect, so remove the `if`"),
+            );
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&IfSameThenElse, source, LuaVersion::Lua54)
+        run_rule(&IfSameThenElse, source, LuaVersion::Lua54)
     }
 
     #[test]

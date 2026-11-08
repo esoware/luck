@@ -1,20 +1,16 @@
-use luck_semantic::scope::{ReferenceKind, SymbolKind};
+use luck_semantic::{ReferenceKind, SymbolKind};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::rule::{LintContext, Rule, WholeRule};
 
-/// Luacheck 231: a local is assigned to after its declaration but its
-/// value is never read.
+/// Flags a local that's assigned after its declaration but never read
+/// (Luacheck 231).
 ///
-/// Why this is distinct from `unused_variable`: `unused_variable` fires
-/// when the declaration itself is unused, which is enough for
-/// `local x = 1`. This rule targets the case where the user *does*
-/// reach for the variable later (`x = 1`) but no code ever reads it.
-/// The signal is "the assignment is dead", not "the declaration is
-/// dead". Requiring at least one post-declaration Write avoids the
-/// overlap, so `local x = 1` with no further references belongs to
-/// `unused_variable`.
-pub struct SetButNeverRead;
+/// A lone `local x = 1` with no other references is left to
+/// `unused_variable`; this rule needs at least one later write, such as
+/// `x = 1`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SetButNeverRead;
 
 impl Rule for SetButNeverRead {
     fn name(&self) -> &'static str {
@@ -29,16 +25,18 @@ impl Rule for SetButNeverRead {
     fn description(&self) -> &'static str {
         "local is written to but its value is never read"
     }
+}
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let semantic = ctx.semantic;
-        let mut diagnostics = Vec::new();
+impl WholeRule for SetButNeverRead {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        let semantic = context.semantic;
+        let mut diags = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
             if symbol.kind != SymbolKind::Local {
                 continue;
             }
-            if symbol.name == "_" || symbol.name.starts_with('_') {
+            if symbol.name.starts_with('_') {
                 continue;
             }
             // Luau: exported bindings are read through the module's
@@ -49,8 +47,8 @@ impl Rule for SetButNeverRead {
 
             let mut has_write = false;
             let mut has_read = false;
-            for &ref_id in &symbol.reference_ids {
-                match semantic.scope_tree.reference(ref_id).kind {
+            for &reference_id in &symbol.reference_ids {
+                match semantic.scope_tree.reference(reference_id).kind {
                     ReferenceKind::Read => has_read = true,
                     ReferenceKind::Write => has_write = true,
                     ReferenceKind::ReadWrite => {
@@ -64,27 +62,29 @@ impl Rule for SetButNeverRead {
                 continue;
             }
 
-            diagnostics.push(
+            diags.push(
                 LintDiagnostic::new(
                     "set_but_never_read",
                     format!("value assigned to `{}` is never read", symbol.name),
                     symbol.definition_span,
                 )
-                .with_help("remove the assignment or use the value somewhere".to_string()),
+                .with_help("remove the assignment or use the value somewhere"),
             );
         }
 
-        diagnostics
+        diags
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&SetButNeverRead, source, LuaVersion::Lua54)
+        run_rule(&SetButNeverRead, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -121,11 +121,8 @@ mod tests {
 
     #[test]
     fn ignores_exported_local_only_written() {
-        let diags = crate::test_support::run_rule(
-            &SetButNeverRead,
-            "export local counter = 0\ncounter = 1",
-            LuaVersion::Luau,
-        );
+        let diags =
+            run_rule(&SetButNeverRead, "export local counter = 0\ncounter = 1", LuaVersion::Luau);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 }

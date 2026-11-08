@@ -1,9 +1,7 @@
-//! Formatter option enums shared between `luck_formatter` and config parsing.
+//! Formatter option enums.
 //!
-//! These live here (rather than in `luck_formatter`) so that
-//! [`config::FormatConfig`](crate::config) can deserialize directly into them.
-//! `luck_formatter` re-exports every type, so callers can also name them as
-//! `luck_formatter::Xxx`.
+//! They live here so [`FormatConfig`](crate::FormatConfig) can
+//! deserialize straight into them. `luck_formatter` re-exports every one.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -42,7 +40,7 @@ pub enum HexCase {
     Upper,
 }
 
-/// Controls when parentheses are used around single-argument function calls.
+/// When a call drops the parentheses around a lone string or table argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CallParentheses {
@@ -54,7 +52,8 @@ pub enum CallParentheses {
     NoSingleTable,
     /// Omit parentheses for single string or table arguments.
     None,
-    /// Preserve the source's choice: `f"x"` stays bare, `f("x")` stays parenthesized.
+    /// Keep the source's choice: `f"x"` stays bare and `f("x")` keeps its
+    /// parentheses.
     Input,
 }
 
@@ -66,41 +65,44 @@ pub enum LineEndings {
     Windows,
 }
 
-/// Controls collapsing of simple single-statement blocks onto one line.
+/// Which simple single-statement blocks collapse onto one line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CollapseSimpleStatement {
     /// Always expand blocks.
     Never,
-    /// Collapse simple function bodies: `function() return x end`.
+    /// Simple function bodies, as in `function() return x end`. The formatter
+    /// doesn't collapse function bodies, so this behaves like `never`.
     FunctionOnly,
     /// Collapse simple conditionals: `if x then return y end`.
     ConditionalOnly,
-    /// Collapse both simple functions and conditionals.
+    /// Simple functions and conditionals. The formatter doesn't collapse
+    /// function bodies, so this behaves like `conditional_only`.
     Always,
 }
 
-/// Controls whether blank lines inside blocks are preserved from source.
+/// Whether a block body can start or end with a blank line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockNewlineGaps {
-    /// Strip blank lines at the start/end of any block body.
+    /// Strip blank lines at the start and end of every block body.
     #[default]
     Never,
-    /// Keep blank lines at the start/end of block bodies verbatim.
+    /// Keep one blank line at the start or end of a block body when the source
+    /// has any there.
     Preserve,
 }
 
-/// Controls inserting a space between `function`/callee and `(`.
+/// Where a space goes before the `(` of a function definition or call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SpaceAfterFunction {
-    /// No space inserted: `function foo()` / `foo()`.
+    /// No space: `function foo()`, `foo()`.
     #[default]
     Never,
-    /// Space only after `function` keyword in definitions: `function foo ()`.
+    /// Space before a definition's parameter list only: `function foo ()`.
     Definitions,
-    /// Space only between callee and `(` in calls: `foo ()`.
+    /// Space between a callee and its `(` only: `foo ()`.
     Calls,
     /// Space in both definitions and calls.
     Always,

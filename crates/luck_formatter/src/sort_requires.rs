@@ -1,222 +1,213 @@
-//! Sort consecutive `local NAME = require(...)` (or `:GetService(...)`)
-//! statements alphabetically.
+//! Sorts runs of `local NAME = require(...)` and
+//! `local NAME = X:GetService(...)` statements by binding name.
 //!
-//! Operates at the source level by rewriting byte ranges rather than mutating
-//! the AST - preserves comments, blank lines, and all trivia inside each line.
-//! A "group" is a run of consecutive sortable statements with no intervening
-//! blank line, non-sortable statement, or `-- luck: format off` region.
+//! Works on source lines instead of the AST, so comments and trivia on a line
+//! move with it. A run is two or more sortable statements on consecutive
+//! lines, outside any `-- luck: format off` region. A blank line, a comment
+//! line, or any other statement but `;` ends it.
 
-use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Var};
-use luck_ast::shared::{Block, FunctionBody, Punctuated};
-use luck_ast::stmt::{LocalAssignment, Statement};
-use luck_token::comment::Comment;
+use core::mem;
+use core::ops::Range;
 
-/// Returned spans are byte offsets into the original source.
-struct SortableLine<'a> {
-    /// Byte range covering the whole line, including leading indentation and
-    /// the trailing newline, so that swapping ranges produces clean output.
-    range: std::ops::Range<usize>,
-    /// Sort key - the binding name.
-    key: &'a str,
+use luck_ast::{Block, Expression, FunctionArgs, LocalAssignment, Punctuated, Statement, Var};
+use luck_token::{Comment, Span, index_to_offset, offset_to_index};
+
+use crate::comments::format_off_regions;
+use crate::format_block::has_blank_line;
+
+struct SortableLine<'source> {
+    /// Byte range of the statement's whole lines, from leading indentation
+    /// through the trailing newline, so ranges swap cleanly.
+    range: Range<usize>,
+    /// The source text under `range`.
+    text: &'source str,
+    /// The binding name, used as the sort key.
+    key: &'source str,
 }
 
-pub fn sort_requires_in_source(source: &str, block: &Block, comments: &[Comment]) -> String {
-    let disabled = build_disabled_ranges(comments, source);
-    let mut groups = Vec::new();
-    collect_groups_in_block(source, block, &disabled, &mut groups);
-
-    if groups.is_empty() {
-        return source.to_string();
+/// `source` with every run sorted, or `None` when there's no run to sort.
+pub(crate) fn sort_requires_in_source(
+    source: &str,
+    block: &Block,
+    comments: &[Comment],
+) -> Option<String> {
+    let source_end = index_to_offset(source.len());
+    let mut collector = RunCollector {
+        source,
+        disabled_ranges: format_off_regions(comments, source)
+            .into_iter()
+            .map(|(off, on)| off.start..on.map_or(source_end, |close| close.end))
+            .collect(),
+        runs: Vec::new(),
+    };
+    collector.collect_block(block);
+    let runs = collector.runs;
+    if runs.is_empty() {
+        return None;
     }
 
     let mut output = String::with_capacity(source.len());
     let mut cursor = 0usize;
 
-    for group in &groups {
-        // Two requires sharing a source line get the same expanded line
-        // range; sorting would emit that line once per member, duplicating
-        // code. Leave any group with overlapping ranges untouched.
-        let has_overlap = group
+    for run in &runs {
+        let [first, .., last] = run.as_slice() else {
+            continue;
+        };
+        if let Some(gap) = source.get(cursor..first.range.start) {
+            output.push_str(gap);
+        }
+
+        let mut sorted_lines: Vec<&SortableLine<'_>> = run.iter().collect();
+        sorted_lines.sort_by_key(|line| line.key);
+
+        for line in sorted_lines {
+            output.push_str(line.text);
+        }
+
+        cursor = last.range.end;
+    }
+
+    if let Some(tail) = source.get(cursor..) {
+        output.push_str(tail);
+    }
+
+    Some(output)
+}
+
+/// Finds the sortable runs in a block and the blocks nested in it, in
+/// source order.
+struct RunCollector<'source> {
+    source: &'source str,
+    disabled_ranges: Vec<Range<u32>>,
+    runs: Vec<Vec<SortableLine<'source>>>,
+}
+
+impl<'source> RunCollector<'source> {
+    /// Collects runs from `block` and the blocks nested in it.
+    ///
+    /// A function literal is searched only when it's assigned directly, so
+    /// one passed as a call argument or held in a table isn't.
+    fn collect_block(&mut self, block: &Block) {
+        let mut current_lines: Vec<SortableLine<'source>> = Vec::new();
+        let mut previous_end: Option<u32> = None;
+
+        for stmt in &block.stmts {
+            let Span { start: stmt_start, end: stmt_end } = stmt.span();
+
+            // Counts newlines, so a comment line breaks the run as well.
+            let is_blank_break = previous_end
+                .is_some_and(|previous| has_blank_line(self.source, previous, stmt_start));
+
+            let is_disabled = self
+                .disabled_ranges
+                .iter()
+                .any(|range| stmt_start < range.end && stmt_end > range.start);
+
+            if is_blank_break || is_disabled {
+                self.flush_run(&mut current_lines);
+            }
+
+            // The formatter drops `;` in this same pass, so ending the run
+            // here would leave the sort to the second pass and break
+            // idempotency.
+            if matches!(stmt, Statement::EmptyStatement(_)) {
+                previous_end = Some(stmt_end);
+                continue;
+            }
+
+            if let Some(line) = sortable_line(self.source, stmt) {
+                if !is_disabled {
+                    current_lines.push(line);
+                }
+            } else {
+                self.flush_run(&mut current_lines);
+            }
+
+            self.collect_nested_blocks(stmt);
+
+            previous_end = Some(stmt_end);
+        }
+
+        self.flush_run(&mut current_lines);
+    }
+
+    /// Keeps `lines` as a run when it has two or more lines, then
+    /// empties it.
+    ///
+    /// Requires that share a line get the same line range, and sorting would
+    /// emit that line once per member, so such a run isn't kept.
+    fn flush_run(&mut self, lines: &mut Vec<SortableLine<'source>>) {
+        let has_shared_line = lines
             .windows(2)
-            .any(|pair| pair[1].range.start < pair[0].range.end);
-        if has_overlap {
-            continue;
-        }
-
-        let group_start = group[0].range.start;
-        if cursor < group_start {
-            output.push_str(&source[cursor..group_start]);
-        }
-
-        let mut sorted: Vec<&SortableLine> = group.iter().collect();
-        sorted.sort_by(|a, b| a.key.cmp(b.key));
-
-        for line in sorted {
-            output.push_str(&source[line.range.clone()]);
-        }
-
-        cursor = group.last().expect("group non-empty").range.end;
-    }
-
-    if cursor < source.len() {
-        output.push_str(&source[cursor..]);
-    }
-
-    output
-}
-
-/// Walk every block in the program, collecting sortable groups along the way.
-fn collect_groups_in_block<'a>(
-    source: &'a str,
-    block: &Block,
-    disabled: &[(u32, u32)],
-    out: &mut Vec<Vec<SortableLine<'a>>>,
-) {
-    let mut current: Vec<SortableLine<'a>> = Vec::new();
-    let mut prev_end: Option<u32> = None;
-
-    for stmt in &block.stmts {
-        let stmt_start = stmt.span().start;
-        let stmt_end = stmt.span().end;
-
-        // Blank line breaks the run.
-        let blank_break =
-            prev_end.is_some_and(|prev| has_blank_line_between(source, prev, stmt_start));
-
-        // Format-off region anywhere in the statement breaks the run.
-        let in_disabled = disabled
-            .iter()
-            .any(|&(start, end)| stmt_start < end && stmt_end > start);
-
-        if blank_break || in_disabled {
-            flush_group(&mut current, out);
-        }
-
-        // `;` carries no content and the formatter drops it on the same pass.
-        // Treating it as a group break would delay sorting to the second
-        // format run, breaking idempotency.
-        if matches!(stmt, Statement::EmptyStatement(_)) {
-            prev_end = Some(stmt_end);
-            continue;
-        }
-
-        if let Some(line) = sortable_line(source, stmt) {
-            if !in_disabled {
-                current.push(line);
-            }
+            .any(|pair| matches!(pair, [left, right] if right.range.start < left.range.end));
+        if lines.len() >= 2 && !has_shared_line {
+            self.runs.push(mem::take(lines));
         } else {
-            flush_group(&mut current, out);
+            lines.clear();
         }
-
-        // Recurse into nested blocks so top-of-function-body groups also sort.
-        walk_nested_blocks(source, stmt, disabled, out);
-
-        prev_end = Some(stmt_end);
     }
 
-    flush_group(&mut current, out);
-}
-
-fn flush_group<'a>(current: &mut Vec<SortableLine<'a>>, out: &mut Vec<Vec<SortableLine<'a>>>) {
-    if current.len() >= 2 {
-        out.push(std::mem::take(current));
-    } else {
-        current.clear();
-    }
-}
-
-fn walk_nested_blocks<'a>(
-    source: &'a str,
-    stmt: &Statement,
-    disabled: &[(u32, u32)],
-    out: &mut Vec<Vec<SortableLine<'a>>>,
-) {
-    match stmt {
-        Statement::DoBlock(node) => collect_groups_in_block(source, &node.block, disabled, out),
-        Statement::WhileLoop(node) => collect_groups_in_block(source, &node.block, disabled, out),
-        Statement::RepeatLoop(node) => collect_groups_in_block(source, &node.block, disabled, out),
-        Statement::NumericFor(node) => collect_groups_in_block(source, &node.block, disabled, out),
-        Statement::GenericFor(node) => collect_groups_in_block(source, &node.block, disabled, out),
-        Statement::IfStatement(node) => {
-            collect_groups_in_block(source, &node.block, disabled, out);
-            for clause in &node.elseif_clauses {
-                collect_groups_in_block(source, &clause.block, disabled, out);
+    fn collect_nested_blocks(&mut self, stmt: &Statement) {
+        match stmt {
+            Statement::DoBlock(node) => self.collect_block(&node.block),
+            Statement::WhileLoop(node) => self.collect_block(&node.block),
+            Statement::RepeatLoop(node) => self.collect_block(&node.block),
+            Statement::NumericFor(node) => self.collect_block(&node.block),
+            Statement::GenericFor(node) => self.collect_block(&node.block),
+            Statement::IfStatement(node) => {
+                self.collect_block(&node.block);
+                for clause in &node.elseif_clauses {
+                    self.collect_block(&clause.block);
+                }
+                if let Some(else_clause) = &node.else_clause {
+                    self.collect_block(&else_clause.block);
+                }
             }
-            if let Some(else_clause) = &node.else_clause {
-                collect_groups_in_block(source, &else_clause.block, disabled, out);
+            Statement::FunctionDecl(node) => self.collect_block(&node.body.block),
+            Statement::LocalFunction(node) => self.collect_block(&node.body.block),
+            // Lua 5.5
+            Statement::GlobalFunction(node) => self.collect_block(&node.body.block),
+            Statement::LocalAssignment(local) => {
+                if let Some(exprs) = &local.exprs {
+                    self.collect_function_values(exprs);
+                }
             }
+            Statement::Assignment(node) => self.collect_function_values(&node.values),
+            // Luau
+            Statement::CompoundAssignment(node) => self.collect_function_value(&node.expr),
+            // Lua 5.5
+            Statement::GlobalDeclaration(global) => {
+                if let Some(exprs) = &global.exprs {
+                    self.collect_function_values(exprs);
+                }
+            }
+            Statement::FunctionCall(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => {}
         }
-        Statement::FunctionDecl(node) => walk_body(source, &node.body, disabled, out),
-        Statement::LocalFunction(node) => walk_body(source, &node.body, disabled, out),
-        Statement::GlobalFunction(node) => walk_body(source, &node.body, disabled, out),
-        Statement::LocalAssignment(local) => {
-            if let Some(exprs) = &local.exprs {
-                walk_exprs(source, exprs, disabled, out);
-            }
+    }
+
+    fn collect_function_values(&mut self, exprs: &Punctuated<Expression>) {
+        for expr in exprs.iter() {
+            self.collect_function_value(expr);
         }
-        Statement::Assignment(node) => walk_exprs(source, &node.values, disabled, out),
-        Statement::FunctionCall(call) => walk_call(source, call, disabled, out),
-        Statement::CompoundAssignment(node) => walk_expr(source, &node.expr, disabled, out),
-        Statement::GlobalDeclaration(global) => {
-            if let Some(exprs) = &global.exprs {
-                walk_exprs(source, exprs, disabled, out);
-            }
+    }
+
+    fn collect_function_value(&mut self, expr: &Expression) {
+        if let Expression::FunctionDef(function_def) = expr {
+            self.collect_block(&function_def.body.block);
         }
-        Statement::EmptyStatement(_)
-        | Statement::Goto(_)
-        | Statement::Label(_)
-        | Statement::GlobalStar(_)
-        | Statement::Break(_)
-        | Statement::TypeDeclaration(_)
-        | Statement::Error(_) => {}
     }
 }
 
-fn walk_body<'a>(
-    source: &'a str,
-    body: &FunctionBody,
-    disabled: &[(u32, u32)],
-    out: &mut Vec<Vec<SortableLine<'a>>>,
-) {
-    collect_groups_in_block(source, &body.block, disabled, out);
-}
-
-fn walk_exprs<'a>(
-    source: &'a str,
-    exprs: &Punctuated<Expression>,
-    disabled: &[(u32, u32)],
-    out: &mut Vec<Vec<SortableLine<'a>>>,
-) {
-    for expr in exprs.iter() {
-        walk_expr(source, expr, disabled, out);
-    }
-}
-
-fn walk_expr<'a>(
-    source: &'a str,
-    expr: &Expression,
-    disabled: &[(u32, u32)],
-    out: &mut Vec<Vec<SortableLine<'a>>>,
-) {
-    if let Expression::FunctionDef(def) = expr {
-        walk_body(source, &def.body, disabled, out);
-    }
-}
-
-fn walk_call<'a>(
-    source: &'a str,
-    _call: &FunctionCall,
-    _disabled: &[(u32, u32)],
-    _out: &mut Vec<Vec<SortableLine<'a>>>,
-) {
-    let _ = source;
-    // No nested blocks reachable through a bare call statement at the top level.
-}
-
-/// Recognize `local NAME = require("path")` or, for Roblox and Luau,
-/// `local NAME = game:GetService("Foo")`. Multi-name bindings
-/// (`local a, b = ...`) and chained calls are rejected.
-fn sortable_line<'a>(source: &'a str, stmt: &Statement) -> Option<SortableLine<'a>> {
+/// Matches a `local` with one name bound to one require or `GetService` call,
+/// in any dialect.
+fn sortable_line<'source>(source: &'source str, stmt: &Statement) -> Option<SortableLine<'source>> {
     let Statement::LocalAssignment(local) = stmt else {
         return None;
     };
@@ -231,60 +222,56 @@ fn sortable_line<'a>(source: &'a str, stmt: &Statement) -> Option<SortableLine<'
         return None;
     }
 
-    Some(SortableLine {
-        range: line_range(source, local.span.start as usize, local.span.end as usize),
-        key,
-    })
+    let range = line_range(source, local.span);
+    let text = source.get(range.clone())?;
+    Some(SortableLine { range, text, key })
 }
 
-fn single_binding_name<'a>(source: &'a str, local: &LocalAssignment) -> Option<&'a str> {
+fn single_binding_name<'source>(
+    source: &'source str,
+    local: &LocalAssignment,
+) -> Option<&'source str> {
     if local.names.len() != 1 {
         return None;
     }
-    let name = &local.names.first()?.name;
-    Some(&source[name.span.start as usize..name.span.end as usize])
+    Some(local.names.first()?.name.span.text(source))
 }
 
-/// Recognize the require/GetService callee patterns. Anything else, including
-/// `require("a")()` chains, is rejected, because it may carry side effects
-/// that reordering would move.
+/// Matches `require(STRING)` and `NAME:GetService(STRING)`, with or without
+/// the parentheses.
+///
+/// Anything else, such as `require("a")()`, may have side effects that
+/// sorting would reorder.
 fn is_pure_require_call(source: &str, expr: &Expression) -> bool {
     let Expression::FunctionCall(call) = expr else {
         return false;
     };
 
-    // In a chained call like `require("x")()` the outermost callee is itself
-    // a FunctionCall. Reject it so side effects never move.
     if matches!(call.callee, Expression::FunctionCall(_)) {
         return false;
     }
 
-    // Require args must be a single string literal (parenthesized or bare).
     if !is_single_string_arg(&call.args) {
         return false;
     }
 
-    // Plain `require(...)`
     if call.method.is_none()
         && let Expression::Var(Var::Name(token)) = &call.callee
     {
-        let name = &source[token.span.start as usize..token.span.end as usize];
-        return name == "require";
+        return token.span.text(source) == "require";
     }
 
-    // `game:GetService("Foo")` - method call on a Name var.
     if let Some(method_name) = &call.method
         && let Expression::Var(Var::Name(_)) = &call.callee
     {
-        let method = &source[method_name.span.start as usize..method_name.span.end as usize];
-        return method == "GetService";
+        return method_name.span.text(source) == "GetService";
     }
 
     false
 }
 
-fn is_single_string_arg(args: &FunctionArgs) -> bool {
-    match args {
+fn is_single_string_arg(call_args: &FunctionArgs) -> bool {
+    match call_args {
         FunctionArgs::Parenthesized { args, .. } => {
             args.len() == 1 && matches!(args.first(), Some(Expression::StringLiteral(_)))
         }
@@ -293,113 +280,75 @@ fn is_single_string_arg(args: &FunctionArgs) -> bool {
     }
 }
 
-/// Expand the statement byte range to cover the full source lines it occupies,
-/// including the trailing newline. The range never crosses a blank line.
-fn line_range(source: &str, start: usize, end: usize) -> std::ops::Range<usize> {
-    let bytes = source.as_bytes();
+/// Widens `stmt_span` to the whole source lines it occupies, including the
+/// trailing newline.
+fn line_range(source: &str, stmt_span: Span) -> Range<usize> {
+    let line_start = Span::new(0, stmt_span.start)
+        .text(source)
+        .trim_end_matches(|character: char| character != '\n')
+        .len();
 
-    let mut line_start = start;
-    while line_start > 0 && bytes[line_start - 1] != b'\n' {
-        line_start -= 1;
-    }
+    let stmt_end = offset_to_index(stmt_span.end);
+    let line_remainder = source
+        .get(stmt_end..)
+        .and_then(|following| following.split_inclusive('\n').next())
+        .unwrap_or_default();
 
-    let mut line_end = end;
-    while line_end < bytes.len() && bytes[line_end] != b'\n' {
-        line_end += 1;
-    }
-    if line_end < bytes.len() {
-        line_end += 1;
-    }
-
-    line_start..line_end
-}
-
-/// Two or more newlines between `prev_end` and `next_start` means a blank line.
-fn has_blank_line_between(source: &str, prev_end: u32, next_start: u32) -> bool {
-    let start = prev_end as usize;
-    let end = next_start as usize;
-    if start >= end || end > source.len() {
-        return false;
-    }
-    source[start..end].bytes().filter(|&b| b == b'\n').count() >= 2
-}
-
-/// Pair `-- luck: format off` with the next `-- luck: format on` (or EOF).
-fn build_disabled_ranges(comments: &[Comment], source: &str) -> Vec<(u32, u32)> {
-    let mut ranges = Vec::new();
-    let mut off_start: Option<u32> = None;
-
-    for comment in comments {
-        let text = &source[comment.span.start as usize..comment.span.end as usize];
-        let trimmed = text.trim_start_matches('-').trim();
-        if trimmed.starts_with("luck: format off") {
-            if off_start.is_none() {
-                off_start = Some(comment.span.start);
-            }
-        } else if trimmed.starts_with("luck: format on")
-            && let Some(start) = off_start.take()
-        {
-            ranges.push((start, comment.span.end));
-        }
-    }
-
-    if let Some(start) = off_start {
-        ranges.push((start, source.len() as u32));
-    }
-    ranges
+    line_start..stmt_end.saturating_add(line_remainder.len())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
-    fn run(input: &str) -> String {
+    use super::*;
+
+    fn sort_source(input: &str) -> String {
         let parsed = luck_parser::parse(input, LuaVersion::Lua54);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
         sort_requires_in_source(input, &parsed.block, &parsed.comments)
+            .unwrap_or_else(|| input.to_owned())
     }
 
     #[test]
-    fn sorts_simple_group() {
+    fn sorts_simple_run() {
         let input = "local zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\nlocal mid = require(\"mid\")\n";
         let expected = "local alpha = require(\"alpha\")\nlocal mid = require(\"mid\")\nlocal zeta = require(\"zeta\")\n";
-        assert_eq!(run(input), expected);
+        assert_eq!(sort_source(input), expected);
     }
 
     #[test]
-    fn blank_line_breaks_group() {
+    fn blank_line_breaks_run() {
         let input = "local zeta = require(\"zeta\")\n\nlocal alpha = require(\"alpha\")\n";
-        // Blank line splits two single-line "groups" - neither has 2 entries,
-        // so nothing is reordered.
-        assert_eq!(run(input), input);
+        // The blank line leaves two one-statement runs, too short to sort.
+        assert_eq!(sort_source(input), input);
     }
 
     #[test]
-    fn non_require_breaks_group() {
+    fn non_require_breaks_run() {
         let input =
             "local zeta = require(\"zeta\")\nlocal x = 1\nlocal alpha = require(\"alpha\")\n";
         // The `local x = 1` line splits the run; no reordering.
-        assert_eq!(run(input), input);
+        assert_eq!(sort_source(input), input);
     }
 
     #[test]
     fn multi_binding_is_unsortable() {
         let input =
             "local zeta = require(\"zeta\")\nlocal a, b = 1, 2\nlocal alpha = require(\"alpha\")\n";
-        assert_eq!(run(input), input);
+        assert_eq!(sort_source(input), input);
     }
 
     #[test]
     fn side_effect_require_is_unsortable() {
         let input = "local zeta = require(\"zeta\")()\nlocal alpha = require(\"alpha\")()\n";
-        assert_eq!(run(input), input);
+        assert_eq!(sort_source(input), input);
     }
 
     #[test]
     fn format_off_region_is_preserved() {
         let input = "-- luck: format off\nlocal zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\n-- luck: format on\n";
-        assert_eq!(run(input), input);
+        assert_eq!(sort_source(input), input);
     }
 
     #[test]
@@ -407,13 +356,13 @@ mod tests {
         let input = "local zeta = require(\"zeta\")\nlocal alpha = game:GetService(\"Players\")\n";
         let expected =
             "local alpha = game:GetService(\"Players\")\nlocal zeta = require(\"zeta\")\n";
-        assert_eq!(run(input), expected);
+        assert_eq!(sort_source(input), expected);
     }
 
     #[test]
-    fn nested_function_body_group_sorts() {
+    fn nested_function_body_run_sorts() {
         let input = "local function f()\n\tlocal zeta = require(\"zeta\")\n\tlocal alpha = require(\"alpha\")\nend\n";
         let expected = "local function f()\n\tlocal alpha = require(\"alpha\")\n\tlocal zeta = require(\"zeta\")\nend\n";
-        assert_eq!(run(input), expected);
+        assert_eq!(sort_source(input), expected);
     }
 }

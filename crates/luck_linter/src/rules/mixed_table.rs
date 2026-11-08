@@ -1,17 +1,12 @@
-use luck_ast::Expression;
-use luck_ast::shared::Field;
+use luck_ast::{Expression, Field, NodeType, NodeTypeSet};
 
-use crate::diagnostic::*;
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
 
-/// Mixing positional fields and identifier-keyed record fields in one
-/// table constructor breaks `ipairs` expectations. The positional
-/// entries land in the sequence half, the record entries in the hash
-/// half, and only the sequence half iterates predictably.
-/// Explicit bracket-indexed keys are exempt because those are the
-/// documented way to put arbitrary keys alongside sequence entries.
-pub struct MixedTable;
+/// Flags table constructors that mix positional fields with `name = value`
+/// fields, which `ipairs` skips.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MixedTable;
 
 impl Rule for MixedTable {
     fn name(&self) -> &'static str {
@@ -26,54 +21,57 @@ impl Rule for MixedTable {
     fn description(&self) -> &'static str {
         "table constructor mixes positional and record-style fields"
     }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
 }
 
 impl NodeRule for MixedTable {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::TableConstructor]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::TableConstructor])
     }
     fn on_expression(
         &self,
-        expr: &luck_ast::expr::Expression,
-        _ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
+        expr: &Expression,
+        _context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
     ) {
-        if let Expression::TableConstructor(table) = expr {
-            let mut has_positional = false;
-            let mut has_named = false;
-            for field in table.fields.iter() {
-                match field {
-                    Field::Positional { .. } => has_positional = true,
-                    Field::Named { .. } => has_named = true,
-                    // Bracketed keys (`[expr] = v`) signal explicit
-                    // author intent about where the value lands. Do not
-                    // count them on either side.
-                    Field::Bracketed { .. } => {}
-                }
+        let Expression::TableConstructor(table) = expr else {
+            return;
+        };
+        let mut has_positional = false;
+        let mut has_named = false;
+        for field in table.fields.iter() {
+            match field {
+                Field::Positional { .. } => has_positional = true,
+                Field::Named { .. } => has_named = true,
+                // An explicit `[expr] = v` key shows the author chose where
+                // the value goes, so it counts as neither kind.
+                Field::Bracketed { .. } => {}
             }
-            if has_positional && has_named {
-                out.push(LintDiagnostic::new("mixed_table", "table mixes positional and record fields; iteration with `ipairs` will skip the record fields"
-                            .to_string(), table.span).with_help(
-                        "split into separate sequence and record tables, or use explicit `[N] = v` keys"
-                            .to_string(),
-                    ));
-            }
+        }
+        if has_positional && has_named {
+            diags.push(
+                LintDiagnostic::new(
+                    "mixed_table",
+                    "table mixes positional and record fields, so iteration with `ipairs` will \
+                     skip the record fields",
+                    table.span,
+                )
+                .with_help(
+                    "split into separate sequence and record tables, or use explicit `[N] = v` keys",
+                ),
+            );
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&MixedTable, source, LuaVersion::Lua54)
+        run_rule(&MixedTable, source, LuaVersion::Lua54)
     }
 
     #[test]

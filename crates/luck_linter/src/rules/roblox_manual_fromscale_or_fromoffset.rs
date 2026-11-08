@@ -1,12 +1,12 @@
-use luck_ast::expr::{Expression, FunctionArgs};
-use luck_token::StdlibEnvironment;
+use luck_ast::{Expression, NodeType, NodeTypeSet};
 
-use crate::diagnostic::{Category, Fix, LintDiagnostic, Severity, TextEdit};
-use crate::roblox::{is_global_new_call, literal_arg_value};
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::fix::{Fix, TextEdit};
+use crate::roblox::{global_new_call, literal_arg_value};
 use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
 
-pub struct RobloxManualFromScaleOrFromOffset;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RobloxManualFromScaleOrFromOffset;
 
 impl Rule for RobloxManualFromScaleOrFromOffset {
     fn name(&self) -> &'static str {
@@ -22,65 +22,52 @@ impl Rule for RobloxManualFromScaleOrFromOffset {
     }
 
     fn description(&self) -> &'static str {
-        "UDim2.new that could be UDim2.fromScale or UDim2.fromOffset"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
+        "`UDim2.new` that could be `UDim2.fromScale` or `UDim2.fromOffset`"
     }
 }
 
 impl NodeRule for RobloxManualFromScaleOrFromOffset {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::FunctionCallExpr]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::FunctionCallExpr])
     }
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if ctx.semantic.environment != StdlibEnvironment::Roblox {
-            return;
-        }
-        let Expression::FunctionCall(call) = expr else {
-            return;
-        };
-        if !is_global_new_call(call, "UDim2", ctx) {
-            return;
-        }
-        let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+    fn on_expression(
+        &self,
+        expr: &Expression,
+        context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
+        let Some((call, args)) = global_new_call(expr, "UDim2", context.semantic) else {
             return;
         };
-        if args.len() != 4 {
+        let [x_scale_arg, x_offset_arg, y_scale_arg, y_offset_arg] = args.items.as_slice() else {
             return;
-        }
+        };
         let values: Vec<f64> = args.iter().filter_map(literal_arg_value).collect();
         let [x_scale, x_offset, y_scale, y_offset] = values.as_slice() else {
             return;
         };
-        let arg_source = |index: usize| {
-            let span = args.get(index).expect("length checked above").span();
-            &ctx.source[span.start as usize..span.end as usize]
+        let is_scale_zero = *x_scale == 0.0f64 && *y_scale == 0.0f64;
+        let is_offset_zero = *x_offset == 0.0f64 && *y_offset == 0.0f64;
+        let (constructor, first_arg, second_arg) = if is_offset_zero && !is_scale_zero {
+            ("fromScale", x_scale_arg, y_scale_arg)
+        } else if is_scale_zero && !is_offset_zero {
+            ("fromOffset", x_offset_arg, y_offset_arg)
+        } else {
+            return;
         };
-        let (constructor, first, second) =
-            if *x_offset == 0.0 && *y_offset == 0.0 && (*x_scale != 0.0 || *y_scale != 0.0) {
-                ("fromScale", arg_source(0), arg_source(2))
-            } else if *x_scale == 0.0 && *y_scale == 0.0 && (*x_offset != 0.0 || *y_offset != 0.0) {
-                ("fromOffset", arg_source(1), arg_source(3))
-            } else {
-                return;
-            };
-        let replacement = format!("UDim2.{constructor}({first}, {second})");
-        out.push(
+        let first_text = first_arg.span().text(context.source);
+        let second_text = second_arg.span().text(context.source);
+        let replacement = format!("UDim2.{constructor}({first_text}, {second_text})");
+        diags.push(
             LintDiagnostic::new(
                 self.name(),
-                format!("this UDim2.new can be written as UDim2.{constructor}"),
+                format!("this `UDim2.new` can be written as `UDim2.{constructor}`"),
                 call.span,
             )
             .with_help(format!("use `{replacement}`"))
             .with_fix(Fix {
-                description: format!("replace with UDim2.{constructor}"),
-                edits: vec![TextEdit {
-                    span: call.span,
-                    replacement,
-                }],
+                description: format!("replace with `UDim2.{constructor}`"),
+                edits: vec![TextEdit { span: call.span, replacement }],
             }),
         );
     }
@@ -88,26 +75,13 @@ impl NodeRule for RobloxManualFromScaleOrFromOffset {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule_roblox(&RobloxManualFromScaleOrFromOffset, source)
-    }
+    use super::*;
+    use crate::fixtures::{fix_and_reparse, run_rule, run_rule_roblox};
 
-    fn apply_fix(source: &str, diags: &[LintDiagnostic]) -> String {
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fix = diags[0].fix.as_ref().expect("fix attached");
-        let mut fixed = source.to_string();
-        for edit in fix.edits.iter().rev() {
-            fixed.replace_range(
-                edit.span.start as usize..edit.span.end as usize,
-                &edit.replacement,
-            );
-        }
-        let parse = luck_parser::parse(&fixed, LuaVersion::Luau);
-        assert!(parse.errors.is_empty(), "reparse: {:?}", parse.errors);
-        fixed
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        run_rule_roblox(&RobloxManualFromScaleOrFromOffset, source)
     }
 
     #[test]
@@ -125,16 +99,20 @@ mod tests {
     }
 
     #[test]
-    fn fix_rewrites_to_fromscale() {
+    fn flags_and_fixes_to_fromscale() {
         let source = "local u = UDim2.new(0.5, 0, 1, 0)";
-        let fixed = apply_fix(source, &run(source));
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
         assert_eq!(fixed, "local u = UDim2.fromScale(0.5, 1)");
     }
 
     #[test]
-    fn fix_rewrites_to_fromoffset_keeping_source_text() {
+    fn flags_and_fixes_to_fromoffset_keeping_source_text() {
         let source = "local u = UDim2.new(0, -100, 0, 0x20)";
-        let fixed = apply_fix(source, &run(source));
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
         assert_eq!(fixed, "local u = UDim2.fromOffset(-100, 0x20)");
     }
 
@@ -170,7 +148,7 @@ mod tests {
 
     #[test]
     fn ignores_standalone_environment() {
-        let diags = crate::test_support::run_rule(
+        let diags = run_rule(
             &RobloxManualFromScaleOrFromOffset,
             "local u = UDim2.new(0.5, 0, 1, 0)",
             LuaVersion::Luau,

@@ -1,13 +1,11 @@
-use luck_ast::Statement;
-use luck_ast::expr::Expression;
-use luck_ast::shared::FunctionBody;
+use luck_ast::{Expression, FunctionBody, NodeType, NodeTypeSet, Statement};
 use luck_token::TokenKind;
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
 
-pub struct DuplicateParameter;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DuplicateParameter;
 
 impl Rule for DuplicateParameter {
     fn name(&self) -> &'static str {
@@ -25,18 +23,13 @@ impl Rule for DuplicateParameter {
     fn description(&self) -> &'static str {
         "function declares two parameters with the same name"
     }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
 }
 
-fn check_params(body: &FunctionBody, is_method: bool, out: &mut Vec<LintDiagnostic>) {
-    let mut seen: Vec<&str> = Vec::new();
-    // Colon methods declare an implicit `self`, so an explicit `self`
-    // parameter is already a duplicate.
+fn check_params(body: &FunctionBody, is_method: bool, diags: &mut Vec<LintDiagnostic>) {
+    let mut seen_names: Vec<&str> = Vec::new();
+    // A colon method already has an implicit `self`.
     if is_method {
-        seen.push("self");
+        seen_names.push("self");
     }
     for param in body.params.iter() {
         let TokenKind::Identifier(name) = &param.name.kind else {
@@ -45,53 +38,86 @@ fn check_params(body: &FunctionBody, is_method: bool, out: &mut Vec<LintDiagnost
         if name == "_" {
             continue;
         }
-        if seen.iter().any(|prev| *prev == name.as_str()) {
-            out.push(LintDiagnostic::new(
+        if seen_names.iter().any(|previous| *previous == name.as_str()) {
+            diags.push(LintDiagnostic::new(
                 "duplicate_parameter",
                 format!("parameter `{name}` is already defined"),
                 param.name.span,
             ));
         } else {
-            seen.push(name.as_str());
+            seen_names.push(name.as_str());
         }
     }
 }
 
 impl NodeRule for DuplicateParameter {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[
             NodeType::FunctionDecl,
             NodeType::LocalFunction,
             NodeType::GlobalFunction,
             NodeType::FunctionDef,
-        ]);
-        Some(&TYPES)
+        ])
     }
-    fn on_statement(&self, stmt: &Statement, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
+    fn on_statement(
+        &self,
+        stmt: &Statement,
+        _context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
         match stmt {
             Statement::FunctionDecl(decl) => {
-                check_params(&decl.body, decl.name.method.is_some(), out);
+                check_params(&decl.body, decl.name.method.is_some(), diags);
             }
-            Statement::LocalFunction(func) => check_params(&func.body, false, out),
-            Statement::GlobalFunction(func) => check_params(&func.body, false, out), // Lua 5.5
-            _ => {}
+            Statement::LocalFunction(local_function) => {
+                check_params(&local_function.body, false, diags);
+            }
+            // Lua 5.5
+            Statement::GlobalFunction(global_function) => {
+                check_params(&global_function.body, false, diags);
+            }
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::LocalAssignment(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => {}
         }
     }
 
-    fn on_expression(&self, expr: &Expression, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if let Expression::FunctionDef(def) = expr {
-            check_params(&def.body, false, out);
+    fn on_expression(
+        &self,
+        expr: &Expression,
+        _context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
+        if let Expression::FunctionDef(function) = expr {
+            check_params(&function.body, false, diags);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use luck_token::{LuaVersion, offset_to_index};
+
     use super::*;
-    use luck_token::LuaVersion;
+    use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&DuplicateParameter, source, LuaVersion::Lua54)
+        run_rule(&DuplicateParameter, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -100,8 +126,8 @@ mod tests {
         let diags = run(source);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`a`"));
-        // The rule flags the SECOND occurrence.
-        assert_eq!(diags[0].span.start as usize, source.rfind('a').unwrap());
+        // The second occurrence is the one flagged.
+        assert_eq!(offset_to_index(diags[0].span.start), source.rfind('a').unwrap());
     }
 
     #[test]
@@ -132,11 +158,7 @@ mod tests {
 
     #[test]
     fn flags_duplicate_in_global_function() {
-        let diags = crate::test_support::run_rule(
-            &DuplicateParameter,
-            "global function f(a, a) end",
-            LuaVersion::Lua55,
-        );
+        let diags = run_rule(&DuplicateParameter, "global function f(a, a) end", LuaVersion::Lua55);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 

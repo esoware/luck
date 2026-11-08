@@ -1,0 +1,12 @@
+pub(crate) mod explicit_self;
+pub(crate) mod fold_constants;
+pub(crate) mod inline_locals;
+pub(crate) mod lift_locals;
+pub(crate) mod merge_locals;
+pub(crate) mod remove_dead_code;
+pub(crate) mod rename_locals;
+pub(crate) mod shorten_numbers;
+pub(crate) mod shorten_strings;
+pub(crate) mod simplify_indexes;
+pub(crate) mod simplify_parens;
+pub(crate) mod simplify_statements;

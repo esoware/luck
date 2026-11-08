@@ -1,10 +1,12 @@
 //! Scope-context validation: const writes, goto/label resolution, and
-//! Luau's continue/until rule (all compile errors in real Lua).
+//! Luau's continue/until rule (all compile errors in Lua).
+
+use core::ops::Range;
 
 use luck_token::LuaVersion;
 
-/// Parse and run the opt-in scope-context validation, folding its
-/// errors into the result (mirrors what `luck check` does).
+/// Parse errors, or validation errors after a clean parse, as `luck check`
+/// reports them.
 struct Validated {
     errors: Vec<luck_parser::ParseError>,
 }
@@ -22,48 +24,30 @@ fn assert_no_errors(result: &Validated) {
     assert!(result.errors.is_empty(), "unexpected: {:?}", result.errors);
 }
 
-fn assert_has_errors(result: &Validated, what: &str) {
-    assert!(
-        !result.errors.is_empty(),
-        "expected errors for {what}, got none"
-    );
+fn assert_has_errors(result: &Validated, description: &str) {
+    assert!(!result.errors.is_empty(), "expected errors for {description}, got none");
 }
 
 #[test]
 fn assignment_to_const_attrib_rejected() {
     for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
-        assert_has_errors(
-            &parse("local x <const> = 1\nx = 2", version),
-            "const reassignment",
-        );
-        assert_has_errors(
-            &parse("local x <close> = nil\nx = 2", version),
-            "close reassignment",
-        );
+        assert_has_errors(&parse("local x <const> = 1\nx = 2", version), "const reassignment");
+        assert_has_errors(&parse("local x <close> = nil\nx = 2", version), "close reassignment");
         // Upvalue writes are compile errors too.
         assert_has_errors(
-            &parse(
-                "local x <const> = 1\nlocal f = function() x = 2 end",
-                version,
-            ),
+            &parse("local x <const> = 1\nlocal f = function() x = 2 end", version),
             "const upvalue write",
         );
         // Reads, shadows, and table mutation stay legal.
         assert_no_errors(&parse("local x <const> = 1\nprint(x)", version));
-        assert_no_errors(&parse(
-            "local x <const> = 1\nlocal x = 2\nx = 3\nprint(x)",
-            version,
-        ));
+        assert_no_errors(&parse("local x <const> = 1\nlocal x = 2\nx = 3\nprint(x)", version));
         assert_no_errors(&parse("local t <const> = {}\nt.x = 1\nt[1] = 2", version));
     }
 }
 
 #[test]
 fn assignment_to_luau_const_rejected() {
-    assert_has_errors(
-        &parse("const x = 1\nx = 2", LuaVersion::Luau),
-        "luau const reassignment",
-    );
+    assert_has_errors(&parse("const x = 1\nx = 2", LuaVersion::Luau), "luau const reassignment");
     assert_has_errors(
         &parse("const x = 1\nx += 1", LuaVersion::Luau),
         "luau const compound assignment",
@@ -78,11 +62,8 @@ fn assignment_to_luau_const_rejected() {
 #[test]
 fn const_bindings_restore_after_nested_scopes() {
     for version in [LuaVersion::Lua54, LuaVersion::Lua55, LuaVersion::Luau] {
-        let declaration = if version.is_luau() {
-            "const value = 1"
-        } else {
-            "local value <const> = 1"
-        };
+        let declaration =
+            if version.is_luau() { "const value = 1" } else { "local value <const> = 1" };
         for scoped in [
             "do local value = 0 value = 1 end",
             "while false do local value = 0 value = 1 end",
@@ -95,18 +76,10 @@ fn const_bindings_restore_after_nested_scopes() {
         ] {
             let source = format!("{declaration}\n{scoped}\nvalue = 2");
             let result = parse(&source, version);
+            assert_eq!(result.errors.len(), 1, "{version:?} {source}: {:?}", result.errors);
+            assert_eq!(result.errors[0].message, "attempt to assign to const variable `value`");
             assert_eq!(
-                result.errors.len(),
-                1,
-                "{version:?} {source}: {:?}",
-                result.errors
-            );
-            assert_eq!(
-                result.errors[0].message,
-                "attempt to assign to const variable 'value'"
-            );
-            assert_eq!(
-                result.errors[0].span.start as usize,
+                Range::<usize>::from(result.errors[0].span).start,
                 source.rfind("value = 2").expect("final assignment")
             );
         }
@@ -117,6 +90,34 @@ fn const_bindings_restore_after_nested_scopes() {
         "local value <const> = 1\nlocal function f(...value) value = 2 end",
         LuaVersion::Lua55,
     ));
+}
+
+#[test]
+fn validation_errors_follow_check_and_walk_order() {
+    // Not sorted by position: const writes come before goto errors, a value's
+    // writes before its own assignment's, and function bodies' gotos before
+    // the main chunk's.
+    let source = "goto top
+local x <const> = 1
+x = function() x = 2 goto inner end";
+    let result = parse(source, LuaVersion::Lua54);
+    let found: Vec<(usize, &str)> = result
+        .errors
+        .iter()
+        .map(|error| (Range::<usize>::from(error.span).start, error.message.as_str()))
+        .collect();
+    let outer_write = source.find("x = function").expect("outer write");
+    let inner_write = source.find("x = 2").expect("inner write");
+    let inner_goto = source.find("goto inner").expect("inner goto");
+    assert_eq!(
+        found,
+        [
+            (inner_write, "attempt to assign to const variable `x`"),
+            (outer_write, "attempt to assign to const variable `x`"),
+            (inner_goto, "no visible label `inner` for `goto`"),
+            (0, "no visible label `top` for `goto`"),
+        ]
+    );
 }
 
 #[test]
@@ -136,10 +137,7 @@ fn lua55_for_variables_are_readonly() {
 
 #[test]
 fn goto_undefined_label_rejected() {
-    assert_has_errors(
-        &parse("do goto nowhere end", LuaVersion::Lua54),
-        "undefined label",
-    );
+    assert_has_errors(&parse("do goto nowhere end", LuaVersion::Lua54), "undefined label");
     assert_has_errors(
         &parse(
             "goto onlyinfunction\nlocal f = function() ::onlyinfunction:: end",
@@ -153,10 +151,7 @@ fn goto_undefined_label_rejected() {
 
 #[test]
 fn duplicate_label_rejected() {
-    assert_has_errors(
-        &parse("::l:: ::l::", LuaVersion::Lua54),
-        "duplicate label in block",
-    );
+    assert_has_errors(&parse("::l:: ::l::", LuaVersion::Lua54), "duplicate label in block");
     assert_has_errors(
         &parse("::l:: do ::l:: goto l end", LuaVersion::Lua54),
         "shadowing visible label",
@@ -171,24 +166,18 @@ fn duplicate_label_rejected() {
 #[test]
 fn goto_into_local_scope_rejected() {
     assert_has_errors(
-        &parse(
-            "do goto skip end local x = 1 ::skip:: print(x)",
-            LuaVersion::Lua54,
-        ),
+        &parse("do goto skip end local x = 1 ::skip:: print(x)", LuaVersion::Lua54),
         "jump into local scope",
     );
     // A label at the end of the block escapes the locals' scope.
-    assert_no_errors(&parse(
-        "do goto skip end local x = 1 ::skip::",
-        LuaVersion::Lua54,
-    ));
+    assert_no_errors(&parse("do goto skip end local x = 1 ::skip::", LuaVersion::Lua54));
     // The goto-continue loop idiom stays valid.
     assert_no_errors(&parse(
         "for i = 1, 3 do if i == 2 then goto continue end local y = i ::continue:: end",
         LuaVersion::Lua54,
     ));
     // In a repeat block, `until` sees the locals, so a trailing label
-    // does NOT escape their scope.
+    // doesn't escape their scope.
     assert_has_errors(
         &parse(
             "repeat if a then goto continue end local x = 1 ::continue:: until x",
@@ -200,12 +189,7 @@ fn goto_into_local_scope_rejected() {
 
 #[test]
 fn goto_trailing_labels_and_empty_statements() {
-    for version in [
-        LuaVersion::Lua52,
-        LuaVersion::Lua53,
-        LuaVersion::Lua54,
-        LuaVersion::Lua55,
-    ] {
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         for source in [
             "",
             "; ::first:: ; ::second:: ;",
@@ -219,16 +203,8 @@ fn goto_trailing_labels_and_empty_statements() {
             "repeat goto skip local value = 1 ::skip:: ; ::last:: ; until value",
         ] {
             let result = parse(source, version);
-            assert_eq!(
-                result.errors.len(),
-                1,
-                "{version:?} {source}: {:?}",
-                result.errors
-            );
-            assert_eq!(
-                result.errors[0].message,
-                "goto 'skip' jumps into the scope of a local"
-            );
+            assert_eq!(result.errors.len(), 1, "{version:?} {source}: {:?}", result.errors);
+            assert_eq!(result.errors[0].message, "`goto skip` jumps into the scope of a local");
         }
     }
 }
@@ -236,10 +212,7 @@ fn goto_trailing_labels_and_empty_statements() {
 #[test]
 fn continue_until_local_capture_rejected() {
     assert_has_errors(
-        &parse(
-            "repeat do continue end local found = f() until found",
-            LuaVersion::Luau,
-        ),
+        &parse("repeat do continue end local found = f() until found", LuaVersion::Luau),
         "until reads local declared after continue",
     );
     assert_no_errors(&parse(

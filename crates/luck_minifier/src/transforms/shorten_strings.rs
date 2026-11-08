@@ -1,18 +1,12 @@
-use luck_ast::expr::{Expression, Literal};
-use luck_ast::shared::Block;
-use luck_ast::transform::AstTransform;
-use luck_token::{LuaVersion, Span};
+use luck_ast::{Block, Expression, Literal, Transform};
+use luck_token::{LuaVersion, Span, decode_string, encode_string};
 
-use crate::expr::{decode_string_literal, encode_string_literal};
-
-/// Shortens string literals by re-encoding their decoded byte value in
-/// canonical quoted form and keeping whichever spelling is shorter.
+/// Shortens string literals by re-encoding their decoded bytes as a
+/// double-quoted string and keeping whichever spelling is shorter.
 ///
-/// The decode-then-encode round trip is exact: it honours full escape
-/// semantics and preserves UTF-8 and arbitrary bytes alike. A textual scanner
-/// could not, since it would have to reinterpret bytes as chars and track
-/// escape state itself.
-pub fn shorten(block: Block, version: LuaVersion) -> Block {
+/// Going through the decoded bytes keeps every escape, UTF-8 sequence, and
+/// arbitrary byte exact.
+pub(crate) fn shorten(block: Block, version: LuaVersion) -> Block {
     StringShortener { version }.transform_block(block)
 }
 
@@ -20,24 +14,39 @@ struct StringShortener {
     version: LuaVersion,
 }
 
-impl AstTransform for StringShortener {
+impl Transform for StringShortener {
     fn transform_expression(&mut self, expr: Expression) -> Expression {
-        let expr = self.walk_expression(expr);
-
-        match expr {
-            Expression::StringLiteral(ref literal) => {
-                if let Some(bytes) = decode_string_literal(&literal.text, self.version) {
-                    let candidate = encode_string_literal(&bytes);
+        match self.walk_expression(expr) {
+            Expression::StringLiteral(literal) => {
+                if let Some(bytes) = decode_string(&literal.text, self.version) {
+                    let candidate = encode_string(&bytes);
                     if candidate.len() < literal.text.len() {
                         return Expression::StringLiteral(Literal {
-                            text: candidate.into(),
+                            text: candidate,
                             span: Span::default(),
                         });
                     }
                 }
-                expr
+                Expression::StringLiteral(literal)
             }
-            other => other,
+            other @ (Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Var(_)
+            | Expression::FunctionCall(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::BinaryOp(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::TypeInstantiation(_)
+            | Expression::Error(_)) => other,
         }
     }
 }
@@ -45,21 +54,10 @@ impl AstTransform for StringShortener {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::{assert_reparses, run_pass};
 
     fn apply(source: &str) -> String {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
-        assert!(
-            result.errors.is_empty(),
-            "parse failed: {:?}",
-            result.errors
-        );
-        let block = shorten(result.block, luck_token::LuaVersion::Lua54);
-        luck_codegen::compact(&block, source)
-    }
-
-    fn reparses(output: &str) {
-        let reparse = luck_parser::parse(output, luck_token::LuaVersion::Lua54);
-        assert!(reparse.errors.is_empty(), "output must reparse: {output}");
+        run_pass(source, LuaVersion::Lua54, |block| shorten(block, LuaVersion::Lua54))
     }
 
     #[test]
@@ -73,7 +71,7 @@ mod tests {
         // The escaped form is both shorter and exact.
         let result = apply("local x = [[hello\nworld]]");
         assert_eq!(result, "local x=\"hello\\nworld\"");
-        reparses(&result);
+        assert_reparses(&result, LuaVersion::Lua54);
     }
 
     #[test]
@@ -97,7 +95,7 @@ mod tests {
     }
 
     #[test]
-    fn numeric_escape_simplified_in_full_transform() {
+    fn numeric_escapes_decode_to_plain_text() {
         let result = apply("local x = \"\\097\\098\\099\"");
         assert_eq!(result, "local x=\"abc\"");
     }
@@ -106,25 +104,22 @@ mod tests {
     fn nul_escape_shortened_but_exact() {
         let result = apply("local x = \"\\000\"");
         assert_eq!(result, "local x=\"\\0\"");
-        reparses(&result);
+        assert_reparses(&result, LuaVersion::Lua54);
     }
 
     #[test]
     fn escaped_backslash_before_digits_stays_escaped() {
         // `\\097` is a literal backslash followed by "097", not the byte 97.
         let result = apply("local x = \"\\\\097\"");
-        assert!(
-            result.contains("\\\\097"),
-            "backslash + digits must survive: {result}"
-        );
-        reparses(&result);
+        assert!(result.contains("\\\\097"), "backslash + digits must survive: {result}");
+        assert_reparses(&result, LuaVersion::Lua54);
     }
 
     #[test]
     fn utf8_survives_with_escapes() {
         let result = apply("local x = \"\u{e9}\\097\\098\\099\"");
         assert_eq!(result, "local x=\"\u{e9}abc\"");
-        reparses(&result);
+        assert_reparses(&result, LuaVersion::Lua54);
     }
 
     #[test]
@@ -135,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_string_in_table() {
+    fn shortens_strings_nested_in_a_table() {
         let result = apply("local t = {[[hello]], [[world]]}");
         assert!(result.contains("\"hello\""));
         assert!(result.contains("\"world\""));

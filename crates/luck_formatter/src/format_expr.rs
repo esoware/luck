@@ -1,144 +1,105 @@
-//! Expression layout: `impl Format` over `luck_ast` expression nodes.
+//! Expression layout.
 //!
-//! Leaf text never slices source. Identifiers, numbers, and strings come from
-//! the token-carried values via `tokens::write_token`, which is what makes
-//! synthetic ASTs printable.
+//! Leaf text comes from token and literal values, never from source, so
+//! synthetic ASTs stay printable.
 
-use luck_ast::expr::{
-    BinaryOp, Expression, FieldAccess, IfExpression, InterpolatedString, Literal, ParenExpression,
-    UnaryOp, Var,
+use luck_ast::{
+    BinaryOp, Expression, FieldAccess, IfExpression, InterpolatedString, ParenthesizedExpression,
+    UnaryOp, Var, expr_starts_with_brace,
 };
-use luck_token::{BinOp, Token, TokenKind, UnOp};
+use luck_token::{BinOp, CompactString, Token, TokenKind, UnOp};
 
 use crate::format_type::FormatExplicitTypeArgs;
-use crate::ir::*;
+use crate::ir::{
+    Format, Formatter, format_with, group, indent, soft_line, soft_line_or_space, space, token,
+};
+use crate::numbers::normalize_number;
 use crate::quotes::normalize_quote;
-use crate::tokens::write_token;
 
 impl Format for Expression {
-    fn fmt(&self, f: &mut Formatter) {
+    fn fmt(&self, formatter: &mut Formatter) {
         match self {
-            // Fixed-spelling leaves.
-            Expression::Nil(_) => token("nil").fmt(f),
-            Expression::False(_) => token("false").fmt(f),
-            Expression::True(_) => token("true").fmt(f),
-            Expression::VarArg(_) => token("...").fmt(f),
+            Self::Nil(_) => token("nil").fmt(formatter),
+            Self::False(_) => token("false").fmt(formatter),
+            Self::True(_) => token("true").fmt(formatter),
+            Self::VarArg(_) => token("...").fmt(formatter),
 
-            Expression::Number(literal) | Expression::Integer(literal) => {
-                format_number(f, literal);
+            Self::Number(literal) | Self::Integer(literal) => {
+                let normalized =
+                    normalize_number(&literal.text, formatter.options().hexadecimal_case);
+                formatter.write_text(normalized);
             }
-            Expression::StringLiteral(literal) => format_string_literal(f, literal),
+            Self::StringLiteral(literal) => {
+                let normalized = normalize_quote(&literal.text, formatter.options().quote_style);
+                formatter.write_text(normalized);
+            }
 
-            Expression::Var(var) => var.fmt(f),
-            Expression::BinaryOp(binop) => binop.fmt(f),
-            Expression::UnaryOp(unop) => unop.fmt(f),
-            Expression::Parenthesized(paren) => paren.fmt(f),
-            Expression::TableConstructor(table) => table.fmt(f),
+            Self::Var(var) => var.fmt(formatter),
+            Self::BinaryOp(binary_op) => binary_op.fmt(formatter),
+            Self::UnaryOp(unary_op) => unary_op.fmt(formatter),
+            Self::Parenthesized(parenthesized) => parenthesized.fmt(formatter),
+            Self::TableConstructor(table) => table.fmt(formatter),
 
-            // `format_function` owns call and definition bodies; an anonymous
-            // def is the `function` keyword plus its body.
-            Expression::FunctionCall(call) => call.fmt(f),
-            Expression::FunctionDef(def) => {
-                // Luau attributes on a function expression stay inline;
-                // dropping them would change runtime behavior.
-                for attr in &def.attributes {
-                    match &attr.args {
-                        Some(args) => {
-                            crate::write!(
-                                f,
-                                [
-                                    token("@"),
-                                    token("["),
-                                    crate::tokens::FormatToken(&attr.name),
-                                    token("(")
-                                ]
-                            );
-                            for (idx, arg) in args.items.iter().enumerate() {
-                                if idx > 0 {
-                                    crate::write!(f, [token(","), space()]);
-                                }
-                                arg.fmt(f);
-                            }
-                            crate::write!(f, [token(")"), token("]"), space()]);
-                        }
-                        None => {
-                            crate::write!(
-                                f,
-                                [token("@"), crate::tokens::FormatToken(&attr.name), space()]
-                            );
-                        }
-                    }
+            Self::FunctionCall(call) => call.fmt(formatter),
+            Self::FunctionDef(function_def) => {
+                // Luau attributes stay on the same line as `function` here.
+                for attribute in &function_def.attributes {
+                    (attribute, space()).fmt(formatter);
                 }
-                token("function").fmt(f);
-                crate::format_function::FormatFunctionBody { body: &def.body }.fmt(f);
+                (token("function"), &function_def.body).fmt(formatter);
             }
 
-            Expression::IfExpression(if_expr) => if_expr.fmt(f), // Luau
-            Expression::InterpolatedString(interp) => interp.fmt(f), // Luau
-            Expression::TypeCast(cast) => {
-                // Luau
-                cast.expr.fmt(f);
-                crate::write!(f, [space(), token("::"), space()]);
-                cast.type_annotation.fmt(f);
+            Self::IfExpression(if_expr) => if_expr.fmt(formatter), // Luau
+            Self::InterpolatedString(interpolated) => interpolated.fmt(formatter), // Luau
+            // Luau
+            Self::TypeCast(cast) => {
+                (&cast.expr, space(), token("::"), space(), &cast.type_annotation).fmt(formatter);
             }
-            Expression::TypeInstantiation(instantiation) => {
-                instantiation.expr.fmt(f);
-                FormatExplicitTypeArgs(&instantiation.type_args).fmt(f);
+            // Luau
+            Self::TypeInstantiation(instantiation) => {
+                (&instantiation.expr, FormatExplicitTypeArgs(&instantiation.type_args))
+                    .fmt(formatter);
             }
 
-            // Parse-recovery placeholder: source is unslicable here, so there
-            // is nothing faithful to emit.
-            Expression::Error(_) => {}
+            // A parse-recovery placeholder has no text to print.
+            Self::Error(_) => {}
         }
     }
-}
-
-/// Numeric literals: the base prefix and exponent markers are canonicalized
-/// to lowercase, hex digit case follows the configured `hexadecimal_case`.
-fn format_number(f: &mut Formatter, literal: &Literal) {
-    text(crate::numbers::normalize_number(
-        &literal.text,
-        f.options.hexadecimal_case,
-    ))
-    .fmt(f);
-}
-
-/// String literals: long-bracket forms pass through untouched (escape-bearing
-/// raw length is unreliable); short forms are re-quoted to the configured style.
-fn format_string_literal(f: &mut Formatter, literal: &Literal) {
-    text(normalize_quote(&literal.text, f.options.quote_style)).fmt(f);
 }
 
 impl Format for Var {
-    fn fmt(&self, f: &mut Formatter) {
+    fn fmt(&self, formatter: &mut Formatter) {
         match self {
-            Var::Name(token) => write_token(f, token),
-            Var::FieldAccess(access) => format_field_access(f, access),
-            Var::Index(index) => {
-                index.prefix.fmt(f);
-                token("[").fmt(f);
-                if starts_with_bracket(&index.index) {
-                    space().fmt(f);
-                    index.index.fmt(f);
-                    space().fmt(f);
-                } else {
-                    index.index.fmt(f);
-                }
-                token("]").fmt(f);
-            }
+            Self::Name(name) => name.fmt(formatter),
+            Self::FieldAccess(access) => format_field_access(formatter, access),
+            Self::Index(index) => (&index.prefix, BracketedKey(&index.index)).fmt(formatter),
         }
     }
 }
 
-/// Whether the expression's leftmost rendered token begins with `[`: a
-/// long-bracket string on the left spine. Emitting it directly after an
-/// opening `[` would lex as a long-string opener (`[[`), so index and
-/// bracket-field sites pad with spaces when this returns true.
-pub(crate) fn starts_with_bracket(expr: &Expression) -> bool {
+/// `[key]`, as an index or a table field's key.
+pub(crate) struct BracketedKey<'expr>(pub &'expr Expression);
+
+impl Format for BracketedKey<'_> {
+    fn fmt(&self, formatter: &mut Formatter) {
+        // Right after the opening `[`, a long-bracket string would lex as
+        // `[[`, a long-string opener, so it's padded with spaces.
+        if starts_with_bracket(self.0) {
+            (token("["), space(), self.0, space(), token("]")).fmt(formatter);
+        } else {
+            (token("["), self.0, token("]")).fmt(formatter);
+        }
+    }
+}
+
+/// Whether the expression's leftmost token is a long-bracket string.
+fn starts_with_bracket(expr: &Expression) -> bool {
     match expr {
         Expression::StringLiteral(literal) => literal.text.starts_with('['),
-        Expression::BinaryOp(binop) => starts_with_bracket(&binop.left),
+        Expression::BinaryOp(binary_op) => starts_with_bracket(&binary_op.left),
+        // Luau
         Expression::TypeCast(cast) => starts_with_bracket(&cast.expr),
+        // Luau
         Expression::TypeInstantiation(instantiation) => starts_with_bracket(&instantiation.expr),
         Expression::FunctionCall(call) => starts_with_bracket(&call.callee),
         Expression::Var(var) => match var {
@@ -182,55 +143,48 @@ fn collect_access_chain(access: &FieldAccess) -> (&Expression, Vec<&Token>) {
 
 /// A dot chain of three or more accesses gets its own group so it can break
 /// one segment per line; shorter chains stay glued to their prefix.
-fn format_field_access(f: &mut Formatter, access: &FieldAccess) {
+fn format_field_access(formatter: &mut Formatter, access: &FieldAccess) {
     let (root, names) = collect_access_chain(access);
     if names.len() >= 3 {
-        group(format_with(|f| {
-            root.fmt(f);
-            indent(format_with(|f| {
+        group((
+            root,
+            indent(format_with(|indented| {
                 for name in &names {
-                    crate::write!(f, [soft_line(), token(".")]);
-                    write_token(f, name);
+                    (soft_line(), token("."), *name).fmt(indented);
                 }
-            }))
-            .fmt(f);
-        }))
-        .fmt(f);
+            })),
+        ))
+        .fmt(formatter);
     } else {
-        access.prefix.fmt(f);
-        token(".").fmt(f);
-        write_token(f, &access.name);
+        (&access.prefix, token("."), &access.name).fmt(formatter);
     }
 }
 
-/// Flatten a left-recursive binary chain into its leftmost operand and the
-/// following `(operator, operand)` pairs.
+/// Flattens a binary chain into its leftmost operand and the
+/// `(operator, operand)` pairs that follow.
 ///
-/// Right-associative same-operator runs (`..`, `^`) nest on the right; each
-/// nested level would otherwise become its own group, and every group re-runs
-/// `fits` over its remainder - quadratic on long concat chains. Splicing them
-/// into the flat chain keeps operand/operator order (and thus the emitted
-/// text) identical while laying the chain out like a left-associative one.
-fn collect_binary_chain(binop: &BinaryOp) -> (&Expression, Vec<(BinOp, &Expression)>) {
+/// Runs of the right-associative `..` or `^` nest on the right. Left nested,
+/// each level would be its own group and re-run `fits` over its remainder,
+/// which is quadratic on long concat chains. Splicing them in keeps the
+/// emitted text the same and lays the run out like a left-associative chain.
+fn collect_binary_chain(binary_op: &BinaryOp) -> (&Expression, Vec<(BinOp, &Expression)>) {
     let mut parts = Vec::new();
-    let mut current = binop;
+    let mut current = binary_op;
     loop {
         parts.push((current.op, &current.right));
-        match &current.left {
-            Expression::BinaryOp(left_binop) => current = left_binop,
-            _ => break,
-        }
+        let Expression::BinaryOp(left_binary_op) = &current.left else {
+            break;
+        };
+        current = left_binary_op;
     }
     parts.reverse();
 
     let mut flattened: Vec<(BinOp, &Expression)> = Vec::with_capacity(parts.len());
     for (mut op, mut right) in parts {
         while let Expression::BinaryOp(inner) = right {
-            let same_right_assoc_op = matches!(
-                (op, inner.op),
-                (BinOp::Concat, BinOp::Concat) | (BinOp::Pow, BinOp::Pow)
-            );
-            if !same_right_assoc_op {
+            let is_same_right_associative_op =
+                matches!((op, inner.op), (BinOp::Concat, BinOp::Concat) | (BinOp::Pow, BinOp::Pow));
+            if !is_same_right_associative_op {
                 break;
             }
             flattened.push((op, &inner.left));
@@ -244,193 +198,152 @@ fn collect_binary_chain(binop: &BinaryOp) -> (&Expression, Vec<(BinOp, &Expressi
 }
 
 impl Format for BinaryOp {
-    fn fmt(&self, f: &mut Formatter) {
+    fn fmt(&self, formatter: &mut Formatter) {
         let (first, chain) = collect_binary_chain(self);
-        // One group over the whole chain: it prints flat if it fits, otherwise
-        // every operator moves to its own indented line (break before the op).
-        group(format_with(|f| {
-            first.fmt(f);
-            indent(format_with(|f| {
+        // One group over the whole chain, so it's either flat or breaks before
+        // every operator.
+        group((
+            first,
+            indent(format_with(|indented| {
                 for (op, right_expr) in &chain {
-                    soft_line_or_space().fmt(f);
-                    token(op.static_text()).fmt(f);
-                    space().fmt(f);
-                    right_expr.fmt(f);
+                    (soft_line_or_space(), token(op.static_text()), space(), *right_expr)
+                        .fmt(indented);
                 }
-            }))
-            .fmt(f);
-        }))
-        .fmt(f);
+            })),
+        ))
+        .fmt(formatter);
     }
 }
 
-/// `-` immediately before a nested unary `-` would form `--`, starting a
-/// comment; a space keeps the output re-parseable (`- -x`).
+/// `-` right before a nested unary `-` would form `--` and start a comment, so
+/// the pair needs a space (`- -x`).
 fn is_double_minus_hazard(op: UnOp, operand: &Expression) -> bool {
     op == UnOp::Neg && matches!(operand, Expression::UnaryOp(inner) if inner.op == UnOp::Neg)
 }
 
 impl Format for UnaryOp {
-    fn fmt(&self, f: &mut Formatter) {
-        token(self.op.static_text()).fmt(f);
-        if self.op == UnOp::Not {
-            // Keyword operator: always separated from its operand.
-            space().fmt(f);
-        } else if is_double_minus_hazard(self.op, &self.operand) {
-            space().fmt(f);
+    fn fmt(&self, formatter: &mut Formatter) {
+        token(self.op.static_text()).fmt(formatter);
+        // `not` is a keyword operator: always separated from its operand.
+        if self.op == UnOp::Not || is_double_minus_hazard(self.op, &self.operand) {
+            space().fmt(formatter);
         }
-        self.operand.fmt(f);
+        self.operand.fmt(formatter);
     }
 }
 
-impl Format for ParenExpression {
-    fn fmt(&self, f: &mut Formatter) {
-        token("(").fmt(f);
-        self.expr.fmt(f);
-        token(")").fmt(f);
+impl Format for ParenthesizedExpression {
+    fn fmt(&self, formatter: &mut Formatter) {
+        (token("("), &self.expr, token(")")).fmt(formatter);
     }
 }
 
 impl Format for IfExpression {
-    fn fmt(&self, f: &mut Formatter) {
+    fn fmt(&self, formatter: &mut Formatter) {
         // Luau: one group so a long if-expression breaks before each branch.
-        group(format_with(|f| {
-            crate::write!(f, [token("if"), space()]);
-            self.condition.fmt(f);
-            crate::write!(f, [space(), token("then")]);
-            indent(format_with(|f| {
-                soft_line_or_space().fmt(f);
-                self.then_expr.fmt(f);
-            }))
-            .fmt(f);
+        group(format_with(|grouped| {
+            (
+                token("if"),
+                space(),
+                &self.condition,
+                space(),
+                token("then"),
+                indent((soft_line_or_space(), &self.then_expr)),
+            )
+                .fmt(grouped);
 
             for clause in &self.elseif_clauses {
-                crate::write!(f, [soft_line_or_space(), token("elseif"), space()]);
-                clause.condition.fmt(f);
-                crate::write!(f, [space(), token("then")]);
-                indent(format_with(|f| {
-                    soft_line_or_space().fmt(f);
-                    clause.expr.fmt(f);
-                }))
-                .fmt(f);
+                (
+                    soft_line_or_space(),
+                    token("elseif"),
+                    space(),
+                    &clause.condition,
+                    space(),
+                    token("then"),
+                    indent((soft_line_or_space(), &clause.expr)),
+                )
+                    .fmt(grouped);
             }
 
-            crate::write!(f, [soft_line_or_space(), token("else")]);
-            indent(format_with(|f| {
-                soft_line_or_space().fmt(f);
-                self.else_expr.fmt(f);
-            }))
-            .fmt(f);
+            (soft_line_or_space(), token("else"), indent((soft_line_or_space(), &self.else_expr)))
+                .fmt(grouped);
         }))
-        .fmt(f);
+        .fmt(formatter);
     }
 }
 
 impl Format for InterpolatedString {
-    fn fmt(&self, f: &mut Formatter) {
-        // Luau. The `` ` ``/`{`/`}` punctuation follows expression presence,
-        // not token kind: a plain `` `text` `` parses as a Begin("") +
-        // End(text) pair with no expression and must print without braces.
-        let mut prev_had_expr = false;
-        for (index, segment) in self.segments.iter().enumerate() {
-            let part = match &segment.literal.kind {
-                TokenKind::InterpBegin(text)
-                | TokenKind::InterpMid(text)
-                | TokenKind::InterpEnd(text) => text.as_str(),
-                _ => "",
+    fn fmt(&self, formatter: &mut Formatter) {
+        // Luau. Punctuation follows expression presence, not token kind: a
+        // plain `` `text` `` parses as `InterpolatedStringBegin("")` plus
+        // `InterpolatedStringEnd(text)` with no expression, and must print
+        // without braces.
+        let mut opener = Some('`');
+        for segment in &self.segments {
+            let part = if let TokenKind::InterpolatedStringBegin(text)
+            | TokenKind::InterpolatedStringMiddle(text)
+            | TokenKind::InterpolatedStringEnd(text) = &segment.literal.kind
+            {
+                text.as_str()
+            } else {
+                ""
             };
-            let mut piece = String::new();
-            if index == 0 {
-                piece.push('`');
-            } else if prev_had_expr {
-                piece.push('}');
-            }
+            let mut piece = CompactString::default();
+            piece.extend(opener);
             piece.push_str(part);
             if segment.expr.is_some() {
                 piece.push('{');
             }
-            f.push(FormatElement::Text(piece.into()));
+            formatter.write_text(piece);
             if let Some(expr) = &segment.expr {
-                // `{{` is a parse error in Luau: an expression starting
-                // with a table constructor needs a space after the
-                // interpolation opener (and before the closer, for
-                // symmetry when the table also ends the expression).
-                let braced = luck_ast::query::expr_starts_with_brace(expr);
-                if braced {
-                    crate::write!(f, [space()]);
-                }
-                expr.fmt(f);
-                if braced {
-                    crate::write!(f, [space()]);
+                // Luau rejects `{{`, so an expression starting with `{`
+                // gets a space after the opening brace, and one before the
+                // closing brace to match.
+                if expr_starts_with_brace(expr) {
+                    (space(), expr, space()).fmt(formatter);
+                } else {
+                    expr.fmt(formatter);
                 }
             }
-            prev_had_expr = segment.expr.is_some();
+            opener = segment.expr.is_some().then_some('}');
         }
-        f.push(FormatElement::Text("`".into()));
+        formatter.write_text("`");
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::comments::Comments;
-    use crate::printer::{PrinterOptions, print};
-    use luck_ast::stmt::LastStatement;
-    use luck_token::LuaVersion;
+    use crate::fixtures::{parse_expr, render};
+    use crate::{FormatOptions, IndentStyle, QuoteStyle};
 
-    fn print_expr(source: &str, quote_style: crate::QuoteStyle, line_width: u16) -> String {
-        let wrapped = format!("return {source}\n");
-        let parsed = luck_parser::parse(&wrapped, LuaVersion::Luau);
-        let last = parsed.block.last_stmt.expect("wrapped return statement");
-        let LastStatement::Return(ret) = last.as_ref() else {
-            panic!("expected a return statement");
-        };
-        let expr = &ret.exprs.items[0];
-
-        let options = crate::FormatOptions {
-            quote_style,
+    fn print_expr(source: &str, quote_style: QuoteStyle, line_width: u16) -> String {
+        let options = FormatOptions {
             line_width,
-            ..crate::FormatOptions::default()
+            indent_style: IndentStyle::Spaces,
+            quote_style,
+            ..FormatOptions::default()
         };
-        let mut formatter = Formatter::with_context(options, Comments::none());
-        expr.fmt(&mut formatter);
-        let group_count = formatter.group_count();
-        let elements = formatter.into_elements();
-        print(
-            &elements,
-            group_count,
-            &PrinterOptions {
-                line_width,
-                use_tabs: false,
-                indent_width: 4,
-            },
-        )
+        render(&parse_expr(source), options)
     }
 
     #[test]
     fn string_requoted_to_double() {
-        assert_eq!(print_expr("'hi'", crate::QuoteStyle::Double, 80), "\"hi\"");
+        assert_eq!(print_expr("'hi'", QuoteStyle::Double, 80), "\"hi\"");
     }
 
     #[test]
     fn long_bracket_string_untouched() {
-        assert_eq!(
-            print_expr("[[raw]]", crate::QuoteStyle::Double, 80),
-            "[[raw]]"
-        );
+        assert_eq!(print_expr("[[raw]]", QuoteStyle::Double, 80), "[[raw]]");
     }
 
     #[test]
     fn binary_chain_flat_fits() {
-        assert_eq!(
-            print_expr("1 + 2 + 3", crate::QuoteStyle::Double, 80),
-            "1 + 2 + 3"
-        );
+        assert_eq!(print_expr("1 + 2 + 3", QuoteStyle::Double, 80), "1 + 2 + 3");
     }
 
     #[test]
-    fn binary_chain_breaks_before_operator() {
-        let output = print_expr("aaaa + bbbb + cccc", crate::QuoteStyle::Double, 10);
+    fn binary_chain_breaks_before_op() {
+        let output = print_expr("aaaa + bbbb + cccc", QuoteStyle::Double, 10);
         assert!(output.starts_with("aaaa"));
         assert!(output.contains('\n'));
         assert!(output.contains("+ bbbb"));
@@ -438,28 +351,28 @@ mod tests {
 
     #[test]
     fn unary_not_keeps_keyword_space() {
-        assert_eq!(print_expr("not x", crate::QuoteStyle::Double, 80), "not x");
+        assert_eq!(print_expr("not x", QuoteStyle::Double, 80), "not x");
     }
 
     #[test]
     fn unary_minus_no_space() {
-        assert_eq!(print_expr("-x", crate::QuoteStyle::Double, 80), "-x");
+        assert_eq!(print_expr("-x", QuoteStyle::Double, 80), "-x");
     }
 
     #[test]
     fn nested_unary_minus_gets_space() {
         // Must not collapse to `--x` (a comment).
-        assert_eq!(print_expr("- -x", crate::QuoteStyle::Double, 80), "- -x");
+        assert_eq!(print_expr("- -x", QuoteStyle::Double, 80), "- -x");
     }
 
     #[test]
     fn short_field_access_stays_glued() {
-        assert_eq!(print_expr("a.b.c", crate::QuoteStyle::Double, 80), "a.b.c");
+        assert_eq!(print_expr("a.b.c", QuoteStyle::Double, 80), "a.b.c");
     }
 
     #[test]
     fn long_field_chain_breaks_per_segment() {
-        let output = print_expr("aaaa.bbbb.cccc.dddd", crate::QuoteStyle::Double, 10);
+        let output = print_expr("aaaa.bbbb.cccc.dddd", QuoteStyle::Double, 10);
         assert!(output.starts_with("aaaa"));
         assert!(output.contains(".bbbb"));
         assert!(output.contains('\n'));
@@ -467,35 +380,23 @@ mod tests {
 
     #[test]
     fn parenthesized_preserved() {
-        assert_eq!(
-            print_expr("(1 + 2)", crate::QuoteStyle::Double, 80),
-            "(1 + 2)"
-        );
+        assert_eq!(print_expr("(1 + 2)", QuoteStyle::Double, 80), "(1 + 2)");
     }
 
     #[test]
     fn if_expression_flat() {
-        assert_eq!(
-            print_expr("if a then b else c", crate::QuoteStyle::Double, 80),
-            "if a then b else c"
-        );
+        assert_eq!(print_expr("if a then b else c", QuoteStyle::Double, 80), "if a then b else c");
     }
 
     #[test]
     fn interpolated_string_roundtrips() {
-        assert_eq!(
-            print_expr("`hi {x} there`", crate::QuoteStyle::Double, 80),
-            "`hi {x} there`"
-        );
+        assert_eq!(print_expr("`hi {x} there`", QuoteStyle::Double, 80), "`hi {x} there`");
     }
 
     #[test]
     fn plain_interpolated_string_roundtrips() {
         // A plain backtick string parses as a Begin("") + End(text) pair with
         // no expression; it must not gain a spurious `{}` hole.
-        assert_eq!(
-            print_expr("`plain text`", crate::QuoteStyle::Double, 80),
-            "`plain text`"
-        );
+        assert_eq!(print_expr("`plain text`", QuoteStyle::Double, 80), "`plain text`");
     }
 }

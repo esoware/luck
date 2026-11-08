@@ -1,4 +1,10 @@
+#![expect(
+    clippy::missing_panics_doc,
+    reason = "a test panics to fail, so a Panics section says nothing"
+)]
+
 mod common;
 
 mod compact;
-mod roundtrip;
+mod fixtures;
+mod separator;

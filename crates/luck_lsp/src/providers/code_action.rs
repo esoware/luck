@@ -1,100 +1,81 @@
-//! Code actions: per-diagnostic auto-fix, source.fixAll, and rule-disable
-//! comment-insertion actions.
+//! Code actions: each diagnostic's fix, when it has one, and a
+//! disable-for-this-line comment, plus `source.fixAll.luck` for the whole
+//! file.
 
-use std::collections::HashMap;
+use alloc::sync::Arc;
 
-use luck_core::config::LuckConfig;
-use luck_linter::diagnostic::LintDiagnostic;
+use luck_linter::{Fix, LintDiagnostic};
+use luck_token::Span;
+use rustc_hash::FxHashMap;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams,
-    CodeActionResponse, Diagnostic, NumberOrString, Position, Range, TextEdit, Url, WorkspaceEdit,
+    CodeActionResponse, NumberOrString, Position, Range, TextEdit, Url, WorkspaceEdit,
 };
 
-use crate::backend::DocumentState;
-use crate::config::ProjectSettings;
-use crate::line_index::LineIndex;
+use crate::document::DocumentState;
+use crate::settings::ProjectSettings;
 
-#[must_use]
-pub fn code_action(
-    doc: &DocumentState,
+/// The actions for `params`, from `published_lints` when they're current
+/// for `document`.
+pub(crate) fn code_action(
+    document: &DocumentState,
     settings: &ProjectSettings,
-    uri: &Url,
     params: &CodeActionParams,
-    cached_lints: Option<std::sync::Arc<Vec<LintDiagnostic>>>,
+    published_lints: Option<Arc<[LintDiagnostic]>>,
 ) -> CodeActionResponse {
+    let uri = &params.text_document.uri;
+    // Without published lints, they're recomputed through the same opt-in
+    // gate as publishing, so we never offer a fix the user wasn't shown.
+    let lints = published_lints.unwrap_or_else(|| document.lint(&settings.lint_config).into());
+
+    let mut lints_by_rule: FxHashMap<&str, Vec<&LintDiagnostic>> = FxHashMap::default();
+    for lint in lints.iter() {
+        lints_by_rule.entry(lint.rule).or_default().push(lint);
+    }
+
     let mut actions: Vec<CodeActionOrCommand> = Vec::new();
-
-    // The same lint pass that produced the published diagnostics (through
-    // the opt-in gate, so we never offer fixes the user wasn't shown).
-    // Served from the backend's cache when current, recomputed only on a
-    // version mismatch. VS Code fires codeAction on nearly every cursor
-    // move, so an uncached request would re-run the whole rule set.
-    let lint_config = settings.effective_lint_config();
-    let all_diags: std::sync::Arc<Vec<LintDiagnostic>> = match cached_lints {
-        Some(cached) => cached,
-        None => std::sync::Arc::new(luck_linter::lint_parsed(
-            &doc.parsed,
-            doc.target.lua_version(),
-            doc.target.stdlib_environment(),
-            &lint_config,
-        )),
-    };
-
-    let by_rule: HashMap<&str, Vec<&LintDiagnostic>> =
-        all_diags.iter().fold(HashMap::new(), |mut acc, d| {
-            acc.entry(d.rule).or_default().push(d);
-            acc
-        });
-
-    // Per-diagnostic quick-fixes for diagnostics within the cursor range.
-    for diag in &params.context.diagnostics {
-        let rule = diagnostic_rule(diag);
-        let Some(matching) = rule.and_then(|r| by_rule.get(r)) else {
+    for diagnostic in &params.context.diagnostics {
+        let Some(NumberOrString::String(rule)) = &diagnostic.code else {
             continue;
         };
-        for source_diag in matching {
-            if !span_overlaps_range(source_diag.span, &params.range, &doc.line_index, &doc.text) {
+        let Some(matching_lints) = lints_by_rule.get(rule.as_str()) else {
+            continue;
+        };
+        for lint in matching_lints {
+            let lint_range = document.range(lint.span);
+            if lint_range.end < params.range.start || lint_range.start > params.range.end {
                 continue;
             }
-            if let Some(fix) = &source_diag.fix {
-                let edits = fix_to_text_edits(fix, &doc.line_index, &doc.text);
+            if let Some(fix) = &lint.fix {
                 actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                     title: fix.description.clone(),
                     kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: Some(vec![diag.clone()]),
-                    edit: Some(workspace_edit(uri, edits)),
+                    diagnostics: Some(vec![diagnostic.clone()]),
+                    edit: Some(workspace_edit(uri, fix_edits(document, fix))),
                     is_preferred: Some(true),
                     disabled: None,
                     command: None,
                     data: None,
                 }));
             }
-            if let Some(rule_name) = rule {
-                let disable_edit = disable_for_line(source_diag.span, rule_name, doc);
-                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: format!("Disable {rule_name} for this line"),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: Some(vec![diag.clone()]),
-                    edit: Some(workspace_edit(uri, vec![disable_edit])),
-                    is_preferred: Some(false),
-                    disabled: None,
-                    command: None,
-                    data: None,
-                }));
-            }
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title: format!("Disable {rule} for this line"),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![diagnostic.clone()]),
+                edit: Some(workspace_edit(uri, vec![disable_for_line(document, lint.span, rule)])),
+                is_preferred: Some(false),
+                disabled: None,
+                command: None,
+                data: None,
+            }));
         }
     }
 
-    // source.fixAll.luck: apply every fix in the file.
     if should_offer_fix_all(&params.context) {
-        let edits: Vec<TextEdit> = all_diags
-            .iter()
-            .filter_map(|d| d.fix.as_ref())
-            .flat_map(|fix| fix_to_text_edits(fix, &doc.line_index, &doc.text))
-            .collect();
+        let edits = all_fix_edits(document, &lints);
         if !edits.is_empty() {
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                title: "Fix all auto-fixable problems".to_string(),
+                title: "Fix all auto-fixable problems".to_owned(),
                 kind: Some(CodeActionKind::SOURCE_FIX_ALL),
                 diagnostics: None,
                 edit: Some(workspace_edit(uri, edits)),
@@ -109,109 +90,64 @@ pub fn code_action(
     actions
 }
 
-fn diagnostic_rule(diag: &Diagnostic) -> Option<&str> {
-    match &diag.code {
-        Some(NumberOrString::String(s)) => Some(s.as_str()),
-        _ => None,
-    }
-}
-
-fn span_overlaps_range(
-    span: luck_token::Span,
-    range: &Range,
-    line_index: &LineIndex,
-    source: &str,
-) -> bool {
-    let lsp = line_index.range(source, span.start, span.end);
-    !(lsp.end.line < range.start.line
-        || (lsp.end.line == range.start.line && lsp.end.character < range.start.character)
-        || lsp.start.line > range.end.line
-        || (lsp.start.line == range.end.line && lsp.start.character > range.end.character))
-}
-
-fn fix_to_text_edits(
-    fix: &luck_linter::diagnostic::Fix,
-    line_index: &LineIndex,
-    source: &str,
-) -> Vec<TextEdit> {
+fn fix_edits(document: &DocumentState, fix: &Fix) -> Vec<TextEdit> {
     fix.edits
         .iter()
         .map(|edit| TextEdit {
-            range: line_index.range(source, edit.span.start, edit.span.end),
+            range: document.range(edit.span),
             new_text: edit.replacement.clone(),
         })
         .collect()
 }
 
-fn disable_for_line(span: luck_token::Span, rule: &str, doc: &DocumentState) -> TextEdit {
-    let pos = doc.line_index.position(&doc.text, span.start);
-    let line_start = Position {
-        line: pos.line,
-        character: 0,
-    };
+/// Every fix's edits, in lint order.
+fn all_fix_edits(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<TextEdit> {
+    lints
+        .iter()
+        .filter_map(|lint| lint.fix.as_ref())
+        .flat_map(|fix| fix_edits(document, fix))
+        .collect()
+}
+
+fn disable_for_line(document: &DocumentState, span: Span, rule: &str) -> TextEdit {
+    let line_start = Position { line: document.position(span.start).line, character: 0 };
     TextEdit {
-        range: Range {
-            start: line_start,
-            end: line_start,
-        },
+        range: Range { start: line_start, end: line_start },
         new_text: format!("-- luck: allow({rule})\n"),
     }
 }
 
 fn workspace_edit(uri: &Url, edits: Vec<TextEdit>) -> WorkspaceEdit {
-    let mut changes = HashMap::new();
-    changes.insert(uri.clone(), edits);
     WorkspaceEdit {
-        changes: Some(changes),
+        changes: Some([(uri.clone(), edits)].into()),
         document_changes: None,
         change_annotations: None,
     }
 }
 
-fn should_offer_fix_all(ctx: &CodeActionContext) -> bool {
-    match &ctx.only {
-        None => true,
-        Some(kinds) => kinds.iter().any(|k| {
-            k == &CodeActionKind::SOURCE_FIX_ALL
-                || k.as_str() == "source.fixAll.luck"
-                || k == &CodeActionKind::SOURCE
-        }),
-    }
+fn should_offer_fix_all(context: &CodeActionContext) -> bool {
+    context.only.as_ref().is_none_or(|kinds| {
+        kinds.iter().any(|kind| {
+            kind == &CodeActionKind::SOURCE_FIX_ALL
+                || kind.as_str() == "source.fixAll.luck"
+                || kind == &CodeActionKind::SOURCE
+        })
+    })
 }
 
-/// Workspace-wide "fix all", behind the `luck/fixAllWorkspace` custom
-/// request. Walks every open document and returns the merged edit set.
-#[must_use]
-pub fn fix_all_open(
-    documents: &HashMap<Url, DocumentState>,
-    settings_by_uri: impl Fn(&Url) -> ProjectSettings,
-    _config: &LuckConfig,
+/// Every available fix across the open documents, for the
+/// `luck/fixAllWorkspace` custom request.
+pub(crate) fn fix_all_open(
+    documents: &[(Url, Arc<DocumentState>, Arc<ProjectSettings>)],
 ) -> WorkspaceEdit {
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    for (uri, doc) in documents.iter() {
-        let settings = settings_by_uri(uri);
-        // Apply the opt-in gate so fix-all never touches diagnostics that were
-        // never published (a project with no `lint` section shows only parse
-        // errors, so fix-all must not silently rewrite for default rules).
-        let lint_config = settings.effective_lint_config();
-        let diags = luck_linter::lint_parsed(
-            &doc.parsed,
-            doc.target.lua_version(),
-            doc.target.stdlib_environment(),
-            &lint_config,
-        );
-        let edits: Vec<TextEdit> = diags
-            .iter()
-            .filter_map(|d| d.fix.as_ref())
-            .flat_map(|fix| fix_to_text_edits(fix, &doc.line_index, &doc.text))
-            .collect();
-        if !edits.is_empty() {
-            changes.insert(uri.clone(), edits);
-        }
-    }
-    WorkspaceEdit {
-        changes: Some(changes),
-        document_changes: None,
-        change_annotations: None,
-    }
+    let changes = documents
+        .iter()
+        .filter_map(|(uri, document, settings)| {
+            // The opt-in gate keeps fix-all away from diagnostics that were never
+            // published.
+            let edits = all_fix_edits(document, &document.lint(&settings.lint_config));
+            (!edits.is_empty()).then(|| (uri.clone(), edits))
+        })
+        .collect();
+    WorkspaceEdit { changes: Some(changes), document_changes: None, change_annotations: None }
 }

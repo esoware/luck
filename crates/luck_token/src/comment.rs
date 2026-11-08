@@ -1,67 +1,38 @@
 use crate::Span;
 
 /// A comment extracted during lexing, stored in a flat sorted array.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Comment {
-    /// Full span including delimiters (`--` or `--[[ ]]` or `#!`)
+    /// Full span including delimiters (`--`, `--[[ ]]`, or the shebang's `#`).
     pub span: Span,
-    /// Byte offset of the token this comment is attached to.
-    /// For leading comments: start of the next token.
-    /// For trailing comments: start of the preceding token.
+    /// Start offset of the token this comment is attached to: the next token
+    /// for a leading comment, the previous one for a trailing comment.
     pub attached_to: u32,
     pub kind: CommentKind,
     pub position: CommentPosition,
     /// Whether a newline appears before this comment (since the last token).
-    pub preceded_by_newline: bool,
-    /// Whether a newline appears after this comment (before the next token).
-    pub followed_by_newline: bool,
+    pub is_preceded_by_newline: bool,
+    /// Whether this comment ends its line, with only spaces or tabs between it
+    /// and the newline or end of file.
+    pub is_followed_by_newline: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommentKind {
-    /// `-- single line comment` (to end of line)
+    /// `-- single line comment` (to end of line).
     Line,
-    /// `--[[ block comment ]]` that fits on a single line
+    /// `--[[ block comment ]]` that fits on a single line.
     SingleLineBlock,
-    /// `--[[ block comment\n spanning lines ]]`
+    /// `--[[ block comment\n spanning lines ]]`.
     MultiLineBlock,
-    /// `#!/usr/bin/env lua` on line 1
+    /// A first line starting with `#`, such as `#!/usr/bin/env lua`.
     Shebang,
 }
 
 /// Where the comment sits relative to its attached token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommentPosition {
-    /// Comment appears before the attached token.
     Leading,
     /// Comment appears after the attached token on the same line.
     Trailing,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn comment_construction_and_equality() {
-        let comment = Comment {
-            span: Span::new(0, 10),
-            attached_to: 12,
-            kind: CommentKind::Line,
-            position: CommentPosition::Leading,
-            preceded_by_newline: true,
-            followed_by_newline: false,
-        };
-        assert_eq!(comment.kind, CommentKind::Line);
-        assert_eq!(comment.position, CommentPosition::Leading);
-        assert_eq!(comment.attached_to, 12);
-        assert_eq!(comment, comment.clone());
-    }
-
-    #[test]
-    fn comment_kinds_are_distinct() {
-        assert_ne!(CommentKind::Line, CommentKind::SingleLineBlock);
-        assert_ne!(CommentKind::MultiLineBlock, CommentKind::Shebang);
-        assert_ne!(CommentPosition::Leading, CommentPosition::Trailing);
-    }
 }

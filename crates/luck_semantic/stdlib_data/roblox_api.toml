@@ -2,7 +2,7 @@
 # Regenerate: cargo test -p luck_semantic regenerate_roblox_api -- --ignored
 # Source: Roblox API dump, MaximumADHD/Roblox-Client-Tracker (roblox branch).
 # Spliced into the luau_roblox library; luau_roblox.toml params reference
-# these sets by name (see stdlib_model.rs for the constant_sets schema).
+# these sets by name (see stdlib_load.rs for the constant_sets schema).
 # Settings-provider classes (settings() / UserSettings() children) are
 # excluded from roblox_services: they are not reachable via game:GetService.
 

@@ -1,194 +1,155 @@
-//! Document symbols (outline) provider. Walks the AST emitting one
-//! `DocumentSymbol` per declaration: top-level functions, methods,
-//! locals, nested function definitions.
+//! Document symbols for the outline: functions, methods, locals, and
+//! function-valued assignments, with each function's own declarations nested
+//! under it.
 
-#![allow(deprecated)]
+#![expect(
+    deprecated,
+    reason = "`DocumentSymbol` has no constructor, so building one names its deprecated field"
+)]
 
-use luck_ast::expr::{Expression, Var};
-use luck_ast::shared::{Block, FunctionBody};
-use luck_ast::stmt::{FuncName, Statement};
-use luck_token::{Span, TokenKind};
+use luck_ast::{Block, Expression, FunctionBody, FunctionName, Statement, Var, Visitor};
+use luck_token::Span;
 use tower_lsp::lsp_types::{DocumentSymbol, DocumentSymbolResponse, SymbolKind};
 
-use crate::backend::DocumentState;
-use crate::line_index::LineIndex;
+use crate::document::DocumentState;
 
-#[must_use]
-pub fn document_symbols(doc: &DocumentState) -> DocumentSymbolResponse {
-    let mut emitter = SymbolEmitter {
-        line_index: &doc.line_index,
-        source: &doc.text,
-        out: Vec::new(),
-    };
-    emitter.emit_block(&doc.parsed.block);
-    DocumentSymbolResponse::Nested(emitter.out)
+pub(crate) fn document_symbols(document: &DocumentState) -> DocumentSymbolResponse {
+    DocumentSymbolResponse::Nested(outline(document, &document.parsed.block))
 }
 
-struct SymbolEmitter<'a> {
-    line_index: &'a LineIndex,
-    source: &'a str,
-    out: Vec<DocumentSymbol>,
+/// The symbols declared in `block` and in the control-flow blocks nested in
+/// it. A function's declarations nest under the function's own symbol.
+fn outline(document: &DocumentState, block: &Block) -> Vec<DocumentSymbol> {
+    let mut emitter = SymbolEmitter { document, symbols: Vec::new() };
+    emitter.visit_block(block);
+    emitter.symbols
 }
 
-impl SymbolEmitter<'_> {
-    fn emit_block(&mut self, block: &Block) {
-        for stmt in &block.stmts {
-            self.emit_stmt(stmt);
-        }
-    }
+struct SymbolEmitter<'document> {
+    document: &'document DocumentState,
+    symbols: Vec<DocumentSymbol>,
+}
 
-    fn emit_stmt(&mut self, stmt: &Statement) {
+impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
-            Statement::FunctionDecl(decl) => {
-                let (name, kind) = func_name_label(&decl.name);
-                if let Some(symbol) = self.build_function_symbol(&name, kind, &decl.body, decl.span)
-                {
-                    self.out.push(symbol);
-                }
+            Statement::FunctionDecl(declaration) => {
+                let (name, kind) = function_name_label(&declaration.name);
+                self.push_function(&name, kind, &declaration.body, declaration.span);
             }
-            Statement::LocalFunction(local_fn) => {
-                if let TokenKind::Identifier(name) = &local_fn.name.kind
-                    && let Some(symbol) = self.build_function_symbol(
-                        name.as_str(),
+            Statement::LocalFunction(local_function) => {
+                if let Some(name) = local_function.name.identifier() {
+                    self.push_function(
+                        name,
                         SymbolKind::FUNCTION,
-                        &local_fn.body,
-                        local_fn.span,
-                    )
-                {
-                    self.out.push(symbol);
+                        &local_function.body,
+                        local_function.span,
+                    );
                 }
             }
             Statement::LocalAssignment(local) => {
-                for (idx, name_token) in local.names.iter().enumerate() {
-                    if let TokenKind::Identifier(name) = &name_token.name.kind {
-                        let initializer =
-                            local.exprs.as_ref().and_then(|exprs| exprs.iter().nth(idx));
-                        if let Some(Expression::FunctionDef(def)) = initializer
-                            && let Some(symbol) = self.build_function_symbol(
-                                name.as_str(),
-                                SymbolKind::FUNCTION,
-                                &def.body,
-                                local.span,
-                            )
-                        {
-                            self.out.push(symbol);
-                            continue;
-                        }
-                        self.out.push(DocumentSymbol {
-                            name: name.to_string(),
-                            detail: Some("local".to_string()),
-                            kind: SymbolKind::VARIABLE,
-                            tags: None,
-                            deprecated: None,
-                            range: self.range(local.span),
-                            selection_range: self.range(name_token.name.span),
-                            children: None,
-                        });
+                for (index, name_token) in local.names.iter().enumerate() {
+                    let Some(name) = name_token.name.identifier() else {
+                        continue;
+                    };
+                    let initializer =
+                        local.exprs.as_ref().and_then(|exprs| exprs.iter().nth(index));
+                    if let Some(Expression::FunctionDef(function)) = initializer {
+                        self.push_function(name, SymbolKind::FUNCTION, &function.body, local.span);
+                        continue;
                     }
+                    self.symbols.push(DocumentSymbol {
+                        name: name.to_owned(),
+                        detail: Some("local".to_owned()),
+                        kind: SymbolKind::VARIABLE,
+                        tags: None,
+                        deprecated: None,
+                        range: self.document.range(local.span),
+                        selection_range: self.document.range(name_token.name.span),
+                        children: None,
+                    });
                 }
             }
-            Statement::Assignment(assign) => {
+            Statement::Assignment(assignment) => {
                 // Function-table assignment: `Module.thing = function() ... end`
-                for (idx, var) in assign.targets.iter().enumerate() {
-                    let value = assign.values.iter().nth(idx);
-                    let Some(value) = value else { continue };
-                    let Expression::FunctionDef(def) = value else {
+                for (index, var) in assignment.targets.iter().enumerate() {
+                    let Some(Expression::FunctionDef(function)) =
+                        assignment.values.iter().nth(index)
+                    else {
                         continue;
                     };
                     let (name, span) = match var {
-                        Var::Name(token) => match &token.kind {
-                            TokenKind::Identifier(name) => (name.to_string(), token.span),
-                            _ => continue,
-                        },
-                        Var::FieldAccess(fa) => {
-                            let name = self.slice(fa.span).to_string();
-                            (name, fa.span)
+                        Var::Name(token) => {
+                            let Some(name) = token.identifier() else {
+                                continue;
+                            };
+                            (name, token.span)
+                        }
+                        Var::FieldAccess(access) => {
+                            (access.span.text(self.document.text()), access.span)
                         }
                         Var::Index(_) => continue,
                     };
-                    if let Some(symbol) =
-                        self.build_function_symbol(&name, SymbolKind::FUNCTION, &def.body, span)
-                    {
-                        self.out.push(symbol);
-                    }
+                    self.push_function(name, SymbolKind::FUNCTION, &function.body, span);
                 }
             }
-            Statement::DoBlock(do_block) => self.emit_block(&do_block.block),
-            Statement::WhileLoop(loop_) => self.emit_block(&loop_.block),
-            Statement::RepeatLoop(loop_) => self.emit_block(&loop_.block),
-            Statement::IfStatement(if_stmt) => {
-                self.emit_block(&if_stmt.block);
-                for clause in &if_stmt.elseif_clauses {
-                    self.emit_block(&clause.block);
-                }
-                if let Some(else_clause) = &if_stmt.else_clause {
-                    self.emit_block(&else_clause.block);
-                }
-            }
-            Statement::NumericFor(nfor) => self.emit_block(&nfor.block),
-            Statement::GenericFor(gfor) => self.emit_block(&gfor.block),
-            _ => {}
+            Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_) => self.walk_statement(stmt),
+            Statement::FunctionCall(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => {}
         }
     }
 
-    fn build_function_symbol(
-        &mut self,
-        name: &str,
-        kind: SymbolKind,
-        body: &FunctionBody,
-        outer: Span,
-    ) -> Option<DocumentSymbol> {
-        let mut child_emitter = SymbolEmitter {
-            line_index: self.line_index,
-            source: self.source,
-            out: Vec::new(),
-        };
-        child_emitter.emit_block(&body.block);
-        let children = if child_emitter.out.is_empty() {
-            None
-        } else {
-            Some(child_emitter.out)
-        };
-        Some(DocumentSymbol {
-            name: name.to_string(),
+    // A function inside an expression gets no symbol, so neither do its
+    // declarations.
+    fn visit_expression(&mut self, _expr: &'ast Expression) {}
+}
+
+impl SymbolEmitter<'_> {
+    fn push_function(&mut self, name: &str, kind: SymbolKind, body: &FunctionBody, span: Span) {
+        let children = outline(self.document, &body.block);
+        let range = self.document.range(span);
+        self.symbols.push(DocumentSymbol {
+            name: name.to_owned(),
             detail: Some(format_params(body)),
             kind,
             tags: None,
             deprecated: None,
-            range: self.range(outer),
-            selection_range: self.range(outer),
-            children,
-        })
-    }
-
-    fn range(&self, span: Span) -> tower_lsp::lsp_types::Range {
-        self.line_index.range(self.source, span.start, span.end)
-    }
-
-    fn slice(&self, span: Span) -> &str {
-        &self.source[span.start as usize..span.end as usize]
+            range,
+            selection_range: range,
+            children: (!children.is_empty()).then_some(children),
+        });
     }
 }
 
-fn func_name_label(name: &FuncName) -> (String, SymbolKind) {
+fn function_name_label(name: &FunctionName) -> (String, SymbolKind) {
     let mut label = String::new();
-    let mut first = true;
-    for token in &name.names {
-        if let TokenKind::Identifier(ident) = &token.kind {
-            if !first {
-                label.push('.');
-            }
-            label.push_str(ident.as_str());
-            first = false;
+    for identifier in name.names.iter().filter_map(|token| token.identifier()) {
+        if !label.is_empty() {
+            label.push('.');
+        }
+        label.push_str(identifier);
+    }
+    if let Some(method) = &name.method {
+        label.push(':');
+        if let Some(identifier) = method.identifier() {
+            label.push_str(identifier);
         }
     }
-    let kind = if let Some(method) = &name.method {
-        label.push(':');
-        if let TokenKind::Identifier(ident) = &method.kind {
-            label.push_str(ident.as_str());
-        }
-        SymbolKind::METHOD
-    } else if name.names.len() <= 1 {
+    let kind = if name.method.is_none() && name.names.len() <= 1 {
         SymbolKind::FUNCTION
     } else {
         SymbolKind::METHOD
@@ -197,16 +158,10 @@ fn func_name_label(name: &FuncName) -> (String, SymbolKind) {
 }
 
 fn format_params(body: &FunctionBody) -> String {
-    let mut parts: Vec<String> = body
-        .params
-        .iter()
-        .filter_map(|p| match &p.name.kind {
-            TokenKind::Identifier(name) => Some(name.to_string()),
-            _ => None,
-        })
-        .collect();
+    let mut parts: Vec<&str> =
+        body.params.iter().filter_map(|param| param.name.identifier()).collect();
     if body.vararg.is_some() {
-        parts.push("...".to_string());
+        parts.push("...");
     }
     format!("({})", parts.join(", "))
 }

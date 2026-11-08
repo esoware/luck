@@ -1,9 +1,11 @@
-use luck_semantic::scope::{ReferenceKind, SymbolKind};
+use luck_semantic::{ReferenceKind, SymbolKind};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::fix::{Fix, TextEdit};
+use crate::rule::{LintContext, Rule, WholeRule};
 
-pub struct UnusedVariable;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UnusedVariable;
 
 impl Rule for UnusedVariable {
     fn name(&self) -> &'static str {
@@ -18,26 +20,27 @@ impl Rule for UnusedVariable {
     fn description(&self) -> &'static str {
         "variable is declared but never read"
     }
+}
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let semantic = ctx.semantic;
-        let mut diagnostics = Vec::new();
+impl WholeRule for UnusedVariable {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        let semantic = context.semantic;
+        let mut diags = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
-            if symbol.name == "_" || symbol.name.starts_with('_') {
+            if symbol.name.starts_with('_') {
                 continue;
             }
 
-            // Luau: an exported binding's identifier is the export
-            // table's key, so it is read externally and renaming it
-            // would change the module's public API.
+            // Luau: an exported binding is read through the module's export
+            // table, and renaming it would change the module's API.
             if symbol.is_exported {
                 continue;
             }
 
-            // unused_argument and unused_loop_variable own parameters and
-            // loop variables. Reporting them here would double-fire.
-            let kind_str = match symbol.kind {
+            // `unused_argument` and `unused_loop_variable` cover parameters
+            // and loop variables.
+            let kind_name = match symbol.kind {
                 SymbolKind::Local => "variable",
                 SymbolKind::FunctionName => "function",
                 SymbolKind::Parameter
@@ -45,9 +48,9 @@ impl Rule for UnusedVariable {
                 | SymbolKind::NumericForVariable => continue,
             };
 
-            let has_read = symbol.reference_ids.iter().any(|&ref_id| {
+            let has_read = symbol.reference_ids.iter().any(|&reference_id| {
                 matches!(
-                    semantic.scope_tree.reference(ref_id).kind,
+                    semantic.scope_tree.reference(reference_id).kind,
                     ReferenceKind::Read | ReferenceKind::ReadWrite
                 )
             });
@@ -56,44 +59,40 @@ impl Rule for UnusedVariable {
                 continue;
             }
 
-            // Write-only symbols get a diagnostic but no fix, because
-            // renaming only the declaration turns every later write into
-            // a global write. The `_` rename is safe only when nothing
-            // references the symbol at all.
-            let fix = if symbol.reference_ids.is_empty() {
-                Some(Fix {
-                    description: format!("prefix `{}` with `_`", symbol.name),
-                    edits: vec![TextEdit {
-                        span: symbol.definition_span,
-                        replacement: format!("_{}", symbol.name),
-                    }],
-                })
-            } else {
-                None
-            };
+            // Renaming only the declaration would turn any later write into a
+            // global write, so only a symbol with no references gets the fix.
+            let fix = symbol.reference_ids.is_empty().then(|| Fix {
+                description: format!("prefix `{}` with `_`", symbol.name),
+                edits: vec![TextEdit {
+                    span: symbol.definition_span,
+                    replacement: format!("_{}", symbol.name),
+                }],
+            });
 
-            diagnostics.push(
+            diags.push(
                 LintDiagnostic::new(
                     "unused_variable",
-                    format!("unused {kind_str} `{}`", symbol.name),
+                    format!("unused {kind_name} `{}`", symbol.name),
                     symbol.definition_span,
                 )
-                .with_help("prefix with `_` to suppress this warning".to_string())
-                .with_fix_opt(fix),
+                .with_help("prefix with `_` to suppress this warning")
+                .with_optional_fix(fix),
             );
         }
 
-        diagnostics
+        diags
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&UnusedVariable, source, LuaVersion::Luau)
+        run_rule(&UnusedVariable, source, LuaVersion::Luau)
     }
 
     #[test]

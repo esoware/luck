@@ -1,107 +1,121 @@
 //! Control-flow analysis over a `Block`'s statement slice.
 //!
-//! Downstream lint rules use this to answer questions like "does this
-//! function always return", "does this branch fall through", and
-//! "what is the cyclomatic complexity of this body". The walker is a
-//! pure function over `&[Statement]`. It builds no persistent graph and
-//! allocates nothing beyond stack frames.
+//! Rules use this to ask whether a function always returns, whether a loop
+//! body always exits, and how many decision points a body has. The walker is
+//! a pure function over `&[Statement]` and builds no graph.
 //!
-//! The walker descends into function literals (`Expression::FunctionDef`,
-//! `Statement::FunctionDecl`, `Statement::LocalFunction`), but their exits
-//! do NOT propagate into the enclosing block. A function value defined
-//! inline does not change the surrounding control flow.
+//! It doesn't descend into nested function bodies. Their exits and decision
+//! points belong to that function, not to the enclosing block.
 
-use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Var};
-use luck_ast::shared::Block;
-use luck_ast::stmt::{LastStatement, Statement};
+use core::num::Saturating;
+
+use luck_ast::{
+    Block, Expression, Field, FunctionArgs, FunctionCall, IfStatement, LastStatement, Punctuated,
+    Statement, Var,
+};
 use luck_token::BinOp;
-use luck_token::TokenKind;
 
 /// How a statement sequence terminates.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Exit {
+pub(crate) enum Exit {
     #[default]
     Normal,
     Return,
     Break,
     Continue,
-    /// Unconditional `error(...)` call or provably infinite loop.
-    /// Treated as non-returning for unreachable analysis.
+    /// An unconditional `error(...)` call or an infinite loop. Neither falls
+    /// through, so both count toward `always_returns()`.
     Error,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct BranchSummary {
+pub(crate) struct BranchSummary {
     pub exit: Exit,
-    pub always_returns: bool,
-    pub may_return: bool,
-    pub statement_count: usize,
+    pub can_return: bool,
     pub decision_points: u32,
 }
 
-/// Walk a full `Block` (statements plus optional `last_stmt`).
-pub fn analyze_full_block(block: &Block) -> BranchSummary {
+impl BranchSummary {
+    /// Whether the sequence never falls through: it returns, errors, or
+    /// loops forever.
+    pub(crate) const fn always_returns(self) -> bool {
+        match self.exit {
+            Exit::Return | Exit::Error => true,
+            Exit::Normal | Exit::Break | Exit::Continue => false,
+        }
+    }
+
+    const fn add_decision_points(&mut self, points: u32) {
+        self.decision_points = self.decision_points.saturating_add(points);
+    }
+
+    /// Count a branch point on `condition`, plus any inside the condition.
+    fn add_branch(&mut self, condition: &Expression) {
+        self.add_decision_points(1);
+        self.add_decision_points(count_decision_points_expr(condition));
+    }
+
+    /// Fold in a nested block. Its exit stays with the caller, because what
+    /// that exit means depends on the construct holding the block.
+    const fn absorb(&mut self, nested: Self) {
+        self.can_return |= nested.can_return;
+        self.add_decision_points(nested.decision_points);
+    }
+}
+
+pub(crate) fn analyze_full_block(block: &Block) -> BranchSummary {
     analyze_sequence(&block.stmts, block.last_stmt.as_deref())
 }
 
 fn analyze_sequence(stmts: &[Statement], last: Option<&LastStatement>) -> BranchSummary {
     let mut summary = BranchSummary::default();
-    let mut terminated = false;
+    let mut is_terminated = false;
 
     for stmt in stmts {
-        summary.statement_count += 1;
-        let stmt_summary = analyze_statement(stmt);
+        let stmt_summary = analyze_stmt(stmt);
 
-        summary.decision_points += stmt_summary.decision_points;
-        if stmt_summary.may_return {
-            summary.may_return = true;
-        }
+        summary.add_decision_points(stmt_summary.decision_points);
+        summary.can_return |= stmt_summary.can_return;
 
-        if terminated {
-            // Already non-Normal; later statements are unreachable and
-            // must not change the enclosing exit, but their decision
-            // points still count (a rule may want McCabe over the whole
-            // body, dead code or not).
+        if is_terminated {
+            // Unreachable statements can't change the exit, but their
+            // decision points still count toward the body's complexity.
             continue;
         }
 
         if !matches!(stmt_summary.exit, Exit::Normal) {
             summary.exit = stmt_summary.exit;
-            terminated = true;
+            is_terminated = true;
         }
     }
 
-    if !terminated && let Some(last_stmt) = last {
-        summary.statement_count += 1;
+    if !is_terminated && let Some(last_stmt) = last {
         let exit = match last_stmt {
             LastStatement::Return(_) => Exit::Return,
             LastStatement::Break(_) => Exit::Break,
+            // Luau
             LastStatement::Continue(_) => Exit::Continue,
             LastStatement::Error(_) => Exit::Normal,
         };
         if matches!(exit, Exit::Return) {
-            summary.may_return = true;
+            summary.can_return = true;
         }
         summary.exit = exit;
     }
 
-    summary.always_returns = matches!(summary.exit, Exit::Return | Exit::Error);
     summary
 }
 
-fn analyze_statement(stmt: &Statement) -> BranchSummary {
-    let mut summary = BranchSummary {
-        statement_count: 1,
-        ..BranchSummary::default()
-    };
+fn analyze_stmt(stmt: &Statement) -> BranchSummary {
+    let mut summary = BranchSummary::default();
 
     match stmt {
         Statement::Assignment(node) => {
-            summary.decision_points += count_decision_points_punctuated_exprs(&node.values);
+            summary.add_decision_points(count_decision_points_punctuated_exprs(&node.values));
         }
         Statement::FunctionCall(node) => {
             let is_unconditional_error = call_is_error(node);
-            summary.decision_points += count_decision_points_call(node);
+            summary.add_decision_points(count_decision_points_call(node));
             if is_unconditional_error {
                 summary.exit = Exit::Error;
             }
@@ -109,173 +123,151 @@ fn analyze_statement(stmt: &Statement) -> BranchSummary {
         Statement::DoBlock(node) => {
             let inner = analyze_full_block(&node.block);
             summary.exit = inner.exit;
-            summary.may_return |= inner.may_return;
-            summary.decision_points += inner.decision_points;
+            summary.absorb(inner);
         }
         Statement::WhileLoop(node) => {
-            summary.decision_points += 1;
-            summary.decision_points += count_decision_points_expression(&node.condition);
+            summary.add_branch(&node.condition);
             let body = analyze_full_block(&node.block);
-            summary.may_return |= body.may_return;
-            summary.decision_points += body.decision_points;
-            // `while true do ... end` never falls through unless an inner
-            // `break` is reachable. The walker can't see through the body
-            // statically beyond the per-branch summary, but if the body
-            // always returns/errors then so does the loop.
+            summary.absorb(body);
+            // `while true` only ends through `break`, but the body summary
+            // shows a break only when every path takes it. A conditional
+            // break goes unseen, and the loop counts as infinite.
             if is_literal_true(&node.condition) {
-                summary.exit = match body.exit {
-                    Exit::Return => Exit::Return,
-                    Exit::Break => Exit::Normal,
-                    Exit::Error => Exit::Error,
-                    // A body that "continues" or runs normally yields an
-                    // infinite loop, unreachable from the outside.
-                    Exit::Continue | Exit::Normal => Exit::Error,
-                };
+                summary.exit = infinite_loop_exit(body.exit);
             }
         }
         Statement::RepeatLoop(node) => {
-            summary.decision_points += 1;
-            summary.decision_points += count_decision_points_expression(&node.condition);
+            summary.add_branch(&node.condition);
             let body = analyze_full_block(&node.block);
-            summary.may_return |= body.may_return;
-            summary.decision_points += body.decision_points;
-            if is_literal_false(&node.condition) {
+            summary.absorb(body);
+            summary.exit = if is_literal_false(&node.condition) {
                 // `repeat ... until false` is equivalent to `while true do ... end`.
-                summary.exit = match body.exit {
-                    Exit::Return => Exit::Return,
-                    Exit::Break => Exit::Normal,
-                    Exit::Error => Exit::Error,
-                    Exit::Continue | Exit::Normal => Exit::Error,
-                };
+                infinite_loop_exit(body.exit)
             } else if is_literal_true(&node.condition) {
                 // `repeat ... until true` runs the body exactly once.
-                summary.exit = match body.exit {
+                match body.exit {
                     Exit::Break => Exit::Normal,
-                    other => other,
-                };
+                    exit @ (Exit::Normal | Exit::Return | Exit::Continue | Exit::Error) => exit,
+                }
             } else {
-                // Body executes at least once; a return/error in the body
-                // still terminates the loop. A break is consumed.
-                summary.exit = match body.exit {
+                // The body runs at least once, so its return or error still
+                // applies. A break is consumed.
+                match body.exit {
                     Exit::Return => Exit::Return,
                     Exit::Error => Exit::Error,
                     Exit::Break | Exit::Continue | Exit::Normal => Exit::Normal,
-                };
-            }
+                }
+            };
         }
-        Statement::IfStatement(node) => {
-            // +1 for the if itself, +1 per elseif. The `else` is the
-            // fallthrough, not a decision point in McCabe's definition.
-            summary.decision_points += 1;
-            summary.decision_points += count_decision_points_expression(&node.condition);
-            for clause in &node.elseif_clauses {
-                summary.decision_points += 1;
-                summary.decision_points += count_decision_points_expression(&clause.condition);
-            }
-
-            let then_summary = analyze_full_block(&node.block);
-            summary.may_return |= then_summary.may_return;
-            summary.decision_points += then_summary.decision_points;
-
-            let mut branch_exits: Vec<Exit> = vec![then_summary.exit];
-            for clause in &node.elseif_clauses {
-                let clause_summary = analyze_full_block(&clause.block);
-                summary.may_return |= clause_summary.may_return;
-                summary.decision_points += clause_summary.decision_points;
-                branch_exits.push(clause_summary.exit);
-            }
-
-            if let Some(else_clause) = &node.else_clause {
-                let else_summary = analyze_full_block(&else_clause.block);
-                summary.may_return |= else_summary.may_return;
-                summary.decision_points += else_summary.decision_points;
-                branch_exits.push(else_summary.exit);
-                summary.exit = combine_branches(&branch_exits);
-            } else {
-                // Implicit fallthrough is Normal, so the if-without-else
-                // can never terminate the enclosing sequence.
-                summary.exit = Exit::Normal;
-            }
-        }
+        Statement::IfStatement(node) => analyze_if(node, &mut summary),
         Statement::NumericFor(node) => {
-            summary.decision_points += 1;
-            summary.decision_points += count_decision_points_expression(&node.start);
-            summary.decision_points += count_decision_points_expression(&node.limit);
+            summary.add_branch(&node.start);
+            summary.add_decision_points(count_decision_points_expr(&node.limit));
             if let Some(step) = &node.step {
-                summary.decision_points += count_decision_points_expression(step);
+                summary.add_decision_points(count_decision_points_expr(step));
             }
-            let body = analyze_full_block(&node.block);
-            summary.may_return |= body.may_return;
-            summary.decision_points += body.decision_points;
-            // The body may execute zero times; the loop itself falls
-            // through normally.
+            summary.absorb(analyze_full_block(&node.block));
+            // The body may run zero times, so the loop falls through.
             summary.exit = Exit::Normal;
         }
         Statement::GenericFor(node) => {
-            summary.decision_points += 1;
-            summary.decision_points += count_decision_points_punctuated_exprs(&node.exprs);
-            let body = analyze_full_block(&node.block);
-            summary.may_return |= body.may_return;
-            summary.decision_points += body.decision_points;
+            summary.add_decision_points(1);
+            summary.add_decision_points(count_decision_points_punctuated_exprs(&node.exprs));
+            summary.absorb(analyze_full_block(&node.block));
             summary.exit = Exit::Normal;
         }
-        // Function declarations are isolated control-flow units. Their
-        // exits and decision points belong to the function, not the
-        // enclosing block. Callers that need per-function complexity
-        // run `analyze_full_block` on the body directly.
-        Statement::FunctionDecl(_) => {}
-        Statement::LocalFunction(_) => {}
         Statement::LocalAssignment(node) => {
             if let Some(exprs) = &node.exprs {
-                summary.decision_points += count_decision_points_punctuated_exprs(exprs);
+                summary.add_decision_points(count_decision_points_punctuated_exprs(exprs));
             }
         }
-        Statement::EmptyStatement(_) => {}
-        Statement::Goto(_) => {}
-        Statement::Label(_) => {}
+        // Lua 5.5
         Statement::GlobalDeclaration(node) => {
             if let Some(exprs) = &node.exprs {
-                summary.decision_points += count_decision_points_punctuated_exprs(exprs);
+                summary.add_decision_points(count_decision_points_punctuated_exprs(exprs));
             }
         }
-        Statement::GlobalFunction(_) => {}
-        Statement::GlobalStar(_) => {}
-        // Lua 5.2+: bare `break` statement.
+        // Lua 5.2+: `break` as an ordinary statement.
         Statement::Break(_) => {
             summary.exit = Exit::Break;
         }
+        // Luau
         Statement::CompoundAssignment(node) => {
-            summary.decision_points += count_decision_points_expression(&node.expr);
+            summary.add_decision_points(count_decision_points_expr(&node.expr));
         }
-        Statement::TypeDeclaration(_) => {}
-        Statement::Error(_) => {}
+        // A function's exits and decision points are its own, so callers
+        // analyze each body separately. The walker doesn't model `goto`,
+        // and the other statements here don't affect control flow.
+        Statement::FunctionDecl(_)
+        | Statement::LocalFunction(_)
+        | Statement::GlobalFunction(_)
+        | Statement::EmptyStatement(_)
+        | Statement::Goto(_)
+        | Statement::Label(_)
+        | Statement::GlobalStar(_)
+        | Statement::TypeDeclaration(_)
+        | Statement::Error(_) => {}
     }
 
     summary
 }
 
-/// Combine branch exits using the "weakest matching exit" rule.
+fn analyze_if(node: &IfStatement, summary: &mut BranchSummary) {
+    // +1 for the if itself, +1 per elseif. The `else` is the
+    // fallthrough, not a decision point in McCabe's definition.
+    summary.add_branch(&node.condition);
+    for clause in &node.elseif_clauses {
+        summary.add_branch(&clause.condition);
+    }
+
+    let then_summary = analyze_full_block(&node.block);
+    summary.absorb(then_summary);
+
+    let mut branch_exits: Vec<Exit> = vec![then_summary.exit];
+    for clause in &node.elseif_clauses {
+        let clause_summary = analyze_full_block(&clause.block);
+        summary.absorb(clause_summary);
+        branch_exits.push(clause_summary.exit);
+    }
+
+    if let Some(else_clause) = &node.else_clause {
+        let else_summary = analyze_full_block(&else_clause.block);
+        summary.absorb(else_summary);
+        branch_exits.push(else_summary.exit);
+        summary.exit = combine_branches(&branch_exits);
+    } else {
+        // Without an `else`, it falls through when no condition holds.
+        summary.exit = Exit::Normal;
+    }
+}
+
+/// Exit of a loop whose condition never ends it, given how its body exits.
+const fn infinite_loop_exit(body_exit: Exit) -> Exit {
+    match body_exit {
+        Exit::Return => Exit::Return,
+        Exit::Break => Exit::Normal,
+        // An erroring body errors, and any other body loops forever, which
+        // counts as `Error` too.
+        Exit::Error | Exit::Continue | Exit::Normal => Exit::Error,
+    }
+}
+
+/// Combines the exits of an if statement's branches, `else` included.
 ///
-/// Returns the common exit kind iff every branch shares it; otherwise
-/// `Exit::Normal` (the path that takes the disagreeing branch falls
-/// through). Error is treated as a stronger non-return than Return only
-/// when paired with itself; mixed Return/Error collapses to Return
-/// because both prevent fallthrough.
+/// Branches that all share an exit give that exit, and a mix of `Return` and
+/// `Error` gives `Return`, since neither falls through. Any other mix gives
+/// `Exit::Normal`.
 fn combine_branches(exits: &[Exit]) -> Exit {
-    if exits.is_empty() {
+    let Some(&first) = exits.first() else {
+        return Exit::Normal;
+    };
+    let has_normal_exit = exits.iter().any(|exit| matches!(exit, Exit::Normal));
+    if has_normal_exit {
         return Exit::Normal;
     }
-    let first = exits[0];
-    let all_non_normal = exits.iter().all(|exit| !matches!(exit, Exit::Normal));
-    if !all_non_normal {
-        return Exit::Normal;
-    }
-    let all_returnish = exits
-        .iter()
-        .all(|exit| matches!(exit, Exit::Return | Exit::Error));
-    if all_returnish {
-        // Return is the dominant label. Error is rare, and merging it
-        // into Return still preserves "always_returns".
+    let is_every_exit_return_or_error =
+        exits.iter().all(|exit| matches!(exit, Exit::Return | Exit::Error));
+    if is_every_exit_return_or_error {
         return if exits.iter().all(|exit| matches!(exit, Exit::Error)) {
             Exit::Error
         } else {
@@ -285,147 +277,132 @@ fn combine_branches(exits: &[Exit]) -> Exit {
     if exits.iter().all(|exit| *exit == first) {
         return first;
     }
-    // Mixed non-Normal exits (e.g. one branch breaks, another returns)
-    // have no single label, so report the weakest observable property.
-    // Normal, since the enclosing sequence may continue along the break
-    // path once a loop consumes it.
+    // No single exit fits a mix like break-or-return, and `Normal` is the
+    // conservative answer.
     Exit::Normal
 }
 
-fn is_literal_true(expr: &Expression) -> bool {
+const fn is_literal_true(expr: &Expression) -> bool {
     matches!(expr, Expression::True(_))
 }
 
-fn is_literal_false(expr: &Expression) -> bool {
+const fn is_literal_false(expr: &Expression) -> bool {
     matches!(expr, Expression::False(_))
 }
 
-/// Direct call to the `error` global with no receiver method.
+/// Whether `call` is a plain `error(...)` call. A local that shadows `error`
+/// still matches.
 fn call_is_error(call: &FunctionCall) -> bool {
     if call.method.is_some() {
         return false;
     }
-    let Expression::Var(var) = &call.callee else {
+    let Expression::Var(Var::Name(token)) = &call.callee else {
         return false;
     };
-    let Var::Name(token) = var else {
-        return false;
-    };
-    matches!(&token.kind, TokenKind::Identifier(name) if name.as_str() == "error")
+    token.identifier() == Some("error")
 }
 
-fn count_decision_points_punctuated_exprs(exprs: &luck_ast::shared::Punctuated<Expression>) -> u32 {
-    exprs.iter().map(count_decision_points_expression).sum()
+fn count_decision_points_punctuated_exprs(exprs: &Punctuated<Expression>) -> u32 {
+    exprs.iter().map(count_decision_points_expr).sum()
 }
 
 fn count_decision_points_call(call: &FunctionCall) -> u32 {
-    let mut total = count_decision_points_expression(&call.callee);
+    let mut total = Saturating(count_decision_points_expr(&call.callee));
     match &call.args {
         FunctionArgs::Parenthesized { args, .. } => {
             total += count_decision_points_punctuated_exprs(args);
         }
-        FunctionArgs::TableConstructor(_) => {}
-        FunctionArgs::StringLiteral(_) => {}
+        FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => {}
     }
-    total
+    total.0
 }
 
-/// McCabe-style decision-point count for an expression. Every short-circuit
-/// `and`/`or` adds 1 (each adds an independent path); a Luau `if/elseif/else`
-/// expression adds 1 per `if`/`elseif`.
-fn count_decision_points_expression(expr: &Expression) -> u32 {
+/// McCabe-style decision points in an expression.
+///
+/// Each `and`/`or` adds 1, as does each `if`/`elseif` of a Luau
+/// if-expression. Function literals add nothing; their points are their own.
+fn count_decision_points_expr(expr: &Expression) -> u32 {
     match expr {
-        Expression::Nil(_) => 0,
-        Expression::False(_) => 0,
-        Expression::True(_) => 0,
-        Expression::Number(_) => 0,
-        Expression::Integer(_) => 0, // Luau
-        Expression::StringLiteral(_) => 0,
-        Expression::VarArg(_) => 0,
-        Expression::FunctionDef(_) => 0,
+        Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Error(_) => 0,
         Expression::Var(var) => count_decision_points_var(var),
         Expression::FunctionCall(call) => count_decision_points_call(call),
-        Expression::Parenthesized(node) => count_decision_points_expression(&node.expr),
+        Expression::Parenthesized(node) => count_decision_points_expr(&node.expr),
         Expression::TableConstructor(node) => {
-            let mut total = 0;
+            let mut total = Saturating(0u32);
             for field in node.fields.iter() {
                 match field {
-                    luck_ast::shared::Field::Bracketed { key, value, .. } => {
-                        total += count_decision_points_expression(key);
-                        total += count_decision_points_expression(value);
+                    Field::Bracketed { key, value, .. } => {
+                        total += count_decision_points_expr(key);
+                        total += count_decision_points_expr(value);
                     }
-                    luck_ast::shared::Field::Named { value, .. } => {
-                        total += count_decision_points_expression(value);
-                    }
-                    luck_ast::shared::Field::Positional { value, .. } => {
-                        total += count_decision_points_expression(value);
+                    Field::Named { value, .. } | Field::Positional { value, .. } => {
+                        total += count_decision_points_expr(value);
                     }
                 }
             }
-            total
+            total.0
         }
         Expression::BinaryOp(node) => {
-            let self_points = match node.op {
-                BinOp::And | BinOp::Or => 1,
-                _ => 0,
-            };
-            self_points
-                + count_decision_points_expression(&node.left)
-                + count_decision_points_expression(&node.right)
+            let mut total = Saturating(u32::from(matches!(node.op, BinOp::And | BinOp::Or)));
+            total += count_decision_points_expr(&node.left);
+            total += count_decision_points_expr(&node.right);
+            total.0
         }
-        Expression::UnaryOp(node) => count_decision_points_expression(&node.operand),
+        Expression::UnaryOp(node) => count_decision_points_expr(&node.operand),
         // Luau: each `if`/`elseif` in an if-expression is a branch point.
         Expression::IfExpression(node) => {
-            let mut total = 1;
-            total += count_decision_points_expression(&node.condition);
-            total += count_decision_points_expression(&node.then_expr);
+            let mut total = Saturating(1u32);
+            total += count_decision_points_expr(&node.condition);
+            total += count_decision_points_expr(&node.then_expr);
             for clause in &node.elseif_clauses {
                 total += 1;
-                total += count_decision_points_expression(&clause.condition);
-                total += count_decision_points_expression(&clause.expr);
+                total += count_decision_points_expr(&clause.condition);
+                total += count_decision_points_expr(&clause.expr);
             }
-            total += count_decision_points_expression(&node.else_expr);
-            total
+            total += count_decision_points_expr(&node.else_expr);
+            total.0
         }
-        Expression::InterpolatedString(node) => {
-            let mut total = 0;
-            for segment in &node.segments {
-                if let Some(expr) = &segment.expr {
-                    total += count_decision_points_expression(expr);
-                }
-            }
-            total
-        }
-        Expression::TypeCast(node) => count_decision_points_expression(&node.expr),
-        Expression::TypeInstantiation(node) => count_decision_points_expression(&node.expr),
-        Expression::Error(_) => 0,
+        // Luau
+        Expression::InterpolatedString(node) => node
+            .segments
+            .iter()
+            .filter_map(|segment| segment.expr.as_ref())
+            .map(count_decision_points_expr)
+            .sum(),
+        // Luau
+        Expression::TypeCast(node) => count_decision_points_expr(&node.expr),
+        // Luau
+        Expression::TypeInstantiation(node) => count_decision_points_expr(&node.expr),
     }
 }
 
 fn count_decision_points_var(var: &Var) -> u32 {
     match var {
         Var::Name(_) => 0,
-        Var::Index(node) => {
-            count_decision_points_expression(&node.prefix)
-                + count_decision_points_expression(&node.index)
-        }
-        Var::FieldAccess(node) => count_decision_points_expression(&node.prefix),
+        Var::Index(node) => count_decision_points_expr(&node.prefix)
+            .saturating_add(count_decision_points_expr(&node.index)),
+        Var::FieldAccess(node) => count_decision_points_expr(&node.prefix),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+
     fn parse_block(source: &str) -> Block {
-        let result = luck_parser::parse(source, LuaVersion::Lua54);
-        assert!(
-            result.errors.is_empty(),
-            "parser errors for {source:?}: {:?}",
-            result.errors
-        );
-        result.block
+        let parse = luck_parser::parse(source, LuaVersion::Lua54);
+        assert!(parse.errors.is_empty(), "parser errors for {source:?}: {:?}", parse.errors);
+        parse.block
     }
 
     fn summarize(source: &str) -> BranchSummary {
@@ -437,33 +414,32 @@ mod tests {
     fn empty_block_is_normal() {
         let summary = summarize("");
         assert_eq!(summary.exit, Exit::Normal);
-        assert_eq!(summary.statement_count, 0);
-        assert!(!summary.always_returns);
-        assert!(!summary.may_return);
+        assert!(!summary.always_returns());
+        assert!(!summary.can_return);
     }
 
     #[test]
     fn bare_return_terminates() {
         let summary = summarize("return 1");
         assert_eq!(summary.exit, Exit::Return);
-        assert!(summary.always_returns);
-        assert!(summary.may_return);
+        assert!(summary.always_returns());
+        assert!(summary.can_return);
     }
 
     #[test]
     fn if_without_else_does_not_always_return() {
         let summary = summarize("local c = 1\nif c then return 1 end");
         assert_eq!(summary.exit, Exit::Normal);
-        assert!(!summary.always_returns);
-        assert!(summary.may_return);
+        assert!(!summary.always_returns());
+        assert!(summary.can_return);
     }
 
     #[test]
     fn if_else_both_return() {
         let summary = summarize("local c = 1\nif c then return 1 else return 2 end");
         assert_eq!(summary.exit, Exit::Return);
-        assert!(summary.always_returns);
-        assert!(summary.may_return);
+        assert!(summary.always_returns());
+        assert!(summary.can_return);
     }
 
     #[test]
@@ -472,57 +448,56 @@ mod tests {
             "local c = 1\nlocal d = 1\nif c then return 1 elseif d then return 2 else return 3 end",
         );
         assert_eq!(summary.exit, Exit::Return);
-        assert!(summary.always_returns);
+        assert!(summary.always_returns());
     }
 
     #[test]
     fn while_true_no_break_is_error_exit() {
         let summary = summarize("while true do print(1) end");
-        // Infinite loop: never falls through, treated like Error for
-        // unreachable analysis. `always_returns` is true since Error
-        // counts as non-falling-through.
+        // An infinite loop never falls through, so it counts as `Error` and
+        // `always_returns` holds.
         assert_eq!(summary.exit, Exit::Error);
-        assert!(summary.always_returns);
-        assert!(!summary.may_return);
+        assert!(summary.always_returns());
+        assert!(!summary.can_return);
     }
 
     #[test]
     fn while_true_with_return_returns() {
         let summary = summarize("while true do return 1 end");
         assert_eq!(summary.exit, Exit::Return);
-        assert!(summary.always_returns);
-        assert!(summary.may_return);
+        assert!(summary.always_returns());
+        assert!(summary.can_return);
     }
 
     #[test]
     fn repeat_until_true_executes_once() {
         let summary = summarize("repeat return 1 until true");
         assert_eq!(summary.exit, Exit::Return);
-        assert!(summary.may_return);
+        assert!(summary.can_return);
     }
 
     #[test]
     fn numeric_for_may_not_execute() {
         let summary = summarize("for i = 1, 10 do return 1 end");
-        // Loop body may not execute (start > limit at runtime), so the
-        // loop itself falls through normally, even though it MAY return.
+        // The body may run zero times, so the loop falls through even
+        // though it may return.
         assert_eq!(summary.exit, Exit::Normal);
-        assert!(!summary.always_returns);
-        assert!(summary.may_return);
+        assert!(!summary.always_returns());
+        assert!(summary.can_return);
     }
 
     #[test]
     fn do_block_return_propagates() {
         let summary = summarize("do return end");
         assert_eq!(summary.exit, Exit::Return);
-        assert!(summary.always_returns);
+        assert!(summary.always_returns());
     }
 
     #[test]
     fn unconditional_error_is_error_exit() {
         let summary = summarize("error(\"x\")");
         assert_eq!(summary.exit, Exit::Error);
-        assert!(summary.always_returns);
+        assert!(summary.always_returns());
     }
 
     #[test]
@@ -531,14 +506,13 @@ mod tests {
         // The break belongs to the while; the enclosing block falls
         // through normally.
         assert_eq!(summary.exit, Exit::Normal);
-        assert!(!summary.always_returns);
+        assert!(!summary.always_returns());
     }
 
     #[test]
     fn decision_points_empty_block() {
         let summary = summarize("");
-        // McCabe baseline of 1 is added by the caller (the rule); the
-        // walker reports 0 decision points for an empty body.
+        // The rule adds McCabe's baseline of 1; the walker reports 0.
         assert_eq!(summary.decision_points, 0);
     }
 

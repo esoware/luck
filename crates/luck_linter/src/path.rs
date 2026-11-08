@@ -1,41 +1,34 @@
-//! Dotted-name path extraction shared by the rules that resolve a
-//! `Name(.Name)*` access against the stdlib or Roblox `Enum` catalog
-//! (`deprecated`, `roblox_unknown_enum_member`).
+//! Name helpers shared by rules, mainly for resolving a `Name(.Name)*` access
+//! against the stdlib or the Roblox `Enum` catalog.
 
-use luck_ast::Expression;
-use luck_ast::expr::Var;
-use luck_token::{Span, Token, TokenKind};
+use luck_ast::{Expression, Var};
+use luck_token::Span;
 
-/// Unwind a `Name(.Name)*` chain into its segments and per-segment spans,
-/// outermost last. Any non-name link (indexing, a call) aborts and yields
-/// `None`.
-pub(crate) fn dotted_path(expr: &Expression) -> Option<(Vec<&str>, Vec<Span>)> {
+/// Splits a `Name(.Name)*` chain into its names and their spans, root first.
+/// Any other link, such as indexing or a call, yields `None`.
+pub(crate) fn dotted_path(var: &Var) -> Option<(Vec<&str>, Vec<Span>)> {
     let mut segments: Vec<&str> = Vec::new();
     let mut spans: Vec<Span> = Vec::new();
-    let mut cursor = expr;
+    let mut cursor = var;
     loop {
         match cursor {
-            Expression::Var(Var::Name(token)) => {
-                segments.push(identifier(token)?);
+            Var::Name(token) => {
+                segments.push(token.identifier()?);
                 spans.push(token.span);
                 break;
             }
-            Expression::Var(Var::FieldAccess(field_access)) => {
-                segments.push(identifier(&field_access.name)?);
+            Var::FieldAccess(field_access) => {
+                segments.push(field_access.name.identifier()?);
                 spans.push(field_access.name.span);
-                cursor = &field_access.prefix;
+                let Expression::Var(prefix) = &field_access.prefix else {
+                    return None;
+                };
+                cursor = prefix;
             }
-            _ => return None,
+            Var::Index(_) => return None,
         }
     }
     segments.reverse();
     spans.reverse();
     Some((segments, spans))
-}
-
-fn identifier(token: &Token) -> Option<&str> {
-    match &token.kind {
-        TokenKind::Identifier(name) => Some(name.as_str()),
-        _ => None,
-    }
 }

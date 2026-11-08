@@ -1,0 +1,88 @@
+---
+source: crates/luck_bundler/tests/it/bundle.rs
+expression: output
+---
+do
+local __luck_modules={}
+local __luck_loaded=type(package)=="table" and type(package.loaded)=="table" and package.loaded or {}
+local __luck_preload=type(package)=="table" and type(package.preload)=="table" and package.preload or {}
+local __luck_paths={}
+local function __luck_require(name)
+local value=__luck_loaded[name]
+if value then return value end
+local loaderdata
+local loader=__luck_preload[name]
+if loader then
+loaderdata=":preload:"
+else
+loader=__luck_modules[name]
+loaderdata=__luck_paths[name]
+end
+value=loader(name,loaderdata)
+if value~=nil then __luck_loaded[name]=value end
+value=__luck_loaded[name]
+if value==nil then
+value=true
+__luck_loaded[name]=value
+end
+return value,loaderdata
+end
+-- module "e": e.lua
+__luck_modules["e"]=function(...)
+local e = {}
+
+function e.compute()
+    return 1
+end
+
+return e
+end
+__luck_paths["e"]="e.lua"
+-- module "d": d.lua
+__luck_modules["d"]=function(...)
+local e = __luck_require("e")
+
+local d = {}
+
+function d.compute()
+    return e.compute() + 1
+end
+
+return d
+end
+__luck_paths["d"]="d.lua"
+-- module "c": c.lua
+__luck_modules["c"]=function(...)
+local d = __luck_require("d")
+
+local c = {}
+
+function c.compute()
+    return d.compute() + 1
+end
+
+return c
+end
+__luck_paths["c"]="c.lua"
+-- module "b": b.lua
+__luck_modules["b"]=function(...)
+local c = __luck_require("c")
+
+local b = {}
+
+function b.compute()
+    return c.compute() + 1
+end
+
+return b
+end
+__luck_paths["b"]="b.lua"
+local __luck_entry=function(...)
+local b = __luck_require("b")
+
+local result = b.compute()
+print(result)
+return result
+end
+return __luck_entry(...)
+end

@@ -1,21 +1,20 @@
-# Standalone Luau standard library: the complete global surface of the
-# open-source Luau VM and CLI (luau / luau-analyze), with no Roblox
-# additions. The Roblox environment lives in luau_roblox.toml as a fully
-# independent file - the two are deliberately split, not layered, because
-# the environments diverge in both directions (loadstring exists here but
-# not there; task/datatypes exist there but not here). Shared entries are
-# duplicated on purpose; drift guards keep them honest.
+# Standalone Luau standard library: the globals of the open-source Luau
+# VM and CLI (luau, luau-analyze), without Roblox's additions. The Roblox
+# environment is a separate file, luau_roblox.toml, not a layer on top of
+# this one, because the two diverge in both directions: Roblox adds task
+# and its datatypes and deprecates getfenv/setfenv, while only standalone
+# Luau has the 4-arg vector.create. Shared entries are duplicated, and
+# tests/it/drift.rs keeps them in sync.
 #
-# Format: see stdlib_model.rs. kind = "function" | "constant" |
-# "property" | "namespace"; functions carry either a flat signature
-# (min_args/max_args/params) or an overloads array; max_args = -1 means
-# unbounded.
+# Schema: see crates/luck_semantic/src/stdlib_load.rs. Each entry has
+# kind = "function" | "namespace" | "constant" | "property". A function
+# has either a flat signature (min_args, max_args, params; max_args = -1
+# means unbounded) or an overloads array.
 
 # Coverage notes vs upstream Lua:
 #   - absent from the Luau VM: dofile, loadfile, load, module, io,
 #     package (os keeps its sandboxed clock/date/difftime/time subset)
-#   - kept from Lua 5.1: getfenv, setfenv, newproxy (Luau uses
-#     getfenv/setfenv instead of _ENV)
+#   - kept from Lua 5.1: getfenv, setfenv, newproxy
 
 # ---- bare-word globals ----
 
@@ -83,7 +82,6 @@ is_pure = true
 must_use = true
 params = [{ kind = "table" }]
 
-# Standalone Luau CLI exposes loadstring; the Roblox VM does not.
 [globals.loadstring]
 kind = "function"
 min_args = 1
@@ -188,7 +186,7 @@ min_args = 2
 max_args = 2
 params = [
   { kind = "table" },
-  { kind = "table", accepts_nil = true },
+  { kind = "table" },
 ]
 
 [globals.tonumber]
@@ -1891,9 +1889,8 @@ params = [{ kind = "display", display = "vector" }]
 [globals.vector.members.zero]
 kind = "constant"
 
-# Luau exposes a sandboxed subset of the os library (clock/date/difftime/
-# time) in BOTH standalone and Roblox environments. Omitting it here makes
-# `os.time()` an undefined-variable Error on every Luau target.
+# Luau keeps only clock, date, difftime, and time from os, in both
+# environments.
 [globals.os]
 kind = "namespace"
 

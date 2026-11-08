@@ -1,15 +1,13 @@
-use luck_ast::expr::FunctionCall;
-use luck_semantic::SemanticAnalysis;
-use luck_semantic::stdlib_model::StdlibEntry;
+use luck_ast::{FunctionCall, NodeType, NodeTypeSet, Statement};
+use luck_semantic::{SemanticAnalysis, StdlibEntry};
 
-use crate::diagnostic::*;
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
 
-/// Warns when a stdlib call marked `must_use` (because it returns a
-/// value with no observable side effects) appears in statement position,
-/// which discards its return value.
-pub struct MustUse;
+/// Flags a call statement to a stdlib function marked `must_use`, which
+/// throws away its result.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MustUse;
 
 impl Rule for MustUse {
     fn name(&self) -> &'static str {
@@ -22,48 +20,41 @@ impl Rule for MustUse {
         Severity::Warning
     }
     fn description(&self) -> &'static str {
-        "return value of must-use function is discarded"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
+        "return value of a must-use function is discarded"
     }
 }
 
 fn must_use_name(semantic: &SemanticAnalysis, call: &FunctionCall) -> Option<String> {
-    let (display_name, resolved) = semantic.resolve_callee(call)?;
-    if let StdlibEntry::Function(func) = resolved.entry
-        && func.must_use
+    let callee = semantic.resolve_callee(call)?;
+    if let StdlibEntry::Function(function) = callee.entry
+        && function.is_must_use
     {
-        Some(display_name)
+        Some(callee.name)
     } else {
         None
     }
 }
 
 impl NodeRule for MustUse {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::FunctionCallStmt]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt])
     }
-    // Only function-call *statements* discard the return. Expression
-    // contexts (assignments, args, returns) all consume it.
     fn on_statement(
         &self,
-        stmt: &luck_ast::Statement,
-        ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
+        stmt: &Statement,
+        context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
     ) {
-        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt
-            && let Some(name) = must_use_name(ctx.semantic, call_stmt)
+        if let Statement::FunctionCall(call) = stmt
+            && let Some(name) = must_use_name(context.semantic, call)
         {
-            out.push(
+            diags.push(
                 LintDiagnostic::new(
                     "must_use",
                     format!("return value of `{name}` is discarded"),
-                    call_stmt.span,
+                    call.span,
                 )
-                .with_help("assign the result or remove the call".to_string()),
+                .with_help("assign the result or remove the call"),
             );
         }
     }
@@ -74,26 +65,21 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::MustUse;
+    use crate::fixtures::run_rule;
 
-    fn warnings(source: &str, version: LuaVersion) -> Vec<String> {
-        crate::test_support::run_rule(&MustUse, source, version)
-            .into_iter()
-            .map(|d| d.message)
-            .collect()
+    fn run(source: &str, version: LuaVersion) -> Vec<String> {
+        run_rule(&MustUse, source, version).into_iter().map(|diag| diag.message).collect()
     }
 
     #[test]
     fn flags_discarded_tostring() {
-        let messages = warnings("tostring(1)", LuaVersion::Lua54);
-        assert!(
-            messages.iter().any(|m| m.contains("tostring")),
-            "{messages:?}"
-        );
+        let messages = run("tostring(1)", LuaVersion::Lua54);
+        assert!(messages.iter().any(|message| message.contains("tostring")), "{messages:?}");
     }
 
     #[test]
     fn ignores_used_tostring() {
-        let messages = warnings("local s = tostring(1)\nprint(s)", LuaVersion::Lua54);
+        let messages = run("local s = tostring(1)\nprint(s)", LuaVersion::Lua54);
         assert!(messages.is_empty(), "{messages:?}");
     }
 
@@ -101,54 +87,48 @@ mod tests {
     fn flags_discarded_pcall() {
         // Discarding a pcall loses the success bool, which is the whole
         // point of calling it.
-        let messages = warnings("pcall(f)", LuaVersion::Lua54);
-        assert!(messages.iter().any(|m| m.contains("pcall")), "{messages:?}");
+        let messages = run("pcall(f)", LuaVersion::Lua54);
+        assert!(messages.iter().any(|message| message.contains("pcall")), "{messages:?}");
     }
 
     #[test]
     fn flags_discarded_coroutine_create() {
-        let messages = warnings("coroutine.create(f)", LuaVersion::Lua54);
+        let messages = run("coroutine.create(f)", LuaVersion::Lua54);
         assert!(
-            messages.iter().any(|m| m.contains("coroutine.create")),
+            messages.iter().any(|message| message.contains("coroutine.create")),
             "{messages:?}"
         );
     }
 
     #[test]
     fn flags_discarded_table_clone_in_luau() {
-        let messages = warnings("table.clone(t)", LuaVersion::Luau);
-        assert!(
-            messages.iter().any(|m| m.contains("table.clone")),
-            "{messages:?}"
-        );
+        let messages = run("table.clone(t)", LuaVersion::Luau);
+        assert!(messages.iter().any(|message| message.contains("table.clone")), "{messages:?}");
     }
 
     #[test]
     fn ignores_table_insert() {
         // table.insert mutates, so discarding the result is fine.
-        let messages = warnings("table.insert(t, 1)", LuaVersion::Lua54);
+        let messages = run("table.insert(t, 1)", LuaVersion::Lua54);
         assert!(messages.is_empty(), "{messages:?}");
     }
 
     #[test]
     fn ignores_method_call() {
-        let messages = warnings("obj:tostring()", LuaVersion::Lua54);
+        let messages = run("obj:tostring()", LuaVersion::Lua54);
         assert!(messages.is_empty(), "{messages:?}");
     }
 
     #[test]
     fn flags_discarded_string_method() {
-        let messages = warnings("local s = 'x'\ns:upper()", LuaVersion::Lua54);
-        assert!(
-            messages.iter().any(|m| m.contains("s:upper")),
-            "{messages:?}"
-        );
+        let messages = run("local s = 'x'\ns:upper()", LuaVersion::Lua54);
+        assert!(messages.iter().any(|message| message.contains("s:upper")), "{messages:?}");
     }
 
-    // A bare f:seek('set') rewind is idiomatic, so seek is not must_use.
+    // A bare f:seek('set') rewind is idiomatic, so seek isn't must_use.
     #[test]
     fn ignores_discarded_file_seek() {
-        let messages = warnings("local f = io.open('x')\nf:seek('set')", LuaVersion::Lua54);
+        let messages = run("local f = io.open('x')\nf:seek('set')", LuaVersion::Lua54);
         assert!(messages.is_empty(), "{messages:?}");
     }
 }

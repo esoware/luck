@@ -1,24 +1,19 @@
-use luck_ast::expr::*;
-use luck_ast::stmt::TypeDeclarationValue;
-use luck_ast::{Expression, LastStatement, Statement};
+use luck_ast::{ElseIfExprClause, Expression, LastStatement, Statement, TypeDeclarationValue, Var};
 
-use crate::common::{assert_no_errors, parse_luau};
+use crate::common::{assert_no_errors, local_value, parse_luau};
 
 #[test]
 fn compound_assign_plus() {
     let result = parse_luau("x += 1");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::CompoundAssignment(ca) = &result.block.stmts[0] {
+    if let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] {
         assert!(
-            matches!(&ca.var, Var::Name(t) if t.kind == luck_token::TokenKind::Identifier("x".into()))
+            matches!(&compound_assignment.var, Var::Name(token) if token.kind == luck_token::TokenKind::Identifier("x".into()))
         );
-        assert_eq!(ca.op, luck_token::CompoundOp::AddAssign);
+        assert_eq!(compound_assignment.op, luck_token::CompoundOp::Add);
     } else {
-        panic!(
-            "expected CompoundAssignment, got {:?}",
-            result.block.stmts[0]
-        );
+        panic!("expected CompoundAssignment, got {:?}", result.block.stmts[0]);
     }
 }
 
@@ -27,9 +22,9 @@ fn compound_assign_index() {
     let result = parse_luau("t[i] *= 2");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::CompoundAssignment(ca) = &result.block.stmts[0] {
-        assert!(matches!(&ca.var, Var::Index(_)));
-        assert_eq!(ca.op, luck_token::CompoundOp::MulAssign);
+    if let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] {
+        assert!(matches!(&compound_assignment.var, Var::Index(_)));
+        assert_eq!(compound_assignment.op, luck_token::CompoundOp::Mul);
     } else {
         panic!("expected CompoundAssignment");
     }
@@ -40,9 +35,9 @@ fn compound_assign_field_concat() {
     let result = parse_luau(r#"a.b ..= "c""#);
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::CompoundAssignment(ca) = &result.block.stmts[0] {
-        assert!(matches!(&ca.var, Var::FieldAccess(_)));
-        assert_eq!(ca.op, luck_token::CompoundOp::ConcatAssign);
+    if let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] {
+        assert!(matches!(&compound_assignment.var, Var::FieldAccess(_)));
+        assert_eq!(compound_assignment.op, luck_token::CompoundOp::Concat);
     } else {
         panic!("expected CompoundAssignment");
     }
@@ -50,22 +45,22 @@ fn compound_assign_field_concat() {
 
 #[test]
 fn compound_assign_all_operators() {
-    for (src, expected_kind) in [
-        ("x += 1", luck_token::CompoundOp::AddAssign),
-        ("x -= 1", luck_token::CompoundOp::SubAssign),
-        ("x *= 1", luck_token::CompoundOp::MulAssign),
-        ("x /= 1", luck_token::CompoundOp::DivAssign),
-        ("x //= 1", luck_token::CompoundOp::FloorDivAssign),
-        ("x %= 1", luck_token::CompoundOp::ModAssign),
-        ("x ^= 1", luck_token::CompoundOp::PowAssign),
-        ("x ..= 1", luck_token::CompoundOp::ConcatAssign),
+    for (source, expected_op) in [
+        ("x += 1", luck_token::CompoundOp::Add),
+        ("x -= 1", luck_token::CompoundOp::Sub),
+        ("x *= 1", luck_token::CompoundOp::Mul),
+        ("x /= 1", luck_token::CompoundOp::Div),
+        ("x //= 1", luck_token::CompoundOp::FloorDiv),
+        ("x %= 1", luck_token::CompoundOp::Mod),
+        ("x ^= 1", luck_token::CompoundOp::Pow),
+        ("x ..= 1", luck_token::CompoundOp::Concat),
     ] {
-        let result = parse_luau(src);
+        let result = parse_luau(source);
         assert_no_errors(&result);
-        if let Statement::CompoundAssignment(ca) = &result.block.stmts[0] {
-            assert_eq!(ca.op, expected_kind, "failed for: {}", src);
+        if let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] {
+            assert_eq!(compound_assignment.op, expected_op, "failed for: {source}");
         } else {
-            panic!("expected CompoundAssignment for: {}", src);
+            panic!("expected CompoundAssignment for: {source}");
         }
     }
 }
@@ -75,15 +70,10 @@ fn if_expression_simple() {
     let result = parse_luau("local x = if a then 1 else 2");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last().expect("expression list has last element");
-        assert!(matches!(expr, Expression::IfExpression(_)));
-        if let Expression::IfExpression(ie) = expr {
-            assert!(ie.elseif_clauses.is_empty());
-        }
-    } else {
-        panic!("expected LocalAssignment");
+    let expr = local_value(&result);
+    assert!(matches!(expr, Expression::IfExpression(_)));
+    if let Expression::IfExpression(if_expr) = expr {
+        assert_eq!(if_expr.elseif_clauses, Vec::<ElseIfExprClause>::new());
     }
 }
 
@@ -91,16 +81,11 @@ fn if_expression_simple() {
 fn if_expression_with_elseif() {
     let result = parse_luau("local y = if a then b elseif c then d else e");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last().expect("expression list has last element");
-        if let Expression::IfExpression(ie) = expr {
-            assert_eq!(ie.elseif_clauses.len(), 1);
-        } else {
-            panic!("expected IfExpression");
-        }
+    let expr = local_value(&result);
+    if let Expression::IfExpression(if_expr) = expr {
+        assert_eq!(if_expr.elseif_clauses.len(), 1);
     } else {
-        panic!("expected LocalAssignment");
+        panic!("expected IfExpression");
     }
 }
 
@@ -108,16 +93,11 @@ fn if_expression_with_elseif() {
 fn if_expression_nested() {
     let result = parse_luau("local z = if a then if b then 1 else 2 else 3");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last().expect("expression list has last element");
-        if let Expression::IfExpression(ie) = expr {
-            assert!(matches!(&ie.then_expr, Expression::IfExpression(_)));
-        } else {
-            panic!("expected IfExpression");
-        }
+    let expr = local_value(&result);
+    if let Expression::IfExpression(if_expr) = expr {
+        assert!(matches!(&if_expr.then_expr, Expression::IfExpression(_)));
     } else {
-        panic!("expected LocalAssignment");
+        panic!("expected IfExpression");
     }
 }
 
@@ -125,32 +105,22 @@ fn if_expression_nested() {
 fn interp_string_plain() {
     let result = parse_luau("local x = `hello`");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last().expect("expression list has last element");
-        assert!(matches!(expr, Expression::InterpolatedString(_)));
-    } else {
-        panic!("expected LocalAssignment");
-    }
+    let expr = local_value(&result);
+    assert!(matches!(expr, Expression::InterpolatedString(_)));
 }
 
 #[test]
 fn interp_string_with_expression() {
     let result = parse_luau("local x = `{y}`");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last().expect("expression list has last element");
-        if let Expression::InterpolatedString(is) = expr {
-            // InterpBegin (with expr y) + InterpEnd
-            assert_eq!(is.segments.len(), 2);
-            assert!(is.segments[0].expr.is_some());
-            assert!(is.segments[1].expr.is_none());
-        } else {
-            panic!("expected InterpolatedString");
-        }
+    let expr = local_value(&result);
+    if let Expression::InterpolatedString(interpolated_string) = expr {
+        // InterpolatedStringBegin (with expr y) + InterpolatedStringEnd
+        assert_eq!(interpolated_string.segments.len(), 2);
+        assert!(interpolated_string.segments[0].expr.is_some());
+        assert!(interpolated_string.segments[1].expr.is_none());
     } else {
-        panic!("expected LocalAssignment");
+        panic!("expected InterpolatedString");
     }
 }
 
@@ -158,20 +128,16 @@ fn interp_string_with_expression() {
 fn interp_string_multiple_expressions() {
     let result = parse_luau("local x = `a{1+2}b{3}c`");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last().expect("expression list has last element");
-        if let Expression::InterpolatedString(is) = expr {
-            // InterpBegin("a") + expr(1+2) -> InterpMid("b") + expr(3) -> InterpEnd("c")
-            assert_eq!(is.segments.len(), 3);
-            assert!(is.segments[0].expr.is_some()); // 1+2
-            assert!(is.segments[1].expr.is_some()); // 3
-            assert!(is.segments[2].expr.is_none()); // end
-        } else {
-            panic!("expected InterpolatedString");
-        }
+    let expr = local_value(&result);
+    if let Expression::InterpolatedString(interpolated_string) = expr {
+        // InterpolatedStringBegin("a") + expr(1+2) -> InterpolatedStringMiddle("b") + expr(3)
+        // -> InterpolatedStringEnd("c")
+        assert_eq!(interpolated_string.segments.len(), 3);
+        assert!(interpolated_string.segments[0].expr.is_some()); // 1+2
+        assert!(interpolated_string.segments[1].expr.is_some()); // 3
+        assert!(interpolated_string.segments[2].expr.is_none()); // end
     } else {
-        panic!("expected LocalAssignment");
+        panic!("expected InterpolatedString");
     }
 }
 
@@ -180,10 +146,7 @@ fn local_with_type_annotation() {
     let result = parse_luau("local x: number = 5");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    assert!(matches!(
-        &result.block.stmts[0],
-        Statement::LocalAssignment(_)
-    ));
+    assert!(matches!(&result.block.stmts[0], Statement::LocalAssignment(_)));
 }
 
 #[test]
@@ -191,10 +154,10 @@ fn function_with_param_types() {
     let result = parse_luau("function f(a: string, b: number): boolean return true end");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::FunctionDecl(fd) = &result.block.stmts[0] {
-        let param_count = fd.body.params.len();
+    if let Statement::FunctionDecl(function_decl) = &result.block.stmts[0] {
+        let param_count = function_decl.body.params.len();
         assert_eq!(param_count, 2);
-        assert!(fd.body.return_type.is_some());
+        assert!(function_decl.body.return_type.is_some());
     } else {
         panic!("expected FunctionDecl");
     }
@@ -204,29 +167,22 @@ fn function_with_param_types() {
 fn local_with_generic_type() {
     let result = parse_luau("local t: Array<number> = {}");
     assert_no_errors(&result);
-    assert!(matches!(
-        &result.block.stmts[0],
-        Statement::LocalAssignment(_)
-    ));
+    assert!(matches!(&result.block.stmts[0], Statement::LocalAssignment(_)));
 }
 
 #[test]
 fn type_cast_expression() {
     let result = parse_luau("local x = y :: number");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        let exprs = la.exprs.as_ref().expect("assignment has values");
-        let expr = exprs.last().expect("expression list has last element");
-        assert!(matches!(expr, Expression::TypeCast(_)));
-    } else {
-        panic!("expected LocalAssignment");
-    }
+    let expr = local_value(&result);
+    assert!(matches!(expr, Expression::TypeCast(_)));
 }
 
-/// `::` applies to any simpleexp, not just prefix expressions. Literals,
-/// tables, and call results must accept a cast (Luau `asexp = simpleexp
-/// ['::' Type]`). Rejecting them here makes the minifier emit unparseable
-/// output such as `print(1::number)`.
+/// `::` applies to any simpleexp, not just prefix expressions.
+///
+/// Luau's grammar is `asexp ::= simpleexp ['::' Type]`, so literals, tables,
+/// and call results take a cast too. The minifier emits forms like
+/// `print(1::number)`, which have to parse back.
 #[test]
 fn type_cast_on_literals_and_tables() {
     for source in [
@@ -248,16 +204,12 @@ fn type_cast_on_literals_and_tables() {
 fn type_cast_binds_tighter_than_binary_op() {
     let result = parse_luau("local x = a + b :: number");
     assert_no_errors(&result);
-    let Statement::LocalAssignment(la) = &result.block.stmts[0] else {
-        panic!("expected LocalAssignment");
-    };
-    let exprs = la.exprs.as_ref().expect("assignment has values");
-    let expr = exprs.last().expect("has last element");
-    let Expression::BinaryOp(binop) = expr else {
+    let expr = local_value(&result);
+    let Expression::BinaryOp(binary_op) = expr else {
         panic!("expected top-level BinaryOp, got {expr:?}");
     };
     assert!(
-        matches!(binop.right, Expression::TypeCast(_)),
+        matches!(binary_op.right, Expression::TypeCast(_)),
         "cast must bind to the right operand: a + (b :: number)"
     );
 }
@@ -265,11 +217,10 @@ fn type_cast_binds_tighter_than_binary_op() {
 #[test]
 fn type_cast_chained() {
     // Grammar: asexp ::= simpleexp ['::' Type], one cast per simpleexp.
-    // Real Luau rejects a second `::`; parens are needed to chain.
-    let result = parse_luau("local x = v :: A :: B");
-    assert!(!result.errors.is_empty(), "chained casts must error");
-    let result = parse_luau("local x = (v :: A) :: B");
-    assert_no_errors(&result);
+    // Luau rejects a second `::`; chaining needs parens.
+    let bare = parse_luau("local x = v :: A :: B");
+    assert!(!bare.errors.is_empty(), "chained casts must error");
+    assert_no_errors(&parse_luau("local x = (v :: A) :: B"));
 }
 
 #[test]
@@ -277,11 +228,8 @@ fn type_declaration_simple() {
     let result = parse_luau("type Foo = number");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::TypeDeclaration(td) = &result.block.stmts[0] {
-        assert_eq!(
-            td.name.kind,
-            luck_token::TokenKind::Identifier("Foo".into())
-        );
+    if let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] {
+        assert_eq!(type_declaration.name.kind, luck_token::TokenKind::Identifier("Foo".into()));
     } else {
         panic!("expected TypeDeclaration, got {:?}", result.block.stmts[0]);
     }
@@ -291,8 +239,8 @@ fn type_declaration_simple() {
 fn type_declaration_generic() {
     let result = parse_luau("type Pair<T> = { first: T, second: T }");
     assert_no_errors(&result);
-    if let Statement::TypeDeclaration(td) = &result.block.stmts[0] {
-        assert!(td.generics.is_some());
+    if let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] {
+        assert!(type_declaration.generics.is_some());
     } else {
         panic!("expected TypeDeclaration");
     }
@@ -302,8 +250,8 @@ fn type_declaration_generic() {
 fn export_type_declaration() {
     let result = parse_luau("export type Bar = string");
     assert_no_errors(&result);
-    if let Statement::TypeDeclaration(td) = &result.block.stmts[0] {
-        assert!(td.is_exported);
+    if let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] {
+        assert!(type_declaration.is_exported);
     } else {
         panic!("expected TypeDeclaration");
     }
@@ -313,10 +261,7 @@ fn export_type_declaration() {
 fn type_declaration_record() {
     let result = parse_luau("export type Point = {x: number, y: number}");
     assert_no_errors(&result);
-    assert!(matches!(
-        &result.block.stmts[0],
-        Statement::TypeDeclaration(_)
-    ));
+    assert!(matches!(&result.block.stmts[0], Statement::TypeDeclaration(_)));
 }
 
 #[test]
@@ -331,21 +276,15 @@ fn consecutive_type_declarations() {
 fn type_function_declaration() {
     let result = parse_luau("type function identity(t) return t end");
     assert_no_errors(&result);
-    assert!(matches!(
-        &result.block.stmts[0],
-        Statement::TypeDeclaration(_)
-    ));
+    assert!(matches!(&result.block.stmts[0], Statement::TypeDeclaration(_)));
 }
 
 #[test]
 fn continue_in_for_loop() {
     let result = parse_luau("for i=1,10 do continue end");
     assert_no_errors(&result);
-    if let Statement::NumericFor(nf) = &result.block.stmts[0] {
-        assert!(matches!(
-            nf.block.last_stmt.as_deref(),
-            Some(LastStatement::Continue(_))
-        ));
+    if let Statement::NumericFor(numeric_for) = &result.block.stmts[0] {
+        assert!(matches!(numeric_for.block.last_stmt.as_deref(), Some(LastStatement::Continue(_))));
     } else {
         panic!("expected NumericFor");
     }
@@ -353,24 +292,18 @@ fn continue_in_for_loop() {
 
 #[test]
 fn continue_as_identifier() {
-    // `continue` used as a variable name parses as a local assignment
+    // `continue` used as a variable name parses as a local assignment.
     let result = parse_luau("local continue = 5");
     assert_no_errors(&result);
-    assert!(matches!(
-        &result.block.stmts[0],
-        Statement::LocalAssignment(_)
-    ));
+    assert!(matches!(&result.block.stmts[0], Statement::LocalAssignment(_)));
 }
 
 #[test]
 fn continue_in_while_loop() {
     let result = parse_luau("while true do continue end");
     assert_no_errors(&result);
-    if let Statement::WhileLoop(wl) = &result.block.stmts[0] {
-        assert!(matches!(
-            wl.block.last_stmt.as_deref(),
-            Some(LastStatement::Continue(_))
-        ));
+    if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
+        assert!(matches!(while_loop.block.last_stmt.as_deref(), Some(LastStatement::Continue(_))));
     } else {
         panic!("expected WhileLoop");
     }
@@ -388,10 +321,7 @@ fn native_function_attribute() {
 fn native_local_function_attribute() {
     let result = parse_luau("@native local function f() end");
     assert_no_errors(&result);
-    assert!(matches!(
-        &result.block.stmts[0],
-        Statement::LocalFunction(_)
-    ));
+    assert!(matches!(&result.block.stmts[0], Statement::LocalFunction(_)));
 }
 
 #[test]
@@ -407,12 +337,9 @@ fn break_in_luau() {
     // break is a last statement, not a free-standing one.
     let result = parse_luau("while true do break end");
     assert_no_errors(&result);
-    if let Statement::WhileLoop(wl) = &result.block.stmts[0] {
-        assert!(wl.block.stmts.is_empty());
-        assert!(matches!(
-            wl.block.last_stmt.as_deref(),
-            Some(LastStatement::Break(_))
-        ));
+    if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
+        assert_eq!(while_loop.block.stmts, Vec::<Statement>::new());
+        assert!(matches!(while_loop.block.last_stmt.as_deref(), Some(LastStatement::Break(_))));
     } else {
         panic!("expected WhileLoop");
     }
@@ -422,7 +349,7 @@ fn break_in_luau() {
 fn break_mid_block_rejected_in_luau() {
     // Statements after `break` are a grammar error in Luau.
     let result = parse_luau("while true do break print(1) end");
-    assert!(!result.errors.is_empty());
+    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
 }
 
 #[test]
@@ -467,13 +394,13 @@ fn continue_as_field_access() {
 
 #[test]
 fn nested_interpolated_strings() {
-    // Nested interpolated strings are valid Luau, but luck's parser rejects
-    // them. It must report errors rather than panic.
+    // A bare string isn't a statement, so this has to report errors, and the
+    // nesting mustn't make the parser panic.
     let source = "`outer{`inner{x}`}`";
     let result = parse_luau(source);
     assert!(
         !result.errors.is_empty(),
-        "nested interpolated strings are not yet supported; expected parse errors"
+        "an interpolated string isn't a statement; expected parse errors"
     );
 }
 
@@ -486,18 +413,18 @@ fn nested_generic_type_annotation() {
 
 #[test]
 fn function_attributes_are_kept_on_ast() {
-    let result = parse_luau("@native function f() end");
-    assert_no_errors(&result);
-    if let Statement::FunctionDecl(decl) = &result.block.stmts[0] {
-        assert_eq!(decl.attributes.len(), 1);
+    let global = parse_luau("@native function f() end");
+    assert_no_errors(&global);
+    if let Statement::FunctionDecl(function_decl) = &global.block.stmts[0] {
+        assert_eq!(function_decl.attributes.len(), 1);
     } else {
         panic!("expected FunctionDecl");
     }
 
-    let result = parse_luau("@native @checked local function g() end");
-    assert_no_errors(&result);
-    if let Statement::LocalFunction(func) = &result.block.stmts[0] {
-        assert_eq!(func.attributes.len(), 2);
+    let local = parse_luau("@native @checked local function g() end");
+    assert_no_errors(&local);
+    if let Statement::LocalFunction(local_function) = &local.block.stmts[0] {
+        assert_eq!(local_function.attributes.len(), 2);
     } else {
         panic!("expected LocalFunction");
     }
@@ -507,19 +434,16 @@ fn function_attributes_are_kept_on_ast() {
 fn attribute_on_local_variable_rejected() {
     // Luau only allows attributes before function declarations.
     let result = parse_luau("@native local x = 1");
-    assert!(!result.errors.is_empty());
+    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
 }
 
 #[test]
 fn export_type_function_parses() {
     let result = parse_luau("export type function Id(t) return t end");
     assert_no_errors(&result);
-    if let Statement::TypeDeclaration(decl) = &result.block.stmts[0] {
-        assert!(decl.is_exported);
-        assert!(matches!(
-            decl.type_value,
-            TypeDeclarationValue::TypeFunction(_)
-        ));
+    if let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] {
+        assert!(type_declaration.is_exported);
+        assert!(matches!(type_declaration.type_value, TypeDeclarationValue::TypeFunction(_)));
     } else {
         panic!("expected TypeDeclaration");
     }
@@ -527,19 +451,10 @@ fn export_type_function_parses() {
 
 #[test]
 fn bitwise_operators_rejected() {
-    // Luau has no bitwise operators; `&`/`|` only exist in type syntax
-    // (compatibility page: bitwise operators = not supported).
-    for source in [
-        "local a = 1 & 2",
-        "local a = 1 | 2",
-        "return x & y",
-        "return x | y",
-    ] {
+    // Luau has no bitwise operators; `&` and `|` only exist in type syntax.
+    for source in ["local a = 1 & 2", "local a = 1 | 2", "return x & y", "return x | y"] {
         let result = parse_luau(source);
-        assert!(
-            !result.errors.is_empty(),
-            "Luau must reject bitwise binop: {source}"
-        );
+        assert!(!result.errors.is_empty(), "Luau must reject bitwise binop: {source}");
     }
     // The same tokens still work in type positions.
     let result = parse_luau("type U = number | string\ntype I = A & B");
@@ -558,18 +473,16 @@ fn const_bindings() {
         panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
     }
 
-    let result = parse_luau("const a, b = 1, 2");
-    assert_no_errors(&result);
+    assert_no_errors(&parse_luau("const a, b = 1, 2"));
 
-    let result = parse_luau("const n: number = 5");
-    assert_no_errors(&result);
+    assert_no_errors(&parse_luau("const n: number = 5"));
 
-    let result = parse_luau("const function cf() end");
-    assert_no_errors(&result);
-    if let Statement::LocalFunction(func) = &result.block.stmts[0] {
-        assert!(func.is_const);
+    let function = parse_luau("const function cf() end");
+    assert_no_errors(&function);
+    if let Statement::LocalFunction(local_function) = &function.block.stmts[0] {
+        assert!(local_function.is_const);
     } else {
-        panic!("expected LocalFunction, got {:?}", result.block.stmts[0]);
+        panic!("expected LocalFunction, got {:?}", function.block.stmts[0]);
     }
 }
 
@@ -598,15 +511,13 @@ fn bracketed_and_parameterized_attributes() {
     assert_no_errors(&parse_luau("@[deprecated(\"use g\")] function f() end"));
     assert_no_errors(&parse_luau("@[checked, native] function f() end"));
     // Arguments must be literals, and only deprecated takes them.
-    assert!(
-        !parse_luau("@[deprecated(foo())] function f() end")
-            .errors
-            .is_empty()
+    assert_ne!(
+        parse_luau("@[deprecated(foo())] function f() end").errors,
+        Vec::<luck_token::SourceError>::new()
     );
-    assert!(
-        !parse_luau("@[native(1)] function f() end")
-            .errors
-            .is_empty()
+    assert_ne!(
+        parse_luau("@[native(1)] function f() end").errors,
+        Vec::<luck_token::SourceError>::new()
     );
 }
 
@@ -615,10 +526,9 @@ fn attributes_on_function_expressions() {
     // simpleexp ::= attributes 'function' funcbody
     assert_no_errors(&parse_luau("local k = @native function() end"));
     assert_no_errors(&parse_luau("f(@checked function() end)"));
-    assert!(
-        !parse_luau("local k = @nonsense function() end")
-            .errors
-            .is_empty()
+    assert_ne!(
+        parse_luau("local k = @nonsense function() end").errors,
+        Vec::<luck_token::SourceError>::new()
     );
 }
 
@@ -642,14 +552,10 @@ fn integer_literals_have_a_distinct_ast_node() {
     let Some(last) = result.block.last_stmt.as_deref() else {
         panic!("expected return");
     };
-    let LastStatement::Return(ret) = last else {
+    let LastStatement::Return(return_stmt) = last else {
         panic!("expected return");
     };
-    assert!(
-        ret.exprs
-            .iter()
-            .all(|expr| matches!(expr, Expression::Integer(_)))
-    );
+    assert!(return_stmt.exprs.iter().all(|expr| matches!(expr, Expression::Integer(_))));
 
     for source in [
         "return 9223372036854775808i",
@@ -658,10 +564,7 @@ fn integer_literals_have_a_distinct_ast_node() {
         "return 123.0i",
         "return 0b250i",
     ] {
-        assert!(
-            !parse_luau(source).errors.is_empty(),
-            "{source} must be rejected"
-        );
+        assert!(!parse_luau(source).errors.is_empty(), "{source} must be rejected");
     }
 
     // The suffix binds to the literal, not the unary minus, so the
@@ -679,10 +582,10 @@ fn integer_literals_have_a_distinct_ast_node() {
 fn explicit_type_instantiation_is_a_suffix() {
     let result = parse_luau("return module.f<<number, string>>(value)");
     assert_no_errors(&result);
-    let Some(LastStatement::Return(ret)) = result.block.last_stmt.as_deref() else {
+    let Some(LastStatement::Return(return_stmt)) = result.block.last_stmt.as_deref() else {
         panic!("expected return");
     };
-    let Some(Expression::FunctionCall(call)) = ret.exprs.first() else {
+    let Some(Expression::FunctionCall(call)) = return_stmt.exprs.first() else {
         panic!("expected call");
     };
     let Expression::TypeInstantiation(instantiation) = &call.callee else {
@@ -700,18 +603,14 @@ fn explicit_type_instantiation_is_a_suffix() {
     }
 
     let method = parse_luau("return t:f<<number, string>>()");
-    let Some(LastStatement::Return(ret)) = method.block.last_stmt.as_deref() else {
+    let Some(LastStatement::Return(method_return)) = method.block.last_stmt.as_deref() else {
         panic!("expected return");
     };
-    let Some(Expression::FunctionCall(call)) = ret.exprs.first() else {
+    let Some(Expression::FunctionCall(method_call)) = method_return.exprs.first() else {
         panic!("expected method call");
     };
     assert_eq!(
-        call.explicit_type_args
-            .as_ref()
-            .expect("method type arguments")
-            .args
-            .len(),
+        method_call.explicit_type_args.as_ref().expect("method type arguments").args.len(),
         2
     );
 }
@@ -748,29 +647,19 @@ fn value_exports_parse_and_enforce_module_rules() {
         "if true then return end\nexport local x = 1",
         "export local function f() end",
     ] {
-        assert!(
-            !parse_luau(source).errors.is_empty(),
-            "{source} must be rejected"
-        );
+        assert!(!parse_luau(source).errors.is_empty(), "{source} must be rejected");
     }
 
     // A type-only export still coexists with a module return.
     assert_no_errors(&parse_luau("export type T = number\nreturn 1"));
 
     // `export` remains contextual when it does not introduce a declaration.
-    assert_no_errors(&parse_luau(
-        "export = 5\nexport += 1\nexport()\nreturn export",
-    ));
+    assert_no_errors(&parse_luau("export = 5\nexport += 1\nexport()\nreturn export"));
 }
 
 #[test]
 fn merged_luau_features_are_version_gated() {
-    for source in [
-        "return 1i",
-        "return f<<number>>()",
-        "export local x = 1",
-        "type T = ~nil",
-    ] {
+    for source in ["return 1i", "return f<<number>>()", "export local x = 1", "type T = ~nil"] {
         let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
         assert!(!result.errors.is_empty(), "{source} must be Luau-only");
     }

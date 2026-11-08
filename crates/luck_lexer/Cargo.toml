@@ -1,18 +1,20 @@
 [package]
-name = "luck_lexer"
-version.workspace = true
-authors.workspace = true
-categories.workspace = true
-description = "Single-pass lexer for Lua 5.1-5.5 and Luau"
-edition.workspace = true
-homepage.workspace = true
-keywords.workspace = true
-license.workspace = true
-repository.workspace = true
+name                   = "luck_lexer"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "Single-pass lexer for Lua 5.1-5.5 and Luau"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
 rust-version.workspace = true
 
-[dependencies]
-luck_token.workspace = true
-memchr.workspace = true
+[lints]
+workspace = true
 
-[dev-dependencies]
+[dependencies]
+luck_token = { workspace = true }
+
+memchr = { workspace = true }

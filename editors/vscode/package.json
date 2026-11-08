@@ -93,6 +93,108 @@
         "path": "./syntaxes/luau.tmLanguage.json"
       }
     ],
+    "semanticTokenScopes": [
+      {
+        "language": "lua",
+        "scopes": {
+          "namespace": [
+            "variable.other.object.lua"
+          ],
+          "namespace.defaultLibrary": [
+            "variable.other.object.lua"
+          ],
+          "variable": [
+            "variable.other.readwrite.lua"
+          ],
+          "variable.readonly": [
+            "variable.other.constant.lua"
+          ],
+          "variable.defaultLibrary": [
+            "variable.other.readwrite.lua"
+          ],
+          "property": [
+            "variable.other.property.lua"
+          ],
+          "property.readonly": [
+            "variable.other.constant.property.lua"
+          ],
+          "property.defaultLibrary": [
+            "variable.other.property.lua"
+          ],
+          "property.readonly.defaultLibrary": [
+            "variable.other.constant.property.lua"
+          ],
+          "parameter": [
+            "variable.parameter.lua"
+          ],
+          "function": [
+            "entity.name.function.lua"
+          ],
+          "function.defaultLibrary": [
+            "support.function.lua"
+          ],
+          "method": [
+            "entity.name.function.lua"
+          ],
+          "method.defaultLibrary": [
+            "support.function.lua"
+          ],
+          "type": [
+            "entity.name.type.lua"
+          ]
+        }
+      },
+      {
+        "language": "luau",
+        "scopes": {
+          "namespace": [
+            "variable.other.object.luau"
+          ],
+          "namespace.defaultLibrary": [
+            "variable.other.object.luau"
+          ],
+          "variable": [
+            "variable.other.readwrite.luau"
+          ],
+          "variable.readonly": [
+            "variable.other.constant.luau"
+          ],
+          "variable.defaultLibrary": [
+            "variable.other.readwrite.luau"
+          ],
+          "property": [
+            "variable.other.property.luau"
+          ],
+          "property.readonly": [
+            "variable.other.constant.property.luau"
+          ],
+          "property.defaultLibrary": [
+            "variable.other.property.luau"
+          ],
+          "property.readonly.defaultLibrary": [
+            "variable.other.constant.property.luau"
+          ],
+          "parameter": [
+            "variable.parameter.luau"
+          ],
+          "function": [
+            "entity.name.function.luau"
+          ],
+          "function.defaultLibrary": [
+            "support.function.luau"
+          ],
+          "method": [
+            "entity.name.function.luau"
+          ],
+          "method.defaultLibrary": [
+            "support.function.luau"
+          ],
+          "type": [
+            "entity.name.type.luau"
+          ]
+        }
+      }
+    ],
     "snippets": [
       {
         "language": "lua",
@@ -478,7 +580,6 @@
     "bundle": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node22 --minify",
     "bundle-dev": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node22 --sourcemap",
     "package": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && vsce package --out dist/",
-    "publish": "vsce publish",
     "lint": "oxlint src",
     "lint:fix": "oxlint src --fix",
     "fmt": "oxfmt src",

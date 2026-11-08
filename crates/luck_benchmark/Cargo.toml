@@ -1,71 +1,77 @@
 [package]
-name = "luck_benchmark"
-version = "0.0.0"
-publish = false
-edition.workspace = true
+name                   = "luck_benchmark"
+version                = "0.0.0"
+publish                = false
+edition.workspace      = true
 rust-version.workspace = true
-license.workspace = true
-description = "Internal benchmark harness: per-stage criterion benches run on CodSpeed"
+license.workspace      = true
+description            = "Internal benchmark harness: per-stage criterion benches run on CodSpeed"
+
+[lints]
+workspace = true
 
 [lib]
-test = false
-bench = false
+test    = false
+bench   = false
 doctest = false
 
 [[bench]]
-name = "lexer"
+name    = "lexer"
 harness = false
 
 [[bench]]
-name = "parser"
+name    = "parser"
 harness = false
 
 [[bench]]
-name = "semantic"
+name    = "semantic"
 harness = false
 
 [[bench]]
-name = "linter"
+name    = "linter"
 harness = false
 
 [[bench]]
-name = "codegen"
+name    = "codegen"
 harness = false
 
 [[bench]]
-name = "formatter"
+name    = "formatter"
 harness = false
 
 [[bench]]
-name = "minifier"
+name    = "minifier"
 harness = false
 
 [[bench]]
-name = "bundler"
+name    = "bundler"
 harness = false
 
 [[bench]]
-name = "synth"
+name    = "synth"
 harness = false
-
-[dependencies]
-luck_testgen.workspace = true
-luck_token.workspace = true
-luck_core.workspace = true
-luck_ast.workspace = true
-luck_lexer.workspace = true
-luck_parser.workspace = true
-luck_semantic.workspace = true
-luck_linter.workspace = true
-luck_codegen.workspace = true
-luck_formatter.workspace = true
-luck_minifier.workspace = true
-luck_bundler.workspace = true
-criterion2 = { workspace = true }
-mimalloc-safe = { workspace = true }
-ureq = { workspace = true }
-flate2 = { workspace = true }
-tar = { workspace = true }
 
 [features]
 codspeed = ["criterion2/codspeed"]
+
+[dependencies]
+luck_core    = { workspace = true }
+luck_parser  = { workspace = true }
+luck_testgen = { workspace = true }
+luck_token   = { workspace = true }
+
+criterion2    = { workspace = true }
+flate2        = { workspace = true }
+mimalloc-safe = { workspace = true }
+tar           = { workspace = true }
+ureq          = { workspace = true }
+
+[dev-dependencies]
+luck_ast       = { workspace = true }
+luck_bundler   = { workspace = true }
+luck_codegen   = { workspace = true }
+luck_formatter = { workspace = true }
+luck_lexer     = { workspace = true }
+luck_linter    = { workspace = true }
+luck_minifier  = { workspace = true }
+luck_semantic  = { workspace = true }

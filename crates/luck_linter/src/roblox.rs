@@ -1,51 +1,72 @@
-//! Helpers shared by the Roblox-specific rules that inspect
-//! `<Global>.new(...)` constructor calls with literal numeric arguments
-//! (`roblox_incorrect_color3_new_bounds`, `roblox_suspicious_udim2_new`,
-//! `roblox_manual_fromscale_or_fromoffset`).
+//! Helpers for the Roblox rules that check `<Global>.new(...)` calls with
+//! literal numeric arguments.
 
-use luck_ast::expr::{Expression, FunctionCall, Var};
-use luck_token::TokenKind;
-use luck_token::literal::{LuaNumber, NumberSubtypes, parse_lua_number};
+use core::ops::Neg;
 
-use crate::rule::LintContext;
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Literal, Punctuated, Var};
+use luck_semantic::SemanticAnalysis;
+use luck_token::{LuaNumber, NumberSubtypes, UnOp, parse_lua_number};
 
-/// Whether `call` is `<global>.new(...)` where `<global>` is the real
-/// Roblox global (not a shadowing local) and there is no method receiver.
-pub(crate) fn is_global_new_call(call: &FunctionCall, global: &str, ctx: &LintContext) -> bool {
+/// The call and its arguments when `expr` is a parenthesized
+/// `<global>.new(...)` call under the Roblox stdlib, and `<global>` isn't
+/// shadowed by a local.
+pub(crate) fn global_new_call<'expr>(
+    expr: &'expr Expression,
+    global: &str,
+    semantic: &SemanticAnalysis,
+) -> Option<(&'expr FunctionCall, &'expr Punctuated<Expression>)> {
+    if !semantic.environment.is_roblox() {
+        return None;
+    }
+    let Expression::FunctionCall(call) = expr else {
+        return None;
+    };
     if call.method.is_some() {
-        return false;
+        return None;
     }
     let Expression::Var(Var::FieldAccess(field)) = &call.callee else {
-        return false;
+        return None;
     };
-    if !matches!(&field.name.kind, TokenKind::Identifier(name) if name == "new") {
-        return false;
+    if field.name.identifier() != Some("new") {
+        return None;
     }
     let Expression::Var(Var::Name(token)) = &field.prefix else {
-        return false;
+        return None;
     };
-    matches!(&token.kind, TokenKind::Identifier(name) if name == global)
-        && !ctx.semantic.resolves_to_local(global, token.span)
+    if token.identifier() != Some(global) || semantic.resolves_to_local(global, token.span) {
+        return None;
+    }
+    let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+        return None;
+    };
+    Some((call, args))
 }
 
 /// Numeric value of a literal argument, allowing a single unary minus.
 /// Non-literal expressions (identifiers, calls) yield `None`.
 pub(crate) fn literal_arg_value(expr: &Expression) -> Option<f64> {
-    match expr {
-        Expression::Number(literal) => number_value(literal),
-        Expression::UnaryOp(unary) if unary.op == luck_token::UnOp::Neg => {
-            if let Expression::Number(literal) = &unary.operand {
-                number_value(literal).map(|value| -value)
-            } else {
-                None
-            }
-        }
-        _ => None,
+    if let Expression::Number(literal) = expr {
+        return number_value(literal);
     }
+    let Expression::UnaryOp(unary) = expr else {
+        return None;
+    };
+    let Expression::Number(literal) = &unary.operand else {
+        return None;
+    };
+    if unary.op != UnOp::Neg {
+        return None;
+    }
+    number_value(literal).map(Neg::neg)
 }
 
-fn number_value(literal: &luck_ast::expr::Literal) -> Option<f64> {
+fn number_value(literal: &Literal) -> Option<f64> {
     match parse_lua_number(&literal.text, NumberSubtypes::IntFloat)? {
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_precision_loss,
+            reason = "Luau numbers are doubles, so this rounding is the conversion wanted"
+        )]
         LuaNumber::Int(int_value) => Some(int_value as f64),
         LuaNumber::Float(float_value) => Some(float_value),
     }

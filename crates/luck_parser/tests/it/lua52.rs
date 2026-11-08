@@ -1,8 +1,8 @@
 use luck_ast::{LastStatement, Statement};
+use luck_parser::ParseResult;
 use luck_token::LuaVersion;
 
 use crate::common::assert_no_errors;
-use luck_parser::ParseResult;
 
 fn parse_lua52(source: &str) -> ParseResult {
     luck_parser::parse(source, LuaVersion::Lua52)
@@ -10,7 +10,7 @@ fn parse_lua52(source: &str) -> ParseResult {
 
 #[test]
 fn goto_statement() {
-    // A goto must resolve to a visible label (undefined -> compile error).
+    // The label is there because Lua rejects a goto with no visible label.
     let result = parse_lua52("goto label_name ::label_name::");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 2);
@@ -56,8 +56,7 @@ fn three_empty_statements() {
     for stmt in &result.block.stmts {
         assert!(
             matches!(stmt, Statement::EmptyStatement(_)),
-            "expected EmptyStatement, got {:?}",
-            stmt
+            "expected EmptyStatement, got {stmt:?}"
         );
     }
 }
@@ -66,21 +65,21 @@ fn three_empty_statements() {
 fn break_in_middle_of_block() {
     let result = parse_lua52("while true do break local x = 1 end");
     assert_no_errors(&result);
-    if let Statement::WhileLoop(w) = &result.block.stmts[0] {
+    if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
         assert!(
-            w.block.stmts.len() >= 2,
+            while_loop.block.stmts.len() >= 2,
             "expected at least 2 statements in while body, got {}",
-            w.block.stmts.len()
+            while_loop.block.stmts.len()
         );
         assert!(
-            matches!(&w.block.stmts[0], Statement::Break(_)),
+            matches!(&while_loop.block.stmts[0], Statement::Break(_)),
             "expected Break, got {:?}",
-            w.block.stmts[0]
+            while_loop.block.stmts[0]
         );
         assert!(
-            matches!(&w.block.stmts[1], Statement::LocalAssignment(_)),
+            matches!(&while_loop.block.stmts[1], Statement::LocalAssignment(_)),
             "expected LocalAssignment, got {:?}",
-            w.block.stmts[1]
+            while_loop.block.stmts[1]
         );
     } else {
         panic!("expected WhileLoop");
@@ -92,8 +91,8 @@ fn return_with_trailing_semicolon() {
     let result = parse_lua52("return 1;");
     assert_no_errors(&result);
     if let Some(last) = &result.block.last_stmt {
-        if let LastStatement::Return(ret) = &**last {
-            assert!(ret.exprs.len() == 1);
+        if let LastStatement::Return(return_stmt) = &**last {
+            assert_eq!(return_stmt.exprs.len(), 1);
         } else {
             panic!("expected Return");
         }
@@ -103,15 +102,17 @@ fn return_with_trailing_semicolon() {
 }
 
 #[test]
-fn break_still_works_as_last_statement() {
+fn break_at_block_end_is_an_ordinary_statement() {
     let result = parse_lua52("while true do break end");
     assert_no_errors(&result);
-    if let Statement::WhileLoop(w) = &result.block.stmts[0] {
-        // In 5.2+, break is parsed as a regular statement, not last statement
+    if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
+        // In 5.2+, `break` is a regular statement, not a last statement.
         assert!(
-            !w.block.stmts.is_empty() || w.block.last_stmt.is_some(),
-            "expected break somewhere in the block"
+            matches!(while_loop.block.stmts.as_slice(), [Statement::Break(_)]),
+            "expected a lone Break statement, got {:?}",
+            while_loop.block.stmts
         );
+        assert!(while_loop.block.last_stmt.is_none());
     } else {
         panic!("expected WhileLoop");
     }

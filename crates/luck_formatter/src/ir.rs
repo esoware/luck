@@ -1,23 +1,34 @@
 //! Formatter IR: a Wadler/Prettier document algebra.
 //!
-//! The document is a flat element stream; structure is expressed by paired
-//! `Tag` start/end markers rather than nested ownership, which keeps
-//! traversal (printing, measuring, expand propagation) allocation-free.
+//! The document is one flat element stream, with structure marked by paired
+//! `Tag` start and end elements instead of nesting. Printing and measuring
+//! walk plain slices, and rolling back to a checkpoint is a truncation.
 //!
-//! Emission goes through the [`Format`] trait plus the combinators in this
-//! module - emitters compose values that know how to write themselves,
-//! instead of pushing raw elements.
+//! Emitters write through the [`Format`] trait and the combinators in this
+//! module rather than pushing raw elements.
 
-use compact_str::CompactString;
+use core::ops::Range;
 
-/// Identifies a group so conditional content and indents can reference the
-/// break decision of a group other than their innermost enclosing one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GroupId(pub u32);
+use luck_token::CompactString;
+
+use crate::comments::{Comments, CommentsCheckpoint};
+use crate::{FormatOptions, printer};
+
+/// Lets conditional content follow the break decision of a group other than
+/// the innermost one around it. Doubles as the group's index into the
+/// printer's mode table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GroupId(usize);
+
+impl GroupId {
+    pub(crate) const fn index(self) -> usize {
+        self.0
+    }
+}
 
 /// How a line element behaves in flat vs expanded mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LineMode {
+pub(crate) enum LineMode {
     /// Nothing when flat, newline when expanded.
     Soft,
     /// Space when flat, newline when expanded.
@@ -30,34 +41,25 @@ pub enum LineMode {
 
 /// Whether a group prints on one line or breaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrintMode {
+pub(crate) enum PrintMode {
     Flat,
     Expanded,
 }
 
 /// Paired structural markers. Every `Start*` has a matching `End*`;
 /// the builder combinators guarantee pairing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Tag {
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub(crate) enum Tag {
     /// Content that prints flat if it fits the remaining line width.
     StartGroup(GroupId),
     EndGroup,
     StartIndent,
     EndIndent,
-    /// Indent by an explicit number of spaces (independent of indent style).
-    StartAlign(u8),
-    EndAlign,
-    /// Content emitted only when the referenced group took `mode`.
-    StartConditional {
-        mode: PrintMode,
-        group_id: GroupId,
-    },
-    EndConditional,
-    /// Indent applied only when the referenced group expanded.
-    StartIndentIfGroupBreaks(GroupId),
-    EndIndentIfGroupBreaks,
-    /// Fill: pack as many entries per line as fit. Entries are wrapped in
-    /// `StartEntry`/`EndEntry`; separators sit between entries.
+    /// Content emitted only when the referenced group expanded.
+    StartIfGroupBreaks(GroupId),
+    EndIfGroupBreaks,
+    /// Pack as many entries per line as fit. Each entry is wrapped in
+    /// `StartEntry`/`EndEntry`, with a `Line` separator between entries.
     StartFill,
     EndFill,
     StartEntry,
@@ -67,9 +69,8 @@ pub enum Tag {
     EndLineSuffix,
 }
 
-/// One element of the document stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FormatElement {
+pub(crate) enum FormatElement {
     /// Static token text - keywords, operators, punctuation.
     Token(&'static str),
     /// Dynamic text - identifiers, literals, comment bodies. May contain
@@ -79,396 +80,279 @@ pub enum FormatElement {
     Line(LineMode),
     /// Force every enclosing group to expand without printing anything.
     ExpandParent,
-    /// Flush pending line suffixes here even without a line break.
+    /// Break the line here if a line suffix is pending, so a trailing comment
+    /// can't swallow what follows.
     LineSuffixBoundary,
-    /// Layout variants ordered most-flat first; the printer takes the first
-    /// variant that fits, or the last if none fit. This is an expansion
-    /// boundary, so breaks inside a variant do not force outer groups.
-    BestFitting(Vec<Vec<FormatElement>>),
     Tag(Tag),
 }
 
 /// Anything that can write itself into the IR stream.
-pub trait Format {
-    fn fmt(&self, f: &mut Formatter);
+pub(crate) trait Format {
+    fn fmt(&self, formatter: &mut Formatter);
 }
 
 impl<T: Format + ?Sized> Format for &T {
-    fn fmt(&self, f: &mut Formatter) {
-        (**self).fmt(f);
+    fn fmt(&self, formatter: &mut Formatter) {
+        (**self).fmt(formatter);
     }
 }
 
 impl<T: Format> Format for Option<T> {
-    fn fmt(&self, f: &mut Formatter) {
+    fn fmt(&self, formatter: &mut Formatter) {
         if let Some(value) = self {
-            value.fmt(f);
+            value.fmt(formatter);
         }
     }
 }
 
-impl Format for () {
-    fn fmt(&self, _f: &mut Formatter) {}
-}
-
+/// A sequence: each member writes in order.
 macro_rules! tuple_format {
     ($($name:ident)+) => {
         impl<$($name: Format),+> Format for ($($name,)+) {
-            fn fmt(&self, f: &mut Formatter) {
-                #[allow(non_snake_case)]
+            fn fmt(&self, formatter: &mut Formatter) {
+                #[expect(
+                    non_snake_case,
+                    reason = "each binding reuses its generic parameter's name"
+                )]
                 let ($($name,)+) = self;
-                $($name.fmt(f);)+
+                $($name.fmt(formatter);)+
             }
         }
     };
 }
-tuple_format!(A);
-tuple_format!(A B);
-tuple_format!(A B C);
-tuple_format!(A B C D);
-tuple_format!(A B C D E);
-tuple_format!(A B C D E F);
-tuple_format!(A B C D E F G);
-tuple_format!(A B C D E F G H);
-tuple_format!(A B C D E F G H I);
-tuple_format!(A B C D E F G H I J);
-tuple_format!(A B C D E F G H I J K);
-tuple_format!(A B C D E F G H I J K L);
+tuple_format!(First Second);
+tuple_format!(First Second Third);
+tuple_format!(First Second Third Fourth);
+tuple_format!(First Second Third Fourth Fifth);
+tuple_format!(First Second Third Fourth Fifth Sixth);
+tuple_format!(First Second Third Fourth Fifth Sixth Seventh);
+tuple_format!(First Second Third Fourth Fifth Sixth Seventh Eighth);
+tuple_format!(First Second Third Fourth Fifth Sixth Seventh Eighth Ninth);
+tuple_format!(First Second Third Fourth Fifth Sixth Seventh Eighth Ninth Tenth);
 
-/// Write a sequence of formatable values: `write!(f, [a, b, c])`.
-#[macro_export]
-macro_rules! write {
-    ($f:expr, [$($arg:expr),* $(,)?]) => {{
-        $($crate::ir::Format::fmt(&$arg, $f);)*
-    }};
-}
-
-/// Rollback point for speculative formatting. The element stream and the
-/// comment cursor are rewound - group ids stay unique across restores so
-/// references made before the rollback remain valid.
+/// Rollback point for speculative formatting.
+///
+/// Restoring rewinds the element stream and the comment cursor but not the
+/// group id counter, so no id is ever handed out twice.
 #[derive(Debug, Clone, Copy)]
-pub struct Checkpoint {
-    element_len: usize,
-    comments: crate::comments::CommentsCheckpoint,
+pub(crate) struct Checkpoint {
+    element_count: usize,
+    comments: CommentsCheckpoint,
 }
 
-/// The document builder threaded through every emitter. Carries the
-/// language context (options, comments) alongside the element stream -
-/// luck formats one language, so no generic context indirection.
-pub struct Formatter {
+/// The document builder every emitter writes to. It carries the options and
+/// comments alongside the element stream.
+#[derive(Debug)]
+pub(crate) struct Formatter {
     elements: Vec<FormatElement>,
-    next_group_id: u32,
-    pub options: crate::FormatOptions,
-    pub comments: crate::comments::Comments,
-    /// When set, only statements overlapping this byte range are formatted;
-    /// the rest emit verbatim (editor "format selection"). Requires source.
-    pub format_range: Option<std::ops::Range<u32>>,
+    next_group_id: usize,
+    options: FormatOptions,
+    comments: Comments,
+    /// When set, only statements overlapping this byte range are formatted
+    /// and the rest go out verbatim. Needs source text.
+    format_range: Option<Range<u32>>,
 }
 
 impl Formatter {
-    pub fn new() -> Self {
-        Self::with_context(
-            crate::FormatOptions::default(),
-            crate::comments::Comments::none(),
-        )
-    }
-
-    pub fn with_context(
-        options: crate::FormatOptions,
-        comments: crate::comments::Comments,
+    pub(crate) fn new(
+        options: FormatOptions,
+        comments: Comments,
+        format_range: Option<Range<u32>>,
     ) -> Self {
         // Roughly one element per 8 source bytes; a mild undershoot that
         // still removes most realloc copies. Synthetic ASTs have no source
         // and start empty.
-        let elements = match comments.source_text() {
-            Some(source) => Vec::with_capacity(source.len() / 8),
-            None => Vec::new(),
-        };
+        let capacity = comments.source_text().map_or(0, |source| source.len().div_ceil(8));
         Self {
-            elements,
+            elements: Vec::with_capacity(capacity),
             next_group_id: 0,
             options,
             comments,
-            format_range: None,
+            format_range,
         }
     }
 
-    pub fn group_id(&mut self) -> GroupId {
+    pub(crate) const fn options(&self) -> &FormatOptions {
+        &self.options
+    }
+
+    pub(crate) const fn comments(&self) -> &Comments {
+        &self.comments
+    }
+
+    pub(crate) const fn comments_mut(&mut self) -> &mut Comments {
+        &mut self.comments
+    }
+
+    pub(crate) const fn format_range(&self) -> Option<&Range<u32>> {
+        self.format_range.as_ref()
+    }
+
+    pub(crate) const fn group_id(&mut self) -> GroupId {
         let id = GroupId(self.next_group_id);
-        self.next_group_id += 1;
+        self.next_group_id = self.next_group_id.saturating_add(1);
         id
     }
 
-    /// Total number of group ids handed out; sizes the printer's mode table.
-    pub fn group_count(&self) -> u32 {
-        self.next_group_id
-    }
-
     #[inline]
-    pub fn push(&mut self, element: FormatElement) {
+    pub(crate) fn push(&mut self, element: FormatElement) {
         self.elements.push(element);
     }
 
-    pub fn into_elements(self) -> Vec<FormatElement> {
-        self.elements
+    /// Writes dynamic text, such as a literal or a comment body.
+    ///
+    /// It moves `content` into the stream, where a reusable [`Format`] value
+    /// would have to copy it.
+    pub(crate) fn write_text(&mut self, content: impl Into<CompactString>) {
+        self.elements.push(FormatElement::Text(content.into()));
     }
 
-    pub fn elements(&self) -> &[FormatElement] {
+    #[cfg(test)]
+    pub(crate) fn elements(&self) -> &[FormatElement] {
         &self.elements
     }
 
-    pub fn checkpoint(&self) -> Checkpoint {
-        Checkpoint {
-            element_len: self.elements.len(),
-            comments: self.comments.checkpoint(),
-        }
+    pub(crate) const fn checkpoint(&self) -> Checkpoint {
+        Checkpoint { element_count: self.elements.len(), comments: self.comments.checkpoint() }
     }
 
-    pub fn restore(&mut self, checkpoint: Checkpoint) {
-        self.elements.truncate(checkpoint.element_len);
+    pub(crate) fn restore(&mut self, checkpoint: Checkpoint) {
+        self.elements.truncate(checkpoint.element_count);
         self.comments.restore(checkpoint.comments);
     }
 
-    /// Detach the elements written since `checkpoint` (used by
-    /// `best_fitting` to capture variants).
-    pub fn take_since(&mut self, checkpoint: Checkpoint) -> Vec<FormatElement> {
-        self.elements.split_off(checkpoint.element_len)
-    }
-}
-
-impl Default for Formatter {
-    fn default() -> Self {
-        Self::new()
+    pub(crate) fn print(self) -> String {
+        printer::print(&self.elements, self.next_group_id, &self.options)
     }
 }
 
 /// Adapter turning a closure into a `Format` value.
-pub struct FormatWith<F>(F);
+#[derive(Debug)]
+pub(crate) struct FormatWith<F>(F);
 
 impl<F: Fn(&mut Formatter)> Format for FormatWith<F> {
-    fn fmt(&self, f: &mut Formatter) {
-        (self.0)(f);
+    fn fmt(&self, formatter: &mut Formatter) {
+        (self.0)(formatter);
     }
 }
 
-pub fn format_with<F: Fn(&mut Formatter)>(build: F) -> FormatWith<F> {
+pub(crate) const fn format_with<F>(build: F) -> FormatWith<F>
+where
+    F: Fn(&mut Formatter),
+{
     FormatWith(build)
 }
 
-pub struct StaticToken(&'static str);
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StaticToken(&'static str);
 
 impl Format for StaticToken {
-    fn fmt(&self, f: &mut Formatter) {
-        f.push(FormatElement::Token(self.0));
+    fn fmt(&self, formatter: &mut Formatter) {
+        formatter.push(FormatElement::Token(self.0));
     }
 }
 
-pub fn token(content: &'static str) -> StaticToken {
+pub(crate) const fn token(content: &'static str) -> StaticToken {
     StaticToken(content)
 }
 
-pub struct DynamicText(CompactString);
-
-impl Format for DynamicText {
-    fn fmt(&self, f: &mut Formatter) {
-        f.push(FormatElement::Text(self.0.clone()));
-    }
-}
-
-pub fn text(content: impl Into<CompactString>) -> DynamicText {
-    DynamicText(content.into())
-}
-
 macro_rules! atom {
-    ($fn_name:ident, $element:expr) => {
-        pub fn $fn_name() -> impl Format {
-            format_with(|f| f.push($element))
+    ($function_name:ident, $element:expr) => {
+        pub(crate) fn $function_name() -> impl Format {
+            format_with(|formatter| formatter.push($element))
         }
     };
 }
 atom!(space, FormatElement::Space);
 atom!(soft_line, FormatElement::Line(LineMode::Soft));
-atom!(
-    soft_line_or_space,
-    FormatElement::Line(LineMode::SoftOrSpace)
-);
+atom!(soft_line_or_space, FormatElement::Line(LineMode::SoftOrSpace));
 atom!(hard_line, FormatElement::Line(LineMode::Hard));
 atom!(empty_line, FormatElement::Line(LineMode::Empty));
 atom!(expand_parent, FormatElement::ExpandParent);
 atom!(line_suffix_boundary, FormatElement::LineSuffixBoundary);
 
-macro_rules! tagged {
-    ($fn_name:ident, $start:expr, $end:expr) => {
-        pub fn $fn_name<T: Format>(content: T) -> impl Format {
-            format_with(move |f| {
-                f.push(FormatElement::Tag($start));
-                content.fmt(f);
-                f.push(FormatElement::Tag($end));
-            })
-        }
-    };
-}
-tagged!(indent, Tag::StartIndent, Tag::EndIndent);
-tagged!(line_suffix, Tag::StartLineSuffix, Tag::EndLineSuffix);
-
-pub fn align<T: Format>(width: u8, content: T) -> impl Format {
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartAlign(width)));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndAlign));
+pub(crate) fn indent<T>(content: T) -> impl Format
+where
+    T: Format,
+{
+    format_with(move |formatter| {
+        formatter.push(FormatElement::Tag(Tag::StartIndent));
+        content.fmt(formatter);
+        formatter.push(FormatElement::Tag(Tag::EndIndent));
     })
 }
 
 /// Group with a fresh id allocated at write time.
-pub fn group<T: Format>(content: T) -> impl Format {
-    format_with(move |f| {
-        let id = f.group_id();
-        f.push(FormatElement::Tag(Tag::StartGroup(id)));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndGroup));
+pub(crate) fn group<T>(content: T) -> impl Format
+where
+    T: Format,
+{
+    format_with(move |formatter| {
+        let id = formatter.group_id();
+        formatter.push(FormatElement::Tag(Tag::StartGroup(id)));
+        content.fmt(formatter);
+        formatter.push(FormatElement::Tag(Tag::EndGroup));
     })
 }
 
 /// Group with a caller-allocated id, so other elements can reference its
-/// break decision via `if_group_breaks`/`indent_if_group_breaks`.
-pub fn group_with_id<T: Format>(id: GroupId, content: T) -> impl Format {
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartGroup(id)));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndGroup));
+/// break decision via `if_group_breaks`.
+pub(crate) fn group_with_id<T>(id: GroupId, content: T) -> impl Format
+where
+    T: Format,
+{
+    format_with(move |formatter| {
+        formatter.push(FormatElement::Tag(Tag::StartGroup(id)));
+        content.fmt(formatter);
+        formatter.push(FormatElement::Tag(Tag::EndGroup));
     })
 }
 
 /// Emitted only when the referenced group breaks. The group must start
 /// before this element (enclosing or earlier sibling).
-pub fn if_group_breaks<T: Format>(group_id: GroupId, content: T) -> impl Format {
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartConditional {
-            mode: PrintMode::Expanded,
-            group_id,
-        }));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndConditional));
+pub(crate) fn if_group_breaks<T>(group_id: GroupId, content: T) -> impl Format
+where
+    T: Format,
+{
+    format_with(move |formatter| {
+        formatter.push(FormatElement::Tag(Tag::StartIfGroupBreaks(group_id)));
+        content.fmt(formatter);
+        formatter.push(FormatElement::Tag(Tag::EndIfGroupBreaks));
     })
 }
 
-/// Emitted only when the referenced group prints flat.
-pub fn if_group_fits<T: Format>(group_id: GroupId, content: T) -> impl Format {
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartConditional {
-            mode: PrintMode::Flat,
-            group_id,
-        }));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndConditional));
+/// `items` in order, with `separator` between each pair.
+pub(crate) fn separated<T, Separator>(items: &[T], separator: Separator) -> impl Format
+where
+    T: Format,
+    Separator: Format,
+{
+    format_with(move |formatter| {
+        for (index, item) in items.iter().enumerate() {
+            if index > 0 {
+                separator.fmt(formatter);
+            }
+            item.fmt(formatter);
+        }
     })
 }
 
-pub fn indent_if_group_breaks<T: Format>(group_id: GroupId, content: T) -> impl Format {
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartIndentIfGroupBreaks(group_id)));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndIndentIfGroupBreaks));
-    })
-}
-
-/// Fill: pack entries onto lines greedily, separated by `separator`
-/// (typically `SoftOrSpace`). Entry boundaries are explicit so the printer
-/// can measure each entry as a unit.
-pub fn fill<'a>(separator: LineMode, entries: &'a [&'a dyn Format]) -> impl Format + 'a {
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartFill));
+/// Pack entries onto lines greedily, separated by `SoftOrSpace`. Entry
+/// boundaries are explicit so the printer can measure each entry as a unit.
+pub(crate) fn fill<T>(entries: &[T]) -> impl Format
+where
+    T: Format,
+{
+    format_with(move |formatter| {
+        formatter.push(FormatElement::Tag(Tag::StartFill));
         for (index, entry) in entries.iter().enumerate() {
             if index > 0 {
-                f.push(FormatElement::Line(separator));
+                formatter.push(FormatElement::Line(LineMode::SoftOrSpace));
             }
-            f.push(FormatElement::Tag(Tag::StartEntry));
-            entry.fmt(f);
-            f.push(FormatElement::Tag(Tag::EndEntry));
+            formatter.push(FormatElement::Tag(Tag::StartEntry));
+            entry.fmt(formatter);
+            formatter.push(FormatElement::Tag(Tag::EndEntry));
         }
-        f.push(FormatElement::Tag(Tag::EndFill));
+        formatter.push(FormatElement::Tag(Tag::EndFill));
     })
-}
-
-/// Layout variants, most-flat first. The printer takes the first that fits.
-pub struct BestFitting<'a> {
-    variants: &'a [&'a dyn Format],
-}
-
-impl Format for BestFitting<'_> {
-    fn fmt(&self, f: &mut Formatter) {
-        debug_assert!(
-            self.variants.len() >= 2,
-            "best_fitting needs at least two variants"
-        );
-        // Every variant formats the same node, so each is written from the
-        // comment state the first one saw: without the rewind a variant that
-        // claims interior comments would leave the later ones nothing to
-        // print, and the printer picks by width, not by comment count.
-        let entry = f.checkpoint();
-        let mut captured = Vec::with_capacity(self.variants.len());
-        let mut printed: Option<crate::comments::CommentsCheckpoint> = None;
-        for variant in self.variants {
-            f.comments.restore(entry.comments);
-            variant.fmt(f);
-            let after = f.comments.checkpoint();
-            debug_assert!(
-                printed.is_none_or(|first| first == after),
-                "best_fitting variants disagree on which comments they print"
-            );
-            printed = Some(after);
-            captured.push(f.take_since(entry));
-        }
-        // Whichever variant the printer takes prints that same set, so the
-        // cursor moves past them exactly once.
-        if let Some(after) = printed {
-            f.comments.restore(after);
-        }
-        f.push(FormatElement::BestFitting(captured));
-    }
-}
-
-pub fn best_fitting<'a>(variants: &'a [&'a dyn Format]) -> BestFitting<'a> {
-    BestFitting { variants }
-}
-
-#[cfg(test)]
-mod tests {
-    use luck_token::Span;
-    use luck_token::comment::{Comment, CommentKind, CommentPosition};
-
-    use super::*;
-    use crate::comments::Comments;
-    use luck_token::LuaVersion;
-
-    #[test]
-    fn best_fitting_variants_each_see_the_same_comments() {
-        let source = "{ --[[ why ]] }";
-        let comment = Comment {
-            span: Span::new(2, 13),
-            attached_to: 14,
-            kind: CommentKind::SingleLineBlock,
-            position: CommentPosition::Leading,
-            preceded_by_newline: false,
-            followed_by_newline: false,
-        };
-        let mut formatter = Formatter::with_context(
-            crate::FormatOptions::default(),
-            Comments::from_source(&[comment], source, LuaVersion::Lua54),
-        );
-
-        let variant = format_with(|f: &mut Formatter| f.emit_own_line_comments_in(0, 14));
-        best_fitting(&[&variant, &variant]).fmt(&mut formatter);
-
-        let [FormatElement::BestFitting(variants)] = formatter.elements() else {
-            panic!("expected a single best-fitting element");
-        };
-        assert!(
-            !variants[1].is_empty(),
-            "the second variant printed no comment"
-        );
-        assert_eq!(variants[0], variants[1]);
-        // Printed once for the run, not once per variant.
-        assert!(!formatter.comments.has_unhandled_in(0, 14));
-    }
 }

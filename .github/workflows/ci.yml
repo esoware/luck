@@ -5,50 +5,41 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+# Only PR runs cancel. Main runs save the cache, so each one gets its own group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  lint:
-    name: fmt + clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-
-  test:
-    name: test (${{ matrix.os }}, ${{ matrix.rust }})
-    runs-on: ${{ matrix.os }}
+  ready:
+    name: Ready on ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable]
         include:
-          - os: ubuntu-latest
-            rust: "1.88.0" # MSRV
+          - os: Windows
+            runner: windows-2025-vs2026
+          - os: macOS
+            runner: macos-26
+          - os: Linux
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          toolchain: ${{ matrix.rust }}
-      - uses: taiki-e/install-action@nextest
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo nextest run --workspace
-      # nextest does not run doctests; keep them covered separately.
-      - run: cargo test --doc --workspace
+          persist-credentials: false
 
+      - uses: $/.github/actions/setup
 
-  deny:
-    name: cargo-deny
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check advisories licenses bans sources
+      - name: Run just ready
+        run: just ready
+
+      - name: Fail if just ready changed or added a file
+        run: git add --all && git diff --cached --exit-code

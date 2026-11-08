@@ -1,17 +1,14 @@
-use luck_ast::shared::Block;
-use luck_ast::stmt::Statement;
-use luck_ast::visitor::Visitor;
-use luck_token::Span;
+use luck_ast::{NodeType, NodeTypeSet, Statement};
 
 use crate::cfg::{Exit, analyze_full_block};
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::rule::{LintContext, NodeRule, Rule};
 
-/// Detects `while`/`repeat`/`for` loops whose body terminates on every
-/// path, so the body runs at most once. A loop that always `break`s,
-/// `return`s, or `error`s is almost certainly a typo for an `if` or `do`
-/// block.
-pub struct LoopExecutesOnce;
+/// Flags loops whose body `break`s, `return`s, or `error`s on every path, so
+/// it runs at most once. Such a loop was usually meant to be an `if` or a
+/// `do` block.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoopExecutesOnce;
 
 impl Rule for LoopExecutesOnce {
     fn name(&self) -> &'static str {
@@ -26,71 +23,73 @@ impl Rule for LoopExecutesOnce {
     fn description(&self) -> &'static str {
         "loop body always exits on the first iteration"
     }
+}
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let mut checker = LoopChecker {
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(block);
-        checker.diagnostics
+impl NodeRule for LoopExecutesOnce {
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[
+            NodeType::WhileLoop,
+            NodeType::RepeatLoop,
+            NodeType::NumericFor,
+            NodeType::GenericFor,
+        ])
     }
-}
 
-struct LoopChecker {
-    diagnostics: Vec<LintDiagnostic>,
-}
-
-impl LoopChecker {
-    fn check_loop_body(&mut self, body: &Block, loop_span: Span, kind: &'static str) {
-        let summary = analyze_full_block(body);
-        // The body must terminate on every path, which means the
-        // analyzer pinned a non-Normal exit on the sequence.
-        let label = match summary.exit {
+    fn on_statement(
+        &self,
+        stmt: &Statement,
+        _context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
+        let (body, span, kind) = match stmt {
+            Statement::WhileLoop(node) => (&node.block, node.span, "`while`"),
+            Statement::RepeatLoop(node) => (&node.block, node.span, "`repeat`"),
+            Statement::NumericFor(node) => (&node.block, node.span, "numeric `for`"),
+            Statement::GenericFor(node) => (&node.block, node.span, "generic `for`"),
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::IfStatement(_)
+            | Statement::FunctionDecl(_)
+            | Statement::LocalFunction(_)
+            | Statement::LocalAssignment(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => return,
+        };
+        let label = match analyze_full_block(body).exit {
             Exit::Return => "always returns",
             Exit::Break => "always breaks",
             Exit::Error => "always errors",
             Exit::Continue | Exit::Normal => return,
         };
-        self.diagnostics.push(
+        diags.push(
             LintDiagnostic::new(
                 "loop_executes_once",
-                format!("{kind} loop body {label}; loop executes at most once"),
-                loop_span,
+                format!("{kind} loop body {label}, so the loop executes at most once"),
+                span,
             )
-            .with_help("if a single execution is intended, use a `do ... end` block".to_string()),
+            .with_help("if a single execution is intended, use a `do ... end` block"),
         );
-    }
-}
-
-impl<'ast> Visitor<'ast> for LoopChecker {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
-        match stmt {
-            Statement::WhileLoop(node) => {
-                self.check_loop_body(&node.block, node.span, "while");
-            }
-            Statement::RepeatLoop(node) => {
-                self.check_loop_body(&node.block, node.span, "repeat");
-            }
-            Statement::NumericFor(node) => {
-                self.check_loop_body(&node.block, node.span, "numeric for");
-            }
-            Statement::GenericFor(node) => {
-                self.check_loop_body(&node.block, node.span, "generic for");
-            }
-            _ => {}
-        }
-        self.walk_statement(stmt);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&LoopExecutesOnce, source, LuaVersion::Lua54)
+        run_rule(&LoopExecutesOnce, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -138,5 +137,19 @@ mod tests {
         // returns.
         let diags = run("local c = 1\nwhile c do if c then return 1 else return 2 end end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_nested_loops_outer_first() {
+        let diags = run("while true do for i = 1, 2 do break end return end");
+        let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "`while` loop body always returns, so the loop executes at most once",
+                "numeric `for` loop body always breaks, so the loop executes at most once",
+            ],
+            "{diags:?}"
+        );
     }
 }

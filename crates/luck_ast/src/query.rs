@@ -1,37 +1,101 @@
-//! Read-only structural queries shared by the printers.
+//! Read-only structural queries that decide where a reprinted node needs
+//! parentheses or a separator.
 
-use crate::expr::Var;
-use crate::{Expression, Statement};
+use crate::expr::{Expression, Var};
+use crate::stmt::Statement;
 
-/// Whether a reprinted statement's first token is `(`. Both printers must
-/// guard these statements. Printed after a call, `(...)` glues onto the
-/// previous expression and re-parses as a chained call, silently changing
-/// the semantics.
-pub fn stmt_starts_with_paren(stmt: &Statement) -> bool {
-    match stmt {
-        Statement::FunctionCall(call) => expr_starts_with_paren(&call.callee),
-        Statement::Assignment(assign) => {
-            let first_var = assign.targets.first();
-            first_var.is_some_and(var_starts_with_paren)
-        }
-        Statement::CompoundAssignment(compound) => var_starts_with_paren(&compound.var),
-        _ => false,
+/// Whether `expr` may stand bare in a prefix position: a call callee, a
+/// method receiver, an index or field prefix, or an instantiated expression.
+///
+/// Anything else needs parentheses there, as in `("s"):rep(2)` or `({}).x`.
+#[must_use]
+pub const fn is_prefix_expression(expr: &Expression) -> bool {
+    match expr {
+        Expression::Var(_)
+        | Expression::FunctionCall(_)
+        | Expression::Parenthesized(_)
+        | Expression::TypeInstantiation(_) => true,
+        Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::TableConstructor(_)
+        | Expression::BinaryOp(_)
+        | Expression::UnaryOp(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::Error(_) => false,
     }
 }
 
-pub fn expr_starts_with_paren(expr: &Expression) -> bool {
+/// Whether a reprinted statement's first token is `(`.
+///
+/// Both printers must guard these statements. Printed after a statement that
+/// ends in an expression, `(...)` glues onto that expression and re-parses
+/// as a call, silently changing the meaning.
+#[must_use]
+pub fn stmt_starts_with_paren(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::FunctionCall(call) => expr_starts_with_paren(&call.callee),
+        Statement::Assignment(assignment) => {
+            let first_var = assignment.targets.first();
+            first_var.is_some_and(var_starts_with_paren)
+        }
+        // Luau
+        Statement::CompoundAssignment(compound) => var_starts_with_paren(&compound.var),
+        Statement::DoBlock(_)
+        | Statement::WhileLoop(_)
+        | Statement::RepeatLoop(_)
+        | Statement::IfStatement(_)
+        | Statement::NumericFor(_)
+        | Statement::GenericFor(_)
+        | Statement::FunctionDecl(_)
+        | Statement::LocalFunction(_)
+        | Statement::LocalAssignment(_)
+        | Statement::EmptyStatement(_)
+        | Statement::Goto(_)
+        | Statement::Label(_)
+        | Statement::GlobalDeclaration(_)
+        | Statement::GlobalFunction(_)
+        | Statement::GlobalStar(_)
+        | Statement::Break(_)
+        | Statement::TypeDeclaration(_)
+        | Statement::Error(_) => false,
+    }
+}
+
+fn expr_starts_with_paren(expr: &Expression) -> bool {
     match expr {
         Expression::Parenthesized(_) => true,
         Expression::FunctionCall(call) => expr_starts_with_paren(&call.callee),
         Expression::Var(var) => var_starts_with_paren(var),
-        Expression::BinaryOp(binop) => expr_starts_with_paren(&binop.left),
-        Expression::UnaryOp(_) => false,
+        Expression::BinaryOp(binary_op) => expr_starts_with_paren(&binary_op.left),
+        // Luau
         Expression::TypeCast(cast) => expr_starts_with_paren(&cast.expr),
-        _ => false,
+        // Luau
+        Expression::TypeInstantiation(instantiation) => expr_starts_with_paren(&instantiation.expr),
+        Expression::UnaryOp(_)
+        | Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::TableConstructor(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::Error(_) => false,
     }
 }
 
-pub fn var_starts_with_paren(var: &Var) -> bool {
+fn var_starts_with_paren(var: &Var) -> bool {
     match var {
         Var::Name(_) => false,
         Var::FieldAccess(field_access) => expr_starts_with_paren(&field_access.prefix),
@@ -39,20 +103,36 @@ pub fn var_starts_with_paren(var: &Var) -> bool {
     }
 }
 
-/// Whether a reprinted expression's first token is `{`. Inside an
-/// interpolated string, `{` directly after the interpolation opener
-/// forms `{{`, which Luau rejects, so printers must separate them.
+/// Whether a reprinted expression's first token is `{`.
+///
+/// Inside an interpolated string, `{` directly after the interpolation
+/// opener forms `{{`, which Luau rejects, so printers must separate them.
+#[must_use]
 pub fn expr_starts_with_brace(expr: &Expression) -> bool {
     match expr {
         Expression::TableConstructor(_) => true,
         Expression::FunctionCall(call) => expr_starts_with_brace(&call.callee),
-        Expression::BinaryOp(binop) => expr_starts_with_brace(&binop.left),
+        Expression::BinaryOp(binary_op) => expr_starts_with_brace(&binary_op.left),
+        // Luau
         Expression::TypeCast(cast) => expr_starts_with_brace(&cast.expr),
         Expression::Var(var) => match var {
             Var::Name(_) => false,
             Var::FieldAccess(field_access) => expr_starts_with_brace(&field_access.prefix),
             Var::Index(index) => expr_starts_with_brace(&index.prefix),
         },
-        _ => false,
+        Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Parenthesized(_)
+        | Expression::UnaryOp(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => false,
     }
 }

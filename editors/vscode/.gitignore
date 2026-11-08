@@ -12,7 +12,7 @@ node_modules/
 # vscode test infrastructure
 .vscode-test/
 
-# bundled server binaries — produced by CI, never committed
+# bundled server binaries, produced by CI
 server/
 
 # editor / OS noise

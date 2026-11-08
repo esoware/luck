@@ -1,17 +1,14 @@
-use std::collections::HashMap;
+use luck_ast::{Expression, FunctionBody, FunctionCall, Statement, Var, Visitor};
+use luck_semantic::{ReferenceKind, ScopeTree, SymbolId};
+use luck_token::Span;
+use rustc_hash::FxHashMap;
 
-use luck_ast::Expression;
-use luck_ast::expr::{FunctionArgs, FunctionCall, Var};
-use luck_ast::shared::FunctionBody;
-use luck_ast::stmt::Statement;
-use luck_ast::visitor::Visitor;
-use luck_semantic::scope::{ReferenceKind, SymbolId};
-use luck_token::{Span, TokenKind};
+use crate::call::{has_multi_value_tail, positional_args};
+use crate::diagnostic::{Category, LintDiagnostic, Severity, line_column};
+use crate::rule::{LintContext, Rule, WholeRule};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
-use crate::rule::{LintContext, Rule};
-
-pub struct MismatchedArgCount;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MismatchedArgCount;
 
 impl Rule for MismatchedArgCount {
     fn name(&self) -> &'static str {
@@ -29,23 +26,24 @@ impl Rule for MismatchedArgCount {
     fn description(&self) -> &'static str {
         "call passes more arguments than the called function accepts"
     }
+}
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let mut definitions = DefinitionCollector {
-            ctx,
-            functions: HashMap::new(),
-        };
-        definitions.visit_block(ctx.block);
+impl WholeRule for MismatchedArgCount {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        let tree = &context.semantic.scope_tree;
+        let mut definitions = DefinitionCollector { tree, functions: FxHashMap::default() };
+        definitions.visit_block(context.block);
         if definitions.functions.is_empty() {
             return Vec::new();
         }
         let mut checker = CallChecker {
-            ctx,
+            tree,
+            source: context.source,
             functions: definitions.functions,
-            diagnostics: Vec::new(),
+            diags: Vec::new(),
         };
-        checker.visit_block(ctx.block);
-        checker.diagnostics
+        checker.visit_block(context.block);
+        checker.diags
     }
 }
 
@@ -55,76 +53,85 @@ struct FunctionSignature {
     definition_start: u32,
 }
 
-/// Maps local symbols to the function signature they are bound to.
-/// Only single-write symbols qualify, since a reassigned `f` could hold
-/// any function by the time a call runs.
-struct DefinitionCollector<'a> {
-    ctx: &'a LintContext<'a>,
-    functions: HashMap<SymbolId, FunctionSignature>,
+/// Maps each local bound to a function literal to that function's signature.
+/// A local that's ever reassigned is left out, since it could hold any
+/// function by the time a call runs.
+struct DefinitionCollector<'tree> {
+    tree: &'tree ScopeTree,
+    functions: FxHashMap<SymbolId, FunctionSignature>,
 }
 
 impl DefinitionCollector<'_> {
     fn record(&mut self, name_span: Span, body: &FunctionBody) {
-        let Some(symbol_id) = self.symbol_defined_at(name_span) else {
+        let Some(symbol) =
+            self.tree.symbols.iter().find(|symbol| symbol.definition_span == name_span)
+        else {
             return;
         };
-        let tree = &self.ctx.semantic.scope_tree;
-        let symbol = &tree.symbols[symbol_id.index()];
-        let reassigned = symbol.reference_ids.iter().any(|&ref_id| {
+        let is_reassigned = symbol.reference_ids.iter().any(|&reference_id| {
             matches!(
-                tree.reference(ref_id).kind,
+                self.tree.reference(reference_id).kind,
                 ReferenceKind::Write | ReferenceKind::ReadWrite
             )
         });
-        if reassigned {
+        if is_reassigned {
             return;
         }
         self.functions.insert(
-            symbol_id,
+            symbol.id,
             FunctionSignature {
-                param_count: body.params.iter().count(),
+                param_count: body.params.len(),
                 has_vararg: body.vararg.is_some(),
                 definition_start: name_span.start,
             },
         );
-    }
-
-    fn symbol_defined_at(&self, span: Span) -> Option<SymbolId> {
-        self.ctx
-            .semantic
-            .scope_tree
-            .symbols
-            .iter()
-            .find(|symbol| symbol.definition_span == span)
-            .map(|symbol| symbol.id)
     }
 }
 
 impl<'ast> Visitor<'ast> for DefinitionCollector<'_> {
     fn visit_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
-            Statement::LocalFunction(local_fn) => {
-                self.record(local_fn.name.span, &local_fn.body);
+            Statement::LocalFunction(local_function) => {
+                self.record(local_function.name.span, &local_function.body);
             }
             Statement::LocalAssignment(local) => {
                 if let Some(exprs) = &local.exprs {
                     for (attributed, value) in local.names.iter().zip(exprs.iter()) {
-                        if let Expression::FunctionDef(def) = value {
-                            self.record(attributed.name.span, &def.body);
+                        if let Expression::FunctionDef(function) = value {
+                            self.record(attributed.name.span, &function.body);
                         }
                     }
                 }
             }
-            _ => {}
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::FunctionDecl(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => {}
         }
         self.walk_statement(stmt);
     }
 }
 
-struct CallChecker<'a> {
-    ctx: &'a LintContext<'a>,
-    functions: HashMap<SymbolId, FunctionSignature>,
-    diagnostics: Vec<LintDiagnostic>,
+struct CallChecker<'context> {
+    tree: &'context ScopeTree,
+    source: &'context str,
+    functions: FxHashMap<SymbolId, FunctionSignature>,
+    diags: Vec<LintDiagnostic>,
 }
 
 impl CallChecker<'_> {
@@ -132,13 +139,10 @@ impl CallChecker<'_> {
         if call.method.is_some() {
             return;
         }
-        let Expression::Var(var) = &call.callee else {
+        let Expression::Var(Var::Name(token)) = &call.callee else {
             return;
         };
-        let Var::Name(token) = var else {
-            return;
-        };
-        let TokenKind::Identifier(name) = &token.kind else {
+        let Some(name) = token.identifier() else {
             return;
         };
         let Some(signature) = self.resolve(token.span) else {
@@ -147,74 +151,41 @@ impl CallChecker<'_> {
         if signature.has_vararg {
             return;
         }
-        let (arg_count, last_expands) = match &call.args {
-            FunctionArgs::Parenthesized { args, .. } => {
-                let exprs: Vec<&Expression> = args.iter().collect();
-                let last_expands = matches!(
-                    exprs.last(),
-                    Some(Expression::FunctionCall(_)) | Some(Expression::VarArg(_))
-                );
-                (exprs.len(), last_expands)
-            }
-            FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => (1, false),
-        };
-        // A trailing call/vararg can expand to zero values, so only the
-        // guaranteed-present preceding args can prove an overflow.
-        let guaranteed = if last_expands {
-            arg_count - 1
-        } else {
-            arg_count
-        };
-        if guaranteed <= signature.param_count {
+        let (args, arg_count) = positional_args(&call.args);
+        // A trailing call or `...` can expand to nothing, so only the args
+        // before it are sure to be passed.
+        let guaranteed_arg_count =
+            arg_count.saturating_sub(usize::from(has_multi_value_tail(args)));
+        if guaranteed_arg_count <= signature.param_count {
             return;
         }
-        let line = line_number(self.ctx.source, signature.definition_start);
-        self.diagnostics.push(
+        let (line, _) = line_column(self.source, signature.definition_start);
+        self.diags.push(
             LintDiagnostic::new(
                 "mismatched_arg_count",
                 format!(
-                    "call passes {guaranteed} arguments to function `{name}`, which accepts only \
-                     {} (defined on line {line})",
+                    "call passes {guaranteed_arg_count} arguments to function `{name}`, \
+                     which accepts only {} (defined on line {line})",
                     signature.param_count
                 ),
                 call.span,
             )
-            .with_help("extra arguments are silently discarded".to_string()),
+            .with_help("extra arguments are silently discarded"),
         );
     }
 
+    /// The signature of the local function the name at `span` calls.
     fn resolve(&self, span: Span) -> Option<&FunctionSignature> {
-        let tree = &self.ctx.semantic.scope_tree;
-        let reference = tree
-            .references
-            .iter()
-            .find(|reference| reference.span == span)?;
+        let reference = self.tree.references.iter().find(|reference| reference.span == span)?;
         self.functions.get(&reference.resolved?)
     }
 }
 
 impl<'ast> Visitor<'ast> for CallChecker<'_> {
-    fn visit_expression(&mut self, expr: &'ast Expression) {
-        if let Expression::FunctionCall(call) = expr {
-            self.check_call(call);
-        }
-        self.walk_expression(expr);
+    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+        self.check_call(call);
+        self.walk_function_call(call);
     }
-
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
-        if let Statement::FunctionCall(call_stmt) = stmt {
-            self.check_call(call_stmt);
-        }
-        self.walk_statement(stmt);
-    }
-}
-
-fn line_number(source: &str, offset: u32) -> usize {
-    source[..offset as usize]
-        .bytes()
-        .filter(|&b| b == b'\n')
-        .count()
-        + 1
 }
 
 #[cfg(test)]
@@ -223,9 +194,10 @@ mod tests {
 
     use super::MismatchedArgCount;
     use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&MismatchedArgCount, source, LuaVersion::Lua54)
+        run_rule(&MismatchedArgCount, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -262,7 +234,7 @@ mod tests {
 
     #[test]
     fn ignores_fewer_args() {
-        // Missing args default to nil; that is idiomatic optional-arg Lua.
+        // Missing args are nil, which is how Lua does optional arguments.
         let diags = run("local function f(a, b) return a or b end\nf(1)");
         assert!(diags.is_empty(), "{diags:?}");
     }

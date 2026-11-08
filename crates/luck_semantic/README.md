@@ -8,10 +8,10 @@ Scope analysis, symbol resolution, and per-environment standard library definiti
 
 ## Key features
 
-- **Scope tree.** A full lexical scoping model with Module, Function, Block, and Loop scope kinds.
+- **Scope tree.** Lexical scopes of four kinds: Module, Function, Block, and Loop.
 - **Reference classification.** The builder records every identifier use as Read, Write, or ReadWrite.
-- **Shadowing detection.** The tree flags declarations that reuse a name from an outer scope.
-- **Upvalue tracking.** Captures across function boundaries carry their source and destination scopes.
+- **Shadowing detection.** Each declaration links to the visible binding of the same name that it hides, whether that binding is in an outer scope or the same one.
+- **Upvalue tracking.** Locals referenced from inside a nested function are flagged as upvalues.
 - **Per-environment stdlib.** Typed signatures with overloads, deprecation metadata down to individual parameters and constant values, purity and must-use markers, and value shapes for method resolution.
 - **Conservative shape resolution.** `resolve.rs` maps chains like `local f = io.open(...)` and `game:GetService("Players")` to stdlib entries without a type-inference engine.
 
@@ -26,30 +26,30 @@ The tree models lexical scoping with four scope kinds:
 - **Block** covers `do...end`, `then`, and `else` blocks.
 - **Loop** covers `for`, `while`, and `repeat` bodies.
 
-Each scope owns its locally declared symbols and tracks every reference to them.
+Each scope records its kind and its parent, and each symbol records its scope and lists its references.
 
 ### Symbols and references
 
-A `Symbol` is a declared variable with a `SymbolKind` (`Local`, `Parameter`, `IteratorVariable`, `NumericForVariable`, `FunctionName`) and the span of its declaration. A `Reference` is a usage site with a `ReferenceKind` (Read, Write, or ReadWrite; the last covers `x += 1` in Luau and similar compound assignments).
+A `Symbol` is a declared variable with a `SymbolKind` (`Local`, `Parameter`, `IteratorVariable`, `NumericForVariable`, `FunctionName`) and the span of its declaration. A `Reference` is a usage site with a `ReferenceKind`: Read, Write, or ReadWrite, the last for Luau compound assignments such as `x += 1`.
 
-Names not declared in any enclosing scope are unresolved. They reach the global scope, where they may match a stdlib entry or remain unknown.
+A name with no visible declaration stays unresolved and is treated as a global, which may be a stdlib entry, a configured extra global, or unknown.
 
 ### Standard library
 
-Each environment is one fully self-contained TOML file under `stdlib_data/`, selected by `(LuaVersion, StdlibEnvironment)`:
+Each environment has its own TOML file under `stdlib_data/`, selected by `(LuaVersion, StdlibEnvironment)`:
 
 - `lua51.toml` through `lua55.toml`, one per numbered Lua version, verified against that version's reference manual.
 - `luau.toml`, standalone (open-source) Luau.
-- `luau_roblox.toml`, the Roblox runtime, plus two **generated** files spliced in at load: `roblox_api.toml` (service and class-name constant sets from the Roblox API dump) and `roblox_enums.toml` (the full `Enum` tree). Regenerate both with `cargo test -p luck_semantic regenerate_roblox_api -- --ignored`; never hand-edit them.
+- `luau_roblox.toml`, the Roblox runtime, plus two **generated** files spliced in at load: `roblox_api.toml` (service and class-name constant sets from the Roblox API dump) and `roblox_enums.toml` (the full `Enum` tree). Regenerate both with `cargo test -p luck_semantic regenerate_roblox_api -- --ignored`. Never hand-edit them.
 
-Both Luau catalogs include the distinct `integer` primitive's library, the matching `buffer.readinteger` / `buffer.writeinteger` APIs, and the current Luau math predicates and constants (`isnan`, `isinf`, `isfinite`, `nan`, `e`, `phi`, `sqrt2`, `tau`).
+Both Luau catalogs include the library for Luau's `integer` type, `buffer.readinteger` and `buffer.writeinteger`, and the newer math functions and constants (`isnan`, `isinf`, `isfinite`, `nan`, `e`, `phi`, `sqrt2`, `tau`).
 
-The files are deliberately independent, with no inheritance or tier layering. Shared entries are duplicated, and the drift-guard suite in `tests/drift.rs` keeps them honest by cross-checking every entry shared between files against an explicit allowlist of manually verified divergences.
+The files don't inherit from each other, so shared entries are duplicated. `tests/it/drift.rs` requires the two Luau files, and each pair of adjacent Lua versions, to agree on every entry they share unless an allowlist names the difference.
 
 Entries model:
 
 - **Overloaded signatures.** Typed parameters with per-signature arity (`CFrame.new`, `collectgarbage`).
-- **Shapes.** Named member sets for non-global values (`file`, the derived `string` receiver, `Instance`, `DataModel`, `EnumItem`, ...) with `extends` composition. Entries declare the shape they return, so method chains resolve.
+- **Shapes.** Named member sets for kinds of values (`file`, the derived `string` receiver, `Instance`, `DataModel`, `EnumItem`, ...), and a shape can name a base shape with `extends`. Functions declare the shape they return and values the shape they have, so method chains resolve.
 - **Constant parameters.** Closed string-value sets (`game:GetService` service names, `Instance.new` class names, `collectgarbage` options), shareable across parameters via named `constant_sets`.
 - **Deprecation.** At entry, parameter, and constant-value level, with `%n` replace templates for auto-fixes.
 - **Purity / must-use / read-only** markers.
@@ -58,11 +58,11 @@ Entries model:
 
 | File | Purpose |
 |------|---------|
-| `lib.rs` | Public API and `analyze()` entry point |
+| `lib.rs` | Crate docs and the flat public surface |
+| `analysis.rs` | `SemanticAnalysis`, the `analyze()` entry points, and its scope and stdlib queries |
 | `scope.rs` | Scope tree data structures |
 | `builder.rs` | AST visitor that constructs the scope tree |
-| `nodes.rs` | Flat pre-order node table (`Nodes`/`collect_nodes`) with parent links and per-node scope, shared with the linter |
+| `resolve.rs` | Conservative shape and callee resolution, and the local-shape pass |
 | `stdlib_model.rs` | Stdlib data model, queries, and the per-environment library instances |
 | `stdlib_load.rs` | TOML deserialization and composition into the `StdlibLibrary` model |
-| `resolve.rs` | Conservative shape and callee resolution |
 | `stdlib_data/` | Per-environment library data (+ generated Roblox data) |

@@ -1,67 +1,64 @@
 //! Deciding which files belong to a project from `include`/`exclude` globs.
 
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::path::{Path, PathBuf};
 
-/// Decides whether a file is part of the project, from include/exclude
-/// globs relative to the config directory. Exclude wins over include.
-#[derive(Debug, Clone)]
+use globset::{Glob, GlobSet, GlobSetBuilder};
+
+/// Decides whether a file belongs to the project from `include` and `exclude`
+/// globs, matched relative to the config directory. Exclude wins.
+///
+/// The `Default` filter includes nothing, while [`ProjectFilter::new`] with no
+/// `include` takes every `.lua` and `.luau` file.
+#[derive(Debug, Clone, Default)]
 pub struct ProjectFilter {
-    base: PathBuf,
+    root: PathBuf,
     include: GlobSet,
     exclude: GlobSet,
 }
 
 impl ProjectFilter {
+    /// # Errors
+    ///
+    /// Returns a message naming the first invalid glob pattern.
     pub fn new(
-        base: &Path,
-        include: &Option<Vec<String>>,
-        exclude: &Option<Vec<String>>,
+        root: &Path,
+        include: Option<&[String]>,
+        exclude: Option<&[String]>,
     ) -> Result<Self, String> {
-        // `{**/,}` matches files at the project root and in any subdirectory,
-        // since `**/` alone does not match zero path segments.
-        let default_include = vec!["{**/,}*.lua".to_string(), "{**/,}*.luau".to_string()];
-        let inc = include.clone().unwrap_or(default_include);
-        // Canonicalize once: callers canonicalize candidate files (on
-        // Windows that yields `\\?\C:\...`), and strip_prefix against a
-        // non-canonical base silently fails, so every include would match
-        // nothing and every exclude would exclude nothing.
-        let base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+        let default_include = ["{**/,}*.lua".to_owned(), "{**/,}*.luau".to_owned()];
+        // `is_included` canonicalizes candidates (`\\?\C:\...` on Windows), so
+        // a non-canonical root would make `strip_prefix` fail and every glob
+        // would see the absolute path.
+        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         Ok(Self {
-            base,
-            include: build_set(&inc)?,
-            exclude: build_set(exclude.as_deref().unwrap_or(&[]))?,
+            root: canonical_root,
+            include: build_set(include.unwrap_or(&default_include))?,
+            exclude: build_set(exclude.unwrap_or_default())?,
         })
     }
 
-    /// True if `path` is inside the project and matches include but not exclude.
+    #[must_use]
     pub fn is_included(&self, path: &Path) -> bool {
-        let canonical;
-        let candidate = match path.canonicalize() {
-            Ok(resolved) => {
-                canonical = resolved;
-                canonical.as_path()
-            }
-            Err(_) => path,
-        };
-        let rel = candidate.strip_prefix(&self.base).unwrap_or(candidate);
-        self.include.is_match(rel) && !self.exclude.is_match(rel)
+        let canonical = path.canonicalize().ok();
+        let candidate = canonical.as_deref().unwrap_or(path);
+        let relative = candidate.strip_prefix(&self.root).unwrap_or(candidate);
+        self.include.is_match(relative) && !self.exclude.is_match(relative)
     }
 }
 
+/// # Errors
+///
+/// Returns a message naming the first invalid glob pattern.
 fn build_set(patterns: &[String]) -> Result<GlobSet, String> {
-    // Invalid patterns are hard errors, matching the config contract
-    // everywhere else. A typo'd exclude silently processing generated
-    // code is exactly the failure deny_unknown_fields exists to prevent.
+    // Invalid patterns are hard errors, like unknown config keys, so a typo'd
+    // exclude can't quietly let generated code through.
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
-        let glob =
-            Glob::new(pattern).map_err(|e| format!("invalid glob pattern \"{pattern}\": {e}"))?;
+        let glob = Glob::new(pattern)
+            .map_err(|error| format!("invalid glob pattern `{pattern}`: {error}"))?;
         builder.add(glob);
     }
-    builder
-        .build()
-        .map_err(|e| format!("invalid glob set: {e}"))
+    builder.build().map_err(|error| format!("invalid glob set: {error}"))
 }
 
 #[cfg(test)]
@@ -70,11 +67,11 @@ mod tests {
 
     #[test]
     fn project_filter_includes_and_excludes() {
-        let base = Path::new("/proj");
+        let root = Path::new("/proj");
         let filter = ProjectFilter::new(
-            base,
-            &Some(vec!["src/**/*.lua".into(), "src/**/*.luau".into()]),
-            &Some(vec!["**/gen/**".into()]),
+            root,
+            Some(&["src/**/*.lua".into(), "src/**/*.luau".into()]),
+            Some(&["**/gen/**".into()]),
         )
         .expect("valid globs");
         assert!(filter.is_included(Path::new("/proj/src/a.lua")));
@@ -84,7 +81,7 @@ mod tests {
 
     #[test]
     fn project_filter_default_includes_lua_luau() {
-        let filter = ProjectFilter::new(Path::new("/proj"), &None, &None).expect("valid globs");
+        let filter = ProjectFilter::new(Path::new("/proj"), None, None).expect("valid globs");
         assert!(filter.is_included(Path::new("/proj/x.lua")));
         assert!(filter.is_included(Path::new("/proj/sub/y.luau")));
         assert!(!filter.is_included(Path::new("/proj/x.txt")));

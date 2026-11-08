@@ -1,161 +1,138 @@
-//! Hover provider. Looks up the identifier under the cursor in the rich
-//! stdlib model and renders signatures (all overloads), deprecation, and
-//! must-use markers as a markdown panel.
+//! Looks up the name under the cursor in the stdlib model and renders it as
+//! Markdown: every overload's signature, any deprecation, and tags such as
+//! must-use and pure.
 
-use luck_semantic::stdlib_model::{StdlibArgKind, StdlibEntry, StdlibParam, library_for};
+use luck_semantic::{StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibParam};
 use luck_token::LuaVersion;
-use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Range};
+use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
 
-use crate::backend::DocumentState;
-use crate::providers::cursor::{CursorTarget, find_target_at};
-use crate::stdlib_render::param_label;
+use crate::document::DocumentState;
+use crate::providers::cursor::{CursorNode, find_node_at};
+use crate::stdlib_render::{CONSTANT_PREVIEW_LIMIT, param_label};
 
-#[must_use]
-pub fn hover(doc: &DocumentState, params: &HoverParams) -> Option<Hover> {
-    let position = params.text_document_position_params.position;
-    let offset = doc.line_index.offset(&doc.text, position);
-    let target = find_target_at(&doc.parsed.block, offset)?;
-    let path = target.path();
-    // Root-span-aware resolution: shaped locals (`f:read` after
-    // `local f = io.open(...)`) resolve through their shape, and a
-    // shadowed base (`local string = 1; string.format`) refuses a
-    // stdlib hover instead of showing the wrong docs.
-    let entry = match &target {
-        CursorTarget::Identifier { name, span } => {
-            if doc.semantic.resolves_to_local(name, *span) {
+pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hover> {
+    let offset = document.offset(position);
+    let node = find_node_at(&document.parsed.block, offset)?;
+    let path = node.path();
+    // Resolving from the root's span lets shaped locals (`f:read` after
+    // `local f = io.open(...)`) resolve through their shape, and gives a
+    // shadowed base (`local string = 1; string.format`) no stdlib hover
+    // instead of the wrong docs.
+    let entry = match &node {
+        CursorNode::Identifier { name, span } => {
+            if document.semantic.resolves_to_local(name, *span) {
                 return None;
             }
-            library_for(doc.target.lua_version(), doc.target.stdlib_environment())
-                .lookup_str(&path)?
+            document.semantic.stdlib().lookup(path)?
         }
-        CursorTarget::DottedPath { spans, .. } => {
-            doc.semantic.resolve_stdlib_path(&path, *spans.first()?)?
+        CursorNode::DottedPath { root_span, .. } => {
+            document.semantic.resolve_stdlib_path(path, *root_span)?
         }
-        CursorTarget::Call { base_span, .. } => {
-            doc.semantic.resolve_stdlib_path(&path, (*base_span)?)?
+        CursorNode::Call { root_span, .. } => {
+            document.semantic.resolve_stdlib_path(path, (*root_span)?)?
         }
     };
-    let range = Some(span_to_range(doc, &target));
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: render_entry(&path, entry, doc.target.lua_version()),
+            value: render_entry(path, entry, document.target.lua_version()),
         }),
-        range,
+        range: Some(document.range(node.span())),
     })
 }
 
-fn span_to_range(doc: &DocumentState, target: &CursorTarget) -> Range {
-    let span = target.span();
-    doc.line_index.range(&doc.text, span.start, span.end)
-}
-
 fn render_entry(path: &[&str], entry: &StdlibEntry, version: LuaVersion) -> String {
-    let mut out = String::new();
-    // Colon-methods render with the call syntax that reaches them.
-    let full_path = match entry {
-        StdlibEntry::Function(func) if func.is_method && path.len() >= 2 => {
+    let full_path = render_path(path, entry);
+    let body = match entry {
+        StdlibEntry::Function(function) => render_function(&full_path, function),
+        StdlibEntry::Namespace(namespace) => format!(
+            "**`{full_path}`** namespace \u{b7} {} entries\n{}",
+            namespace.members.len(),
+            deprecation_note(namespace.deprecated.as_ref()),
+        ),
+        StdlibEntry::Constant(value) => format!(
+            "```lua\n{full_path}  -- constant\n```\n{}",
+            deprecation_note(value.deprecated.as_ref()),
+        ),
+        StdlibEntry::Property(value) => {
+            let access = if value.is_read_only { "read-only" } else { "read/write" };
             format!(
-                "{}:{}",
-                path[..path.len() - 1].join("."),
-                path[path.len() - 1]
+                "```lua\n{full_path}  -- {access} property\n```\n{}",
+                deprecation_note(value.deprecated.as_ref()),
             )
         }
-        _ => path.join("."),
     };
-    match entry {
-        StdlibEntry::Function(func) => {
-            out.push_str("```lua\n");
-            for (idx, sig) in func.signatures.iter().enumerate() {
-                if idx > 0 {
-                    out.push('\n');
-                }
-                out.push_str(&render_signature(&full_path, sig.params.as_slice()));
-            }
-            out.push_str("\n```\n");
-            if let Some(dep) = &func.deprecated {
-                out.push_str(&format!("\n**Deprecated:** {}\n", dep.message));
-            }
-            let mut tags: Vec<&str> = Vec::new();
-            if func.must_use {
-                tags.push("must_use");
-            }
-            if func.is_pure {
-                tags.push("pure");
-            }
-            if !func.read_only {
-                tags.push("rebindable");
-            }
-            if !tags.is_empty() {
-                out.push_str(&format!("\n_{}_\n", tags.join(" · ")));
-            }
-        }
-        StdlibEntry::Namespace(namespace) => {
-            out.push_str(&format!(
-                "**`{full_path}`** namespace · {} entries\n",
-                namespace.members.len()
-            ));
-            if let Some(dep) = &namespace.deprecated {
-                out.push_str(&format!("\n**Deprecated:** {}\n", dep.message));
-            }
-        }
-        StdlibEntry::Constant(value) => {
-            out.push_str(&format!("```lua\n{full_path}  -- constant\n```\n"));
-            if let Some(dep) = &value.deprecated {
-                out.push_str(&format!("\n**Deprecated:** {}\n", dep.message));
-            }
-        }
-        StdlibEntry::Property(value) => {
-            let rw = if value.read_only {
-                "read-only"
-            } else {
-                "read/write"
-            };
-            out.push_str(&format!("```lua\n{full_path}  -- {rw} property\n```\n"));
-            if let Some(dep) = &value.deprecated {
-                out.push_str(&format!("\n**Deprecated:** {}\n", dep.message));
-            }
-        }
+    format!("{body}\n_{}_", version_label(version))
+}
+
+/// Methods render with colon syntax (`game:GetService`).
+fn render_path(path: &[&str], entry: &StdlibEntry) -> String {
+    if let StdlibEntry::Function(function) = entry
+        && function.is_method
+        && let Some((method, receiver)) = path.split_last()
+        && !receiver.is_empty()
+    {
+        format!("{}:{method}", receiver.join("."))
+    } else {
+        path.join(".")
     }
-    out.push_str(&format!("\n_{}_", version_label(version)));
-    out
+}
+
+fn render_function(full_path: &str, function: &StdlibFunction) -> String {
+    let signatures = function
+        .signatures
+        .iter()
+        .map(|signature| render_signature(full_path, signature.params.as_slice()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut tags: Vec<&str> = Vec::new();
+    if function.is_must_use {
+        tags.push("must_use");
+    }
+    if function.is_pure {
+        tags.push("pure");
+    }
+    if !function.is_read_only {
+        tags.push("rebindable");
+    }
+    let tag_line =
+        if tags.is_empty() { String::new() } else { format!("\n_{}_\n", tags.join(" \u{b7} ")) };
+    format!(
+        "```lua\n{signatures}\n```\n{}{tag_line}",
+        deprecation_note(function.deprecated.as_ref())
+    )
+}
+
+fn deprecation_note(deprecated: Option<&StdlibDeprecation>) -> String {
+    deprecated.map_or_else(String::new, |deprecation| {
+        format!("\n**Deprecated:** {}\n", deprecation.message)
+    })
 }
 
 fn render_signature(name: &str, params: &[StdlibParam]) -> String {
-    let rendered = params
-        .iter()
-        .map(render_param)
-        .collect::<Vec<_>>()
-        .join(", ");
+    let rendered = params.iter().map(render_param).collect::<Vec<_>>().join(", ");
     format!("function {name}({rendered})")
 }
 
 fn render_param(param: &StdlibParam) -> String {
-    if matches!(param.kind, StdlibArgKind::Vararg) {
-        return "...".to_string();
+    let label = param_label(param);
+    let StdlibArgKind::Constant(values) = &param.kind else {
+        return label;
+    };
+    let allowed = values
+        .iter()
+        .take(CONSTANT_PREVIEW_LIMIT)
+        .map(|constant| format!("\"{}\"", constant.value))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if values.len() > CONSTANT_PREVIEW_LIMIT {
+        format!("{label}: {allowed} | ... ({} values)", values.len())
+    } else {
+        format!("{label}: {allowed}")
     }
-    let mut out = param_label(param);
-    if let StdlibArgKind::Constant(values) = &param.kind {
-        // Large generated sets (Roblox service and class names) would
-        // swamp the panel; show a prefix and the total.
-        let allowed = values
-            .iter()
-            .take(CONSTANT_PREVIEW_LIMIT)
-            .map(|constant| format!("\"{}\"", constant.value))
-            .collect::<Vec<_>>()
-            .join(" | ");
-        if values.len() > CONSTANT_PREVIEW_LIMIT {
-            out.push_str(&format!(": {allowed} | ... ({} values)", values.len()));
-        } else {
-            out.push_str(&format!(": {allowed}"));
-        }
-    }
-    out
 }
 
-const CONSTANT_PREVIEW_LIMIT: usize = 8;
-
-fn version_label(version: LuaVersion) -> &'static str {
+const fn version_label(version: LuaVersion) -> &'static str {
     match version {
         LuaVersion::Lua51 => "Lua 5.1",
         LuaVersion::Lua52 => "Lua 5.2",
@@ -163,5 +140,62 @@ fn version_label(version: LuaVersion) -> &'static str {
         LuaVersion::Lua54 => "Lua 5.4",
         LuaVersion::Lua55 => "Lua 5.5",
         LuaVersion::Luau => "Luau",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use luck_core::LuaTarget;
+    use luck_token::index_to_offset;
+
+    use super::*;
+
+    fn markdown_at(document: &DocumentState, line: u32, utf16_column: u32) -> Option<String> {
+        let HoverContents::Markup(markup) =
+            hover(document, Position::new(line, utf16_column))?.contents
+        else {
+            panic!("hover should return markup contents");
+        };
+        Some(markup.value)
+    }
+
+    #[test]
+    fn hover_on_enum_item_renders_constant() {
+        let text = "local m = Enum.Material.Grass";
+        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox);
+        // Cursor on `Grass`.
+        let utf16_column = index_to_offset(text.find("Grass").expect("item") + 2);
+        let markdown = markdown_at(&document, 0, utf16_column).expect("hover on enum item");
+        assert!(markdown.contains("Enum.Material.Grass"), "hover names the full path: {markdown}");
+    }
+
+    #[test]
+    fn hover_on_shaped_local_method_renders_colon_form() {
+        let text = "local f = io.open('x')\nlocal n = f:seek('set')";
+        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+        let utf16_column = index_to_offset(text.find(":seek").expect("method") + 2);
+        let markdown =
+            markdown_at(&document, 1, utf16_column).expect("hover on shaped local method");
+        assert!(markdown.contains("f:seek("), "colon rendering expected: {markdown}");
+    }
+
+    #[test]
+    fn hover_refuses_shadowed_namespace_member() {
+        let text = "local string = 1\nlocal x = string.format";
+        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+        let utf16_column = index_to_offset(text.find(".format").expect("member") + 3);
+        assert!(
+            markdown_at(&document, 1, utf16_column).is_none(),
+            "shadowed base must not hover stdlib docs"
+        );
+    }
+
+    #[test]
+    fn hover_on_game_get_service_uses_colon_syntax() {
+        let text = "local p = game:GetService('RunService')";
+        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox);
+        let utf16_column = index_to_offset(text.find("GetService").expect("method") + 4);
+        let markdown = markdown_at(&document, 0, utf16_column).expect("hover on GetService");
+        assert!(markdown.contains("game:GetService("), "colon rendering expected: {markdown}");
     }
 }

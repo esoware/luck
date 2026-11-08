@@ -1,256 +1,52 @@
-//! # luck_resolver
+//! # `luck_resolver`
 //!
 //! Maps the string argument of a `require()` call to a filesystem path.
 //!
 //! Lua 5.x searches path templates. `require("foo.bar")` substitutes `foo/bar`
 //! into each template (`./?.lua`, `./?/init.lua`, and so on) and returns the
-//! first candidate that exists on disk.
+//! first candidate that exists, taking relative templates from the project
+//! root.
 //!
 //! Luau resolves relative imports (`./module`, `../module`) from the requiring
 //! file's directory, and `@alias` prefixes from the `.luaurc` files found up
 //! the directory tree.
 //!
-//! A [`Resolver`] owns the `.luaurc` alias cache. Create one per build so alias
-//! edits are always observed; the cache never outlives the resolver.
+//! A [`Resolver`] caches `.luaurc` aliases and never invalidates them, so
+//! create one per build to see alias edits.
 //!
 //! # Usage
 //!
 //! ```no_run
-//! use luck_core::LuaTarget;
-//! use luck_resolver::{ResolveRequest, Resolver};
-//! use luck_token::Span;
 //! use std::path::Path;
 //!
-//! let mut resolver = Resolver::new();
+//! use luck_resolver::{ResolveRequest, Resolver};
+//! use luck_token::{LuaVersion, Span};
+//!
+//! let search_paths = ["./?.lua".to_owned()];
+//! let mut resolver = Resolver::new(LuaVersion::Lua54, &search_paths, Path::new("."));
 //! let resolved = resolver
 //!     .resolve(&ResolveRequest {
 //!         module: "foo",
 //!         from_file: "main.lua",
-//!         target: LuaTarget::Lua54,
-//!         search_paths: &["./?.lua".to_string()],
-//!         project_root: Path::new("."),
 //!         span: Span::new(0, 3),
 //!     })
 //!     .unwrap();
-//! assert!(resolved.path.to_string_lossy().ends_with(".lua"));
+//! assert!(resolved.path.ends_with(".lua"));
 //! ```
 
-use luck_core::diagnostics::{Diagnostic, errors};
-use luck_core::types::LuaTarget;
-use luck_token::Span;
-use rustc_hash::FxHashMap;
-use std::path::{Path, PathBuf};
-
-mod luau;
-
-/// A resolved module: its normalized filesystem path and any warnings raised
-/// during resolution.
-///
-/// `path` is forward-slash normalized (see [`normalize_path`]); callers that key
-/// a graph on it derive the string form with [`normalize_path_str`] or
-/// `path.to_string_lossy()`.
-#[derive(Debug)]
-pub struct ResolvedModule {
-    pub path: PathBuf,
-    pub warnings: Vec<Diagnostic>,
-}
-
-/// One `require()` to resolve, with the context needed to locate it.
-#[derive(Debug, Clone, Copy)]
-pub struct ResolveRequest<'a> {
-    /// The require string, e.g. `"foo.bar"`, `"./sibling"`, or `"@alias/mod"`.
-    pub module: &'a str,
-    /// Normalized path of the file containing the require.
-    pub from_file: &'a str,
-    pub target: LuaTarget,
-    /// Lua template search paths. Ignored for Luau.
-    pub search_paths: &'a [String],
-    /// Project root that Lua templates resolve against. Ignored for Luau.
-    pub project_root: &'a Path,
-    /// Byte span of the require call, for diagnostics.
-    pub span: Span,
-}
-
-/// Resolves `require()` strings to filesystem paths, caching the `.luaurc`
-/// alias tables discovered during Luau resolution.
-///
-/// The resolver owns the cache, rather than a global owning it. Drop the
-/// resolver, or make a fresh one per build, and stale alias data goes with it.
-#[derive(Debug, Default)]
-pub struct Resolver {
-    luaurc_cache: FxHashMap<PathBuf, Option<FxHashMap<String, String>>>,
-    merged_aliases_cache: FxHashMap<PathBuf, FxHashMap<String, PathBuf>>,
-}
-
-impl Resolver {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn resolve(&mut self, request: &ResolveRequest<'_>) -> Result<ResolvedModule, Diagnostic> {
-        if request.target.is_luau() {
-            self.resolve_luau(request)
-        } else {
-            resolve_lua(request)
-        }
-    }
-}
-
-fn resolve_lua(request: &ResolveRequest<'_>) -> Result<ResolvedModule, Diagnostic> {
-    let transformed = request.module.replace('.', "/");
-    let mut tried_paths = Vec::new();
-
-    for template in request.search_paths {
-        let relative_path = template.replace('?', &transformed);
-        let abs_path = request.project_root.join(&relative_path);
-
-        if abs_path.is_file() {
-            return Ok(ResolvedModule {
-                path: normalize_path(&abs_path),
-                warnings: Vec::new(),
-            });
-        }
-
-        tried_paths.push(relative_path);
-    }
-
-    Err(errors::e004(
-        request.from_file,
-        request.span.into(),
-        request.module,
-        &tried_paths,
-    ))
-}
-
-/// Canonicalizes `path` and normalizes it to forward slashes, returned as a
-/// `PathBuf`. This is the resolver's Path-typed boundary; for the graph key or
-/// display form call [`normalize_path_str`].
-pub fn normalize_path(path: &Path) -> PathBuf {
-    PathBuf::from(normalize_path_str(path))
-}
-
-/// The forward-slash string form of [`normalize_path`], used as the bundler's
-/// canonical module key and for cross-platform-stable display.
-pub fn normalize_path_str(path: &Path) -> String {
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    // Windows extended-length prefixes after backslash replacement:
-    //   \\?\C:\x        -> //?/C:/x        -> C:/x
-    //   \\?\UNC\srv\sh  -> //?/UNC/srv/sh  -> //srv/sh (network path!)
-    // Stripping `//?/` blindly would turn a network path into a RELATIVE
-    // one (`UNC/srv/share/...`).
-    if let Some(unc) = normalized.strip_prefix("//?/UNC/") {
-        return format!("//{unc}");
-    }
-    normalized
-        .strip_prefix("//?/")
-        .unwrap_or(&normalized)
-        .to_string()
-}
+#![cfg_attr(
+    test,
+    expect(
+        clippy::missing_panics_doc,
+        reason = "a test panics to fail, so a Panics section says nothing"
+    )
+)]
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::TempDir;
+mod fixtures;
+mod lua;
+mod luau;
+mod luaurc;
+mod resolver;
 
-    fn resolve_lua_module(
-        module: &str,
-        from_file: &str,
-        search_paths: &[String],
-        project_root: &Path,
-    ) -> Result<ResolvedModule, Diagnostic> {
-        Resolver::new().resolve(&ResolveRequest {
-            module,
-            from_file,
-            target: LuaTarget::Lua54,
-            search_paths,
-            project_root,
-            span: Span::new(0, 10),
-        })
-    }
-
-    fn setup_lua_project() -> TempDir {
-        let dir = TempDir::new().expect("tempdir creation failed");
-        let src = dir.path().join("src");
-        fs::create_dir_all(&src).expect("failed to create dir");
-        fs::write(src.join("utils.lua"), "return {}").expect("failed to write file");
-        fs::write(src.join("main.lua"), "local u = require('utils')")
-            .expect("failed to write file");
-
-        let lib = dir.path().join("lib");
-        fs::create_dir_all(&lib).expect("failed to create dir");
-        fs::write(lib.join("helper.lua"), "return {}").expect("failed to write file");
-
-        let comp = src.join("components");
-        fs::create_dir_all(&comp).expect("failed to create dir");
-        fs::write(comp.join("init.lua"), "return {}").expect("failed to write file");
-
-        dir
-    }
-
-    #[test]
-    fn resolves_module_from_first_template() {
-        let dir = setup_lua_project();
-        let search_paths = vec!["src/?.lua".to_string(), "src/?/init.lua".to_string()];
-        let current_file = normalize_path_str(&dir.path().join("src/main.lua"));
-
-        let result = resolve_lua_module("utils", &current_file, &search_paths, dir.path())
-            .expect("resolve failed");
-        assert!(result.path.ends_with("src/utils.lua"));
-    }
-
-    #[test]
-    fn resolves_dotted_module_to_nested_path() {
-        let dir = setup_lua_project();
-        let nested = dir.path().join("src/foo");
-        fs::create_dir_all(&nested).expect("failed to create dir");
-        fs::write(nested.join("bar.lua"), "return {}").expect("failed to write file");
-
-        let search_paths = vec!["src/?.lua".to_string()];
-        let current_file = normalize_path_str(&dir.path().join("src/main.lua"));
-
-        let result = resolve_lua_module("foo.bar", &current_file, &search_paths, dir.path())
-            .expect("resolve failed");
-        assert!(result.path.ends_with("src/foo/bar.lua"));
-    }
-
-    #[test]
-    fn resolves_directory_module_via_init_template() {
-        let dir = setup_lua_project();
-        let search_paths = vec!["src/?.lua".to_string(), "src/?/init.lua".to_string()];
-        let current_file = normalize_path_str(&dir.path().join("src/main.lua"));
-
-        let result = resolve_lua_module("components", &current_file, &search_paths, dir.path())
-            .expect("resolve failed");
-        assert!(result.path.ends_with("src/components/init.lua"));
-    }
-
-    #[test]
-    fn falls_back_to_later_template() {
-        let dir = setup_lua_project();
-        let search_paths = vec!["src/?.lua".to_string(), "lib/?.lua".to_string()];
-        let current_file = normalize_path_str(&dir.path().join("src/main.lua"));
-
-        let result = resolve_lua_module("helper", &current_file, &search_paths, dir.path())
-            .expect("resolve failed");
-        assert!(result.path.ends_with("lib/helper.lua"));
-    }
-
-    #[test]
-    fn reports_e004_with_searched_paths_when_missing() {
-        let dir = setup_lua_project();
-        let search_paths = vec!["src/?.lua".to_string()];
-        let current_file = normalize_path_str(&dir.path().join("src/main.lua"));
-
-        let err = resolve_lua_module("nonexistent", &current_file, &search_paths, dir.path())
-            .unwrap_err();
-        assert_eq!(err.code, "E004");
-        assert!(
-            err.help()
-                .expect("e004 always sets help")
-                .contains("src/nonexistent.lua")
-        );
-    }
-}
+pub use resolver::{ResolveRequest, ResolvedModule, Resolver};

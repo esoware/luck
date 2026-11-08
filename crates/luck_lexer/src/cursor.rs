@@ -1,65 +1,98 @@
-/// Zero-copy forward-only cursor over source bytes. Tracks byte position.
-pub struct Cursor<'src> {
-    source: &'src [u8],
+use luck_token::Span;
+
+use crate::search::{ByteMatchTable, find_match};
+
+/// Zero-copy, forward-only byte cursor over source text.
+#[derive(Debug)]
+pub(crate) struct Cursor<'source> {
+    source: &'source str,
     position: usize,
 }
 
-impl<'src> Cursor<'src> {
-    pub fn new(source: &'src [u8]) -> Self {
-        Self {
-            source,
-            position: 0,
-        }
+impl<'source> Cursor<'source> {
+    pub(crate) const fn new(source: &'source str) -> Self {
+        Self { source, position: 0 }
     }
 
     #[inline]
-    pub fn position(&self) -> usize {
+    pub(crate) const fn position(&self) -> usize {
         self.position
     }
 
     #[inline]
-    pub fn peek(&self) -> Option<u8> {
-        self.source.get(self.position).copied()
+    pub(crate) fn peek(&self) -> Option<u8> {
+        self.source.as_bytes().get(self.position).copied()
     }
 
     #[inline]
-    pub fn peek_at(&self, offset: usize) -> Option<u8> {
-        self.source.get(self.position + offset).copied()
+    pub(crate) fn peek_at(&self, offset: usize) -> Option<u8> {
+        self.source.as_bytes().get(self.position.saturating_add(offset)).copied()
     }
 
     #[inline]
-    pub fn advance(&mut self) -> Option<u8> {
-        let byte = self.source.get(self.position).copied()?;
-        self.position += 1;
+    pub(crate) fn advance(&mut self) -> Option<u8> {
+        let byte = self.peek()?;
+        self.advance_by(1);
         Some(byte)
     }
 
+    /// Consume the next byte if it is `byte`.
     #[inline]
-    pub fn rest(&self) -> &'src [u8] {
-        &self.source[self.position..]
+    pub(crate) fn eat(&mut self, byte: u8) -> bool {
+        let is_next = self.peek() == Some(byte);
+        if is_next {
+            self.advance_by(1);
+        }
+        is_next
     }
 
     #[inline]
-    pub fn advance_by(&mut self, count: usize) {
-        debug_assert!(self.position + count <= self.source.len());
-        self.position += count;
+    pub(crate) fn rest(&self) -> &'source [u8] {
+        self.source.as_bytes().get(self.position..).unwrap_or_default()
+    }
+
+    /// Source text from byte index `start` up to the cursor.
+    #[inline]
+    pub(crate) fn text_since(&self, start: usize) -> &'source str {
+        self.source.get(start..self.position).unwrap_or_default()
+    }
+
+    /// Span from byte index `start` up to the cursor.
+    #[inline]
+    pub(crate) fn span_since(&self, start: usize) -> Span {
+        Span::from_indices(start, self.position)
+    }
+
+    /// The only place the position moves. It never passes the source length,
+    /// so the add can't wrap, and this per-byte path can skip saturation.
+    #[inline]
+    pub(crate) fn advance_by(&mut self, count: usize) {
+        debug_assert!(count <= self.rest().len(), "cursor advanced past the end of the source");
+        self.position = self.position.wrapping_add(count);
     }
 
     /// Advance to the first byte matching `table`, or EOF.
     #[inline]
-    pub fn advance_until_match(&mut self, table: &crate::search::ByteMatchTable) {
-        self.position += crate::search::find_match(self.rest(), table);
+    pub(crate) fn advance_until_match(&mut self, table: &ByteMatchTable) {
+        self.advance_by(find_match(self.rest(), table));
     }
 
-    pub fn eat_while(&mut self, predicate: impl Fn(u8) -> bool) -> &'src [u8] {
-        let start = self.position;
-        while let Some(byte) = self.peek() {
-            if predicate(byte) {
-                self.position += 1;
-            } else {
-                break;
-            }
+    /// Advance to the next line break, or EOF.
+    pub(crate) fn advance_to_line_break(&mut self) {
+        let rest = self.rest();
+        self.advance_by(memchr::memchr2(b'\n', b'\r', rest).unwrap_or(rest.len()));
+    }
+
+    pub(crate) fn eat_while(&mut self, predicate: impl Fn(u8) -> bool) {
+        while self.peek().is_some_and(&predicate) {
+            self.advance_by(1);
         }
-        &self.source[start..self.position]
+    }
+
+    /// Whether only spaces and tabs stand between the cursor and a line break
+    /// or EOF.
+    pub(crate) fn is_at_line_end(&self) -> bool {
+        let next_content = self.rest().iter().find(|byte| !matches!(byte, b' ' | b'\t'));
+        matches!(next_content, Some(b'\n' | b'\r') | None)
     }
 }

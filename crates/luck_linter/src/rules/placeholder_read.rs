@@ -1,17 +1,16 @@
-use luck_ast::Expression;
-use luck_ast::expr::Var;
-use luck_ast::visitor::Visitor;
-use luck_token::TokenKind;
+use luck_ast::{Expression, NodeType, NodeTypeSet, Var};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::rule::{LintContext, NodeRule, Rule};
 
-/// `_` is a regular identifier in Lua, but convention is "value I'm
-/// throwing away". Reading from it usually means the author forgot
-/// which binding they meant, or that an outer `_` is shadowed by a
-/// nearer one. Walk expressions, skipping declaration/target/parameter
-/// positions which are always non-reads.
-pub struct PlaceholderRead;
+/// Flags reads of `_`, which by convention names a value being thrown away.
+///
+/// A read usually means the author grabbed the wrong binding, or a nearer `_`
+/// shadows the one they meant. Declared names and assignment targets aren't
+/// expressions, so they never reach the hook. That includes Luau's `_ += 1`,
+/// which does read `_`, but is rare and clearly deliberate.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PlaceholderRead;
 
 impl Rule for PlaceholderRead {
     fn name(&self) -> &'static str {
@@ -26,161 +25,42 @@ impl Rule for PlaceholderRead {
     fn description(&self) -> &'static str {
         "use of `_` as a value; convention reserves it for ignored bindings"
     }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let mut checker = PlaceholderChecker {
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(ctx.block);
-        checker.diagnostics
-    }
 }
 
-struct PlaceholderChecker {
-    diagnostics: Vec<LintDiagnostic>,
-}
-
-fn is_placeholder_name(kind: &TokenKind) -> bool {
-    if let TokenKind::Identifier(name) = kind {
-        return name == "_";
+impl NodeRule for PlaceholderRead {
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::Var])
     }
-    false
-}
-
-impl PlaceholderChecker {
-    /// Visit `Var` in a non-target position (i.e. as a value). Walks
-    /// into compound `Var::Index` / `Var::FieldAccess` to flag inner
-    /// reads like `_.field` while also recursing into index keys.
-    fn visit_var_as_read(&mut self, var: &Var) {
-        match var {
-            Var::Name(token) => {
-                if is_placeholder_name(&token.kind) {
-                    self.diagnostics.push(
-                        LintDiagnostic::new(
-                            "placeholder_read",
-                            "read of `_`; convention is to use `_` only for ignored bindings"
-                                .to_string(),
-                            token.span,
-                        )
-                        .with_help(
-                            "rename the binding or pull the value into a meaningful local"
-                                .to_string(),
-                        ),
-                    );
-                }
-            }
-            Var::Index(idx) => {
-                self.visit_expression(&idx.prefix);
-                self.visit_expression(&idx.index);
-            }
-            Var::FieldAccess(fld) => {
-                self.visit_expression(&fld.prefix);
-            }
-        }
-    }
-}
-
-impl<'ast> Visitor<'ast> for PlaceholderChecker {
-    fn visit_expression(&mut self, expr: &'ast Expression) {
-        if let Expression::Var(var) = expr {
-            self.visit_var_as_read(var);
-            return;
-        }
-        self.walk_expression(expr);
-    }
-
-    fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
-        match stmt {
-            // Assignment targets are writes, so skip them and visit the
-            // values, which may contain reads.
-            luck_ast::Statement::Assignment(assignment) => {
-                for var in assignment.targets.iter() {
-                    // Index and FieldAccess prefixes are reads even on
-                    // the LHS of an assignment.
-                    if let Var::Index(idx) = var {
-                        self.visit_expression(&idx.prefix);
-                        self.visit_expression(&idx.index);
-                    } else if let Var::FieldAccess(fld) = var {
-                        self.visit_expression(&fld.prefix);
-                    }
-                }
-                for expr in assignment.values.iter() {
-                    self.visit_expression(expr);
-                }
-            }
-            // Local binding names are declarations, not reads. Visit
-            // initializer expressions only.
-            luck_ast::Statement::LocalAssignment(local) => {
-                if let Some(exprs) = &local.exprs {
-                    for expr in exprs.iter() {
-                        self.visit_expression(expr);
-                    }
-                }
-            }
-            // A compound assignment (`x += y`) reads then writes the var,
-            // but placeholder semantics skip it anyway, since `_ += 1` is
-            // rare and clearly self-referential.
-            luck_ast::Statement::CompoundAssignment(compound) => {
-                if let Var::Index(idx) = &compound.var {
-                    self.visit_expression(&idx.prefix);
-                    self.visit_expression(&idx.index);
-                } else if let Var::FieldAccess(fld) = &compound.var {
-                    self.visit_expression(&fld.prefix);
-                }
-                self.visit_expression(&compound.expr);
-            }
-            // Generic-for binding names are declarations, so visit only
-            // the iterator expressions and the body.
-            luck_ast::Statement::GenericFor(generic_for) => {
-                for expr in generic_for.exprs.iter() {
-                    self.visit_expression(expr);
-                }
-                self.visit_block(&generic_for.block);
-            }
-            // Numeric-for binding name is also a declaration.
-            luck_ast::Statement::NumericFor(num_for) => {
-                self.visit_expression(&num_for.start);
-                self.visit_expression(&num_for.limit);
-                if let Some(step) = &num_for.step {
-                    self.visit_expression(step);
-                }
-                self.visit_block(&num_for.block);
-            }
-            // Function parameters in any declaration form are bindings,
-            // not reads. The default walker recurses into the body.
-            luck_ast::Statement::LocalFunction(_)
-            | luck_ast::Statement::FunctionDecl(_)
-            | luck_ast::Statement::GlobalFunction(_) => {
-                self.walk_statement(stmt);
-            }
-            // All other shapes need no "skip these tokens" logic and use
-            // the default traversal.
-            luck_ast::Statement::FunctionCall(_)
-            | luck_ast::Statement::DoBlock(_)
-            | luck_ast::Statement::WhileLoop(_)
-            | luck_ast::Statement::RepeatLoop(_)
-            | luck_ast::Statement::IfStatement(_)
-            | luck_ast::Statement::EmptyStatement(_)
-            | luck_ast::Statement::Goto(_)
-            | luck_ast::Statement::Label(_)
-            | luck_ast::Statement::GlobalDeclaration(_)
-            | luck_ast::Statement::GlobalStar(_)
-            | luck_ast::Statement::Break(_)
-            | luck_ast::Statement::TypeDeclaration(_)
-            | luck_ast::Statement::Error(_) => {
-                self.walk_statement(stmt);
-            }
+    fn on_expression(
+        &self,
+        expr: &Expression,
+        _context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
+        if let Expression::Var(Var::Name(token)) = expr
+            && token.identifier() == Some("_")
+        {
+            diags.push(
+                LintDiagnostic::new(
+                    "placeholder_read",
+                    "read of `_`, but convention is to use `_` only for ignored bindings",
+                    token.span,
+                )
+                .with_help("rename the binding or pull the value into a meaningful local"),
+            );
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&PlaceholderRead, source, LuaVersion::Lua54)
+        run_rule(&PlaceholderRead, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -202,13 +82,21 @@ mod tests {
     }
 
     #[test]
+    fn flags_prefix_and_key_of_assignment_target() {
+        let diags = run("_[_] = 1\n_.x = 2");
+        assert_eq!(diags.len(), 3, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_compound_assignment_target() {
+        let diags = run_rule(&PlaceholderRead, "_ += 1", LuaVersion::Luau);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
     fn flags_read_inside_generic_for_body() {
         let diags = run("for _, v in pairs(t) do print(_) end");
-        assert_eq!(
-            diags.len(),
-            1,
-            "binding should not fire, body read should: {diags:?}"
-        );
+        assert_eq!(diags.len(), 1, "binding should not fire, body read should: {diags:?}");
     }
 
     #[test]

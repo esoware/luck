@@ -1,10 +1,8 @@
-//! Custom `luck/syntaxTree` request. Returns a debug pretty-print of the
-//! parsed AST for the currently-open document. The VS Code extension
-//! opens the response in a side panel.
+//! Custom `luck/syntaxTree` request: a debug pretty-print of the document's
+//! parsed AST. The VS Code extension opens it beside the editor.
 
-use crate::backend::DocumentState;
+use crate::document::DocumentState;
 
-#[must_use]
-pub fn syntax_tree(doc: &DocumentState) -> String {
-    format!("{:#?}", doc.parsed.block)
+pub(crate) fn syntax_tree(document: &DocumentState) -> String {
+    format!("{:#?}", document.parsed.block)
 }

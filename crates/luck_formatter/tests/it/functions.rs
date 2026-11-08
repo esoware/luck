@@ -1,6 +1,7 @@
-use crate::common::{assert_format, assert_format_with};
 use luck_formatter::FormatOptions;
 use luck_token::LuaVersion;
+
+use crate::common::{assert_format, assert_format_with};
 
 #[test]
 fn function_def_flat() {
@@ -11,14 +12,11 @@ fn function_def_flat() {
 }
 
 #[test]
-fn trailing_callback_uses_uniform_argument_expansion() {
+fn trailing_callback_uses_uniform_args_expansion() {
     let source = "subscribe(event, function(value) consume(value) end)\n";
     let expected = "subscribe(\n\tevent,\n\tfunction(value)\n\t\tconsume(value)\n\tend\n)\n";
     for width in [60, 80, 120] {
-        let options = FormatOptions {
-            line_width: width,
-            ..FormatOptions::default()
-        };
+        let options = FormatOptions { line_width: width, ..FormatOptions::default() };
         assert_format_with(source, expected, LuaVersion::Lua54, &options);
         luck_formatter::format_and_verify(source, LuaVersion::Lua54, &options)
             .expect("layout verifies");
@@ -63,15 +61,12 @@ fn anonymous_function() {
 
 #[test]
 fn method_chain_expanded() {
-    let opts = FormatOptions {
-        line_width: 20,
-        ..FormatOptions::default()
-    };
+    let options = FormatOptions { line_width: 20, ..FormatOptions::default() };
     assert_format_with(
         "foo:bar():baz():qux()\n",
         "foo\n\t:bar()\n\t:baz()\n\t:qux()\n",
         LuaVersion::Lua54,
-        &opts,
+        &options,
     );
 }
 
@@ -87,7 +82,7 @@ fn empty_function_body() {
 
 #[test]
 fn method_call_on_call_result() {
-    // `foo().bar` is a field access expression, not a statement - test as rhs
+    // `foo().bar` isn't a statement, so it goes on the right-hand side.
     assert_format("local x = foo().bar\n", "local x = foo().bar\n");
 }
 
@@ -98,14 +93,11 @@ fn single_table_arg_hugged() {
 
 #[test]
 fn single_table_arg_hugged_multiline() {
-    let opts = FormatOptions {
-        line_width: 20,
-        ..FormatOptions::default()
-    };
+    let options = FormatOptions { line_width: 20, ..FormatOptions::default() };
     assert_format_with(
         "foo({very_long_key=1,another_key=2})\n",
         "foo({\n\tvery_long_key = 1,\n\tanother_key = 2,\n})\n",
         LuaVersion::Lua54,
-        &opts,
+        &options,
     );
 }

@@ -1,5 +1,6 @@
-use luck_benchmark::corpus::{test_files, test_projects};
-use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use luck_benchmark::{
+    BenchmarkId, Criterion, black_box, criterion_group, criterion_main, test_files, test_projects,
+};
 
 fn bench_lexer(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("lexer");
@@ -7,9 +8,9 @@ fn bench_lexer(criterion: &mut Criterion) {
     for file in test_files() {
         let id = BenchmarkId::from_parameter(file.file_name);
         let source_text = file.source_text.as_str();
-        let version = file.version;
-        group.bench_function(id, |b| {
-            b.iter(|| luck_lexer::lex(black_box(source_text), version));
+        let version = file.target.lua_version();
+        group.bench_function(id, |bencher| {
+            bencher.iter(|| luck_lexer::lex(black_box(source_text), version));
         });
     }
 
@@ -17,10 +18,10 @@ fn bench_lexer(criterion: &mut Criterion) {
     // shape a `luck` invocation actually sees.
     for project in test_projects() {
         let id = BenchmarkId::from_parameter(project.name);
-        let version = project.version;
+        let version = project.target.lua_version();
         let files = project.files;
-        group.bench_function(id, |b| {
-            b.iter(|| {
+        group.bench_function(id, |bencher| {
+            bencher.iter(|| {
                 for (_, source_text) in &files {
                     black_box(luck_lexer::lex(black_box(source_text.as_str()), version));
                 }

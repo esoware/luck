@@ -1,68 +1,41 @@
 # luck_testgen
 
-Internal test harness: deterministic Lua/Luau program generators and the
-property tests that run over them. Unpublished (`publish = false`,
-version `0.0.0`).
+Internal test harness: deterministic Lua/Luau program generators and the property tests that run over them. Unpublished (`publish = false`, version `0.0.0`).
 
 ## Overview
 
-Two generators turn a `(seed, LuaVersion, statement_budget)` triple into a
-source string. Both are fully deterministic: same inputs, byte-identical
-output, on every platform. That is what lets the generated programs seed
-benchmark and fuzz corpora without committing large files. The two profiles
-trade off differently:
+Two generators turn a `(seed, LuaVersion, statement_budget)` triple into a source string. Both are fully deterministic: same inputs, byte-identical output, on every platform. That's what lets the benchmark corpus include generated programs without committing large files. The two profiles trade off differently:
 
 | Generator | Entry | Guarantee | Purpose |
 |-----------|-------|-----------|---------|
 | Runtime-safe | `generate` | Parses **and executes** without error | Differential testing: run original vs. transformed program, compare stdout |
 | Full-grammar | `generate_full` | Parses with zero errors (may not execute) | Pipeline stress: reach every version-gated construct |
 
-Determinism is the load-bearing property. A single deterministic xorshift64\*
-`Rng` drives every choice; there is no external RNG dependency and no
-wall-clock or hashmap-order input.
+Determinism matters most. A single xorshift64\* `Rng` (`rng.rs`) drives every choice, with no external RNG dependency and no wall-clock or hash-map-order input.
 
 ## Generators
 
 ### Runtime-safe (`generate`)
 
-`Generator` tracks a scope stack of typed bindings (`Num`/`Str`/`Bool`/
-`Table`) so every emitted operation is type-safe at runtime: no `"a" + 1`,
-no calling a number, no division by a literal zero, no reads of an
-uninitialized variable. Loops are counter-bounded and library calls avoid
-observable nondeterminism (`pairs` order, time, GC). Every top-level
-binding is `print`ed at the end, so a transform that wrongly eliminates or
-reorders an assignment changes stdout, the signal the differential
-harness keys on. A small name pool with a deliberate 30% bare-stem
-shadowing rate exercises the shadowing bug class that flat analyses miss.
+`RuntimeGenerator` (`runtime.rs`) tracks a scope stack of typed bindings (`Number`/`String`/`Boolean`/`Table`) so every emitted operation is type-safe at runtime: no `"a" + 1`, no calling a number, no division by a literal zero, no reads of an uninitialized variable. Loops are counter-bounded and library calls avoid observable nondeterminism (`pairs` order, time, GC). Every top-level binding is `print`ed at the end, so a transform that wrongly eliminates or reorders an assignment changes stdout, which is what a differential run compares. A small name pool with a deliberate 30% bare-stem shadowing rate exercises the shadowing bug class that flat analyses miss.
 
 ### Full-grammar (`generate_full`)
 
-`FullGenerator` emits module-shaped code (strict-mode prelude, an OOP class
-table with a constructor and methods, then a call- and table-heavy body,
-then a module return) rather than statement soup. Output is **not**
-runtime-safe: it may index nil, divide strings, or call numbers. In
-exchange it reaches constructs the runtime profile cannot: `goto`/labels,
-Luau type annotations and casts, named varargs, string interpolation,
-compound assignment, attributes, and hex/binary literals. Each is gated
-behind the matching `LuaVersion::has_*` predicate, so a program never
-contains a construct its version rejects.
+`FullGenerator` (`full.rs`) emits module-shaped code (a prelude, an OOP class table with a constructor and a method, then a call- and table-heavy body, then a module return) rather than statement soup. Output is **not** runtime-safe: it may index nil, divide strings, or call numbers. In exchange it reaches constructs the runtime profile can't: `goto`/labels, Luau type annotations and casts, named varargs, string interpolation, every compound assignment operator, attributes, and hex-float and binary literals. Each is gated behind the matching `LuaVersion` predicate, so a program never contains a construct its version rejects.
+
+`generate_full_embeddable` never picks the Luau shape that exports values instead of returning a table, since exports are only valid at module scope. Its output can sit inside a `do ... end` block, which is how the bench corpus concatenates programs.
 
 ## Property tests
 
-`tests/roundtrip.rs` runs the workspace's hard invariants over both
-generators, across every version and many seeds:
+`tests/it/roundtrip.rs` runs the workspace's hard invariants over both generators, across every version and many seeds:
 
 - **Parse cleanliness.** Every generated program parses with zero errors.
 - **Compact round-trip.** `compact` output re-parses cleanly.
-- **Format idempotency and structure.** `format(format(x)) == format(x)`,
-  the output re-parses, and the AST structure survives (`blocks_equiv`),
-  on both the source-in and AST-in (`format_block`) paths.
-- **Minify idempotency.** Minified output re-parses, size is stable
-  across passes, and a byte-exact fixpoint arrives from the second pass
-  onward.
+- **Format idempotency and structure.** `format(format(x)) == format(x)`, the output re-parses, and the AST structure survives (`blocks_equivalent`).
+- **AST-in format.** `format_block` on the bare parsed AST, with no source or comments, re-parses and keeps the structure.
+- **Minify fixpoint.** Minified output re-parses, size is stable across passes, and a byte-exact fixpoint arrives from the second pass onward.
 
-These sweeps are the enforcement mechanism behind the formatter and
-minifier guarantees; strengthen them rather than bypass them.
+These sweeps back the formatter and minifier guarantees. Strengthen them instead of working around them.
 
 ## Usage
 

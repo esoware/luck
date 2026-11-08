@@ -1,441 +1,474 @@
-//! Validators for Lua's three string DSLs: `string.format` specifiers,
-//! Lua patterns (`string.match`/`gmatch`/`find`/`gsub`), and
-//! `string.pack`/`string.unpack` format strings.
+//! Validators for the string DSLs of Lua's stdlib.
 //!
-//! Each validator takes the literal pattern body (already stripped of
-//! surrounding quotes by the caller) and returns either a count
-//! (specifiers, captures, or values consumed) or a precise `PatternError`
-//! whose `offset` is a byte index INTO the pattern body. Callers map the
-//! offset back into source coordinates.
+//! They cover `string.format` specifiers, Lua patterns
+//! (`string.match`/`gmatch`/`find`/`gsub`), `string.pack`/`string.unpack`
+//! format strings, `gsub` replacement strings, and `os.date` formats.
+//!
+//! Each validator takes a literal's body without its quotes and returns a
+//! count (specifiers, captures, or values consumed) where one applies, or
+//! the first [`PatternError`] it finds. Callers map the error's offset back
+//! into source.
 
-use std::fmt;
+use core::error::Error;
+use core::fmt;
+use core::iter::from_fn;
 
-/// Errors produced by the three validators. `offset` is a byte index
-/// into the pattern body passed in.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PatternError {
-    /// A `%` at the end of input with nothing after it.
+/// The first malformed construct a validator finds. Each `offset` is a
+/// byte index into the body the validator was given.
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub(crate) enum PatternError {
+    /// A `%` construct cut off by the end of the body.
     TruncatedSpecifier { offset: usize },
-    /// `%X` where X is not a known specifier letter in this DSL.
-    UnknownSpecifier { offset: usize, ch: char },
-    /// Duplicate or otherwise malformed flag in a format spec.
-    BadFlag { offset: usize, ch: char },
-    /// Width digits overflow or are otherwise unparseable.
+    /// A `string.format` conversion character Lua doesn't know.
+    UnknownSpecifier { offset: usize, character: char },
+    /// A flag repeated within one `string.format` specifier.
+    BadFlag { offset: usize, character: char },
+    /// A width longer than the two digits Lua allows.
     BadWidth { offset: usize },
-    /// Precision digits overflow or are otherwise unparseable.
+    /// A precision longer than the two digits Lua allows.
     BadPrecision { offset: usize },
-    /// `[set]` opened but never closed.
+    /// A `[set]` with no closing `]`.
     UnterminatedSet { offset: usize },
-    /// `[]` with no characters. Lua only allows a leading `]` to mean
-    /// "literal ]" when at least one other character follows it in the
-    /// set.
+    /// A set with `]` right after its `[` or `[^`, as in `[]`.
     EmptySet { offset: usize },
-    /// `%X` where X is not valid in a pattern context.
-    BadEscape { offset: usize, ch: char },
-    /// `*`/`+`/`-`/`?` at a position where there is no preceding atom
-    /// to quantify (e.g. at the start of a pattern, or right after `(`).
+    /// A `%` before a letter that isn't a pattern class or item, or a `%f`
+    /// with no `[set]` after it.
+    BadEscape { offset: usize, character: char },
+    /// A `*`, `+`, `-`, or `?` with nothing before it to repeat, such as at
+    /// the start of a pattern or right after `(`.
     InvalidQuantifierTarget { offset: usize },
-    /// Capture group nesting error or unmatched closing paren.
+    /// A `)` with no open capture, or a `(` that never closes.
     UnmatchedCapture { offset: usize },
-    /// `string.pack` option letter is not recognized.
-    InvalidPackOption { offset: usize, ch: char },
-    /// A pack option that requires a size suffix (`s`, `X`) reached EOI
-    /// before its argument was supplied.
+    /// An unknown `string.pack` option, or an option `X` can't align to.
+    InvalidPackOption { offset: usize, character: char },
+    /// A `c` with no size, or an `X` with no option after it.
     TruncatedPackSize { offset: usize },
+    /// A `gsub` replacement or `os.date` format ending in a single `%`.
+    LonePercent { offset: usize },
+    /// A `gsub` replacement `%` before something other than a digit or `%`.
+    BadReplacementEscape { offset: usize },
+    /// A `gsub` replacement `%n` above the pattern's capture count.
+    CaptureIndexOutOfRange { offset: usize },
+    /// An `os.date` format holding a NUL byte.
+    NullCharacter { offset: usize },
+    /// An `os.date` `%` before something other than a date specifier or `%`.
+    BadDateSpecifier { offset: usize },
+}
+
+impl PatternError {
+    /// Byte index into the validated body where the error was found.
+    pub(crate) const fn offset(&self) -> usize {
+        match *self {
+            Self::TruncatedSpecifier { offset }
+            | Self::UnterminatedSet { offset }
+            | Self::EmptySet { offset }
+            | Self::InvalidQuantifierTarget { offset }
+            | Self::UnmatchedCapture { offset }
+            | Self::TruncatedPackSize { offset }
+            | Self::LonePercent { offset }
+            | Self::BadReplacementEscape { offset }
+            | Self::CaptureIndexOutOfRange { offset }
+            | Self::NullCharacter { offset }
+            | Self::BadDateSpecifier { offset }
+            | Self::BadWidth { offset }
+            | Self::BadPrecision { offset }
+            | Self::UnknownSpecifier { offset, .. }
+            | Self::BadFlag { offset, .. }
+            | Self::BadEscape { offset, .. }
+            | Self::InvalidPackOption { offset, .. } => offset,
+        }
+    }
 }
 
 impl fmt::Display for PatternError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TruncatedSpecifier { offset } => {
-                write!(formatter, "truncated specifier at offset {offset}")
+                write!(f, "truncated specifier at offset {offset}")
             }
-            Self::UnknownSpecifier { offset, ch } => {
-                write!(formatter, "unknown specifier `%{ch}` at offset {offset}")
+            Self::UnknownSpecifier { offset, character } => {
+                write!(f, "unknown specifier `%{character}` at offset {offset}")
             }
-            Self::BadFlag { offset, ch } => {
-                write!(formatter, "bad flag `{ch}` at offset {offset}")
+            Self::BadFlag { offset, character } => {
+                write!(f, "repeated flag `{character}` at offset {offset}")
             }
-            Self::BadWidth { offset } => write!(formatter, "bad width at offset {offset}"),
+            Self::BadWidth { offset } => write!(f, "width too long at offset {offset}"),
             Self::BadPrecision { offset } => {
-                write!(formatter, "bad precision at offset {offset}")
+                write!(f, "precision too long at offset {offset}")
             }
             Self::UnterminatedSet { offset } => {
-                write!(formatter, "unterminated set at offset {offset}")
+                write!(f, "unterminated set at offset {offset}")
             }
-            Self::EmptySet { offset } => write!(formatter, "empty set at offset {offset}"),
-            Self::BadEscape { offset, ch } => {
-                write!(formatter, "bad escape `%{ch}` at offset {offset}")
+            Self::EmptySet { offset } => write!(f, "empty set at offset {offset}"),
+            Self::BadEscape { offset, character } => {
+                write!(f, "bad escape `%{character}` at offset {offset}")
             }
             Self::InvalidQuantifierTarget { offset } => {
-                write!(formatter, "quantifier has no target at offset {offset}")
+                write!(f, "quantifier has no target at offset {offset}")
             }
             Self::UnmatchedCapture { offset } => {
-                write!(formatter, "unmatched capture at offset {offset}")
+                write!(f, "unmatched capture at offset {offset}")
             }
-            Self::InvalidPackOption { offset, ch } => {
-                write!(formatter, "invalid pack option `{ch}` at offset {offset}")
+            Self::InvalidPackOption { offset, character } => {
+                write!(f, "invalid pack option `{character}` at offset {offset}")
             }
             Self::TruncatedPackSize { offset } => {
-                write!(formatter, "truncated pack size at offset {offset}")
+                write!(f, "truncated pack size at offset {offset}")
+            }
+            Self::LonePercent { .. } => f.write_str("ends with a lone `%`"),
+            Self::BadReplacementEscape { .. } => {
+                f.write_str("unexpected character after `%`, expected a digit or `%`")
+            }
+            Self::CaptureIndexOutOfRange { .. } => {
+                f.write_str("capture index is higher than the pattern's capture count")
+            }
+            Self::NullCharacter { .. } => f.write_str("contains a null character"),
+            Self::BadDateSpecifier { .. } => {
+                f.write_str("unexpected character after `%`, expected a date specifier or `%`")
             }
         }
     }
 }
 
-impl std::error::Error for PatternError {}
+impl Error for PatternError {}
 
-/// Validate a `string.format` pattern. Returns the number of `%X`
-/// specifiers that consume an argument (i.e. excludes `%%`).
-pub fn validate_format(pattern: &str) -> Result<usize, PatternError> {
-    let bytes = pattern.as_bytes();
-    let mut idx = 0;
-    let mut specifiers = 0;
+/// Forward-only reader over a pattern body. Offsets count bytes from the
+/// start of the body, matching what [`PatternError`] reports.
+struct Cursor<'pattern> {
+    remaining_bytes: &'pattern [u8],
+    body_length: usize,
+}
 
-    while idx < bytes.len() {
-        if bytes[idx] != b'%' {
-            idx += 1;
+impl<'pattern> Cursor<'pattern> {
+    const fn new(pattern: &'pattern str) -> Self {
+        Self { remaining_bytes: pattern.as_bytes(), body_length: pattern.len() }
+    }
+
+    const fn offset(&self) -> usize {
+        self.body_length.saturating_sub(self.remaining_bytes.len())
+    }
+
+    const fn peek(&self) -> Option<u8> {
+        self.remaining_bytes.first().copied()
+    }
+
+    /// Skips `count` bytes, stopping at the end of the body.
+    fn skip_bytes(&mut self, count: usize) {
+        self.remaining_bytes = self.remaining_bytes.get(count..).unwrap_or_default();
+    }
+
+    /// Skips a run of ASCII digits and returns its length.
+    fn skip_digits(&mut self) -> usize {
+        let digit_count =
+            self.remaining_bytes.iter().take_while(|byte| byte.is_ascii_digit()).count();
+        self.skip_bytes(digit_count);
+        digit_count
+    }
+
+    /// Skips one UTF-8 sequence so error offsets land on char boundaries.
+    ///
+    /// A one-byte escape skip can leave a continuation byte in lead
+    /// position, and that steps a single byte.
+    fn skip_char(&mut self) {
+        let width = match self.peek() {
+            Some(0xC0..=0xDF) => 2,
+            Some(0xE0..=0xEF) => 3,
+            Some(0xF0..=0xFF) => 4,
+            Some(0x00..=0xBF) | None => 1,
+        };
+        self.skip_bytes(width);
+    }
+}
+
+/// Validates a `string.format` string and returns how many arguments its
+/// specifiers consume.
+///
+/// # Errors
+///
+/// The first malformed specifier, as a [`PatternError`].
+pub(crate) fn validate_format(pattern: &str) -> Result<usize, PatternError> {
+    let mut cursor = Cursor::new(pattern);
+    let mut specifier_count = 0usize;
+
+    while let Some(byte) = cursor.peek() {
+        let start = cursor.offset();
+        cursor.skip_bytes(1);
+        if byte != b'%' {
             continue;
         }
+        let truncated_error = PatternError::TruncatedSpecifier { offset: start };
 
-        let start = idx;
-        idx += 1;
-        if idx >= bytes.len() {
-            return Err(PatternError::TruncatedSpecifier { offset: start });
+        // `%%` is a literal percent and consumes no argument.
+        match cursor.peek() {
+            Some(b'%') => {
+                cursor.skip_bytes(1);
+                continue;
+            }
+            Some(_) => {}
+            None => return Err(truncated_error),
         }
 
-        // `%%` is a literal percent; consumes no argument.
-        if bytes[idx] == b'%' {
-            idx += 1;
-            continue;
-        }
-
-        // Flags: `-`, `+`, ` `, `#`, `0`. Each flag may appear at most
-        // once but order within the group is free.
-        let mut flag_seen = [false; 5];
-        loop {
-            let slot = match bytes[idx] {
-                b'-' => 0,
-                b'+' => 1,
-                b' ' => 2,
-                b'#' => 3,
-                b'0' => 4,
+        // Flags can come in any order, but each at most once.
+        let mut seen_flags = 0u8;
+        while let Some(flag) = cursor.peek() {
+            let flag_bit = match flag {
+                b'-' => 1,
+                b'+' => 2,
+                b' ' => 4,
+                b'#' => 8,
+                b'0' => 16,
                 _ => break,
             };
-            if flag_seen[slot] {
+            if seen_flags & flag_bit != 0 {
                 return Err(PatternError::BadFlag {
-                    offset: idx,
-                    ch: bytes[idx] as char,
+                    offset: cursor.offset(),
+                    character: char::from(flag),
                 });
             }
-            flag_seen[slot] = true;
-            idx += 1;
-            if idx >= bytes.len() {
-                return Err(PatternError::TruncatedSpecifier { offset: start });
+            seen_flags |= flag_bit;
+            cursor.skip_bytes(1);
+        }
+
+        // Lua allows at most two digits each for width and precision.
+        let width_start = cursor.offset();
+        if cursor.skip_digits() > 2 {
+            return Err(PatternError::BadWidth { offset: width_start });
+        }
+
+        if cursor.peek() == Some(b'.') {
+            cursor.skip_bytes(1);
+            let precision_start = cursor.offset();
+            if cursor.skip_digits() > 2 {
+                return Err(PatternError::BadPrecision { offset: precision_start });
             }
         }
 
-        // Width: zero or more decimal digits. Lua caps width at 99 in
-        // the reference implementation; reject any 3-digit width.
-        let width_start = idx;
-        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-            idx += 1;
-        }
-        if idx - width_start > 2 {
-            return Err(PatternError::BadWidth {
-                offset: width_start,
+        let Some(conversion) = cursor.peek() else {
+            return Err(truncated_error);
+        };
+        if !matches!(
+            conversion,
+            b'c' | b'd'
+                | b'i'
+                | b'o'
+                | b'u'
+                | b'x'
+                | b'X'
+                | b'e'
+                | b'E'
+                | b'f'
+                | b'g'
+                | b'G'
+                | b'a'
+                | b'A'
+                | b'q'
+                | b's'
+        ) {
+            return Err(PatternError::UnknownSpecifier {
+                offset: cursor.offset(),
+                character: char::from(conversion),
             });
         }
-        if idx >= bytes.len() {
-            return Err(PatternError::TruncatedSpecifier { offset: start });
-        }
-
-        // Precision: optional `.` followed by zero or more digits. Same
-        // 2-digit cap as width.
-        if bytes[idx] == b'.' {
-            idx += 1;
-            let prec_start = idx;
-            while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-                idx += 1;
-            }
-            if idx - prec_start > 2 {
-                return Err(PatternError::BadPrecision { offset: prec_start });
-            }
-            if idx >= bytes.len() {
-                return Err(PatternError::TruncatedSpecifier { offset: start });
-            }
-        }
-
-        let conv = bytes[idx];
-        match conv {
-            b'c' | b'd' | b'i' | b'o' | b'u' | b'x' | b'X' | b'e' | b'E' | b'f' | b'g' | b'G'
-            | b'a' | b'A' | b'q' | b's' => {
-                specifiers += 1;
-                idx += 1;
-            }
-            _ => {
-                return Err(PatternError::UnknownSpecifier {
-                    offset: idx,
-                    ch: conv as char,
-                });
-            }
-        }
+        specifier_count = specifier_count.saturating_add(1);
+        cursor.skip_bytes(1);
     }
 
-    Ok(specifiers)
+    Ok(specifier_count)
 }
 
-/// Validate a Lua pattern (the kind accepted by `string.match`,
-/// `string.gmatch`, `string.find`, and the search side of
-/// `string.gsub`). Returns the number of `(...)` captures.
-pub fn validate_lua_pattern(pattern: &str) -> Result<usize, PatternError> {
-    let bytes = pattern.as_bytes();
-    let mut idx = 0;
-    let mut captures = 0;
-    let mut open_captures = 0u32;
-    // For quantifier validation: was the previous token a quantifiable
-    // atom (literal, class, set, or `%n` back-reference)?
-    let mut prev_quantifiable = false;
+/// Validates a Lua pattern, as taken by `string.match`, `gmatch`, `find`,
+/// and `gsub`, and returns how many captures it has.
+///
+/// # Errors
+///
+/// The first malformed construct, as a [`PatternError`].
+pub(crate) fn validate_lua_pattern(pattern: &str) -> Result<usize, PatternError> {
+    let mut cursor = Cursor::new(pattern);
+    let mut capture_count = 0usize;
+    let mut open_capture_count = 0u32;
+    let mut can_quantify = false;
 
-    while idx < bytes.len() {
-        let here = bytes[idx];
-
-        // `^` and `$` anchors at start/end are not atoms. Track them so
-        // quantifiers don't bind to them.
-        if here == b'^' && idx == 0 {
-            idx += 1;
-            prev_quantifiable = false;
-            continue;
-        }
-        if here == b'$' && idx == bytes.len() - 1 {
-            idx += 1;
-            prev_quantifiable = false;
+    while let Some(here) = cursor.peek() {
+        // A leading `^` and a trailing `$` are anchors, which a quantifier
+        // can't repeat.
+        let is_anchor = (here == b'^' && cursor.offset() == 0)
+            || (here == b'$' && cursor.remaining_bytes.len() == 1);
+        if is_anchor {
+            cursor.skip_bytes(1);
+            can_quantify = false;
             continue;
         }
 
-        match here {
-            b'%' => {
-                let start = idx;
-                idx += 1;
-                if idx >= bytes.len() {
-                    return Err(PatternError::TruncatedSpecifier { offset: start });
-                }
-                let escape = bytes[idx];
-                match escape {
-                    // Character classes: %a %A %c %C %d %D %g %G %l %L
-                    // %p %P %s %S %u %U %w %W %x %X %z %Z. All valid
-                    // pattern escapes; quantifiable.
-                    b'a' | b'A' | b'c' | b'C' | b'd' | b'D' | b'g' | b'G' | b'l' | b'L' | b'p'
-                    | b'P' | b's' | b'S' | b'u' | b'U' | b'w' | b'W' | b'x' | b'X' | b'z'
-                    | b'Z' => {
-                        idx += 1;
-                        prev_quantifiable = true;
-                    }
-                    // `%n` back-references (`%0` through `%9`) refer to
-                    // earlier captures. Lua resumes past the reference
-                    // without reading a suffix, so a following `*` is a
-                    // literal `*` and quantifies nothing.
-                    b'0'..=b'9' => {
-                        idx += 1;
-                        prev_quantifiable = false;
-                    }
-                    // `%bxy` is a balanced match between literal x and y.
-                    // It consumes three more bytes total.
-                    b'b' => {
-                        idx += 1;
-                        if idx + 1 >= bytes.len() {
-                            return Err(PatternError::TruncatedSpecifier { offset: start });
-                        }
-                        idx += 2;
-                        prev_quantifiable = false;
-                    }
-                    // `%f[set]` is a frontier pattern. A character set
-                    // must follow it.
-                    b'f' => {
-                        idx += 1;
-                        if idx >= bytes.len() || bytes[idx] != b'[' {
-                            return Err(PatternError::BadEscape {
-                                offset: start,
-                                ch: 'f',
-                            });
-                        }
-                        idx = scan_set(bytes, idx)?;
-                        prev_quantifiable = false;
-                    }
-                    // `%%` is a literal percent. Quantifiable.
-                    b'%' => {
-                        idx += 1;
-                        prev_quantifiable = true;
-                    }
-                    // Any other punctuation after `%` is an escaped
-                    // literal. Quantifiable.
-                    ch if !ch.is_ascii_alphabetic() => {
-                        idx += 1;
-                        prev_quantifiable = true;
-                    }
-                    other => {
-                        return Err(PatternError::BadEscape {
-                            offset: idx,
-                            ch: other as char,
-                        });
-                    }
-                }
-            }
+        can_quantify = match here {
+            b'%' => scan_escape(&mut cursor)?,
             b'[' => {
-                idx = scan_set(bytes, idx)?;
-                prev_quantifiable = true;
+                scan_set(&mut cursor)?;
+                true
             }
             b'(' => {
-                idx += 1;
-                open_captures += 1;
-                captures += 1;
-                prev_quantifiable = false;
+                cursor.skip_bytes(1);
+                open_capture_count = open_capture_count.saturating_add(1);
+                capture_count = capture_count.saturating_add(1);
+                false
             }
             b')' => {
-                if open_captures == 0 {
-                    return Err(PatternError::UnmatchedCapture { offset: idx });
-                }
-                open_captures -= 1;
-                idx += 1;
-                prev_quantifiable = true;
+                let Some(still_open) = open_capture_count.checked_sub(1) else {
+                    return Err(PatternError::UnmatchedCapture { offset: cursor.offset() });
+                };
+                open_capture_count = still_open;
+                cursor.skip_bytes(1);
+                true
             }
             b'*' | b'+' | b'-' | b'?' => {
-                if !prev_quantifiable {
-                    return Err(PatternError::InvalidQuantifierTarget { offset: idx });
+                if !can_quantify {
+                    return Err(PatternError::InvalidQuantifierTarget { offset: cursor.offset() });
                 }
-                idx += 1;
-                prev_quantifiable = false;
+                cursor.skip_bytes(1);
+                false
             }
             b'.' => {
-                // The `.` class matches any character. Quantifiable.
-                idx += 1;
-                prev_quantifiable = true;
+                cursor.skip_bytes(1);
+                true
             }
             _ => {
-                // Plain literal byte. Advance by UTF-8 char length so the
-                // offset returned in error reports is on a char boundary.
-                idx += utf8_char_len(bytes, idx);
-                prev_quantifiable = true;
+                cursor.skip_char();
+                true
             }
-        }
+        };
     }
 
-    if open_captures != 0 {
-        return Err(PatternError::UnmatchedCapture {
-            offset: pattern.len(),
-        });
+    if open_capture_count != 0 {
+        return Err(PatternError::UnmatchedCapture { offset: pattern.len() });
     }
 
-    Ok(captures)
+    Ok(capture_count)
 }
 
-/// Scan a `[set]` starting at `idx` (where `bytes[idx] == b'['`).
-/// Returns the byte index just past the closing `]`.
-fn scan_set(bytes: &[u8], mut idx: usize) -> Result<usize, PatternError> {
-    let start = idx;
-    debug_assert_eq!(bytes[idx], b'[');
-    idx += 1;
+/// Scans a `%` escape with the cursor on the `%`, and returns whether a
+/// quantifier may follow it.
+///
+/// # Errors
+///
+/// A [`PatternError`] for a truncated or unrecognized escape.
+fn scan_escape(cursor: &mut Cursor<'_>) -> Result<bool, PatternError> {
+    let start = cursor.offset();
+    cursor.skip_bytes(1);
+    let escape_offset = cursor.offset();
+    let Some(escape) = cursor.peek() else {
+        return Err(PatternError::TruncatedSpecifier { offset: start });
+    };
+    cursor.skip_bytes(1);
 
-    // Optional leading `^` negates the set; does not count toward content.
-    if idx < bytes.len() && bytes[idx] == b'^' {
-        idx += 1;
+    match escape {
+        // Character classes.
+        b'a' | b'A' | b'c' | b'C' | b'd' | b'D' | b'g' | b'G' | b'l' | b'L' | b'p' | b'P'
+        | b's' | b'S' | b'u' | b'U' | b'w' | b'W' | b'x' | b'X' | b'z' | b'Z' => Ok(true),
+        // Back-references. Lua reads no quantifier after one, so a
+        // following `*` is a literal `*`.
+        b'0'..=b'9' => Ok(false),
+        // `%bxy` matches a run balanced between `x` and `y`.
+        b'b' => {
+            if cursor.remaining_bytes.len() < 2 {
+                return Err(PatternError::TruncatedSpecifier { offset: start });
+            }
+            cursor.skip_bytes(2);
+            Ok(false)
+        }
+        // A `%f` frontier needs a `[set]` after it.
+        b'f' => {
+            if cursor.peek() != Some(b'[') {
+                return Err(PatternError::BadEscape { offset: start, character: 'f' });
+            }
+            scan_set(cursor)?;
+            Ok(false)
+        }
+        // Any other non-letter, `%` included, is an escaped literal.
+        character if !character.is_ascii_alphabetic() => Ok(true),
+        other => {
+            Err(PatternError::BadEscape { offset: escape_offset, character: char::from(other) })
+        }
+    }
+}
+
+/// Scans a `[set]` with the cursor on the opening `[`, leaving it just past
+/// the closing `]`.
+///
+/// # Errors
+///
+/// A [`PatternError`] for an empty, unterminated, or truncated set.
+fn scan_set(cursor: &mut Cursor<'_>) -> Result<(), PatternError> {
+    let start = cursor.offset();
+    debug_assert_eq!(cursor.peek(), Some(b'['), "a set opens with `[`");
+    cursor.skip_bytes(1);
+
+    if cursor.peek() == Some(b'^') {
+        cursor.skip_bytes(1);
     }
 
-    // Plain `[]` (or `[^]`) closes with no preceding content, so it is
-    // an empty set. Lua's "leading `]` is literal" rule only applies
-    // when at least one other character follows.
-    if idx < bytes.len() && bytes[idx] == b']' {
+    // Lua reads a `]` here as a member, so a bare `[]` or `[^]` is
+    // unterminated. Flagging it also rejects sets like `[]]` and `[]a]`,
+    // which Lua accepts.
+    if cursor.peek() == Some(b']') {
         return Err(PatternError::EmptySet { offset: start });
     }
 
-    while idx < bytes.len() {
-        let here = bytes[idx];
-        if here == b']' {
-            return Ok(idx + 1);
-        }
-        if here == b'%' {
-            idx += 1;
-            if idx >= bytes.len() {
-                return Err(PatternError::TruncatedSpecifier { offset: idx - 1 });
+    while let Some(here) = cursor.peek() {
+        match here {
+            b']' => {
+                cursor.skip_bytes(1);
+                return Ok(());
             }
-            idx += 1;
-            continue;
+            b'%' => {
+                let escape_start = cursor.offset();
+                cursor.skip_bytes(1);
+                if cursor.peek().is_none() {
+                    return Err(PatternError::TruncatedSpecifier { offset: escape_start });
+                }
+                cursor.skip_bytes(1);
+            }
+            _ => cursor.skip_char(),
         }
-        idx += utf8_char_len(bytes, idx);
     }
 
     Err(PatternError::UnterminatedSet { offset: start })
 }
 
-fn utf8_char_len(bytes: &[u8], idx: usize) -> usize {
-    let lead = bytes[idx];
-    if lead < 0x80 {
-        1
-    } else if lead < 0xC0 {
-        // Continuation byte. This should never be a lead position, so
-        // step one byte and keep going.
-        1
-    } else if lead < 0xE0 {
-        2
-    } else if lead < 0xF0 {
-        3
-    } else {
-        4
-    }
-    .min(bytes.len() - idx)
-    .max(1)
-}
+/// Validates a `string.pack`, `unpack`, or `packsize` format and returns
+/// how many values it packs.
+///
+/// Control options such as `<`, `>`, `=`, `!`, `x`, and `X` take no value.
+///
+/// # Errors
+///
+/// The first malformed option, as a [`PatternError`].
+pub(crate) fn validate_pack_format(pattern: &str) -> Result<usize, PatternError> {
+    let mut cursor = Cursor::new(pattern);
+    let mut value_count = 0usize;
 
-/// Validate a `string.pack`/`string.unpack`/`string.packsize` format.
-/// Returns the count of values the format consumes (i.e. options that
-/// pack/unpack a value; control options like `<`, `>`, `=`, `!`, `x` do
-/// not count).
-pub fn validate_pack_format(pattern: &str) -> Result<usize, PatternError> {
-    let bytes = pattern.as_bytes();
-    let mut idx = 0;
-    let mut values = 0;
+    while let Some(option) = cursor.peek() {
+        let option_offset = cursor.offset();
+        cursor.skip_bytes(1);
 
-    while idx < bytes.len() {
-        let here = bytes[idx];
-
-        // Lua ignores whitespace between options.
-        if here == b' ' || here == b'\t' {
-            idx += 1;
-            continue;
-        }
-
-        match here {
-            // Endianness and alignment controls consume no value. The
-            // `!` option takes an optional alignment size suffix.
-            b'<' | b'>' | b'=' => {
-                idx += 1;
-            }
+        let has_value = match option {
+            // Spaces, endianness controls, and `x` padding take no value.
+            b' ' | b'\t' | b'<' | b'>' | b'=' | b'x' => false,
+            // The `!` alignment control takes an optional size suffix.
             b'!' => {
-                idx += 1;
-                while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-                    idx += 1;
-                }
+                cursor.skip_digits();
+                false
             }
-            // Padding byte. Emits one byte, consumes no value.
-            b'x' => {
-                idx += 1;
-            }
-            // Align-to-type. Reads a following type option but does not
-            // itself consume a value. The next option must be a sized
-            // type letter, and only its presence is checked.
+            // `X` aligns to the size of the next option and packs no value.
             b'X' => {
-                idx += 1;
-                while idx < bytes.len() && (bytes[idx] == b' ' || bytes[idx] == b'\t') {
-                    idx += 1;
+                while matches!(cursor.peek(), Some(b' ' | b'\t')) {
+                    cursor.skip_bytes(1);
                 }
-                if idx >= bytes.len() {
-                    return Err(PatternError::TruncatedPackSize { offset: idx });
-                }
-                // Consume the argument option letter and any digits
-                // after it so it is not double-counted as a value.
-                let arg = bytes[idx];
+                let Some(aligned_option) = cursor.peek() else {
+                    return Err(PatternError::TruncatedPackSize { offset: cursor.offset() });
+                };
+                // That option must be a sized type. It's consumed here so it
+                // isn't counted as a value.
                 if !matches!(
-                    arg,
+                    aligned_option,
                     b'b' | b'B'
                         | b'h'
                         | b'H'
@@ -451,76 +484,146 @@ pub fn validate_pack_format(pattern: &str) -> Result<usize, PatternError> {
                         | b'n'
                 ) {
                     return Err(PatternError::InvalidPackOption {
-                        offset: idx,
-                        ch: arg as char,
+                        offset: cursor.offset(),
+                        character: char::from(aligned_option),
                     });
                 }
-                idx += 1;
-                while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-                    idx += 1;
-                }
+                cursor.skip_bytes(1);
+                cursor.skip_digits();
+                false
             }
-            // Fixed-size integer types. `i`/`I` accept an optional size
-            // suffix; `b`/`B`/`h`/`H`/`l`/`L`/`j`/`J`/`T` do not.
-            b'b' | b'B' | b'h' | b'H' | b'l' | b'L' | b'j' | b'J' | b'T' => {
-                idx += 1;
-                values += 1;
-            }
-            b'i' | b'I' => {
-                idx += 1;
-                while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-                    idx += 1;
-                }
-                values += 1;
-            }
-            // Floats take no size suffix.
-            b'f' | b'd' | b'n' => {
-                idx += 1;
-                values += 1;
-            }
-            // String options. `s` packs a length-prefixed string with an
-            // optional size suffix; `z` packs a NUL-terminated string.
-            b's' => {
-                idx += 1;
-                while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-                    idx += 1;
-                }
-                values += 1;
-            }
-            b'z' => {
-                idx += 1;
-                values += 1;
+            // Fixed-size integers, floats, and NUL-terminated `z` strings
+            // take no size suffix.
+            b'b' | b'B' | b'h' | b'H' | b'l' | b'L' | b'j' | b'J' | b'T' | b'f' | b'd' | b'n'
+            | b'z' => true,
+            // `i`/`I` integers and length-prefixed `s` strings accept an
+            // optional size suffix.
+            b'i' | b'I' | b's' => {
+                cursor.skip_digits();
+                true
             }
             // Fixed-length string `c<n>` requires a size suffix.
             b'c' => {
-                idx += 1;
-                let size_start = idx;
-                while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-                    idx += 1;
-                }
-                if idx == size_start {
+                let size_start = cursor.offset();
+                if cursor.skip_digits() == 0 {
                     return Err(PatternError::TruncatedPackSize { offset: size_start });
                 }
-                values += 1;
+                true
             }
-            // A digit no option above consumed is a stray size suffix
-            // with no host option.
-            digit if digit.is_ascii_digit() => {
-                return Err(PatternError::InvalidPackOption {
-                    offset: idx,
-                    ch: digit as char,
-                });
-            }
+            // A digit lands here when it follows an option that takes no
+            // size.
             other => {
                 return Err(PatternError::InvalidPackOption {
-                    offset: idx,
-                    ch: other as char,
+                    offset: option_offset,
+                    character: char::from(other),
                 });
             }
+        };
+
+        if has_value {
+            value_count = value_count.saturating_add(1);
         }
     }
 
-    Ok(values)
+    Ok(value_count)
+}
+
+/// Counts the unescaped `(` in a Lua pattern, position captures `()`
+/// included.
+///
+/// Sets are skipped, so `[(]` doesn't count. The `(` in `%b()` does count,
+/// which is fine because overcounting only suppresses diagnostics.
+pub(crate) fn count_pattern_captures(pattern: &str) -> usize {
+    let mut bytes = pattern.bytes().peekable();
+    from_fn(|| {
+        let byte = bytes.next()?;
+        match byte {
+            b'%' => {
+                bytes.next();
+            }
+            b'[' => {
+                bytes.next_if_eq(&b'^');
+                // A `]` right after the opener (or `^`) is a literal.
+                bytes.next_if_eq(&b']');
+                while let Some(set_byte) = bytes.next_if(|&set_byte| set_byte != b']') {
+                    if set_byte == b'%' {
+                        bytes.next();
+                    }
+                }
+                bytes.next();
+            }
+            _ => {}
+        }
+        Some(byte)
+    })
+    .filter(|&byte| byte == b'(')
+    .count()
+}
+
+/// Validates a `gsub` replacement string.
+///
+/// `capture_count` is `None` when the pattern isn't a literal, which
+/// disables the index check. `%0` is the whole match, and with zero captures
+/// so is `%1`, so only indices above `max(captures, 1)` are flagged.
+///
+/// # Errors
+///
+/// The first invalid `%` sequence, as a [`PatternError`].
+pub(crate) fn validate_gsub_replacement(
+    body: &str,
+    capture_count: Option<usize>,
+) -> Result<(), PatternError> {
+    let mut bytes = body.bytes().enumerate();
+    while let Some((index, byte)) = bytes.next() {
+        if byte != b'%' {
+            continue;
+        }
+        let Some((next_index, next)) = bytes.next() else {
+            return Err(PatternError::LonePercent { offset: index });
+        };
+        if next == b'%' {
+            continue;
+        }
+        if !next.is_ascii_digit() {
+            return Err(PatternError::BadReplacementEscape { offset: next_index });
+        }
+        if let Some(known_capture_count) = capture_count
+            && usize::from(next.saturating_sub(b'0')) > known_capture_count.max(1)
+        {
+            return Err(PatternError::CaptureIndexOutOfRange { offset: next_index });
+        }
+    }
+    Ok(())
+}
+
+/// Validates an `os.date` format string.
+///
+/// After an optional leading `!` (UTC), it's either exactly `*t` or text
+/// whose specifiers come from C89 `strftime` plus `%z`.
+///
+/// # Errors
+///
+/// The first invalid character, as a [`PatternError`].
+pub(crate) fn validate_os_date(body: &str) -> Result<(), PatternError> {
+    if let Some(null_offset) = body.find('\0') {
+        return Err(PatternError::NullCharacter { offset: null_offset });
+    }
+    if body.strip_prefix('!').unwrap_or(body) == "*t" {
+        return Ok(());
+    }
+    let mut bytes = body.bytes().enumerate();
+    while let Some((index, byte)) = bytes.next() {
+        if byte != b'%' {
+            continue;
+        }
+        let Some((next_index, next)) = bytes.next() else {
+            return Err(PatternError::LonePercent { offset: index });
+        };
+        if next != b'%' && !b"aAbBcdHIjmMpSUwWxXyYzZ".contains(&next) {
+            return Err(PatternError::BadDateSpecifier { offset: next_index });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -554,10 +657,7 @@ mod tests {
 
     #[test]
     fn format_truncated() {
-        assert!(matches!(
-            validate_format("%"),
-            Err(PatternError::TruncatedSpecifier { .. })
-        ));
+        assert!(matches!(validate_format("%"), Err(PatternError::TruncatedSpecifier { .. })));
     }
 
     #[test]
@@ -565,7 +665,7 @@ mod tests {
         // `%z` is valid in patterns but not in format specs.
         assert!(matches!(
             validate_format("%z"),
-            Err(PatternError::UnknownSpecifier { ch: 'z', .. })
+            Err(PatternError::UnknownSpecifier { character: 'z', .. })
         ));
     }
 
@@ -591,18 +691,12 @@ mod tests {
 
     #[test]
     fn pattern_unterminated_set() {
-        assert!(matches!(
-            validate_lua_pattern("[a-"),
-            Err(PatternError::UnterminatedSet { .. })
-        ));
+        assert!(matches!(validate_lua_pattern("[a-"), Err(PatternError::UnterminatedSet { .. })));
     }
 
     #[test]
     fn pattern_empty_set() {
-        assert!(matches!(
-            validate_lua_pattern("[]"),
-            Err(PatternError::EmptySet { .. })
-        ));
+        assert!(matches!(validate_lua_pattern("[]"), Err(PatternError::EmptySet { .. })));
     }
 
     #[test]
@@ -629,8 +723,8 @@ mod tests {
     fn pattern_frontier_truncated() {
         assert!(matches!(
             validate_lua_pattern("%f"),
-            Err(PatternError::TruncatedSpecifier { .. })
-                | Err(PatternError::BadEscape { ch: 'f', .. })
+            Err(PatternError::TruncatedSpecifier { .. }
+                | PatternError::BadEscape { character: 'f', .. })
         ));
     }
 
@@ -692,19 +786,15 @@ mod tests {
 
     #[test]
     fn pack_truncated_align() {
-        assert!(matches!(
-            validate_pack_format("X"),
-            Err(PatternError::TruncatedPackSize { .. })
-        ));
+        assert!(matches!(validate_pack_format("X"), Err(PatternError::TruncatedPackSize { .. })));
     }
 
     #[test]
     fn pack_size_on_unsized_option() {
-        // `x` is a padding byte and accepts no size suffix, so the
-        // trailing digit is a stray size with no host option.
+        // `x` takes no size, so the `4` is stray.
         assert!(matches!(
             validate_pack_format("x4"),
-            Err(PatternError::InvalidPackOption { ch: '4', .. })
+            Err(PatternError::InvalidPackOption { character: '4', .. })
         ));
     }
 }

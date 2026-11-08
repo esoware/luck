@@ -1,123 +1,149 @@
-//! `span()` accessors for the node enums, kept together so span extraction
-//! stays greppable in one place rather than scattered across the node modules.
+//! `span()` accessors for the node enums, kept in one place instead of beside
+//! each node type.
 
 use luck_token::Span;
 
-use crate::expr::{Expression, Var};
+use crate::expr::{Expression, FunctionArgs, Var};
 use crate::shared::Field;
 use crate::stmt::{LastStatement, Statement};
 use crate::types::{Type, TypeField};
 
 impl Statement {
+    #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            Statement::Assignment(s) => s.span,
-            Statement::FunctionCall(s) => s.span,
-            Statement::DoBlock(s) => s.span,
-            Statement::WhileLoop(s) => s.span,
-            Statement::RepeatLoop(s) => s.span,
-            Statement::IfStatement(s) => s.span,
-            Statement::NumericFor(s) => s.span,
-            Statement::GenericFor(s) => s.span,
-            Statement::FunctionDecl(s) => s.span,
-            Statement::LocalFunction(s) => s.span,
-            Statement::LocalAssignment(s) => s.span,
-            Statement::Goto(s) => s.span,
-            Statement::Label(s) => s.span,
-            Statement::GlobalDeclaration(s) => s.span,
-            Statement::GlobalFunction(s) => s.span,
-            Statement::GlobalStar(s) => s.span,
-            Statement::CompoundAssignment(s) => s.span,
-            Statement::TypeDeclaration(s) => s.span,
-            Statement::EmptyStatement(span) | Statement::Break(span) => *span,
-            Statement::Error(span) => *span,
+            Self::Assignment(stmt) => stmt.span,
+            Self::FunctionCall(stmt) => stmt.span,
+            Self::DoBlock(stmt) => stmt.span,
+            Self::WhileLoop(stmt) => stmt.span,
+            Self::RepeatLoop(stmt) => stmt.span,
+            Self::IfStatement(stmt) => stmt.span,
+            Self::NumericFor(stmt) => stmt.span,
+            Self::GenericFor(stmt) => stmt.span,
+            Self::FunctionDecl(stmt) => stmt.span,
+            Self::LocalFunction(stmt) => stmt.span,
+            Self::LocalAssignment(stmt) => stmt.span,
+            // Lua 5.2+
+            Self::Goto(stmt) => stmt.span,
+            // Lua 5.2+
+            Self::Label(stmt) => stmt.span,
+            // Lua 5.5
+            Self::GlobalDeclaration(stmt) => stmt.span,
+            // Lua 5.5
+            Self::GlobalFunction(stmt) => stmt.span,
+            // Lua 5.5
+            Self::GlobalStar(stmt) => stmt.span,
+            // Luau
+            Self::CompoundAssignment(stmt) => stmt.span,
+            // Luau
+            Self::TypeDeclaration(stmt) => stmt.span,
+            Self::EmptyStatement(span) | Self::Break(span) | Self::Error(span) => *span,
         }
     }
 }
 
 impl LastStatement {
+    #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            LastStatement::Return(s) => s.span,
-            LastStatement::Break(span) | LastStatement::Continue(span) => *span,
-            LastStatement::Error(span) => *span,
+            Self::Return(stmt) => stmt.span,
+            Self::Break(span) | Self::Continue(span) | Self::Error(span) => *span,
         }
     }
 }
 
 impl Expression {
+    #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            Expression::Nil(span)
-            | Expression::False(span)
-            | Expression::True(span)
-            | Expression::VarArg(span) => *span,
-            Expression::Number(literal) // Lua
-            | Expression::Integer(literal) // Luau
-            | Expression::StringLiteral(literal) => literal.span,
-            Expression::FunctionDef(e) => e.span,
-            Expression::Var(e) => e.span(),
-            Expression::FunctionCall(e) => e.span,
-            Expression::Parenthesized(e) => e.span,
-            Expression::TableConstructor(e) => e.span,
-            Expression::BinaryOp(e) => e.span,
-            Expression::UnaryOp(e) => e.span,
-            Expression::IfExpression(e) => e.span,
-            Expression::InterpolatedString(e) => e.span,
-            Expression::TypeCast(e) => e.span,
-            Expression::TypeInstantiation(e) => e.span, // Luau
-            Expression::Error(span) => *span,
+            Self::Nil(span)
+            | Self::False(span)
+            | Self::True(span)
+            | Self::VarArg(span)
+            | Self::Error(span) => *span,
+            Self::Number(literal) | Self::Integer(literal) | Self::StringLiteral(literal) => {
+                literal.span
+            }
+            Self::FunctionDef(expr) => expr.span,
+            Self::Var(expr) => expr.span(),
+            Self::FunctionCall(expr) => expr.span,
+            Self::Parenthesized(expr) => expr.span,
+            Self::TableConstructor(expr) => expr.span,
+            Self::BinaryOp(expr) => expr.span,
+            Self::UnaryOp(expr) => expr.span,
+            // Luau
+            Self::IfExpression(expr) => expr.span,
+            // Luau
+            Self::InterpolatedString(expr) => expr.span,
+            // Luau
+            Self::TypeCast(expr) => expr.span,
+            // Luau
+            Self::TypeInstantiation(expr) => expr.span,
         }
     }
 }
 
 impl Var {
+    #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            Var::Name(token) => token.span,
-            Var::Index(e) => e.span,
-            Var::FieldAccess(e) => e.span,
+            Self::Name(token) => token.span,
+            Self::Index(expr) => expr.span,
+            Self::FieldAccess(expr) => expr.span,
+        }
+    }
+}
+
+impl FunctionArgs {
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Parenthesized { span, .. } => *span,
+            Self::TableConstructor(table) => table.span,
+            Self::StringLiteral(literal) => literal.span,
         }
     }
 }
 
 impl Field {
-    pub fn span(&self) -> Span {
+    #[must_use]
+    pub const fn span(&self) -> Span {
         match self {
-            Field::Bracketed { span, .. } => *span,
-            Field::Named { span, .. } => *span,
-            Field::Positional { span, .. } => *span,
+            Self::Bracketed { span, .. }
+            | Self::Named { span, .. }
+            | Self::Positional { span, .. } => *span,
         }
     }
 }
 
 impl Type {
+    #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            Type::Name { span, .. } => *span,
-            Type::Named(t) => t.span,
-            Type::Typeof(t) => t.span,
-            Type::Table(t) => t.span,
-            Type::Function(t) => t.span,
-            Type::Optional(t) => t.span,
-            Type::Union(t) => t.span,
-            Type::Intersection(t) => t.span,
-            Type::Parenthesized(t) => t.span,
-            Type::Pack(t) => t.span,
-            Type::Singleton(t) => t.span,
-            Type::Variadic(t) => t.span,
-            Type::GenericPack(t) => t.span,
-            Type::Error(span) => *span,
+            Self::Name { span, .. } | Self::Error(span) => *span,
+            Self::Named(node) => node.span,
+            Self::Typeof(node) => node.span,
+            Self::Table(node) => node.span,
+            Self::Function(node) => node.span,
+            Self::Optional(node) => node.span,
+            Self::Union(node) => node.span,
+            Self::Intersection(node) => node.span,
+            Self::Parenthesized(node) => node.span,
+            Self::Pack(node) => node.span,
+            Self::Singleton(node) => node.span,
+            Self::Variadic(node) => node.span,
+            Self::GenericPack(node) => node.span,
         }
     }
 }
 
 impl TypeField {
-    pub fn span(&self) -> Span {
+    #[must_use]
+    pub const fn span(&self) -> Span {
         match self {
-            TypeField::Named { span, .. } => *span,
-            TypeField::Indexer { span, .. } => *span,
-            TypeField::Array { span, .. } => *span,
+            Self::Named { span, .. } | Self::Indexer { span, .. } | Self::Array { span, .. } => {
+                *span
+            }
         }
     }
 }

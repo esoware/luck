@@ -1,14 +1,14 @@
 # Lua 5.1 standard library, verified against the 5.1 reference manual
-# (https://www.lua.org/manual/5.1/). Undocumented-but-real interpreter
-# surface (gcinfo, newproxy, arg, _PROMPT) is included and marked where
-# luck already suggests the modern replacement.
+# (https://www.lua.org/manual/5.1/), plus the undocumented newproxy.
+# Entries that 5.1 already replaces, such as gcinfo and table.getn, are
+# marked deprecated.
 #
-# Schema (see crates/luck_semantic/src/stdlib_model.rs): entries are
-# kind = "function" | "namespace" | "constant" | "property"; functions
-# carry a flat signature (min_args/max_args/params, -1 = unbounded) or
-# an overloads array; [shapes.<name>.members.*] declare value shapes
-# (file handles; the string receiver is derived at load).
-# Cross-file consistency is enforced by tests/drift.rs.
+# Schema: see crates/luck_semantic/src/stdlib_load.rs. Each entry has
+# kind = "function" | "namespace" | "constant" | "property". A function
+# has either a flat signature (min_args, max_args, params; max_args = -1
+# means unbounded) or an overloads array. [shapes.<name>.members.*]
+# declare value shapes such as file handles; the string receiver shape is
+# derived at load. tests/it/drift.rs keeps the files consistent.
 
 [globals._G]
 kind = "property"
@@ -213,7 +213,7 @@ min_args = 2
 max_args = 2
 params = [
   { kind = "table" },
-  { kind = "table", accepts_nil = true },
+  { kind = "table" },
 ]
 
 [globals.tonumber]
@@ -749,9 +749,8 @@ kind = "function"
 min_args = 0
 max_args = 0
 
-# With an argument this sets the default input file rather than only
-# returning one; a single entry cannot express both, so the return shape
-# reflects the getter form (the setter also returns the handle in PUC).
+# With an argument this also sets the default input file. PUC Lua returns
+# the current input file either way, so returns = "file" fits both forms.
 [globals.io.members.input]
 kind = "function"
 min_args = 0
@@ -833,9 +832,8 @@ params = [{ kind = "vararg", required = false }]
 
 # ---- file handle shape (io.open and friends) ----
 
-# Read formats ("*l", "*n", "*a", or a byte count) are variadic and mix
-# string constants with numbers, so they stay a plain vararg - a
-# constant set would reject numeric counts.
+# Read formats ("*l", "*n", "*a", or a byte count) stay a plain vararg,
+# since a constant set would reject numeric counts.
 [shapes.file.members.read]
 kind = "function"
 method = true

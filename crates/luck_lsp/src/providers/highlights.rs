@@ -1,45 +1,33 @@
-//! Document highlights. For a name under the cursor, return every other
-//! occurrence of the same name in the document.
+//! Document highlights: every read and write of the name under the cursor.
+//! Matching is by name across the whole file, and declarations aren't
+//! included.
 
-use luck_semantic::scope::ReferenceKind;
-use tower_lsp::lsp_types::{DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams};
+use luck_semantic::ReferenceKind;
+use tower_lsp::lsp_types::{DocumentHighlight, DocumentHighlightKind, Position};
 
-use crate::backend::DocumentState;
-use crate::providers::cursor::find_target_at;
+use crate::document::DocumentState;
+use crate::providers::cursor::find_node_at;
 
-#[must_use]
-pub fn document_highlight(
-    doc: &DocumentState,
-    params: &DocumentHighlightParams,
+pub(crate) fn document_highlight(
+    document: &DocumentState,
+    position: Position,
 ) -> Vec<DocumentHighlight> {
-    let position = params.text_document_position_params.position;
-    let offset = doc.line_index.offset(&doc.text, position);
-    let Some(target) = find_target_at(&doc.parsed.block, offset) else {
+    let offset = document.offset(position);
+    let Some(node) = find_node_at(&document.parsed.block, offset) else {
         return Vec::new();
     };
-    let name = match &target {
-        crate::providers::cursor::CursorTarget::Identifier { name, .. } => name.as_str(),
-        crate::providers::cursor::CursorTarget::DottedPath { segments, .. } => {
-            segments.last().map(String::as_str).unwrap_or("")
-        }
-        crate::providers::cursor::CursorTarget::Call { path, .. } => {
-            path.last().map(String::as_str).unwrap_or("")
-        }
-    };
-    if name.is_empty() {
+    let Some(&name) = node.path().last() else {
         return Vec::new();
-    }
-
-    // The document caches one semantic analysis per edit. Re-running it
-    // here would make every cursor-idle highlight re-walk the whole file.
-    doc.semantic
+    };
+    document
+        .semantic
         .scope_tree
         .references
         .iter()
-        .filter(|r| r.name == name)
-        .map(|r| DocumentHighlight {
-            range: doc.line_index.range(&doc.text, r.span.start, r.span.end),
-            kind: Some(match r.kind {
+        .filter(|reference| reference.name == name)
+        .map(|reference| DocumentHighlight {
+            range: document.range(reference.span),
+            kind: Some(match reference.kind {
                 ReferenceKind::Write => DocumentHighlightKind::WRITE,
                 ReferenceKind::Read | ReferenceKind::ReadWrite => DocumentHighlightKind::READ,
             }),

@@ -1,5 +1,5 @@
-//! One module per subcommand. Each owns its `clap` argument struct, its handler
-//! (`Args::run`), and its own tests.
+//! One module per subcommand. Each owns its `clap` argument struct, its `run`
+//! handler, and its tests.
 
 pub(crate) mod build;
 pub(crate) mod bundle;

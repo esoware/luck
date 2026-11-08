@@ -1,22 +1,19 @@
-use luck_ast::expr::Var;
-use luck_ast::visitor::Visitor;
-use luck_ast::{Expression, Statement};
-use luck_semantic::scope::{ReferenceKind, SymbolKind};
-use luck_token::TokenKind;
+use luck_ast::{Expression, Statement, Var, Visitor};
+use luck_semantic::ReferenceKind;
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::rule::{LintContext, Rule, WholeRule};
+use crate::uninitialized::{UninitializedLocals, first_reference};
 
-/// Luacheck 341: a local is declared without an initializer, then code
-/// assigns to a field or index on it before assigning the variable
-/// itself. `local x; x.foo = 1` is a runtime error, because `x` is
-/// `nil`.
+/// Flags a field or index write on a local declared without a value, before
+/// anything assigns the local itself (Luacheck 341). `local x; x.foo = 1`
+/// indexes `nil`.
 ///
-/// Why a custom AST pass: the scope builder records `x.foo = ...` as a
-/// *read* of `x`, since it has to evaluate the prefix to do the field
-/// assignment. Only that read is a field/index write target, so it has
-/// to be told apart from `print(x)`.
-pub struct MutatingUninitialized;
+/// The scope tree records the `x` in `x.foo = ...` as a plain read, so
+/// `MutationCollector` finds the reads that are write prefixes to tell them
+/// apart from `print(x)`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MutatingUninitialized;
 
 impl Rule for MutatingUninitialized {
     fn name(&self) -> &'static str {
@@ -31,132 +28,92 @@ impl Rule for MutatingUninitialized {
     fn description(&self) -> &'static str {
         "field or index assignment on an uninitialized local"
     }
+}
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let semantic = ctx.semantic;
+impl WholeRule for MutatingUninitialized {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        let tree = &context.semantic.scope_tree;
         let mut collector = MutationCollector::default();
-        collector.visit_block(block);
-
-        let mut diagnostics = Vec::new();
-
-        for symbol in &semantic.scope_tree.symbols {
-            if symbol.kind != SymbolKind::Local {
-                continue;
-            }
-            if !collector.is_uninit(symbol.definition_span.start, symbol.definition_span.end) {
-                continue;
-            }
-            if symbol.name == "_" || symbol.name.starts_with('_') {
-                continue;
-            }
-
-            // First reference ANYWHERE, by source order, because writes
-            // inside nested branch and loop scopes initialize too (see
-            // accessing_uninitialized for the idiom this protects).
-            let mut refs: Vec<_> = symbol
-                .reference_ids
-                .iter()
-                .map(|&ref_id| semantic.scope_tree.reference(ref_id))
-                .collect();
-            refs.sort_by_key(|r| r.span.start);
-
-            let Some(first) = refs.first() else {
-                continue;
-            };
-            // Only field/index writes on this name qualify. The first
-            // reference must be the prefix of such a write.
-            if !collector.is_field_write_prefix(first.span.start) {
-                continue;
-            }
-            // A bare-name write shows up as Write kind. Reads from
-            // `x.foo` as an rvalue also count as Read, but they live in
-            // an Expression position rather than an Assignment target,
-            // so `field_write_prefix_positions` never records them.
-            if !matches!(first.kind, ReferenceKind::Read) {
-                continue;
-            }
-
-            diagnostics.push(
-                LintDiagnostic::new(
-                    "mutating_uninitialized",
-                    format!(
-                        "field/index assignment on uninitialized `{}` (value is nil)",
-                        symbol.name
-                    ),
-                    first.span,
-                )
-                .with_help("initialize the local before mutating its fields".to_string()),
-            );
-        }
-
-        diagnostics
+        collector.visit_block(context.block);
+        tree.symbols
+            .iter()
+            .filter(|symbol| {
+                collector.uninitialized_locals.contains(symbol) && !symbol.name.starts_with('_')
+            })
+            .filter_map(|symbol| {
+                let first = first_reference(symbol, tree)?;
+                // The scope tree records a field write's prefix as a `Read`.
+                let is_mutation = collector.field_write_prefix_starts.contains(&first.span.start)
+                    && first.kind == ReferenceKind::Read;
+                is_mutation.then(|| {
+                    LintDiagnostic::new(
+                        "mutating_uninitialized",
+                        format!(
+                            "field/index assignment on uninitialized `{}` (value is `nil`)",
+                            symbol.name
+                        ),
+                        first.span,
+                    )
+                    .with_help("initialize the local before mutating its fields")
+                })
+            })
+            .collect()
     }
 }
 
-/// AST pass that records:
-/// (1) definition spans of locals declared without an initializer, and
-/// (2) source positions of bare names used as the prefix of a field or
-///     index write target (`<name>.foo = ...` or `<name>[k] = ...`).
+/// Records the locals declared without a value, and where a bare name is the
+/// prefix of a field or index write (`x.foo = ...`, `x[k] = ...`).
 #[derive(Default)]
 struct MutationCollector {
-    uninit_spans: Vec<(u32, u32)>,
-    field_write_prefix_positions: Vec<u32>,
+    uninitialized_locals: UninitializedLocals,
+    field_write_prefix_starts: Vec<u32>,
 }
 
 impl MutationCollector {
-    fn is_uninit(&self, start: u32, end: u32) -> bool {
-        self.uninit_spans
-            .iter()
-            .any(|(s, e)| *s == start && *e == end)
-    }
-
-    fn is_field_write_prefix(&self, position: u32) -> bool {
-        self.field_write_prefix_positions.contains(&position)
-    }
-
     fn record_target(&mut self, var: &Var) {
-        match var {
-            Var::Name(_) => {}
-            Var::FieldAccess(fa) => {
-                if let Expression::Var(prefix_var) = &fa.prefix
-                    && let Var::Name(token) = prefix_var
-                    && let TokenKind::Identifier(_) = &token.kind
-                {
-                    self.field_write_prefix_positions.push(token.span.start);
-                }
-            }
-            Var::Index(idx) => {
-                if let Expression::Var(prefix_var) = &idx.prefix
-                    && let Var::Name(token) = prefix_var
-                    && let TokenKind::Identifier(_) = &token.kind
-                {
-                    self.field_write_prefix_positions.push(token.span.start);
-                }
-            }
+        let prefix = match var {
+            Var::Name(_) => return,
+            Var::FieldAccess(field_access) => &field_access.prefix,
+            Var::Index(index) => &index.prefix,
+        };
+        if let Expression::Var(Var::Name(token)) = prefix
+            && token.identifier().is_some()
+        {
+            self.field_write_prefix_starts.push(token.span.start);
         }
     }
 }
 
 impl<'ast> Visitor<'ast> for MutationCollector {
     fn visit_statement(&mut self, stmt: &'ast Statement) {
+        self.uninitialized_locals.record(stmt);
         match stmt {
-            Statement::LocalAssignment(local) if local.exprs.is_none() => {
-                for attributed in local.names.iter() {
-                    self.uninit_spans
-                        .push((attributed.name.span.start, attributed.name.span.end));
-                }
-            }
-            Statement::Assignment(assign) => {
-                for var in assign.targets.iter() {
+            Statement::Assignment(assignment) => {
+                for var in assignment.targets.iter() {
                     self.record_target(var);
                 }
             }
-            Statement::CompoundAssignment(compound) => {
-                // Luau `x.foo += 1` also mutates a field.
-                self.record_target(&compound.var);
-            }
-            _ => {}
+            // Luau: `x.foo += 1` also mutates a field.
+            Statement::CompoundAssignment(compound) => self.record_target(&compound.var),
+            Statement::LocalAssignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::FunctionDecl(_)
+            | Statement::LocalFunction(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => {}
         }
         self.walk_statement(stmt);
     }
@@ -164,11 +121,13 @@ impl<'ast> Visitor<'ast> for MutationCollector {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&MutatingUninitialized, source, LuaVersion::Lua54)
+        run_rule(&MutatingUninitialized, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -194,6 +153,12 @@ mod tests {
     #[test]
     fn ignores_when_assigned_first() {
         let diags = run("local x\nx = {}\nx.foo = 1");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_read_before_field_write() {
+        let diags = run("local x\nprint(x)\nx.foo = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 

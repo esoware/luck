@@ -23,13 +23,13 @@ pub enum Type {
     Optional(Box<OptionalType>),
     Union(Box<UnionType>),
     Intersection(Box<IntersectionType>),
-    Parenthesized(Box<ParenType>),
+    Parenthesized(Box<ParenthesizedType>),
     /// `(T, U)` or `()`, valid only where a type pack is expected
     /// (return positions, generic argument lists).
     Pack(Box<TypePack>),
-    /// Literal singleton type: string literal, `true`, `false`, or `nil`.
-    /// The parser also accepts number tokens so sources that once parsed
-    /// keep round-tripping, even though Luau proper rejects them.
+    /// Literal singleton type: a string literal, `true`, `false`, or `nil`.
+    /// The parser also accepts numbers, which Luau rejects, so sources
+    /// carrying them keep round-tripping.
     Singleton(Token),
     /// `...T` variadic pack element.
     Variadic(Box<VariadicType>),
@@ -38,9 +38,11 @@ pub enum Type {
     Error(Span),
 }
 
-/// Qualified or generic type reference: `module.Name`, `Name<args>`. A bare
-/// `Name` is [`Type::Name`], which keeps the most common type allocation-free;
-/// the parser and `Synth` never build this node without a prefix or generics.
+/// Qualified or generic type reference: `module.Name`, `Name<args>`.
+///
+/// A bare `Name` is a [`Type::Name`] instead, which keeps the most common
+/// type allocation-free. The parser and `Synth` only build this node with a
+/// prefix or generics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamedType {
     pub span: Span,
@@ -116,7 +118,7 @@ pub struct OptionalType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnionType {
     pub span: Span,
-    /// Leading `|` (allowed in multiline definitions).
+    /// Leading `|`, common in multiline definitions.
     pub has_leading_pipe: bool,
     pub types: Punctuated<Type>,
 }
@@ -125,14 +127,14 @@ pub struct UnionType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntersectionType {
     pub span: Span,
-    /// Leading `&` (allowed in multiline definitions).
+    /// Leading `&`, common in multiline definitions.
     pub has_leading_ampersand: bool,
     pub types: Punctuated<Type>,
 }
 
 /// Parenthesized type: `(T)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParenType {
+pub struct ParenthesizedType {
     pub span: Span,
     pub type_value: Type,
 }
@@ -172,6 +174,6 @@ pub struct GenericTypeParam {
     pub name: Token,
     /// `...` marking a pack parameter (`T...`).
     pub is_pack: bool,
-    /// `= T` default. Only legal in `type` declarations.
+    /// `= T` default. Only legal in type alias declarations.
     pub default: Option<Type>,
 }

@@ -1,11 +1,11 @@
-use luck_ast::Expression;
+use luck_ast::{Expression, NodeType, NodeTypeSet};
 use luck_token::BinOp;
 
-use crate::diagnostic::*;
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
 
-pub struct CompareNan;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CompareNan;
 
 impl Rule for CompareNan {
     fn name(&self) -> &'static str {
@@ -18,46 +18,80 @@ impl Rule for CompareNan {
         Severity::Error
     }
     fn description(&self) -> &'static str {
-        "comparison with NaN (0/0) always fails"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
+        "comparison with NaN (`0/0`) always has the same result"
     }
 }
 
-fn is_nan_expr(expr: &Expression) -> bool {
-    if let Expression::BinaryOp(binop) = expr
-        && binop.op == BinOp::Div
-    {
-        return is_zero(&binop.left) && is_zero(&binop.right);
+impl NodeRule for CompareNan {
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    false
+    fn on_expression(
+        &self,
+        expr: &Expression,
+        _context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
+        if let Expression::BinaryOp(binary) = expr
+            && matches!(binary.op, BinOp::Eq | BinOp::Ne)
+            && (is_nan_expr(&binary.left) || is_nan_expr(&binary.right))
+        {
+            diags.push(
+                LintDiagnostic::new(
+                    "compare_nan",
+                    "NaN (`0/0`) equals nothing, so this comparison always has the same result",
+                    binary.span,
+                )
+                .with_help("use `x ~= x` to check for NaN"),
+            );
+        }
+    }
+}
+
+/// Whether `expr` is spelled exactly `0/0`.
+fn is_nan_expr(expr: &Expression) -> bool {
+    let Expression::BinaryOp(binary) = expr else {
+        return false;
+    };
+    binary.op == BinOp::Div && is_zero(&binary.left) && is_zero(&binary.right)
 }
 
 fn is_zero(expr: &Expression) -> bool {
     matches!(expr, Expression::Number(literal) if literal.text == "0")
 }
 
-impl NodeRule for CompareNan {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::BinaryOp]);
-        Some(&TYPES)
+#[cfg(test)]
+mod tests {
+    use luck_token::LuaVersion;
+
+    use super::*;
+    use crate::fixtures::run_rule;
+
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        run_rule(&CompareNan, source, LuaVersion::Lua54)
     }
-    fn on_expression(&self, expr: &Expression, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if let Expression::BinaryOp(binop) = expr
-            && matches!(binop.op, BinOp::Eq | BinOp::Ne)
-            && (is_nan_expr(&binop.left) || is_nan_expr(&binop.right))
-        {
-            out.push(
-                LintDiagnostic::new(
-                    "compare_nan",
-                    "comparison with NaN (0/0) always fails; use x ~= x to check for NaN"
-                        .to_string(),
-                    binop.span,
-                )
-                .with_help("use `x ~= x` instead".to_string()),
-            );
-        }
+
+    #[test]
+    fn flags_equality_with_nan() {
+        let diags = run("local same = x == 0/0");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_inequality_with_nan_on_left() {
+        let diags = run("local differs = 0/0 ~= x");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_division_that_isnt_nan() {
+        let diags = run("local same = x == 0/1");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_self_comparison_nan_check() {
+        let diags = run("local is_nan = x ~= x");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

@@ -1,19 +1,17 @@
-use luck_ast::shared::Block;
+use core::mem;
+
+use luck_ast::Block;
 use luck_token::{CommentKind, Span};
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
-use crate::rule::{LintContext, Rule};
+use crate::rule::{LintContext, Rule, WholeRule};
+use crate::suggest::levenshtein;
 
-pub struct CommentDirective;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommentDirective;
 
-const KNOWN_DIRECTIVES: &[&str] = &[
-    "nolint",
-    "nocheck",
-    "nonstrict",
-    "strict",
-    "optimize",
-    "native",
-];
+const KNOWN_DIRECTIVES: &[&str] =
+    &["nolint", "nocheck", "nonstrict", "strict", "optimize", "native"];
 
 impl Rule for CommentDirective {
     fn name(&self) -> &'static str {
@@ -29,138 +27,113 @@ impl Rule for CommentDirective {
     }
 
     fn description(&self) -> &'static str {
-        "invalid or misplaced --! comment directive"
+        "invalid or misplaced `--!` comment directive"
     }
+}
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        if !ctx.semantic.version.is_luau() {
+impl WholeRule for CommentDirective {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        if !context.semantic.version.is_luau() {
             return Vec::new();
         }
-        let first_code_start = first_code_start(ctx.block);
-        let mut diagnostics = Vec::new();
+        let first_code_start = first_code_start(context.block);
         let mut has_seen_mode = false;
-        for comment in ctx.comments {
+        let mut diags = Vec::new();
+        for comment in context.comments {
             if comment.kind != CommentKind::Line {
                 continue;
             }
-            let text = &ctx.source[comment.span.start as usize..comment.span.end as usize];
-            let Some(body) = text
-                .strip_prefix("--")
-                .and_then(|rest| rest.strip_prefix('!'))
-            else {
+            let Some(body) = comment.span.text(context.source).strip_prefix("--!") else {
                 continue;
             };
-            // Luau only honors hot comments that precede all code; a
-            // directive after the first statement is dead weight.
-            if first_code_start.is_some_and(|start| comment.span.start > start) {
-                diagnostics.push(LintDiagnostic::new(
+            // Luau ignores hot comments after the first statement.
+            let problem = if first_code_start.is_some_and(|start| comment.span.start > start) {
+                Some(LintDiagnostic::new(
                     "comment_directive",
-                    "comment directive is ignored because it is placed after the first statement",
+                    "comment directive after the first statement has no effect",
                     comment.span,
-                ));
-                continue;
-            }
-            check_directive(
-                body,
-                comment.span.start + 3,
-                &mut has_seen_mode,
-                &mut diagnostics,
-            );
+                ))
+            } else {
+                directive_problem(body, comment.span.start.saturating_add(3), &mut has_seen_mode)
+            };
+            diags.extend(problem);
         }
-        diagnostics
+        diags
     }
 }
 
 fn first_code_start(block: &Block) -> Option<u32> {
     let stmt_start = block.stmts.first().map(|stmt| stmt.span().start);
     let last_start = block.last_stmt.as_ref().map(|last| last.span().start);
-    match (stmt_start, last_start) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    }
+    stmt_start.into_iter().chain(last_start).min()
 }
 
-fn check_directive(
+/// Checks the directive `body` that follows `--!`, starting at `word_start`
+/// in source. A valid type checking mode directive sets `has_seen_mode`.
+fn directive_problem(
     body: &str,
     word_start: u32,
     has_seen_mode: &mut bool,
-    diagnostics: &mut Vec<LintDiagnostic>,
-) {
-    let word_len = body.find(char::is_whitespace).unwrap_or(body.len());
-    let (word, rest) = body.split_at(word_len);
-    let word_span = Span::new(word_start, word_start + word_len as u32);
-    match word {
-        // Nolint arguments name Luau's own lints, not luck's, so
-        // validating them here would flag every legitimate use.
-        "nolint" => {}
-        "native" => {
-            if let Some(extra_span) = trailing_symbols_span(rest, word_span.end) {
-                diagnostics.push(LintDiagnostic::new(
-                    "comment_directive",
-                    "native directive has extra symbols at the end of the line",
-                    extra_span,
-                ));
-            }
-        }
+) -> Option<LintDiagnostic> {
+    let word_length = body.find(char::is_whitespace).unwrap_or(body.len());
+    let (word, rest) = body.split_at(word_length);
+    let word_span = Span::from_indices(0, word_length).shifted(word_start);
+    let (message, span) = match word {
+        // `nolint` arguments name Luau's lints, not luck's.
+        "nolint" => return None,
+        "native" => (
+            "`native` directive has extra symbols at the end of the line".to_owned(),
+            trailing_symbols_span(rest, word_span.end)?,
+        ),
         "nocheck" | "nonstrict" | "strict" => {
             if let Some(extra_span) = trailing_symbols_span(rest, word_span.end) {
-                diagnostics.push(LintDiagnostic::new(
-                    "comment_directive",
-                    "comment directive with the type checking mode has extra symbols at the end of the line",
+                (
+                    "type checking mode directive has extra symbols at the end of the line"
+                        .to_owned(),
                     extra_span,
-                ));
-            } else if *has_seen_mode {
-                diagnostics.push(LintDiagnostic::new(
-                    "comment_directive",
-                    "comment directive with the type checking mode has already been used",
-                    word_span,
-                ));
+                )
+            } else if mem::replace(has_seen_mode, true) {
+                ("type checking mode is already set by an earlier directive".to_owned(), word_span)
             } else {
-                *has_seen_mode = true;
+                return None;
             }
         }
         "optimize" => {
-            let level = rest.trim();
-            if level.is_empty() {
-                diagnostics.push(LintDiagnostic::new(
+            let Some(level_span) = trailing_symbols_span(rest, word_span.end) else {
+                return Some(LintDiagnostic::new(
                     "comment_directive",
-                    "optimize directive requires an optimization level",
+                    "`optimize` directive requires an optimization level",
                     word_span,
                 ));
-            } else if !matches!(level, "0" | "1" | "2") {
-                let level_offset = (rest.len() - rest.trim_start().len()) as u32;
-                let level_start = word_span.end + level_offset;
-                diagnostics.push(LintDiagnostic::new(
-                    "comment_directive",
-                    format!("unknown optimization level `{level}`, 0..2 expected"),
-                    Span::new(level_start, level_start + level.len() as u32),
-                ));
+            };
+            let level = rest.trim();
+            if matches!(level, "0" | "1" | "2") {
+                return None;
             }
+            (format!("unknown optimization level `{level}`, expected `0`, `1`, or `2`"), level_span)
         }
         unknown => {
-            let mut message = format!("unknown comment directive `{unknown}`");
-            if let Some(suggestion) = closest_directive(unknown) {
-                message.push_str(&format!("; did you mean `{suggestion}`?"));
-            }
-            diagnostics.push(LintDiagnostic::new("comment_directive", message, word_span));
+            let suggestion_hint = closest_directive(unknown)
+                .map_or_else(String::new, |suggestion| format!(", did you mean `{suggestion}`?"));
+            (format!("unknown comment directive `{unknown}`{suggestion_hint}"), word_span)
         }
-    }
+    };
+    Some(LintDiagnostic::new("comment_directive", message, span))
 }
 
-/// Span of non-whitespace trailing content after a directive word, or
-/// `None` when the rest of the line is blank. `base` is the byte offset
-/// of the first character of `rest`.
+/// Returns the span of whatever follows a directive word, or `None` if only
+/// whitespace does. `base` is the offset where `rest` starts.
 fn trailing_symbols_span(rest: &str, base: u32) -> Option<Span> {
-    let trimmed_len = rest.trim_end().len();
-    let first = rest[..trimmed_len].find(|c: char| !c.is_whitespace())?;
-    Some(Span::new(base + first as u32, base + trimmed_len as u32))
+    let trimmed = rest.trim_end();
+    let first = trimmed.find(|character: char| !character.is_whitespace())?;
+    Some(Span::from_indices(first, trimmed.len()).shifted(base))
 }
 
 fn closest_directive(word: &str) -> Option<&'static str> {
     KNOWN_DIRECTIVES
         .iter()
         .copied()
-        .map(|candidate| (crate::suggest::levenshtein(word, candidate), candidate))
+        .map(|candidate| (levenshtein(word, candidate), candidate))
         .filter(|&(distance, _)| distance <= 2)
         .min_by_key(|&(distance, _)| distance)
         .map(|(_, candidate)| candidate)
@@ -168,22 +141,20 @@ fn closest_directive(word: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&CommentDirective, source, LuaVersion::Luau)
+        run_rule(&CommentDirective, source, LuaVersion::Luau)
     }
 
     #[test]
     fn flags_unknown_directive() {
         let diags = run("--!foobar\nlocal _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            diags[0]
-                .message
-                .contains("unknown comment directive `foobar`")
-        );
+        assert!(diags[0].message.contains("unknown comment directive `foobar`"));
         assert!(!diags[0].message.contains("did you mean"));
     }
 
@@ -191,10 +162,7 @@ mod tests {
     fn flags_unknown_directive_with_suggestion() {
         let diags = run("--!strcit\nlocal _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            diags[0].message.contains("did you mean `strict`"),
-            "{diags:?}"
-        );
+        assert!(diags[0].message.contains("did you mean `strict`"), "{diags:?}");
     }
 
     #[test]
@@ -222,7 +190,7 @@ mod tests {
     fn flags_second_mode_directive() {
         let diags = run("--!strict\n--!nocheck\nlocal _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("already been used"));
+        assert!(diags[0].message.contains("set by an earlier directive"));
     }
 
     #[test]
@@ -237,9 +205,7 @@ mod tests {
         let diags = run("--!optimize 3\nlocal _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(
-            diags[0]
-                .message
-                .contains("unknown optimization level `3`, 0..2 expected"),
+            diags[0].message.contains("unknown optimization level `3`, expected `0`, `1`, or `2`"),
             "{diags:?}"
         );
     }
@@ -271,11 +237,7 @@ mod tests {
 
     #[test]
     fn ignores_non_luau() {
-        let diags = crate::test_support::run_rule(
-            &CommentDirective,
-            "--!foobar\nlocal _x = 1",
-            LuaVersion::Lua54,
-        );
+        let diags = run_rule(&CommentDirective, "--!foobar\nlocal _x = 1", LuaVersion::Lua54);
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

@@ -1,17 +1,23 @@
-use crate::common::assert_format_with;
 use luck_formatter::FormatOptions;
 use luck_token::LuaVersion;
+
+use crate::common::assert_format_with;
 
 fn assert_luau(input: &str, expected: &str) {
     assert_format_with(input, expected, LuaVersion::Luau, &FormatOptions::default());
 }
 
 #[test]
+fn paren_type_instantiation_stmt_keeps_guard() {
+    // Without the `;` this is a parse error: Luau rejects a call whose `(`
+    // opens a new line.
+    assert_luau("f()\n;(g or h)<<T>>()\n", "f()\n;(g or h)<<T>>()\n");
+    assert_luau("f()\n;(g or h)<<T>>.x = 1\n", "f()\n;(g or h)<<T>>.x = 1\n");
+}
+
+#[test]
 fn param_type_annotation_simple() {
-    assert_luau(
-        "local function f(x: number)\nend\n",
-        "local function f(x: number)\nend\n",
-    );
+    assert_luau("local function f(x: number)\nend\n", "local function f(x: number)\nend\n");
 }
 
 #[test]
@@ -36,7 +42,7 @@ fn type_cast() {
 }
 
 #[test]
-fn type_decl_table() {
+fn type_declaration_table() {
     assert_luau(
         "type Foo = { name: string, age: number }\n",
         "type Foo = { name: string, age: number }\n",
@@ -44,7 +50,7 @@ fn type_decl_table() {
 }
 
 #[test]
-fn type_decl_table_normalizes_whitespace() {
+fn type_declaration_table_normalizes_whitespace() {
     assert_luau(
         "type Foo = {name:string,age:number}\n",
         "type Foo = { name: string, age: number }\n",
@@ -52,7 +58,7 @@ fn type_decl_table_normalizes_whitespace() {
 }
 
 #[test]
-fn type_decl_function_type() {
+fn type_declaration_function_type() {
     assert_luau(
         "type Callback = (number, string) -> boolean\n",
         "type Callback = (number, string) -> boolean\n",
@@ -60,7 +66,7 @@ fn type_decl_function_type() {
 }
 
 #[test]
-fn type_decl_union() {
+fn type_declaration_union() {
     assert_luau(
         "type StringOrNumber = string | number\n",
         "type StringOrNumber = string | number\n",
@@ -68,31 +74,22 @@ fn type_decl_union() {
 }
 
 #[test]
-fn type_decl_union_normalizes_whitespace() {
-    assert_luau(
-        "type StringOrNumber = string|number\n",
-        "type StringOrNumber = string | number\n",
-    );
+fn type_declaration_union_normalizes_whitespace() {
+    assert_luau("type StringOrNumber = string|number\n", "type StringOrNumber = string | number\n");
 }
 
 #[test]
-fn type_decl_intersection() {
-    assert_luau(
-        "type Both = Readable & Writable\n",
-        "type Both = Readable & Writable\n",
-    );
+fn type_declaration_intersection() {
+    assert_luau("type Both = Readable & Writable\n", "type Both = Readable & Writable\n");
 }
 
 #[test]
-fn type_decl_generic() {
-    assert_luau(
-        "type Map = Map<string, number>\n",
-        "type Map = Map<string, number>\n",
-    );
+fn type_declaration_generic() {
+    assert_luau("type Map = Map<string, number>\n", "type Map = Map<string, number>\n");
 }
 
 #[test]
-fn type_decl_nested_generic() {
+fn type_declaration_nested_generic() {
     assert_luau(
         "type Nested = Map<string, Array<number>>\n",
         "type Nested = Map<string, Array<number>>\n",
@@ -101,23 +98,17 @@ fn type_decl_nested_generic() {
 
 #[test]
 fn type_annotation_optional() {
-    assert_luau(
-        "local function f(x: number?)\nend\n",
-        "local function f(x: number?)\nend\n",
-    );
+    assert_luau("local function f(x: number?)\nend\n", "local function f(x: number?)\nend\n");
 }
 
 #[test]
-fn type_decl_qualified() {
+fn type_declaration_qualified() {
     assert_luau("type Alias = module.Type\n", "type Alias = module.Type\n");
 }
 
 #[test]
 fn vararg_type_annotation() {
-    assert_luau(
-        "local function f(...: number)\nend\n",
-        "local function f(...: number)\nend\n",
-    );
+    assert_luau("local function f(...: number)\nend\n", "local function f(...: number)\nend\n");
 }
 
 #[test]
@@ -129,47 +120,37 @@ fn export_type_table() {
 }
 
 #[test]
-fn type_decl_with_generics() {
-    assert_luau(
-        "type Container<T> = { value: T }\n",
-        "type Container<T> = { value: T }\n",
-    );
+fn type_declaration_with_generics() {
+    assert_luau("type Container<T> = { value: T }\n", "type Container<T> = { value: T }\n");
 }
 
-// Luau's parlist grammar forbids trailing commas in parameter lists
-// (`bindinglist [',' '...'] | '...'`), so broken params must never gain
-// one - the output has to re-parse (hard invariant 8).
+// Luau's parlist grammar (`bindinglist [',' '...'] | '...'`) has no trailing
+// comma, so a broken parameter list must not gain one.
 #[test]
 fn luau_params_break_without_trailing_comma() {
-    let options = FormatOptions {
-        line_width: 30,
-        ..FormatOptions::default()
-    };
+    let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
     let input = "local function f(aaa: number, bbb: string, ccc: boolean)\nend\n";
     let result = luck_formatter::format(input, LuaVersion::Luau, &options);
-    assert!(result.errors.is_empty());
+    assert_eq!(result.errors, Vec::<luck_token::SourceError>::new());
     assert!(
         !result.output.contains("boolean,"),
         "params must not gain a trailing comma: {}",
         result.output,
     );
-    let reparse = luck_parser::parse(&result.output, LuaVersion::Luau);
+    let reparsed = luck_parser::parse(&result.output, LuaVersion::Luau);
     assert!(
-        reparse.errors.is_empty(),
+        reparsed.errors.is_empty(),
         "formatted params failed to re-parse: {}\nerrors: {:?}",
         result.output,
-        reparse.errors,
+        reparsed.errors,
     );
 }
 
 #[test]
-fn interp_expr_starting_with_table_gets_space() {
+fn interpolated_expr_starting_with_table_gets_space() {
     // `{{` is a parse error in Luau; the formatter separates the
     // interpolation opener from a leading table constructor.
-    assert_luau(
-        "return `list { {1, 2} } tail`\n",
-        "return `list { { 1, 2 } } tail`\n",
-    );
+    assert_luau("return `list { {1, 2} } tail`\n", "return `list { { 1, 2 } } tail`\n");
 }
 
 #[test]

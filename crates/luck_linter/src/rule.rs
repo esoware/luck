@@ -1,24 +1,26 @@
-use luck_ast::node::AstTypesBitset;
-use luck_ast::shared::Block;
+//! The traits lint rules implement, and the context their checks read.
+
+use luck_ast::{Block, Expression, LastStatement, NodeTypeSet, Statement};
+use luck_core::LintConfig;
 use luck_semantic::SemanticAnalysis;
-use luck_semantic::nodes::Nodes;
 use luck_token::Comment;
 
-use crate::LintConfig;
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 
-/// Everything a rule can see for one lint pass over one document.
-pub struct LintContext<'a> {
-    pub block: &'a Block,
-    pub semantic: &'a SemanticAnalysis,
-    pub nodes: &'a Nodes<'a>,
-    pub source: &'a str,
-    pub comments: &'a [Comment],
-    pub config: &'a LintConfig,
+/// The parsed document, its analysis, and the config, for one lint pass.
+#[derive(Debug)]
+pub(crate) struct LintContext<'document> {
+    pub block: &'document Block,
+    pub semantic: &'document SemanticAnalysis,
+    pub source: &'document str,
+    pub comments: &'document [Comment],
+    pub config: &'document LintConfig,
 }
 
+/// A rule's identity and defaults. Its `WholeRule` or `NodeRule` impl does
+/// the checking.
 pub trait Rule: Send + Sync {
-    /// Unique name of this rule (e.g. "unused_variable").
+    /// Unique name, such as `unused_variable`, used in config and directives.
     fn name(&self) -> &'static str;
 
     fn category(&self) -> Category;
@@ -26,45 +28,44 @@ pub trait Rule: Send + Sync {
     fn default_severity(&self) -> Severity;
 
     fn description(&self) -> &'static str;
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic>;
 }
 
-/// A rule driven by the shared single-pass walk (`bus::run`). It receives
-/// one callback per node instead of walking the AST itself. Rules whose
-/// logic is node-local implement this and delegate `Rule::check` to
-/// [`crate::bus::run_single`]; rules that need traversal state (scope
-/// stacks, statement sequences, CFG) stay whole-tree `Rule`s.
-pub trait NodeRule: Rule {
-    /// Node types this rule's hooks act on; `None` runs on every node.
-    /// Over-including a type is harmless; omitting one silently disables
-    /// the rule for it, which the debug dual-dispatch check in the driver
-    /// catches.
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        None
-    }
+/// A rule that walks the tree itself, because it needs traversal state such
+/// as scope stacks or statement sequences.
+pub(crate) trait WholeRule: Rule {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic>;
+}
+
+/// A rule that gets one callback per node from the bus's shared walk
+/// instead of walking the tree itself.
+pub(crate) trait NodeRule: Rule {
+    /// Node types this rule's hooks act on.
+    ///
+    /// Listing an extra type is harmless. Leaving one out silently skips
+    /// those nodes, which the driver's debug check catches.
+    fn node_types(&self) -> NodeTypeSet;
 
     fn on_statement(
         &self,
-        _stmt: &luck_ast::stmt::Statement,
-        _ctx: &LintContext,
-        _out: &mut Vec<LintDiagnostic>,
+        _stmt: &Statement,
+        _context: &LintContext<'_>,
+        _diags: &mut Vec<LintDiagnostic>,
     ) {
     }
 
     fn on_expression(
         &self,
-        _expr: &luck_ast::expr::Expression,
-        _ctx: &LintContext,
-        _out: &mut Vec<LintDiagnostic>,
+        _expr: &Expression,
+        _context: &LintContext<'_>,
+        _diags: &mut Vec<LintDiagnostic>,
     ) {
     }
 
     fn on_last_statement(
         &self,
-        _last: &luck_ast::stmt::LastStatement,
-        _ctx: &LintContext,
-        _out: &mut Vec<LintDiagnostic>,
+        _last_stmt: &LastStatement,
+        _context: &LintContext<'_>,
+        _diags: &mut Vec<LintDiagnostic>,
     ) {
     }
 }

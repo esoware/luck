@@ -1,27 +1,30 @@
 [package]
-name = "luck_semantic"
-version.workspace = true
-authors.workspace = true
-categories.workspace = true
-description = "Scope and symbol analysis with stdlib definitions for Lua and Luau"
-edition.workspace = true
-homepage.workspace = true
-keywords.workspace = true
-license.workspace = true
-repository.workspace = true
+name                   = "luck_semantic"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "Scope and symbol analysis with stdlib definitions for Lua and Luau"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
+luck_ast   = { workspace = true }
 luck_token = { workspace = true }
-luck_ast = { workspace = true }
-compact_str = { workspace = true }
+
 rustc-hash = { workspace = true }
-serde = { workspace = true }
-toml = { workspace = true }
+serde      = { workspace = true }
+toml       = { workspace = true }
 
 [dev-dependencies]
 luck_parser = { workspace = true }
-# Used only by the ignored regenerate_roblox_api test to fetch the live
-# Roblox API dump.
-ureq = { workspace = true }
+
+# Only the ignored regenerate_roblox_api test uses these, to fetch and parse the live Roblox API dump.
 serde_json = { workspace = true }
+ureq       = { workspace = true }

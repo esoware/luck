@@ -1,23 +1,18 @@
-use luck_ast::expr::*;
-use luck_ast::shared::*;
-use luck_ast::stmt::*;
-use luck_ast::transform::AstTransform;
-use luck_ast::visitor::Visitor;
+use luck_ast::{Block, FunctionBody, Parameter, Statement, Transform, Var, Visitor};
 use luck_token::Span;
-use luck_token::token::{Token, TokenKind};
 
-use crate::expr::ident_name;
+use crate::binding::{identifier_name, identifier_token};
 
-/// Rewrite `function X:Y(params)` -> `function X.Y(self, params)` when `self`
-/// is referenced enough in the body. The renamer then shortens the explicit
-/// parameter from 4 chars to 1.
-pub fn rewrite(block: Block) -> Block {
+/// Rewrites `function X:Y(params)` to `function X.Y(self, params)` when the
+/// body uses `self` at least twice, so the renamer can shorten it.
+pub(crate) fn rewrite(block: Block) -> Block {
     ExplicitSelfRewriter.transform_block(block)
 }
 
 struct ExplicitSelfRewriter;
 
-fn count_self_refs(body: &FunctionBody) -> usize {
+/// How many times `body` reads `self`, outside nested functions.
+fn count_self_references(body: &FunctionBody) -> usize {
     let mut counter = SelfCounter(0);
     counter.visit_block(&body.block);
     counter.0
@@ -28,103 +23,109 @@ struct SelfCounter(usize);
 impl<'ast> Visitor<'ast> for SelfCounter {
     fn visit_var(&mut self, var: &'ast Var) {
         if let Var::Name(name) = var
-            && ident_name(name) == "self"
+            && identifier_name(name) == "self"
         {
-            self.0 += 1;
+            self.0 = self.0.saturating_add(1);
         }
         self.walk_var(var);
     }
 
-    fn visit_expression(&mut self, expr: &'ast Expression) {
-        self.walk_expression(expr);
-    }
-
-    // A nested function body binds its own `self`, so stop here.
+    // Skips nested functions. A nested method binds its own `self`, and
+    // missing a closure's uses of the outer `self` only undercounts.
     fn visit_function_body(&mut self, _body: &'ast FunctionBody) {}
 }
 
-impl AstTransform for ExplicitSelfRewriter {
+impl Transform for ExplicitSelfRewriter {
     fn transform_statement(&mut self, stmt: Statement) -> Statement {
         match stmt {
-            Statement::FunctionDecl(mut func_decl) => {
-                if let Some(method_name) = func_decl.name.method.take() {
-                    let self_refs = count_self_refs(&func_decl.body);
-                    // The added "X," parameter costs 2 bytes; each `self`
-                    // reference saves 3 (4 chars down to 1 after rename).
-                    if self_refs >= 2 {
-                        func_decl.name.names.push(method_name);
-
-                        let self_param = Parameter {
-                            span: Span::default(),
-                            name: Token::new(TokenKind::Identifier("self".into()), Span::default()),
-                            type_annotation: None,
-                        };
-                        func_decl.body.params.items.insert(0, self_param);
-                    } else {
-                        func_decl.name.method = Some(method_name);
-                    }
+            Statement::FunctionDecl(mut function_declaration) => {
+                // The new `X,` parameter costs 2 bytes, and each `self` saves
+                // 3 once renamed to a single character.
+                if function_declaration.name.method.is_some()
+                    && count_self_references(&function_declaration.body) >= 2
+                    && let Some(method_name) = function_declaration.name.method.take()
+                {
+                    function_declaration.name.names.push(method_name);
+                    let self_param = Parameter {
+                        span: Span::default(),
+                        name: identifier_token("self".into()),
+                        type_annotation: None,
+                    };
+                    function_declaration.body.params.items.insert(0, self_param);
                 }
-                func_decl.body = self.walk_function_body(func_decl.body);
-                Statement::FunctionDecl(func_decl)
+                function_declaration.body = self.walk_function_body(function_declaration.body);
+                Statement::FunctionDecl(function_declaration)
             }
-            other => self.walk_statement(other),
+            other @ (Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::LocalFunction(_)
+            | Statement::LocalAssignment(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_)) => self.walk_statement(other),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
-    use luck_core::types::LuaTarget;
+    use crate::fixtures::{assert_reparses, run_pass};
+    use crate::transforms::rename_locals::rename;
 
-    fn minify(source: &str) -> String {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
-        assert!(result.errors.is_empty(), "parse failed");
-        let block = rewrite(result.block);
-        let block = crate::transforms::rename_locals::rename(block, LuaTarget::Lua54, true);
-        luck_codegen::compact(&block, source)
-    }
-
-    fn reparses(source: &str) -> bool {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
-        result.errors.is_empty()
+    /// Rewrites, then renames, so an explicit `self` shows up renamed.
+    fn rewrite_and_rename(source: &str) -> String {
+        let output = run_pass(source, LuaVersion::Lua54, |block| {
+            rename(rewrite(block), LuaVersion::Lua54, true)
+        });
+        assert_reparses(&output, LuaVersion::Lua54);
+        output
     }
 
     #[test]
-    fn rewrites_method_with_many_self_refs() {
-        let result = minify(
+    fn rewrites_method_with_many_self_references() {
+        let result = rewrite_and_rename(
             "local t = {}\nfunction t:method(x)\n  self.a = 1\n  self.b = 2\n  return self.c + x\nend\nreturn t\n",
         );
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
         assert!(!result.contains("self"), "self should be renamed: {result}");
     }
 
     #[test]
-    fn keeps_method_syntax_with_one_self_ref() {
-        let result =
-            minify("local t = {}\nfunction t:method(x)\n  return self.a + x\nend\nreturn t\n");
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
-        assert!(
-            result.contains("self"),
-            "self should be kept (only 1 ref): {result}"
+    fn keeps_method_syntax_with_one_self_reference() {
+        let result = rewrite_and_rename(
+            "local t = {}\nfunction t:method(x)\n  return self.a + x\nend\nreturn t\n",
         );
+        assert!(result.contains("self"), "self should be kept (only 1 ref): {result}");
     }
 
     #[test]
-    fn no_params_case() {
-        let result = minify(
+    fn rewrites_method_without_params() {
+        let result = rewrite_and_rename(
             "local t = {}\nfunction t:method()\n  self.a = 1\n  self.b = 2\nend\nreturn t\n",
         );
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
         assert!(!result.contains("self"), "self should be renamed: {result}");
     }
 
     #[test]
     fn vararg_only_method_keeps_comma() {
-        let result = minify(
+        let result = rewrite_and_rename(
             "local t = {}\nfunction t:method(...)\n  self.a = 1\n  self.b = 2\n  return ...\nend\nreturn t\n",
         );
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
         assert!(!result.contains("self"), "self should be renamed: {result}");
     }
 }

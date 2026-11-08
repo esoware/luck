@@ -1,29 +1,19 @@
-use luck_ast::Statement;
-use luck_ast::visitor::Visitor;
-use luck_semantic::scope::{ReferenceKind, SymbolKind};
+use luck_semantic::{ReferenceKind, SymbolKind};
 use luck_token::Span;
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::rule::{LintContext, Rule, WholeRule};
+use crate::uninitialized::UninitializedLocals;
 
-/// Luacheck 311: a value is written to a local, then a new value is
-/// written before the first is ever read. The earlier assignment is
-/// dead.
+/// Flags a value written to a local and then overwritten before anything
+/// reads it (Luacheck 311).
 ///
-/// Why this is conservative: a full reaching-definitions analysis would
-/// require a CFG. The rule only walks references in the same lexical
-/// scope as the symbol's declaration, in source order. That catches the
-/// linear `x = 1; x = 2` pattern while sidestepping false positives from
-/// branching. In `local x = 1; if c then x = 2 end; return x` the two
-/// writes sit in distinct scopes, so the second stays untracked.
-pub struct ValueOverwrittenBeforeRead;
-
-#[derive(Clone, Copy)]
-enum LastEvent {
-    Init { span: Span },
-    Write { span: Span },
-    Read,
-}
+/// This isn't a full reaching-definitions analysis. It tracks writes only in
+/// the declaring scope, in source order, and counts any reference from a
+/// nested scope as a read. That catches the linear `x = 1; x = 2` and stays
+/// quiet on `local x = 1; if c then x = 2 end; return x`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ValueOverwrittenBeforeRead;
 
 impl Rule for ValueOverwrittenBeforeRead {
     fn name(&self) -> &'static str {
@@ -38,95 +28,67 @@ impl Rule for ValueOverwrittenBeforeRead {
     fn description(&self) -> &'static str {
         "value assigned to a local is overwritten before it is read"
     }
+}
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let semantic = ctx.semantic;
-        // Determine which locals have an initializer (Init event at the
-        // declaration site). The reference list omits the declaration
-        // itself, so only an AST pass can find this.
-        let mut initialized = InitializedCollector::default();
-        initialized.visit_block(block);
+impl WholeRule for ValueOverwrittenBeforeRead {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        let scope_tree = &context.semantic.scope_tree;
+        let uninitialized_locals = UninitializedLocals::collect(context.block);
+        let mut diags = Vec::new();
 
-        let mut diagnostics = Vec::new();
-
-        for symbol in &semantic.scope_tree.symbols {
-            if symbol.kind != SymbolKind::Local {
+        for symbol in &scope_tree.symbols {
+            if symbol.kind != SymbolKind::Local || symbol.name.starts_with('_') {
                 continue;
             }
-            if symbol.name == "_" || symbol.name.starts_with('_') {
-                continue;
-            }
-            // A closure can read the captured value at any time between
-            // the textual write positions, so source order proves
-            // nothing for upvalues.
+            // A closure can read a captured local at any time, so source
+            // order proves nothing for upvalues.
             if symbol.is_upvalue {
                 continue;
             }
 
-            // All references, sorted by source position. References from
-            // nested scopes downgrade to reads. A nested read really is
-            // a read, and a nested write is conditional on a branch or
-            // loop, so it proves no overwrite.
-            let mut refs: Vec<(u32, ReferenceKind)> = symbol
+            // A reference from a nested scope counts as a read, since a
+            // write inside a branch or loop might not run.
+            let mut references: Vec<(u32, ReferenceKind)> = symbol
                 .reference_ids
                 .iter()
-                .map(|&ref_id| {
-                    let r = semantic.scope_tree.reference(ref_id);
-                    let kind = if r.scope == symbol.scope {
-                        r.kind
+                .map(|&reference_id| {
+                    let reference = scope_tree.reference(reference_id);
+                    let kind = if reference.scope == symbol.scope {
+                        reference.kind
                     } else {
                         ReferenceKind::Read
                     };
-                    (r.span.start, kind)
+                    (reference.span.start, kind)
                 })
                 .collect();
-            refs.sort_by_key(|(start, _)| *start);
+            references.sort_by_key(|&(start, _)| start);
 
-            let has_initializer = initialized.is_initialized(symbol.definition_span);
-
-            let mut last: Option<LastEvent> = if has_initializer {
-                Some(LastEvent::Init {
-                    span: symbol.definition_span,
-                })
-            } else {
-                None
-            };
-
-            for (start, kind) in &refs {
-                let ref_span = Span::new(*start, *start);
+            // Where the value no reference has read yet was written, if any.
+            // A `Local` comes only from a `local` statement, so one not
+            // declared bare starts with its initializer unread.
+            let mut unread_write =
+                (!uninitialized_locals.contains(symbol)).then_some(symbol.definition_span);
+            for (start, kind) in references {
                 match kind {
-                    ReferenceKind::Read => {
-                        last = Some(LastEvent::Read);
+                    ReferenceKind::Read => unread_write = None,
+                    ReferenceKind::Write => {
+                        if let Some(span) = unread_write {
+                            diags.push(overwritten_diag(&symbol.name, span));
+                        }
+                        unread_write = Some(Span::new(start, start));
                     }
-                    ReferenceKind::Write => match last {
-                        Some(LastEvent::Init { span }) => {
-                            diagnostics.push(make_diagnostic(&symbol.name, span));
-                            last = Some(LastEvent::Write { span: ref_span });
-                        }
-                        Some(LastEvent::Write { span }) => {
-                            diagnostics.push(make_diagnostic(&symbol.name, span));
-                            last = Some(LastEvent::Write { span: ref_span });
-                        }
-                        Some(LastEvent::Read) | None => {
-                            last = Some(LastEvent::Write { span: ref_span });
-                        }
-                    },
-                    ReferenceKind::ReadWrite => {
-                        // A compound assignment reads then writes. The
-                        // read clears any pending Init or Write before
-                        // the write registers.
-                        last = Some(LastEvent::Write { span: ref_span });
-                    }
+                    // A compound assignment reads then writes, so the read
+                    // clears any pending write before its own registers.
+                    ReferenceKind::ReadWrite => unread_write = Some(Span::new(start, start)),
                 }
             }
         }
 
-        diagnostics
+        diags
     }
 }
 
-fn make_diagnostic(name: &str, span: Span) -> LintDiagnostic {
+fn overwritten_diag(name: &str, span: Span) -> LintDiagnostic {
     LintDiagnostic::new(
         "value_overwritten_before_read",
         format!("value assigned to `{name}` is overwritten before it is read"),
@@ -135,49 +97,19 @@ fn make_diagnostic(name: &str, span: Span) -> LintDiagnostic {
     .with_help("remove the earlier assignment or read it first")
 }
 
-/// The scope tree records reads and writes but not whether an
-/// initializer accompanies the declaration, so it alone cannot say
-/// whether a local started life with a value.
-#[derive(Default)]
-struct InitializedCollector {
-    /// Sorted `(definition_span.start, definition_span.end)` for every
-    /// local declared with an initializer.
-    spans: Vec<(u32, u32)>,
-}
-
-impl InitializedCollector {
-    fn is_initialized(&self, span: Span) -> bool {
-        self.spans
-            .iter()
-            .any(|(start, end)| *start == span.start && *end == span.end)
-    }
-}
-
-impl<'ast> Visitor<'ast> for InitializedCollector {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
-        if let Statement::LocalAssignment(local) = stmt
-            && local.exprs.is_some()
-        {
-            for attributed in local.names.iter() {
-                self.spans
-                    .push((attributed.name.span.start, attributed.name.span.end));
-            }
-        }
-        self.walk_statement(stmt);
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&ValueOverwrittenBeforeRead, source, LuaVersion::Lua54)
+        run_rule(&ValueOverwrittenBeforeRead, source, LuaVersion::Lua54)
     }
 
     #[test]
-    fn flags_init_then_overwrite() {
+    fn flags_initializer_then_overwrite() {
         let diags = run("local x = 1\nx = 2\nreturn x");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`x`"));
@@ -186,10 +118,7 @@ mod tests {
     #[test]
     fn ignores_branched_overwrite() {
         let diags = run("local x = 1\nif c then x = 2 end\nreturn x");
-        assert!(
-            diags.is_empty(),
-            "branched writes must not fire (conservative): {diags:?}"
-        );
+        assert!(diags.is_empty(), "branched writes must not fire (conservative): {diags:?}");
     }
 
     #[test]
@@ -199,13 +128,13 @@ mod tests {
     }
 
     #[test]
-    fn ignores_single_init() {
+    fn ignores_single_initializer() {
         let diags = run("local x = 1\nreturn x");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
-    fn flags_two_post_decl_writes() {
+    fn flags_two_writes_after_declaration() {
         // Write then write with no read between, so the first is dead.
         let diags = run("local x\nx = 1\nx = 2\nreturn x");
         assert_eq!(diags.len(), 1, "got: {diags:?}");

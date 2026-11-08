@@ -1,13 +1,15 @@
 //! `luck graph` - print the dependency graph as JSON or Graphviz DOT.
 
-use crate::output::{build_file_cache, current_dir_or_exit, fail_with_diagnostics};
-use crate::project::{config_governing, resolve_configured_target, resolve_dynamic_require};
-use crate::render::render_diagnostics;
-use crate::{EXIT_SUCCESS, EXIT_USAGE, Verbosity};
-use clap::{Args, ValueEnum};
-use luck_bundler::graph::{DependencyGraph, build_graph};
 use std::path::PathBuf;
-use std::process::ExitCode;
+
+use clap::{Args, ValueEnum};
+use luck_bundler::{DependencyGraph, ModuleId};
+
+use crate::exit::Exit;
+use crate::output::{current_directory, fail_with_diags, usage_error};
+use crate::project::{config_for_one_shot, resolve_configured_target, resolve_dynamic_require};
+use crate::render::print_diags;
+use crate::verbosity::Verbosity;
 
 #[derive(Clone, ValueEnum)]
 pub(crate) enum GraphFormat {
@@ -17,114 +19,110 @@ pub(crate) enum GraphFormat {
 
 #[derive(Args)]
 pub(crate) struct GraphArgs {
-    /// Entry file
+    /// Entry file.
     entry: String,
 
-    /// Lua target [default: inferred from entry extension]
+    /// Lua target [default: from the entry's extension and luck.json].
     #[arg(short = 't', long = "target", value_name = "TARGET")]
     target: Option<String>,
 
-    /// Search path template (repeatable)
+    /// Search path template (repeatable).
     #[arg(short = 's', long = "search-path", value_name = "PATTERN")]
-    search_path: Vec<String>,
+    search_paths: Vec<String>,
 
-    /// Output format
+    /// Output format.
     #[arg(long, value_enum, default_value_t = GraphFormat::Json)]
     format: GraphFormat,
 
-    /// How to treat require(expr): error, warn, or allow
+    /// How to treat require(expr): error, warn, or allow.
     #[arg(long = "dynamic-require", value_name = "MODE")]
     dynamic_require: Option<String>,
 }
 
 impl GraphArgs {
-    pub(crate) fn run(self, verbosity: Verbosity) -> ExitCode {
-        let config = config_governing(&self.entry);
-        let target = resolve_configured_target(self.target.as_deref(), &self.entry, &config);
-        let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require.as_deref());
+    /// # Errors
+    ///
+    /// Returns [`Exit::Usage`] on a bad config, target, or entry path, and
+    /// [`Exit::Failure`] when the graph can't be built.
+    pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
+        // `graph` takes no `-c`, so its config is always the discovered one.
+        let config = config_for_one_shot(None, &self.entry)?;
+        let target = resolve_configured_target(self.target.as_deref(), &self.entry, &config)?;
+        let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require.as_deref())?;
 
         let entry_path = PathBuf::from(&self.entry);
         if !entry_path.is_file() {
-            eprintln!("Error: entry file not found: {}", self.entry);
-            return ExitCode::from(EXIT_USAGE);
+            return Err(usage_error(format!("entry file not found: `{}`", self.entry)));
         }
 
-        let cwd = current_dir_or_exit();
+        let working_directory = current_directory()?;
 
-        match build_graph(
+        let dependency_graph = DependencyGraph::build(
             &entry_path,
-            target,
-            &self.search_path,
-            &cwd,
+            target.lua_version(),
+            &self.search_paths,
+            &working_directory,
             dynamic_require,
-        ) {
-            Ok(dep_graph) => {
-                if !dep_graph.warnings.is_empty() && verbosity != Verbosity::Quiet {
-                    let mut cache = build_file_cache(&dep_graph.warnings);
-                    render_diagnostics(&dep_graph.warnings, &mut cache);
-                }
+        )
+        .map_err(|errors| fail_with_diags(&errors, None))?;
 
-                match self.format {
-                    GraphFormat::Json => print_graph_json(&dep_graph),
-                    GraphFormat::Dot => print_graph_dot(&dep_graph),
-                }
-                ExitCode::from(EXIT_SUCCESS)
-            }
-            Err(errors) => fail_with_diagnostics(&errors, None),
+        if !dependency_graph.warnings.is_empty() && verbosity != Verbosity::Quiet {
+            print_diags(&dependency_graph.warnings);
         }
+
+        match self.format {
+            GraphFormat::Json => print_graph_json(&dependency_graph),
+            GraphFormat::Dot => print_graph_dot(&dependency_graph),
+        }
+        Ok(())
     }
 }
 
-fn print_graph_json(dep_graph: &DependencyGraph) {
+fn print_graph_json(dependency_graph: &DependencyGraph) {
     use serde_json::{Map, Value, json};
 
-    let entry_path = &dep_graph.modules[dep_graph.entry_id.0].path;
+    let module_path =
+        |id: ModuleId| dependency_graph.modules.get(id.0).map(|module| module.path.as_str());
 
     let mut modules_map = Map::new();
-    for module in &dep_graph.modules {
+    for module in &dependency_graph.modules {
         let requires: Vec<&str> = module
             .dependencies
             .iter()
-            .map(|dep| dep.require_string.as_str())
+            .map(|dependency| dependency.require_string.as_str())
             .collect();
-        let resolved_deps: Vec<&str> = module
+        let resolved_paths: Vec<&str> = module
             .dependencies
             .iter()
-            .map(|dep| dep.resolved_path.as_str())
+            .map(|dependency| dependency.resolved_path.as_str())
             .collect();
 
         modules_map.insert(
             module.path.clone(),
             json!({
                 "requires": requires,
-                "resolved_deps": resolved_deps,
+                "resolved_deps": resolved_paths,
             }),
         );
     }
 
-    let order: Vec<&str> = dep_graph
-        .topo_order
-        .iter()
-        .map(|id| dep_graph.modules[id.0].path.as_str())
-        .collect();
+    let ordered_paths: Vec<Option<&str>> =
+        dependency_graph.topological_order.iter().map(|id| module_path(*id)).collect();
 
     let output = json!({
-        "entry": entry_path,
+        "entry": module_path(dependency_graph.entry_id),
         "modules": Value::Object(modules_map),
-        "order": order,
+        "order": ordered_paths,
     });
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&output).expect("failed to serialize dependency graph")
-    );
+    println!("{output:#}");
 }
 
-fn print_graph_dot(dep_graph: &DependencyGraph) {
+fn print_graph_dot(dependency_graph: &DependencyGraph) {
     println!("digraph dependencies {{");
-    for module in &dep_graph.modules {
-        for dep in &module.dependencies {
-            println!("  \"{}\" -> \"{}\";", module.path, dep.resolved_path);
+    for module in &dependency_graph.modules {
+        for dependency in &module.dependencies {
+            println!("  \"{}\" -> \"{}\";", module.path, dependency.resolved_path);
         }
     }
     println!("}}");
@@ -132,34 +130,21 @@ fn print_graph_dot(dep_graph: &DependencyGraph) {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser as _;
+
     use super::{GraphArgs, GraphFormat};
     use crate::args::{Cli, Command};
-    use clap::Parser;
 
     #[test]
     fn graph_accepts_target_and_format() {
-        let cli = Cli::try_parse_from([
-            "luck",
-            "graph",
-            "src/main.lua",
-            "-t",
-            "54",
-            "--format",
-            "dot",
-        ])
-        .expect("graph parses");
-        match cli.command {
-            Command::Graph(GraphArgs {
-                entry,
-                target,
-                format,
-                ..
-            }) => {
-                assert_eq!(entry, "src/main.lua");
-                assert_eq!(target, Some("54".to_string()));
-                assert!(matches!(format, GraphFormat::Dot));
-            }
-            _ => panic!("expected Command::Graph"),
-        }
+        let cli =
+            Cli::try_parse_from(["luck", "graph", "src/main.lua", "-t", "54", "--format", "dot"])
+                .expect("graph parses");
+        let Command::Graph(GraphArgs { entry, target, format, .. }) = cli.command else {
+            panic!("expected Command::Graph");
+        };
+        assert_eq!(entry, "src/main.lua");
+        assert_eq!(target, Some("54".to_owned()));
+        assert!(matches!(format, GraphFormat::Dot));
     }
 }

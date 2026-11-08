@@ -1,87 +1,81 @@
-//! Signature help. Finds the enclosing call expression at the cursor,
-//! looks the callee up in the stdlib model, and renders one signature
-//! per overload with the active signature and parameter selected from
-//! the cursor's argument position.
+//! Signature help.
+//!
+//! Finds the enclosing call expression at the cursor, looks the callee up in
+//! the stdlib model, and renders one signature per overload with the active
+//! signature and parameter selected from the cursor's argument position.
 
-use luck_semantic::stdlib_model::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
+use luck_semantic::{ResolvedCallee, StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
+use luck_token::index_to_offset;
 use tower_lsp::lsp_types::{
-    Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, SignatureHelp,
-    SignatureHelpParams, SignatureInformation,
+    Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, Position,
+    SignatureHelp, SignatureInformation,
 };
 
-use crate::backend::DocumentState;
+use crate::document::DocumentState;
 use crate::providers::cursor::find_call_site_at;
-use crate::stdlib_render::param_label;
+use crate::stdlib_render::{CONSTANT_PREVIEW_LIMIT, param_label};
 
-#[must_use]
-pub fn signature_help(doc: &DocumentState, params: &SignatureHelpParams) -> Option<SignatureHelp> {
-    let position = params.text_document_position_params.position;
-    let offset = doc.line_index.offset(&doc.text, position);
-    let call = find_call_site_at(&doc.parsed.block, &doc.text, offset)?;
-    // Semantic resolution instead of a textual lookup: shaped locals
-    // (`f:read(` after `local f = io.open(...)`), literal receivers
-    // (`("x"):rep(`), and shadowed bases all resolve or refuse
-    // correctly. Method params exclude self, matching the
-    // paren-relative argument count.
-    let (name, resolved) = doc.semantic.resolve_callee(call.call)?;
-    let StdlibEntry::Function(func) = resolved.entry else {
+pub(crate) fn signature_help(
+    document: &DocumentState,
+    position: Position,
+) -> Option<SignatureHelp> {
+    let offset = document.offset(position);
+    let site = find_call_site_at(&document.parsed.block, document.text(), offset)?;
+    // Semantic resolution handles shaped locals (`f:read(` after
+    // `local f = io.open(...)`) and literal receivers (`("x"):rep(`), and
+    // gives a shadowed base no help. Method params exclude `self`, matching
+    // the argument count inside the parens.
+    let ResolvedCallee { name, entry } = document.semantic.resolve_callee(site.call)?;
+    let StdlibEntry::Function(function) = entry else {
         return None;
     };
-    let deprecated_message = func.deprecated.as_ref().map(|dep| dep.message.as_str());
-    let signatures: Vec<SignatureInformation> = func
+    let deprecated_message =
+        function.deprecated.as_ref().map(|deprecation| deprecation.message.as_str());
+    let signatures: Vec<SignatureInformation> = function
         .signatures
         .iter()
-        .map(|sig| build_signature(&name, sig, deprecated_message, func.must_use))
+        .map(|signature| {
+            build_signature(&name, signature, deprecated_message, function.is_must_use)
+        })
         .collect();
 
-    let active_signature = func.signature_index_for_active_param(call.active_param as usize);
-    let active_sig = &func.signatures[active_signature];
-    let active_param = clamp_active_param(call.active_param, active_sig);
+    let active_signature = function.signature_index_for_active_param(site.active_param);
+    let active_param_count = function.signatures.get(active_signature)?.params.len();
+    let active_param = site.active_param.min(active_param_count.saturating_sub(1));
 
     Some(SignatureHelp {
         signatures,
-        active_signature: Some(active_signature as u32),
-        active_parameter: Some(active_param),
+        active_signature: Some(index_to_offset(active_signature)),
+        active_parameter: Some(index_to_offset(active_param)),
     })
-}
-
-fn clamp_active_param(active: u32, sig: &StdlibSignature) -> u32 {
-    let max = if sig.params.is_empty() {
-        0
-    } else {
-        (sig.params.len() - 1) as u32
-    };
-    active.min(max)
 }
 
 fn build_signature(
     name: &str,
-    sig: &StdlibSignature,
+    signature: &StdlibSignature,
     deprecated_message: Option<&str>,
-    must_use: bool,
+    is_must_use: bool,
 ) -> SignatureInformation {
     let mut label = format!("{name}(");
     let mut parameters: Vec<ParameterInformation> = Vec::new();
-    for (idx, param) in sig.params.iter().enumerate() {
-        if idx > 0 {
+    for (index, param) in signature.params.iter().enumerate() {
+        if index > 0 {
             label.push_str(", ");
         }
-        let start = label.chars().count() as u32;
+        let start = index_to_offset(label.chars().count());
         label.push_str(&param_label(param));
-        let end = label.chars().count() as u32;
+        let end = index_to_offset(label.chars().count());
         parameters.push(ParameterInformation {
             label: ParameterLabel::LabelOffsets([start, end]),
-            documentation: param_doc(param),
+            documentation: param_documentation(param),
         });
     }
     label.push(')');
 
-    let mut documentation = String::new();
-    if let Some(message) = deprecated_message {
-        documentation.push_str(&format!("**Deprecated:** {message}\n"));
-    }
-    if must_use {
-        documentation.push_str("\n_Return value should not be discarded._");
+    let mut documentation = deprecated_message
+        .map_or_else(String::new, |message| format!("**Deprecated:** {message}\n"));
+    if is_must_use {
+        documentation.push_str("\n_Don't discard the return value._");
     }
 
     SignatureInformation {
@@ -99,23 +93,22 @@ fn build_signature(
     }
 }
 
-fn param_doc(param: &StdlibParam) -> Option<Documentation> {
+fn param_documentation(param: &StdlibParam) -> Option<Documentation> {
     if let StdlibArgKind::Constant(values) = &param.kind {
-        // Large generated sets (Roblox service and class names) would
-        // swamp the panel; show a prefix and the total.
-        const PREVIEW_LIMIT: usize = 8;
-        let mut body = values
+        let preview = values
             .iter()
-            .take(PREVIEW_LIMIT)
+            .take(CONSTANT_PREVIEW_LIMIT)
             .map(|constant| format!("`\"{}\"`", constant.value))
             .collect::<Vec<_>>()
             .join(", ");
-        if values.len() > PREVIEW_LIMIT {
-            body.push_str(&format!(", ... ({} values)", values.len()));
-        }
+        let value = if values.len() > CONSTANT_PREVIEW_LIMIT {
+            format!("one of: {preview}, ... ({} values)", values.len())
+        } else {
+            format!("one of: {preview}")
+        };
         return Some(Documentation::MarkupContent(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: format!("one of: {body}"),
+            value,
         }));
     }
     if let Some(deprecation) = &param.deprecated {
@@ -124,8 +117,71 @@ fn param_doc(param: &StdlibParam) -> Option<Documentation> {
             value: format!("**Deprecated:** {}", deprecation.message),
         }));
     }
-    if !param.required {
-        return Some(Documentation::String("optional".to_string()));
+    if !param.is_required {
+        return Some(Documentation::String("optional".to_owned()));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use luck_core::LuaTarget;
+    use luck_token::offset_to_index;
+
+    use super::*;
+
+    fn active_signature(help: &SignatureHelp) -> &SignatureInformation {
+        &help.signatures[offset_to_index(help.active_signature.unwrap_or(0))]
+    }
+
+    #[test]
+    fn signature_help_resolves_shaped_local_method() {
+        let text = "local f = io.open('x')\nf:setvbuf('full', 512)";
+        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+        // Cursor inside the second argument.
+        let help =
+            signature_help(&document, Position::new(1, 18)).expect("file method signature help");
+        let signature = active_signature(&help);
+        assert!(signature.label.starts_with("f:setvbuf("), "method rendering: {}", signature.label);
+        assert_eq!(help.active_parameter, Some(1), "cursor is in arg 2");
+    }
+
+    #[test]
+    fn signature_help_marks_method_active_param_excluding_self() {
+        let text = "local p = game:GetService('Players')";
+        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox);
+        let utf16_column = index_to_offset(text.find("'Players'").expect("literal") + 3);
+        let help = signature_help(&document, Position::new(0, utf16_column))
+            .expect("GetService signature help");
+        let signature = active_signature(&help);
+        assert!(signature.label.starts_with("game:GetService("), "label: {}", signature.label);
+        // self is excluded: exactly one declared parameter, and the cursor
+        // in the first paren argument selects it.
+        assert_eq!(signature.parameters.as_ref().map(Vec::len), Some(1));
+        assert_eq!(help.active_parameter, Some(0));
+    }
+
+    #[test]
+    fn signature_help_refuses_shadowed_base() {
+        let text = "local string = 1\nstring.format('x')";
+        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+        assert!(
+            signature_help(&document, Position::new(1, 15)).is_none(),
+            "shadowed base must not show stdlib signatures"
+        );
+    }
+
+    #[test]
+    fn signature_help_works_at_statement_position() {
+        // Statement-position calls never pass through visit_expression;
+        // the call hook must find them.
+        let text = "collectgarbage('collect')";
+        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+        let help =
+            signature_help(&document, Position::new(0, 16)).expect("statement-position call");
+        assert!(
+            help.signatures.iter().any(|signature| signature.label.starts_with("collectgarbage(")),
+            "{help:?}"
+        );
+    }
 }

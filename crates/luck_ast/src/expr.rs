@@ -1,12 +1,16 @@
 use luck_token::{BinOp, CompactString, Span, Token, UnOp};
 
 use crate::shared::{Field, FunctionBody, Punctuated};
-use crate::types::Type;
+use crate::stmt::FunctionAttribute;
+use crate::types::{Type, TypeArgs};
 
 /// Fixed-spelling leaves (`nil`, `true`, `false`, `...`) carry only their
-/// span; literal leaves carry a [`Literal`] because the text is the
-/// payload.
+/// span; number and string leaves carry a [`Literal`] with their text.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "each variant is named for its payload, and the syntax tree view prints these names"
+)]
 pub enum Expression {
     Nil(Span),
     False(Span),
@@ -19,7 +23,7 @@ pub enum Expression {
     FunctionDef(Box<FunctionDef>),
     Var(Var),
     FunctionCall(Box<FunctionCall>),
-    Parenthesized(Box<ParenExpression>),
+    Parenthesized(Box<ParenthesizedExpression>),
     TableConstructor(Box<TableConstructor>),
     BinaryOp(Box<BinaryOp>),
     UnaryOp(Box<UnaryOp>),
@@ -31,8 +35,8 @@ pub enum Expression {
     Error(Span),
 }
 
-/// A literal leaf: the exact source spelling plus its span. The owning
-/// variant implies the token kind, so none is stored.
+/// A literal leaf: its exact spelling plus its span. The owning variant
+/// implies the token kind, so none is stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Literal {
     pub text: CompactString,
@@ -51,12 +55,11 @@ pub struct FunctionCall {
     pub span: Span,
     pub callee: Expression,
     pub args: FunctionArgs,
-    /// `:method` name.
     pub method: Option<Token>,
     /// Luau: explicit type arguments between a method name and its call
-    /// arguments (`receiver:method<<T>>()`). Non-method instantiation is
-    /// represented by [`Expression::TypeInstantiation`] instead.
-    pub explicit_type_args: Option<Box<crate::types::TypeArgs>>,
+    /// arguments (`receiver:method<<T>>()`). Non-method instantiation is an
+    /// [`Expression::TypeInstantiation`] instead.
+    pub explicit_type_args: Option<Box<TypeArgs>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +89,7 @@ pub struct UnaryOp {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParenExpression {
+pub struct ParenthesizedExpression {
     pub span: Span,
     pub expr: Expression,
 }
@@ -116,7 +119,7 @@ pub struct FieldAccess {
 pub struct FunctionDef {
     pub span: Span,
     /// Luau: `@attr` list preceding `function`. Empty outside Luau.
-    pub attributes: Vec<crate::stmt::FunctionAttribute>,
+    pub attributes: Vec<FunctionAttribute>,
     pub body: FunctionBody,
 }
 
@@ -142,11 +145,11 @@ pub struct ElseIfExprClause {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterpolatedString {
     pub span: Span,
-    pub segments: Vec<InterpSegment>,
+    pub segments: Vec<InterpolatedStringSegment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InterpSegment {
+pub struct InterpolatedStringSegment {
     pub literal: Token,
     pub expr: Option<Expression>,
 }
@@ -164,5 +167,5 @@ pub struct TypeCast {
 pub struct TypeInstantiation {
     pub span: Span,
     pub expr: Expression,
-    pub type_args: crate::types::TypeArgs,
+    pub type_args: TypeArgs,
 }

@@ -1,8 +1,6 @@
-//! Luau type grammar tests (real type AST, not span scanning).
+use core::ops::Range;
 
-use luck_ast::stmt::TypeDeclarationValue;
-use luck_ast::types::{Type, TypeField};
-use luck_ast::{Expression, Statement};
+use luck_ast::{Expression, Statement, Type, TypeDeclarationValue, TypeField};
 use luck_token::LuaVersion;
 
 use crate::common::{assert_no_errors, parse_luau};
@@ -11,12 +9,13 @@ use crate::common::{assert_no_errors, parse_luau};
 fn alias_type(source: &str) -> Type {
     let result = parse_luau(source);
     assert_no_errors(&result);
-    match &result.block.stmts[0] {
-        Statement::TypeDeclaration(type_decl) => match &type_decl.type_value {
-            TypeDeclarationValue::Alias(alias) => alias.clone(),
-            TypeDeclarationValue::TypeFunction(_) => panic!("expected alias form"),
-        },
-        other => panic!("expected TypeDeclaration, got {other:?}"),
+    let stmt = &result.block.stmts[0];
+    let Statement::TypeDeclaration(type_declaration) = stmt else {
+        panic!("expected TypeDeclaration, got {stmt:?}");
+    };
+    match &type_declaration.type_value {
+        TypeDeclarationValue::Alias(alias) => alias.clone(),
+        TypeDeclarationValue::TypeFunction(_) => panic!("expected alias form"),
     }
 }
 
@@ -28,7 +27,7 @@ fn named_type() {
             panic!("expected inline Name");
         };
         assert_eq!(name, expected);
-        assert_eq!(&source[span.start as usize..span.end as usize], expected);
+        assert_eq!(source.get(Range::<usize>::from(span)), Some(expected));
     }
 }
 
@@ -56,7 +55,7 @@ fn nested_generics_shift_right_split() {
     let args = named.generics.expect("generics");
     assert_eq!(args.args.len(), 2);
     let inner = args.args.get(1).expect("second arg");
-    assert!(matches!(inner, Type::Named(inner) if inner.generics.is_some()));
+    assert!(matches!(inner, Type::Named(nested) if nested.generics.is_some()));
 }
 
 #[test]
@@ -87,9 +86,9 @@ fn intersection_type() {
 
 #[test]
 fn intersection_binds_tighter_than_union() {
-    // Real Luau's suffix chain is flat: mixing `&` and `|` without
-    // parentheses is a parse error, not a precedence question.
-    let result = crate::common::parse_luau("type X = A & B | C");
+    // Luau's suffix chain is flat: mixing `&` and `|` without parentheses
+    // is a parse error, not a precedence question.
+    let result = parse_luau("type X = A & B | C");
     assert!(!result.errors.is_empty(), "mixed union/intersection errors");
     let Type::Union(union) = alias_type("type X = (A & B) | C") else {
         panic!("expected Union at top level");
@@ -113,10 +112,10 @@ fn rejects_negation_syntax() {
         "type X = ~string | nil",
         "type X = ~(string | nil)",
     ] {
-        let result = crate::common::parse_luau(source);
+        let result = parse_luau(source);
         assert!(!result.errors.is_empty(), "{source}");
     }
-    let result = crate::common::parse_luau("return 1 ~= 2");
+    let result = parse_luau("return 1 ~= 2");
     assert!(result.errors.is_empty(), "{:?}", result.errors);
 }
 
@@ -175,13 +174,7 @@ fn table_type_read_write_access() {
         panic!("expected Table");
     };
     for field in table.fields.iter() {
-        assert!(matches!(
-            field,
-            TypeField::Named {
-                access: Some(_),
-                ..
-            }
-        ));
+        assert!(matches!(field, TypeField::Named { access: Some(_), .. }));
     }
 }
 
@@ -190,10 +183,7 @@ fn table_field_literally_named_read() {
     let Type::Table(table) = alias_type("type X = { read: number }") else {
         panic!("expected Table");
     };
-    assert!(matches!(
-        &table.fields.items[0],
-        TypeField::Named { access: None, .. }
-    ));
+    assert!(matches!(&table.fields.items[0], TypeField::Named { access: None, .. }));
 }
 
 #[test]
@@ -210,12 +200,7 @@ fn function_type_named_params() {
     else {
         panic!("expected Function");
     };
-    assert!(
-        function_type
-            .params
-            .iter()
-            .all(|param| param.name.is_some())
-    );
+    assert!(function_type.params.iter().all(|param| param.name.is_some()));
 }
 
 #[test]
@@ -249,10 +234,7 @@ fn function_type_pack_return() {
 
 #[test]
 fn paren_type_is_not_pack() {
-    assert!(matches!(
-        alias_type("type X = (number)"),
-        Type::Parenthesized(_)
-    ));
+    assert!(matches!(alias_type("type X = (number)"), Type::Parenthesized(_)));
 }
 
 #[test]
@@ -290,10 +272,7 @@ fn named_parenthesized_type_still_reports_error() {
     let parsed = parse_luau("type X = (value: number)");
     assert_eq!(parsed.errors.len(), 1, "{:?}", parsed.errors);
     assert_eq!(parsed.errors[0].span, luck_token::Span::new(10, 15));
-    assert_eq!(
-        parsed.errors[0].message,
-        "named parameters are only valid in function types"
-    );
+    assert_eq!(parsed.errors[0].message, "named parameters are only valid in function types");
 }
 
 #[test]
@@ -316,10 +295,10 @@ fn generic_pack_reference() {
 fn type_declaration_generic_defaults() {
     let result = parse_luau("type Foo<T = string, S... = ...string> = T");
     assert_no_errors(&result);
-    let Statement::TypeDeclaration(type_decl) = &result.block.stmts[0] else {
+    let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] else {
         panic!("expected TypeDeclaration");
     };
-    let generics = type_decl.generics.as_ref().expect("generics");
+    let generics = type_declaration.generics.as_ref().expect("generics");
     assert_eq!(generics.params.len(), 2);
     assert!(generics.params.iter().all(|param| param.default.is_some()));
     assert!(generics.params.last().expect("pack param").is_pack);
@@ -329,33 +308,30 @@ fn type_declaration_generic_defaults() {
 fn export_type_declaration() {
     let result = parse_luau("export type Point = { x: number, y: number }");
     assert_no_errors(&result);
-    let Statement::TypeDeclaration(type_decl) = &result.block.stmts[0] else {
+    let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] else {
         panic!("expected TypeDeclaration");
     };
-    assert!(type_decl.is_exported);
+    assert!(type_declaration.is_exported);
 }
 
 #[test]
 fn type_function_declaration_keeps_body() {
     let result = parse_luau("type function Id(t)\n\treturn t\nend");
     assert_no_errors(&result);
-    let Statement::TypeDeclaration(type_decl) = &result.block.stmts[0] else {
+    let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] else {
         panic!("expected TypeDeclaration");
     };
-    assert!(matches!(
-        type_decl.type_value,
-        TypeDeclarationValue::TypeFunction(_)
-    ));
+    assert!(matches!(type_declaration.type_value, TypeDeclarationValue::TypeFunction(_)));
 }
 
 #[test]
 fn local_annotation_preserved() {
     let result = parse_luau("local x: number = 1");
     assert_no_errors(&result);
-    let Statement::LocalAssignment(local_assign) = &result.block.stmts[0] else {
+    let Statement::LocalAssignment(local) = &result.block.stmts[0] else {
         panic!("expected LocalAssignment");
     };
-    let name = local_assign.names.first().expect("name");
+    let name = local.names.first().expect("name");
     assert!(name.type_annotation.is_some());
 }
 
@@ -363,14 +339,11 @@ fn local_annotation_preserved() {
 fn multi_local_annotations_preserved() {
     let result = parse_luau("local a: number, b, c: string? = 1, 2, \"x\"");
     assert_no_errors(&result);
-    let Statement::LocalAssignment(local_assign) = &result.block.stmts[0] else {
+    let Statement::LocalAssignment(local) = &result.block.stmts[0] else {
         panic!("expected LocalAssignment");
     };
-    let annotations: Vec<bool> = local_assign
-        .names
-        .iter()
-        .map(|name| name.type_annotation.is_some())
-        .collect();
+    let annotations: Vec<bool> =
+        local.names.iter().map(|name| name.type_annotation.is_some()).collect();
     assert_eq!(annotations, vec![true, false, true]);
 }
 
@@ -391,12 +364,7 @@ fn generic_for_annotations_preserved() {
     let Statement::GenericFor(generic_for) = &result.block.stmts[0] else {
         panic!("expected GenericFor");
     };
-    assert!(
-        generic_for
-            .names
-            .iter()
-            .all(|binding| binding.type_annotation.is_some())
-    );
+    assert!(generic_for.names.iter().all(|binding| binding.type_annotation.is_some()));
 }
 
 #[test]
@@ -409,13 +377,7 @@ fn generic_function_declaration() {
     };
     assert!(local_function.body.generics.is_some());
     assert!(local_function.body.return_type.is_some());
-    assert!(
-        local_function
-            .body
-            .params
-            .iter()
-            .all(|param| param.type_annotation.is_some())
-    );
+    assert!(local_function.body.params.iter().all(|param| param.type_annotation.is_some()));
 }
 
 #[test]
@@ -426,17 +388,15 @@ fn cast_with_complex_type() {
 
 #[test]
 fn chained_casts() {
-    // One cast per simpleexp; real Luau requires parens to chain.
-    let result = parse_luau("local x = y :: any :: number");
-    assert!(!result.errors.is_empty(), "chained casts must error");
-    let result = parse_luau("local x = (y :: any) :: number");
-    assert_no_errors(&result);
+    // One cast per simpleexp; Luau needs parens to chain them.
+    let bare = parse_luau("local x = y :: any :: number");
+    assert!(!bare.errors.is_empty(), "chained casts must error");
+    assert_no_errors(&parse_luau("local x = (y :: any) :: number"));
 }
 
 #[test]
 fn annotation_not_confused_with_method_call() {
-    // `:` in `obj:method()` must not trigger type parsing outside
-    // annotation positions
+    // The `:` in `obj:method()` must not start a type annotation.
     let result = parse_luau("obj:method(1)");
     assert_no_errors(&result);
 }
@@ -444,82 +404,73 @@ fn annotation_not_confused_with_method_call() {
 #[test]
 fn type_annotations_rejected_outside_luau() {
     let result = luck_parser::parse("local x: number = 1", LuaVersion::Lua54);
-    assert!(!result.errors.is_empty());
+    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
 }
 
 #[test]
 fn mixed_union_intersection_rejected() {
-    for source in [
-        "type X = A | B & C",
-        "type X = A & B | C",
-        "type X = A & B?",
-        "type X = A? & B",
-    ] {
-        let result = crate::common::parse_luau(source);
+    for source in ["type X = A | B & C", "type X = A & B | C", "type X = A & B?", "type X = A? & B"]
+    {
+        let result = parse_luau(source);
         assert!(!result.errors.is_empty(), "must reject mixing: {source}");
     }
-    for source in [
-        "type X = (A & B) | C",
-        "type X = A & (B?)",
-        "type X = A? | B",
-        "type X = A | B | C?",
-    ] {
-        let result = crate::common::parse_luau(source);
-        assert!(
-            result.errors.is_empty(),
-            "parenthesized forms parse: {source}"
-        );
+    for source in
+        ["type X = (A & B) | C", "type X = A & (B?)", "type X = A? | B", "type X = A | B | C?"]
+    {
+        let result = parse_luau(source);
+        assert!(result.errors.is_empty(), "parenthesized forms parse: {source}");
     }
 }
 
 #[test]
 fn table_type_shape_rules() {
     // TableType ::= '{' Type '}' | '{' [PropList] '}'
-    let bad = [
+    let invalid_sources = [
         "type T = {number, x: string}",
         "type T = {x: string, number}",
         "type T = {number, string}",
         "type T = {[string]: number, [number]: string}",
     ];
-    for source in bad {
-        let result = crate::common::parse_luau(source);
+    for source in invalid_sources {
+        let result = parse_luau(source);
         assert!(!result.errors.is_empty(), "must reject: {source}");
     }
-    let good = [
+    let valid_sources = [
         "type T = {number}",
         "type T = {x: string, y: number}",
         "type T = {[string]: number, x: boolean}",
         "type T = {x: boolean, [string]: number}",
     ];
-    for source in good {
-        let result = crate::common::parse_luau(source);
+    for source in valid_sources {
+        let result = parse_luau(source);
         assert!(result.errors.is_empty(), "must accept: {source}");
     }
 }
 
 #[test]
 fn generic_type_list_ordering() {
-    // Packs come last; a defaulted param forces defaults on the rest;
-    // pack defaults must be packs; defaults are alias-only.
-    let bad = [
+    // Packs come last, a plain parameter after a defaulted one needs a
+    // default, a default must match its parameter's kind, and only aliases
+    // take defaults.
+    let invalid_sources = [
         "type X<T..., U> = U",
         "type X<T = number, U> = U",
         "type X<T... = number> = number",
         "type X<T = U...> = number",
         "local f = function<T = number>(x: T) return x end",
     ];
-    for source in bad {
-        let result = crate::common::parse_luau(source);
+    for source in invalid_sources {
+        let result = parse_luau(source);
         assert!(!result.errors.is_empty(), "must reject: {source}");
     }
-    let good = [
+    let valid_sources = [
         "type X<T, U...> = T",
         "type X<T, U = number> = U",
         "type X<T... = ...number> = number",
         "type X<T... = (string, number)> = number",
     ];
-    for source in good {
-        let result = crate::common::parse_luau(source);
+    for source in valid_sources {
+        let result = parse_luau(source);
         assert!(result.errors.is_empty(), "must accept: {source}");
     }
 }

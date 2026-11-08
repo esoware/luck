@@ -1,28 +1,56 @@
-use luck_ast::expr::*;
-use luck_ast::shared::*;
-use luck_ast::transform::AstTransform;
-use luck_token::BinOp;
+use luck_ast::{
+    Block, Expression, FunctionArgs, FunctionCall, Transform, Var, is_prefix_expression,
+};
 
-use crate::tokens::default_span as sp;
+use crate::expr::{can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, parenthesize};
 
 /// Removes parentheses that operator precedence and the operand's expression
 /// kind already make redundant.
-pub fn simplify(block: Block) -> Block {
+pub(crate) fn simplify(block: Block) -> Block {
     ParenSimplifier.transform_block(block)
 }
 
 struct ParenSimplifier;
 
-impl AstTransform for ParenSimplifier {
-    fn transform_expression(&mut self, expr: Expression) -> Expression {
-        let expr = self.walk_expression(expr);
+impl ParenSimplifier {
+    /// Keeps a prefix's own parens, which a literal like `("str"):method()`
+    /// needs, but strips any nested inside them.
+    fn transform_prefix(&mut self, prefix: Expression) -> Expression {
+        match prefix {
+            Expression::Parenthesized(paren) => {
+                let transformed = self.transform_expression(paren.expr);
+                parenthesize(transformed)
+            }
+            other @ (Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Var(_)
+            | Expression::FunctionCall(_)
+            | Expression::TableConstructor(_)
+            | Expression::BinaryOp(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::TypeInstantiation(_)
+            | Expression::Error(_)) => self.transform_expression(other),
+        }
+    }
+}
 
-        match expr {
+impl Transform for ParenSimplifier {
+    fn transform_expression(&mut self, expr: Expression) -> Expression {
+        match self.walk_expression(expr) {
             Expression::Parenthesized(paren) => {
                 if can_remove_parens(&paren.expr) {
                     paren.expr
                 } else {
-                    make_clean_parens(paren.expr)
+                    parenthesize(paren.expr)
                 }
             }
             Expression::BinaryOp(mut binop) => {
@@ -30,14 +58,14 @@ impl AstTransform for ParenSimplifier {
                     if can_unwrap_in_binop_lhs(&paren.expr, binop.op) {
                         binop.left = paren.expr;
                     } else {
-                        binop.left = make_clean_parens(paren.expr);
+                        binop.left = parenthesize(paren.expr);
                     }
                 }
                 if let Expression::Parenthesized(paren) = binop.right {
                     if can_unwrap_in_binop_rhs(&paren.expr, binop.op) {
                         binop.right = paren.expr;
                     } else {
-                        binop.right = make_clean_parens(paren.expr);
+                        binop.right = parenthesize(paren.expr);
                     }
                 }
                 Expression::BinaryOp(binop)
@@ -47,118 +75,86 @@ impl AstTransform for ParenSimplifier {
                     if can_unwrap_in_unary(&paren.expr) {
                         unop.operand = paren.expr;
                     } else {
-                        unop.operand = make_clean_parens(paren.expr);
+                        unop.operand = parenthesize(paren.expr);
                     }
                 }
                 Expression::UnaryOp(unop)
             }
-            other => other,
+            // Luau: the walk stripped these parens, but `{}<<T>>` doesn't
+            // parse, so anything that isn't a valid prefix gets them back.
+            Expression::TypeInstantiation(mut instantiation) => {
+                if !is_prefix_expression(&instantiation.expr) {
+                    instantiation.expr = parenthesize(instantiation.expr);
+                }
+                Expression::TypeInstantiation(instantiation)
+            }
+            other @ (Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Var(_)
+            | Expression::FunctionCall(_)
+            | Expression::TableConstructor(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::Error(_)) => other,
         }
     }
 
     // f("str") becomes f"str", and f({...}) becomes f{...}.
-    fn walk_function_args(&mut self, args: FunctionArgs) -> FunctionArgs {
+    fn transform_function_args(&mut self, args: FunctionArgs) -> FunctionArgs {
         match args {
-            FunctionArgs::Parenthesized { span, args } => {
-                if args.len() == 1 {
-                    let items: Vec<_> = args.iter().collect();
-                    match items[0] {
-                        Expression::StringLiteral(literal) => {
-                            return FunctionArgs::StringLiteral(literal.clone());
-                        }
-                        Expression::TableConstructor(table) => {
-                            return FunctionArgs::TableConstructor(Box::new(
-                                self.walk_table_constructor(*table.clone()),
-                            ));
-                        }
-                        _ => {}
-                    }
+            FunctionArgs::Parenthesized { span, args: call_args } => {
+                if let [Expression::StringLiteral(literal)] = call_args.items.as_slice() {
+                    return FunctionArgs::StringLiteral(literal.clone());
                 }
-                let args = self.walk_punctuated_exprs(args);
-                FunctionArgs::Parenthesized { span, args }
+                if let [Expression::TableConstructor(table)] = call_args.items.as_slice() {
+                    return FunctionArgs::TableConstructor(Box::new(
+                        self.walk_table_constructor(*table.clone()),
+                    ));
+                }
+                FunctionArgs::Parenthesized { span, args: self.walk_punctuated_exprs(call_args) }
             }
             FunctionArgs::TableConstructor(mut table) => {
                 *table = self.walk_table_constructor(*table);
                 FunctionArgs::TableConstructor(table)
             }
-            other => other,
+            literal @ FunctionArgs::StringLiteral(_) => literal,
         }
     }
 
     fn transform_var(&mut self, var: Var) -> Var {
         match var {
-            // A literal prefix keeps its parens, as in `("str"):method()`.
             Var::FieldAccess(mut field_access) => {
-                field_access.prefix = match field_access.prefix {
-                    Expression::Parenthesized(paren) => {
-                        let transformed = self.transform_expression(paren.expr);
-                        make_clean_parens(transformed)
-                    }
-                    other => self.transform_expression(other),
-                };
+                field_access.prefix = self.transform_prefix(field_access.prefix);
                 Var::FieldAccess(field_access)
             }
             Var::Index(mut index_expr) => {
-                index_expr.prefix = match index_expr.prefix {
-                    Expression::Parenthesized(paren) => {
-                        let transformed = self.transform_expression(paren.expr);
-                        make_clean_parens(transformed)
-                    }
-                    other => self.transform_expression(other),
-                };
+                index_expr.prefix = self.transform_prefix(index_expr.prefix);
                 index_expr.index = self.transform_expression(index_expr.index);
                 Var::Index(index_expr)
             }
-            other => self.walk_var(other),
+            name @ Var::Name(_) => self.walk_var(name),
         }
     }
 
-    fn walk_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
-        call.callee = match call.callee {
-            Expression::Parenthesized(paren) => {
-                let transformed = self.transform_expression(paren.expr);
-                make_clean_parens(transformed)
-            }
-            other => self.transform_expression(other),
-        };
+    fn transform_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
+        call.callee = self.transform_prefix(call.callee);
         call.explicit_type_args = call.explicit_type_args.map(|mut type_args| {
             *type_args = self.walk_type_args(*type_args);
             type_args
         });
-        call.args = self.walk_function_args(call.args);
+        call.args = self.transform_function_args(call.args);
         call
     }
 }
 
-fn can_remove_parens(inner: &Expression) -> bool {
-    match inner {
-        Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_) => true,
-        Expression::Var(_) => true,
-        Expression::TableConstructor(_) => true,
-        Expression::Parenthesized(_) => true,
-        Expression::FunctionDef(_) => true,
-        // Calls are NOT safe: dropping the parens restores multiple returns.
-        Expression::FunctionCall(_) => false,
-        Expression::BinaryOp(_) | Expression::UnaryOp(_) => false,
-        Expression::IfExpression(_) => false,
-        _ => false,
-    }
-}
-
-fn binop_precedence(op: BinOp) -> u8 {
-    op.precedence().0
-}
-
-fn is_right_associative(op: BinOp) -> bool {
-    op.precedence().1 == luck_token::Assoc::Right
-}
-
-fn can_unwrap_in_binop_lhs(inner: &Expression, outer: BinOp) -> bool {
+const fn can_remove_parens(inner: &Expression) -> bool {
     match inner {
         Expression::Number(_)
         | Expression::Integer(_)
@@ -168,26 +164,23 @@ fn can_unwrap_in_binop_lhs(inner: &Expression, outer: BinOp) -> bool {
         | Expression::False(_)
         | Expression::Var(_)
         | Expression::TableConstructor(_)
+        | Expression::Parenthesized(_)
         | Expression::FunctionDef(_) => true,
-        Expression::FunctionCall(_) => false,
-        // Unary ops bind looser than ^, so (-a)^b needs its parens.
-        Expression::UnaryOp(_) => outer != BinOp::Pow,
-        Expression::BinaryOp(binop) => {
-            let inner_prec = binop_precedence(binop.op);
-            let outer_prec = binop_precedence(outer);
-            if inner_prec > outer_prec {
-                return true;
-            }
-            if inner_prec == outer_prec && !is_right_associative(outer) {
-                return true;
-            }
-            false
-        }
-        _ => false,
+        // Calls and `...` aren't safe: dropping the parens restores multiple
+        // values.
+        Expression::FunctionCall(_)
+        | Expression::BinaryOp(_)
+        | Expression::UnaryOp(_)
+        | Expression::IfExpression(_)
+        | Expression::VarArg(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => false,
     }
 }
 
-fn can_unwrap_in_binop_rhs(inner: &Expression, outer: BinOp) -> bool {
+const fn can_unwrap_in_unary(inner: &Expression) -> bool {
     match inner {
         Expression::Number(_)
         | Expression::Integer(_)
@@ -197,160 +190,184 @@ fn can_unwrap_in_binop_rhs(inner: &Expression, outer: BinOp) -> bool {
         | Expression::False(_)
         | Expression::Var(_)
         | Expression::TableConstructor(_)
-        | Expression::FunctionDef(_) => true,
-        Expression::FunctionCall(_) => false,
-        Expression::UnaryOp(_) => true,
-        Expression::BinaryOp(binop) => {
-            let inner_prec = binop_precedence(binop.op);
-            let outer_prec = binop_precedence(outer);
-            if inner_prec > outer_prec {
-                return true;
-            }
-            if inner_prec == outer_prec && is_right_associative(outer) {
-                return true;
-            }
-            false
-        }
-        _ => false,
+        | Expression::FunctionDef(_)
+        | Expression::UnaryOp(_) => true,
+        // Not safe: `-(a+b)` isn't `-a+b`.
+        Expression::BinaryOp(_)
+        | Expression::FunctionCall(_)
+        | Expression::VarArg(_)
+        | Expression::Parenthesized(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => false,
     }
-}
-
-fn can_unwrap_in_unary(inner: &Expression) -> bool {
-    match inner {
-        Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_)
-        | Expression::Var(_)
-        | Expression::TableConstructor(_)
-        | Expression::FunctionDef(_) => true,
-        Expression::UnaryOp(_) => true,
-        // NOT safe: -a+b is not -(a+b).
-        Expression::BinaryOp(_) => false,
-        Expression::FunctionCall(_) => false,
-        _ => false,
-    }
-}
-
-fn make_clean_parens(expr: Expression) -> Expression {
-    Expression::Parenthesized(Box::new(ParenExpression { span: sp(), expr }))
 }
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
+    use crate::fixtures::{assert_reparses, run_pass};
 
     fn apply(source: &str) -> String {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
-        assert!(result.errors.is_empty(), "parse failed");
-        let block = simplify(result.block);
-        luck_codegen::compact(&block, source)
+        run_pass(source, LuaVersion::Lua54, simplify)
     }
 
     #[test]
-    fn removes_parens_number_in_assignment() {
-        let r = apply("local x = (42)\n");
-        assert!(!r.contains("(42)"), "Got: {r}");
+    fn removes_parens_around_number() {
+        let result = apply("local x = (42)\n");
+        assert!(!result.contains("(42)"), "Got: {result}");
     }
 
     #[test]
-    fn removes_parens_variable() {
-        let r = apply("local x = (y)\n");
-        assert!(!r.contains("(y)"), "Got: {r}");
+    fn removes_parens_around_variable() {
+        let result = apply("local x = (y)\n");
+        assert!(!result.contains("(y)"), "Got: {result}");
     }
 
     #[test]
-    fn keeps_parens_func_call() {
-        let r = apply("local x = (foo())\n");
-        assert!(r.contains("(foo())"), "Multi-return parens removed: {r}");
+    fn keeps_parens_around_call() {
+        let result = apply("local x = (foo())\n");
+        assert!(result.contains("(foo())"), "Multi-return parens removed: {result}");
     }
 
     #[test]
     fn higher_precedence_inner_unwraps() {
-        let r = apply("return (a * b) + c\n");
+        let result = apply("return (a * b) + c\n");
         assert!(
-            !r.contains("(a*b)") && !r.contains("(a * b)"),
-            "Higher prec inner should unwrap, got: {r}"
+            !result.contains("(a*b)") && !result.contains("(a * b)"),
+            "Higher prec inner should unwrap, got: {result}"
         );
     }
 
     #[test]
     fn lower_precedence_rhs_keeps_parens() {
-        let r = apply("return a * (b + c)\n");
-        assert!(r.contains("("), "Lower prec rhs must keep parens, got: {r}");
+        let result = apply("return a * (b + c)\n");
+        assert!(result.contains('('), "Lower prec rhs must keep parens, got: {result}");
     }
 
     #[test]
-    fn keeps_parens_lower_prec_in_multiply() {
-        let r = apply("return (1 + 2) * 3\n");
-        assert!(
-            r.contains("("),
-            "Lower prec (1+2) must keep parens in multiply: {r}"
-        );
+    fn keeps_parens_lower_precedence_in_multiply() {
+        let result = apply("return (1 + 2) * 3\n");
+        assert!(result.contains('('), "Lower prec (1+2) must keep parens in multiply: {result}");
     }
 
     #[test]
     fn removes_parens_around_variable_in_multiply() {
-        let r = apply("return (x) * 3\n");
-        assert!(
-            !r.contains("(x)"),
-            "Parens around variable should be removed: {r}"
-        );
+        let result = apply("return (x) * 3\n");
+        assert!(!result.contains("(x)"), "Parens around variable should be removed: {result}");
     }
 
     #[test]
     fn keeps_parens_unary_in_exponentiation() {
-        let r = apply("return (-a) ^ b\n");
-        assert!(r.contains("(-a)"), "Parens required for (-a)^b, got: {r}");
+        let result = apply("return (-a) ^ b\n");
+        assert!(result.contains("(-a)"), "Parens required for (-a)^b, got: {result}");
     }
 
     #[test]
     fn strips_parens_on_single_arg_string_call() {
-        let r = apply("print(\"hello\")\n");
+        let result = apply("print(\"hello\")\n");
         assert!(
-            r.contains("print\"hello\""),
-            "Single string arg should strip parens: {r}"
+            result.contains("print\"hello\""),
+            "Single string arg should strip parens: {result}"
         );
     }
 
     #[test]
     fn strips_parens_on_single_arg_table_call() {
-        let r = apply("foo({1, 2})\n");
-        assert!(
-            r.contains("foo{"),
-            "Single table arg should strip parens: {r}"
-        );
+        let result = apply("foo({1, 2})\n");
+        assert!(result.contains("foo{"), "Single table arg should strip parens: {result}");
     }
 
     #[test]
     fn keeps_parens_left_concat_in_concat() {
         // Concat is right-associative, so (a .. b) .. c is not a .. b .. c.
-        let r = apply("return (a .. b) .. c\n");
-        assert!(
-            r.contains("("),
-            "Left-associative concat grouping needs parens: {r}"
-        );
+        let result = apply("return (a .. b) .. c\n");
+        assert!(result.contains('('), "Left-associative concat grouping needs parens: {result}");
     }
 
     #[test]
     fn removes_parens_right_concat_in_concat() {
         // Concat is right-associative, so a .. (b .. c) is a .. b .. c.
-        let r = apply("return a .. (b .. c)\n");
-        assert!(
-            !r.contains("("),
-            "Right-associative concat parens are redundant: {r}"
-        );
+        let result = apply("return a .. (b .. c)\n");
+        assert!(!result.contains('('), "Right-associative concat parens are redundant: {result}");
     }
 
     #[test]
-    fn keeps_parens_func_call_in_binop() {
-        // The parens in (f()) + 1 truncate f's multiple returns.
-        let r = apply("return (f()) + 1\n");
-        assert!(
-            r.contains("(f())"),
-            "Parens around call in binop must be kept: {r}"
-        );
+    fn keeps_parens_around_call_in_binop() {
+        // `+` already truncates f() to one value, but the pass keeps parens
+        // around every call.
+        let result = apply("return (f()) + 1\n");
+        assert!(result.contains("(f())"), "Parens around call in binop must be kept: {result}");
+    }
+
+    fn assert_luau_output(cases: &[(&str, &str)]) {
+        for &(source, expected) in cases {
+            let result = run_pass(source, LuaVersion::Luau, simplify);
+            assert_reparses(&result, LuaVersion::Luau);
+            assert_eq!(result, expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn keeps_parens_on_instantiated_literal() {
+        assert_luau_output(&[
+            ("return ({})<<T>>\n", "return({})<<T>>"),
+            ("return (\"s\")<<T>>\n", "return(\"s\")<<T>>"),
+            ("return (1)<<T>>\n", "return(1)<<T>>"),
+            ("return (1i)<<T>>\n", "return(1i)<<T>>"),
+            ("return (nil)<<T>>\n", "return(nil)<<T>>"),
+            ("return (true)<<T>>\n", "return(true)<<T>>"),
+            ("return (false)<<T>>\n", "return(false)<<T>>"),
+            ("return (function() end)<<T>>\n", "return(function()end)<<T>>"),
+            ("return (({}))<<T>>\n", "return({})<<T>>"),
+        ]);
+    }
+
+    #[test]
+    fn keeps_parens_on_instantiated_literal_in_every_position() {
+        assert_luau_output(&[
+            ("return ({})<<T>><<U>>\n", "return({})<<T>><<U>>"),
+            ("return ({})<<T>>()\n", "return({})<<T>>()"),
+            ("return (\"s\")<<T>>.x\n", "return(\"s\")<<T>>.x"),
+            ("return ({})<<T>>[1]\n", "return({})<<T>>[1]"),
+            ("return ({})<<T>>:m<<U>>()\n", "return({})<<T>>:m<<U>>()"),
+            ("({})<<T>>()\n", "({})<<T>>()"),
+            ("f();({})<<T>>()\n", "f();({})<<T>>()"),
+            ("({})<<T>>.x = 1\n", "({})<<T>>.x=1"),
+            ("({})<<T>>[1] += 1\n", "({})<<T>>[1]+=1"),
+            ("print(({})<<T>>)\n", "print(({})<<T>>)"),
+            ("return {a = ({})<<T>>}\n", "return{a=({})<<T>>}"),
+            ("return ({})<<T>> + 1\n", "return({})<<T>>+1"),
+            ("return -({})<<T>>\n", "return-({})<<T>>"),
+            ("return ({})<<T>> :: U\n", "return({})<<T>>::U"),
+            ("return if c then ({})<<T>> else 1\n", "return if c then({})<<T>>else 1"),
+            ("return `x{({})<<T>>}y`\n", "return`x{({})<<T>>}y`"),
+            ("type X = typeof(({})<<T>>)\n", "type X=typeof(({})<<T>>)"),
+        ]);
+    }
+
+    #[test]
+    fn strips_parens_on_instantiated_var() {
+        assert_luau_output(&[
+            ("return (x)<<T>>\n", "return x<<T>>"),
+            ("return (x.y)<<T>>\n", "return x.y<<T>>"),
+            ("return (x[1])<<T>>\n", "return x[1]<<T>>"),
+            ("return ((x))<<T>>\n", "return x<<T>>"),
+            ("return (x)<<T>>()\n", "return x<<T>>()"),
+            ("return (x)<<T>>.y\n", "return x<<T>>.y"),
+        ]);
+    }
+
+    #[test]
+    fn keeps_parens_on_instantiated_multi_value() {
+        // The parens truncate to one value, as in (f())<<T>>.
+        assert_luau_output(&[
+            ("return (f())<<T>>\n", "return(f())<<T>>"),
+            ("return (...)<<T>>\n", "return(...)<<T>>"),
+        ]);
     }
 }

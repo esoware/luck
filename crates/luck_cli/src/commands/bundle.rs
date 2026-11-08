@@ -1,41 +1,46 @@
 //! `luck bundle` - bundle a multi-file project into a single file.
 
-use crate::minify_flags::MinifyFlags;
-use crate::output::{build_file_cache, current_dir_or_exit, fail_with_diagnostics, write_output};
-use crate::project::{config_for_one_shot, resolve_configured_target, resolve_dynamic_require};
-use crate::render::render_diagnostics;
-use crate::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE, Verbosity};
+use std::fs;
+use std::path::PathBuf;
+
 use clap::Args;
 use luck_bundler::bundle;
-use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+
+use crate::exit::Exit;
+use crate::minify_flags::MinifyFlags;
+use crate::output::{
+    current_directory, fail_with_diags, operation_error, usage_error, write_output,
+};
+use crate::project::{config_for_one_shot, resolve_configured_target, resolve_dynamic_require};
+use crate::render::print_diags;
+use crate::verbosity::Verbosity;
 
 #[derive(Args)]
 pub(crate) struct BundleArgs {
-    /// Entry file
+    /// Entry file.
     entry: String,
 
-    /// Lua target [default: inferred from entry extension]
+    /// Lua target [default: from the entry's extension and luck.json].
     #[arg(short = 't', long = "target", value_name = "TARGET")]
     target: Option<String>,
 
-    /// Output file [default: stdout]
+    /// Output file [default: stdout].
     #[arg(short, long, value_name = "PATH")]
     output: Option<String>,
 
-    /// Project config [default: discovered from entry directory]
+    /// Project config [default: discovered from entry directory].
     #[arg(short = 'c', long = "config", value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// Search path template (repeatable)
+    /// Search path template (repeatable).
     #[arg(short = 's', long = "search-path", value_name = "PATTERN")]
-    search_path: Vec<String>,
+    search_paths: Vec<String>,
 
-    /// Minify the output
+    /// Minify the output.
     #[arg(long)]
     minify: bool,
 
-    /// How to treat require(expr): error, warn, or allow
+    /// How to treat require(expr): error, warn, or allow.
     #[arg(long = "dynamic-require", value_name = "MODE")]
     dynamic_require: Option<String>,
 
@@ -49,93 +54,84 @@ pub(crate) struct BundleArgs {
 }
 
 impl BundleArgs {
-    pub(crate) fn run(self, verbosity: Verbosity) -> ExitCode {
-        let project = config_for_one_shot(self.config.as_deref(), &self.entry);
-        let target = resolve_configured_target(self.target.as_deref(), &self.entry, &project);
-        let dynamic_require = resolve_dynamic_require(&project, self.dynamic_require.as_deref());
-        let transforms = self
-            .minify_flags
-            .apply_to(project.transforms.unwrap_or_default());
+    /// # Errors
+    ///
+    /// Returns [`Exit::Usage`] on a bad config, target, or entry path, and
+    /// [`Exit::Failure`] when bundling, minifying, or writing fails.
+    pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
+        let config = config_for_one_shot(self.config.as_deref(), &self.entry)?;
+        let target = resolve_configured_target(self.target.as_deref(), &self.entry, &config)?;
+        let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require.as_deref())?;
+        let transforms = self.minify_flags.apply_to(config.transforms.unwrap_or_default());
 
         let entry_path = PathBuf::from(&self.entry);
         if !entry_path.is_file() {
-            eprintln!("Error: entry file not found: {}", self.entry);
-            return ExitCode::from(EXIT_USAGE);
+            return Err(usage_error(format!("entry file not found: `{}`", self.entry)));
         }
 
-        // Root Lua search paths at the ENTRY's directory: `luck bundle
-        // src/main.lua` should find src/'s siblings without a hand-crafted
-        // `-s`, matching how `require` resolves relative to the script.
+        // Root search paths at the entry's directory, so `luck bundle
+        // src/main.lua` finds the modules next to it without `-s`.
         let search_root = entry_path
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(current_dir_or_exit);
+            .map_or_else(current_directory, |parent| Ok(parent.to_path_buf()))?;
 
-        match bundle(
+        let result = bundle(
             &entry_path,
-            target,
-            &self.search_path,
+            target.lua_version(),
+            &self.search_paths,
             &search_root,
             dynamic_require,
-        ) {
-            Ok(result) => {
-                if !result.warnings.is_empty() && verbosity != Verbosity::Quiet {
-                    let mut cache = build_file_cache(&result.warnings);
-                    render_diagnostics(&result.warnings, &mut cache);
-                }
+        )
+        .map_err(|errors| fail_with_diags(&errors, None))?;
 
-                let mut code = result.output;
-
-                if self.minify {
-                    match luck_minifier::minify(&code, target, &transforms, &self.entry) {
-                        Ok(minified) => code = minified,
-                        Err(errors) => fail_with_diagnostics(&errors, Some((&self.entry, &code))),
-                    }
-                }
-
-                if let Some(map_path) = self.line_map.as_deref() {
-                    let entries: Vec<serde_json::Value> = result
-                        .line_map
-                        .iter()
-                        .map(|entry| {
-                            serde_json::json!({
-                                "bundleStartLine": entry.bundle_start_line,
-                                "bundleEndLine": entry.bundle_end_line,
-                                "path": entry.path,
-                            })
-                        })
-                        .collect();
-                    let map_json = serde_json::json!({ "version": 1, "entries": entries });
-                    if let Err(error) = std::fs::write(map_path, format!("{map_json:#}\n")) {
-                        eprintln!("Error: cannot write {}: {error}", map_path.display());
-                        return ExitCode::from(EXIT_FAILURE);
-                    }
-                }
-
-                write_output(self.output.as_deref(), &code);
-                ExitCode::from(EXIT_SUCCESS)
-            }
-            Err(errors) => fail_with_diagnostics(&errors, None),
+        if !result.warnings.is_empty() && verbosity != Verbosity::Quiet {
+            print_diags(&result.warnings);
         }
+
+        let mut code = result.output;
+
+        if self.minify {
+            code = luck_minifier::minify(&code, target.lua_version(), &transforms, &self.entry)
+                .map_err(|errors| fail_with_diags(&errors, Some((self.entry.clone(), code))))?;
+        }
+
+        if let Some(map_path) = self.line_map.as_deref() {
+            let entries: Vec<serde_json::Value> = result
+                .line_map
+                .iter()
+                .map(|entry| {
+                    serde_json::json!({
+                        "bundleStartLine": entry.bundle_start_line,
+                        "bundleEndLine": entry.bundle_end_line,
+                        "path": entry.path,
+                    })
+                })
+                .collect();
+            let map_json = serde_json::json!({ "version": 1u8, "entries": entries });
+            fs::write(map_path, format!("{map_json:#}\n")).map_err(|error| {
+                operation_error(format!("cannot write `{}`: {error}", map_path.display()))
+            })?;
+        }
+
+        write_output(self.output.as_deref(), &code)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser as _;
+
     use super::BundleArgs;
     use crate::args::{Cli, Command};
-    use clap::Parser;
 
     #[test]
     fn bundle_is_top_level_command_with_target_flag() {
         let cli = Cli::try_parse_from(["luck", "bundle", "entry.lua", "-t", "54"])
             .expect("bundle parses");
-        match cli.command {
-            Command::Bundle(BundleArgs { entry, target, .. }) => {
-                assert_eq!(entry, "entry.lua");
-                assert_eq!(target, Some("54".to_string()));
-            }
-            _ => panic!("expected Command::Bundle"),
-        }
+        let Command::Bundle(BundleArgs { entry, target, .. }) = cli.command else {
+            panic!("expected Command::Bundle");
+        };
+        assert_eq!(entry, "entry.lua");
+        assert_eq!(target, Some("54".to_owned()));
     }
 }

@@ -1,7 +1,8 @@
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity, line_column};
+use crate::rule::{LintContext, Rule, WholeRule};
 
-pub struct Shadowing;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Shadowing;
 
 impl Rule for Shadowing {
     fn name(&self) -> &'static str {
@@ -16,48 +17,52 @@ impl Rule for Shadowing {
     fn description(&self) -> &'static str {
         "variable shadows an outer variable with the same name"
     }
+}
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let semantic = ctx.semantic;
-        let mut diagnostics = Vec::new();
+impl WholeRule for Shadowing {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        let semantic = context.semantic;
+        let mut diags = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
-            if let Some(shadowed_id) = symbol.shadows {
-                // Underscore-prefixed names are a discard convention.
-                if symbol.name == "_" || symbol.name.starts_with('_') {
-                    continue;
-                }
-                let shadowed = &semantic.scope_tree.symbols[shadowed_id.index()];
-                let (line, column) =
-                    luck_token::line_col(ctx.source, shadowed.definition_span.start);
-                diagnostics.push(
-                    LintDiagnostic::new(
-                        "shadowing",
-                        format!("variable `{}` shadows outer variable", symbol.name),
-                        symbol.definition_span,
-                    )
-                    .with_help(format!("outer variable defined at {line}:{column}")),
-                );
+            let Some(shadowed_id) = symbol.shadows else {
+                continue;
+            };
+            // A leading `_` marks a name as deliberately unused.
+            if symbol.name.starts_with('_') {
+                continue;
             }
+            let shadowed = semantic.scope_tree.symbol(shadowed_id);
+            let (line, column) = line_column(context.source, shadowed.definition_span.start);
+            diags.push(
+                LintDiagnostic::new(
+                    "shadowing",
+                    format!("variable `{}` shadows outer variable", symbol.name),
+                    symbol.definition_span,
+                )
+                .with_help(format!("outer variable defined at {line}:{column}")),
+            );
         }
 
-        diagnostics
+        diags
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&Shadowing, source, LuaVersion::Lua54)
+        run_rule(&Shadowing, source, LuaVersion::Lua54)
     }
 
     #[test]
     fn flags_nested_block_shadow() {
-        // Inner-scope redeclaration of an outer local. Distinct from
-        // redefining_local, which is same-block only.
+        // Inner-scope redeclaration of an outer local. `redefining_local`
+        // covers only the same block.
         let diags = run("local x = 1\ndo local x = 2 print(x) end");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("`x`"));

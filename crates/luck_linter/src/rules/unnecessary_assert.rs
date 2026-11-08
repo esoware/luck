@@ -1,12 +1,11 @@
-use luck_ast::Expression;
-use luck_ast::expr::{FunctionArgs, FunctionCall, Var};
-use luck_token::TokenKind;
+use luck_ast::{Expression, FunctionArgs, FunctionCall, NodeType, NodeTypeSet, Statement};
 
+use crate::call::is_global_call;
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
 
-pub struct UnnecessaryAssert;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UnnecessaryAssert;
 
 impl Rule for UnnecessaryAssert {
     fn name(&self) -> &'static str {
@@ -22,105 +21,97 @@ impl Rule for UnnecessaryAssert {
     }
 
     fn description(&self) -> &'static str {
-        "assert on a constant value always passes or always errors"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
+        "`assert` on a constant value always passes or always errors"
     }
 }
 
 impl NodeRule for UnnecessaryAssert {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset =
-            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
     fn on_statement(
         &self,
-        stmt: &luck_ast::stmt::Statement,
-        ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
+        stmt: &Statement,
+        context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
     ) {
-        if let luck_ast::stmt::Statement::FunctionCall(call_stmt) = stmt {
-            check_call(call_stmt, ctx, out);
+        if let Statement::FunctionCall(call) = stmt {
+            check_call(call, context, diags);
         }
     }
 
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
+    fn on_expression(
+        &self,
+        expr: &Expression,
+        context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
         if let Expression::FunctionCall(call) = expr {
-            check_call(call, ctx, out);
+            check_call(call, context, diags);
         }
     }
 }
 
-fn check_call(call: &FunctionCall, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-    if !is_global_assert(call, ctx) {
+fn check_call(call: &FunctionCall, context: &LintContext<'_>, diags: &mut Vec<LintDiagnostic>) {
+    if !is_global_call(call, "assert", context.semantic) {
         return;
     }
     let FunctionArgs::Parenthesized { args, .. } = &call.args else {
         return;
     };
-    let Some(condition) = args.iter().next() else {
+    let Some(condition) = args.first() else {
         return;
     };
     match condition {
         // 0 and "" are truthy in Lua, so every number and string passes.
         Expression::True(_)
         | Expression::Number(_)
-        | Expression::Integer(_) // Luau
+        | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::InterpolatedString(_)
         | Expression::TableConstructor(_)
         | Expression::FunctionDef(_) => {
-            out.push(
+            diags.push(
                 LintDiagnostic::new(
                     "unnecessary_assert",
-                    "assert on a constant value always passes",
+                    "`assert` on a constant value always passes",
                     call.span,
                 )
-                .with_help("remove the assert or check a real condition".to_string()),
+                .with_help("remove the `assert` or check a real condition"),
             );
         }
         Expression::False(_) | Expression::Nil(_) => {
-            out.push(
+            diags.push(
                 LintDiagnostic::new(
                     "unnecessary_assert",
-                    "assert on a constant falsy value always errors",
+                    "`assert` on a constant falsy value always errors",
                     call.span,
                 )
-                .with_help("use error() to raise unconditionally".to_string()),
+                .with_help("use `error()` to raise unconditionally"),
             );
         }
-        _ => {}
+        Expression::VarArg(_)
+        | Expression::Var(_)
+        | Expression::FunctionCall(_)
+        | Expression::Parenthesized(_)
+        | Expression::BinaryOp(_)
+        | Expression::UnaryOp(_)
+        | Expression::IfExpression(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => {}
     }
-}
-
-fn is_global_assert(call: &FunctionCall, ctx: &LintContext) -> bool {
-    if call.method.is_some() {
-        return false;
-    }
-    let Expression::Var(var) = &call.callee else {
-        return false;
-    };
-    let Var::Name(token) = var else {
-        return false;
-    };
-    let TokenKind::Identifier(name) = &token.kind else {
-        return false;
-    };
-    name.as_str() == "assert" && !ctx.semantic.resolves_to_local(name.as_str(), token.span)
 }
 
 #[cfg(test)]
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::UnnecessaryAssert;
-    use crate::diagnostic::LintDiagnostic;
+    use super::*;
+    use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&UnnecessaryAssert, source, LuaVersion::Lua54)
+        run_rule(&UnnecessaryAssert, source, LuaVersion::Lua54)
     }
 
     #[test]

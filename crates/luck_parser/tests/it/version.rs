@@ -1,24 +1,16 @@
 use luck_ast::Statement;
+use luck_parser::{ParseResult, parse};
 use luck_token::LuaVersion;
 
 use crate::common::assert_no_errors;
-use luck_parser::ParseResult;
-
-fn parse(source: &str, version: LuaVersion) -> ParseResult {
-    luck_parser::parse(source, version)
-}
 
 fn assert_has_errors(result: &ParseResult) {
-    assert!(
-        !result.errors.is_empty(),
-        "expected parse errors but got none"
-    );
+    assert!(!result.errors.is_empty(), "expected parse errors but got none");
 }
 
 #[test]
 fn goto_in_lua51_is_identifier() {
-    // In Lua 5.1, `goto` is just an identifier. `goto label` parses as
-    // a function call or assignment, not a goto statement.
+    // In Lua 5.1, `goto` is an ordinary identifier.
     let result = parse("goto = 1", LuaVersion::Lua51);
     assert_no_errors(&result);
     assert!(matches!(&result.block.stmts[0], Statement::Assignment(_)));
@@ -34,16 +26,15 @@ fn double_colon_label_in_lua51() {
 
 #[test]
 fn attribute_in_lua53_not_parsed() {
-    // Lua 5.3 has no attribute syntax, so `<` ends the name list. The parser
-    // sees `local x`, stops there for want of a `=` or `,`, and leaves
-    // `<const> = 5` unparsed.
+    // Lua 5.3 has no attributes, so the statement ends at `local x` and
+    // `<const> = 5` is left over.
     let result = parse("local x <const> = 5", LuaVersion::Lua53);
-    if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
         assert!(
-            la.names.get(0).expect("declared name").attrib.is_none(),
+            local.names.get(0).expect("declared name").attribute.is_none(),
             "should not parse attribute in Lua 5.3"
         );
-        assert!(la.exprs.is_none(), "should not reach = in Lua 5.3");
+        assert!(local.exprs.is_none(), "should not reach = in Lua 5.3");
     } else {
         panic!("expected LocalAssignment");
     }
@@ -66,22 +57,19 @@ fn bitwise_and_in_lua51_is_error() {
 
 #[test]
 fn bitwise_pipe_in_lua52_is_error() {
-    // The lexer rejects `|` in Lua 5.2
+    // The lexer rejects `|` in Lua 5.2.
     let result = parse("local x = a | b", LuaVersion::Lua52);
     assert_has_errors(&result);
 }
 
 #[test]
 fn named_vararg_in_lua54_not_consumed() {
-    // Lua 5.4 has no named varargs, so `args` after `...` stays a separate name
+    // Lua 5.4 has no named varargs, so the vararg parameter stays unnamed.
     let result = parse("function f(...) return args end", LuaVersion::Lua54);
     assert_no_errors(&result);
-    if let Statement::FunctionDecl(f) = &result.block.stmts[0] {
-        let vararg = f.body.vararg.as_ref().expect("expected vararg");
-        assert!(
-            vararg.name.is_none(),
-            "vararg should not have a name in Lua 5.4"
-        );
+    if let Statement::FunctionDecl(function_decl) = &result.block.stmts[0] {
+        let vararg = function_decl.body.vararg.as_ref().expect("expected vararg");
+        assert!(vararg.name.is_none(), "vararg should not have a name in Lua 5.4");
     } else {
         panic!("expected FunctionDecl");
     }
@@ -94,10 +82,7 @@ fn break_outside_loop_rejected() {
         assert_has_errors(&parse("do break end", version));
         assert_has_errors(&parse("function f() break end", version));
         // Function bodies reset the loop context.
-        assert_has_errors(&parse(
-            "while true do local f = function() break end end",
-            version,
-        ));
+        assert_has_errors(&parse("while true do local f = function() break end end", version));
         assert_no_errors(&parse("while true do break end", version));
         assert_no_errors(&parse("repeat break until x", version));
         assert_no_errors(&parse("for i = 1, 2 do break end", version));
@@ -141,20 +126,15 @@ fn unknown_lua_attribute_rejected() {
 
 #[test]
 fn multiple_close_attributes_rejected() {
-    // 5.4 §3.3.7: at most one to-be-closed variable per list.
-    assert_has_errors(&parse(
-        "local x <close>, y <close> = a, b",
-        LuaVersion::Lua54,
-    ));
-    assert_no_errors(&parse(
-        "local x <close>, y <const> = a, 1",
-        LuaVersion::Lua54,
-    ));
+    // 5.4 manual section 3.3.7: at most one to-be-closed variable per list.
+    assert_has_errors(&parse("local x <close>, y <close> = a, b", LuaVersion::Lua54));
+    assert_no_errors(&parse("local x <close>, y <const> = a, 1", LuaVersion::Lua54));
 }
 
 #[test]
 fn close_attribute_on_globals_rejected() {
-    // 5.5 §3.3.7: only local variables can have the close attribute.
+    // 5.5 manual section 3.3.7: only local variables can have the close
+    // attribute.
     assert_has_errors(&parse("global x <close>", LuaVersion::Lua55));
     assert_has_errors(&parse("global <close> x", LuaVersion::Lua55));
     assert_has_errors(&parse("global <close> *", LuaVersion::Lua55));
@@ -164,7 +144,7 @@ fn close_attribute_on_globals_rejected() {
 
 #[test]
 fn empty_statement_gated_by_version() {
-    // 5.1 and Luau have no empty statement: `;` only follows a stat.
+    // 5.1 and Luau have no empty statement: `;` only follows a statement.
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
         assert_has_errors(&parse(";", version));
         assert_has_errors(&parse(";local x = 1", version));
@@ -180,7 +160,7 @@ fn empty_statement_gated_by_version() {
 
 #[test]
 fn ambiguous_newline_call_gated_by_version() {
-    // 5.1 and Luau hard-error on a call whose `(` opens a new line.
+    // 5.1 and Luau reject a call whose `(` starts a new line.
     let source = "a = b\n(f)(g)";
     assert_has_errors(&parse(source, LuaVersion::Lua51));
     assert_has_errors(&parse(source, LuaVersion::Luau));
@@ -194,10 +174,7 @@ fn ambiguous_newline_call_gated_by_version() {
 #[test]
 fn luau_function_attribute_names_validated() {
     assert_no_errors(&parse("@native function f() end", LuaVersion::Luau));
-    assert_no_errors(&parse(
-        "@checked @native function f() end",
-        LuaVersion::Luau,
-    ));
+    assert_no_errors(&parse("@checked @native function f() end", LuaVersion::Luau));
     assert_has_errors(&parse("@totallymadeup function f() end", LuaVersion::Luau));
     assert_has_errors(&parse("@native @native function f() end", LuaVersion::Luau));
 }

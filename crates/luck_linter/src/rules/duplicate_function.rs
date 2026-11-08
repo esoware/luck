@@ -1,13 +1,11 @@
-use luck_ast::Statement;
-use luck_ast::shared::Block;
-use luck_ast::stmt::FuncName;
-use luck_ast::visitor::Visitor;
-use luck_token::{Span, TokenKind};
+use luck_ast::{Block, FunctionName, Statement, Visitor};
+use luck_token::Span;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Category, LintDiagnostic, Severity, line_column};
+use crate::rule::{LintContext, Rule, WholeRule};
 
-pub struct DuplicateFunction;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DuplicateFunction;
 
 impl Rule for DuplicateFunction {
     fn name(&self) -> &'static str {
@@ -25,70 +23,60 @@ impl Rule for DuplicateFunction {
     fn description(&self) -> &'static str {
         "function with the same name is defined twice in the same block"
     }
+}
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let mut checker = DuplicateChecker {
-            source: ctx.source,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(ctx.block);
-        checker.diagnostics
+impl WholeRule for DuplicateFunction {
+    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+        let mut checker = DuplicateChecker { source: context.source, diags: Vec::new() };
+        checker.visit_block(context.block);
+        checker.diags
     }
 }
 
-fn full_name(func_name: &FuncName) -> Option<String> {
-    let mut parts = Vec::new();
-    for token in &func_name.names {
-        let TokenKind::Identifier(name) = &token.kind else {
-            return None;
-        };
-        parts.push(name.as_str());
+/// The declared name as written, such as `a.b:c`, or `None` if any part
+/// isn't an identifier.
+fn full_name(function_name: &FunctionName) -> Option<String> {
+    let mut names = function_name.names.iter();
+    let mut joined = names.next()?.identifier()?.to_owned();
+    for token in names {
+        joined.push('.');
+        joined.push_str(token.identifier()?);
     }
-    if parts.is_empty() {
-        return None;
-    }
-    let mut joined = parts.join(".");
-    if let Some(method_token) = &func_name.method {
-        let TokenKind::Identifier(method) = &method_token.kind else {
-            return None;
-        };
+    if let Some(method_token) = &function_name.method {
         joined.push(':');
-        joined.push_str(method);
+        joined.push_str(method_token.identifier()?);
     }
     Some(joined)
 }
 
-fn line_of(source: &str, offset: Span) -> usize {
-    let end = (offset.start as usize).min(source.len());
-    source[..end].bytes().filter(|&byte| byte == b'\n').count() + 1
-}
-
-struct DuplicateChecker<'a> {
-    source: &'a str,
-    diagnostics: Vec<LintDiagnostic>,
+struct DuplicateChecker<'document> {
+    source: &'document str,
+    diags: Vec<LintDiagnostic>,
 }
 
 impl DuplicateChecker<'_> {
     fn check_block(&mut self, block: &Block) {
-        let mut defined: Vec<(String, Span)> = Vec::new();
+        let mut definitions: Vec<(String, Span)> = Vec::new();
 
         for stmt in &block.stmts {
-            // Local functions are redefining_local's territory.
+            // `redefining_local` covers local functions.
             let Statement::FunctionDecl(decl) = stmt else {
                 continue;
             };
             let Some(name) = full_name(&decl.name) else {
                 continue;
             };
-            if let Some((_, first_span)) = defined.iter().find(|(n, _)| *n == name) {
-                let line = line_of(self.source, *first_span);
-                self.diagnostics.push(LintDiagnostic::new(
+            if let Some((_, first_span)) =
+                definitions.iter().find(|(defined_name, _)| *defined_name == name)
+            {
+                let (line, _) = line_column(self.source, first_span.start);
+                self.diags.push(LintDiagnostic::new(
                     "duplicate_function",
-                    format!("duplicate function definition `{name}`; also defined on line {line}"),
+                    format!("duplicate function definition `{name}`, also defined on line {line}"),
                     decl.name.span,
                 ));
             } else {
-                defined.push((name, decl.name.span));
+                definitions.push((name, decl.name.span));
             }
         }
     }
@@ -103,11 +91,13 @@ impl<'ast> Visitor<'ast> for DuplicateChecker<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&DuplicateFunction, source, LuaVersion::Lua54)
+        run_rule(&DuplicateFunction, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -147,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_dot_vs_colon() {
+    fn ignores_same_name_with_dot_and_colon() {
         let diags = run("local t = {}\nfunction t.m() end\nfunction t:m() end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }

@@ -1,43 +1,36 @@
+use core::mem;
+
+use luck_ast::{
+    BinaryOp, Block, DoBlock, ElseClause, Expression, FunctionBody, IfStatement, LastStatement,
+    LocalAssignment, Punctuated, Statement, Transform, UnaryOp, Var, Visitor,
+};
+use luck_token::{BinOp, CompactString, LuaVersion, Span, UnOp};
 use rustc_hash::FxHashSet;
 
-use luck_ast::expr::*;
-use luck_ast::shared::*;
-use luck_ast::stmt::*;
-use luck_ast::transform::AstTransform;
-use luck_ast::visitor::Visitor;
-use luck_token::{BinOp, CompactString, LuaVersion, UnOp};
-
-use crate::expr::{extract_boolean, ident_name, is_env_binding, is_nil, is_pure_expression};
-use crate::tokens::default_span as sp;
+use crate::binding::{identifier_name, is_env_binding};
+use crate::expr::{extract_boolean, is_nil, is_pure_expression};
 
 /// Removes unused locals, dead branches, and trivial statements, looping to a
 /// fixpoint.
-pub fn remove(mut block: Block, version: LuaVersion) -> Block {
+pub(crate) fn remove(mut block: Block, version: LuaVersion) -> Block {
     loop {
-        let (new_block, changed) = remove_unused_locals(block, version);
-        block = new_block;
-        if !changed {
-            break;
+        let mut transform = DeadCodeTransform {
+            referenced_names: collect_all_references(&block),
+            version,
+            has_changed: false,
+        };
+        block = transform.transform_block(block);
+        if !transform.has_changed {
+            return block;
         }
     }
-    block
-}
-
-fn remove_unused_locals(block: Block, version: LuaVersion) -> (Block, bool) {
-    let referenced = collect_all_references(&block);
-    let mut transform = DeadCodeTransform {
-        referenced,
-        version,
-        changed: false,
-    };
-    let block = transform.transform_block(block);
-    (block, transform.changed)
 }
 
 /// Whether a block contains a `break`/`continue` that binds to the loop
-/// directly enclosing it. Nested loops capture their own exits and
-/// function bodies are separate control-flow units, so neither is
-/// descended into.
+/// directly enclosing it.
+///
+/// Nested loops and function bodies aren't searched, since their exits can't
+/// reach this loop.
 fn has_loop_exit(block: &Block) -> bool {
     if matches!(
         block.last_stmt.as_deref(),
@@ -50,18 +43,13 @@ fn has_loop_exit(block: &Block) -> bool {
 
 fn stmt_has_loop_exit(stmt: &Statement) -> bool {
     match stmt {
+        // Lua 5.2+
         Statement::Break(_) => true,
         Statement::DoBlock(do_block) => has_loop_exit(&do_block.block),
         Statement::IfStatement(if_stmt) => {
             has_loop_exit(&if_stmt.block)
-                || if_stmt
-                    .elseif_clauses
-                    .iter()
-                    .any(|clause| has_loop_exit(&clause.block))
-                || if_stmt
-                    .else_clause
-                    .as_ref()
-                    .is_some_and(|clause| has_loop_exit(&clause.block))
+                || if_stmt.elseif_clauses.iter().any(|clause| has_loop_exit(&clause.block))
+                || if_stmt.else_clause.as_ref().is_some_and(|clause| has_loop_exit(&clause.block))
         }
         Statement::WhileLoop(_)
         | Statement::RepeatLoop(_)
@@ -85,9 +73,7 @@ fn stmt_has_loop_exit(stmt: &Statement) -> bool {
 }
 
 fn collect_all_references(block: &Block) -> FxHashSet<CompactString> {
-    let mut collector = ReferenceCollector {
-        references: FxHashSet::default(),
-    };
+    let mut collector = ReferenceCollector { references: FxHashSet::default() };
     collector.visit_block(block);
     collector.references
 }
@@ -99,91 +85,195 @@ struct ReferenceCollector {
 impl<'ast> Visitor<'ast> for ReferenceCollector {
     fn visit_var(&mut self, var: &'ast Var) {
         if let Var::Name(name) = var {
-            self.references.insert(ident_name(name).into());
+            self.references.insert(identifier_name(name).into());
         }
         self.walk_var(var);
     }
-
-    fn visit_expression(&mut self, expr: &'ast Expression) {
-        self.walk_expression(expr);
-    }
 }
 
-/// The fused DCE rebuild: one traversal applies both the unused-local
-/// removal (driven by the pre-collected `referenced` set) and the dead-
-/// branch elimination. Local rewrites compose per-statement, and both
-/// `remove()`'s inner loop and the pipeline's outer loop run to fixpoint,
-/// so interleaving the two reaches the same result in half the traversals
-/// that separate rebuilds would take.
+/// Removes unused locals and dead branches in one traversal.
+///
+/// The two rewrites compose per statement, and both `remove()`'s loop and
+/// the pipeline's outer loop run to a fixpoint, so interleaving them reaches
+/// the same result as separate rebuilds in half the traversals.
 struct DeadCodeTransform {
-    referenced: FxHashSet<CompactString>,
+    referenced_names: FxHashSet<CompactString>,
     version: LuaVersion,
-    changed: bool,
+    has_changed: bool,
 }
 
-fn is_const_truthy(expr: &Expression) -> Option<bool> {
-    if let Some(b) = extract_boolean(expr) {
-        return Some(b);
+fn constant_truthiness(expr: &Expression) -> Option<bool> {
+    if let Some(value) = extract_boolean(expr) {
+        return Some(value);
     }
     if is_nil(expr) {
         return Some(false);
     }
-    if matches!(
-        expr,
-        Expression::Number(_) | Expression::Integer(_) | Expression::StringLiteral(_)
-    ) {
+    if matches!(expr, Expression::Number(_) | Expression::Integer(_) | Expression::StringLiteral(_))
+    {
         return Some(true);
     }
     None
 }
 
-impl AstTransform for DeadCodeTransform {
+/// Whether a rewritten statement can never run or has nothing left to run.
+fn is_dead_branch(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::WhileLoop(while_loop) => {
+            constant_truthiness(&while_loop.condition) == Some(false)
+        }
+        Statement::IfStatement(if_stmt) => {
+            // An empty-body `if` can only go when evaluating the condition is
+            // side-effect free: `if f() then end` calls f.
+            let has_no_effect = if_stmt.block.stmts.is_empty()
+                && if_stmt.block.last_stmt.is_none()
+                && is_pure_expression(&if_stmt.condition);
+            if_stmt.elseif_clauses.is_empty()
+                && if_stmt.else_clause.is_none()
+                && (constant_truthiness(&if_stmt.condition) == Some(false) || has_no_effect)
+        }
+        // `x = x` stays. Without binding resolution this pass can't prove `x`
+        // is a local, and on a global under a metatabled environment it fires
+        // __index and __newindex.
+        Statement::Assignment(_)
+        | Statement::FunctionCall(_)
+        | Statement::DoBlock(_)
+        | Statement::RepeatLoop(_)
+        | Statement::NumericFor(_)
+        | Statement::GenericFor(_)
+        | Statement::FunctionDecl(_)
+        | Statement::LocalFunction(_)
+        | Statement::LocalAssignment(_)
+        | Statement::EmptyStatement(_)
+        | Statement::Goto(_)
+        | Statement::Label(_)
+        | Statement::GlobalDeclaration(_)
+        | Statement::GlobalFunction(_)
+        | Statement::GlobalStar(_)
+        | Statement::Break(_)
+        | Statement::CompoundAssignment(_)
+        | Statement::TypeDeclaration(_)
+        | Statement::Error(_) => false,
+    }
+}
+
+/// Whether `outer` is `cond and X or X` with `cond` and `X` both pure.
+fn is_redundant_ternary(outer: &BinaryOp) -> bool {
+    matches!(
+        &outer.left,
+        Expression::BinaryOp(inner)
+            if matches!(outer.op, BinOp::Or)
+                && matches!(inner.op, BinOp::And)
+                && inner.right == outer.right
+                && is_pure_expression(&inner.left)
+                // X must be pure too: a call that returns a falsy value runs
+                // twice in the original but once here.
+                && is_pure_expression(&outer.right)
+    )
+}
+
+impl DeadCodeTransform {
+    fn simplify_if(&mut self, mut if_stmt: IfStatement) -> Statement {
+        if let Some(is_truthy) = constant_truthiness(&if_stmt.condition) {
+            if is_truthy {
+                self.has_changed = true;
+                let new_block = self.transform_block(if_stmt.block);
+                return Statement::DoBlock(Box::new(DoBlock {
+                    span: Span::default(),
+                    block: new_block,
+                }));
+            }
+            // Elseif arms must be promoted before the else is considered:
+            // taking the else first would drop them.
+            let mut clauses = mem::take(&mut if_stmt.elseif_clauses).into_iter();
+            if let Some(first_elseif) = clauses.next() {
+                self.has_changed = true;
+                let else_clause = if_stmt.else_clause.take();
+                let new_condition = self.transform_expression(first_elseif.condition);
+                let new_block = self.transform_block(first_elseif.block);
+                let new_if = IfStatement {
+                    span: Span::default(),
+                    condition: new_condition,
+                    block: new_block,
+                    elseif_clauses: clauses.collect(),
+                    else_clause,
+                };
+                return self.transform_statement(Statement::IfStatement(Box::new(new_if)));
+            }
+            if let Some(else_clause) = if_stmt.else_clause.take() {
+                self.has_changed = true;
+                let new_block = self.transform_block(else_clause.block);
+                return Statement::DoBlock(Box::new(DoBlock {
+                    span: Span::default(),
+                    block: new_block,
+                }));
+            }
+        }
+
+        if if_stmt.block.stmts.is_empty()
+            && if_stmt.block.last_stmt.is_none()
+            && if_stmt.elseif_clauses.is_empty()
+            && let Some(else_clause) = if_stmt.else_clause.take()
+        {
+            self.has_changed = true;
+            let negated = negate_expression(if_stmt.condition);
+            let new_block = self.transform_block(else_clause.block);
+            let new_if = IfStatement {
+                span: Span::default(),
+                condition: negated,
+                block: new_block,
+                elseif_clauses: Vec::new(),
+                else_clause: None,
+            };
+            return Statement::IfStatement(Box::new(new_if));
+        }
+
+        match if_stmt {
+            IfStatement {
+                condition: Expression::UnaryOp(unop),
+                block,
+                elseif_clauses,
+                else_clause: Some(else_clause),
+                ..
+            } if matches!(unop.op, UnOp::Not) && elseif_clauses.is_empty() => {
+                self.has_changed = true;
+                let new_if = IfStatement {
+                    span: Span::default(),
+                    condition: unop.operand,
+                    block: self.transform_block(else_clause.block),
+                    elseif_clauses: Vec::new(),
+                    else_clause: Some(ElseClause {
+                        span: Span::default(),
+                        block: self.transform_block(block),
+                    }),
+                };
+                Statement::IfStatement(Box::new(new_if))
+            }
+            other => self.walk_statement(Statement::IfStatement(Box::new(other))),
+        }
+    }
+}
+
+impl Transform for DeadCodeTransform {
     fn transform_block(&mut self, block: Block) -> Block {
         let mut new_stmts: Vec<Statement> = Vec::new();
         for stmt in block.stmts {
-            let stmt = self.transform_statement(stmt);
+            let transformed = self.transform_statement(stmt);
             // Unused-local removal first: a dropped/extracted statement
             // never reaches the branch checks below.
-            let replacements = match simplify_dead_local(stmt, &self.referenced, self.version) {
-                None => {
-                    self.changed = true;
-                    continue;
+            match classify_dead_local(&transformed, &self.referenced_names, self.version) {
+                DeadLocalAction::Keep => {
+                    if is_dead_branch(&transformed) {
+                        self.has_changed = true;
+                    } else {
+                        new_stmts.push(transformed);
+                    }
                 }
-                Some(replacements) => replacements,
-            };
-            for stmt in replacements {
-                match &stmt {
-                    Statement::WhileLoop(while_loop)
-                        if is_const_truthy(&while_loop.condition) == Some(false) =>
-                    {
-                        self.changed = true;
-                        continue;
+                DeadLocalAction::Remove => self.has_changed = true,
+                DeadLocalAction::ExtractCalls => {
+                    if let Statement::LocalAssignment(local) = transformed {
+                        new_stmts.extend(call_statements(*local));
                     }
-                    Statement::IfStatement(if_stmt)
-                        if is_const_truthy(&if_stmt.condition) == Some(false)
-                            && if_stmt.elseif_clauses.is_empty()
-                            && if_stmt.else_clause.is_none() =>
-                    {
-                        self.changed = true;
-                        continue;
-                    }
-                    // An empty-body `if` can only go when evaluating the
-                    // condition is side-effect free: `if f() then end` calls f.
-                    Statement::IfStatement(if_stmt)
-                        if if_stmt.block.stmts.is_empty()
-                            && if_stmt.block.last_stmt.is_none()
-                            && if_stmt.elseif_clauses.is_empty()
-                            && if_stmt.else_clause.is_none()
-                            && is_pure_expression(&if_stmt.condition, true) =>
-                    {
-                        self.changed = true;
-                        continue;
-                    }
-                    // `x = x` self-assignment is NOT removed. Without binding
-                    // resolution this pass cannot prove `x` is a local, and for
-                    // a global under a metatabled environment the statement
-                    // fires __index and __newindex.
-                    _ => new_stmts.push(stmt),
                 }
             }
         }
@@ -193,141 +283,43 @@ impl AstTransform for DeadCodeTransform {
             last
         });
 
-        Block {
-            span: block.span,
-            stmts: new_stmts,
-            last_stmt,
-        }
+        Block { span: block.span, stmts: new_stmts, last_stmt }
     }
 
-    fn walk_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
-        let new_block = self.transform_block(body.block);
-        let new_block = if let Some(last) = &new_block.last_stmt {
-            match last.as_ref() {
-                LastStatement::Return(ret) => {
-                    // Only a bare `return` is removable. `return nil` returns
-                    // ONE value, and `select('#', f())` observes the difference.
-                    let returns: Vec<_> = ret.exprs.iter().collect();
-                    if returns.is_empty() {
-                        self.changed = true;
-                        Block {
-                            span: new_block.span,
-                            stmts: new_block.stmts,
-                            last_stmt: None,
-                        }
-                    } else {
-                        new_block
-                    }
-                }
-                _ => new_block,
-            }
-        } else {
-            new_block
-        };
-        body.block = new_block;
+    fn transform_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
+        body.block = self.transform_block(body.block);
+        // Only a bare `return` is removable. `return nil` returns one value,
+        // and `select('#', f())` observes the difference.
+        if let Some(LastStatement::Return(return_stmt)) = body.block.last_stmt.as_deref()
+            && return_stmt.exprs.is_empty()
+        {
+            self.has_changed = true;
+            body.block.last_stmt = None;
+        }
         body
     }
 
     fn transform_statement(&mut self, stmt: Statement) -> Statement {
         match stmt {
-            Statement::IfStatement(mut if_stmt) => {
-                if let Some(truthy) = is_const_truthy(&if_stmt.condition) {
-                    if truthy {
-                        self.changed = true;
-                        let new_block = self.transform_block(if_stmt.block);
-                        return Statement::DoBlock(Box::new(DoBlock {
-                            span: sp(),
-                            block: new_block,
-                        }));
-                    } else if !if_stmt.elseif_clauses.is_empty() {
-                        // Elseif arms must be promoted before the else is
-                        // considered: taking the else first would drop them.
-                        self.changed = true;
-                        let else_clause = if_stmt.else_clause.take();
-                        let mut clauses = if_stmt.elseif_clauses.into_iter();
-                        let first_elseif = clauses.next().expect("checked non-empty above");
-                        let new_cond = self.transform_expression(first_elseif.condition);
-                        let new_block = self.transform_block(first_elseif.block);
-                        let new_if = IfStatement {
-                            span: sp(),
-                            condition: new_cond,
-                            block: new_block,
-                            elseif_clauses: clauses.collect(),
-                            else_clause,
-                        };
-                        return self.transform_statement(Statement::IfStatement(Box::new(new_if)));
-                    } else if let Some(else_clause) = if_stmt.else_clause.take() {
-                        self.changed = true;
-                        let new_block = self.transform_block(else_clause.block);
-                        return Statement::DoBlock(Box::new(DoBlock {
-                            span: sp(),
-                            block: new_block,
-                        }));
-                    }
-                }
-
-                if if_stmt.block.stmts.is_empty()
-                    && if_stmt.block.last_stmt.is_none()
-                    && if_stmt.elseif_clauses.is_empty()
-                    && let Some(else_clause) = if_stmt.else_clause.take()
-                {
-                    self.changed = true;
-                    let negated = negate_expression(if_stmt.condition);
-                    let new_block = self.transform_block(else_clause.block);
-                    let new_if = IfStatement {
-                        span: sp(),
-                        condition: negated,
-                        block: new_block,
-                        elseif_clauses: Vec::new(),
-                        else_clause: None,
-                    };
-                    return Statement::IfStatement(Box::new(new_if));
-                }
-
-                if matches!(&if_stmt.condition, Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Not))
-                    && if_stmt.elseif_clauses.is_empty()
-                    && let Some(else_clause) = if_stmt.else_clause.take()
-                {
-                    self.changed = true;
-                    let Expression::UnaryOp(unop) = if_stmt.condition else {
-                        unreachable!("condition matched UnaryOp above")
-                    };
-                    let new_if = IfStatement {
-                        span: sp(),
-                        condition: unop.operand,
-                        block: self.transform_block(else_clause.block),
-                        elseif_clauses: Vec::new(),
-                        else_clause: Some(ElseClause {
-                            span: sp(),
-                            block: self.transform_block(if_stmt.block),
-                        }),
-                    };
-                    return Statement::IfStatement(Box::new(new_if));
-                }
-
-                self.walk_statement(Statement::IfStatement(if_stmt))
-            }
-            // A body-level break/continue binds to THIS repeat; in a
-            // do-block it would rebind to an outer loop (or be invalid),
-            // so the rewrite only fires when none exists.
+            Statement::IfStatement(if_stmt) => self.simplify_if(*if_stmt),
+            // `repeat ... until true` runs once, so it becomes a `do` block
+            // unless its body has its own `break` or `continue`, which a `do`
+            // block would rebind to an outer loop (or make invalid).
             Statement::RepeatLoop(repeat_loop)
-                if is_const_truthy(&repeat_loop.condition) == Some(true)
+                if constant_truthiness(&repeat_loop.condition) == Some(true)
                     && !has_loop_exit(&repeat_loop.block) =>
             {
-                self.changed = true;
+                self.has_changed = true;
                 let new_block = self.transform_block(repeat_loop.block);
-                Statement::DoBlock(Box::new(DoBlock {
-                    span: sp(),
-                    block: new_block,
-                }))
+                Statement::DoBlock(Box::new(DoBlock { span: Span::default(), block: new_block }))
             }
-            // A step of 1 is the default, so stripping it saves bytes.
+            // A step of 1 is the default.
             Statement::NumericFor(mut numeric_for) => {
                 if let Some(step) = &numeric_for.step
                     && let Expression::Number(literal) = step
                     && literal.text == "1"
                 {
-                    self.changed = true;
+                    self.has_changed = true;
                     numeric_for.step = None;
                 }
                 self.walk_statement(Statement::NumericFor(numeric_for))
@@ -335,110 +327,131 @@ impl AstTransform for DeadCodeTransform {
             // `local x = nil` becomes `local x`, since nil is the default.
             Statement::LocalAssignment(mut local) => {
                 // Const declarations keep their mandatory initializer.
-                let single_nil = !local.is_const
+                let is_single_nil = !local.is_const
                     && local.names.len() == 1
-                    && local.exprs.as_ref().is_some_and(|exprs| {
-                        exprs.len() == 1 && is_nil(exprs.first().expect("len checked above"))
-                    });
-                if single_nil {
-                    self.changed = true;
-                    local.span = sp();
+                    && local.exprs.as_ref().is_some_and(
+                        |exprs| matches!(exprs.items.as_slice(), [value] if is_nil(value)),
+                    );
+                if is_single_nil {
+                    self.has_changed = true;
+                    local.span = Span::default();
                     local.exprs = None;
                     return Statement::LocalAssignment(local);
                 }
                 self.walk_statement(Statement::LocalAssignment(local))
             }
-            other => self.walk_statement(other),
+            other @ (Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::GenericFor(_)
+            | Statement::FunctionDecl(_)
+            | Statement::LocalFunction(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_)) => self.walk_statement(other),
         }
     }
 
     fn transform_expression(&mut self, expr: Expression) -> Expression {
-        let expr = self.walk_expression(expr);
-        // `cond and X or X` folds to `X` when both branches are identical and
-        // the condition is pure.
-        if let Expression::BinaryOp(ref outer) = expr
-            && matches!(outer.op, BinOp::Or)
-            && let Expression::BinaryOp(ref inner) = outer.left
-            && matches!(inner.op, BinOp::And)
-            && inner.right == outer.right
-            && is_pure_expression(&inner.left, true)
-            // X must be pure too: a falsy-returning CALL evaluates twice
-            // (truncated) in the original but once here.
-            && is_pure_expression(&outer.right, true)
-        {
-            self.changed = true;
-            let Expression::BinaryOp(outer) = expr else {
-                unreachable!("matched BinaryOp above")
-            };
-            return outer.right;
+        match self.walk_expression(expr) {
+            // `cond and X or X` folds to `X` when both branches are identical
+            // and the condition is pure.
+            Expression::BinaryOp(outer) if is_redundant_ternary(&outer) => {
+                self.has_changed = true;
+                outer.right
+            }
+            other @ (Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Var(_)
+            | Expression::FunctionCall(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::BinaryOp(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::TypeInstantiation(_)
+            | Expression::Error(_)) => other,
         }
-        expr
     }
 }
 
 fn negate_expression(expr: Expression) -> Expression {
     // Only wrap in `not`. Inverting a comparison operator would change which
     // metamethod is called, __lt instead of __le and so on.
-    Expression::UnaryOp(Box::new(UnaryOp {
-        span: sp(),
-        op: UnOp::Not,
-        operand: expr,
-    }))
+    Expression::UnaryOp(Box::new(UnaryOp { span: Span::default(), op: UnOp::Not, operand: expr }))
 }
 
 enum DeadLocalAction {
     Keep,
     Remove,
+    /// Every initializer is pure or a call, so only the calls stay.
     ExtractCalls,
 }
 
 fn classify_dead_local(
     stmt: &Statement,
-    referenced: &FxHashSet<CompactString>,
+    referenced_names: &FxHashSet<CompactString>,
     version: LuaVersion,
 ) -> DeadLocalAction {
     match stmt {
         Statement::LocalAssignment(local) => {
-            // `<close>` runs __close at scope exit and `<const>` affects
-            // validity, so an attributed local is never dead.
+            // Exports, attributed names, and a 5.2+ `_ENV` are never dead:
+            // `<close>` runs __close at scope exit, `<const>` affects
+            // validity, and `_ENV` redirects global lookup.
             if local.is_exported
                 || local.names.iter().any(|attributed| {
-                    attributed.attrib.is_some()
-                        || is_env_binding(ident_name(&attributed.name), version)
+                    attributed.attribute.is_some()
+                        || is_env_binding(identifier_name(&attributed.name), version)
                 })
             {
                 return DeadLocalAction::Keep;
             }
-            let all_unused = local
+            let is_unused = local
                 .names
                 .iter()
-                .all(|n| !referenced.contains(ident_name(&n.name)));
-            if !all_unused {
+                .all(|attributed| !referenced_names.contains(identifier_name(&attributed.name)));
+            if !is_unused {
                 return DeadLocalAction::Keep;
             }
-            match &local.exprs {
-                None => DeadLocalAction::Remove,
-                Some(exprs) => {
-                    let expr_list: Vec<_> = exprs.iter().collect();
-                    if expr_list.is_empty() || expr_list.iter().all(|e| is_pure_expression(e, true))
-                    {
-                        DeadLocalAction::Remove
-                    } else if expr_list.iter().all(|e| {
-                        is_pure_expression(e, true) || matches!(e, Expression::FunctionCall(_))
-                    }) {
-                        DeadLocalAction::ExtractCalls
-                    } else {
-                        DeadLocalAction::Keep
-                    }
-                }
+            let Some(exprs) = &local.exprs else {
+                return DeadLocalAction::Remove;
+            };
+            if exprs.iter().all(is_pure_expression) {
+                DeadLocalAction::Remove
+            } else if exprs
+                .iter()
+                .all(|expr| is_pure_expression(expr) || matches!(expr, Expression::FunctionCall(_)))
+            {
+                DeadLocalAction::ExtractCalls
+            } else {
+                DeadLocalAction::Keep
             }
         }
-        Statement::LocalFunction(local_func) => {
-            if local_func.is_exported || is_env_binding(ident_name(&local_func.name), version) {
+        Statement::LocalFunction(local_function) => {
+            if local_function.is_exported
+                || is_env_binding(identifier_name(&local_function.name), version)
+            {
                 return DeadLocalAction::Keep;
             }
-            let name = ident_name(&local_func.name);
-            if referenced.contains(name) {
+            let name = identifier_name(&local_function.name);
+            if referenced_names.contains(name) {
                 DeadLocalAction::Keep
             } else {
                 DeadLocalAction::Remove
@@ -451,60 +464,52 @@ fn classify_dead_local(
                 DeadLocalAction::Keep
             }
         }
-        _ => DeadLocalAction::Keep,
+        Statement::Assignment(_)
+        | Statement::FunctionCall(_)
+        | Statement::WhileLoop(_)
+        | Statement::RepeatLoop(_)
+        | Statement::IfStatement(_)
+        | Statement::NumericFor(_)
+        | Statement::GenericFor(_)
+        | Statement::FunctionDecl(_)
+        | Statement::EmptyStatement(_)
+        | Statement::Goto(_)
+        | Statement::Label(_)
+        | Statement::GlobalDeclaration(_)
+        | Statement::GlobalFunction(_)
+        | Statement::GlobalStar(_)
+        | Statement::Break(_)
+        | Statement::CompoundAssignment(_)
+        | Statement::TypeDeclaration(_)
+        | Statement::Error(_) => DeadLocalAction::Keep,
     }
 }
 
-/// Returns None to remove the statement, Some(stmts) to replace it.
-fn simplify_dead_local(
-    stmt: Statement,
-    referenced: &FxHashSet<CompactString>,
-    version: LuaVersion,
-) -> Option<Vec<Statement>> {
-    match classify_dead_local(&stmt, referenced, version) {
-        DeadLocalAction::Keep => Some(vec![stmt]),
-        DeadLocalAction::Remove => None,
-        DeadLocalAction::ExtractCalls => {
-            if let Statement::LocalAssignment(local) = stmt {
-                if let Some(exprs) = local.exprs {
-                    let kept: Vec<_> = exprs
-                        .into_items()
-                        .into_iter()
-                        .filter_map(|expr| {
-                            if let Expression::FunctionCall(call) = expr {
-                                Some(Statement::FunctionCall(call))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if kept.is_empty() { None } else { Some(kept) }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+/// The calls among an unused local's initializers, as call statements.
+fn call_statements(local: LocalAssignment) -> impl Iterator<Item = Statement> {
+    local.exprs.into_iter().flat_map(Punctuated::into_items).filter_map(|expr| {
+        if let Expression::FunctionCall(call) = expr {
+            Some(Statement::FunctionCall(call))
+        } else {
+            None
         }
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::run_pass;
 
     fn apply(source: &str) -> String {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
-        assert!(result.errors.is_empty(), "parse failed");
-        let block = remove(result.block, luck_token::LuaVersion::Lua54);
-        luck_codegen::compact(&block, source)
+        run_pass(source, LuaVersion::Lua54, |block| remove(block, LuaVersion::Lua54))
     }
 
     #[test]
     fn removes_unused_local_literal() {
-        let r = apply("local unused = 42\nlocal used = 1\nreturn used\n");
-        assert!(!r.contains("unused"), "Unused local not removed: {r}");
-        assert!(r.contains("used"), "Used local was removed: {r}");
+        let result = apply("local unused = 42\nlocal used = 1\nreturn used\n");
+        assert!(!result.contains("unused"), "Unused local not removed: {result}");
+        assert!(result.contains("used"), "Used local was removed: {result}");
     }
 
     #[test]
@@ -513,11 +518,8 @@ mod tests {
         let kept = apply(source);
         assert!(kept.contains("_ENV"), "5.4 must pin _ENV: {kept}");
 
-        for version in [luck_token::LuaVersion::Lua51, luck_token::LuaVersion::Luau] {
-            let result = luck_parser::parse(source, version);
-            assert!(result.errors.is_empty(), "parse failed");
-            let block = remove(result.block, version);
-            let removed = luck_codegen::compact(&block, source);
+        for version in [LuaVersion::Lua51, LuaVersion::Luau] {
+            let removed = run_pass(source, version, |block| remove(block, version));
             assert!(
                 !removed.contains("_ENV"),
                 "{version:?} binds _ENV like any other local: {removed}"
@@ -527,81 +529,81 @@ mod tests {
 
     #[test]
     fn removes_unused_local_function() {
-        let r = apply("local function unused() return 1 end\nreturn 2\n");
-        assert!(!r.contains("unused"), "Unused function not removed: {r}");
+        let result = apply("local function unused() return 1 end\nreturn 2\n");
+        assert!(!result.contains("unused"), "Unused function not removed: {result}");
     }
 
     #[test]
     fn removes_if_false() {
-        let r = apply("if false then print(1) end\n");
-        assert!(!r.contains("print"), "if false branch not removed: {r}");
+        let result = apply("if false then print(1) end\n");
+        assert!(!result.contains("print"), "if false branch not removed: {result}");
     }
 
     #[test]
     fn if_false_promotes_elseif_and_keeps_else() {
-        let r = apply("if false then print(1) elseif x then print(2) else print(3) end\n");
-        assert!(!r.contains("print(1)"), "dead branch must go: {r}");
-        assert!(r.contains("print(2)"), "elseif branch must survive: {r}");
-        assert!(r.contains("print(3)"), "else branch must survive: {r}");
-        assert!(r.contains("if x"), "elseif must be promoted to if: {r}");
+        let result = apply("if false then print(1) elseif x then print(2) else print(3) end\n");
+        assert!(!result.contains("print(1)"), "dead branch must go: {result}");
+        assert!(result.contains("print(2)"), "elseif branch must survive: {result}");
+        assert!(result.contains("print(3)"), "else branch must survive: {result}");
+        assert!(result.contains("if x"), "elseif must be promoted to if: {result}");
     }
 
     #[test]
     fn if_false_chained_elseifs_collapse_to_else() {
-        let r = apply("if false then print(1) elseif false then print(2) else print(3) end\n");
-        assert!(!r.contains("print(1)"), "dead branch must go: {r}");
-        assert!(!r.contains("print(2)"), "dead elseif must go: {r}");
-        assert!(r.contains("print(3)"), "else branch must survive: {r}");
+        let result = apply("if false then print(1) elseif false then print(2) else print(3) end\n");
+        assert!(!result.contains("print(1)"), "dead branch must go: {result}");
+        assert!(!result.contains("print(2)"), "dead elseif must go: {result}");
+        assert!(result.contains("print(3)"), "else branch must survive: {result}");
     }
 
     #[test]
     fn unwraps_if_true() {
-        let r = apply("if true then print(1) end\n");
-        assert!(r.contains("print"), "Body should remain: {r}");
+        let result = apply("if true then print(1) end\n");
+        assert!(result.contains("print"), "Body should remain: {result}");
     }
 
     #[test]
     fn removes_while_false() {
-        let r = apply("while false do print(1) end\n");
-        assert!(!r.contains("print"), "while false body not removed: {r}");
+        let result = apply("while false do print(1) end\n");
+        assert!(!result.contains("print"), "while false body not removed: {result}");
     }
 
     #[test]
-    fn local_nil_simplifies() {
-        let r = apply("local x = nil\nreturn x\n");
+    fn drops_nil_initializer() {
+        let result = apply("local x = nil\nreturn x\n");
         assert!(
-            !r.contains("= nil") && !r.contains("=nil"),
-            "Should remove = nil: {r}"
+            !result.contains("= nil") && !result.contains("=nil"),
+            "Should remove = nil: {result}"
         );
-        assert!(r.contains("local"), "Should keep declaration: {r}");
+        assert!(result.contains("local"), "Should keep declaration: {result}");
     }
 
     #[test]
     fn global_self_assignment_kept() {
         // `x = x` on a global fires __index and __newindex under a metatabled
-        // environment. Removal is sound only for proven locals, which this
-        // pass cannot prove without binding info.
-        let r = apply("x = x\nreturn 1\n");
+        // environment. Removal is only sound for proven locals, and this pass
+        // has no binding info.
+        let result = apply("x = x\nreturn 1\n");
         assert!(
-            r.contains("x=x") || r.contains("x = x"),
-            "global self-assignment must be preserved: {r}"
+            result.contains("x=x") || result.contains("x = x"),
+            "global self-assignment must be preserved: {result}"
         );
     }
 
     #[test]
     fn repeat_until_true_without_break_becomes_do_block() {
-        let r = apply("repeat print(1) until true\n");
-        assert!(r.contains("do"), "repeat->do rewrite expected: {r}");
-        assert!(!r.contains("repeat"), "repeat should be gone: {r}");
+        let result = apply("repeat print(1) until true\n");
+        assert!(result.contains("do"), "repeat->do rewrite expected: {result}");
+        assert!(!result.contains("repeat"), "repeat should be gone: {result}");
     }
 
     #[test]
     fn repeat_until_true_with_break_is_kept() {
         // `break` binds to the repeat; a do-block would rebind it to an
         // outer loop (or make it invalid).
-        let r = apply("while f() do repeat if g() then break end until true end\n");
-        assert!(r.contains("repeat"), "repeat with break must be kept: {r}");
-        let r = apply("repeat break until true\n");
-        assert!(r.contains("repeat"), "repeat with break must be kept: {r}");
+        let nested = apply("while f() do repeat if g() then break end until true end\n");
+        assert!(nested.contains("repeat"), "repeat with break must be kept: {nested}");
+        let bare = apply("repeat break until true\n");
+        assert!(bare.contains("repeat"), "repeat with break must be kept: {bare}");
     }
 }

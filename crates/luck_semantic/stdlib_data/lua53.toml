@@ -4,11 +4,9 @@
 #     math.maxinteger/mininteger/type/tointeger/ult added
 #   - math.atan absorbs atan2 (optional second arg); string.dump gains
 #     strip
-#   - bit32 removed upstream but kept here fully deprecated (native
-#     bitwise operators replace it)
-#   - removed math compat functions (atan2/pow/log10/cosh/sinh/tanh/
-#     frexp/ldexp) kept as deprecated entries so users get a clear
-#     diagnostic instead of an unknown-global error
+#   - bit32 deprecated in favor of the native bitwise operators
+#   - math.atan2/pow/cosh/sinh/tanh/frexp/ldexp deprecated, joining
+#     math.log10
 
 [globals._G]
 kind = "property"
@@ -17,7 +15,7 @@ read_only = false
 [globals._VERSION]
 kind = "property"
 
-# Interactive-interpreter prompt overrides (manual, Lua Standalone).
+# Interactive-interpreter prompt overrides (manual section 7).
 [globals._PROMPT]
 kind = "property"
 read_only = false
@@ -96,15 +94,14 @@ params = [
   { kind = "any", required = false },
 ]
 
-# `loadstring` was removed in Lua 5.2 from the spec, but most real
-# codebases still encounter it (compatibility shims, embedded engines).
-# Keep it visible as deprecated so the diagnostic fires with an actionable
-# replace template.
+# Deprecated in 5.2 and gone since 5.3, but real code still calls it
+# (compat shims, embedded engines), so it stays with a fix that rewrites
+# it to load.
 [globals.loadstring]
 kind = "function"
 min_args = 1
 max_args = 2
-deprecated = { message = "removed in Lua 5.2+; use 'load' instead", replace_template = "load(%1)" }
+deprecated = { message = "deprecated since Lua 5.2; use 'load' instead", replace_template = "load(%1)" }
 params = [
   { kind = "string" },
   { kind = "string", required = false },
@@ -207,7 +204,7 @@ min_args = 2
 max_args = 2
 params = [
   { kind = "table" },
-  { kind = "table", accepts_nil = true },
+  { kind = "table" },
 ]
 
 [globals.tonumber]
@@ -475,7 +472,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 must_use = true
-deprecated = { message = "removed in Lua 5.2+; use '#' length operator instead", replace_template = "#%1" }
+deprecated = { message = "deprecated since Lua 5.2; use the '#' length operator instead", replace_template = "#%1" }
 params = [{ kind = "table" }]
 
 [globals.table.members.insert]
@@ -631,7 +628,7 @@ min_args = 1
 max_args = 1
 is_pure = true
 must_use = true
-deprecated = { message = "removed in Lua 5.3; compute via math.exp" }
+deprecated = { message = "deprecated since Lua 5.3; compute via math.exp" }
 params = [{ kind = "number" }]
 
 [globals.math.members.fmod]
@@ -648,7 +645,7 @@ min_args = 1
 max_args = 1
 is_pure = true
 must_use = true
-deprecated = { message = "removed in Lua 5.3; use math.modf and bit ops" }
+deprecated = { message = "deprecated since Lua 5.3; use math.modf and bit ops" }
 params = [{ kind = "number" }]
 
 [globals.math.members.huge]
@@ -660,7 +657,7 @@ min_args = 2
 max_args = 2
 is_pure = true
 must_use = true
-deprecated = { message = "removed in Lua 5.3; use x * 2^exp instead", replace_template = "(%1 * 2 ^ %2)" }
+deprecated = { message = "deprecated since Lua 5.3; use x * 2^exp instead", replace_template = "(%1 * 2 ^ %2)" }
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.log10]
@@ -687,7 +684,7 @@ min_args = 2
 max_args = 2
 is_pure = true
 must_use = true
-deprecated = { message = "removed in Lua 5.3; use '^' operator instead", replace_template = "(%1 ^ %2)" }
+deprecated = { message = "deprecated since Lua 5.3; use '^' operator instead", replace_template = "(%1 ^ %2)" }
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.sinh]
@@ -696,7 +693,7 @@ min_args = 1
 max_args = 1
 is_pure = true
 must_use = true
-deprecated = { message = "removed in Lua 5.3; compute via math.exp" }
+deprecated = { message = "deprecated since Lua 5.3; compute via math.exp" }
 params = [{ kind = "number" }]
 
 [globals.math.members.tanh]
@@ -705,7 +702,7 @@ min_args = 1
 max_args = 1
 is_pure = true
 must_use = true
-deprecated = { message = "removed in Lua 5.3; compute via math.exp" }
+deprecated = { message = "deprecated since Lua 5.3; compute via math.exp" }
 params = [{ kind = "number" }]
 
 [globals.math.members.log]
@@ -893,7 +890,7 @@ params = [
   { kind = "number", required = false },
 ]
 
-# ---- bit32 (still present in 5.3 as deprecated) ----
+# ---- bit32 namespace (deprecated in 5.3) ----
 
 [globals.bit32]
 kind = "namespace"
@@ -1031,9 +1028,8 @@ kind = "function"
 min_args = 0
 max_args = 0
 
-# With an argument this sets the default input file rather than only
-# returning one; a single entry cannot express both, so the return shape
-# reflects the getter form (the setter also returns the handle in PUC).
+# With an argument this also sets the default input file. PUC Lua returns
+# the current input file either way, so returns = "file" fits both forms.
 [globals.io.members.input]
 kind = "function"
 min_args = 0
@@ -1118,9 +1114,8 @@ returns = "file"
 # ---- file handle shape (io.open and friends) ----
 
 # Read formats ("l", "L", "n", "a", their star-prefixed 5.2 spellings,
-# or a byte count) are variadic and mix string constants with numbers,
-# so they stay a plain vararg - a constant set would reject numeric
-# counts.
+# or a byte count) stay a plain vararg, since a constant set would reject
+# numeric counts.
 [shapes.file.members.read]
 kind = "function"
 method = true
@@ -1483,8 +1478,8 @@ min_args = 2
 max_args = 2
 params = [{ kind = "string" }, { kind = "string" }]
 
-# The environment table (Lua 5.2+). Assignable: `local _ENV = ...` is the
-# sanctioned sandboxing idiom.
+# The chunk's environment (Lua 5.2+). Writable, since assigning it
+# (`_ENV = sandbox`) is the standard sandboxing idiom.
 [globals._ENV]
 kind = "property"
 read_only = false

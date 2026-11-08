@@ -1,15 +1,21 @@
-use luck_ast::Expression;
-use luck_ast::node::{AstTypesBitset, NodeType};
-use luck_token::{LuaVersion, Span};
+use core::num::ParseIntError;
 
-use crate::diagnostic::*;
+use luck_ast::{Expression, Literal, NodeType, NodeTypeSet};
+use luck_token::LuaVersion;
+
+use crate::diagnostic::{Category, LintDiagnostic, Severity};
 use crate::rule::{LintContext, NodeRule, Rule};
 
-/// Numeric literals that exceed the precision of the target runtime's
-/// number representation. On Lua 5.1/5.2 every number is an IEEE-754
-/// double, so integers above 2^53 silently round. On 5.3+ integers are
-/// 64-bit, so hex literals above 2^64-1 cannot be represented at all.
-pub struct IntegerParsing;
+/// Every integer up to this value is exact in a double.
+const MAX_EXACT_DOUBLE_INTEGER: u128 = 2u128.pow(53);
+
+/// Flags integer literals the target can't represent exactly.
+///
+/// Lua 5.1, 5.2, and Luau store every number as a double, so integers above
+/// 2^53 can round. Lua 5.3+ has 64-bit integers: a decimal literal above
+/// 2^63-1 becomes a float, and a hex literal above 2^64-1 wraps around.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IntegerParsing;
 
 impl Rule for IntegerParsing {
     fn name(&self) -> &'static str {
@@ -22,160 +28,113 @@ impl Rule for IntegerParsing {
         Severity::Warning
     }
     fn description(&self) -> &'static str {
-        "integer literal exceeds the target Lua version's representable range"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
+        "integer literal the target Lua version can't represent exactly"
     }
 }
 
-struct LiteralChecker<'a> {
-    version: LuaVersion,
-    out: &'a mut Vec<LintDiagnostic>,
+impl NodeRule for IntegerParsing {
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::Number])
+    }
+    fn on_expression(
+        &self,
+        expr: &Expression,
+        context: &LintContext<'_>,
+        diags: &mut Vec<LintDiagnostic>,
+    ) {
+        if let Expression::Number(literal) = expr {
+            diags.extend(check_number(literal, context.semantic.version));
+        }
+    }
 }
 
-/// Whether the runtime treats integers as a distinct 64-bit subtype.
-fn has_64bit_integers(version: LuaVersion) -> bool {
-    matches!(
-        version,
-        LuaVersion::Lua53 | LuaVersion::Lua54 | LuaVersion::Lua55
+fn check_number(literal: &Literal, version: LuaVersion) -> Option<LintDiagnostic> {
+    let raw = literal.text.as_str();
+    let has_integer_subtype = version.has_integer_subtype();
+    let (message, help) = match classify(raw) {
+        LiteralShape::NotInteger => return None,
+        // Without an integer subtype every number is a double.
+        LiteralShape::Hex(digits) if !has_integer_subtype => {
+            exceeds_double_precision(u128::from_str_radix(digits, 16))
+                .then(|| double_precision_loss(raw))?
+        }
+        LiteralShape::Decimal(digits) if !has_integer_subtype => {
+            exceeds_double_precision(digits.parse()).then(|| double_precision_loss(raw))?
+        }
+        // Lua 5.3+ wraps a hex literal that overflows 64 bits.
+        LiteralShape::Hex(digits) => {
+            if u128::from_str_radix(digits, 16).is_ok_and(|value| value <= u128::from(u64::MAX)) {
+                return None;
+            }
+            (
+                format!(
+                    "hex literal `{raw}` exceeds the 64-bit integer range, so it wraps around to a different value"
+                ),
+                "use a smaller value or split across two values",
+            )
+        }
+        // Lua 5.3+ reads a decimal literal above `i64::MAX` as a float.
+        LiteralShape::Decimal(digits) => {
+            if digits.parse::<i64>().is_ok() {
+                return None;
+            }
+            (
+                format!(
+                    "decimal integer `{raw}` exceeds 2^63-1, so it will be parsed as a float and lose precision"
+                ),
+                "use a hex literal or split into smaller values",
+            )
+        }
+    };
+    Some(LintDiagnostic::new("integer_parsing", message, literal.span).with_help(help))
+}
+
+/// Whether parsed integer text is above 2^53, where doubles start skipping
+/// integers. Text too large for `u128` counts too.
+fn exceeds_double_precision(parsed: Result<u128, ParseIntError>) -> bool {
+    parsed.ok().is_none_or(|value| value > MAX_EXACT_DOUBLE_INTEGER)
+}
+
+fn double_precision_loss(raw: &str) -> (String, &'static str) {
+    (
+        format!(
+            "integer literal `{raw}` exceeds 2^53, so it loses precision when stored as a double"
+        ),
+        "use a smaller value or store as a string",
     )
 }
 
-/// Number text classification. Floats (anything with `.`, `p`, `P`, `e`,
-/// or `E` in the relevant position) are not integers and pass through.
-/// They lose precision differently, which is a separate concern from
-/// "is this *intended* as an exact integer".
-enum LiteralShape<'a> {
-    Hex(&'a str),
-    Decimal(&'a str),
+/// The shape of a number literal's text.
+///
+/// Float literals are `NotInteger` and go unchecked, since nobody writes one
+/// expecting an exact integer.
+enum LiteralShape<'text> {
+    Hex(&'text str),
+    Decimal(&'text str),
     NotInteger,
 }
 
 fn classify(text: &str) -> LiteralShape<'_> {
     if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
         // Hex floats (`0x1.Fp10`) and explicit exponents are not integers.
-        if rest.bytes().any(|byte| matches!(byte, b'.' | b'p' | b'P')) {
-            return LiteralShape::NotInteger;
-        }
-        if rest.is_empty() {
+        if rest.is_empty() || rest.bytes().any(|byte| matches!(byte, b'.' | b'p' | b'P')) {
             return LiteralShape::NotInteger;
         }
         return LiteralShape::Hex(rest);
     }
-    if text.bytes().any(|byte| matches!(byte, b'.' | b'e' | b'E')) {
-        return LiteralShape::NotInteger;
-    }
-    if text.is_empty() {
+    if text.is_empty() || text.bytes().any(|byte| matches!(byte, b'.' | b'e' | b'E')) {
         return LiteralShape::NotInteger;
     }
     LiteralShape::Decimal(text)
 }
 
-impl LiteralChecker<'_> {
-    fn check_number(&mut self, span: Span, raw: &str) {
-        match classify(raw) {
-            LiteralShape::Hex(digits) => {
-                if !has_64bit_integers(self.version) {
-                    // On 5.1/5.2 every literal is a double; apply the
-                    // 2^53 ceiling using the parsed value.
-                    if let Ok(value) = u128::from_str_radix(digits, 16) {
-                        if value > (1u128 << 53) {
-                            self.push_double_precision(span, raw);
-                        }
-                    } else {
-                        // Too large even for u128, so it is over budget.
-                        self.push_double_precision(span, raw);
-                    }
-                    return;
-                }
-                // On 5.3+, integers are 64-bit. Anything that overflows
-                // u64 wraps modulo 2^64 in the reference implementation.
-                match u128::from_str_radix(digits, 16) {
-                    Ok(value) if value > u128::from(u64::MAX) => {
-                        self.push_hex_overflow(span, raw);
-                    }
-                    Err(_) => {
-                        self.push_hex_overflow(span, raw);
-                    }
-                    Ok(_) => {}
-                }
-            }
-            LiteralShape::Decimal(digits) => {
-                if has_64bit_integers(self.version) {
-                    // Decimal literals exceeding i64::MAX become floats
-                    // in 5.3+ (per `lvm` parsing rules). Flag them since
-                    // a plain integer literal was clearly intended.
-                    let parsed = digits.parse::<u128>();
-                    let above = match parsed {
-                        Ok(value) => value > i64::MAX as u128,
-                        Err(_) => true,
-                    };
-                    if above {
-                        self.out.push(LintDiagnostic::new("integer_parsing", format!(
-                                "decimal integer `{raw}` exceeds 2^63-1; will be parsed as a float and lose precision"
-                            ), span).with_help(
-                                "use a hex literal or split into smaller values".to_string(),
-                            ));
-                    }
-                } else {
-                    let parsed = digits.parse::<u128>();
-                    let above = match parsed {
-                        Ok(value) => value > (1u128 << 53),
-                        Err(_) => true,
-                    };
-                    if above {
-                        self.push_double_precision(span, raw);
-                    }
-                }
-            }
-            LiteralShape::NotInteger => {}
-        }
-    }
-
-    fn push_double_precision(&mut self, span: Span, raw: &str) {
-        self.out.push(
-            LintDiagnostic::new(
-                "integer_parsing",
-                format!(
-                    "integer literal `{raw}` exceeds 2^53; loses precision when stored as a double"
-                ),
-                span,
-            )
-            .with_help("use a smaller value or store as a string".to_string()),
-        );
-    }
-
-    fn push_hex_overflow(&mut self, span: Span, raw: &str) {
-        self.out.push(LintDiagnostic::new("integer_parsing", format!(
-                "hex literal `{raw}` exceeds 64-bit integer range; will wrap or be parsed as a float"
-            ), span).with_help("use a smaller value or split across two values".to_string()));
-    }
-}
-
-impl NodeRule for IntegerParsing {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::Number]);
-        Some(&TYPES)
-    }
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if let Expression::Number(literal) = expr {
-            LiteralChecker {
-                version: ctx.semantic.version,
-                out,
-            }
-            .check_number(literal.span, &literal.text);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::run_rule;
 
     fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&IntegerParsing, source, version)
+        run_rule(&IntegerParsing, source, version)
     }
 
     #[test]

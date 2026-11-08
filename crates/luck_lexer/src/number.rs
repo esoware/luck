@@ -1,296 +1,278 @@
-use crate::LexError;
-use crate::cursor::Cursor;
 use luck_token::{LuaVersion, Span, TokenKind};
 
-/// Lex a number literal. Cursor should be positioned at the first digit or `.`
-/// (when followed by a digit).
-pub fn lex_number(
-    cursor: &mut Cursor,
-    source: &str,
+use crate::cursor::Cursor;
+use crate::lex_error::{LexError, lex_error};
+
+/// Scan a number literal, with the cursor on its first digit or on a `.`
+/// followed by a digit.
+///
+/// # Errors
+///
+/// Returns a [`LexError`] for a malformed numeral.
+pub(crate) fn scan_number(
+    cursor: &mut Cursor<'_>,
     version: LuaVersion,
 ) -> Result<TokenKind, LexError> {
     let start = cursor.position();
-
-    if cursor.peek() == Some(b'0') && matches!(cursor.peek_at(1), Some(b'x' | b'X')) {
-        lex_hex_number(cursor, source, version, start)
-    } else if version.has_binary_literals()
-        && cursor.peek() == Some(b'0')
-        && matches!(cursor.peek_at(1), Some(b'b' | b'B'))
-    {
-        lex_binary_number(cursor, source, start)
-    } else {
-        lex_decimal_number(cursor, source, version, start)
+    match cursor.rest() {
+        [b'0', b'x' | b'X', ..] => scan_hex_number(cursor, version, start),
+        // Luau
+        [b'0', b'b' | b'B', ..] if version.has_binary_literals() => {
+            scan_binary_number(cursor, version, start)
+        }
+        _ => scan_decimal_number(cursor, version, start),
     }
 }
 
-fn lex_hex_number(
-    cursor: &mut Cursor,
-    source: &str,
+/// # Errors
+///
+/// Returns a [`LexError`] for a malformed hexadecimal numeral.
+fn scan_hex_number(
+    cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
 ) -> Result<TokenKind, LexError> {
-    cursor.advance(); // 0
-    cursor.advance(); // x/X
+    cursor.advance_by(2); // `0x`
 
-    let allow_underscores = version.has_underscore_separators();
-    let digit_start = cursor.position();
-    eat_hex_digits(cursor, allow_underscores);
+    let digits_start = cursor.position();
+    eat_digits(cursor, version, u8::is_ascii_hexdigit);
     // Underscores are separators, not digits, so `0x_` carries no value.
-    let has_integer_part = source[digit_start..cursor.position()]
-        .bytes()
-        .any(|byte| byte.is_ascii_hexdigit());
+    let has_integer_part =
+        cursor.text_since(digits_start).bytes().any(|byte| byte.is_ascii_hexdigit());
 
     if version.has_hex_floats() {
         // Lua 5.2+
-        let has_dot = cursor.peek() == Some(b'.');
-        if has_dot {
-            cursor.advance(); // .
-            let frac_start = cursor.position();
-            eat_hex_digits(cursor, allow_underscores);
-            let has_frac = cursor.position() > frac_start;
-
-            if !has_integer_part && !has_frac {
-                return Err(crate::lex_error(
-                    Span::new(start as u32, cursor.position() as u32),
+        if !has_integer_part && cursor.peek() != Some(b'.') {
+            return Err(lex_error(
+                cursor.span_since(start),
+                "hex literal requires at least one digit after `0x`",
+            ));
+        }
+        if cursor.eat(b'.') {
+            let fraction_start = cursor.position();
+            eat_digits(cursor, version, u8::is_ascii_hexdigit);
+            if !has_integer_part && cursor.position() == fraction_start {
+                return Err(lex_error(
+                    cursor.span_since(start),
                     "hex float requires digits before or after decimal point",
                 ));
             }
-        } else if !has_integer_part {
-            return Err(crate::lex_error(
-                Span::new(start as u32, cursor.position() as u32),
-                "hex literal requires at least one digit after '0x'",
-            ));
         }
-        if matches!(cursor.peek(), Some(b'p' | b'P')) {
-            cursor.advance();
-            if matches!(cursor.peek(), Some(b'+' | b'-')) {
-                cursor.advance();
-            }
-            let exp_start = cursor.position();
-            eat_decimal_digits(cursor, allow_underscores);
-            if cursor.position() == exp_start {
-                return Err(crate::lex_error(
-                    Span::new(start as u32, cursor.position() as u32),
-                    "hex float exponent requires digits",
-                ));
-            }
+        if matches!(cursor.peek(), Some(b'p' | b'P')) && !eat_exponent(cursor, version) {
+            return Err(lex_error(cursor.span_since(start), "hex float exponent requires digits"));
         }
         if cursor.peek() == Some(b'.') {
-            return Err(crate::lex_error(
-                Span::new(start as u32, (cursor.position() + 1) as u32),
+            return Err(lex_error(
+                Span::from_indices(start, cursor.position().saturating_add(1)),
                 "malformed hexadecimal number",
             ));
         }
-    } else if !has_integer_part {
-        // Without hex floats there is no fraction to carry the value, so a
-        // digitless `0x` is malformed whatever follows it, including the `.`
-        // the float path would have consumed.
-        return Err(crate::lex_error(
-            Span::new(start as u32, cursor.position() as u32),
-            "hex literal requires at least one digit after '0x'",
-        ));
-    } else if (cursor.peek() == Some(b'.')
-        && cursor.peek_at(1).is_some_and(|b| b.is_ascii_hexdigit()))
-        || matches!(cursor.peek(), Some(b'p' | b'P'))
-    {
-        return Err(crate::lex_error(
-            Span::new(start as u32, cursor.position() as u32),
-            "hex float literals are not supported in this Lua version",
-        ));
+    } else {
+        // Without hex floats, a `.` can't start a fraction, so a digitless
+        // `0x` is malformed whatever follows it.
+        if !has_integer_part {
+            return Err(lex_error(
+                cursor.span_since(start),
+                "hex literal requires at least one digit after `0x`",
+            ));
+        }
+        if matches!(cursor.rest(), [b'.', digit, ..] if digit.is_ascii_hexdigit())
+            || matches!(cursor.peek(), Some(b'p' | b'P'))
+        {
+            return Err(lex_error(
+                cursor.span_since(start),
+                "hex float literals are not supported in this Lua version",
+            ));
+        }
     }
 
-    // Lua 5.1's hex scanner stops before dots, unlike Luau's scanner.
-    if version.is_luau() && cursor.peek() == Some(b'.') && cursor.peek_at(1) == Some(b'.') {
-        return Err(crate::lex_error(
-            Span::new(start as u32, (cursor.position() + 2) as u32),
-            "malformed number (a numeral cannot directly precede '..')",
-        ));
+    // Luau's hex scanner consumes dots and 5.1's stops before them. 5.2+
+    // already failed in the hex-float path.
+    if version.is_luau() {
+        reject_adjacent_concat(cursor, start)?;
     }
 
-    if version.has_luau_integer_literals() && cursor.peek() == Some(b'i') {
-        cursor.advance();
-        validate_integer_range(source, start, cursor.position(), 16)?;
+    if version.has_luau_integer_literals() && cursor.eat(b'i') {
+        validate_integer_range(cursor, start, 16)?;
     }
 
     // Every Lua scanner swallows the letters trailing a hex numeral and then
     // fails to convert them, so `0xFF.foo` is one malformed number rather
     // than `0xFF.f` followed by the name `oo`.
-    if cursor
-        .peek()
-        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
-    {
-        return Err(crate::lex_error(
-            Span::new(start as u32, (cursor.position() + 1) as u32),
+    if cursor.peek().is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_') {
+        return Err(lex_error(
+            Span::from_indices(start, cursor.position().saturating_add(1)),
             "malformed hexadecimal number",
         ));
     }
 
-    let raw = &source[start..cursor.position()];
-    validate_underscore_placement(raw, start, version)?;
-    Ok(TokenKind::Number(raw.into()))
+    finish_number(cursor, version, start)
 }
 
-fn lex_binary_number(
-    cursor: &mut Cursor,
-    source: &str,
+/// # Errors
+///
+/// Returns a [`LexError`] for a malformed binary numeral.
+fn scan_binary_number(
+    cursor: &mut Cursor<'_>,
+    version: LuaVersion,
     start: usize,
 ) -> Result<TokenKind, LexError> {
-    cursor.advance(); // 0
-    cursor.advance(); // b/B
+    cursor.advance_by(2); // `0b`
 
-    let digit_start = cursor.position();
-    cursor.eat_while(|b| b == b'0' || b == b'1' || b == b'_');
-
-    if cursor.position() == digit_start {
-        return Err(crate::lex_error(
-            Span::new(start as u32, cursor.position() as u32),
+    let digits_start = cursor.position();
+    eat_digits(cursor, version, |byte| matches!(byte, b'0' | b'1'));
+    if cursor.position() == digits_start {
+        return Err(lex_error(
+            cursor.span_since(start),
             "binary literal requires at least one digit",
         ));
     }
 
     // Binary literals are Luau-only, and Luau's scanner consumes dots.
-    if cursor.peek() == Some(b'.') && cursor.peek_at(1) == Some(b'.') {
-        return Err(crate::lex_error(
-            Span::new(start as u32, (cursor.position() + 2) as u32),
-            "malformed number (a numeral cannot directly precede '..')",
-        ));
+    reject_adjacent_concat(cursor, start)?;
+
+    if version.has_luau_integer_literals() && cursor.eat(b'i') {
+        validate_integer_range(cursor, start, 2)?;
     }
 
-    if cursor.peek() == Some(b'i') {
-        cursor.advance();
-        validate_integer_range(source, start, cursor.position(), 2)?;
-    }
-
-    let raw = &source[start..cursor.position()];
-    validate_underscore_placement(raw, start, LuaVersion::Luau)?;
-    Ok(TokenKind::Number(raw.into()))
+    finish_number(cursor, version, start)
 }
 
-fn lex_decimal_number(
-    cursor: &mut Cursor,
-    source: &str,
+/// # Errors
+///
+/// Returns a [`LexError`] for a malformed decimal numeral.
+fn scan_decimal_number(
+    cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
 ) -> Result<TokenKind, LexError> {
-    let allow_underscores = version.has_underscore_separators();
-
-    eat_decimal_digits(cursor, allow_underscores);
+    eat_digits(cursor, version, u8::is_ascii_digit);
 
     let mut is_float = false;
     if cursor.peek() == Some(b'.') {
-        let after_dot = cursor.peek_at(1);
-        let consume_dot = match after_dot {
-            Some(b) if b.is_ascii_digit() => true,
+        let should_consume_dot = match cursor.peek_at(1) {
+            Some(byte) if byte.is_ascii_digit() => true,
             Some(b'e' | b'E') => true,
             Some(b'.') => false, // `..` or `...`
-            Some(b) if b.is_ascii_alphabetic() || b == b'_' => false, // method access like `1.foo`
-            _ => true,           // `1.` is a valid float at EOF or before an operator
+            Some(byte) if byte.is_ascii_alphabetic() || byte == b'_' => false, // field access like `1.foo`
+            _ => true, // `1.` is a valid float at EOF or before an operator
         };
-        if consume_dot {
+        if should_consume_dot {
             is_float = true;
             cursor.advance(); // .
-            eat_decimal_digits(cursor, allow_underscores);
+            eat_digits(cursor, version, u8::is_ascii_digit);
         }
     }
 
     if matches!(cursor.peek(), Some(b'e' | b'E')) {
         is_float = true;
-        cursor.advance();
-        if matches!(cursor.peek(), Some(b'+' | b'-')) {
-            cursor.advance();
-        }
-        let exp_start = cursor.position();
-        eat_decimal_digits(cursor, allow_underscores);
-        if cursor.position() == exp_start {
-            return Err(crate::lex_error(
-                Span::new(start as u32, cursor.position() as u32),
-                "decimal exponent requires digits",
-            ));
+        if !eat_exponent(cursor, version) {
+            return Err(lex_error(cursor.span_since(start), "decimal exponent requires digits"));
         }
     }
 
-    // Every real Lua numeral scanner consumes `.` greedily, so a number
-    // running straight into `..` is "malformed number", never a concat;
-    // `1 ..2` needs the space. 5.1's hex scanner stops at `.`, so hex is
-    // exempt there; see lex_hex_number.
-    if cursor.peek() == Some(b'.') && cursor.peek_at(1) == Some(b'.') {
-        return Err(crate::lex_error(
-            Span::new(start as u32, (cursor.position() + 2) as u32),
-            "malformed number (a numeral cannot directly precede '..')",
-        ));
-    }
+    reject_adjacent_concat(cursor, start)?;
 
-    if version.has_luau_integer_literals() && cursor.peek() == Some(b'i') {
-        cursor.advance();
+    if version.has_luau_integer_literals() && cursor.eat(b'i') {
         // Luau consumes the suffix on floats too: `2.5i` is a malformed
         // integer, not a float followed by an identifier.
         if is_float {
-            return Err(crate::lex_error(
-                Span::new(start as u32, cursor.position() as u32),
-                "the 'i' integer suffix is not allowed on float literals",
+            return Err(lex_error(
+                cursor.span_since(start),
+                "the `i` integer suffix is not allowed on float literals",
             ));
         }
-        validate_integer_range(source, start, cursor.position(), 10)?;
+        validate_integer_range(cursor, start, 10)?;
     }
 
-    let raw = &source[start..cursor.position()];
-    validate_underscore_placement(raw, start, version)?;
-    Ok(TokenKind::Number(raw.into()))
+    finish_number(cursor, version, start)
 }
 
-fn eat_hex_digits(cursor: &mut Cursor, allow_underscores: bool) {
-    if allow_underscores {
-        cursor.eat_while(|b| b.is_ascii_hexdigit() || b == b'_');
+/// Consume digits that satisfy `is_digit`, plus underscore separators where
+/// `version` has them.
+fn eat_digits(cursor: &mut Cursor<'_>, version: LuaVersion, is_digit: impl Fn(&u8) -> bool) {
+    if version.has_underscore_separators() {
+        cursor.eat_while(|byte| is_digit(&byte) || byte == b'_');
     } else {
-        cursor.eat_while(|b| b.is_ascii_hexdigit());
+        cursor.eat_while(|byte| is_digit(&byte));
     }
 }
 
-fn eat_decimal_digits(cursor: &mut Cursor, allow_underscores: bool) {
-    if allow_underscores {
-        cursor.eat_while(|b| b.is_ascii_digit() || b == b'_');
-    } else {
-        cursor.eat_while(|b| b.is_ascii_digit());
+/// Consume an exponent with the cursor on its marker (`e` or `p`): the
+/// marker, an optional sign, and the decimal digits. Returns whether any
+/// digits followed.
+fn eat_exponent(cursor: &mut Cursor<'_>, version: LuaVersion) -> bool {
+    cursor.advance();
+    if matches!(cursor.peek(), Some(b'+' | b'-')) {
+        cursor.advance();
     }
+    let digits_start = cursor.position();
+    eat_digits(cursor, version, u8::is_ascii_digit);
+    cursor.position() > digits_start
 }
 
-/// Reject underscore separators outside Luau. Luau itself strips
-/// underscores anywhere in the literal before conversion, so `0b_01`,
-/// `1__2`, and `12_` are all valid there, with no placement rules.
-fn validate_underscore_placement(
-    raw: &str,
-    start: usize,
-    version: LuaVersion,
-) -> Result<(), LexError> {
-    if raw.contains('_') && !version.has_underscore_separators() {
-        return Err(crate::lex_error(
-            Span::new(start as u32, (start + raw.len()) as u32),
-            "underscore separators in numbers are not supported in this Lua version",
+/// Reject a numeral running straight into `..`.
+///
+/// Every real Lua numeral scanner consumes `.` greedily, so that is
+/// "malformed number", never a concat (`1 ..2` needs the space). 5.1's hex
+/// scanner is the exception; see `scan_hex_number`.
+///
+/// # Errors
+///
+/// Returns a [`LexError`] spanning the numeral and the two dots.
+fn reject_adjacent_concat(cursor: &Cursor<'_>, start: usize) -> Result<(), LexError> {
+    if cursor.rest().starts_with(b"..") {
+        return Err(lex_error(
+            Span::from_indices(start, cursor.position().saturating_add(2)),
+            "malformed number (a numeral cannot directly precede `..`)",
         ));
     }
     Ok(())
 }
 
-/// Integer literals use signed decimal spelling but allow all 64 bits in
-/// hexadecimal and binary spellings, matching Luau's bit-pattern semantics.
-fn validate_integer_range(
-    source: &str,
+/// Build the token for the numeral ending at the cursor.
+///
+/// Rejects underscore separators outside Luau. Luau itself strips underscores
+/// anywhere in the literal before conversion, so `0b_01`, `1__2`, and `12_`
+/// are all valid there, with no placement rules.
+///
+/// # Errors
+///
+/// Returns a [`LexError`] for an underscore when `version` has no separators.
+fn finish_number(
+    cursor: &Cursor<'_>,
+    version: LuaVersion,
     start: usize,
-    end: usize,
-    radix: u32,
-) -> Result<(), LexError> {
-    let raw = &source[start..end - 1]; // exclude the trailing `i`
-    let digits = match radix {
-        16 | 2 => &raw[2..],
-        10 => raw,
-        _ => unreachable!("Luau integer literals use radix 2, 10, or 16"),
-    };
+) -> Result<TokenKind, LexError> {
+    let raw = cursor.text_since(start);
+    if raw.contains('_') && !version.has_underscore_separators() {
+        return Err(lex_error(
+            cursor.span_since(start),
+            "underscore separators in numbers are not supported in this Lua version",
+        ));
+    }
+    Ok(TokenKind::Number(raw.into()))
+}
+
+/// Range-check a numeral ending at the cursor with its `i` suffix consumed.
+///
+/// A decimal literal must fit an `i64`, while hexadecimal and binary ones may
+/// use all 64 bits, matching Luau's bit-pattern semantics.
+///
+/// # Errors
+///
+/// Returns a [`LexError`] when the value doesn't fit.
+fn validate_integer_range(cursor: &Cursor<'_>, start: usize, radix: u32) -> Result<(), LexError> {
+    let text = cursor.text_since(start);
+    let raw = text.strip_suffix('i').unwrap_or(text);
+    let spelled_digits = if radix == 10 { raw } else { raw.get(2..).unwrap_or_default() };
     let normalized;
-    let digits = if digits.contains('_') {
-        normalized = digits.chars().filter(|ch| *ch != '_').collect::<String>();
+    let digits = if spelled_digits.contains('_') {
+        normalized =
+            spelled_digits.chars().filter(|character| *character != '_').collect::<String>();
         normalized.as_str()
     } else {
-        digits
+        spelled_digits
     };
     let is_valid = if radix == 10 {
         digits.parse::<i64>().is_ok()
@@ -301,9 +283,6 @@ fn validate_integer_range(
     if is_valid {
         Ok(())
     } else {
-        Err(crate::lex_error(
-            Span::new(start as u32, end as u32),
-            "integer literal is outside the 64-bit range",
-        ))
+        Err(lex_error(cursor.span_since(start), "integer literal is outside the 64-bit range"))
     }
 }

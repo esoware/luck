@@ -1,21 +1,25 @@
 [package]
-name = "luck_formatter"
-version.workspace = true
-authors.workspace = true
-categories.workspace = true
-description = "Prettier-style formatter for Lua 5.1-5.5 and Luau"
-edition.workspace = true
-homepage.workspace = true
-keywords.workspace = true
-license.workspace = true
-repository.workspace = true
+name                   = "luck_formatter"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "Prettier-style formatter for Lua 5.1-5.5 and Luau"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
-compact_str.workspace = true
-luck_core.workspace = true
-luck_token.workspace = true
-unicode-width.workspace = true
-luck_ast.workspace = true
-luck_parser.workspace = true
-luck_lexer.workspace = true
+luck_ast    = { workspace = true }
+luck_core   = { workspace = true }
+luck_lexer  = { workspace = true }
+luck_parser = { workspace = true }
+luck_token  = { workspace = true }
+
+rustc-hash    = { workspace = true }
+unicode-width = { workspace = true }
