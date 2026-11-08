@@ -1,10 +1,8 @@
-use core::ops::Neg;
-
-use luck_ast::{Expression, Statement};
-use luck_token::UnOp;
+use luck_ast::Statement;
 
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::node_type::{NodeType, NodeTypeSet};
+use crate::number::decimal_literal_value;
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -36,8 +34,8 @@ impl NodeRule for ReversedForLoop {
         findings: &mut Vec<Finding>,
     ) {
         if let Statement::NumericFor(numeric_for) = stmt
-            && let Some(start) = literal_value(&numeric_for.start)
-            && let Some(limit) = literal_value(&numeric_for.limit)
+            && let Some(start) = decimal_literal_value(&numeric_for.start)
+            && let Some(limit) = decimal_literal_value(&numeric_for.limit)
             && start > limit
             && numeric_for.step.is_none()
         {
@@ -52,21 +50,6 @@ impl NodeRule for ReversedForLoop {
             );
         }
     }
-}
-
-/// The value of a decimal number literal under any number of unary minuses.
-/// Rust's float parser reads the text, so hex literals yield `None`.
-fn literal_value(expr: &Expression) -> Option<f64> {
-    if let Expression::Number(literal) = expr {
-        return literal.text.parse().ok();
-    }
-    let Expression::UnaryOp(unary) = expr else {
-        return None;
-    };
-    if unary.op != UnOp::Neg {
-        return None;
-    }
-    literal_value(&unary.operand).map(Neg::neg)
 }
 
 #[cfg(test)]

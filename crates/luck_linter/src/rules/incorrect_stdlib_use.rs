@@ -81,36 +81,29 @@ fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, findings: &mut V
         None
     };
     match arity_message {
-        Some(message) => {
-            findings.push(Finding::new(message, call.span));
-        }
-        None => check_constant_args(&name, function, args, arg_count, findings),
+        Some(message) => findings.push(Finding::new(message, call.span)),
+        None => findings.extend(invalid_constant_args(&name, function, args, arg_count)),
     }
 }
 
-/// Flags a literal string argument that isn't one of the constants its
+/// Flags each literal string argument that isn't one of the constants its
 /// parameter allows.
 ///
 /// With overloads, a value passes if any signature matching the arg count
 /// allows it, and a position some matching signature leaves unconstrained
 /// isn't checked.
-fn check_constant_args(
+fn invalid_constant_args(
     name: &str,
     function: &StdlibFunction,
     args: &[Expression],
     arg_count: usize,
-    findings: &mut Vec<Finding>,
-) {
-    for (index, expr) in args.iter().enumerate() {
-        let Some((value, span)) = string_literal_value(expr) else {
-            continue;
-        };
-        let Some(allowed_sets) = function.allowed_constants(index, arg_count) else {
-            continue;
-        };
+) -> impl Iterator<Item = Finding> {
+    args.iter().enumerate().filter_map(move |(index, expr)| {
+        let (value, span) = string_literal_value(expr)?;
+        let allowed_sets = function.allowed_constants(index, arg_count)?;
         let allowed = || allowed_sets.iter().flat_map(|values| values.iter());
         if allowed().any(|constant| constant.value == value) {
-            continue;
+            return None;
         }
         let allowed_list = allowed()
             .take(LISTED_VALUE_LIMIT)
@@ -124,14 +117,14 @@ fn check_constant_args(
             String::new()
         };
         let arg_number = index.saturating_add(1);
-        findings.push(Finding::new(
+        Some(Finding::new(
             format!(
                 "`{name}` argument {arg_number} must be one of \
                  {allowed_list}{truncation_note}, got `{value}`",
             ),
             span,
-        ));
-    }
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -146,6 +139,10 @@ mod tests {
             .into_iter()
             .map(|diag| diag.message)
             .collect()
+    }
+
+    fn run_roblox(source: &str) -> Vec<String> {
+        run_rule_roblox(&IncorrectStdlibUse, source).into_iter().map(|diag| diag.message).collect()
     }
 
     #[test]
@@ -203,14 +200,14 @@ mod tests {
                       local d = CFrame.new(1, 2, 3)\n\
                       local e = CFrame.new(1, 2, 3, 4, 5, 6, 7)\n\
                       local f = CFrame.new(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)";
-        let diags = run_rule_roblox(&IncorrectStdlibUse, source);
-        assert!(diags.is_empty(), "{diags:?}");
+        let messages = run_roblox(source);
+        assert!(messages.is_empty(), "{messages:?}");
     }
 
     #[test]
     fn flags_cframe_new_between_overload_arities() {
-        let diags = run_rule_roblox(&IncorrectStdlibUse, "local c = CFrame.new(1, 2, 3, 4, 5)");
-        assert!(!diags.is_empty(), "5 args matches no CFrame.new overload: {diags:?}");
+        let messages = run_roblox("local c = CFrame.new(1, 2, 3, 4, 5)");
+        assert!(!messages.is_empty(), "5 args matches no CFrame.new overload: {messages:?}");
     }
 
     #[test]
@@ -218,8 +215,8 @@ mod tests {
         let source = "local u = UDim.new(0, 10)\n\
                       local a = UDim2.new(0, 0, 1, 0)\n\
                       local b = UDim2.new(u, u)";
-        let diags = run_rule_roblox(&IncorrectStdlibUse, source);
-        assert!(diags.is_empty(), "{diags:?}");
+        let messages = run_roblox(source);
+        assert!(messages.is_empty(), "{messages:?}");
     }
 
     #[test]
@@ -273,10 +270,6 @@ mod tests {
     fn ignores_method_on_unshaped_local() {
         let messages = run("local f = something()\nf:setvbuf()", LuaVersion::Lua54);
         assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    fn run_roblox(source: &str) -> Vec<String> {
-        run_rule_roblox(&IncorrectStdlibUse, source).into_iter().map(|diag| diag.message).collect()
     }
 
     #[test]

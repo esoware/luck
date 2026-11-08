@@ -33,38 +33,25 @@ struct SwapChecker {
     findings: Vec<Finding>,
 }
 
-fn var_name(var: &Var) -> Option<&str> {
-    let Var::Name(token) = var else {
-        return None;
-    };
-    token.identifier()
-}
-
-fn expr_var_name(expr: &Expression) -> Option<&str> {
-    let Expression::Var(var) = expr else {
-        return None;
-    };
-    var_name(var)
-}
-
 impl<'ast> Visitor<'ast> for SwapChecker {
     fn visit_block(&mut self, block: &'ast Block) {
         for pair in block.stmts.windows(2) {
             let [Statement::Assignment(first), Statement::Assignment(second)] = pair else {
                 continue;
             };
-            if first.targets.len() != 1
-                || second.targets.len() != 1
-                || first.values.len() != 1
-                || second.values.len() != 1
-            {
+            let ([first_target], [first_value], [second_target], [second_value]) = (
+                first.targets.items.as_slice(),
+                first.values.items.as_slice(),
+                second.targets.items.as_slice(),
+                second.values.items.as_slice(),
+            ) else {
                 continue;
-            }
+            };
             let (Some(target_a), Some(value_a), Some(target_b), Some(value_b)) = (
-                first.targets.first().and_then(var_name),
-                first.values.first().and_then(expr_var_name),
-                second.targets.first().and_then(var_name),
-                second.values.first().and_then(expr_var_name),
+                var_name(first_target),
+                expr_var_name(first_value),
+                var_name(second_target),
+                expr_var_name(second_value),
             ) else {
                 continue;
             };
@@ -83,6 +70,20 @@ impl<'ast> Visitor<'ast> for SwapChecker {
         }
         self.walk_block(block);
     }
+}
+
+fn var_name(var: &Var) -> Option<&str> {
+    let Var::Name(token) = var else {
+        return None;
+    };
+    token.identifier()
+}
+
+fn expr_var_name(expr: &Expression) -> Option<&str> {
+    let Expression::Var(var) = expr else {
+        return None;
+    };
+    var_name(var)
 }
 
 #[cfg(test)]

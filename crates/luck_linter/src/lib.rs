@@ -38,6 +38,7 @@ mod fixtures;
 mod format_pattern;
 mod node_type;
 mod nodes;
+mod number;
 mod path;
 mod roblox;
 mod rule;

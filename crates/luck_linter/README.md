@@ -58,9 +58,10 @@ A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix`
 | `fix.rs` | `Fix` and `TextEdit`, and auto-fix application |
 | `format_pattern.rs` | Validators for `string.format`, pattern, `string.pack`, `gsub` replacement, and `os.date` literals |
 | `call.rs` | Whether a call names an unshadowed global, plus positional arguments, argument count, and raw string-argument text, shared by the rules that match calls |
+| `number.rs` | Literal values of numeric `for` bounds, shared by `for_range` and `reversed_for_loop` |
 | `path.rs` | Dotted `Name(.Name)*` path extraction shared by stdlib-resolving rules |
 | `roblox.rs` | Shared helpers for the Roblox `<Global>.new(...)` constructor rules |
-| `suggest.rs` | Levenshtein "did you mean" distance shared by the suggestion rules |
+| `suggest.rs` | Levenshtein distance and the nearest-candidate search behind "did you mean" suggestions |
 | `uninitialized.rs` | Locals declared without a value, and a symbol's first reference, shared by the rules that track a local before its first assignment |
 | `rules/*.rs` | Individual rule implementations |
 

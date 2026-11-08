@@ -12,15 +12,12 @@ impl Rule for RobloxIncorrectColor3NewBounds {
     fn name(&self) -> &'static str {
         "roblox_incorrect_color3_new_bounds"
     }
-
     fn category(&self) -> Category {
         Category::Correctness
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Error
     }
-
     fn description(&self) -> &'static str {
         "`Color3.new` component outside the 0 to 1 range"
     }
@@ -54,6 +51,8 @@ impl NodeRule for RobloxIncorrectColor3NewBounds {
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{run_rule, run_rule_roblox};
@@ -103,7 +102,7 @@ mod tests {
         let diags = run_rule(
             &RobloxIncorrectColor3NewBounds,
             "local c = Color3.new(255, 0, 0)",
-            luck_token::LuaVersion::Luau,
+            LuaVersion::Luau,
         );
         assert!(diags.is_empty(), "{diags:?}");
     }

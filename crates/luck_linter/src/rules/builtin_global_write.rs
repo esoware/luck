@@ -13,15 +13,12 @@ impl Rule for BuiltinGlobalWrite {
     fn name(&self) -> &'static str {
         "builtin_global_write"
     }
-
     fn category(&self) -> Category {
         Category::Correctness
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "overwriting a standard-library global or one of its fields"
     }
@@ -97,16 +94,17 @@ impl FieldWriteChecker<'_> {
         let Some((name, name_span)) = base else {
             return;
         };
-        if self.semantic.resolves_to_local(name, name_span) {
-            return;
-        }
         // Writing through a writable base (`_G.x = 1`, Roblox's
         // `shared.score = 1`) or to a leaf the model marks writable
         // (`package.path = ...`) is intended.
         if !is_overwritable_builtin(self.semantic, name) {
             return;
         }
-        let path_segments = dotted_path(var).map(|(segments, _)| segments);
+        // `resolves_to_local` scans every reference, so it waits for a builtin.
+        if self.semantic.resolves_to_local(name, name_span) {
+            return;
+        }
+        let path_segments = dotted_path(var).map(|path| path.segments);
         if let Some(segments) = &path_segments
             && let Some(entry) = self.semantic.stdlib().lookup(segments)
             && !entry.is_read_only()
@@ -128,10 +126,11 @@ impl FieldWriteChecker<'_> {
         let Some(name) = first.identifier() else {
             return;
         };
-        if self.semantic.resolves_to_local(name, first.span) {
+        if !is_overwritable_builtin(self.semantic, name) {
             return;
         }
-        if !is_overwritable_builtin(self.semantic, name) {
+        // `resolves_to_local` scans every reference, so it waits for a builtin.
+        if self.semantic.resolves_to_local(name, first.span) {
             return;
         }
         let mut display = name.to_owned();
@@ -183,6 +182,7 @@ impl<'ast> Visitor<'ast> for FieldWriteChecker<'_> {
 
 #[cfg(test)]
 mod tests {
+    use luck_core::LintConfig;
     use luck_token::LuaVersion;
 
     use super::*;
@@ -309,11 +309,25 @@ mod tests {
 
     #[test]
     fn ignores_extra_global_write() {
-        let mut config = crate::LintConfig::default();
-        config.extra_globals.push("vim".to_owned());
+        let config = LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() };
         let diags = run_rule_with_config(
             &BuiltinGlobalWrite,
             "vim = 5\nvim.api = 1",
+            LuaVersion::Lua54,
+            &config,
+        );
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_builtin_listed_in_extra_globals() {
+        // `table` is a stdlib name, so only the `extra_globals` entry keeps
+        // these writes quiet.
+        let config =
+            LintConfig { extra_globals: vec!["table".to_owned()], ..LintConfig::default() };
+        let diags = run_rule_with_config(
+            &BuiltinGlobalWrite,
+            "table = 5\ntable.insert = 1\nfunction table.foo() end",
             LuaVersion::Lua54,
             &config,
         );

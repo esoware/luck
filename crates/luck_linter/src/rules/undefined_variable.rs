@@ -1,4 +1,3 @@
-use luck_semantic::ReferenceKind;
 use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Category, Finding, Severity};
@@ -38,14 +37,14 @@ impl WholeRule for UndefinedVariable {
             .collect();
 
         for reference in semantic.scope_tree.unresolved_references() {
+            // `setting_global` owns writes to undeclared names.
+            if reference.kind.is_write() {
+                continue;
+            }
             if semantic.is_known_global(&reference.name) {
                 continue;
             }
             if reference.name == "_" {
-                continue;
-            }
-            // `setting_global` owns writes to undeclared names.
-            if matches!(reference.kind, ReferenceKind::Write) {
                 continue;
             }
             if assigned_globals.contains(reference.name.as_str()) {
@@ -90,6 +89,12 @@ mod tests {
     #[test]
     fn ignores_plain_write_and_discard() {
         let diags = run("fresh = 1\nprint(_)");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_compound_assignment_to_undeclared_name() {
+        let diags = run_rule(&UndefinedVariable, "counter += 1", LuaVersion::Luau);
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

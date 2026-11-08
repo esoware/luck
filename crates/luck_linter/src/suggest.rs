@@ -32,6 +32,21 @@ pub(crate) fn levenshtein(left: &str, right: &str) -> usize {
     distance
 }
 
+/// The candidate nearest to `needle`, among those `is_close` accepts at
+/// their distance. The first of equally near candidates wins.
+pub(crate) fn closest<'candidate>(
+    needle: &str,
+    candidates: impl IntoIterator<Item = &'candidate str>,
+    is_close: impl Fn(usize, &str) -> bool,
+) -> Option<&'candidate str> {
+    candidates
+        .into_iter()
+        .map(|candidate| (levenshtein(needle, candidate), candidate))
+        .filter(|&(distance, candidate)| is_close(distance, candidate))
+        .min_by_key(|&(distance, _)| distance)
+        .map(|(_, candidate)| candidate)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -43,5 +58,22 @@ mod tests {
         assert_eq!(levenshtein("abc", "abd"), 1);
         assert_eq!(levenshtein("abc", "ab"), 1);
         assert_eq!(levenshtein("kitten", "sitting"), 3);
+    }
+
+    #[test]
+    fn closest_picks_nearest_candidate() {
+        assert_eq!(closest("abcd", ["abxy", "abcx"], |distance, _| distance <= 2), Some("abcx"));
+    }
+
+    #[test]
+    fn closest_picks_first_of_equally_near_candidates() {
+        assert_eq!(closest("abc", ["abd", "abe"], |distance, _| distance <= 2), Some("abd"));
+    }
+
+    #[test]
+    fn closest_skips_candidates_it_rejects() {
+        let is_close = |distance: usize, candidate: &str| candidate != "abd" && distance <= 3;
+        assert_eq!(closest("abc", ["abd", "xyz"], is_close), Some("xyz"));
+        assert!(closest("abc", ["abd"], is_close).is_none());
     }
 }

@@ -1,5 +1,5 @@
 use luck_ast::{Expression, FunctionBody, FunctionCall, Statement, Var, Visitor};
-use luck_semantic::{ScopeTree, SymbolId};
+use luck_semantic::ScopeTree;
 use luck_token::Span;
 use rustc_hash::FxHashMap;
 
@@ -14,15 +14,12 @@ impl Rule for MismatchedArgCount {
     fn name(&self) -> &'static str {
         "mismatched_arg_count"
     }
-
     fn category(&self) -> Category {
         Category::Correctness
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "call passes more arguments than the called function accepts"
     }
@@ -30,16 +27,17 @@ impl Rule for MismatchedArgCount {
 
 impl WholeRule for MismatchedArgCount {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = &context.semantic.scope_tree;
-        let mut definitions = DefinitionCollector { tree, functions: FxHashMap::default() };
+        let mut definitions = DefinitionCollector {
+            tree: &context.semantic.scope_tree,
+            callees: FxHashMap::default(),
+        };
         definitions.visit_block(context.block);
-        if definitions.functions.is_empty() {
+        if definitions.callees.is_empty() {
             return Vec::new();
         }
         let mut checker = CallChecker {
-            tree,
             source: context.source,
-            functions: definitions.functions,
+            callees: definitions.callees,
             findings: Vec::new(),
         };
         checker.visit_block(context.block);
@@ -47,18 +45,22 @@ impl WholeRule for MismatchedArgCount {
     }
 }
 
+#[derive(Clone, Copy)]
 struct FunctionSignature {
     param_count: usize,
     has_vararg: bool,
     definition_start: u32,
 }
 
-/// Maps each local bound to a function literal to that function's signature.
+/// Maps each reference to a local bound to a function literal, by span, to
+/// that function's signature.
+///
 /// A local that's ever reassigned is left out, since it could hold any
-/// function by the time a call runs.
+/// function by the time a call runs. Keying by span lets a call's name
+/// resolve without scanning every reference.
 struct DefinitionCollector<'tree> {
     tree: &'tree ScopeTree,
-    functions: FxHashMap<SymbolId, FunctionSignature>,
+    callees: FxHashMap<Span, FunctionSignature>,
 }
 
 impl DefinitionCollector<'_> {
@@ -71,14 +73,14 @@ impl DefinitionCollector<'_> {
         if symbol.is_modified {
             return;
         }
-        self.functions.insert(
-            symbol.id,
-            FunctionSignature {
-                param_count: body.params.len(),
-                has_vararg: body.vararg.is_some(),
-                definition_start: name_span.start,
-            },
-        );
+        let signature = FunctionSignature {
+            param_count: body.params.len(),
+            has_vararg: body.vararg.is_some(),
+            definition_start: name_span.start,
+        };
+        for &reference_id in &symbol.reference_ids {
+            self.callees.insert(self.tree.reference(reference_id).span, signature);
+        }
     }
 }
 
@@ -121,10 +123,9 @@ impl<'ast> Visitor<'ast> for DefinitionCollector<'_> {
     }
 }
 
-struct CallChecker<'context> {
-    tree: &'context ScopeTree,
-    source: &'context str,
-    functions: FxHashMap<SymbolId, FunctionSignature>,
+struct CallChecker<'source> {
+    source: &'source str,
+    callees: FxHashMap<Span, FunctionSignature>,
     findings: Vec<Finding>,
 }
 
@@ -139,7 +140,7 @@ impl CallChecker<'_> {
         let Some(name) = token.identifier() else {
             return;
         };
-        let Some(signature) = self.resolve(token.span) else {
+        let Some(&signature) = self.callees.get(&token.span) else {
             return;
         };
         if signature.has_vararg {
@@ -165,12 +166,6 @@ impl CallChecker<'_> {
             )
             .with_help("extra arguments are silently discarded"),
         );
-    }
-
-    /// The signature of the local function the name at `span` calls.
-    fn resolve(&self, span: Span) -> Option<&FunctionSignature> {
-        let reference = self.tree.references.iter().find(|reference| reference.span == span)?;
-        self.functions.get(&reference.resolved?)
     }
 }
 
@@ -261,6 +256,12 @@ mod tests {
     #[test]
     fn ignores_table_field_calls() {
         let diags = run("local t = { f = function(a) return a end }\nt.f(1, 2)");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_call_to_shadowing_local() {
+        let diags = run("local function f(a) return a end\ndo local f = print\nf(1, 2) end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 

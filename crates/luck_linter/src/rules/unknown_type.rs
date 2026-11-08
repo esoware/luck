@@ -1,6 +1,8 @@
-use luck_ast::{BinaryOp, Expression, FunctionArgs, FunctionCall, Literal, Var};
-use luck_token::{BinOp, LuaVersion, StdlibEnvironment, short_string_body};
+use luck_ast::{BinaryOp, Expression, FunctionArgs, FunctionCall, Literal};
+use luck_semantic::SemanticAnalysis;
+use luck_token::{BinOp, LuaVersion, short_string_body};
 
+use crate::call::is_global_call;
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
@@ -13,15 +15,12 @@ impl Rule for UnknownType {
     fn name(&self) -> &'static str {
         "unknown_type"
     }
-
     fn category(&self) -> Category {
         Category::Correctness
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "`type()` or `typeof()` result compared against an unknown type name"
     }
@@ -43,7 +42,7 @@ impl NodeRule for UnknownType {
         if !matches!(binary.op, BinOp::Eq | BinOp::Ne) {
             return;
         }
-        let Some((callee, literal)) = classify_comparison(binary, context) else {
+        let Some((callee, literal)) = classify_comparison(binary, context.semantic) else {
             return;
         };
         // An escape could spell a valid name, so only plain text is checked.
@@ -58,8 +57,7 @@ impl NodeRule for UnknownType {
         // Roblox `typeof` also returns datatype names (`"Instance"`,
         // `"Vector3"`) that aren't in this list, so only case typos of a
         // primitive are flagged there.
-        let is_roblox_typeof =
-            callee == "typeof" && context.semantic.environment == StdlibEnvironment::Roblox;
+        let is_roblox_typeof = callee == "typeof" && context.semantic.environment.is_roblox();
         let case_match = primitives.iter().find(|primitive| primitive.eq_ignore_ascii_case(name));
         if is_roblox_typeof && case_match.is_none() {
             return;
@@ -82,14 +80,14 @@ impl NodeRule for UnknownType {
 /// returns the callee name and the literal.
 fn classify_comparison<'ast>(
     binary: &'ast BinaryOp,
-    context: &LintContext<'_>,
-) -> Option<(&'ast str, &'ast Literal)> {
+    semantic: &SemanticAnalysis,
+) -> Option<(&'static str, &'ast Literal)> {
     let sides = [(&binary.left, &binary.right), (&binary.right, &binary.left)];
     for (call_side, literal_side) in sides {
         let Expression::FunctionCall(call) = call_side else {
             continue;
         };
-        let Some(callee) = type_function_callee(call, context) else {
+        let Some(callee) = type_function_callee(call, semantic) else {
             continue;
         };
         let Expression::StringLiteral(literal) = literal_side else {
@@ -102,29 +100,18 @@ fn classify_comparison<'ast>(
 
 /// `type`, or `typeof` on Luau, when `call` is a one-argument call to that
 /// global.
-fn type_function_callee<'ast>(
-    call: &'ast FunctionCall,
-    context: &LintContext<'_>,
-) -> Option<&'ast str> {
-    if call.method.is_some() {
-        return None;
-    }
-    let Expression::Var(Var::Name(token)) = &call.callee else {
+fn type_function_callee(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<&'static str> {
+    let callee = if is_global_call(call, "type", semantic) {
+        "type"
+    } else if semantic.version.is_luau() && is_global_call(call, "typeof", semantic) {
+        "typeof"
+    } else {
         return None;
     };
-    let name = token.identifier()?;
-    let is_type_function = match name {
-        "type" => true,
-        "typeof" => context.semantic.version.is_luau(),
-        _ => false,
-    };
-    if !is_type_function || context.semantic.resolves_to_local(name, token.span) {
-        return None;
-    }
     let FunctionArgs::Parenthesized { args, .. } = &call.args else {
         return None;
     };
-    (args.len() == 1).then_some(name)
+    (args.len() == 1).then_some(callee)
 }
 
 const fn primitive_type_names(version: LuaVersion) -> &'static [&'static str] {

@@ -1,7 +1,8 @@
 use alloc::borrow::Cow;
+use core::str;
 
-use luck_ast::{Expression, Field};
-use luck_token::{Span, decode_string};
+use luck_ast::{Expression, Field, Literal};
+use luck_token::{LuaVersion, Span, decode_string};
 use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Category, Finding, Severity, line_column};
@@ -48,9 +49,7 @@ impl NodeRule for DuplicateKeys {
                 // Compare decoded values, since `["\97"]` and `["a"]` are the
                 // same key.
                 Field::Bracketed { key: Expression::StringLiteral(literal), .. } => {
-                    decode_string(&literal.text, context.semantic.version)
-                        .and_then(|bytes| String::from_utf8(bytes.into_owned()).ok())
-                        .map(|value| (Cow::Owned(value), literal.span))
+                    decoded_key(literal, context.semantic.version).map(|key| (key, literal.span))
                 }
                 Field::Bracketed { .. } | Field::Positional { .. } => None,
             };
@@ -70,10 +69,17 @@ impl NodeRule for DuplicateKeys {
     }
 }
 
+/// A string literal's decoded value, borrowed when decoding changes nothing,
+/// or `None` when it doesn't decode to UTF-8.
+fn decoded_key(literal: &Literal, version: LuaVersion) -> Option<Cow<'_, str>> {
+    match decode_string(&literal.text, version)? {
+        Cow::Borrowed(bytes) => str::from_utf8(bytes).ok().map(Cow::Borrowed),
+        Cow::Owned(bytes) => String::from_utf8(bytes).ok().map(Cow::Owned),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;

@@ -25,19 +25,6 @@ impl Rule for MisleadingAndOr {
     }
 }
 
-/// Strips one layer of parentheses, since people write the idiom both with
-/// and without them.
-fn unparenthesize(expr: &Expression) -> &Expression {
-    if let Expression::Parenthesized(parenthesized) = expr {
-        return &parenthesized.expr;
-    }
-    expr
-}
-
-fn is_falsy_literal(expr: &Expression) -> bool {
-    matches!(unparenthesize(expr), Expression::Nil(_) | Expression::False(_))
-}
-
 impl NodeRule for MisleadingAndOr {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
@@ -63,6 +50,19 @@ impl NodeRule for MisleadingAndOr {
             }
         }
     }
+}
+
+/// Strips one layer of parentheses, since people write the idiom both with
+/// and without them.
+fn unparenthesize(expr: &Expression) -> &Expression {
+    if let Expression::Parenthesized(parenthesized) = expr {
+        return &parenthesized.expr;
+    }
+    expr
+}
+
+fn is_falsy_literal(expr: &Expression) -> bool {
+    matches!(unparenthesize(expr), Expression::Nil(_) | Expression::False(_))
 }
 
 #[cfg(test)]

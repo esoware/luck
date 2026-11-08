@@ -44,8 +44,8 @@ impl NodeRule for FormatString {
         findings: &mut Vec<Finding>,
     ) {
         if let Statement::FunctionCall(call) = stmt {
-            check_dsl_literal(call, context.semantic, findings);
-            check_gsub_replacement(call, context.semantic, findings);
+            findings.extend(check_dsl_literal(call, context.semantic));
+            findings.extend(check_gsub_replacement(call, context.semantic));
         }
     }
     fn on_expression(
@@ -55,8 +55,8 @@ impl NodeRule for FormatString {
         findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionCall(call) = expr {
-            check_dsl_literal(call, context.semantic, findings);
-            check_gsub_replacement(call, context.semantic, findings);
+            findings.extend(check_dsl_literal(call, context.semantic));
+            findings.extend(check_gsub_replacement(call, context.semantic));
         }
     }
 }
@@ -98,19 +98,13 @@ impl DslKind {
 
 /// Validates the literal of a dotted `string.*` or `os.date` call, or the
 /// literal receiver of the method form `("..."):format(...)`.
-fn check_dsl_literal(
-    call: &FunctionCall,
-    semantic: &SemanticAnalysis,
-    findings: &mut Vec<Finding>,
-) {
+fn check_dsl_literal(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<Finding> {
     // `trailing_args` are the arguments after the literal, or `None` when
     // string or table call syntax leaves no argument list to count.
     let (dsl, literal, trailing_args) = if let Some(method) = &call.method {
-        let Some(dsl) = method.identifier().and_then(DslKind::of_string_function) else {
-            return;
-        };
+        let dsl = method.identifier().and_then(DslKind::of_string_function)?;
         let Expression::StringLiteral(receiver) = unwrap_parentheses(&call.callee) else {
-            return;
+            return None;
         };
         // The receiver isn't in the argument list, so every argument counts.
         let all_args = match &call.args {
@@ -119,28 +113,24 @@ fn check_dsl_literal(
         };
         (dsl, receiver, all_args)
     } else {
-        let Some(dsl) = dotted_callee_dsl(call, semantic) else {
-            return;
-        };
+        let dsl = dotted_callee_dsl(call, semantic)?;
         match &call.args {
             FunctionArgs::Parenthesized { args, .. } => {
                 let literal_index = dsl.literal_index();
                 let Some(Expression::StringLiteral(literal)) = args.get(literal_index) else {
-                    return;
+                    return None;
                 };
                 (dsl, literal, args.items.get(literal_index.saturating_add(1)..))
             }
             FunctionArgs::StringLiteral(literal) if dsl.literal_index() == 0 => {
                 (dsl, literal, None)
             }
-            FunctionArgs::StringLiteral(_) | FunctionArgs::TableConstructor(_) => return,
+            FunctionArgs::StringLiteral(_) | FunctionArgs::TableConstructor(_) => return None,
         }
     };
 
     // Escapes stay undecoded, and long-bracket strings go unchecked.
-    let Some(body) = short_string_body(&literal.text) else {
-        return;
-    };
+    let body = short_string_body(&literal.text)?;
     // The argument count each specifier or value option asks for. Pattern
     // functions and `os.date` take arguments the literal doesn't determine.
     let (noun, expected_arg_count) = match dsl {
@@ -150,9 +140,9 @@ fn check_dsl_literal(
         DslKind::OsDate => ("date format", validate_os_date(body).map(|()| None)),
     };
     match expected_arg_count {
-        Ok(Some(expected)) => check_arg_count(trailing_args, literal.span, expected, findings),
-        Ok(None) => {}
-        Err(error) => findings.push(literal_error(error, literal, noun)),
+        Ok(Some(expected)) => check_arg_count(trailing_args?, literal.span, expected),
+        Ok(None) => None,
+        Err(error) => Some(literal_error(error, literal, noun)),
     }
 }
 
@@ -196,68 +186,54 @@ fn unwrap_parentheses(expr: &Expression) -> &Expression {
 
 /// Flags a call whose argument count after the literal differs from
 /// `expected`.
-fn check_arg_count(
-    trailing_args: Option<&[Expression]>,
-    literal_span: Span,
-    expected: usize,
-    findings: &mut Vec<Finding>,
-) {
-    let Some(args) = trailing_args else {
-        return;
-    };
+fn check_arg_count(args: &[Expression], literal_span: Span, expected: usize) -> Option<Finding> {
     // A `...` or call could expand to any number of values.
     if args.iter().any(is_multi_value) {
-        return;
+        return None;
     }
     let given = args.len();
-    if given != expected {
-        findings.push(Finding::new(
+    (given != expected).then(|| {
+        Finding::new(
             format!("wrong argument count, format takes {expected}, got {given}"),
             literal_span,
-        ));
-    }
+        )
+    })
 }
 
 /// Validates a literal `gsub` replacement string.
 ///
 /// Capture indices are only checked when the pattern is a literal too.
-fn check_gsub_replacement(
-    call: &FunctionCall,
-    semantic: &SemanticAnalysis,
-    findings: &mut Vec<Finding>,
-) {
+fn check_gsub_replacement(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<Finding> {
     let pattern_index: usize = if let Some(method) = &call.method {
         if method.identifier() != Some("gsub") {
-            return;
+            return None;
         }
         0
     } else {
         let Some((root, "gsub")) = dotted_callee(call) else {
-            return;
+            return None;
         };
         if root.identifier() != Some("string") || !is_global(root, semantic) {
-            return;
+            return None;
         }
         1
     };
     let FunctionArgs::Parenthesized { args, .. } = &call.args else {
-        return;
+        return None;
     };
     let Some(Expression::StringLiteral(replacement)) = args.get(pattern_index.saturating_add(1))
     else {
-        return;
+        return None;
     };
-    let Some(replacement_body) = short_string_body(&replacement.text) else {
-        return;
-    };
+    let replacement_body = short_string_body(&replacement.text)?;
     let capture_count = if let Some(Expression::StringLiteral(pattern)) = args.get(pattern_index) {
         short_string_body(&pattern.text).map(count_pattern_captures)
     } else {
         None
     };
-    if let Err(error) = validate_gsub_replacement(replacement_body, capture_count) {
-        findings.push(literal_error(error, replacement, "replacement"));
-    }
+    validate_gsub_replacement(replacement_body, capture_count)
+        .err()
+        .map(|error| literal_error(error, replacement, "replacement"))
 }
 
 /// Reports `error` at its offset in the body of the quoted `literal`.

@@ -28,6 +28,29 @@ impl Rule for DivideByZero {
     }
 }
 
+impl NodeRule for DivideByZero {
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::BinaryOp])
+    }
+    fn on_expression(
+        &self,
+        expr: &Expression,
+        _context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
+        if let Expression::BinaryOp(binary) = expr
+            && let Some(op_name) = divisive_op_name(binary.op)
+            && is_zero_literal(&binary.right)
+        {
+            findings.push(
+                Finding::new(format!("{op_name} by literal zero"), binary.span).with_help(
+                    "guard with an `if divisor ~= 0 then` check or use a nonzero constant",
+                ),
+            );
+        }
+    }
+}
+
 /// Whether `expr` is a number literal equal to zero, such as `0`, `0.0`,
 /// `0x0`, or `0e0`.
 fn is_zero_literal(expr: &Expression) -> bool {
@@ -71,29 +94,6 @@ const fn divisive_op_name(op: BinOp) -> Option<&'static str> {
         | BinOp::BitXor
         | BinOp::Shl
         | BinOp::Shr => None,
-    }
-}
-
-impl NodeRule for DivideByZero {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::BinaryOp])
-    }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Expression::BinaryOp(binary) = expr
-            && let Some(op_name) = divisive_op_name(binary.op)
-            && is_zero_literal(&binary.right)
-        {
-            findings.push(
-                Finding::new(format!("{op_name} by literal zero"), binary.span).with_help(
-                    "guard with an `if divisor ~= 0 then` check or use a nonzero constant",
-                ),
-            );
-        }
     }
 }
 

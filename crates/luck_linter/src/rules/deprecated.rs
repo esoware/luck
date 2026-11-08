@@ -8,7 +8,7 @@ use crate::call::{positional_args, string_literal_value};
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::fix::{Fix, TextEdit};
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::path::dotted_path;
+use crate::path::{DottedPath, dotted_path};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -57,7 +57,7 @@ impl NodeRule for Deprecated {
             Expression::FunctionCall(call) => {
                 check_call(call, CallPosition::Expression, context, findings);
             }
-            Expression::Var(var) => check_field_access(var, context.semantic, findings),
+            Expression::Var(var) => findings.extend(check_field_access(var, context.semantic)),
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
@@ -108,81 +108,64 @@ fn check_call(
     }
 
     if let StdlibEntry::Function(function) = entry {
-        check_deprecated_constants(call, &name, function, findings);
-        check_deprecated_params(call, &name, function, findings);
+        findings.extend(deprecated_constants(call, &name, function));
+        findings.extend(deprecated_params(call, &name, function));
     }
 }
 
-/// Flags an argument in a position that every signature matching the call's
-/// arity marks deprecated, like the `parent` of `Instance.new`.
+/// Flags each argument in a position that every signature matching the
+/// call's arity marks deprecated, like the `parent` of `Instance.new`.
 ///
 /// Any expression counts, since passing that argument at all is the problem.
-fn check_deprecated_params(
+fn deprecated_params(
     call: &FunctionCall,
     display_name: &str,
     function: &StdlibFunction,
-    findings: &mut Vec<Finding>,
-) {
-    let FunctionArgs::Parenthesized { args, .. } = &call.args else {
-        return;
-    };
-    let arg_count = args.len();
-    for (index, expr) in args.iter().enumerate() {
+) -> impl Iterator<Item = Finding> {
+    let (args, arg_count) = positional_args(&call.args);
+    args.iter().enumerate().filter_map(move |(index, expr)| {
         let mut deprecations = function
             .matching_signatures(arg_count)
             .map(|signature| signature.params.get(index)?.deprecated.as_ref());
         // The first signature's deprecation speaks for all of them.
-        if let Some(Some(deprecation)) = deprecations.next()
-            && deprecations.all(|later| later.is_some())
-        {
+        let deprecation = deprecations.next().flatten()?;
+        deprecations.all(|later| later.is_some()).then(|| {
             let arg_number = index.saturating_add(1);
-            findings.push(
-                Finding::new(
-                    format!("argument {arg_number} of `{display_name}` is deprecated"),
-                    expr.span(),
-                )
-                .with_help(deprecation.message.as_str()),
-            );
-        }
-    }
+            Finding::new(
+                format!("argument {arg_number} of `{display_name}` is deprecated"),
+                expr.span(),
+            )
+            .with_help(deprecation.message.as_str())
+        })
+    })
 }
 
-/// Flags a literal string argument that's a deprecated constant, like a dead
-/// service name in `game:GetService(...)` or `collectgarbage("setpause")` in
-/// 5.4.
+/// Flags each literal string argument that's a deprecated constant, like a
+/// dead service name in `game:GetService(...)` or `collectgarbage("setpause")`
+/// in 5.4.
 ///
 /// Only positions that every signature matching the call's arity limits to
 /// constants are checked.
-fn check_deprecated_constants(
+fn deprecated_constants(
     call: &FunctionCall,
     display_name: &str,
     function: &StdlibFunction,
-    findings: &mut Vec<Finding>,
-) {
+) -> impl Iterator<Item = Finding> {
     let (args, arg_count) = positional_args(&call.args);
-    for (index, expr) in args.iter().enumerate() {
-        let Some((value, span)) = string_literal_value(expr) else {
-            continue;
-        };
-        let Some(allowed_sets) = function.allowed_constants(index, arg_count) else {
-            continue;
-        };
+    args.iter().enumerate().filter_map(move |(index, expr)| {
+        let (value, span) = string_literal_value(expr)?;
         // Each signature's first constant spelled `value` counts, and the
         // first of those that's deprecated decides.
-        if let Some(deprecation) = allowed_sets
+        let deprecation = function
+            .allowed_constants(index, arg_count)?
             .iter()
             .filter_map(|values| values.iter().find(|constant| constant.value == value))
-            .find_map(|constant| constant.deprecated.as_ref())
-        {
-            findings.push(
-                Finding::new(
-                    format!("`{value}` is a deprecated argument of `{display_name}`"),
-                    span,
-                )
+            .find_map(|constant| constant.deprecated.as_ref())?;
+        Some(
+            Finding::new(format!("`{value}` is a deprecated argument of `{display_name}`"), span)
                 .with_help(deprecation.message.as_str()),
-            );
-        }
-    }
+        )
+    })
 }
 
 /// The deprecation's replacement template filled in with the call's argument
@@ -225,36 +208,27 @@ fn arg_texts<'source>(function_args: &FunctionArgs, source: &'source str) -> Vec
 /// namespace, such as a deprecated Roblox enum item or type.
 ///
 /// Functions are skipped because `check_call` reports them at the call.
-fn check_field_access(var: &Var, semantic: &SemanticAnalysis, findings: &mut Vec<Finding>) {
+fn check_field_access(var: &Var, semantic: &SemanticAnalysis) -> Option<Finding> {
     let Var::FieldAccess(_) = var else {
-        return;
+        return None;
     };
-    let Some((segments, spans)) = dotted_path(var) else {
-        return;
-    };
-    let (Some(root), Some(&root_span), Some(&leaf_span)) =
-        (segments.first(), spans.first(), spans.last())
-    else {
-        return;
-    };
-    if semantic.resolves_to_local(root, root_span) {
-        return;
-    }
-    let Some(entry) = semantic.stdlib().lookup(&segments) else {
-        return;
-    };
+    let DottedPath { segments, root_span, leaf_span } = dotted_path(var)?;
+    let entry = semantic.stdlib().lookup(&segments)?;
     if matches!(entry, StdlibEntry::Function(_)) {
-        return;
+        return None;
     }
     // Check only this node's own entry. The inner access node reports a
     // deprecated prefix, so a chain warns once.
-    let Some(deprecation) = entry.deprecation() else {
-        return;
-    };
-    findings.push(
+    let deprecation = entry.deprecation()?;
+    // `resolves_to_local` scans every reference, so it waits for a deprecated
+    // entry.
+    if semantic.resolves_to_local(segments.first()?, root_span) {
+        return None;
+    }
+    Some(
         Finding::new(format!("`{}` is deprecated", segments.join(".")), leaf_span)
             .with_help(deprecation.message.as_str()),
-    );
+    )
 }
 
 #[cfg(test)]
@@ -371,6 +345,20 @@ mod tests {
     #[test]
     fn ignores_instance_new_without_parent_arg() {
         let diags = run_rule_roblox(&Deprecated, "local p = Instance.new('Part')");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_deprecated_enum_item() {
+        let diags = run_rule_roblox(&Deprecated, "local a = Enum.AlignType.Parallel");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("`Enum.AlignType.Parallel` is deprecated"), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_deprecated_enum_item_on_shadowed_root() {
+        let diags =
+            run_rule_roblox(&Deprecated, "local Enum = {}\nlocal a = Enum.AlignType.Parallel");
         assert!(diags.is_empty(), "{diags:?}");
     }
 

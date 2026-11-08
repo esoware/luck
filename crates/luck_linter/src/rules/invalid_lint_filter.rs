@@ -1,7 +1,7 @@
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 use crate::rules::{is_registered_rule_name, registered_rule_names};
-use crate::suggest::levenshtein;
+use crate::suggest::closest;
 use crate::suppression::{DirectiveRule, parse_directive};
 
 /// Flags unknown rule names in lint directives. A typo like
@@ -75,17 +75,10 @@ fn closest_match(
     needle: &str,
     candidates: impl IntoIterator<Item = &'static str>,
 ) -> Option<&'static str> {
-    let mut best: Option<(usize, &str)> = None;
-    for candidate in candidates {
-        let distance = levenshtein(needle, candidate);
-        // Up to a third of the longer name, and never less than 2.
-        let is_close =
-            distance <= 2 || distance.saturating_mul(3) <= needle.len().max(candidate.len());
-        if is_close && best.is_none_or(|(best_distance, _)| distance < best_distance) {
-            best = Some((distance, candidate));
-        }
-    }
-    best.map(|(_, candidate)| candidate)
+    // Up to a third of the longer name, and never less than 2.
+    closest(needle, candidates, |distance, candidate| {
+        distance <= 2 || distance.saturating_mul(3) <= needle.len().max(candidate.len())
+    })
 }
 
 #[cfg(test)]

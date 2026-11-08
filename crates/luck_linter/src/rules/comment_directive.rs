@@ -5,27 +5,24 @@ use luck_token::{CommentKind, Span};
 
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
-use crate::suggest::levenshtein;
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct CommentDirective;
+use crate::suggest::closest;
 
 const KNOWN_DIRECTIVES: &[&str] =
     &["nolint", "nocheck", "nonstrict", "strict", "optimize", "native"];
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommentDirective;
 
 impl Rule for CommentDirective {
     fn name(&self) -> &'static str {
         "comment_directive"
     }
-
     fn category(&self) -> Category {
         Category::Correctness
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "invalid or misplaced `--!` comment directive"
     }
@@ -47,15 +44,24 @@ impl WholeRule for CommentDirective {
                 continue;
             };
             // Luau ignores hot comments after the first statement.
-            let problem = if first_code_start.is_some_and(|start| comment.span.start > start) {
-                Some(Finding::new(
+            if first_code_start.is_some_and(|start| comment.span.start > start) {
+                findings.push(Finding::new(
                     "comment directive after the first statement has no effect",
                     comment.span,
-                ))
+                ));
+                continue;
+            }
+            let hot_comment = HotComment::split(body, comment.span.start.saturating_add(3));
+            if hot_comment.sets_mode() {
+                if mem::replace(&mut has_seen_mode, true) {
+                    findings.push(Finding::new(
+                        "type checking mode is already set by an earlier directive",
+                        hot_comment.word_span,
+                    ));
+                }
             } else {
-                directive_problem(body, comment.span.start.saturating_add(3), &mut has_seen_mode)
-            };
-            findings.extend(problem);
+                findings.extend(hot_comment.problem());
+            }
         }
         findings
     }
@@ -67,70 +73,79 @@ fn first_code_start(block: &Block) -> Option<u32> {
     stmt_start.into_iter().chain(last_start).min()
 }
 
-/// Checks the directive `body` that follows `--!`, starting at `word_start`
-/// in source. A valid type checking mode directive sets `has_seen_mode`.
-fn directive_problem(body: &str, word_start: u32, has_seen_mode: &mut bool) -> Option<Finding> {
-    let word_length = body.find(char::is_whitespace).unwrap_or(body.len());
-    let (word, rest) = body.split_at(word_length);
-    let word_span = Span::from_indices(0, word_length).shifted(word_start);
-    let (message, span) = match word {
-        // `nolint` arguments name Luau's lints, not luck's.
-        "nolint" => return None,
-        "native" => (
-            "`native` directive has extra symbols at the end of the line".to_owned(),
-            trailing_symbols_span(rest, word_span.end)?,
-        ),
-        "nocheck" | "nonstrict" | "strict" => {
-            if let Some(extra_span) = trailing_symbols_span(rest, word_span.end) {
+/// The text after a `--!`, split into its directive word and the rest.
+struct HotComment<'body> {
+    word: &'body str,
+    rest: &'body str,
+    word_span: Span,
+}
+
+impl<'body> HotComment<'body> {
+    /// Splits `body`, which starts at `word_start` in source.
+    fn split(body: &'body str, word_start: u32) -> Self {
+        let word_length = body.find(char::is_whitespace).unwrap_or(body.len());
+        let (word, rest) = body.split_at(word_length);
+        Self { word, rest, word_span: Span::from_indices(0, word_length).shifted(word_start) }
+    }
+
+    /// The span of whatever follows the word, or `None` if only whitespace
+    /// does.
+    fn trailing_symbols_span(&self) -> Option<Span> {
+        let trimmed = self.rest.trim_end();
+        let first = trimmed.find(|character: char| !character.is_whitespace())?;
+        Some(Span::from_indices(first, trimmed.len()).shifted(self.word_span.end))
+    }
+
+    /// Whether the word names a type checking mode.
+    fn is_mode(&self) -> bool {
+        matches!(self.word, "nocheck" | "nonstrict" | "strict")
+    }
+
+    /// Whether this is a well-formed type checking mode directive.
+    fn sets_mode(&self) -> bool {
+        self.is_mode() && self.trailing_symbols_span().is_none()
+    }
+
+    /// What's wrong with this directive, short of repeating an earlier mode.
+    fn problem(&self) -> Option<Finding> {
+        let (message, span) = match self.word {
+            // `nolint` arguments name Luau's lints, not luck's.
+            "nolint" => return None,
+            "native" => (
+                "`native` directive has extra symbols at the end of the line".to_owned(),
+                self.trailing_symbols_span()?,
+            ),
+            _ if self.is_mode() => (
+                "type checking mode directive has extra symbols at the end of the line".to_owned(),
+                self.trailing_symbols_span()?,
+            ),
+            "optimize" => {
+                let Some(level_span) = self.trailing_symbols_span() else {
+                    return Some(Finding::new(
+                        "`optimize` directive requires an optimization level",
+                        self.word_span,
+                    ));
+                };
+                let level = self.rest.trim();
+                if matches!(level, "0" | "1" | "2") {
+                    return None;
+                }
                 (
-                    "type checking mode directive has extra symbols at the end of the line"
-                        .to_owned(),
-                    extra_span,
+                    format!("unknown optimization level `{level}`, expected `0`, `1`, or `2`"),
+                    level_span,
                 )
-            } else if mem::replace(has_seen_mode, true) {
-                ("type checking mode is already set by an earlier directive".to_owned(), word_span)
-            } else {
-                return None;
             }
-        }
-        "optimize" => {
-            let Some(level_span) = trailing_symbols_span(rest, word_span.end) else {
-                return Some(Finding::new(
-                    "`optimize` directive requires an optimization level",
-                    word_span,
-                ));
-            };
-            let level = rest.trim();
-            if matches!(level, "0" | "1" | "2") {
-                return None;
+            unknown => {
+                let suggestion_hint =
+                    closest(unknown, KNOWN_DIRECTIVES.iter().copied(), |distance, _| distance <= 2)
+                        .map_or_else(String::new, |suggestion| {
+                            format!(", did you mean `{suggestion}`?")
+                        });
+                (format!("unknown comment directive `{unknown}`{suggestion_hint}"), self.word_span)
             }
-            (format!("unknown optimization level `{level}`, expected `0`, `1`, or `2`"), level_span)
-        }
-        unknown => {
-            let suggestion_hint = closest_directive(unknown)
-                .map_or_else(String::new, |suggestion| format!(", did you mean `{suggestion}`?"));
-            (format!("unknown comment directive `{unknown}`{suggestion_hint}"), word_span)
-        }
-    };
-    Some(Finding::new(message, span))
-}
-
-/// Returns the span of whatever follows a directive word, or `None` if only
-/// whitespace does. `base` is the offset where `rest` starts.
-fn trailing_symbols_span(rest: &str, base: u32) -> Option<Span> {
-    let trimmed = rest.trim_end();
-    let first = trimmed.find(|character: char| !character.is_whitespace())?;
-    Some(Span::from_indices(first, trimmed.len()).shifted(base))
-}
-
-fn closest_directive(word: &str) -> Option<&'static str> {
-    KNOWN_DIRECTIVES
-        .iter()
-        .copied()
-        .map(|candidate| (levenshtein(word, candidate), candidate))
-        .filter(|&(distance, _)| distance <= 2)
-        .min_by_key(|&(distance, _)| distance)
-        .map(|(_, candidate)| candidate)
+        };
+        Some(Finding::new(message, span))
+    }
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ use luck_token::UnOp;
 
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::node_type::{NodeType, NodeTypeSet};
+use crate::number::decimal_literal_value;
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags numeric `for` ranges that can't iterate or are likely off by one.
@@ -48,9 +49,9 @@ impl NodeRule for ForRange {
 
 /// The message and help for what's wrong with a loop's range, if anything.
 fn range_problem(numeric_for: &NumericFor) -> Option<(String, &'static str)> {
-    let start = literal_number(&numeric_for.start);
-    let limit = literal_number(&numeric_for.limit);
-    let step = numeric_for.step.as_ref().and_then(literal_number);
+    let start = decimal_literal_value(&numeric_for.start);
+    let limit = decimal_literal_value(&numeric_for.limit);
+    let step = numeric_for.step.as_ref().and_then(decimal_literal_value);
 
     // A zero step loops forever before Lua 5.4 and raises an error from 5.4
     // on.
@@ -165,23 +166,6 @@ fn limit_landing_problem(
     })
 }
 
-/// Parses a number literal, optionally wrapped in a unary minus.
-#[expect(
-    clippy::float_arithmetic,
-    reason = "this rule reproduces the Lua VM arithmetic in doubles"
-)]
-fn literal_number(expr: &Expression) -> Option<f64> {
-    if let Expression::UnaryOp(unary) = expr
-        && unary.op == UnOp::Neg
-    {
-        return literal_number(&unary.operand).map(|value| -value);
-    }
-    let Expression::Number(literal) = expr else {
-        return None;
-    };
-    literal.text.parse().ok()
-}
-
 /// Whether `expr` is `#name`.
 fn is_length_of_identifier(expr: &Expression) -> bool {
     if let Expression::UnaryOp(unary) = expr
@@ -234,13 +218,13 @@ mod tests {
     }
 
     #[test]
-    fn ignores_happy_path() {
+    fn ignores_ascending_range_without_step() {
         let diags = run("for i = 1, 10 do end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
-    fn ignores_happy_descending() {
+    fn ignores_descending_range_with_negative_step() {
         let diags = run("for i = 10, 1, -1 do end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }

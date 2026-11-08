@@ -1,5 +1,4 @@
 use luck_ast::{Expression, FunctionBody, Statement};
-use luck_token::TokenKind;
 
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -12,41 +11,14 @@ impl Rule for DuplicateParameter {
     fn name(&self) -> &'static str {
         "duplicate_parameter"
     }
-
     fn category(&self) -> Category {
         Category::Correctness
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Error
     }
-
     fn description(&self) -> &'static str {
         "function declares two parameters with the same name"
-    }
-}
-
-fn check_params(body: &FunctionBody, is_method: bool, findings: &mut Vec<Finding>) {
-    let mut seen_names: Vec<&str> = Vec::new();
-    // A colon method already has an implicit `self`.
-    if is_method {
-        seen_names.push("self");
-    }
-    for param in body.params.iter() {
-        let TokenKind::Identifier(name) = &param.name.kind else {
-            continue;
-        };
-        if name == "_" {
-            continue;
-        }
-        if seen_names.iter().any(|previous| *previous == name.as_str()) {
-            findings.push(Finding::new(
-                format!("parameter `{name}` is already defined"),
-                param.name.span,
-            ));
-        } else {
-            seen_names.push(name.as_str());
-        }
     }
 }
 
@@ -65,17 +37,11 @@ impl NodeRule for DuplicateParameter {
         _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        match stmt {
-            Statement::FunctionDecl(decl) => {
-                check_params(&decl.body, decl.name.method.is_some(), findings);
-            }
-            Statement::LocalFunction(local_function) => {
-                check_params(&local_function.body, false, findings);
-            }
+        let (body, is_method) = match stmt {
+            Statement::FunctionDecl(decl) => (&decl.body, decl.name.method.is_some()),
+            Statement::LocalFunction(local_function) => (&local_function.body, false),
             // Lua 5.5
-            Statement::GlobalFunction(global_function) => {
-                check_params(&global_function.body, false, findings);
-            }
+            Statement::GlobalFunction(global_function) => (&global_function.body, false),
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::DoBlock(_)
@@ -93,10 +59,10 @@ impl NodeRule for DuplicateParameter {
             | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
+            | Statement::Error(_) => return,
+        };
+        findings.extend(duplicate_params(body, is_method));
     }
-
     fn on_expression(
         &self,
         expr: &Expression,
@@ -104,9 +70,23 @@ impl NodeRule for DuplicateParameter {
         findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionDef(function) = expr {
-            check_params(&function.body, false, findings);
+            findings.extend(duplicate_params(&function.body, false));
         }
     }
+}
+
+/// Flags each parameter named like an earlier one, or `self` in a colon
+/// method, which already has an implicit `self`. `_` may repeat.
+fn duplicate_params(body: &FunctionBody, is_method: bool) -> impl Iterator<Item = Finding> {
+    let params = body.params.items.as_slice();
+    params.iter().enumerate().filter_map(move |(index, param)| {
+        let name = param.name.identifier().filter(|&name| name != "_")?;
+        let is_duplicate = (is_method && name == "self")
+            || params.iter().take(index).any(|earlier| earlier.name.identifier() == Some(name));
+        is_duplicate.then(|| {
+            Finding::new(format!("parameter `{name}` is already defined"), param.name.span)
+        })
+    })
 }
 
 #[cfg(test)]

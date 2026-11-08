@@ -2,7 +2,7 @@ use luck_ast::{Expression, Var};
 
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::path::dotted_path;
+use crate::path::{DottedPath, dotted_path};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags dotted accesses under the `Enum` global that name a
@@ -33,7 +33,6 @@ impl NodeRule for RobloxUnknownEnumMember {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::Var])
     }
-
     fn on_expression(
         &self,
         expr: &Expression,
@@ -43,23 +42,18 @@ impl NodeRule for RobloxUnknownEnumMember {
         let Expression::Var(var @ Var::FieldAccess(_)) = expr else {
             return;
         };
-        let Some((segments, spans)) = dotted_path(var) else {
-            return;
-        };
-        let (Some((last_segment, prefix)), [root_span, .., last_span]) =
-            (segments.split_last(), spans.as_slice())
-        else {
-            return;
-        };
-        if prefix.first() != Some(&"Enum") {
-            return;
-        }
         let stdlib = context.semantic.stdlib();
         // Only the Roblox stdlib has an `Enum` global.
         if !stdlib.globals.contains_key("Enum") {
             return;
         }
-        if context.semantic.resolves_to_local("Enum", *root_span) {
+        let Some(DottedPath { segments, root_span, leaf_span }) = dotted_path(var) else {
+            return;
+        };
+        let Some((last_segment, prefix)) = segments.split_last() else {
+            return;
+        };
+        if prefix.first() != Some(&"Enum") {
             return;
         }
         // A broken prefix is reported by the inner access, so this node only
@@ -70,6 +64,11 @@ impl NodeRule for RobloxUnknownEnumMember {
         if stdlib.child(prefix_entry, last_segment).is_some() {
             return;
         }
+        // `resolves_to_local` scans every reference, so it waits for an
+        // unknown member.
+        if context.semantic.resolves_to_local("Enum", root_span) {
+            return;
+        }
         let prefix_path = prefix.join(".");
         let message = match segments.len() {
             2 => format!("unknown enum type `Enum.{last_segment}`"),
@@ -77,7 +76,7 @@ impl NodeRule for RobloxUnknownEnumMember {
             _ => format!("`{last_segment}` is not a member of `{prefix_path}`"),
         };
         findings.push(
-            Finding::new(message, *last_span).with_help(
+            Finding::new(message, leaf_span).with_help(
                 "enum data is generated from the Roblox API dump, so check the spelling",
             ),
         );
@@ -130,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_broken_prefix_beyond_first_failure() {
+    fn flags_only_first_unknown_segment() {
         // Only the innermost failing access reports; the outer one
         // stays silent instead of cascading.
         let diags = run_roblox("local m = Enum.Materialz.Grass");
@@ -145,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_on_standalone_luau() {
+    fn ignores_standalone_environment() {
         let diags =
             run_rule(&RobloxUnknownEnumMember, "local m = Enum.Materialz", LuaVersion::Luau);
         assert!(diags.is_empty(), "{diags:?}");
