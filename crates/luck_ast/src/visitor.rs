@@ -1,6 +1,7 @@
-use crate::expr::{Expression, FunctionArgs, FunctionCall, TableConstructor, Var};
-use crate::shared::{Block, Field, FunctionBody, Punctuated};
-use crate::stmt::{AttributedName, LastStatement, Statement, TypeDeclarationValue};
+use crate::expr::{Expression, Field, FunctionArgs, FunctionCall, TableConstructor, Var};
+use crate::function::FunctionBody;
+use crate::punctuated::Punctuated;
+use crate::stmt::{AttributedName, Block, LastStatement, Statement, TypeDeclarationValue};
 use crate::types::{GenericTypeList, Type, TypeField};
 
 /// Read-only AST traversal.

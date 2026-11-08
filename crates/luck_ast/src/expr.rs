@@ -1,7 +1,7 @@
 use luck_token::{BinOp, CompactString, Span, Token, UnOp};
 
-use crate::shared::{Field, FunctionBody, Punctuated};
-use crate::stmt::FunctionAttribute;
+use crate::function::{FunctionAttribute, FunctionBody};
+use crate::punctuated::Punctuated;
 use crate::types::{Type, TypeArgs};
 
 /// Fixed-spelling leaves (`nil`, `true`, `false`, `...`) carry only their
@@ -98,6 +98,13 @@ pub struct ParenthesizedExpression {
 pub struct TableConstructor {
     pub span: Span,
     pub fields: Punctuated<Field>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Field {
+    Bracketed { span: Span, key: Expression, value: Expression },
+    Named { span: Span, name: Token, value: Expression },
+    Positional { span: Span, value: Expression },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

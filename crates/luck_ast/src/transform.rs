@@ -1,6 +1,9 @@
-use crate::expr::{Expression, FunctionArgs, FunctionCall, TableConstructor, Var};
-use crate::shared::{Block, Field, FunctionBody, Parameter, Punctuated};
-use crate::stmt::{AttributedName, IfStatement, LastStatement, Statement, TypeDeclarationValue};
+use crate::expr::{Expression, Field, FunctionArgs, FunctionCall, TableConstructor, Var};
+use crate::function::{FunctionBody, Parameter};
+use crate::punctuated::Punctuated;
+use crate::stmt::{
+    AttributedName, Block, IfStatement, LastStatement, Statement, TypeDeclarationValue,
+};
 use crate::types::{GenericTypeList, Type, TypeArgs, TypeField};
 
 /// Ownership-based AST rewrite: each node goes in by value and its

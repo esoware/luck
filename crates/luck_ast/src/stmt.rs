@@ -1,8 +1,16 @@
 use luck_token::{CompoundOp, Span, Token};
 
 use crate::expr::{Expression, FunctionCall, Var};
-use crate::shared::{Block, FunctionBody, Parameter, Punctuated};
+use crate::function::{FunctionAttribute, FunctionBody, Parameter};
+use crate::punctuated::Punctuated;
 use crate::types::{GenericTypeList, Type};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Block {
+    pub span: Span,
+    pub stmts: Vec<Statement>,
+    pub last_stmt: Option<Box<LastStatement>>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(
@@ -118,19 +126,6 @@ pub struct FunctionName {
     pub span: Span,
     pub names: Vec<Token>,
     pub method: Option<Token>,
-}
-
-/// Luau function attribute: `@native`, `@checked`, `@deprecated`, and so on.
-///
-/// Output must keep these, since some change runtime behavior (`@native`
-/// forces native codegen).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionAttribute {
-    pub span: Span,
-    pub name: Token,
-    /// Literal arguments of the bracketed `@[name(...)]` form; `None` for
-    /// the plain `@name` form and for `@[name]` without arguments.
-    pub args: Option<Punctuated<Expression>>,
 }
 
 /// Named function declaration: `function a.b.c:m(...) ... end`.

@@ -2,7 +2,7 @@ use core::mem;
 
 use luck_ast::{
     BinaryOp, Block, Expression, IfStatement, LastStatement, Punctuated, ReturnStatement,
-    Statement, Transform,
+    Statement, Transform, is_multi_value,
 };
 use luck_token::{BinOp, Span};
 
@@ -87,7 +87,7 @@ fn try_convert_if_return_chain(mut block: Block) -> Block {
     };
     // `return f()` returns every value f does, but as the `or` fallback it
     // would be truncated to one, so leave the chain alone.
-    if matches!(fallback_expr, Expression::FunctionCall(_) | Expression::VarArg(_)) {
+    if is_multi_value(fallback_expr) {
         return block;
     }
 

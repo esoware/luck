@@ -1,12 +1,12 @@
 use crate::expr::{
-    BinaryOp, ElseIfExprClause, Expression, FieldAccess, FunctionArgs, FunctionCall, FunctionDef,
-    IfExpression, IndexExpression, InterpolatedString, InterpolatedStringSegment,
+    BinaryOp, ElseIfExprClause, Expression, Field, FieldAccess, FunctionArgs, FunctionCall,
+    FunctionDef, IfExpression, IndexExpression, InterpolatedString, InterpolatedStringSegment,
     ParenthesizedExpression, TableConstructor, TypeCast, TypeInstantiation, UnaryOp, Var,
 };
-use crate::shared::{Block, Field, FunctionBody, Parameter, VarArgParam};
+use crate::function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
 use crate::stmt::{
-    Assignment, Attribute, AttributedName, CompoundAssignment, DoBlock, ElseClause, ElseIfClause,
-    FunctionAttribute, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
+    Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
+    ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
     GlobalStar, GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment,
     LocalFunction, NumericFor, RepeatLoop, ReturnStatement, Statement, TypeDeclaration,
     TypeDeclarationValue, WhileLoop,

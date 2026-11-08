@@ -1,5 +1,6 @@
 use luck_ast::{
     Expression, FunctionArgs, FunctionCall, Literal, NodeType, NodeTypeSet, Statement, Var,
+    is_multi_value,
 };
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, Token, short_string_body};
@@ -207,7 +208,7 @@ fn check_arg_count(
         return;
     };
     // A `...` or call could expand to any number of values.
-    if args.iter().any(|expr| matches!(expr, Expression::VarArg(_) | Expression::FunctionCall(_))) {
+    if args.iter().any(is_multi_value) {
         return;
     }
     let given = args.len();

@@ -1,9 +1,3 @@
-use luck_token::{Span, Token};
-
-use crate::expr::Expression;
-use crate::stmt::{LastStatement, Statement};
-use crate::types::{GenericTypeList, Type};
-
 /// A sequence of items separated by a fixed token, usually a comma.
 ///
 /// Interior separators are implied by position; `has_trailing_separator`
@@ -79,61 +73,4 @@ impl<T> Punctuated<T> {
     pub const fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionBody {
-    pub span: Span,
-    /// Luau: `<T, U...>` generic list before the parameter parens.
-    pub generics: Option<Box<GenericTypeList>>,
-    pub params: Punctuated<Parameter>,
-    pub vararg: Option<Box<VarArgParam>>,
-    /// Luau: `: T` return annotation after `)`.
-    pub return_type: Option<Type>,
-    pub block: Block,
-}
-
-impl FunctionBody {
-    /// Span of the closing `end` keyword: the last three bytes of the body
-    /// span.
-    ///
-    /// Only meaningful for parsed ASTs, since synthetic bodies carry point
-    /// spans. Callers use it only for source-anchored trivia, which
-    /// synthetic ASTs don't have.
-    #[must_use]
-    pub const fn end_keyword_span(&self) -> Span {
-        Span::new(self.span.end.saturating_sub(3), self.span.end)
-    }
-}
-
-/// A typed name: function parameter or generic-for loop binding.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Parameter {
-    pub span: Span,
-    pub name: Token,
-    /// Luau: `: T`.
-    pub type_annotation: Option<Type>,
-}
-
-/// Vararg parameter (`...` or `...name` in Lua 5.5).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VarArgParam {
-    pub span: Span,
-    pub name: Option<Token>,
-    /// Luau: `: T`, which may be a generic pack (`T...`).
-    pub type_annotation: Option<Type>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Block {
-    pub span: Span,
-    pub stmts: Vec<Statement>,
-    pub last_stmt: Option<Box<LastStatement>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Field {
-    Bracketed { span: Span, key: Expression, value: Expression },
-    Named { span: Span, name: Token, value: Expression },
-    Positional { span: Span, value: Expression },
 }

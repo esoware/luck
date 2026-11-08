@@ -1,8 +1,37 @@
-//! Read-only structural queries that decide where a reprinted node needs
-//! parentheses or a separator.
+//! Read-only structural queries: how many values an expression yields, and
+//! where a reprinted node needs parentheses or a separator.
 
 use crate::expr::{Expression, Var};
 use crate::stmt::Statement;
+
+/// Whether `expr` is a call or `...`, the only forms that can yield any
+/// number of values, none included.
+///
+/// Parenthesizing one, or moving it out of the last position of a list,
+/// truncates it to exactly one value.
+#[must_use]
+pub const fn is_multi_value(expr: &Expression) -> bool {
+    match expr {
+        Expression::FunctionCall(_) | Expression::VarArg(_) => true,
+        Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::FunctionDef(_)
+        | Expression::Var(_)
+        | Expression::Parenthesized(_)
+        | Expression::TableConstructor(_)
+        | Expression::BinaryOp(_)
+        | Expression::UnaryOp(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => false,
+    }
+}
 
 /// Whether `expr` may stand bare in a prefix position: a call callee, a
 /// method receiver, an index or field prefix, or an instantiated expression.

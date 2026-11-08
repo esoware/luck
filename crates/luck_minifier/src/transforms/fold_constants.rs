@@ -1,6 +1,6 @@
 use alloc::borrow::Cow;
 
-use luck_ast::{Block, Expression, Literal, Transform, UnaryOp};
+use luck_ast::{Block, Expression, Literal, Transform, UnaryOp, is_multi_value};
 use luck_token::{
     BinOp, CompactString, LuaNumber, LuaVersion, NumberSubtypes, Span, UnOp, decode_string,
     encode_string, parse_lua_number,
@@ -306,26 +306,7 @@ fn compare_numbers(lhs: LuaNumber, op: BinOp, rhs: LuaNumber) -> Option<bool> {
 /// Parenthesizes a call or `...` that replaces an `and`/`or`, which always
 /// yields one value.
 fn truncate_multi_value(expr: Expression) -> Expression {
-    match expr {
-        Expression::FunctionCall(_) | Expression::VarArg(_) => parenthesize(expr),
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::FunctionDef(_)
-        | Expression::Var(_)
-        | Expression::Parenthesized(_)
-        | Expression::TableConstructor(_)
-        | Expression::BinaryOp(_)
-        | Expression::UnaryOp(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::TypeInstantiation(_)
-        | Expression::Error(_) => expr,
-    }
+    if is_multi_value(&expr) { parenthesize(expr) } else { expr }
 }
 
 fn extract_string_bytes(expr: &Expression, version: LuaVersion) -> Option<Cow<'_, [u8]>> {

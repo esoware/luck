@@ -1,4 +1,4 @@
-use luck_ast::{Expression, LocalAssignment, NodeType, NodeTypeSet, Statement};
+use luck_ast::{Expression, LocalAssignment, NodeType, NodeTypeSet, Statement, is_multi_value};
 use luck_token::Span;
 
 use crate::diagnostic::{Category, LintDiagnostic, Severity};
@@ -69,7 +69,7 @@ fn check_local(local: &LocalAssignment) -> Option<LintDiagnostic> {
 
     // A call or `...` that ended up last would expand to fill the names the
     // `nil`s covered, so leave those alone.
-    if matches!(last_kept_expr, Expression::FunctionCall(_) | Expression::VarArg(_)) {
+    if is_multi_value(last_kept_expr) {
         return None;
     }
 

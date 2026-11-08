@@ -36,7 +36,6 @@ pub enum NodeType {
     False,
     True,
     Number,
-    // Luau
     Integer,
     StringLiteral,
     VarArg,
@@ -50,7 +49,6 @@ pub enum NodeType {
     IfExpression,
     InterpolatedString,
     TypeCast,
-    // Luau
     TypeInstantiation,
     ErrorExpr,
     Return,
@@ -60,6 +58,7 @@ pub enum NodeType {
 }
 
 impl NodeType {
+    /// `ErrorLastStmt` must stay the last variant for this to count them all.
     pub const COUNT: usize = Self::ErrorLastStmt.index() + 1;
 
     /// Discriminant value, for callers indexing bucket arrays.
@@ -165,10 +164,6 @@ impl NodeKind<'_> {
     }
 }
 
-const _: () = assert!(
-    NodeType::ErrorLastStmt.index() == NodeType::COUNT - 1,
-    "ErrorLastStmt must stay the last NodeType"
-);
 const _: () = assert!(NodeType::COUNT <= 64, "NodeTypeSet holds one bit per NodeType in a u64");
 
 /// Fixed-size set of [`NodeType`]s, const-constructible so lint rules can

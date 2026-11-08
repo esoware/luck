@@ -7,7 +7,7 @@
 use luck_token::{CompactString, Span, Token};
 
 use crate::expr::Expression;
-use crate::shared::Punctuated;
+use crate::punctuated::Punctuated;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {

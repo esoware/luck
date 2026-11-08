@@ -3,8 +3,7 @@
 
 use luck_token::Span;
 
-use crate::expr::{Expression, FunctionArgs, Var};
-use crate::shared::Field;
+use crate::expr::{Expression, Field, FunctionArgs, Var};
 use crate::stmt::{LastStatement, Statement};
 use crate::types::{Type, TypeField};
 

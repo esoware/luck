@@ -371,7 +371,7 @@ pub(crate) fn emit_leading_comments(formatter: &mut Formatter, anchor: u32) -> b
             }))
         }
         Store::Synthetic { comments, .. } => {
-            take_synthetic(comments, anchor, |comment| comment.is_leading)
+            take_synthetic(comments, anchor, |comment| comment.position == CommentPosition::Leading)
         }
         Store::Empty => Vec::new(),
     };
@@ -473,12 +473,12 @@ pub(crate) fn emit_trailing_comments(
                 )
                 .collect()
         }
-        Store::Synthetic { comments, .. } => {
-            take_synthetic(comments, anchor, |comment| !comment.is_leading)
-                .into_iter()
-                .map(Placement::Suffix)
-                .collect()
-        }
+        Store::Synthetic { comments, .. } => take_synthetic(comments, anchor, |comment| {
+            comment.position == CommentPosition::Trailing
+        })
+        .into_iter()
+        .map(Placement::Suffix)
+        .collect(),
         Store::Empty => Vec::new(),
     };
 
@@ -825,11 +825,15 @@ mod tests {
     #[test]
     fn synthetic_comments_attach_by_anchor() {
         let synthetic = vec![
-            SyntheticComment { attached_to: 5, text: "upvalue u0".into(), is_leading: true },
+            SyntheticComment {
+                attached_to: 5,
+                text: "upvalue u0".into(),
+                position: CommentPosition::Leading,
+            },
             SyntheticComment {
                 attached_to: 5,
                 text: "-- explicit marker".into(),
-                is_leading: false,
+                position: CommentPosition::Trailing,
             },
         ];
         let mut formatter = formatter_over(Comments::synthetic(synthetic));
@@ -851,8 +855,11 @@ mod tests {
 
     #[test]
     fn synthetic_dangling_drained_by_anchor() {
-        let synthetic =
-            vec![SyntheticComment { attached_to: 9, text: "unreachable".into(), is_leading: true }];
+        let synthetic = vec![SyntheticComment {
+            attached_to: 9,
+            text: "unreachable".into(),
+            position: CommentPosition::Leading,
+        }];
         let comments = Comments::synthetic(synthetic);
         assert!(comments.has_dangling_comments(9, 0));
         assert!(!comments.has_dangling_comments(8, 0));
@@ -881,8 +888,16 @@ mod tests {
     #[test]
     fn synthetic_remaining_flushes_in_anchor_order() {
         let synthetic = vec![
-            SyntheticComment { attached_to: 20, text: "second".into(), is_leading: true },
-            SyntheticComment { attached_to: 10, text: "first".into(), is_leading: true },
+            SyntheticComment {
+                attached_to: 20,
+                text: "second".into(),
+                position: CommentPosition::Leading,
+            },
+            SyntheticComment {
+                attached_to: 10,
+                text: "first".into(),
+                position: CommentPosition::Leading,
+            },
         ];
         let mut formatter = formatter_over(Comments::synthetic(synthetic));
         emit_remaining_comments(&mut formatter, false);

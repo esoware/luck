@@ -1,4 +1,7 @@
-use luck_ast::{Block, Expression, Field, FieldAccess, Literal, TableConstructor, Transform, Var};
+use luck_ast::{
+    Block, Expression, Field, FieldAccess, Literal, TableConstructor, Transform, Var,
+    is_multi_value,
+};
 use luck_token::{Span, TokenKind, short_string_body};
 
 use crate::binding::identifier_token;
@@ -110,7 +113,7 @@ fn is_sequential_from_one(fields: &[Field]) -> bool {
     // a call or `...`.
     let has_multi_value_tail = matches!(
         fields.last(),
-        Some(Field::Bracketed { value: Expression::FunctionCall(_) | Expression::VarArg(_), .. })
+        Some(Field::Bracketed { value, .. }) if is_multi_value(value)
     );
     !fields.is_empty() && has_sequential_keys && !has_multi_value_tail
 }

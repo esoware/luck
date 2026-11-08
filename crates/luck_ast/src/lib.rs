@@ -30,11 +30,12 @@
 extern crate alloc;
 
 mod expr;
+mod function;
 #[cfg(test)]
 mod layout;
 mod node;
+mod punctuated;
 mod query;
-mod shared;
 mod span;
 mod stmt;
 mod synth;
@@ -43,16 +44,19 @@ mod types;
 mod visitor;
 
 pub use expr::{
-    BinaryOp, ElseIfExprClause, Expression, FieldAccess, FunctionArgs, FunctionCall, FunctionDef,
-    IfExpression, IndexExpression, InterpolatedString, InterpolatedStringSegment, Literal,
-    ParenthesizedExpression, TableConstructor, TypeCast, TypeInstantiation, UnaryOp, Var,
+    BinaryOp, ElseIfExprClause, Expression, Field, FieldAccess, FunctionArgs, FunctionCall,
+    FunctionDef, IfExpression, IndexExpression, InterpolatedString, InterpolatedStringSegment,
+    Literal, ParenthesizedExpression, TableConstructor, TypeCast, TypeInstantiation, UnaryOp, Var,
 };
+pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
 pub use node::{NodeKind, NodeType, NodeTypeSet};
-pub use query::{expr_starts_with_brace, is_prefix_expression, stmt_starts_with_paren};
-pub use shared::{Block, Field, FunctionBody, Parameter, Punctuated, VarArgParam};
+pub use punctuated::Punctuated;
+pub use query::{
+    expr_starts_with_brace, is_multi_value, is_prefix_expression, stmt_starts_with_paren,
+};
 pub use stmt::{
-    Assignment, Attribute, AttributedName, CompoundAssignment, DoBlock, ElseClause, ElseIfClause,
-    FunctionAttribute, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
+    Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
+    ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
     GlobalStar, GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment,
     LocalFunction, NumericFor, RepeatLoop, ReturnStatement, Statement, TypeDeclaration,
     TypeDeclarationValue, WhileLoop,

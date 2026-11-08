@@ -1,7 +1,7 @@
 //! Helpers for the rules that match a call: which global it calls, and what
 //! it passes.
 
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Var};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Var, is_multi_value};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, short_string_body};
 
@@ -29,7 +29,7 @@ pub(crate) const fn positional_args(function_args: &FunctionArgs) -> (&[Expressi
 /// Whether the last argument, or the last value of an assignment, is a call
 /// or `...`, which can expand to any number of values, none included.
 pub(crate) const fn has_multi_value_tail(args: &[Expression]) -> bool {
-    matches!(args.last(), Some(Expression::FunctionCall(_) | Expression::VarArg(_)))
+    matches!(args.last(), Some(last) if is_multi_value(last))
 }
 
 /// The text between a quoted string argument's quotes, and its span.
