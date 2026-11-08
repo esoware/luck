@@ -30,6 +30,7 @@ extern crate alloc;
 
 mod ast_equivalence;
 mod comments;
+mod directive;
 #[cfg(test)]
 mod fixtures;
 mod format;

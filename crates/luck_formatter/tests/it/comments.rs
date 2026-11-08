@@ -230,7 +230,7 @@ fn trailing_newline_added() {
 }
 
 #[test]
-fn comment_at_eof_no_trailing_newline() {
+fn comment_at_eof_gains_a_trailing_newline() {
     assert_format("local x = 1 -- end", "local x = 1 -- end\n");
 }
 

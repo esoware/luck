@@ -57,21 +57,13 @@ fn semicolons_stripped() {
 }
 
 #[test]
-fn stmts_separated_by_newline() {
-    let output = formatted("local a = 1\nlocal b = 2");
-    assert_eq!(output.trim().lines().count(), 2);
-}
-
-#[test]
-fn single_newline_stays_single() {
-    let output = formatted("local a = 1\nlocal b = 2");
-    assert!(!output.trim().contains("\n\n"));
+fn single_newline_between_stmts_stays_single() {
+    assert_format("local a = 1\nlocal b = 2", "local a = 1\nlocal b = 2\n");
 }
 
 #[test]
 fn semicolon_runs_dropped() {
-    let output = formatted("local a = 1;;;");
-    assert_eq!(output.trim(), "local a = 1");
+    assert_format("local a = 1;;;", "local a = 1\n");
 }
 
 #[test]

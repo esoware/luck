@@ -1,18 +1,15 @@
 use alloc::borrow::Cow;
 
+use luck_token::short_string_body;
+
 use crate::QuoteStyle;
 
 pub(crate) fn normalize_quote(literal: &str, style: QuoteStyle) -> Cow<'_, str> {
-    if literal.starts_with('[') {
-        return Cow::Borrowed(literal);
-    }
-
-    let mut delimited = literal.chars();
-    let Some(current_quote) = delimited.next() else {
+    // A long-bracket string has no quotes to swap.
+    let (Some(content), Some(current_quote)) = (short_string_body(literal), literal.chars().next())
+    else {
         return Cow::Borrowed(literal);
     };
-    delimited.next_back();
-    let content = delimited.as_str();
     let target_quote = resolve_target_quote(style, content);
 
     if current_quote == target_quote {

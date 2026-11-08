@@ -12,7 +12,7 @@ use core::ops::Range;
 use luck_ast::{Block, Expression, FunctionArgs, LocalAssignment, Punctuated, Statement, Var};
 use luck_token::{Comment, Span, index_to_offset, offset_to_index};
 
-use crate::comments::format_off_regions;
+use crate::directive::format_off_regions;
 use crate::format_block::has_blank_line;
 
 struct SortableLine<'source> {

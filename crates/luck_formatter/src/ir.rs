@@ -4,8 +4,9 @@
 //! `Tag` start and end elements instead of nesting. Printing and measuring
 //! walk plain slices, and rolling back to a checkpoint is a truncation.
 //!
-//! Emitters write through the [`Format`] trait and the combinators in this
-//! module rather than pushing raw elements.
+//! Emitters write through the [`Format`] trait, the combinators in this
+//! module, and `Formatter`'s `write_*` methods. Only this module pushes raw
+//! elements, which is what keeps every tag paired.
 
 use core::ops::Range;
 
@@ -37,13 +38,6 @@ pub(crate) enum LineMode {
     Hard,
     /// Always a blank line (two newlines); forces expansion like `Hard`.
     Empty,
-}
-
-/// Whether a group prints on one line or breaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PrintMode {
-    Flat,
-    Expanded,
 }
 
 /// Paired structural markers. Every `Start*` has a matching `End*`;
@@ -195,7 +189,7 @@ impl Formatter {
     }
 
     #[inline]
-    pub(crate) fn push(&mut self, element: FormatElement) {
+    fn push(&mut self, element: FormatElement) {
         self.elements.push(element);
     }
 
@@ -205,6 +199,19 @@ impl Formatter {
     /// would have to copy it.
     pub(crate) fn write_text(&mut self, content: impl Into<CompactString>) {
         self.elements.push(FormatElement::Text(content.into()));
+    }
+
+    /// Writes a space and `text` as a line suffix, printed just before the
+    /// next line break, which is how a trailing comment stays at its line's
+    /// end.
+    ///
+    /// A suffix body is only ever this, so the printer can flush one without
+    /// laying it out.
+    pub(crate) fn write_line_suffix(&mut self, text: CompactString) {
+        self.push(FormatElement::Tag(Tag::StartLineSuffix));
+        self.push(FormatElement::Space);
+        self.push(FormatElement::Text(text));
+        self.push(FormatElement::Tag(Tag::EndLineSuffix));
     }
 
     #[cfg(test)]

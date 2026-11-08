@@ -104,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn idempotent() {
+    fn normalization_is_idempotent() {
         for input in ["0XB0", "0xDEad", "1E10", "0xAP-2", "0B10", ".5", ".5E2"] {
             for case in [HexCase::Preserve, HexCase::Lower, HexCase::Upper] {
                 let once = normalize_number(input, case);

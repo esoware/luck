@@ -81,7 +81,7 @@ fn empty_function_body() {
 }
 
 #[test]
-fn method_call_on_call_result() {
+fn field_access_on_call_result() {
     // `foo().bar` isn't a statement, so it goes on the right-hand side.
     assert_format("local x = foo().bar\n", "local x = foo().bar\n");
 }

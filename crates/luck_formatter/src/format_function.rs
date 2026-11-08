@@ -6,8 +6,8 @@ use luck_ast::{
 };
 use luck_token::Token;
 
-use crate::comments::{ListSeparator, emit_dangling_comments, write_commented_list};
-use crate::format_type::FormatExplicitTypeArgs;
+use crate::comments::{ListSeparator, write_commented_list, write_dangling_comments};
+use crate::format_type::ExplicitTypeArgs;
 use crate::ir::{
     Format, Formatter, format_with, group, hard_line, indent, separated, soft_line,
     soft_line_or_space, space, token,
@@ -29,16 +29,14 @@ impl Format for FunctionBody {
             (token(":"), space(), return_type).fmt(formatter);
         }
 
-        let is_empty = self.block.stmts.is_empty() && self.block.last_stmt.is_none();
-        let anchor = self.block.span.start;
-        let end = self.end_keyword_span().start;
-        let has_dangling_comments = formatter.comments().has_dangling_comments(anchor, end);
-        if is_empty {
-            if has_dangling_comments {
+        if self.block.stmts.is_empty() && self.block.last_stmt.is_none() {
+            let anchor = self.block.span.start;
+            let end = self.end_keyword_span().start;
+            if formatter.comments().has_dangling_comments(anchor, end) {
                 // Comments in an otherwise empty body stay indented inside it.
                 indent(format_with(move |indented| {
                     hard_line().fmt(indented);
-                    emit_dangling_comments(indented, anchor, end);
+                    write_dangling_comments(indented, anchor, end);
                 }))
                 .fmt(formatter);
             }
@@ -133,13 +131,13 @@ impl Format for ChainSegment<'_> {
         if let Some(name) = self.accessor {
             (token(":"), name).fmt(formatter);
         }
-        self.explicit_type_args.map(FormatExplicitTypeArgs).fmt(formatter);
+        self.explicit_type_args.map(ExplicitTypeArgs).fmt(formatter);
         self.args.fmt(formatter);
     }
 }
 
 /// Collect a left-recursive chain of function calls into (root, segments).
-fn collect_chain(call: &FunctionCall) -> (&Expression, Vec<ChainSegment<'_>>) {
+fn collect_call_chain(call: &FunctionCall) -> (&Expression, Vec<ChainSegment<'_>>) {
     let mut segments = Vec::new();
     let mut current = call;
     loop {
@@ -164,7 +162,7 @@ fn is_method_chain(segments: &[ChainSegment<'_>]) -> bool {
 
 impl Format for FunctionCall {
     fn fmt(&self, formatter: &mut Formatter) {
-        let (root, segments) = collect_chain(self);
+        let (root, segments) = collect_call_chain(self);
 
         if is_method_chain(&segments) {
             // Wrap the whole chain so it can break before each accessor.

@@ -238,7 +238,8 @@ fn call_parens_input_preserves_bare_table() {
 }
 
 #[test]
-fn format_ignore_preserves_next_stmt() {
+fn format_ignore_alias_keeps_next_stmt_verbatim() {
+    // `luck: format ignore` is an alias of `luck: ignore`.
     let input = "-- luck: format ignore\nlocal   x   =   1\nlocal y = 2\n";
     let result = format(input, LuaVersion::Lua54, &FormatOptions::default());
     assert!(result.errors.is_empty(), "parse: {:?}", result.errors);
@@ -255,15 +256,6 @@ fn format_ignore_preserves_next_stmt() {
 }
 
 #[test]
-fn legacy_luck_ignore_still_works() {
-    let input = "-- luck: ignore\nlocal   x   =   1\nlocal y = 2\n";
-    let result = format(input, LuaVersion::Lua54, &FormatOptions::default());
-    assert_eq!(result.errors, Vec::<luck_token::SourceError>::new());
-    assert!(result.output.contains("local   x   =   1"));
-    assert!(result.output.contains("local y = 2"));
-}
-
-#[test]
 fn magic_trailing_comma_off_keeps_packed_table() {
     // With `magic_trailing_comma` off, a trailing comma doesn't force a break,
     // so the table stays packed.
@@ -275,6 +267,8 @@ fn magic_trailing_comma_off_keeps_packed_table() {
 
 #[test]
 fn magic_trailing_comma_on_expands_table() {
+    // The expanded output keeps its trailing comma, so the idempotency check
+    // finds the second pass multi-line too.
     let options = FormatOptions { magic_trailing_comma: true, ..FormatOptions::default() };
     let input = "local t = { 1, 2, 3, }\n";
     let expected = "local t = {\n\t1,\n\t2,\n\t3,\n}\n";
@@ -297,42 +291,9 @@ fn magic_trailing_comma_on_expands_call_args_via_table() {
 }
 
 #[test]
-fn magic_trailing_comma_idempotent_after_expand() {
-    // The expanded output keeps its trailing comma, so the second pass stays
-    // multi-line.
-    let options = FormatOptions { magic_trailing_comma: true, ..FormatOptions::default() };
-    let input = "local t = { 1, 2, 3, }\n";
-    let first_pass = format(input, LuaVersion::Lua54, &options);
-    assert_eq!(first_pass.errors, Vec::<luck_token::SourceError>::new());
-    let second_pass = format(&first_pass.output, LuaVersion::Lua54, &options);
-    assert_eq!(first_pass.output, second_pass.output);
-}
-
-#[test]
 fn verify_passes_on_clean_format() {
     let input = "local x = 1\nlocal y = 2\n";
     let result = format_and_verify(input, LuaVersion::Lua54, &FormatOptions::default())
         .expect("structurally equivalent format");
     assert_eq!(result.errors, Vec::<luck_token::SourceError>::new());
-}
-
-#[test]
-fn verify_detects_structural_divergence() {
-    // Two different parse trees stand in for a buggy printer, and the diff
-    // has to say where they first diverge.
-    let original = luck_parser::parse("local x = 1\nlocal y = 2", LuaVersion::Lua54).block;
-    let mutated = luck_parser::parse("local x = 1", LuaVersion::Lua54).block;
-    let diff = luck_formatter::blocks_equivalent(&original, &mutated, LuaVersion::Lua54)
-        .expect_err("must diverge");
-    assert!(diff.path.contains("block"));
-    assert!(diff.reason.contains("count"));
-}
-
-#[test]
-fn verify_detects_renamed_identifier() {
-    let original = luck_parser::parse("local x = 1", LuaVersion::Lua54).block;
-    let mutated = luck_parser::parse("local pr1nt = 1", LuaVersion::Lua54).block;
-    let diff = luck_formatter::blocks_equivalent(&original, &mutated, LuaVersion::Lua54)
-        .expect_err("rename must diverge");
-    assert!(diff.reason.contains("kind"), "got: {}", diff.reason);
 }

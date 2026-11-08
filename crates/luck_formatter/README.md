@@ -56,7 +56,8 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 | `format_options.rs` | `FormatOptions` and its conversion from `FormatConfig` |
 | `ir.rs` | `Format` trait, `Formatter`, and the tag-stream IR (`FormatElement`, `Tag`, combinators) |
 | `printer.rs` | Line-width-aware IR printer (expand pre-pass + fits-then-commit) |
-| `comments.rs` | Comment interleaving (sourced + synthetic) and the `luck:` directives (`format off`/`on`, `ignore`) |
+| `comments.rs` | Comment interleaving (sourced + synthetic), including the lists that claim the comments between their items |
+| `directive.rs` | The `luck:` directives (`format off`/`on`, `ignore`) and the `format off` regions they mark |
 | `format_expr.rs` | Expression formatting |
 | `format_stmt.rs` | Statement formatting |
 | `format_table.rs` | Table constructor formatting |
@@ -67,5 +68,5 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 | `numbers.rs` | Numeric-literal normalization |
 | `tokens.rs` | Token-to-IR text emission |
 | `sort_requires.rs` | `require` statement sorting (source-level pre-pass) |
-| `ast_equivalence.rs` | AST-equality verifier backing `format_and_verify` |
+| `ast_equivalence.rs` | AST-equality verifier backing `format_and_verify`, with its comparisons in `ast_equivalence/` split by node family as `luck_ast` is: `stmt.rs`, `expr.rs`, `function.rs`, and `types.rs` |
 | `verify.rs` | `format_and_verify`: the re-parse, AST, comment-placement, and idempotency checks |

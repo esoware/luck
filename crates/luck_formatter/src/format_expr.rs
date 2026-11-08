@@ -9,7 +9,7 @@ use luck_ast::{
 };
 use luck_token::{BinOp, CompactString, Token, TokenKind, UnOp};
 
-use crate::format_type::FormatExplicitTypeArgs;
+use crate::format_type::ExplicitTypeArgs;
 use crate::ir::{
     Format, Formatter, format_with, group, indent, soft_line, soft_line_or_space, space, token,
 };
@@ -57,8 +57,7 @@ impl Format for Expression {
             }
             // Luau
             Self::TypeInstantiation(instantiation) => {
-                (&instantiation.expr, FormatExplicitTypeArgs(&instantiation.type_args))
-                    .fmt(formatter);
+                (&instantiation.expr, ExplicitTypeArgs(&instantiation.type_args)).fmt(formatter);
             }
 
             // A parse-recovery placeholder has no text to print.
@@ -71,7 +70,7 @@ impl Format for Var {
     fn fmt(&self, formatter: &mut Formatter) {
         match self {
             Self::Name(name) => name.fmt(formatter),
-            Self::FieldAccess(access) => format_field_access(formatter, access),
+            Self::FieldAccess(access) => access.fmt(formatter),
             Self::Index(index) => (&index.prefix, BracketedKey(&index.index)).fmt(formatter),
         }
     }
@@ -143,20 +142,22 @@ fn collect_access_chain(access: &FieldAccess) -> (&Expression, Vec<&Token>) {
 
 /// A dot chain of three or more accesses gets its own group so it can break
 /// one segment per line; shorter chains stay glued to their prefix.
-fn format_field_access(formatter: &mut Formatter, access: &FieldAccess) {
-    let (root, names) = collect_access_chain(access);
-    if names.len() >= 3 {
-        group((
-            root,
-            indent(format_with(|indented| {
-                for name in &names {
-                    (soft_line(), token("."), *name).fmt(indented);
-                }
-            })),
-        ))
-        .fmt(formatter);
-    } else {
-        (&access.prefix, token("."), &access.name).fmt(formatter);
+impl Format for FieldAccess {
+    fn fmt(&self, formatter: &mut Formatter) {
+        let (root, names) = collect_access_chain(self);
+        if names.len() >= 3 {
+            group((
+                root,
+                indent(format_with(|indented| {
+                    for name in &names {
+                        (soft_line(), token("."), *name).fmt(indented);
+                    }
+                })),
+            ))
+            .fmt(formatter);
+        } else {
+            (&self.prefix, token("."), &self.name).fmt(formatter);
+        }
     }
 }
 

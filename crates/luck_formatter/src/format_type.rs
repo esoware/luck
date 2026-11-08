@@ -4,8 +4,8 @@
 //! types format the same as parsed ones.
 
 use luck_ast::{
-    FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, NamedType, TableType, Type,
-    TypeArgs, TypeField, TypeofType,
+    FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, IntersectionType,
+    NamedType, TableType, Type, TypeArgs, TypeField, TypeofType, UnionType,
 };
 
 use crate::ir::{
@@ -17,15 +17,13 @@ impl Format for Type {
     fn fmt(&self, formatter: &mut Formatter) {
         match self {
             Self::Name { name, .. } => formatter.write_text(name.clone()),
-            Self::Named(named) => write_named(formatter, named),
-            Self::Typeof(typeof_type) => write_typeof(formatter, typeof_type),
-            Self::Table(table) => write_table(formatter, table),
-            Self::Function(function) => write_function_type(formatter, function),
+            Self::Named(named) => named.fmt(formatter),
+            Self::Typeof(typeof_type) => typeof_type.fmt(formatter),
+            Self::Table(table) => table.fmt(formatter),
+            Self::Function(function) => function.fmt(formatter),
             Self::Optional(optional) => (&optional.type_value, token("?")).fmt(formatter),
-            Self::Union(union) => write_alternation(formatter, &union.types.items, "|"),
-            Self::Intersection(intersection) => {
-                write_alternation(formatter, &intersection.types.items, "&");
-            }
+            Self::Union(union) => union.fmt(formatter),
+            Self::Intersection(intersection) => intersection.fmt(formatter),
             Self::Parenthesized(parenthesized) => {
                 (token("("), &parenthesized.type_value, token(")")).fmt(formatter);
             }
@@ -43,52 +41,72 @@ impl Format for Type {
 
 /// `Name`, `module.Name`, `Name<args>`. Qualification and generics are tight
 /// against the name.
-fn write_named(formatter: &mut Formatter, named: &NamedType) {
-    if let Some(module) = &named.prefix {
-        (module, token(".")).fmt(formatter);
+impl Format for NamedType {
+    fn fmt(&self, formatter: &mut Formatter) {
+        if let Some(module) = &self.prefix {
+            (module, token(".")).fmt(formatter);
+        }
+        (&self.name, &self.generics).fmt(formatter);
     }
-    (&named.name, &named.generics).fmt(formatter);
 }
 
 /// `typeof(expr)`.
-fn write_typeof(formatter: &mut Formatter, typeof_type: &TypeofType) {
-    (token("typeof"), token("("), &typeof_type.expr, token(")")).fmt(formatter);
+impl Format for TypeofType {
+    fn fmt(&self, formatter: &mut Formatter) {
+        (token("typeof"), token("("), &self.expr, token(")")).fmt(formatter);
+    }
 }
 
 /// `{ name: T, [K]: V }`.
 ///
 /// When the group breaks, each field gets its own line and a trailing comma,
 /// except the array shorthand `{ T }`, since Luau's grammar has no `{ T, }`.
-fn write_table(formatter: &mut Formatter, table: &TableType) {
-    if table.fields.is_empty() {
-        (token("{"), token("}")).fmt(formatter);
-        return;
-    }
+impl Format for TableType {
+    fn fmt(&self, formatter: &mut Formatter) {
+        if self.fields.is_empty() {
+            (token("{"), token("}")).fmt(formatter);
+            return;
+        }
 
-    let is_array_shorthand = matches!(table.fields.items.as_slice(), [TypeField::Array { .. }]);
+        let is_array_shorthand = matches!(self.fields.items.as_slice(), [TypeField::Array { .. }]);
 
-    let group_id = formatter.group_id();
-    group_with_id(
-        group_id,
-        (
-            token("{"),
-            indent((
+        let group_id = formatter.group_id();
+        group_with_id(
+            group_id,
+            (
+                token("{"),
+                indent((
+                    soft_line_or_space(),
+                    separated(&self.fields.items, (token(","), soft_line_or_space())),
+                    (!is_array_shorthand).then(|| if_group_breaks(group_id, token(","))),
+                )),
                 soft_line_or_space(),
-                separated(&table.fields.items, (token(","), soft_line_or_space())),
-                (!is_array_shorthand).then(|| if_group_breaks(group_id, token(","))),
-            )),
-            soft_line_or_space(),
-            token("}"),
-        ),
-    )
-    .fmt(formatter);
+                token("}"),
+            ),
+        )
+        .fmt(formatter);
+    }
 }
 
 /// `<T>(a: T) -> R`. The parameter list breaks like a call argument list.
-fn write_function_type(formatter: &mut Formatter, function: &FunctionType) {
-    function.generics.fmt(formatter);
-    write_delimited(formatter, "(", ")", &function.params.items);
-    (space(), token("->"), space(), &function.return_type).fmt(formatter);
+impl Format for FunctionType {
+    fn fmt(&self, formatter: &mut Formatter) {
+        self.generics.fmt(formatter);
+        write_delimited(formatter, "(", ")", &self.params.items);
+        (space(), token("->"), space(), &self.return_type).fmt(formatter);
+    }
+}
+
+impl Format for UnionType {
+    fn fmt(&self, formatter: &mut Formatter) {
+        write_alternation(formatter, &self.types.items, "|");
+    }
+}
+
+impl Format for IntersectionType {
+    fn fmt(&self, formatter: &mut Formatter) {
+        write_alternation(formatter, &self.types.items, "&");
+    }
 }
 
 /// Union or intersection.
@@ -136,9 +154,9 @@ impl Format for TypeArgs {
 }
 
 /// Luau expression-side explicit type arguments use doubled delimiters.
-pub(crate) struct FormatExplicitTypeArgs<'args>(pub &'args TypeArgs);
+pub(crate) struct ExplicitTypeArgs<'args>(pub &'args TypeArgs);
 
-impl Format for FormatExplicitTypeArgs<'_> {
+impl Format for ExplicitTypeArgs<'_> {
     fn fmt(&self, formatter: &mut Formatter) {
         write_delimited(formatter, "<<", ">>", &self.0.args.items);
     }

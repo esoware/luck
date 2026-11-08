@@ -13,8 +13,15 @@ use core::mem::take;
 use luck_token::CodeBuffer;
 use unicode_width::UnicodeWidthStr as _;
 
-use crate::ir::{FormatElement, GroupId, LineMode, PrintMode, Tag};
+use crate::ir::{FormatElement, GroupId, LineMode, Tag};
 use crate::{FormatOptions, IndentStyle};
+
+/// Whether a group prints on one line or breaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrintMode {
+    Flat,
+    Expanded,
+}
 
 /// Lay out a document whose groups took `group_count` ids.
 pub(crate) fn print(
@@ -431,8 +438,8 @@ impl Printer {
                 FormatElement::Token(content) => self.emit_text(content),
                 FormatElement::Text(content) => self.emit_text(content),
                 FormatElement::Space => self.is_pending_space = true,
-                // Suffix bodies are comment text; anything structural
-                // inside one is an emitter bug.
+                // `Formatter::write_line_suffix` writes only a space and
+                // text, so nothing structural can reach a suffix body.
                 FormatElement::Line(_)
                 | FormatElement::ExpandParent
                 | FormatElement::LineSuffixBoundary
@@ -501,8 +508,8 @@ fn split_line_suffix(elements: &[FormatElement]) -> (&[FormatElement], &[FormatE
 mod tests {
     use crate::comments::Comments;
     use crate::ir::{
-        Format as _, FormatElement, Formatter, Tag, empty_line, format_with, group, group_with_id,
-        hard_line, if_group_breaks, indent, soft_line, soft_line_or_space, space, token,
+        Format as _, Formatter, empty_line, format_with, group, group_with_id, hard_line,
+        if_group_breaks, indent, soft_line, soft_line_or_space, space, token,
     };
     use crate::{FormatOptions, IndentStyle};
 
@@ -577,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn if_group_breaks_by_id() {
+    fn if_group_breaks_prints_when_its_group_breaks() {
         let output = print_document(
             |formatter| {
                 let id = formatter.group_id();
@@ -649,10 +656,7 @@ mod tests {
         let output = print_document(
             |formatter| {
                 token("local x = 1").fmt(formatter);
-                formatter.push(FormatElement::Tag(Tag::StartLineSuffix));
-                formatter.push(FormatElement::Space);
-                formatter.write_text("-- trailing");
-                formatter.push(FormatElement::Tag(Tag::EndLineSuffix));
+                formatter.write_line_suffix("-- trailing".into());
                 (hard_line(), token("local y = 2")).fmt(formatter);
             },
             80,

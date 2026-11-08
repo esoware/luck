@@ -11,7 +11,7 @@ Leaf text comes from token-carried values (`src/tokens.rs`), never from source s
 
 ## Gotchas that produce real bugs
 
-- **Comment safety.** If the construct can contain comments (tables, arg lists, chains), verify a comment inside it survives in place. Comment relocation is this crate's historical worst bug class. `emit_trailing_comments` drains the comments no emitter visited, after the statement.
+- **Comment safety.** If the construct can contain comments (tables, arg lists, chains), verify a comment inside it survives in place. Comment relocation is this crate's historical worst bug class. `write_trailing_comments` drains the comments no emitter visited, after the statement.
 - **Synthetic ASTs.** `format_block` runs with no source text and `Comments::none()`/`Comments::synthetic(..)`. Any new logic that reads source must degrade gracefully when it is `None` (see the blank-line policy in `format_block.rs`).
 - **Hug patterns.** A single function or table literal argument stays inline (`format_function.rs`), defeated by a magic trailing comma.
 - **Fill mode.** Simple all-positional tables pack greedily.

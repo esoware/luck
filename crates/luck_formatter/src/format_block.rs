@@ -15,7 +15,7 @@ use luck_ast::{Block, LastStatement, Statement, stmt_starts_with_paren};
 use luck_token::{CompactString, LuaVersion, Span, offset_to_index};
 
 use crate::BlockNewlineGaps;
-use crate::comments::{emit_leading_comments, emit_stalled_comments, emit_trailing_comments};
+use crate::comments::{write_leading_comments, write_stalled_comments, write_trailing_comments};
 use crate::ir::{Format, Formatter, empty_line, hard_line, token};
 
 /// A statement the block loop prints.
@@ -127,11 +127,11 @@ impl Format for Block {
             let should_surround_with_blank = item.should_surround_with_blank();
 
             if let Some(previous_item) = previous {
-                emit_separator(formatter, previous_item, start, should_surround_with_blank);
+                write_separator(formatter, previous_item, start, should_surround_with_blank);
             }
 
-            emit_stalled_comments(formatter, start);
-            let is_ignored = emit_leading_comments(formatter, start);
+            write_stalled_comments(formatter, start);
+            let is_ignored = write_leading_comments(formatter, start);
 
             // A statement starting with `(` would reparse as a call on the
             // one before it (`f()` then `(g)()` reads as `f()(g)()`), so it
@@ -146,8 +146,8 @@ impl Format for Block {
                 .format_range()
                 .is_some_and(|range| end <= range.start || start >= range.end);
 
-            emit_verbatim_or(formatter, &item, start, end, is_ignored || is_outside_range);
-            let has_own_line_comment = emit_trailing_comments(formatter, start, end);
+            write_verbatim_or(formatter, item, is_ignored || is_outside_range);
+            let has_own_line_comment = write_trailing_comments(formatter, start, end);
 
             previous = Some(PreviousItem { end, should_surround_with_blank, has_own_line_comment });
         }
@@ -182,7 +182,7 @@ fn whitespace_run_has_blank(bytes: impl Iterator<Item = u8>) -> bool {
     bytes.take_while(u8::is_ascii_whitespace).filter(|&byte| byte == b'\n').count() >= 2
 }
 
-/// Emit the line break between two adjacent items.
+/// Write the line break between two adjacent items.
 ///
 /// It becomes a blank line when the source has one or, on the source-less
 /// path, when a neighbor wants surrounding blanks or the next statement's
@@ -190,7 +190,7 @@ fn whitespace_run_has_blank(bytes: impl Iterator<Item = u8>) -> bool {
 /// rules the blank out, because it would sit between that comment and this
 /// statement, where a reparse reads the comment as leading and drops the
 /// blank.
-fn emit_separator(
+fn write_separator(
     formatter: &mut Formatter,
     previous: PreviousItem,
     next_start: u32,
@@ -218,18 +218,13 @@ fn emit_separator(
     }
 }
 
-/// Emit the statement verbatim when it opted out of formatting or sits in a
+/// Write the statement verbatim when it opted out of formatting or sits in a
 /// `format off` region, and format it otherwise.
 ///
 /// A formatted statement with an interior comment no emitter claimed is
 /// replaced by its own source, re-indented, so the comment can't drift.
-fn emit_verbatim_or(
-    formatter: &mut Formatter,
-    item: &impl Format,
-    start: u32,
-    end: u32,
-    is_opted_out: bool,
-) {
+fn write_verbatim_or(formatter: &mut Formatter, item: BlockItem<'_>, is_opted_out: bool) {
+    let Span { start, end } = item.span();
     let verbatim = if is_opted_out || formatter.comments().is_format_disabled_at(start) {
         formatter
             .comments()

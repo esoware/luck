@@ -49,43 +49,37 @@ impl Default for FormatOptions {
 /// field.
 impl From<&FormatConfig> for FormatOptions {
     fn from(config: &FormatConfig) -> Self {
-        let mut options = Self::default();
-        if let Some(line_width) = config.line_width {
-            options.line_width = line_width;
+        // Destructured in full so a new config field can't go unmapped.
+        let FormatConfig {
+            line_width,
+            indent_style,
+            indent_width,
+            quote_style,
+            hexadecimal_case,
+            call_parentheses,
+            collapse_simple_statement,
+            line_endings,
+            block_newline_gaps,
+            sort_requires,
+            space_after_function_names,
+            magic_trailing_comma,
+        } = *config;
+        let defaults = Self::default();
+        Self {
+            line_width: line_width.unwrap_or(defaults.line_width),
+            indent_style: indent_style.unwrap_or(defaults.indent_style),
+            indent_width: indent_width.unwrap_or(defaults.indent_width),
+            quote_style: quote_style.unwrap_or(defaults.quote_style),
+            hexadecimal_case: hexadecimal_case.unwrap_or(defaults.hexadecimal_case),
+            call_parentheses: call_parentheses.unwrap_or(defaults.call_parentheses),
+            collapse_simple_statement: collapse_simple_statement
+                .unwrap_or(defaults.collapse_simple_statement),
+            line_endings: line_endings.unwrap_or(defaults.line_endings),
+            block_newline_gaps: block_newline_gaps.unwrap_or(defaults.block_newline_gaps),
+            sort_requires: sort_requires.unwrap_or(defaults.sort_requires),
+            space_after_function_names: space_after_function_names
+                .unwrap_or(defaults.space_after_function_names),
+            magic_trailing_comma: magic_trailing_comma.unwrap_or(defaults.magic_trailing_comma),
         }
-        if let Some(indent_style) = config.indent_style {
-            options.indent_style = indent_style;
-        }
-        if let Some(indent_width) = config.indent_width {
-            options.indent_width = indent_width;
-        }
-        if let Some(quote_style) = config.quote_style {
-            options.quote_style = quote_style;
-        }
-        if let Some(hexadecimal_case) = config.hexadecimal_case {
-            options.hexadecimal_case = hexadecimal_case;
-        }
-        if let Some(call_parentheses) = config.call_parentheses {
-            options.call_parentheses = call_parentheses;
-        }
-        if let Some(collapse_simple_statement) = config.collapse_simple_statement {
-            options.collapse_simple_statement = collapse_simple_statement;
-        }
-        if let Some(line_endings) = config.line_endings {
-            options.line_endings = line_endings;
-        }
-        if let Some(block_newline_gaps) = config.block_newline_gaps {
-            options.block_newline_gaps = block_newline_gaps;
-        }
-        if let Some(sort_requires) = config.sort_requires {
-            options.sort_requires = sort_requires;
-        }
-        if let Some(space_after_function_names) = config.space_after_function_names {
-            options.space_after_function_names = space_after_function_names;
-        }
-        if let Some(magic_trailing_comma) = config.magic_trailing_comma {
-            options.magic_trailing_comma = magic_trailing_comma;
-        }
-        options
     }
 }

@@ -22,9 +22,8 @@ use luck_token::{
 };
 use rustc_hash::FxHashSet;
 
-use crate::ir::{
-    Format, FormatElement, Formatter, LineMode, Tag, format_with, hard_line, indent, token,
-};
+use crate::directive::{Directive, format_off_regions};
+use crate::ir::{Format, Formatter, format_with, hard_line, indent, space, token};
 
 /// A parsed comment, with its text copied out of the source.
 #[derive(Debug, Clone)]
@@ -71,79 +70,6 @@ pub struct Comments {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CommentsCheckpoint {
     printed_count: usize,
-}
-
-/// Whether a claimed list writes a separator after its last item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ListSeparator {
-    /// Table fields: a trailing comma is the expanded-layout convention.
-    AfterEachItem,
-    /// Call arguments: no dialect's grammar allows a trailing comma.
-    BetweenItems,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Directive {
-    /// `luck: format off`, which opens a region kept as written.
-    FormatOff,
-    /// `luck: format on`, which closes it.
-    FormatOn,
-    /// `luck: ignore` or `luck: format ignore`, which keeps the next
-    /// statement as written.
-    Ignore,
-}
-
-impl Directive {
-    fn parse(comment_text: &str) -> Option<Self> {
-        let body = comment_text.trim_start_matches('-').trim();
-        if body.starts_with("luck: ignore") || body.starts_with("luck: format ignore") {
-            Some(Self::Ignore)
-        } else if body.starts_with("luck: format off") {
-            Some(Self::FormatOff)
-        } else if body.starts_with("luck: format on") {
-            Some(Self::FormatOn)
-        } else {
-            None
-        }
-    }
-}
-
-/// The `-- luck: format off` regions, as directive spans.
-///
-/// Each `off` comment's span is paired with the span of the `on` that closes
-/// its region, or `None` when the region runs to end of file. An `off` inside
-/// an open region changes nothing.
-pub(crate) fn format_off_regions(comments: &[Comment], source: &str) -> Vec<(Span, Option<Span>)> {
-    let mut regions = Vec::new();
-    let mut unclosed_off: Option<Span> = None;
-    for comment in comments {
-        match Directive::parse(comment.span.text(source)) {
-            Some(Directive::FormatOff) => {
-                unclosed_off.get_or_insert(comment.span);
-            }
-            Some(Directive::FormatOn) => {
-                if let Some(off) = unclosed_off.take() {
-                    regions.push((off, Some(comment.span)));
-                }
-            }
-            Some(Directive::Ignore) | None => {}
-        }
-    }
-    if let Some(off) = unclosed_off {
-        regions.push((off, None));
-    }
-    regions
-}
-
-/// Synthetic text may leave out the `--` marker, so add it when missing.
-fn synthetic_comment_text(text: &str) -> CompactString {
-    if text.trim_start().starts_with("--") {
-        CompactString::from(text)
-    } else {
-        let mut prefixed = CompactString::from("-- ");
-        prefixed.push_str(text);
-        prefixed
-    }
 }
 
 impl Comments {
@@ -284,7 +210,7 @@ impl Comments {
     ///
     /// The cursor is sequential, so an unprinted comment before `start` stops
     /// the mark and the ones inside stay pending. They aren't lost:
-    /// [`emit_trailing_comments`] won't move a comment from before its
+    /// [`write_trailing_comments`] won't move a comment from before its
     /// statement, so the enclosing statement finds them still pending and
     /// goes verbatim over its whole span.
     pub(crate) fn mark_printed_range(&mut self, start: u32, end: u32) {
@@ -344,26 +270,39 @@ impl Comments {
             *printed_count = checkpoint.printed_count;
         }
     }
-}
 
-/// Emit a shebang line if the document starts with one.
-pub(crate) fn emit_shebang(formatter: &mut Formatter) {
-    let texts = match &mut formatter.comments_mut().store {
-        Store::Sourced { comments, printed_count, .. } => {
-            comment_texts(take_pending_while(comments, printed_count, |comment| {
-                comment.kind == CommentKind::Shebang
-            }))
+    /// Move the cursor past the leading pending comments `should_take`
+    /// accepts, given the source, and return their texts.
+    ///
+    /// Parsed input only: a synthetic comment has no offset or source to test.
+    fn take_sourced_while(
+        &mut self,
+        mut should_take: impl FnMut(&SourcedComment, &str) -> bool,
+    ) -> Vec<CompactString> {
+        match &mut self.store {
+            Store::Sourced { comments, printed_count, source, .. } => {
+                comment_texts(take_pending_while(comments, printed_count, |comment| {
+                    should_take(comment, source)
+                }))
+            }
+            Store::Synthetic { .. } | Store::Empty => Vec::new(),
         }
-        Store::Synthetic { .. } | Store::Empty => Vec::new(),
-    };
-    push_comment_lines(formatter, texts);
+    }
 }
 
-/// Emit the leading comments of the statement starting at `anchor`, each on
+/// Write a shebang line if the document starts with one.
+pub(crate) fn write_shebang(formatter: &mut Formatter) {
+    let texts = formatter
+        .comments_mut()
+        .take_sourced_while(|comment, _| comment.kind == CommentKind::Shebang);
+    write_comment_lines(formatter, texts);
+}
+
+/// Write the leading comments of the statement starting at `anchor`, each on
 /// its own line.
 ///
 /// Returns true when one of them is a `luck: ignore` directive.
-pub(crate) fn emit_leading_comments(formatter: &mut Formatter, anchor: u32) -> bool {
+pub(crate) fn write_leading_comments(formatter: &mut Formatter, anchor: u32) -> bool {
     let texts = match &mut formatter.comments_mut().store {
         Store::Sourced { comments, printed_count, .. } => {
             comment_texts(take_pending_while(comments, printed_count, |comment| {
@@ -376,24 +315,24 @@ pub(crate) fn emit_leading_comments(formatter: &mut Formatter, anchor: u32) -> b
         Store::Empty => Vec::new(),
     };
     let has_ignore = texts.iter().any(|text| Directive::parse(text) == Some(Directive::Ignore));
-    push_comment_lines(formatter, texts);
+    write_comment_lines(formatter, texts);
     has_ignore
 }
 
-/// Emit the comments stalled before the statement starting at `anchor`, each
-/// on its own line.
+/// Write the comments stalled before the statement starting at `anchor`,
+/// each on its own line.
 ///
 /// These are attached to a token no emitter asked for, such as the `then` of
 /// an enclosing `if` or a `;` the block loop skips. Left pending, they'd block
 /// the cursor for every later comment. The statement's own leading comments
-/// end the run, since [`emit_leading_comments`] owns those and reports the
+/// end the run, since [`write_leading_comments`] owns those and reports the
 /// `luck: ignore` directive.
 ///
 /// The run moves only if nothing but whitespace and `;` separates its
 /// comments from each other and from `anchor`, because crossing a token would
 /// relocate a comment. Otherwise it stays pending and the statement holding
 /// it falls back to verbatim.
-pub(crate) fn emit_stalled_comments(formatter: &mut Formatter, anchor: u32) {
+pub(crate) fn write_stalled_comments(formatter: &mut Formatter, anchor: u32) {
     let texts = match &mut formatter.comments_mut().store {
         Store::Sourced { comments, printed_count, source, .. } => {
             let pending = pending_comments(comments, *printed_count);
@@ -420,17 +359,17 @@ pub(crate) fn emit_stalled_comments(formatter: &mut Formatter, anchor: u32) {
         }
         Store::Synthetic { .. } | Store::Empty => Vec::new(),
     };
-    push_comment_lines(formatter, texts);
+    write_comment_lines(formatter, texts);
 }
 
-/// Emit the trailing comments of the statement spanning `anchor..stmt_end`,
+/// Write the trailing comments of the statement spanning `anchor..stmt_end`,
 /// plus any comments inside that span no emitter printed.
 ///
 /// Returns true when a comment went on its own line after the statement. The
 /// caller then drops the following blank line: it would sit between that
 /// comment and the next statement, and a reparse would read the comment as
 /// leading and lose the blank, breaking idempotency.
-pub(crate) fn emit_trailing_comments(
+pub(crate) fn write_trailing_comments(
     formatter: &mut Formatter,
     anchor: u32,
     stmt_end: u32,
@@ -485,9 +424,9 @@ pub(crate) fn emit_trailing_comments(
     let mut has_emitted_own_line = false;
     for placement in placements {
         match placement {
-            Placement::Suffix(text) => push_line_suffix(formatter, text),
+            Placement::Suffix(text) => formatter.write_line_suffix(text),
             Placement::OwnLine(text) => {
-                formatter.push(FormatElement::Line(LineMode::Hard));
+                hard_line().fmt(formatter);
                 formatter.write_text(text);
                 has_emitted_own_line = true;
             }
@@ -496,7 +435,7 @@ pub(crate) fn emit_trailing_comments(
     has_emitted_own_line
 }
 
-/// Emit the unprinted comments starting in `start..limit`, each on its own
+/// Write the unprinted comments starting in `start..limit`, each on its own
 /// line, for a list that hosts the comments written between its items.
 ///
 /// `start` is the list's own start. A pending comment before it was written
@@ -505,23 +444,18 @@ pub(crate) fn emit_trailing_comments(
 /// takes the whole run.
 ///
 /// Parsed input only: a synthetic comment has no offset to compare, and
-/// [`emit_leading_comments`] already places it by anchor.
-fn emit_own_line_comments_in(formatter: &mut Formatter, start: u32, limit: u32) {
-    let texts = match &mut formatter.comments_mut().store {
-        Store::Sourced { comments, printed_count, .. } => {
-            comment_texts(take_pending_while(comments, printed_count, |comment| {
-                (start..limit).contains(&comment.span.start)
-            }))
-        }
-        Store::Synthetic { .. } | Store::Empty => Vec::new(),
-    };
+/// [`write_leading_comments`] already places it by anchor.
+fn write_own_line_comments_in(formatter: &mut Formatter, start: u32, limit: u32) {
+    let texts = formatter
+        .comments_mut()
+        .take_sourced_while(|comment, _| (start..limit).contains(&comment.span.start));
     for text in texts {
-        formatter.push(FormatElement::Line(LineMode::Hard));
+        hard_line().fmt(formatter);
         formatter.write_text(text);
     }
 }
 
-/// Emit the single-line block comments written right after `offset`,
+/// Write the single-line block comments written right after `offset`,
 /// inline and in order, like the `--[[ why ]]` between a condition and its
 /// `then`.
 ///
@@ -529,57 +463,56 @@ fn emit_own_line_comments_in(formatter: &mut Formatter, start: u32, limit: u32) 
 /// the same two tokens. A line comment would swallow the rest of the line and
 /// a multi-line block comment would break it, so either one ends the run and
 /// is left to the statement-level verbatim fallback.
-pub(crate) fn emit_inline_comments_after(formatter: &mut Formatter, offset: u32) {
-    let texts = match &mut formatter.comments_mut().store {
-        Store::Sourced { comments, printed_count, source, .. } => {
-            let mut gap_start = offset;
-            comment_texts(take_pending_while(comments, printed_count, |comment| {
-                if comment.span.start < gap_start
-                    || comment.kind != CommentKind::SingleLineBlock
-                    || !is_code_free(Span::new(gap_start, comment.span.start).text(source))
-                {
-                    return false;
-                }
-                gap_start = comment.span.end;
-                true
-            }))
+pub(crate) fn write_inline_comments_after(formatter: &mut Formatter, offset: u32) {
+    let mut gap_start = offset;
+    let texts = formatter.comments_mut().take_sourced_while(|comment, source| {
+        if comment.span.start < gap_start
+            || comment.kind != CommentKind::SingleLineBlock
+            || !is_code_free(Span::new(gap_start, comment.span.start).text(source))
+        {
+            return false;
         }
-        Store::Synthetic { .. } | Store::Empty => Vec::new(),
-    };
+        gap_start = comment.span.end;
+        true
+    });
     for text in texts {
-        formatter.push(FormatElement::Space);
+        space().fmt(formatter);
         formatter.write_text(text);
     }
 }
 
-/// Emit the comments written on the same line as `offset` as line
+/// Write the comments written on the same line as `offset` as line
 /// suffixes, like the `-- why` after a list item's comma.
 ///
-/// The run ends at `limit`, the next item the caller emits. It also ends at a
-/// newline, since [`emit_own_line_comments_in`] takes the comments after one,
+/// The run ends at `limit`, the next item the caller writes. It also ends at a
+/// newline, since [`write_own_line_comments_in`] takes the comments after one,
 /// and at a comment pending from before `offset`, which stalled outside
 /// this list and isn't the list's to place.
-fn emit_same_line_comments_after(formatter: &mut Formatter, offset: u32, limit: u32) {
-    let texts = match &mut formatter.comments_mut().store {
-        Store::Sourced { comments, printed_count, source, .. } => {
-            let mut gap_start = offset;
-            comment_texts(take_pending_while(comments, printed_count, |comment| {
-                if comment.span.start < gap_start || comment.span.start >= limit {
-                    return false;
-                }
-                let gap = Span::new(gap_start, comment.span.start).text(source);
-                if gap.contains(['\n', '\r']) {
-                    return false;
-                }
-                gap_start = comment.span.end;
-                true
-            }))
+fn write_same_line_comments_after(formatter: &mut Formatter, offset: u32, limit: u32) {
+    let mut gap_start = offset;
+    let texts = formatter.comments_mut().take_sourced_while(|comment, source| {
+        if comment.span.start < gap_start || comment.span.start >= limit {
+            return false;
         }
-        Store::Synthetic { .. } | Store::Empty => Vec::new(),
-    };
+        let gap = Span::new(gap_start, comment.span.start).text(source);
+        if gap.contains(['\n', '\r']) {
+            return false;
+        }
+        gap_start = comment.span.end;
+        true
+    });
     for text in texts {
-        push_line_suffix(formatter, text);
+        formatter.write_line_suffix(text);
     }
+}
+
+/// Whether a claimed list writes a separator after its last item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListSeparator {
+    /// Table fields: a trailing comma is the expanded-layout convention.
+    AfterEachItem,
+    /// Call arguments: no dialect's grammar allows a trailing comma.
+    BetweenItems,
 }
 
 /// Write a list that holds comments, one item per line, so each comment stays
@@ -607,29 +540,29 @@ pub(crate) fn write_commented_list<T>(
         let mut remaining = items;
         while let [item, rest @ ..] = remaining {
             let item_span = span_of(item);
-            emit_own_line_comments_in(indented, span.start, item_span.start);
+            write_own_line_comments_in(indented, span.start, item_span.start);
             hard_line().fmt(indented);
             item.fmt(indented);
             if separator == ListSeparator::AfterEachItem || !rest.is_empty() {
                 token(",").fmt(indented);
             }
             let next_start = rest.first().map_or(span.end, |next| span_of(next).start);
-            emit_same_line_comments_after(indented, item_span.end, next_start);
+            write_same_line_comments_after(indented, item_span.end, next_start);
             remaining = rest;
         }
-        emit_own_line_comments_in(indented, span.start, span.end);
+        write_own_line_comments_in(indented, span.start, span.end);
     }))
     .fmt(formatter);
     (hard_line(), token(close)).fmt(formatter);
 }
 
-/// Emit the comments in an empty region, such as a function body with no
+/// Write the comments in an empty region, such as a function body with no
 /// statements, one per line.
 ///
 /// On the parsed path that's the [`dangling_run`] before `end`; on the
 /// synthetic path, every comment anchored at `anchor` (the block's span
 /// start). The caller writes the line breaks around them.
-pub(crate) fn emit_dangling_comments(formatter: &mut Formatter, anchor: u32, end: u32) {
+pub(crate) fn write_dangling_comments(formatter: &mut Formatter, anchor: u32, end: u32) {
     let texts = match &mut formatter.comments_mut().store {
         Store::Sourced { comments, printed_count, source, .. } => {
             let run = dangling_run(pending_comments(comments, *printed_count), source, end);
@@ -641,14 +574,14 @@ pub(crate) fn emit_dangling_comments(formatter: &mut Formatter, anchor: u32, end
     };
     for (index, text) in texts.into_iter().enumerate() {
         if index > 0 {
-            formatter.push(FormatElement::Line(LineMode::Hard));
+            hard_line().fmt(formatter);
         }
         formatter.write_text(text);
     }
 }
 
 /// Flush every comment still unprinted at end of file.
-pub(crate) fn emit_remaining_comments(formatter: &mut Formatter, has_stmts_before: bool) {
+pub(crate) fn write_remaining_comments(formatter: &mut Formatter, has_stmts_before: bool) {
     let texts = match &mut formatter.comments_mut().store {
         Store::Sourced { comments, printed_count, .. } => {
             let taken = comment_texts(pending_comments(comments, *printed_count));
@@ -664,7 +597,7 @@ pub(crate) fn emit_remaining_comments(formatter: &mut Formatter, has_stmts_befor
     };
     for (index, text) in texts.into_iter().enumerate() {
         if index > 0 || has_stmts_before {
-            formatter.push(FormatElement::Line(LineMode::Hard));
+            hard_line().fmt(formatter);
         }
         formatter.write_text(text);
     }
@@ -672,19 +605,11 @@ pub(crate) fn emit_remaining_comments(formatter: &mut Formatter, has_stmts_befor
 
 /// Each comment followed by a line break, the shape of comments above a
 /// statement.
-fn push_comment_lines(formatter: &mut Formatter, texts: Vec<CompactString>) {
+fn write_comment_lines(formatter: &mut Formatter, texts: Vec<CompactString>) {
     for text in texts {
         formatter.write_text(text);
-        formatter.push(FormatElement::Line(LineMode::Hard));
+        hard_line().fmt(formatter);
     }
-}
-
-/// A comment deferred to the end of the line it trails.
-fn push_line_suffix(formatter: &mut Formatter, text: CompactString) {
-    formatter.push(FormatElement::Tag(Tag::StartLineSuffix));
-    formatter.push(FormatElement::Space);
-    formatter.write_text(text);
-    formatter.push(FormatElement::Tag(Tag::EndLineSuffix));
 }
 
 /// The comments the cursor hasn't reached yet.
@@ -750,6 +675,17 @@ fn is_code_free(text: &str) -> bool {
     text.bytes().all(|byte| byte.is_ascii_whitespace() || byte == b';')
 }
 
+/// Synthetic text may leave out the `--` marker, so add it when missing.
+fn synthetic_comment_text(text: &str) -> CompactString {
+    if text.trim_start().starts_with("--") {
+        CompactString::from(text)
+    } else {
+        let mut prefixed = CompactString::from("-- ");
+        prefixed.push_str(text);
+        prefixed
+    }
+}
+
 /// Drain the comments at `anchor` matching `filter`, in insertion order.
 fn take_synthetic(
     comments: &mut BTreeMap<u32, Vec<SyntheticComment>>,
@@ -777,6 +713,7 @@ fn take_synthetic(
 mod tests {
     use super::*;
     use crate::FormatOptions;
+    use crate::ir::{FormatElement, Tag};
 
     fn make_comment(
         start: u32,
@@ -806,10 +743,10 @@ mod tests {
         let mut formatter =
             formatter_over(Comments::from_source(&comments, source, LuaVersion::Lua54));
 
-        assert!(!emit_leading_comments(&mut formatter, 11));
+        assert!(!write_leading_comments(&mut formatter, 11));
         let first_element_count = formatter.elements().len();
         assert!(first_element_count > 0);
-        emit_leading_comments(&mut formatter, 11);
+        write_leading_comments(&mut formatter, 11);
         assert_eq!(formatter.elements().len(), first_element_count);
     }
 
@@ -819,7 +756,7 @@ mod tests {
         let comments = vec![make_comment(0, 15, 16, CommentKind::Line, CommentPosition::Leading)];
         let mut formatter =
             formatter_over(Comments::from_source(&comments, source, LuaVersion::Lua54));
-        assert!(emit_leading_comments(&mut formatter, 16));
+        assert!(write_leading_comments(&mut formatter, 16));
     }
 
     #[test]
@@ -838,14 +775,14 @@ mod tests {
         ];
         let mut formatter = formatter_over(Comments::synthetic(synthetic));
 
-        assert!(!emit_leading_comments(&mut formatter, 5));
+        assert!(!write_leading_comments(&mut formatter, 5));
         let has_prefixed = formatter
             .elements()
             .iter()
             .any(|element| matches!(element, FormatElement::Text(text) if text == "-- upvalue u0"));
         assert!(has_prefixed, "marker prefix added to bare text");
 
-        emit_trailing_comments(&mut formatter, 5, 0);
+        write_trailing_comments(&mut formatter, 5, 0);
         let has_suffix = formatter
             .elements()
             .iter()
@@ -865,7 +802,7 @@ mod tests {
         assert!(!comments.has_dangling_comments(8, 0));
 
         let mut formatter = formatter_over(comments);
-        emit_dangling_comments(&mut formatter, 9, 0);
+        write_dangling_comments(&mut formatter, 9, 0);
         let is_emitted = formatter.elements().iter().any(
             |element| matches!(element, FormatElement::Text(text) if text == "-- unreachable"),
         );
@@ -900,7 +837,7 @@ mod tests {
             },
         ];
         let mut formatter = formatter_over(Comments::synthetic(synthetic));
-        emit_remaining_comments(&mut formatter, false);
+        write_remaining_comments(&mut formatter, false);
         let texts: Vec<&str> = formatter
             .elements()
             .iter()
@@ -912,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn format_disabled_ranges() {
+    fn format_off_disables_formatting_until_format_on() {
         let source = "-- luck: format off\nlocal x=1\n-- luck: format on\nlocal y = 2";
         let source_comments = vec![
             make_comment(0, 19, 20, CommentKind::Line, CommentPosition::Leading),

@@ -3,7 +3,7 @@ use core::ops::Range;
 use luck_ast::Block;
 use luck_token::{LuaVersion, index_to_offset};
 
-use crate::comments::{Comments, emit_remaining_comments, emit_shebang};
+use crate::comments::{Comments, write_remaining_comments, write_shebang};
 use crate::format_block::first_item_start;
 use crate::ir::{Format as _, Formatter};
 use crate::sort_requires::sort_requires_in_source;
@@ -26,12 +26,12 @@ fn print_block(
     format_range: Option<Range<u32>>,
 ) -> String {
     let mut formatter = Formatter::new(*options, comments, format_range);
-    emit_shebang(&mut formatter);
+    write_shebang(&mut formatter);
     block.fmt(&mut formatter);
     // Empty and error statements print nothing, so a block holding only
     // those must not open a line before the trailing comment flush.
     let has_stmts = first_item_start(block).is_some();
-    emit_remaining_comments(&mut formatter, has_stmts);
+    write_remaining_comments(&mut formatter, has_stmts);
     let mut output = formatter.print();
 
     let trimmed = output.trim_end();

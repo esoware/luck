@@ -618,7 +618,7 @@ fn requested_blank_lines_separate_stmts() {
 }
 
 #[test]
-fn empty_block_does_not_panic() {
+fn empty_block_formats_to_parseable_output() {
     let synth = Synth::new();
     let block = synth.block(vec![], None);
     let output = format_block(&block, Comments::none(), &FormatOptions::default());
