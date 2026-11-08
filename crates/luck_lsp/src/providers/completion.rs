@@ -22,7 +22,7 @@ use tower_lsp::lsp_types::{
 
 use crate::document::DocumentState;
 use crate::providers::cursor::find_string_arg_at;
-use crate::stdlib_render::param_label;
+use crate::providers::stdlib_render::param_label;
 
 pub(crate) fn completion(document: &DocumentState, position: Position) -> CompletionResponse {
     let offset = document.offset(position);

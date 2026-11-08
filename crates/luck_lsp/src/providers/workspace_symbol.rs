@@ -9,9 +9,7 @@
 
 use alloc::sync::Arc;
 
-use tower_lsp::lsp_types::{
-    DocumentSymbol, DocumentSymbolResponse, Location, SymbolInformation, Url,
-};
+use tower_lsp::lsp_types::{DocumentSymbol, Location, SymbolInformation, Url};
 
 use crate::document::DocumentState;
 use crate::providers::document_symbol;
@@ -25,10 +23,7 @@ pub(crate) fn workspace_symbols(
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
     for (uri, document) in documents {
-        let DocumentSymbolResponse::Nested(symbols) = document_symbol::document_symbols(document)
-        else {
-            continue;
-        };
+        let symbols = document_symbol::document_symbols(document);
         flatten(&symbols, uri, None, &query_lower, &mut results);
         if results.len() >= MAX_RESULTS {
             results.truncate(MAX_RESULTS);

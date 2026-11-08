@@ -13,7 +13,7 @@ use tower_lsp::lsp_types::{
 
 use crate::document::DocumentState;
 use crate::providers::cursor::find_call_site_at;
-use crate::stdlib_render::{CONSTANT_PREVIEW_LIMIT, param_label};
+use crate::providers::stdlib_render::{constant_preview, param_label};
 
 pub(crate) fn signature_help(
     document: &DocumentState,
@@ -95,20 +95,11 @@ fn build_signature(
 
 fn param_documentation(param: &StdlibParam) -> Option<Documentation> {
     if let StdlibArgKind::Constant(values) = &param.kind {
-        let preview = values
-            .iter()
-            .take(CONSTANT_PREVIEW_LIMIT)
-            .map(|constant| format!("`\"{}\"`", constant.value))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let value = if values.len() > CONSTANT_PREVIEW_LIMIT {
-            format!("one of: {preview}, ... ({} values)", values.len())
-        } else {
-            format!("one of: {preview}")
-        };
+        let preview =
+            constant_preview(values, ", ", |constant| format!("`\"{}\"`", constant.value));
         return Some(Documentation::MarkupContent(MarkupContent {
             kind: MarkupKind::Markdown,
-            value,
+            value: format!("one of: {preview}"),
         }));
     }
     if let Some(deprecation) = &param.deprecated {
@@ -172,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn signature_help_works_at_statement_position() {
+    fn signature_help_finds_a_call_at_statement_position() {
         // Statement-position calls never pass through visit_expression;
         // the call hook must find them.
         let text = "collectgarbage('collect')";

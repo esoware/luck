@@ -35,12 +35,10 @@
 extern crate alloc;
 
 mod backend;
-mod diagnostics;
 mod document;
 mod line_index;
 mod providers;
 mod settings;
-mod stdlib_render;
 mod transport;
 
 pub use backend::{Backend, Notifier};

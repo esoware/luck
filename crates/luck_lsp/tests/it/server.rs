@@ -1,14 +1,6 @@
 //! Tests that call the `LanguageServer` methods directly, with
 //! `CapturedNotifier` standing in for the client and no transport.
 
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-#![cfg(test)]
-
-extern crate alloc;
-
 use alloc::sync::Arc;
 use core::str::FromStr as _;
 use std::fs;
@@ -122,7 +114,7 @@ async fn initialize_advertises_required_capabilities() {
 }
 
 #[tokio::test]
-async fn format_on_save_returns_expected_edits() {
+async fn formatting_normalizes_spacing() {
     let notifier = CapturedNotifier::default();
     let server = Backend::new(notifier.clone());
     let uri = workspace_uri("ugly.lua");
@@ -485,6 +477,8 @@ async fn document_link_resolves_luau_relative_import() {
     // Luau relative imports go through the shared resolver, so `./sibling`
     // survives instead of being mangled by a dots-to-slashes rewrite.
     let directory = tempfile::tempdir().expect("tempdir");
+    // Pins the dialect, so no `luck.json` above the temp root can pick it.
+    fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
     fs::write(directory.path().join("sibling.luau"), "return {}\n").expect("write sibling.luau");
     let main_path = directory.path().join("main.luau");
     let source = "local s = require(\"./sibling\")\n";
@@ -515,6 +509,8 @@ async fn document_link_resolves_luau_relative_import() {
 async fn document_link_resolves_luau_alias_import() {
     // `@alias` imports resolve through the `.luaurc` alias table.
     let directory = tempfile::tempdir().expect("tempdir");
+    // Pins the dialect, so no `luck.json` above the temp root can pick it.
+    fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
     let shared = directory.path().join("shared");
     fs::create_dir_all(&shared).expect("mkdir shared");
     fs::write(shared.join("common.luau"), "return {}\n").expect("write common.luau");
@@ -639,7 +635,7 @@ async fn goto_definition_jumps_to_declaration() {
 }
 
 #[tokio::test]
-async fn goto_definition_none_for_global() {
+async fn goto_definition_returns_none_for_a_global() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("definition_global.lua");
     open(&server, &uri, "print(1)\n").await;
@@ -747,7 +743,7 @@ async fn rename_updates_declaration_and_references() {
 }
 
 #[tokio::test]
-async fn rename_rejects_keywords_and_used_names() {
+async fn rename_rejects_keywords_used_names_and_builtins() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("rename_reject.lua");
     open(&server, &uri, "local count = 1\nlocal other = count\n").await;
@@ -879,7 +875,7 @@ async fn semantic_tokens_range_returns_subset() {
 }
 
 #[tokio::test]
-async fn collectgarbage_option_string_completes() {
+async fn completion_offers_collectgarbage_options_inside_the_string() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("gc.lua");
     let text = "collectgarbage('c')";

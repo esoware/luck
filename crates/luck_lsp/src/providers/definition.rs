@@ -19,11 +19,7 @@ pub(crate) fn goto(
 
     // A `require("...")` string under the cursor that resolves to a file
     // jumps to the top of that file.
-    if let Some(module_uri) = document_link::document_links(document, uri, settings)
-        .into_iter()
-        .filter(|link| position >= link.range.start && position <= link.range.end)
-        .find_map(|link| link.target)
-    {
+    if let Some(module_uri) = document_link::target_at(document, uri, settings, position) {
         return Some(GotoDefinitionResponse::Scalar(Location {
             uri: module_uri,
             range: Range::default(),

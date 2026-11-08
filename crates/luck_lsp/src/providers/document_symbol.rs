@@ -9,12 +9,12 @@
 
 use luck_ast::{Block, Expression, FunctionBody, FunctionName, Statement, Var, Visitor};
 use luck_token::Span;
-use tower_lsp::lsp_types::{DocumentSymbol, DocumentSymbolResponse, SymbolKind};
+use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
 
 use crate::document::DocumentState;
 
-pub(crate) fn document_symbols(document: &DocumentState) -> DocumentSymbolResponse {
-    DocumentSymbolResponse::Nested(outline(document, &document.parsed.block))
+pub(crate) fn document_symbols(document: &DocumentState) -> Vec<DocumentSymbol> {
+    outline(document, &document.parsed.block)
 }
 
 /// The symbols declared in `block` and in the control-flow blocks nested in

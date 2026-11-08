@@ -8,7 +8,7 @@ use luck_ast::{
     Expression, Field, FunctionCall, GenericTypeList, Statement, TableConstructor, Type,
     TypeDeclarationValue, TypeField, Var, Visitor,
 };
-use luck_semantic::{ScopeTree, StdlibEntry, SymbolKind};
+use luck_semantic::{StdlibEntry, SymbolKind};
 use luck_token::{Span, Token, TokenKind, index_to_offset, offset_to_index};
 use rustc_hash::FxHashMap;
 use tower_lsp::lsp_types::{
@@ -82,9 +82,8 @@ pub(crate) fn semantic_tokens(document: &DocumentState) -> SemanticTokensResult 
 /// Deltas are re-encoded from the filtered list, so the first token is
 /// relative to the document start exactly as the protocol requires.
 pub(crate) fn in_range(document: &DocumentState, range: Range) -> SemanticTokensRangeResult {
-    let start = document.offset(range.start);
-    let end = document.offset(range.end);
-    SemanticTokensRangeResult::Tokens(encode_tokens(document, Some((start, end))))
+    let byte_range = Span::new(document.offset(range.start), document.offset(range.end));
+    SemanticTokensRangeResult::Tokens(encode_tokens(document, Some(byte_range)))
 }
 
 /// How a name is used, judged from the tokens right after it.
@@ -121,188 +120,176 @@ fn is_screaming_case(name: &str) -> bool {
         && chars.all(|rest| rest.is_ascii_uppercase() || rest.is_ascii_digit() || rest == '_')
 }
 
-fn encode_tokens(document: &DocumentState, byte_range: Option<(u32, u32)>) -> SemanticTokens {
+fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> SemanticTokens {
     let lex_result = luck_lexer::lex(document.text(), document.target.lua_version());
-    let tokens = &lex_result.tokens;
-
-    let mut raw_tokens = RawTokens::new();
-    classify_scope_names(document, tokens, &mut raw_tokens);
-    classify_members(document, tokens, &mut raw_tokens);
-    AstTokens { raw_tokens: &mut raw_tokens }.visit_block(&document.parsed.block);
-    propagate_to_references(&document.semantic.scope_tree, &mut raw_tokens);
-    delta_encode(document, raw_tokens, byte_range)
+    let mut classifier =
+        Classifier { document, tokens: &lex_result.tokens, raw_tokens: RawTokens::new() };
+    classifier.classify_scope_names();
+    classifier.classify_members();
+    classifier.visit_block(&document.parsed.block);
+    classifier.propagate_to_references();
+    classifier.delta_encode(byte_range)
 }
 
-/// Classifies every declaration and reference the scope tree recorded.
-fn classify_scope_names(document: &DocumentState, tokens: &[Token], raw_tokens: &mut RawTokens) {
-    let stdlib = document.semantic.stdlib();
-    let tree = &document.semantic.scope_tree;
+/// The classification passes, run in order over one token map.
+struct Classifier<'document> {
+    document: &'document DocumentState,
+    tokens: &'document [Token],
+    raw_tokens: RawTokens,
+}
 
-    let mut identifier_indexes_by_offset: FxHashMap<u32, usize> = FxHashMap::default();
-    for (index, token) in tokens.iter().enumerate() {
-        if matches!(token.kind, TokenKind::Identifier(_)) {
-            identifier_indexes_by_offset.insert(token.span.start, index);
+impl Classifier<'_> {
+    /// Classifies every declaration and reference the scope tree recorded.
+    fn classify_scope_names(&mut self) {
+        let Self { document, tokens, raw_tokens } = self;
+        let stdlib = document.semantic.stdlib();
+        let tree = &document.semantic.scope_tree;
+
+        let mut identifier_indexes_by_offset: FxHashMap<u32, usize> = FxHashMap::default();
+        for (index, token) in tokens.iter().enumerate() {
+            if matches!(token.kind, TokenKind::Identifier(_)) {
+                identifier_indexes_by_offset.insert(token.span.start, index);
+            }
         }
-    }
 
-    let classify_bare = |name: &str, span: Span, base: Classification| -> Classification {
-        let mut classification = base;
-        if classification.token_type == TYPE_VARIABLE
-            && let Some(&index) = identifier_indexes_by_offset.get(&span.start)
-        {
-            match value_shape(tokens, index) {
-                ValueShape::Called | ValueShape::AssignedFunction => {
-                    classification.token_type = TYPE_FUNCTION;
-                }
-                ValueShape::Plain => {
-                    if is_screaming_case(name) {
-                        classification.modifiers |= MODIFIER_READONLY;
+        let classify_bare = |name: &str, span: Span, base: Classification| -> Classification {
+            let mut classification = base;
+            if classification.token_type == TYPE_VARIABLE
+                && let Some(&index) = identifier_indexes_by_offset.get(&span.start)
+            {
+                match value_shape(tokens, index) {
+                    ValueShape::Called | ValueShape::AssignedFunction => {
+                        classification.token_type = TYPE_FUNCTION;
+                    }
+                    ValueShape::Plain => {
+                        if is_screaming_case(name) {
+                            classification.modifiers |= MODIFIER_READONLY;
+                        }
                     }
                 }
             }
-        }
-        classification
-    };
+            classification
+        };
 
-    for symbol in &tree.symbols {
-        if symbol.name == "self"
-            || !symbol.name.starts_with(|first: char| first.is_ascii_alphabetic() || first == '_')
-        {
-            continue;
+        for symbol in &tree.symbols {
+            if symbol.name == "self"
+                || !symbol
+                    .name
+                    .starts_with(|first: char| first.is_ascii_alphabetic() || first == '_')
+            {
+                continue;
+            }
+            let span = symbol.definition_span;
+            let classification = classify_bare(&symbol.name, span, symbol_classify(symbol.kind));
+            raw_tokens.insert(span.start, (span, classification));
         }
-        let span = symbol.definition_span;
-        let classification = classify_bare(&symbol.name, span, symbol_classify(symbol.kind));
-        raw_tokens.insert(span.start, (span, classification));
+
+        for reference in &tree.references {
+            if reference.name == "self" {
+                continue;
+            }
+            let base = reference.resolved.map_or_else(
+                || {
+                    stdlib
+                        .globals
+                        .get(reference.name.as_str())
+                        .map_or(Classification::plain(TYPE_VARIABLE), stdlib_classify)
+                },
+                |symbol_id| symbol_classify(tree.symbol(symbol_id).kind),
+            );
+            let classification = classify_bare(&reference.name, reference.span, base);
+            raw_tokens.insert(reference.span.start, (reference.span, classification));
+        }
     }
 
-    for reference in &tree.references {
-        if reference.name == "self" {
-            continue;
-        }
-        let base = reference.resolved.map_or_else(
-            || {
-                stdlib
-                    .globals
-                    .get(reference.name.as_str())
-                    .map_or(Classification::plain(TYPE_VARIABLE), stdlib_classify)
-            },
-            |symbol_id| symbol_classify(tree.symbol(symbol_id).kind),
-        );
-        let classification = classify_bare(&reference.name, reference.span, base);
-        raw_tokens.insert(reference.span.start, (reference.span, classification));
-    }
-}
-
-/// Classifies names after a `.` or `:`. Each one walks its whole chain back to
-/// the root so nested paths classify too: `Enum.Material.Grass`,
-/// `game:GetService`, and `f:read` on a shaped local, not only `math.floor`.
-fn classify_members(document: &DocumentState, tokens: &[Token], raw_tokens: &mut RawTokens) {
-    for (index, token) in tokens.iter().enumerate() {
-        let TokenKind::Identifier(name) = &token.kind else {
-            continue;
-        };
-        let Some((separator, before_separator)) =
-            tokens.get(..index).and_then(<[Token]>::split_last)
-        else {
-            continue;
-        };
-        if !matches!(separator.kind, TokenKind::Dot | TokenKind::Colon) {
-            continue;
-        }
-        let stdlib_member =
-            dotted_path(name.as_str(), before_separator).and_then(|(segments, root_span)| {
-                document.semantic.resolve_stdlib_path(&segments, root_span).map(member_classify)
-            });
-        let classification = stdlib_member.unwrap_or_else(|| match value_shape(tokens, index) {
-            ValueShape::Called | ValueShape::AssignedFunction => Classification::plain(TYPE_METHOD),
-            ValueShape::Plain => Classification {
-                token_type: TYPE_PROPERTY,
-                modifiers: if is_screaming_case(name) { MODIFIER_READONLY } else { 0 },
-            },
-        });
-        raw_tokens.insert(token.span.start, (token.span, classification));
-    }
-}
-
-/// The path ending in `name`, root first, plus the root's span.
-/// `preceding_tokens` is everything before `name`'s separator, which may be
-/// `.` or `:`; the rest of the chain is dots only.
-fn dotted_path<'token>(
-    name: &'token str,
-    preceding_tokens: &'token [Token],
-) -> Option<(Vec<&'token str>, Span)> {
-    let mut segments: Vec<&str> = vec![name];
-    let mut remaining_tokens = preceding_tokens;
-    loop {
-        let (base, before_base) = remaining_tokens.split_last()?;
-        let TokenKind::Identifier(base_name) = &base.kind else {
-            return None;
-        };
-        segments.push(base_name.as_str());
-        if let Some((Token { kind: TokenKind::Dot, .. }, before_dot)) = before_base.split_last() {
-            remaining_tokens = before_dot;
-        } else {
-            segments.reverse();
-            return Some((segments, base.span));
+    /// Classifies names after a `.` or `:`. Each one walks its whole chain back
+    /// to the root so nested paths classify too: `Enum.Material.Grass`,
+    /// `game:GetService`, and `f:read` on a shaped local, not only `math.floor`.
+    fn classify_members(&mut self) {
+        let Self { document, tokens, raw_tokens } = self;
+        for (index, token) in tokens.iter().enumerate() {
+            let TokenKind::Identifier(name) = &token.kind else {
+                continue;
+            };
+            let Some((separator, before_separator)) =
+                tokens.get(..index).and_then(<[Token]>::split_last)
+            else {
+                continue;
+            };
+            if !matches!(separator.kind, TokenKind::Dot | TokenKind::Colon) {
+                continue;
+            }
+            let stdlib_member =
+                dotted_path(name.as_str(), before_separator).and_then(|(segments, root_span)| {
+                    document.semantic.resolve_stdlib_path(&segments, root_span).map(member_classify)
+                });
+            let classification =
+                stdlib_member.unwrap_or_else(|| match value_shape(tokens, index) {
+                    ValueShape::Called | ValueShape::AssignedFunction => {
+                        Classification::plain(TYPE_METHOD)
+                    }
+                    ValueShape::Plain => Classification {
+                        token_type: TYPE_PROPERTY,
+                        modifiers: if is_screaming_case(name) { MODIFIER_READONLY } else { 0 },
+                    },
+                });
+            raw_tokens.insert(token.span.start, (token.span, classification));
         }
     }
-}
 
-/// Carries a declaration's function type and readonly modifier to its
-/// references.
-fn propagate_to_references(tree: &ScopeTree, raw_tokens: &mut RawTokens) {
-    for symbol in &tree.symbols {
-        let Some(&(_, declared)) = raw_tokens.get(&symbol.definition_span.start) else {
-            continue;
-        };
-        for reference_id in &symbol.reference_ids {
-            let reference = tree.reference(*reference_id);
-            if let Some((_, classification)) = raw_tokens.get_mut(&reference.span.start) {
-                if !symbol.is_modified && declared.token_type == TYPE_FUNCTION {
-                    classification.token_type = TYPE_FUNCTION;
+    /// Carries a declaration's function type and readonly modifier to its
+    /// references.
+    fn propagate_to_references(&mut self) {
+        let Self { document, raw_tokens, .. } = self;
+        let tree = &document.semantic.scope_tree;
+        for symbol in &tree.symbols {
+            let Some(&(_, declared)) = raw_tokens.get(&symbol.definition_span.start) else {
+                continue;
+            };
+            for reference_id in &symbol.reference_ids {
+                let reference = tree.reference(*reference_id);
+                if let Some((_, classification)) = raw_tokens.get_mut(&reference.span.start) {
+                    if !symbol.is_modified && declared.token_type == TYPE_FUNCTION {
+                        classification.token_type = TYPE_FUNCTION;
+                    }
+                    classification.modifiers |= declared.modifiers & MODIFIER_READONLY;
                 }
-                classification.modifiers |= declared.modifiers & MODIFIER_READONLY;
             }
         }
     }
-}
 
-fn delta_encode(
-    document: &DocumentState,
-    raw_tokens: RawTokens,
-    byte_range: Option<(u32, u32)>,
-) -> SemanticTokens {
-    let mut data: Vec<SemanticToken> = Vec::with_capacity(raw_tokens.len());
-    let mut previous = Position { line: 0, character: 0 };
-    for (span, classification) in raw_tokens.into_values() {
-        if span.is_empty()
-            || byte_range
-                .is_some_and(|(start, end)| start >= end || span.end <= start || span.start >= end)
-        {
-            continue;
+    fn delta_encode(self, byte_range: Option<Span>) -> SemanticTokens {
+        let Self { document, raw_tokens, .. } = self;
+        let mut data: Vec<SemanticToken> = Vec::with_capacity(raw_tokens.len());
+        let mut previous = Position { line: 0, character: 0 };
+        for (span, classification) in raw_tokens.into_values() {
+            if span.is_empty()
+                || byte_range.is_some_and(|Span { start, end }| {
+                    start >= end || span.end <= start || span.start >= end
+                })
+            {
+                continue;
+            }
+            let Position { line, character } = document.position(span.start);
+            let delta_line = line.saturating_sub(previous.line);
+            let delta_start = if delta_line == 0 {
+                character.saturating_sub(previous.character)
+            } else {
+                character
+            };
+            data.push(SemanticToken {
+                delta_line,
+                delta_start,
+                length: utf16_length(document.text(), span),
+                token_type: classification.token_type,
+                token_modifiers_bitset: classification.modifiers,
+            });
+            previous = Position { line, character };
         }
-        let Position { line, character } = document.position(span.start);
-        let delta_line = line.saturating_sub(previous.line);
-        let delta_start =
-            if delta_line == 0 { character.saturating_sub(previous.character) } else { character };
-        data.push(SemanticToken {
-            delta_line,
-            delta_start,
-            length: utf16_length(document.text(), span),
-            token_type: classification.token_type,
-            token_modifiers_bitset: classification.modifiers,
-        });
-        previous = Position { line, character };
+
+        SemanticTokens { result_id: None, data }
     }
 
-    SemanticTokens { result_id: None, data }
-}
-
-struct AstTokens<'tokens> {
-    raw_tokens: &'tokens mut RawTokens,
-}
-
-impl AstTokens<'_> {
     fn insert(&mut self, span: Span, token_type: u32) {
         self.raw_tokens.insert(span.start, (span, Classification::plain(token_type)));
     }
@@ -343,7 +330,31 @@ impl AstTokens<'_> {
     }
 }
 
-impl<'ast> Visitor<'ast> for AstTokens<'_> {
+/// The path ending in `name`, root first, plus the root's span.
+/// `preceding_tokens` is everything before `name`'s separator, which may be
+/// `.` or `:`; the rest of the chain is dots only.
+fn dotted_path<'token>(
+    name: &'token str,
+    preceding_tokens: &'token [Token],
+) -> Option<(Vec<&'token str>, Span)> {
+    let mut segments: Vec<&str> = vec![name];
+    let mut remaining_tokens = preceding_tokens;
+    loop {
+        let (base, before_base) = remaining_tokens.split_last()?;
+        let TokenKind::Identifier(base_name) = &base.kind else {
+            return None;
+        };
+        segments.push(base_name.as_str());
+        if let Some((Token { kind: TokenKind::Dot, .. }, before_dot)) = before_base.split_last() {
+            remaining_tokens = before_dot;
+        } else {
+            segments.reverse();
+            return Some((segments, base.span));
+        }
+    }
+}
+
+impl<'ast> Visitor<'ast> for Classifier<'_> {
     fn visit_statement(&mut self, stmt: &'ast Statement) {
         match stmt {
             // Luau
@@ -787,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn utf16_crlf_interpolation_and_half_open_ranges() {
+    fn utf16_positions_in_interpolations_and_half_open_ranges_across_crlf() {
         let document = parse_document(
             "local text = `\u{1F600} {object.field}`\r\nPlayers = Services.Players\r\n",
             LuaTarget::Luau,

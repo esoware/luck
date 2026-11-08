@@ -7,7 +7,7 @@ use tower_lsp::lsp_types::FoldingRange;
 
 use crate::document::DocumentState;
 
-pub(crate) fn ranges(document: &DocumentState) -> Vec<FoldingRange> {
+pub(crate) fn folding_ranges(document: &DocumentState) -> Vec<FoldingRange> {
     let mut folder = Folder { document, ranges: Vec::new() };
     folder.visit_block(&document.parsed.block);
     folder.ranges

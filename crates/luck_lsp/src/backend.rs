@@ -6,7 +6,7 @@
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 
-use luck_formatter::FormatResult;
+use luck_core::LuaTarget;
 use luck_linter::LintDiagnostic;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
@@ -21,7 +21,7 @@ use tower_lsp::lsp_types::{
     DocumentSymbolResponse, FileSystemWatcher, FoldingRange, FoldingRangeParams,
     FoldingRangeProviderCapability, GlobPattern, GotoDefinitionParams, GotoDefinitionResponse,
     Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, Location, MessageType, OneOf, PrepareRenameResponse, ReferenceParams,
+    InitializedParams, Location, MessageType, OneOf, PrepareRenameResponse, Range, ReferenceParams,
     Registration, RenameOptions, RenameParams, SaveOptions, SelectionRange, SelectionRangeParams,
     SelectionRangeProviderCapability, SemanticTokensFullOptions, SemanticTokensOptions,
     SemanticTokensParams, SemanticTokensRangeParams, SemanticTokensRangeResult,
@@ -34,12 +34,11 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer};
 
-use crate::diagnostics;
 use crate::document::DocumentState;
 use crate::providers::{
-    code_action, completion, definition, document_link, document_symbol, folding, highlights,
-    hover, references, rename, selection_range, semantic_tokens, signature_help, syntax_tree,
-    workspace_symbol,
+    code_action, completion, definition, diagnostics, document_highlight, document_link,
+    document_symbol, folding_range, hover, references, rename, selection_range, semantic_tokens,
+    signature_help, syntax_tree, workspace_symbol,
 };
 use crate::settings::SettingsCache;
 
@@ -100,9 +99,9 @@ struct OpenDocument {
     published_lints: Option<Arc<[LintDiagnostic]>>,
 }
 
-impl From<DocumentState> for OpenDocument {
-    fn from(state: DocumentState) -> Self {
-        Self { state: Arc::new(state), published_lints: None }
+impl OpenDocument {
+    fn new(text: String, version: i32, target: LuaTarget) -> Self {
+        Self { state: Arc::new(DocumentState::new(text, version, target)), published_lints: None }
     }
 }
 
@@ -133,6 +132,14 @@ impl<N: Notifier> Backend<N> {
         documents.iter().map(|(uri, open)| (uri.clone(), Arc::clone(&open.state))).collect()
     }
 
+    async fn target_for(&self, uri: &Url) -> LuaTarget {
+        let file_path = uri.to_file_path().ok();
+        self.settings_cache
+            .settings_for(file_path.as_deref())
+            .await
+            .target_for(file_path.as_deref())
+    }
+
     async fn lint_and_publish(&self, uri: Url) {
         let Some(document) = self.snapshot(&uri).await else {
             return;
@@ -161,14 +168,31 @@ impl<N: Notifier> Backend<N> {
         self.notifier.publish_diagnostics(uri, diagnostics, Some(document.version)).await;
     }
 
-    /// The whole-document edit for a formatter run over `document`, or
-    /// `None` after warning that the file doesn't parse.
-    async fn whole_document_edit(
-        &self,
-        document: &DocumentState,
-        result: FormatResult,
-        action: &str,
-    ) -> Option<Vec<TextEdit>> {
+    /// Formats the document at `uri`, or only `range` of it, as one
+    /// whole-document edit. `None` when it isn't open, `range` doesn't fit
+    /// it, or it doesn't parse, which also shows a warning.
+    async fn format_edits(&self, uri: &Url, range: Option<Range>) -> Option<Vec<TextEdit>> {
+        let document = self.snapshot(uri).await?;
+        let byte_range = match range {
+            Some(requested) => Some(document.byte_range(requested)?),
+            None => None,
+        };
+        let file_path = uri.to_file_path().ok();
+        let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
+        let options = settings.format_options(file_path.as_deref());
+        let lua_version = document.target.lua_version();
+        let (result, action) = byte_range.map_or_else(
+            || (luck_formatter::format(document.text(), lua_version, &options), "format"),
+            // `format_range` returns the whole file with text outside the
+            // range kept byte-for-byte, so a whole-file edit only changes the
+            // range.
+            |bytes| {
+                (
+                    luck_formatter::format_range(document.text(), lua_version, &options, bytes),
+                    "range-format",
+                )
+            },
+        );
         if let Some(first) = result.errors.first() {
             self.notifier
                 .show_message(
@@ -254,7 +278,7 @@ fn update_stored_document(
         documents.remove(uri);
         return false;
     };
-    *open = OpenDocument::from(DocumentState::new(text, version, open.state.target));
+    *open = OpenDocument::new(text, version, open.state.target);
     true
 }
 
@@ -370,29 +394,19 @@ impl<N: Notifier> LanguageServer for Backend<N> {
     async fn did_change_watched_files(&self, _params: DidChangeWatchedFilesParams) {
         self.settings_cache.clear().await;
         // Retarget every open document (the config may have changed its
-        // dialect) and republish diagnostics under the new settings.
-        let uris: Vec<Url> = {
+        // dialect) and republish diagnostics under the new settings. Each
+        // target is found before taking the documents lock, so config
+        // discovery doesn't stall other requests.
+        let uris: Vec<Url> = self.documents.read().await.keys().cloned().collect();
+        for uri in &uris {
+            let target = self.target_for(uri).await;
             let mut documents = self.documents.write().await;
-            let uris: Vec<Url> = documents.keys().cloned().collect();
-            for uri in &uris {
-                let file_path = uri.to_file_path().ok();
-                let target = self
-                    .settings_cache
-                    .settings_for(file_path.as_deref())
-                    .await
-                    .target_for(file_path.as_deref());
-                if let Some(open) = documents.get_mut(uri)
-                    && open.state.target != target
-                {
-                    *open = OpenDocument::from(DocumentState::new(
-                        open.state.text().to_owned(),
-                        open.state.version,
-                        target,
-                    ));
-                }
+            if let Some(open) = documents.get_mut(uri)
+                && open.state.target != target
+            {
+                *open = OpenDocument::new(open.state.text().to_owned(), open.state.version, target);
             }
-            uris
-        };
+        }
         for uri in uris {
             self.lint_and_publish(uri).await;
         }
@@ -404,15 +418,10 @@ impl<N: Notifier> LanguageServer for Backend<N> {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
-        let file_path = uri.to_file_path().ok();
-        let target = self
-            .settings_cache
-            .settings_for(file_path.as_deref())
-            .await
-            .target_for(file_path.as_deref());
+        let target = self.target_for(&uri).await;
         let document =
-            DocumentState::new(params.text_document.text, params.text_document.version, target);
-        self.documents.write().await.insert(uri.clone(), OpenDocument::from(document));
+            OpenDocument::new(params.text_document.text, params.text_document.version, target);
+        self.documents.write().await.insert(uri.clone(), document);
         self.lint_and_publish(uri).await;
     }
 
@@ -435,11 +444,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
                 // the current one.
                 && open.state.text() != text
             {
-                *open = OpenDocument::from(DocumentState::new(
-                    text,
-                    open.state.version,
-                    open.state.target,
-                ));
+                *open = OpenDocument::new(text, open.state.version, open.state.target);
             }
         }
         self.lint_and_publish(uri).await;
@@ -456,42 +461,14 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         &self,
         params: DocumentFormattingParams,
     ) -> JsonRpcResult<Option<Vec<TextEdit>>> {
-        let uri = &params.text_document.uri;
-        let Some(document) = self.snapshot(uri).await else {
-            return Ok(None);
-        };
-        let file_path = uri.to_file_path().ok();
-        let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
-        let result = luck_formatter::format(
-            document.text(),
-            document.target.lua_version(),
-            &settings.format_options(file_path.as_deref()),
-        );
-        Ok(self.whole_document_edit(&document, result, "format").await)
+        Ok(self.format_edits(&params.text_document.uri, None).await)
     }
 
     async fn range_formatting(
         &self,
         params: DocumentRangeFormattingParams,
     ) -> JsonRpcResult<Option<Vec<TextEdit>>> {
-        let uri = &params.text_document.uri;
-        let Some(document) = self.snapshot(uri).await else {
-            return Ok(None);
-        };
-        let Some(byte_range) = document.byte_range(params.range) else {
-            return Ok(None);
-        };
-        let file_path = uri.to_file_path().ok();
-        let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
-        let result = luck_formatter::format_range(
-            document.text(),
-            document.target.lua_version(),
-            &settings.format_options(file_path.as_deref()),
-            byte_range,
-        );
-        // `format_range` returns the whole file with text outside the range
-        // kept byte-for-byte, so a whole-file edit only changes the range.
-        Ok(self.whole_document_edit(&document, result, "range-format").await)
+        Ok(self.format_edits(&params.text_document.uri, Some(params.range)).await)
     }
 
     async fn hover(&self, params: HoverParams) -> JsonRpcResult<Option<Hover>> {
@@ -531,7 +508,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         let Some(document) = self.snapshot(&params.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(Some(document_symbol::document_symbols(&document)))
+        Ok(Some(DocumentSymbolResponse::Nested(document_symbol::document_symbols(&document))))
     }
 
     async fn code_action(
@@ -548,8 +525,17 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         else {
             return Ok(None);
         };
-        let settings = self.settings_cache.settings_for(uri.to_file_path().ok().as_deref()).await;
-        Ok(Some(code_action::code_action(&document, &settings, &params, published_lints)))
+        // Without published lints, they're recomputed through the same opt-in
+        // gate as publishing, so no action fixes a diagnostic the user wasn't
+        // shown.
+        let lints = if let Some(lints) = published_lints {
+            lints
+        } else {
+            let settings =
+                self.settings_cache.settings_for(uri.to_file_path().ok().as_deref()).await;
+            document.lint(&settings.lint_config).into()
+        };
+        Ok(Some(code_action::code_action(&document, &params, &lints)))
     }
 
     async fn semantic_tokens_full(
@@ -570,7 +556,10 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         let Some(document) = self.snapshot(&text_document_position.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(Some(highlights::document_highlight(&document, text_document_position.position)))
+        Ok(Some(document_highlight::document_highlights(
+            &document,
+            text_document_position.position,
+        )))
     }
 
     async fn goto_definition(
@@ -636,7 +625,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         let Some(document) = self.snapshot(&params.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(Some(folding::ranges(&document)))
+        Ok(Some(folding_range::folding_ranges(&document)))
     }
 
     async fn selection_range(

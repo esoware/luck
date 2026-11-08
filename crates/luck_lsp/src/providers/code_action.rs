@@ -15,21 +15,15 @@ use tower_lsp::lsp_types::{
 use crate::document::DocumentState;
 use crate::settings::ProjectSettings;
 
-/// The actions for `params`, from `published_lints` when they're current
-/// for `document`.
+/// The actions for `params`, built from `document`'s `lints`.
 pub(crate) fn code_action(
     document: &DocumentState,
-    settings: &ProjectSettings,
     params: &CodeActionParams,
-    published_lints: Option<Arc<[LintDiagnostic]>>,
+    lints: &[LintDiagnostic],
 ) -> CodeActionResponse {
     let uri = &params.text_document.uri;
-    // Without published lints, they're recomputed through the same opt-in
-    // gate as publishing, so we never offer a fix the user wasn't shown.
-    let lints = published_lints.unwrap_or_else(|| document.lint(&settings.lint_config).into());
-
     let mut lints_by_rule: FxHashMap<&str, Vec<&LintDiagnostic>> = FxHashMap::default();
-    for lint in lints.iter() {
+    for lint in lints {
         lints_by_rule.entry(lint.rule).or_default().push(lint);
     }
 
@@ -72,7 +66,7 @@ pub(crate) fn code_action(
     }
 
     if should_offer_fix_all(&params.context) {
-        let edits = all_fix_edits(document, &lints);
+        let edits = all_fix_edits(document, lints);
         if !edits.is_empty() {
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                 title: "Fix all auto-fixable problems".to_owned(),

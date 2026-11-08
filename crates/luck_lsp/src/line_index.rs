@@ -139,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_position_clamps() {
+    fn offset_clamps_an_out_of_range_position() {
         let source = "abc";
         let index = LineIndex::new(source);
         let position = Position { line: 99, character: 99 };

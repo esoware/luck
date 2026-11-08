@@ -8,7 +8,7 @@ use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Posi
 
 use crate::document::DocumentState;
 use crate::providers::cursor::{CursorNode, find_node_at};
-use crate::stdlib_render::{CONSTANT_PREVIEW_LIMIT, param_label};
+use crate::providers::stdlib_render::{constant_preview, param_label};
 
 pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hover> {
     let offset = document.offset(position);
@@ -119,17 +119,8 @@ fn render_param(param: &StdlibParam) -> String {
     let StdlibArgKind::Constant(values) = &param.kind else {
         return label;
     };
-    let allowed = values
-        .iter()
-        .take(CONSTANT_PREVIEW_LIMIT)
-        .map(|constant| format!("\"{}\"", constant.value))
-        .collect::<Vec<_>>()
-        .join(" | ");
-    if values.len() > CONSTANT_PREVIEW_LIMIT {
-        format!("{label}: {allowed} | ... ({} values)", values.len())
-    } else {
-        format!("{label}: {allowed}")
-    }
+    let allowed = constant_preview(values, " | ", |constant| format!("\"{}\"", constant.value));
+    format!("{label}: {allowed}")
 }
 
 const fn version_label(version: LuaVersion) -> &'static str {

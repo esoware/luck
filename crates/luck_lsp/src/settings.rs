@@ -101,10 +101,17 @@ impl ProjectSettings {
 pub(crate) struct SettingsCache {
     /// Shared by every document without a config or a file path.
     defaults: Arc<ProjectSettings>,
-    settings_by_root: RwLock<FxHashMap<PathBuf, Arc<ProjectSettings>>>,
+    /// One lock for both maps, so a reader never sees a root without its
+    /// settings.
+    lookups: RwLock<Lookups>,
+}
+
+#[derive(Debug, Default)]
+struct Lookups {
+    settings_by_root: FxHashMap<PathBuf, Arc<ProjectSettings>>,
     /// Each search directory's config root, or `None` for no config, so a
     /// repeat lookup doesn't walk the filesystem again.
-    roots_by_search_directory: RwLock<FxHashMap<PathBuf, Option<PathBuf>>>,
+    roots_by_search_directory: FxHashMap<PathBuf, Option<PathBuf>>,
 }
 
 impl SettingsCache {
@@ -119,33 +126,36 @@ impl SettingsCache {
         let search_directory =
             file_path.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf);
 
-        let cached_root =
-            self.roots_by_search_directory.read().await.get(&search_directory).cloned();
-        match cached_root {
-            Some(Some(root)) => {
-                if let Some(settings) = self.settings_by_root.read().await.get(&root) {
-                    return Arc::clone(settings);
+        {
+            let lookups = self.lookups.read().await;
+            match lookups.roots_by_search_directory.get(&search_directory) {
+                Some(Some(root)) => {
+                    if let Some(settings) = lookups.settings_by_root.get(root) {
+                        return Arc::clone(settings);
+                    }
                 }
+                Some(None) => return Arc::clone(&self.defaults),
+                None => {}
             }
-            Some(None) => return Arc::clone(&self.defaults),
-            None => {}
         }
 
         let Some(project) = discover_config(&search_directory).ok().flatten() else {
             // Cache the negative lookup so we don't re-walk every did_change.
-            self.roots_by_search_directory.write().await.insert(search_directory, None);
+            self.lookups.write().await.roots_by_search_directory.insert(search_directory, None);
             return Arc::clone(&self.defaults);
         };
         let root = project.root;
         let settings = Arc::new(ProjectSettings::new(&project.config, Some(root.clone())));
-        self.settings_by_root.write().await.insert(root.clone(), Arc::clone(&settings));
-        self.roots_by_search_directory.write().await.insert(search_directory, Some(root));
+        let mut lookups = self.lookups.write().await;
+        lookups.settings_by_root.insert(root.clone(), Arc::clone(&settings));
+        lookups.roots_by_search_directory.insert(search_directory, Some(root));
         settings
     }
 
     pub(crate) async fn clear(&self) {
-        self.settings_by_root.write().await.clear();
-        self.roots_by_search_directory.write().await.clear();
+        let mut lookups = self.lookups.write().await;
+        lookups.settings_by_root.clear();
+        lookups.roots_by_search_directory.clear();
     }
 }
 
@@ -189,6 +199,25 @@ mod tests {
         assert_eq!(settings.lua_target, LuaTarget::Lua54);
     }
 
+    #[tokio::test]
+    async fn cache_keeps_settings_until_cleared() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("luck.json");
+        fs::write(&config_path, r#"{ "lua": "lua53" }"#).expect("write luck.json");
+        let first = directory.path().join("first.lua");
+        let second = directory.path().join("second.lua");
+        let cache = SettingsCache::default();
+
+        let settings = cache.settings_for(Some(&first)).await;
+        assert_eq!(settings.lua_target, LuaTarget::Lua53);
+        assert!(Arc::ptr_eq(&settings, &cache.settings_for(Some(&second)).await));
+
+        fs::write(&config_path, r#"{ "lua": "lua51" }"#).expect("rewrite luck.json");
+        assert_eq!(cache.settings_for(Some(&first)).await.lua_target, LuaTarget::Lua53);
+        cache.clear().await;
+        assert_eq!(cache.settings_for(Some(&first)).await.lua_target, LuaTarget::Lua51);
+    }
+
     #[test]
     fn settings_carry_targets_lint_and_filter() {
         let json = r#"{ "lua":"lua53","luau":"roblox","lint":{"extra_globals":["vim"]},
@@ -211,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn format_options_round_trip_from_config() {
+    fn format_options_without_a_path_use_the_format_section() {
         let json = r#"{
             "luau": "luau",
             "entry": "main.luau",
@@ -280,13 +309,5 @@ mod tests {
         assert_eq!(options.indent_width, 8);
         // indent_style not set in luck.json, so it still comes from editorconfig.
         assert_eq!(options.indent_style, IndentStyle::Spaces);
-    }
-
-    #[test]
-    fn format_options_without_path_use_the_format_section() {
-        let config = parse_luck_config(r#"{ "format": { "indent_width": 7 } }"#).unwrap();
-        let settings = ProjectSettings::new(&config, Some(PathBuf::from(".")));
-        let options = settings.format_options(None);
-        assert_eq!(options.indent_width, 7);
     }
 }

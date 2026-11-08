@@ -11,7 +11,7 @@ use luck_ast::{Expression, FunctionArgs, FunctionCall, Var, Visitor};
 use luck_core::normalize_path;
 use luck_resolver::{ResolveRequest, Resolver};
 use luck_token::short_string_body;
-use tower_lsp::lsp_types::{DocumentLink, Url};
+use tower_lsp::lsp_types::{DocumentLink, Position, Url};
 
 use crate::document::DocumentState;
 use crate::settings::ProjectSettings;
@@ -20,6 +20,31 @@ pub(crate) fn document_links(
     document: &DocumentState,
     document_uri: &Url,
     settings: &ProjectSettings,
+) -> Vec<DocumentLink> {
+    collect_links(document, document_uri, settings, None)
+}
+
+/// The file the `require` string at `position` resolves to, either end of
+/// the string included.
+pub(crate) fn target_at(
+    document: &DocumentState,
+    document_uri: &Url,
+    settings: &ProjectSettings,
+    position: Position,
+) -> Option<Url> {
+    collect_links(document, document_uri, settings, Some(position))
+        .into_iter()
+        .find_map(|link| link.target)
+}
+
+/// The links of every resolvable `require` string, or only of those at
+/// `position` when it's given, so a lookup at the cursor resolves no other
+/// module.
+fn collect_links(
+    document: &DocumentState,
+    document_uri: &Url,
+    settings: &ProjectSettings,
+    position: Option<Position>,
 ) -> Vec<DocumentLink> {
     let Ok(document_path) = document_uri.to_file_path() else {
         return Vec::new();
@@ -33,6 +58,7 @@ pub(crate) fn document_links(
         .unwrap_or_else(|| Path::new("."));
     let mut collector = LinkCollector {
         document,
+        position,
         from_file: normalize_path(&document_path),
         resolver: Resolver::new(
             document.target.lua_version(),
@@ -47,6 +73,7 @@ pub(crate) fn document_links(
 
 struct LinkCollector<'document> {
     document: &'document DocumentState,
+    position: Option<Position>,
     from_file: String,
     resolver: Resolver<'document>,
     links: Vec<DocumentLink>,
@@ -87,6 +114,10 @@ impl LinkCollector<'_> {
         else {
             return;
         };
+        let range = self.document.range(literal.span);
+        if self.position.is_some_and(|position| position < range.start || position > range.end) {
+            return;
+        }
         let Ok(resolved) = self.resolver.resolve(&ResolveRequest {
             module,
             from_file: &self.from_file,
@@ -98,7 +129,7 @@ impl LinkCollector<'_> {
             return;
         };
         self.links.push(DocumentLink {
-            range: self.document.range(literal.span),
+            range,
             target: Some(target),
             tooltip: Some(module.to_owned()),
             data: None,
@@ -134,5 +165,26 @@ mod tests {
         assert_eq!(links.len(), 1, "{links:?}");
         let target = links[0].target.as_ref().expect("link target");
         assert!(target.path().ends_with("foo.lua"), "{target}");
+    }
+
+    #[test]
+    fn target_at_resolves_the_require_string_under_the_position() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
+        let main_path = directory.path().join("main.lua");
+        let text = "local foo = require(\"foo\")\nlocal x = 1\n";
+        fs::write(&main_path, text).expect("write main.lua");
+        let uri = Url::from_file_path(&main_path).expect("file path URI");
+        let settings = ProjectSettings::default();
+        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+
+        // Both ends of the string count.
+        for utf16_column in [20, 25] {
+            let target = target_at(&document, &uri, &settings, Position::new(0, utf16_column))
+                .expect("the require string resolves");
+            assert!(target.path().ends_with("foo.lua"), "{target}");
+        }
+        assert_eq!(target_at(&document, &uri, &settings, Position::new(0, 19)), None);
+        assert_eq!(target_at(&document, &uri, &settings, Position::new(1, 6)), None);
     }
 }

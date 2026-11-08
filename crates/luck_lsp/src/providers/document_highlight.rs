@@ -8,7 +8,7 @@ use tower_lsp::lsp_types::{DocumentHighlight, DocumentHighlightKind, Position};
 use crate::document::DocumentState;
 use crate::providers::cursor::find_node_at;
 
-pub(crate) fn document_highlight(
+pub(crate) fn document_highlights(
     document: &DocumentState,
     position: Position,
 ) -> Vec<DocumentHighlight> {

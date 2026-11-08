@@ -6,7 +6,8 @@
 //! anywhere in the document. Refusing is safer than silently capturing a
 //! shadowed name.
 
-use luck_token::{Span, TokenKind};
+use luck_ast::is_valid_identifier_in;
+use luck_token::Span;
 use tower_lsp::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
 use tower_lsp::lsp_types::{
     Position, PrepareRenameResponse, RenameParams, TextEdit, WorkspaceEdit,
@@ -70,17 +71,9 @@ pub(crate) fn rename(
 /// Returns the refusal to show the user when it isn't an identifier, shadows
 /// a built-in global, or is already used in the document.
 fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), String> {
-    // Lexing the candidate under the document's Lua version rejects
-    // keywords version-accurately (`goto` is an identifier in 5.1).
-    let lexed = luck_lexer::lex(new_name, document.target.lua_version());
-    let tokens: Vec<_> = lexed.tokens.iter().filter(|token| token.kind != TokenKind::Eof).collect();
-    let is_identifier = lexed.errors.is_empty()
-        && matches!(
-            tokens.as_slice(),
-            [token] if matches!(token.kind, TokenKind::Identifier(_))
-                && token.span == Span::from_indices(0, new_name.len())
-        );
-    if !is_identifier {
+    // Checked under the document's Lua version, so keywords are rejected
+    // version-accurately (`goto` is an identifier in 5.1).
+    if !is_valid_identifier_in(new_name, document.target.lua_version()) {
         return Err(format!("`{new_name}` isn't a valid identifier"));
     }
     if document.semantic.is_known_global(new_name) {
