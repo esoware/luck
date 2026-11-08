@@ -1,7 +1,7 @@
 use core::mem;
 
 use luck_ast::{Block, Expression, FunctionBody, Statement, Transform, Var, Visitor};
-use luck_token::{BinOp, CompactString, LuaVersion, Span, TokenKind, UnOp};
+use luck_token::{BinOp, CompactString, LuaVersion, Span, UnOp};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::binding::{has_fixed_binding, identifier_name};
@@ -163,9 +163,7 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
 
     fn visit_function_body(&mut self, body: &'ast FunctionBody) {
         for param in body.params.iter() {
-            if let TokenKind::Identifier(name) = &param.name.kind {
-                self.shadowed_names.insert(name.clone());
-            }
+            self.shadowed_names.insert(identifier_name(&param.name).into());
         }
         self.walk_function_body(body);
     }

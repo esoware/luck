@@ -17,7 +17,7 @@ Every pass gets a bool on `TransformConfig` (`luck_core/src/config/transform_con
 
 ## 3. Wire into the pipeline
 
-`pub mod` in `transforms.rs`, slot in `lib.rs::minify()`. **Read the current pipeline order from `minify()` before choosing a slot. Do not trust any written snapshot of it.** Structural facts that hold: `fold_constants` runs twice because inlining exposes new folds. If your pass exposes opportunities for an earlier pass, re-run that pass after yours. `rename_locals` is not last, so a pass touching user-visible names must run before it. Pipeline-order interactions are a known bug source. If your pass reorders or merges declarations, add a test combining it with `lift_locals` and `merge_locals`.
+`pub(crate) mod` in `transforms.rs`, then a slot in `apply_core_transforms` or `apply_tail_transforms` in `src/pipeline.rs`. **Read the current pipeline order from those two functions before choosing a slot. Do not trust any written snapshot of it.** Structural facts that hold: `fold_constants` runs twice because inlining exposes new folds. If your pass exposes opportunities for an earlier pass, re-run that pass after yours. `rename_locals` is not last, so a pass touching user-visible names must run before it. Pipeline-order interactions are a known bug source. If your pass reorders or merges declarations, add a test combining it with `lift_locals` and `merge_locals`.
 
 ## 4. Semantics safety (this is where bugs hide)
 

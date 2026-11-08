@@ -1,4 +1,5 @@
-//! Expression predicates and builders the passes share.
+//! Expression predicates and builders, and the integer-to-float conversion,
+//! that the passes share.
 
 use luck_ast::{Expression, Field, ParenthesizedExpression, Var};
 use luck_token::{BinOp, OperandSide, Span, UnOp};

@@ -20,17 +20,18 @@ pub(crate) fn is_env_binding(name: &str, version: LuaVersion) -> bool {
     version.has_env_upvalue() && name == "_ENV"
 }
 
-/// Whether no transform may reshape, merge away, or move a `local`
-/// declaration.
-///
-/// That holds for an export, a `const`, an attributed name (`<close>` runs
-/// `__close` at scope exit and `<const>` affects validity), and a 5.2+
+/// Whether a `local` declaration binds a name with an attribute (`<close>`
+/// runs `__close` at scope exit and `<const>` affects validity) or a 5.2+
 /// `_ENV`, which redirects global lookup for everything after it.
+pub(crate) fn has_attributed_or_env_name(local: &LocalAssignment, version: LuaVersion) -> bool {
+    local.names.iter().any(|attributed| {
+        attributed.attribute.is_some() || is_env_binding(identifier_name(&attributed.name), version)
+    })
+}
+
+/// Whether no transform may reshape, merge away, or move a `local`
+/// declaration: an export, a `const`, or one that
+/// [`has_attributed_or_env_name`].
 pub(crate) fn has_fixed_binding(local: &LocalAssignment, version: LuaVersion) -> bool {
-    local.is_const
-        || local.is_exported
-        || local.names.iter().any(|attributed| {
-            attributed.attribute.is_some()
-                || is_env_binding(identifier_name(&attributed.name), version)
-        })
+    local.is_const || local.is_exported || has_attributed_or_env_name(local, version)
 }

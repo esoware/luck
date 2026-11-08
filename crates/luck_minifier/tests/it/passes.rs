@@ -23,7 +23,7 @@ fn folds_not_true() {
 }
 
 #[test]
-fn hash_string_not_folded() {
+fn keeps_length_of_a_string_literal() {
     // #"str" must not be folded: escape sequences make the raw length
     // unreliable.
     let result = minify_lua54("local x = #\"hello\"\nreturn x\n");
@@ -31,7 +31,7 @@ fn hash_string_not_folded() {
 }
 
 #[test]
-fn no_fold_division_by_zero() {
+fn keeps_division_by_zero() {
     let result = minify_lua54("local x = 1 / 0\nreturn x\n");
     assert!(result.contains('/'), "Should not fold div by zero: {result}");
 }
@@ -43,7 +43,7 @@ fn folds_exponentiation() {
 }
 
 #[test]
-fn no_fold_overflow_to_inf() {
+fn keeps_multiplication_that_overflows_to_infinity() {
     let result = minify_lua54("local x = 1e308 * 10\nreturn x\n");
     assert!(result.contains('*'), "Should not fold to inf: {result}");
 }
@@ -126,7 +126,7 @@ fn keeps_parens_around_function_call() {
 }
 
 #[test]
-fn concat_right_associativity_preserved() {
+fn keeps_parens_around_left_nested_concat() {
     // Concat is right-associative, so (a .. b) .. c differs from
     // a .. b .. c and the parens must survive.
     let result = minify_lua54("return (a .. b) .. c\n");
@@ -138,7 +138,7 @@ fn concat_right_associativity_preserved() {
 }
 
 #[test]
-fn parens_around_returned_call_are_kept() {
+fn keeps_parens_around_returned_call() {
     // (f()) truncates f's multiple returns, so the parens must be kept.
     let result = minify_lua54("return (f())\n");
     assert!(

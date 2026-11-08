@@ -30,12 +30,8 @@ impl Transform for ConstantFolder {
                 }
             }
             Expression::UnaryOp(unop) => {
-                if let Some(result) =
-                    try_fold_unary(unop.op, &unop.operand, NumberSubtypes::from(self.version))
-                {
-                    return result;
-                }
-                Expression::UnaryOp(unop)
+                fold_unary(unop.op, &unop.operand, NumberSubtypes::from(self.version))
+                    .unwrap_or(Expression::UnaryOp(unop))
             }
             other @ (Expression::Nil(_)
             | Expression::False(_)
@@ -407,7 +403,7 @@ fn fold_binary(
     }
 }
 
-fn try_fold_unary(op: UnOp, expr: &Expression, subtypes: NumberSubtypes) -> Option<Expression> {
+fn fold_unary(op: UnOp, expr: &Expression, subtypes: NumberSubtypes) -> Option<Expression> {
     match op {
         UnOp::Neg => {
             if let Some(number) = extract_lua_number(expr, subtypes) {
@@ -504,50 +500,50 @@ mod tests {
     }
 
     #[test]
-    fn fold_addition() {
+    fn folds_addition() {
         let result = apply("local x = 1 + 2\n");
         assert!(result.contains('3'), "Expected folded result, got: {result}");
         assert!(!result.contains('+'), "Operator should be gone, got: {result}");
     }
 
     #[test]
-    fn fold_multiplication() {
+    fn folds_multiplication() {
         let result = apply("local x = 10 * 5\n");
         assert!(result.contains("50"), "Expected folded result, got: {result}");
     }
 
     #[test]
-    fn fold_string_concat() {
+    fn folds_string_concat() {
         let result = apply("local x = \"hello\" .. \" world\"\n");
         assert!(result.contains("\"hello world\""), "Expected folded string, got: {result}");
     }
 
     #[test]
-    fn fold_not_true() {
+    fn folds_not_true() {
         let result = apply("local x = not true\n");
         assert!(result.contains("false"), "Expected `false`, got: {result}");
     }
 
     #[test]
-    fn fold_not_false() {
+    fn folds_not_false() {
         let result = apply("local x = not false\n");
         assert!(result.contains("true"), "Expected `true`, got: {result}");
     }
 
     #[test]
-    fn fold_not_number() {
+    fn folds_not_of_a_number_to_false() {
         let result = apply("local x = not 5\n");
         assert!(result.contains("false"), "not <number> should be false, got: {result}");
     }
 
     #[test]
-    fn fold_not_string() {
+    fn folds_not_of_a_string_to_false() {
         let result = apply("local x = not \"hello\"\n");
         assert!(result.contains("false"), "not <string> should be false, got: {result}");
     }
 
     #[test]
-    fn hash_string_not_folded() {
+    fn keeps_length_of_a_string_literal() {
         // #"str" must not be folded: escape sequences make the raw length
         // unreliable.
         let result = apply("local x = #\"hello\"\n");
@@ -555,44 +551,44 @@ mod tests {
     }
 
     #[test]
-    fn no_fold_division_by_zero() {
+    fn keeps_division_by_zero() {
         let result = apply("local x = 1 / 0\n");
         assert!(result.contains('/'), "Should not fold division by zero: {result}");
     }
 
     #[test]
-    fn fold_and_true_lhs() {
+    fn folds_and_with_a_true_left_operand() {
         let result = apply("local x = true and 42\n");
         assert!(result.contains("42"), "Expected 42, got: {result}");
     }
 
     #[test]
-    fn fold_and_false_lhs() {
+    fn folds_and_with_a_false_left_operand() {
         let result = apply("local x = false and 42\n");
         assert!(result.contains("false"), "Expected false, got: {result}");
     }
 
     #[test]
-    fn fold_or_true_lhs() {
+    fn folds_or_with_a_true_left_operand() {
         let result = apply("local x = true or 42\n");
         assert!(result.contains("true"), "Expected true, got: {result}");
     }
 
     #[test]
-    fn fold_or_false_lhs() {
+    fn folds_or_with_a_false_left_operand() {
         let result = apply("local x = false or 42\n");
         assert!(result.contains("42"), "Expected 42, got: {result}");
     }
 
     #[test]
-    fn identity_add_zero_preserves_metamethods() {
+    fn keeps_adding_zero_to_a_variable() {
         // a + 0 must not be folded: `+` may invoke an __add metamethod.
         let result = apply("return a + 0\n");
         assert!(result.contains('+'), "Should preserve a + 0 (metamethod safety), got: {result}");
     }
 
     #[test]
-    fn comparison_negation_preserves_metamethods() {
+    fn never_inverts_a_negated_comparison() {
         // not (a < b) must not become a >= b: the two call different
         // metamethods, __lt and __le.
         let result = apply("return not (a < b)\n");
@@ -603,33 +599,33 @@ mod tests {
     }
 
     #[test]
-    fn fold_nil_and() {
+    fn folds_and_with_a_nil_left_operand() {
         let result = apply("local x = nil and 42\n");
         assert!(result.contains("nil"), "Expected nil, got: {result}");
     }
 
     #[test]
-    fn fold_nil_or() {
+    fn folds_or_with_a_nil_left_operand() {
         let result = apply("local x = nil or 42\n");
         assert!(result.contains("42"), "Expected 42, got: {result}");
     }
 
     #[test]
-    fn fold_negative_modulo() {
+    fn folds_modulo_of_a_negative_dividend_with_floored_sign() {
         // Lua: -5 % 3 = 1 (not -2 like Rust's truncated modulo)
         let result = apply("local x = -5 % 3\n");
         assert!(result.contains("local x=1"), "Expected 1 (Lua floored modulo), got: {result}");
     }
 
     #[test]
-    fn fold_modulo_negative_divisor() {
+    fn folds_modulo_by_a_negative_divisor_with_floored_sign() {
         // Lua: 5 % -3 = -1 (not 2 like Rust)
         let result = apply("local x = 5 % -3\n");
         assert!(result.contains("local x=-1"), "Expected -1 (Lua floored modulo), got: {result}");
     }
 
     #[test]
-    fn negative_zero_preserved() {
+    fn keeps_negative_zero() {
         let source = "local x = 0.0 * -1\nreturn 1/x";
         let result = apply(source);
         assert_reparses(&result, LuaVersion::Lua54);
@@ -643,14 +639,14 @@ mod tests {
     }
 
     #[test]
-    fn fold_modulo_by_zero() {
+    fn keeps_integer_modulo_by_zero() {
         // Integer modulo by zero raises at runtime.
         let result = apply("local x = 5 % 0\n");
         assert!(result.contains('%'), "Should not fold modulo by zero, got: {result}");
     }
 
     #[test]
-    fn fold_int_min_mixed_with_float() {
+    fn folds_int_min_mixed_with_a_float_only_where_exact() {
         // `0x8000000000000000` wraps to i64::MIN, whose f64 image is exact, so
         // it folds. Its neighbor has no exact image and must not.
         for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
@@ -666,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn float_modulo_fmod_semantics_53_plus() {
+    fn folds_float_modulo_with_fmod_from_lua53() {
         // 5.3+ luai_nummod is fmod + sign fix: 1e16 % 3 == 1.0 exactly.
         // The floor formula gives 0.0 (precision loss at 1e16).
         let result = apply_version("return 1e16 % 3\n", LuaVersion::Lua54);
@@ -679,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn float_modulo_preserves_negative_zero_53_plus() {
+    fn folds_float_modulo_keeping_the_sign_of_zero_from_lua53() {
         // fmod(-6.0, 3.0) is -0.0 under 5.3+; the floor formula loses
         // the sign. Observable via 1/x and tostring.
         let result = apply_version("return -6.0 % 3.0\n", LuaVersion::Lua54);

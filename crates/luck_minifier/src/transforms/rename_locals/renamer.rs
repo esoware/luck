@@ -205,8 +205,8 @@ impl Transform for Renamer {
                 }
                 Statement::GlobalDeclaration(global_declaration)
             }
-            // `walk_statement` visits these in the same order as
-            // `Analyzer::analyze_stmt`, which keeps the binding ids in step.
+            // `walk_statement` visits these in the same order as the
+            // analyzer's `Visitor` walk, which keeps the binding ids in step.
             other @ (Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::CompoundAssignment(_)
@@ -238,6 +238,9 @@ impl Transform for Renamer {
         body
     }
 
+    // `Transform::walk_function_call` reaches the arguments before the
+    // explicit type arguments, but the analyzer's `Visitor` walk reaches them
+    // after, so this follows the analyzer to keep the binding ids in step.
     fn transform_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
         call.callee = self.transform_expression(call.callee);
         call.explicit_type_args = call.explicit_type_args.map(|mut type_args| {

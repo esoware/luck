@@ -78,20 +78,20 @@ struct LiftableCollector<'names> {
 }
 
 impl LiftableCollector<'_> {
-    fn declare(&mut self, name: CompactString) {
+    fn declare(&mut self, name: &str) {
         if let Some(frame) = self.scope_names.last_mut() {
-            frame.insert(name);
+            frame.insert(name.into());
         }
     }
 
-    fn is_safe_to_lift(&self, name: &CompactString) -> bool {
+    fn is_safe_to_lift(&self, name: &str) -> bool {
         !self.scope_names.iter().any(|frame| frame.contains(name))
             && !self.ineligible_names.contains(name)
     }
 
-    fn mark_liftable(&mut self, name: &CompactString) {
-        if self.liftable_names.insert(name.clone()) {
-            self.ordered_liftable_names.push(name.clone());
+    fn mark_liftable(&mut self, name: &str) {
+        if self.liftable_names.insert(name.into()) {
+            self.ordered_liftable_names.push(name.into());
         }
     }
 
@@ -112,12 +112,11 @@ impl LiftableCollector<'_> {
     }
 
     fn collect_local(&mut self, local: &LocalAssignment) {
-        let names: Vec<CompactString> =
-            local.names.iter().map(|attributed| identifier_name(&attributed.name).into()).collect();
+        let names = local.names.items.iter().map(|attributed| identifier_name(&attributed.name));
         if can_lift_assignment(local, self.version)
-            && names.iter().all(|name| self.is_safe_to_lift(name))
+            && names.clone().all(|name| self.is_safe_to_lift(name))
         {
-            for name in &names {
+            for name in names.clone() {
                 self.mark_liftable(name);
             }
         }
@@ -130,12 +129,12 @@ impl LiftableCollector<'_> {
         match stmt {
             Statement::LocalAssignment(local) => self.collect_local(local),
             Statement::LocalFunction(local_function) => {
-                let name: CompactString = identifier_name(&local_function.name).into();
+                let name = identifier_name(&local_function.name);
                 if !local_function.is_const
                     && !local_function.is_exported
-                    && self.is_safe_to_lift(&name)
+                    && self.is_safe_to_lift(name)
                 {
-                    self.mark_liftable(&name);
+                    self.mark_liftable(name);
                 }
                 self.declare(name);
                 // The function body gets its own lift pass, so stop here.
@@ -393,7 +392,7 @@ struct LiftRewriter<'names> {
 }
 
 impl LiftRewriter<'_> {
-    fn is_shadowed(&self, name: &CompactString) -> bool {
+    fn is_shadowed(&self, name: &str) -> bool {
         self.scope_names.iter().any(|frame| frame.contains(name))
     }
 
@@ -409,14 +408,13 @@ impl LiftRewriter<'_> {
     }
 
     fn rewrite_local(&mut self, local: Box<LocalAssignment>) -> Statement {
-        let names: Vec<CompactString> =
-            local.names.iter().map(|attributed| identifier_name(&attributed.name).into()).collect();
+        let names = local.names.items.iter().map(|attributed| identifier_name(&attributed.name));
         let is_lifted = can_lift_assignment(&local, self.version)
-            && names.iter().all(|name| self.liftable_names.contains(name))
-            && !names.iter().any(|name| self.is_shadowed(name));
+            && names.clone().all(|name| self.liftable_names.contains(name))
+            && !names.clone().any(|name| self.is_shadowed(name));
 
         if let Some(frame) = self.scope_names.last_mut() {
-            frame.extend(names);
+            frame.extend(names.map(CompactString::from));
         }
         // local a,b=X,Y -> a,b=X,Y. `can_lift_assignment` has already
         // rejected bare declarations, so `exprs` is always set here.
@@ -439,13 +437,13 @@ impl LiftRewriter<'_> {
     }
 
     fn rewrite_local_function(&mut self, local_function: Box<LocalFunction>) -> Statement {
-        let name: CompactString = identifier_name(&local_function.name).into();
+        let name = identifier_name(&local_function.name);
         let is_lifted = !local_function.is_const
             && !local_function.is_exported
-            && self.liftable_names.contains(&name)
-            && !self.is_shadowed(&name);
+            && self.liftable_names.contains(name)
+            && !self.is_shadowed(name);
         if let Some(frame) = self.scope_names.last_mut() {
-            frame.insert(name);
+            frame.insert(name.into());
         }
         if !is_lifted {
             return Statement::LocalFunction(local_function);

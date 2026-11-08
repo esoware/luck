@@ -95,7 +95,7 @@ fn string_ops_preserves_semantics() {
     assert!(function_count >= 1, "Expected >=1 function keyword, got {function_count}: {result}");
 }
 
-fn verify_idempotent(source: &str, label: &str) {
+fn assert_reminifying_does_not_grow(source: &str, label: &str) {
     let first = minify_lua54(source);
     let second = minify_lua54(&first);
     assert!(reparses(&second), "Re-minified {label} should parse: {second}");
@@ -108,10 +108,10 @@ fn verify_idempotent(source: &str, label: &str) {
 }
 
 #[test]
-fn integration_sources_are_idempotent() {
-    verify_idempotent(MODULE_SOURCE, "module");
-    verify_idempotent(CONTROL_FLOW_SOURCE, "control_flow");
-    verify_idempotent(STRING_OPS_SOURCE, "string_ops");
+fn reminifying_sample_sources_does_not_grow_them() {
+    assert_reminifying_does_not_grow(MODULE_SOURCE, "module");
+    assert_reminifying_does_not_grow(CONTROL_FLOW_SOURCE, "control_flow");
+    assert_reminifying_does_not_grow(STRING_OPS_SOURCE, "string_ops");
 }
 
 const DEAD_CODE_SOURCE: &str = r#"

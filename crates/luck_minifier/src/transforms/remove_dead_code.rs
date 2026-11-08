@@ -7,20 +7,20 @@ use luck_ast::{
 use luck_token::{BinOp, CompactString, LuaVersion, Span, UnOp};
 use rustc_hash::FxHashSet;
 
-use crate::binding::{identifier_name, is_env_binding};
+use crate::binding::{has_attributed_or_env_name, identifier_name, is_env_binding};
 use crate::expr::{extract_boolean, is_nil, is_pure_expression};
 
 /// Removes unused locals, dead branches, and trivial statements, looping to a
 /// fixpoint.
 pub(crate) fn remove(mut block: Block, version: LuaVersion) -> Block {
     loop {
-        let mut transform = DeadCodeTransform {
+        let mut remover = DeadCodeRemover {
             referenced_names: collect_all_references(&block),
             version,
             has_changed: false,
         };
-        block = transform.transform_block(block);
-        if !transform.has_changed {
+        block = remover.transform_block(block);
+        if !remover.has_changed {
             return block;
         }
     }
@@ -96,7 +96,7 @@ impl<'ast> Visitor<'ast> for ReferenceCollector {
 /// The two rewrites compose per statement, and both `remove()`'s loop and
 /// the pipeline's outer loop run to a fixpoint, so interleaving them reaches
 /// the same result as separate rebuilds in half the traversals.
-struct DeadCodeTransform {
+struct DeadCodeRemover {
     referenced_names: FxHashSet<CompactString>,
     version: LuaVersion,
     has_changed: bool,
@@ -172,7 +172,7 @@ fn is_redundant_ternary(outer: &BinaryOp) -> bool {
     )
 }
 
-impl DeadCodeTransform {
+impl DeadCodeRemover {
     fn simplify_if(&mut self, mut if_stmt: IfStatement) -> Statement {
         if let Some(is_truthy) = constant_truthiness(&if_stmt.condition) {
             if is_truthy {
@@ -254,7 +254,7 @@ impl DeadCodeTransform {
     }
 }
 
-impl Transform for DeadCodeTransform {
+impl Transform for DeadCodeRemover {
     fn transform_block(&mut self, block: Block) -> Block {
         let mut new_stmts: Vec<Statement> = Vec::new();
         for stmt in block.stmts {
@@ -412,15 +412,8 @@ fn classify_dead_local(
 ) -> DeadLocalAction {
     match stmt {
         Statement::LocalAssignment(local) => {
-            // Exports, attributed names, and a 5.2+ `_ENV` are never dead:
-            // `<close>` runs __close at scope exit, `<const>` affects
-            // validity, and `_ENV` redirects global lookup.
-            if local.is_exported
-                || local.names.iter().any(|attributed| {
-                    attributed.attribute.is_some()
-                        || is_env_binding(identifier_name(&attributed.name), version)
-                })
-            {
+            // Exports, attributed names, and a 5.2+ `_ENV` are never dead.
+            if local.is_exported || has_attributed_or_env_name(local, version) {
                 return DeadLocalAction::Keep;
             }
             let is_unused = local
@@ -579,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn global_self_assignment_kept() {
+    fn keeps_global_self_assignment() {
         // `x = x` on a global fires __index and __newindex under a metatabled
         // environment. Removal is only sound for proven locals, and this pass
         // has no binding info.

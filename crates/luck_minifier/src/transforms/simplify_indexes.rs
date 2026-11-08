@@ -22,7 +22,7 @@ impl IndexSimplifier {
             return Field::Bracketed { span, key: Expression::StringLiteral(literal), value };
         };
         let new_value = self.transform_expression(value);
-        if is_valid_identifier(name) {
+        if is_safe_field_name(name) {
             Field::Named {
                 span: Span::default(),
                 name: identifier_token(name.into()),
@@ -45,7 +45,7 @@ impl Transform for IndexSimplifier {
             Var::Index(index_expr) => {
                 if let Expression::StringLiteral(literal) = &index_expr.index
                     && let Some(name) = short_string_body(&literal.text)
-                    && is_valid_identifier(name)
+                    && is_safe_field_name(name)
                 {
                     return Var::FieldAccess(Box::new(FieldAccess {
                         span: Span::default(),
@@ -96,7 +96,8 @@ const LUA_KEYWORDS: &[&str] = &[
     "continue", // Luau
 ];
 
-fn is_valid_identifier(name: &str) -> bool {
+/// Whether a string key can be spelled as a `.name` field or a `name =` key.
+fn is_safe_field_name(name: &str) -> bool {
     TokenKind::is_identifier_shaped(name) && !LUA_KEYWORDS.contains(&name)
 }
 
@@ -130,22 +131,22 @@ mod tests {
     }
 
     #[test]
-    fn validates_identifiers() {
-        assert!(is_valid_identifier("foo"));
-        assert!(is_valid_identifier("_bar"));
-        assert!(is_valid_identifier("x1"));
-        assert!(is_valid_identifier("_"));
-        assert!(is_valid_identifier("camelCase"));
+    fn recognizes_safe_field_names() {
+        assert!(is_safe_field_name("foo"));
+        assert!(is_safe_field_name("_bar"));
+        assert!(is_safe_field_name("x1"));
+        assert!(is_safe_field_name("_"));
+        assert!(is_safe_field_name("camelCase"));
 
-        assert!(!is_valid_identifier("if"));
-        assert!(!is_valid_identifier("end"));
-        assert!(!is_valid_identifier("and"));
-        assert!(!is_valid_identifier("or"));
+        assert!(!is_safe_field_name("if"));
+        assert!(!is_safe_field_name("end"));
+        assert!(!is_safe_field_name("and"));
+        assert!(!is_safe_field_name("or"));
 
-        assert!(!is_valid_identifier("a-b"));
-        assert!(!is_valid_identifier("123abc"));
-        assert!(!is_valid_identifier(""));
-        assert!(!is_valid_identifier("foo bar"));
+        assert!(!is_safe_field_name("a-b"));
+        assert!(!is_safe_field_name("123abc"));
+        assert!(!is_safe_field_name(""));
+        assert!(!is_safe_field_name("foo bar"));
     }
 
     #[test]

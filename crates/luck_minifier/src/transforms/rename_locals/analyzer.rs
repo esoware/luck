@@ -3,10 +3,7 @@
 
 use core::mem;
 
-use luck_ast::{
-    Block, Expression, Field, FunctionArgs, FunctionBody, FunctionCall, IfStatement, LastStatement,
-    Punctuated, Statement, TypeArgs, Var, Visitor,
-};
+use luck_ast::{Block, FunctionBody, Statement, Var, Visitor};
 use luck_token::{CompactString, LuaVersion};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -21,39 +18,36 @@ struct ScopeNode {
     referenced_globals: FxHashSet<CompactString>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BindingKind {
+    /// Gets a slot, and with it a short name.
+    Renamable,
+    /// Keeps its name: a local named `self`, a 5.2+ `_ENV`, or a Luau export.
+    Fixed,
+    /// Lua 5.5: a `global` declaration. It keeps its name and scopes and
+    /// shadows like a local, but its references still reach the real global.
+    Global,
+}
+
 struct BindingInfo {
     original_name: CompactString,
     scope_id: usize,
     reference_count: usize,
-    // `None` until `assign_slots` runs, and always `None` for a fixed binding.
+    // `None` until `assign_slots` runs, and always `None` unless renamable.
     slot: Option<usize>,
-    is_fixed: bool,
-    // Lua 5.5: a `global` declaration. It scopes and shadows like a local, but
-    // its references still reach the real global.
-    is_global: bool,
+    kind: BindingKind,
     // The declaring scope, the reference scopes, and every scope on the path
     // between them.
     live_scopes: ScopeSet,
 }
 
-/// Hands the expressions a type embeds back to the analyzer.
-///
-/// `Visitor::walk_type` reaches them in the same order as
-/// `Transform::walk_type`, and the renamer's binding ids follow that order.
-struct TypeExpressions<'analyzer>(&'analyzer mut Analyzer);
-
-impl<'ast> Visitor<'ast> for TypeExpressions<'_> {
-    fn visit_expression(&mut self, expr: &'ast Expression) {
-        self.0.analyze_expr(expr);
-    }
-
-    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
-        self.0.analyze_function_body(body);
-    }
-}
-
 /// Resolves every name in one walk, in the order the renamer later visits
 /// the same bindings.
+///
+/// The walk is `Visitor`'s, which reaches nodes in the same order as the
+/// renamer's `Transform` walk, so binding ids line up. Both sides walk
+/// function bodies and the statements that bind or open a scope by hand, and
+/// neither visits the types those declare.
 pub(super) struct Analyzer {
     scopes: Vec<ScopeNode>,
     bindings: Vec<BindingInfo>,
@@ -87,7 +81,7 @@ impl Analyzer {
     /// walk, so every reference to one resolves to it.
     pub(super) fn declare_root_globals(&mut self, names: &[&str]) {
         for name in names {
-            self.declare_binding(name, false);
+            self.declare_binding(name, BindingKind::Renamable);
         }
     }
 
@@ -107,12 +101,8 @@ impl Analyzer {
             .collect()
     }
 
-    const fn current_scope(&self) -> usize {
-        self.current_scope_id
-    }
-
     fn enter_scope(&mut self) {
-        let parent = self.current_scope();
+        let parent = self.current_scope_id;
         let new_id = self.scopes.len();
         self.scopes.push(ScopeNode {
             parent: Some(parent),
@@ -143,8 +133,8 @@ impl Analyzer {
         }
     }
 
-    fn declare_binding(&mut self, name: &str, is_fixed: bool) -> usize {
-        let scope_id = self.current_scope();
+    fn declare_binding(&mut self, name: &str, kind: BindingKind) {
+        let scope_id = self.current_scope_id;
         let binding_id = self.bindings.len();
         let mut live_scopes = ScopeSet::default();
         live_scopes.insert(scope_id);
@@ -154,15 +144,28 @@ impl Analyzer {
             scope_id,
             reference_count: 0,
             slot: None,
-            is_fixed,
-            is_global: false,
+            kind,
             live_scopes,
         });
         if let Some(scope) = self.scopes.get_mut(scope_id) {
             scope.binding_ids.push(binding_id);
         }
         self.name_stacks.entry(original_name).or_default().push(binding_id);
-        binding_id
+    }
+
+    fn declare_local(&mut self, name: &str, is_exported: bool) {
+        let is_fixed = name == "self" || is_env_binding(name, self.version) || is_exported;
+        let kind = if is_fixed { BindingKind::Fixed } else { BindingKind::Renamable };
+        self.declare_binding(name, kind);
+    }
+
+    /// Declares a name a parameter list or a `for` loop binds. Unlike a
+    /// local, one named `self` gets renamed. The implicit `self` of a `:`
+    /// method is never in the params list.
+    fn declare_parameter(&mut self, name: &str) {
+        let is_fixed = is_env_binding(name, self.version);
+        let kind = if is_fixed { BindingKind::Fixed } else { BindingKind::Renamable };
+        self.declare_binding(name, kind);
     }
 
     /// Lua 5.5: declares `name` as a global from here to the end of the scope.
@@ -171,15 +174,12 @@ impl Analyzer {
     /// used after it would resolve to the global instead. Declaring therefore
     /// counts as a global read, even if nothing reads the name.
     fn declare_global(&mut self, name: &str) {
-        let binding_id = self.declare_binding(name, true);
-        if let Some(binding) = self.bindings.get_mut(binding_id) {
-            binding.is_global = true;
-        }
+        self.declare_binding(name, BindingKind::Global);
         self.reference_name(name);
     }
 
     fn reference_name(&mut self, name: &str) {
-        let current_scope = self.current_scope();
+        let current_scope = self.current_scope_id;
         let Self { scopes, bindings, name_stacks, .. } = self;
         let innermost_binding = name_stacks
             .get(name)
@@ -195,7 +195,7 @@ impl Analyzer {
                 }
                 next_scope = scopes.get(scope_id).and_then(|scope| scope.parent);
             }
-            if !binding.is_global {
+            if binding.kind != BindingKind::Global {
                 return;
             }
         }
@@ -207,263 +207,13 @@ impl Analyzer {
         }
     }
 
-    pub(super) fn analyze_block(&mut self, block: &Block) {
-        for stmt in &block.stmts {
-            self.analyze_stmt(stmt);
-        }
-        if let Some(last) = &block.last_stmt {
-            self.analyze_last_stmt(last);
-        }
-    }
-
-    fn analyze_scoped_block(&mut self, block: &Block) {
+    fn visit_scoped_block(&mut self, block: &Block) {
         self.enter_scope();
-        self.analyze_block(block);
+        self.visit_block(block);
         self.exit_scope();
     }
 
-    fn analyze_if(&mut self, if_stmt: &IfStatement) {
-        self.analyze_expr(&if_stmt.condition);
-        self.analyze_scoped_block(&if_stmt.block);
-        for clause in &if_stmt.elseif_clauses {
-            self.analyze_expr(&clause.condition);
-            self.analyze_scoped_block(&clause.block);
-        }
-        if let Some(else_clause) = &if_stmt.else_clause {
-            self.analyze_scoped_block(&else_clause.block);
-        }
-    }
-
-    fn analyze_stmt(&mut self, stmt: &Statement) {
-        match stmt {
-            Statement::LocalAssignment(local) => {
-                // RHS before LHS: `local x = x` reads the outer x.
-                if let Some(exprs) = &local.exprs {
-                    for expr in exprs.iter() {
-                        self.analyze_expr(expr);
-                    }
-                }
-                for attributed in local.names.iter() {
-                    let name = identifier_name(&attributed.name);
-                    let is_fixed =
-                        name == "self" || is_env_binding(name, self.version) || local.is_exported;
-                    self.declare_binding(name, is_fixed);
-                }
-            }
-            Statement::LocalFunction(local_function) => {
-                let name = identifier_name(&local_function.name);
-                let is_fixed = name == "self"
-                    || is_env_binding(name, self.version)
-                    || local_function.is_exported;
-                self.declare_binding(name, is_fixed);
-                self.analyze_function_body(&local_function.body);
-            }
-            Statement::FunctionDecl(function_declaration) => {
-                self.analyze_function_body(&function_declaration.body);
-                if let Some(root_name) = function_declaration.name.names.first() {
-                    self.reference_name(identifier_name(root_name));
-                }
-            }
-            Statement::Assignment(assignment) => {
-                for expr in assignment.values.iter() {
-                    self.analyze_expr(expr);
-                }
-                for var in assignment.targets.iter() {
-                    self.analyze_var(var);
-                }
-            }
-            Statement::FunctionCall(call_stmt) => self.analyze_function_call(call_stmt),
-            Statement::DoBlock(do_block) => self.analyze_scoped_block(&do_block.block),
-            Statement::WhileLoop(while_loop) => {
-                self.analyze_expr(&while_loop.condition);
-                self.analyze_scoped_block(&while_loop.block);
-            }
-            Statement::RepeatLoop(repeat_loop) => {
-                self.enter_scope();
-                self.analyze_block(&repeat_loop.block);
-                self.analyze_expr(&repeat_loop.condition);
-                self.exit_scope();
-            }
-            Statement::IfStatement(if_stmt) => self.analyze_if(if_stmt),
-            Statement::NumericFor(numeric_for) => {
-                self.analyze_expr(&numeric_for.start);
-                self.analyze_expr(&numeric_for.limit);
-                if let Some(step) = &numeric_for.step {
-                    self.analyze_expr(step);
-                }
-                self.enter_scope();
-                let name = identifier_name(&numeric_for.name);
-                self.declare_binding(name, is_env_binding(name, self.version));
-                self.analyze_block(&numeric_for.block);
-                self.exit_scope();
-            }
-            Statement::GenericFor(generic_for) => {
-                for expr in generic_for.exprs.iter() {
-                    self.analyze_expr(expr);
-                }
-                self.enter_scope();
-                for param in generic_for.names.iter() {
-                    let name = identifier_name(&param.name);
-                    self.declare_binding(name, is_env_binding(name, self.version));
-                }
-                self.analyze_block(&generic_for.block);
-                self.exit_scope();
-            }
-            // Luau
-            Statement::CompoundAssignment(compound_assignment) => {
-                self.analyze_var(&compound_assignment.var);
-                self.analyze_expr(&compound_assignment.expr);
-            }
-            // Lua 5.5: as with `local function`, the body sees the name.
-            Statement::GlobalFunction(global_function) => {
-                self.declare_global(identifier_name(&global_function.name));
-                self.analyze_function_body(&global_function.body);
-            }
-            // Lua 5.5: as with `local`, the initializers see the outer scope.
-            Statement::GlobalDeclaration(global_declaration) => {
-                if let Some(exprs) = &global_declaration.exprs {
-                    for expr in exprs.iter() {
-                        self.analyze_expr(expr);
-                    }
-                }
-                for attributed in global_declaration.names.iter() {
-                    self.declare_global(identifier_name(&attributed.name));
-                }
-            }
-            // Luau: `type function` bodies and `typeof` are ordinary code that
-            // `Renamer` walks too. If the analyzer skipped them, the binding
-            // ids would fall out of step and the renamer would panic.
-            Statement::TypeDeclaration(_) => TypeExpressions(self).walk_statement(stmt),
-            // Leaves with no bindings or references the renamer touches.
-            Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::Error(_) => {}
-        }
-    }
-
-    fn analyze_last_stmt(&mut self, last: &LastStatement) {
-        if let LastStatement::Return(return_stmt) = last {
-            for expr in return_stmt.exprs.iter() {
-                self.analyze_expr(expr);
-            }
-        }
-    }
-
-    fn analyze_expr(&mut self, expr: &Expression) {
-        match expr {
-            Expression::Var(var) => self.analyze_var(var),
-            Expression::FunctionCall(call) => self.analyze_function_call(call),
-            Expression::BinaryOp(binop) => {
-                self.analyze_expr(&binop.left);
-                self.analyze_expr(&binop.right);
-            }
-            Expression::UnaryOp(unop) => self.analyze_expr(&unop.operand),
-            Expression::Parenthesized(paren) => self.analyze_expr(&paren.expr),
-            Expression::FunctionDef(function) => self.analyze_function_body(&function.body),
-            Expression::TableConstructor(table) => self.analyze_fields(&table.fields),
-            // Luau
-            Expression::InterpolatedString(interpolated) => {
-                for segment in &interpolated.segments {
-                    if let Some(segment_expr) = &segment.expr {
-                        self.analyze_expr(segment_expr);
-                    }
-                }
-            }
-            // Luau
-            Expression::IfExpression(if_expr) => {
-                self.analyze_expr(&if_expr.condition);
-                self.analyze_expr(&if_expr.then_expr);
-                for clause in &if_expr.elseif_clauses {
-                    self.analyze_expr(&clause.condition);
-                    self.analyze_expr(&clause.expr);
-                }
-                self.analyze_expr(&if_expr.else_expr);
-            }
-            // Luau
-            Expression::TypeCast(cast) => {
-                self.analyze_expr(&cast.expr);
-                TypeExpressions(self).visit_type(&cast.type_annotation);
-            }
-            // Luau
-            Expression::TypeInstantiation(instantiation) => {
-                self.analyze_expr(&instantiation.expr);
-                self.analyze_type_args(&instantiation.type_args);
-            }
-            // Leaves with no sub-expressions or name references.
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::Error(_) => {}
-        }
-    }
-
-    fn analyze_var(&mut self, var: &Var) {
-        match var {
-            Var::Name(name) => self.reference_name(identifier_name(name)),
-            Var::FieldAccess(field_access) => self.analyze_expr(&field_access.prefix),
-            Var::Index(index_expr) => {
-                self.analyze_expr(&index_expr.prefix);
-                self.analyze_expr(&index_expr.index);
-            }
-        }
-    }
-
-    fn analyze_type_args(&mut self, type_args: &TypeArgs) {
-        for type_arg in type_args.args.iter() {
-            TypeExpressions(self).visit_type(type_arg);
-        }
-    }
-
-    fn analyze_function_call(&mut self, call: &FunctionCall) {
-        self.analyze_expr(&call.callee);
-        if let Some(type_args) = &call.explicit_type_args {
-            self.analyze_type_args(type_args);
-        }
-        match &call.args {
-            FunctionArgs::Parenthesized { args, .. } => {
-                for arg in args.iter() {
-                    self.analyze_expr(arg);
-                }
-            }
-            FunctionArgs::TableConstructor(table) => self.analyze_fields(&table.fields),
-            FunctionArgs::StringLiteral(_) => {}
-        }
-    }
-
-    fn analyze_fields(&mut self, fields: &Punctuated<Field>) {
-        for field in fields.iter() {
-            match field {
-                Field::Bracketed { key, value, .. } => {
-                    self.analyze_expr(key);
-                    self.analyze_expr(value);
-                }
-                Field::Named { value, .. } | Field::Positional { value, .. } => {
-                    self.analyze_expr(value);
-                }
-            }
-        }
-    }
-
-    fn analyze_function_body(&mut self, body: &FunctionBody) {
-        self.enter_scope();
-        // Unlike a local, a param named `self` gets renamed. The implicit
-        // `self` of a `:` method is never in the params list.
-        for param in body.params.iter() {
-            let name = identifier_name(&param.name);
-            self.declare_binding(name, is_env_binding(name, self.version));
-        }
-        self.analyze_block(&body.block);
-        self.exit_scope();
-    }
-
-    /// Gives every non-fixed binding a slot and returns each slot's liveness.
+    /// Gives every renamable binding a slot and returns each slot's liveness.
     fn assign_slots(&mut self) -> Vec<ScopeSet> {
         let mut live_scopes_by_slot: Vec<ScopeSet> = Vec::new();
         let Self { scopes, bindings, .. } = self;
@@ -474,7 +224,7 @@ impl Analyzer {
                 let Some(binding) = bindings.get_mut(binding_id) else {
                     continue;
                 };
-                if binding.is_fixed {
+                if binding.kind != BindingKind::Renamable {
                     continue;
                 }
 
@@ -552,5 +302,127 @@ impl Analyzer {
         }
 
         slot_names
+    }
+}
+
+impl<'ast> Visitor<'ast> for Analyzer {
+    fn visit_statement(&mut self, stmt: &'ast Statement) {
+        match stmt {
+            Statement::LocalAssignment(local) => {
+                // RHS before LHS: `local x = x` reads the outer x.
+                if let Some(exprs) = &local.exprs {
+                    for expr in exprs.iter() {
+                        self.visit_expression(expr);
+                    }
+                }
+                for attributed in local.names.iter() {
+                    self.declare_local(identifier_name(&attributed.name), local.is_exported);
+                }
+            }
+            Statement::LocalFunction(local_function) => {
+                self.declare_local(
+                    identifier_name(&local_function.name),
+                    local_function.is_exported,
+                );
+                self.visit_function_body(&local_function.body);
+            }
+            Statement::FunctionDecl(function_declaration) => {
+                self.visit_function_body(&function_declaration.body);
+                if let Some(root_name) = function_declaration.name.names.first() {
+                    self.reference_name(identifier_name(root_name));
+                }
+            }
+            Statement::DoBlock(do_block) => self.visit_scoped_block(&do_block.block),
+            Statement::WhileLoop(while_loop) => {
+                self.visit_expression(&while_loop.condition);
+                self.visit_scoped_block(&while_loop.block);
+            }
+            Statement::RepeatLoop(repeat_loop) => {
+                // The condition sees the block's locals.
+                self.enter_scope();
+                self.visit_block(&repeat_loop.block);
+                self.visit_expression(&repeat_loop.condition);
+                self.exit_scope();
+            }
+            Statement::IfStatement(if_stmt) => {
+                self.visit_expression(&if_stmt.condition);
+                self.visit_scoped_block(&if_stmt.block);
+                for clause in &if_stmt.elseif_clauses {
+                    self.visit_expression(&clause.condition);
+                    self.visit_scoped_block(&clause.block);
+                }
+                if let Some(else_clause) = &if_stmt.else_clause {
+                    self.visit_scoped_block(&else_clause.block);
+                }
+            }
+            Statement::NumericFor(numeric_for) => {
+                self.visit_expression(&numeric_for.start);
+                self.visit_expression(&numeric_for.limit);
+                if let Some(step) = &numeric_for.step {
+                    self.visit_expression(step);
+                }
+                self.enter_scope();
+                self.declare_parameter(identifier_name(&numeric_for.name));
+                self.visit_block(&numeric_for.block);
+                self.exit_scope();
+            }
+            Statement::GenericFor(generic_for) => {
+                for expr in generic_for.exprs.iter() {
+                    self.visit_expression(expr);
+                }
+                self.enter_scope();
+                for param in generic_for.names.iter() {
+                    self.declare_parameter(identifier_name(&param.name));
+                }
+                self.visit_block(&generic_for.block);
+                self.exit_scope();
+            }
+            // Lua 5.5: as with `local function`, the body sees the name.
+            Statement::GlobalFunction(global_function) => {
+                self.declare_global(identifier_name(&global_function.name));
+                self.visit_function_body(&global_function.body);
+            }
+            // Lua 5.5: as with `local`, the initializers see the outer scope.
+            Statement::GlobalDeclaration(global_declaration) => {
+                if let Some(exprs) = &global_declaration.exprs {
+                    for expr in exprs.iter() {
+                        self.visit_expression(expr);
+                    }
+                }
+                for attributed in global_declaration.names.iter() {
+                    self.declare_global(identifier_name(&attributed.name));
+                }
+            }
+            // These bind nothing themselves. The walk still reaches the
+            // functions they hold, Luau `type function` bodies and `typeof`
+            // included, which `Renamer` walks too: skipping one would put the
+            // binding ids out of step and the renamer would panic.
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::Error(_) => self.walk_statement(stmt),
+        }
+    }
+
+    fn visit_var(&mut self, var: &'ast Var) {
+        if let Var::Name(name) = var {
+            self.reference_name(identifier_name(name));
+        }
+        self.walk_var(var);
+    }
+
+    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
+        self.enter_scope();
+        for param in body.params.iter() {
+            self.declare_parameter(identifier_name(&param.name));
+        }
+        self.visit_block(&body.block);
+        self.exit_scope();
     }
 }

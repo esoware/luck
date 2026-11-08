@@ -109,14 +109,36 @@ impl Transform for ParenSimplifier {
     // f("str") becomes f"str", and f({...}) becomes f{...}.
     fn transform_function_args(&mut self, args: FunctionArgs) -> FunctionArgs {
         match args {
-            FunctionArgs::Parenthesized { span, args: call_args } => {
-                if let [Expression::StringLiteral(literal)] = call_args.items.as_slice() {
-                    return FunctionArgs::StringLiteral(literal.clone());
-                }
-                if let [Expression::TableConstructor(table)] = call_args.items.as_slice() {
-                    return FunctionArgs::TableConstructor(Box::new(
-                        self.walk_table_constructor(*table.clone()),
-                    ));
+            FunctionArgs::Parenthesized { span, args: mut call_args } => {
+                if call_args.len() == 1
+                    && let Some(arg) = call_args.items.pop()
+                {
+                    match arg {
+                        Expression::StringLiteral(literal) => {
+                            return FunctionArgs::StringLiteral(literal);
+                        }
+                        Expression::TableConstructor(mut table) => {
+                            *table = self.walk_table_constructor(*table);
+                            return FunctionArgs::TableConstructor(table);
+                        }
+                        other @ (Expression::Nil(_)
+                        | Expression::False(_)
+                        | Expression::True(_)
+                        | Expression::Number(_)
+                        | Expression::Integer(_)
+                        | Expression::VarArg(_)
+                        | Expression::FunctionDef(_)
+                        | Expression::Var(_)
+                        | Expression::FunctionCall(_)
+                        | Expression::Parenthesized(_)
+                        | Expression::BinaryOp(_)
+                        | Expression::UnaryOp(_)
+                        | Expression::IfExpression(_)
+                        | Expression::InterpolatedString(_)
+                        | Expression::TypeCast(_)
+                        | Expression::TypeInstantiation(_)
+                        | Expression::Error(_)) => call_args.items.push(other),
+                    }
                 }
                 FunctionArgs::Parenthesized { span, args: self.walk_punctuated_exprs(call_args) }
             }

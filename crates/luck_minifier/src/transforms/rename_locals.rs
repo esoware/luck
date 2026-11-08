@@ -4,11 +4,12 @@ mod globals;
 mod renamer;
 mod scope_set;
 
-use analyzer::Analyzer;
-use globals::renamable_globals;
-use luck_ast::{Block, Transform as _};
+use luck_ast::{Block, Transform as _, Visitor as _};
 use luck_token::LuaVersion;
-use renamer::Renamer;
+
+use self::analyzer::Analyzer;
+use self::globals::renamable_globals;
+use self::renamer::Renamer;
 
 /// Renames every local to the shortest name its scopes allow, and with
 /// `rename_globals` the globals the chunk defines before reading them too.
@@ -21,7 +22,7 @@ pub(crate) fn rename(block: Block, version: LuaVersion, rename_globals: bool) ->
     // can't tell a global read from a same-named local elsewhere in the file.
     let mut analyzer = Analyzer::new(version);
     analyzer.declare_root_globals(&root_globals);
-    analyzer.analyze_block(&block);
+    analyzer.visit_block(&block);
     let binding_names = analyzer.binding_names();
 
     let mut renamer = Renamer::new(binding_names);
@@ -636,6 +637,23 @@ mod tests {
             (
                 "type T = typeof(function(longparam) return longparam end)\nlocal after = f()\nreturn after\n",
                 "type T=typeof(function(l)return l end)local l=f()return l",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn bindings_in_an_assignment_keep_their_place_in_walk_order() {
+        // Binding ids follow visit order, and the renamer visits an
+        // assignment's targets before its values. Visiting them out of turn
+        // hands a parameter another binding's name, which can capture `x`.
+        assert_luau_renames(&[
+            (
+                "local x = f()\nt[function(a) return x, a end] = function(b) return b end\nreturn x\n",
+                "local l=f()t[function(u)return l,u end]=function(l)return l end return l",
+            ),
+            (
+                "local x = f()\ng(function(a) return a end).k = function(b) return b + x end\nreturn x\n",
+                "local l=f()g(function(l)return l end).k=function(u)return u+l end return l",
             ),
         ]);
     }
