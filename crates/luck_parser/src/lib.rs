@@ -22,8 +22,10 @@
     expect(clippy::missing_panics_doc, reason = "a Panics section says nothing about a test")
 )]
 
+mod parse_result;
 mod parser;
 mod validate;
 
-pub use parser::{ParseError, ParseResult, parse};
+pub use parse_result::{ParseError, ParseResult};
+pub use parser::parse;
 pub use validate::validate;

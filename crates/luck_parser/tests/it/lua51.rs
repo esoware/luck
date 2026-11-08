@@ -631,7 +631,7 @@ fn empty_program() {
 }
 
 #[test]
-fn semicolons_as_separators() {
+fn semicolon_separates_statements_without_an_empty_statement() {
     let result = parse_lua51("local x = 1; local y = 2");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 2);

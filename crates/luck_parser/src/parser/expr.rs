@@ -1,34 +1,12 @@
-use core::mem;
-
 use luck_ast::{
-    BinaryOp, Block, ElseIfExprClause, Expression, Field, FieldAccess, FunctionArgs, FunctionBody,
-    FunctionCall, FunctionDef, IfExpression, IndexExpression, InterpolatedString,
-    InterpolatedStringSegment, Literal, Parameter, ParenthesizedExpression, Punctuated,
-    TableConstructor, Type, TypeArgs, TypeCast, TypeInstantiation, UnaryOp, Var, VarArgParam,
+    BinaryOp, ElseIfExprClause, Expression, Field, FieldAccess, FunctionArgs, FunctionCall,
+    FunctionDef, IfExpression, IndexExpression, InterpolatedString, InterpolatedStringSegment,
+    ParenthesizedExpression, Punctuated, TableConstructor, TypeArgs, TypeCast, TypeInstantiation,
+    UnaryOp, Var,
 };
-use luck_token::{Associativity, BinOp, Span, Token, TokenKind, UnOp};
+use luck_token::{Associativity, BinOp, Span, TokenKind, UnOp};
 
-use super::types::GenericsOwner;
-use crate::parser::Parser;
-
-/// Turn a number or string literal token into a `Literal`. The caller has
-/// already matched the kind.
-pub(super) fn literal_from(token: Token) -> Literal {
-    #[expect(clippy::unreachable, reason = "the caller has already matched this token kind")]
-    let (TokenKind::Number(text) | TokenKind::StringLiteral(text)) = token.kind else {
-        unreachable!("caller matched a literal token kind");
-    };
-    Literal { text, span: token.span }
-}
-
-fn number_from(token: Token) -> Expression {
-    let literal = literal_from(token);
-    if literal.text.ends_with('i') {
-        Expression::Integer(literal)
-    } else {
-        Expression::Number(literal)
-    }
-}
+use super::Parser;
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -132,11 +110,11 @@ impl Parser<'_> {
             TokenKind::Nil => Expression::Nil(self.advance_span()),
             TokenKind::False => Expression::False(self.advance_span()),
             TokenKind::True => Expression::True(self.advance_span()),
-            TokenKind::Number(_) => number_from(self.advance()),
-            TokenKind::StringLiteral(_) => Expression::StringLiteral(literal_from(self.advance())),
+            TokenKind::Number(_) => self.parse_number(),
+            TokenKind::StringLiteral(_) => Expression::StringLiteral(self.advance_literal()),
             TokenKind::DotDotDot => {
                 let span = self.advance_span();
-                if !self.is_vararg_scope {
+                if !self.function_scope.is_vararg {
                     self.error(span, "cannot use `...` outside a vararg function");
                 }
                 Expression::VarArg(span)
@@ -188,6 +166,20 @@ impl Parser<'_> {
         }
     }
 
+    /// Consume a number token, an exact Luau integer when it has the `i`
+    /// suffix.
+    // Its own frame keeps these temporaries off that of
+    // `parse_primary_expression`, which every level of nesting pays for in an
+    // unoptimized build.
+    fn parse_number(&mut self) -> Expression {
+        let literal = self.advance_literal();
+        if literal.text.ends_with('i') {
+            Expression::Integer(literal)
+        } else {
+            Expression::Number(literal)
+        }
+    }
+
     /// Parse a suffix chain: `.name`, `[expr]`, `:name(args)`, `(args)`,
     /// `{table}`, `"string"`, and Luau's `<<T>>`.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
@@ -196,10 +188,7 @@ impl Parser<'_> {
             match self.peek() {
                 // Luau: explicit type-parameter instantiation is a suffix,
                 // so it composes with field access, indexing, and calls.
-                TokenKind::Less
-                    if self.version.has_explicit_type_instantiation()
-                        && matches!(self.peek_next(), TokenKind::Less) =>
-                {
+                TokenKind::Less if self.is_at_type_instantiation() => {
                     let (type_args, close) = self.parse_type_instantiation();
                     let span = expr.span().merge(close);
                     expr = Expression::TypeInstantiation(Box::new(TypeInstantiation {
@@ -232,10 +221,9 @@ impl Parser<'_> {
                 TokenKind::Colon => {
                     self.advance_span();
                     let method_name = self.expect_identifier_recover();
-                    let explicit_type_args = (self.version.has_explicit_type_instantiation()
-                        && matches!(self.peek(), TokenKind::Less)
-                        && matches!(self.peek_next(), TokenKind::Less))
-                    .then(|| Box::new(self.parse_type_instantiation().0));
+                    let explicit_type_args = self
+                        .is_at_type_instantiation()
+                        .then(|| Box::new(self.parse_type_instantiation().0));
                     let args = self.parse_function_args();
                     let span = expr.span().merge(args.span());
                     expr = Expression::FunctionCall(Box::new(FunctionCall {
@@ -274,6 +262,13 @@ impl Parser<'_> {
             }
         }
         expr
+    }
+
+    /// Whether a Luau `<<T>>` instantiation starts here.
+    const fn is_at_type_instantiation(&self) -> bool {
+        self.version.has_explicit_type_instantiation()
+            && matches!(self.peek(), TokenKind::Less)
+            && matches!(self.peek_next(), TokenKind::Less)
     }
 
     /// Parse Luau's `<<T, U>>`, returning the type arguments and the span of
@@ -405,9 +400,7 @@ impl Parser<'_> {
                 let table = self.parse_table_constructor();
                 FunctionArgs::TableConstructor(Box::new(table))
             }
-            TokenKind::StringLiteral(_) => {
-                FunctionArgs::StringLiteral(literal_from(self.advance()))
-            }
+            TokenKind::StringLiteral(_) => FunctionArgs::StringLiteral(self.advance_literal()),
             _ => {
                 let span = self.current_span();
                 self.error(span, "expected function arguments");
@@ -419,11 +412,7 @@ impl Parser<'_> {
     /// Parse `function(params) block end`, optionally preceded by Luau
     /// `@attr` attributes (`simpleexp ::= attributes 'function' funcbody`).
     fn parse_function_def(&mut self) -> Expression {
-        let attributes = if matches!(self.peek(), TokenKind::At) {
-            self.parse_function_attributes()
-        } else {
-            Vec::new()
-        };
+        let attributes = self.parse_function_attributes();
         let start_span =
             attributes.first().map_or_else(|| self.current_span(), |attribute| attribute.span);
         if !matches!(self.peek(), TokenKind::Function) {
@@ -435,102 +424,6 @@ impl Parser<'_> {
         let body = self.parse_function_body();
         let span = start_span.merge(body.span);
         Expression::FunctionDef(Box::new(FunctionDef { span, attributes, body }))
-    }
-
-    /// Parse a function body: `[<generics>] (params) block end`.
-    pub(super) fn parse_function_body(&mut self) -> FunctionBody {
-        // Luau puts the generic list before the parens: `function f<T>(x: T)`.
-        let generics = (self.version.is_luau() && matches!(self.peek(), TokenKind::Less))
-            .then(|| Box::new(self.parse_generic_type_list(GenericsOwner::Function)));
-
-        let open = self.expect(&TokenKind::LeftParen);
-        let start_span = generics.as_ref().map_or(open, |list| list.span);
-
-        if !self.enter_depth() {
-            return FunctionBody {
-                span: start_span,
-                generics,
-                params: Punctuated::empty(),
-                vararg: None,
-                return_type: None,
-                block: Block { span: start_span, stmts: Vec::new(), last_stmt: None },
-            };
-        }
-
-        let (params, vararg) = self.parse_params();
-
-        self.expect(&TokenKind::RightParen);
-
-        // Luau: optional return type annotation after `)`.
-        let return_type = self.try_parse_type_annotation();
-
-        // A loop around the function doesn't make `break` or `continue` valid
-        // inside it, and `...` needs this function's own vararg parameter.
-        let outer_loop_depth = mem::replace(&mut self.loop_depth, 0);
-        let is_outer_vararg_scope = mem::replace(&mut self.is_vararg_scope, vararg.is_some());
-        self.function_depth = self.function_depth.saturating_add(1);
-        let block = self.parse_block();
-        self.function_depth = self.function_depth.saturating_sub(1);
-        self.loop_depth = outer_loop_depth;
-        self.is_vararg_scope = is_outer_vararg_scope;
-
-        let end_span = self.expect(&TokenKind::End);
-
-        self.exit_depth();
-
-        let span = start_span.merge(end_span);
-
-        FunctionBody { span, generics, params, vararg, return_type, block }
-    }
-
-    /// Parse the parameter list between a function's parens, stopping before
-    /// the closing `)`.
-    fn parse_params(&mut self) -> (Punctuated<Parameter>, Option<Box<VarArgParam>>) {
-        let mut params = Punctuated::<Parameter>::empty();
-        if matches!(self.peek(), TokenKind::DotDotDot) {
-            return (params, Some(Box::new(self.parse_vararg_param())));
-        }
-        if !self.is_at_identifier() {
-            return (params, None);
-        }
-
-        let first_name = self.advance();
-        params.push(self.parse_parameter(first_name));
-
-        while matches!(self.peek(), TokenKind::Comma) {
-            self.advance_span();
-            if matches!(self.peek(), TokenKind::DotDotDot) {
-                // Vararg after the last named parameter.
-                return (params, Some(Box::new(self.parse_vararg_param())));
-            }
-            let name = self.expect_identifier_recover();
-            params.push(self.parse_parameter(name));
-        }
-        (params, None)
-    }
-
-    /// Finish a function parameter or a for-loop variable whose `name` was
-    /// just consumed, taking a Luau `: T` annotation if one follows.
-    pub(super) fn parse_parameter(&mut self, name: Token) -> Parameter {
-        let type_annotation = self.try_parse_type_annotation();
-        let end_span = type_annotation.as_ref().map_or(name.span, Type::span);
-        Parameter { span: name.span.merge(end_span), name, type_annotation }
-    }
-
-    /// Parse `... [name] [: type]`; `...` must be the current token.
-    fn parse_vararg_param(&mut self) -> VarArgParam {
-        let dots = self.advance_span();
-        // Lua 5.5: named varargs `...name`.
-        let vararg_name =
-            (self.version.has_named_varargs() && self.is_at_identifier()).then(|| self.advance());
-        // Luau: vararg type annotation `...: type`.
-        let vararg_type = self.try_parse_type_annotation();
-        let end_span = vararg_type
-            .as_ref()
-            .map(Type::span)
-            .or_else(|| vararg_name.as_ref().map(|name| name.span))
-            .unwrap_or(dots);
-        VarArgParam { span: dots.merge(end_span), name: vararg_name, type_annotation: vararg_type }
     }
 
     /// Parse a table constructor: `{ [fieldlist] }`.

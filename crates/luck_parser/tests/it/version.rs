@@ -17,7 +17,7 @@ fn goto_in_lua51_is_identifier() {
 }
 
 #[test]
-fn double_colon_label_in_lua51() {
+fn label_is_an_error_in_lua51() {
     // In Lua 5.1 the lexer still produces DoubleColon, which the parser
     // has nowhere to put.
     let result = parse("::label::", LuaVersion::Lua51);
@@ -25,7 +25,7 @@ fn double_colon_label_in_lua51() {
 }
 
 #[test]
-fn attribute_in_lua53_not_parsed() {
+fn attribute_is_not_parsed_in_lua53() {
     // Lua 5.3 has no attributes, so the statement ends at `local x` and
     // `<const> = 5` is left over.
     let result = parse("local x <const> = 5", LuaVersion::Lua53);
@@ -63,7 +63,7 @@ fn bitwise_pipe_in_lua52_is_error() {
 }
 
 #[test]
-fn named_vararg_in_lua54_not_consumed() {
+fn vararg_name_is_not_consumed_in_lua54() {
     // Lua 5.4 has no named varargs, so the vararg parameter stays unnamed.
     let result = parse("function f(...) return args end", LuaVersion::Lua54);
     assert_no_errors(&result);
@@ -172,7 +172,7 @@ fn ambiguous_newline_call_gated_by_version() {
 }
 
 #[test]
-fn luau_function_attribute_names_validated() {
+fn luau_function_attributes_must_be_known_and_unique() {
     assert_no_errors(&parse("@native function f() end", LuaVersion::Luau));
     assert_no_errors(&parse("@checked @native function f() end", LuaVersion::Luau));
     assert_has_errors(&parse("@totallymadeup function f() end", LuaVersion::Luau));

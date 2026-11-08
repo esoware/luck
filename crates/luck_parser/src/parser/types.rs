@@ -12,7 +12,7 @@ use luck_ast::{
 };
 use luck_token::{Span, Token, TokenKind};
 
-use crate::parser::Parser;
+use super::Parser;
 
 /// Luau's flat type-suffix chain rejects `A | B & C`, `A? & B`, and the like.
 const MIXED_TYPE_MESSAGE: &str =
@@ -265,14 +265,7 @@ impl Parser<'_> {
             let arg = self.parse_type();
             let is_error = matches!(arg, Type::Error(_));
             args.push(arg);
-            if matches!(self.peek(), TokenKind::Comma) {
-                self.advance_span();
-                args.has_trailing_separator = true;
-            } else {
-                args.has_trailing_separator = false;
-                break;
-            }
-            if is_error {
+            if !self.eat_list_comma(&mut args) || is_error {
                 break;
             }
         }
@@ -352,17 +345,24 @@ impl Parser<'_> {
             };
             params.push(param);
 
-            if matches!(self.peek(), TokenKind::Comma) {
-                self.advance_span();
-                params.has_trailing_separator = true;
-            } else {
-                params.has_trailing_separator = false;
+            if !self.eat_list_comma(&mut params) {
                 break;
             }
         }
 
         let close = self.consume_type_close_angle();
         GenericTypeList { span: open.merge(close), params }
+    }
+
+    /// Consume the `,` after a list item if there is one, and record on
+    /// `items` whether there was.
+    fn eat_list_comma<Item>(&mut self, items: &mut Punctuated<Item>) -> bool {
+        let has_comma = matches!(self.peek(), TokenKind::Comma);
+        if has_comma {
+            self.advance_span();
+        }
+        items.has_trailing_separator = has_comma;
+        has_comma
     }
 
     /// Consume the `>` that closes a generic list, recording an error if it's
@@ -500,14 +500,7 @@ impl Parser<'_> {
             let is_error = matches!(param.type_value, Type::Error(_));
             params.push(param);
 
-            if matches!(self.peek(), TokenKind::Comma) {
-                self.advance_span();
-                params.has_trailing_separator = true;
-            } else {
-                params.has_trailing_separator = false;
-                break;
-            }
-            if is_error {
+            if !self.eat_list_comma(&mut params) || is_error {
                 break;
             }
         }

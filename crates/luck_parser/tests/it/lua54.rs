@@ -53,7 +53,7 @@ fn local_close_attribute() {
 }
 
 #[test]
-fn local_mixed_attributes_only_second() {
+fn trailing_attribute_applies_only_to_its_name() {
     // In `local a, b <const> = 1, 2` only `b` carries the attribute.
     let result = parse_lua54("local a, b <const> = 1, 2");
     assert_no_errors(&result);
@@ -73,7 +73,7 @@ fn local_mixed_attributes_only_second() {
 }
 
 #[test]
-fn local_both_have_attributes() {
+fn each_name_keeps_its_own_attribute() {
     let result = parse_lua54("local a <const>, b <close> = 1, 2");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(local) = &result.block.stmts[0] {

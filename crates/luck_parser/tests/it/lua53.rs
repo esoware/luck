@@ -97,7 +97,7 @@ fn bitwise_xor() {
 }
 
 #[test]
-fn lua53_has_goto() {
+fn goto_and_labels_parse_in_lua53() {
     let result = parse_lua53("goto done ::done::");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 2);

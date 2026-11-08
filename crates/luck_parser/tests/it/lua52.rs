@@ -49,7 +49,7 @@ fn goto_and_label_in_same_block() {
 }
 
 #[test]
-fn three_empty_statements() {
+fn semicolons_parse_as_empty_statements() {
     let result = parse_lua52(";;;");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 3);
@@ -62,7 +62,7 @@ fn three_empty_statements() {
 }
 
 #[test]
-fn break_in_middle_of_block() {
+fn break_can_precede_other_statements() {
     let result = parse_lua52("while true do break local x = 1 end");
     assert_no_errors(&result);
     if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
@@ -87,7 +87,7 @@ fn break_in_middle_of_block() {
 }
 
 #[test]
-fn return_with_trailing_semicolon() {
+fn return_takes_a_trailing_semicolon() {
     let result = parse_lua52("return 1;");
     assert_no_errors(&result);
     if let Some(last) = &result.block.last_stmt {

@@ -63,7 +63,7 @@ fn walk_directory(directory: &Path, files: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn parse_all_fixtures() {
+fn fixtures_outside_errors_parse_cleanly() {
     let root = fixtures_directory();
     let files = collect_fixture_files(&root);
     assert!(!files.is_empty(), "no fixture files found");

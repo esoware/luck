@@ -8,8 +8,7 @@
 use luck_ast::{Attribute, Expression, Field, FunctionAttribute, Punctuated};
 use luck_token::{Token, TokenKind};
 
-use super::expr::literal_from;
-use crate::parser::Parser;
+use super::Parser;
 
 /// Whether `expr` fits the grammar's `literal` production for attribute
 /// arguments: nil, booleans, numbers, strings, and tables of literals with
@@ -137,7 +136,7 @@ impl Parser<'_> {
                 Some(args)
             }
             TokenKind::StringLiteral(_) => {
-                Some(Punctuated::from_item(Expression::StringLiteral(literal_from(self.advance()))))
+                Some(Punctuated::from_item(Expression::StringLiteral(self.advance_literal())))
             }
             TokenKind::LeftBrace => {
                 let table = self.parse_table_constructor();

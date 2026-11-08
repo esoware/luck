@@ -48,7 +48,7 @@ fn generic_args() {
 }
 
 #[test]
-fn nested_generics_shift_right_split() {
+fn nested_generics_split_the_closing_shift_right() {
     let Type::Named(named) = alias_type("type X = Map<string, Array<number>>") else {
         panic!("expected Named");
     };
@@ -85,7 +85,7 @@ fn intersection_type() {
 }
 
 #[test]
-fn intersection_binds_tighter_than_union() {
+fn parenthesized_intersection_is_one_union_member() {
     // Luau's suffix chain is flat: mixing `&` and `|` without parentheses
     // is a parse error, not a precedence question.
     let result = parse_luau("type X = A & B | C");
@@ -103,7 +103,7 @@ fn optional_type() {
 }
 
 #[test]
-fn rejects_negation_syntax() {
+fn negation_syntax_is_an_error_in_luau() {
     for source in [
         "return ~1",
         "type X = ~nil",
@@ -233,7 +233,7 @@ fn function_type_pack_return() {
 }
 
 #[test]
-fn paren_type_is_not_pack() {
+fn parenthesized_type_is_not_a_pack() {
     assert!(matches!(alias_type("type X = (number)"), Type::Parenthesized(_)));
 }
 
@@ -268,7 +268,7 @@ fn parenthesized_types_preserve_pack_and_function_shapes() {
 }
 
 #[test]
-fn named_parenthesized_type_still_reports_error() {
+fn named_parameter_outside_a_function_type_is_an_error() {
     let parsed = parse_luau("type X = (value: number)");
     assert_eq!(parsed.errors.len(), 1, "{:?}", parsed.errors);
     assert_eq!(parsed.errors[0].span, luck_token::Span::new(10, 15));
@@ -302,26 +302,6 @@ fn type_declaration_generic_defaults() {
     assert_eq!(generics.params.len(), 2);
     assert!(generics.params.iter().all(|param| param.default.is_some()));
     assert!(generics.params.last().expect("pack param").is_pack);
-}
-
-#[test]
-fn export_type_declaration() {
-    let result = parse_luau("export type Point = { x: number, y: number }");
-    assert_no_errors(&result);
-    let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] else {
-        panic!("expected TypeDeclaration");
-    };
-    assert!(type_declaration.is_exported);
-}
-
-#[test]
-fn type_function_declaration_keeps_body() {
-    let result = parse_luau("type function Id(t)\n\treturn t\nend");
-    assert_no_errors(&result);
-    let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] else {
-        panic!("expected TypeDeclaration");
-    };
-    assert!(matches!(type_declaration.type_value, TypeDeclarationValue::TypeFunction(_)));
 }
 
 #[test]
@@ -384,14 +364,6 @@ fn generic_function_declaration() {
 fn cast_with_complex_type() {
     let result = parse_luau("local x = (y :: { [string]: number }?)");
     assert_no_errors(&result);
-}
-
-#[test]
-fn chained_casts() {
-    // One cast per simpleexp; Luau needs parens to chain them.
-    let bare = parse_luau("local x = y :: any :: number");
-    assert!(!bare.errors.is_empty(), "chained casts must error");
-    assert_no_errors(&parse_luau("local x = (y :: any) :: number"));
 }
 
 #[test]

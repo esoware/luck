@@ -4,7 +4,7 @@ use luck_parser::parse;
 use luck_token::LuaVersion;
 
 #[test]
-fn documented_resource_boundary_is_dialect_independent() {
+fn depth_cap_is_the_same_in_every_dialect() {
     for version in LuaVersion::ALL {
         for depth in [255, 256] {
             let source = format!("return {}1{}", "(".repeat(depth), ")".repeat(depth));
@@ -26,7 +26,7 @@ fn documented_resource_boundary_is_dialect_independent() {
 }
 
 #[test]
-fn deeply_nested_parens_no_crash() {
+fn parens_past_the_depth_cap_are_an_error() {
     let open = "(".repeat(1000);
     let close = ")".repeat(1000);
     let source = format!("{open}1{close}");
@@ -35,7 +35,7 @@ fn deeply_nested_parens_no_crash() {
 }
 
 #[test]
-fn deeply_nested_binary_ops_no_crash() {
+fn long_left_associative_chain_stays_under_the_depth_cap() {
     let additions = repeat_n("1", 3000).collect::<Vec<_>>().join("+");
     let source = format!("local x = {additions}");
     let result = parse(&source, LuaVersion::Lua54);
@@ -43,14 +43,14 @@ fn deeply_nested_binary_ops_no_crash() {
 }
 
 #[test]
-fn nested_blocks_no_crash() {
+fn blocks_past_the_depth_cap_are_an_error() {
     let source = format!("{}local x = 1{}", "do ".repeat(500), " end".repeat(500));
     let result = parse(&source, LuaVersion::Lua54);
     assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
 }
 
 #[test]
-fn nested_tables_no_crash() {
+fn tables_past_the_depth_cap_are_an_error() {
     let open = "{".repeat(500);
     let close = "}".repeat(500);
     let source = format!("local x = {open}1{close}");
@@ -59,7 +59,7 @@ fn nested_tables_no_crash() {
 }
 
 #[test]
-fn nested_functions_no_crash() {
+fn functions_past_the_depth_cap_are_an_error() {
     let prefix = "function() return ".repeat(500);
     let suffix = " end".repeat(500);
     let source = format!("local x = {prefix}1{suffix}");
@@ -68,7 +68,7 @@ fn nested_functions_no_crash() {
 }
 
 #[test]
-fn deep_concat_chain_no_crash() {
+fn concat_chain_past_the_depth_cap_is_an_error() {
     // `..` is right-associative, so each operator recurses. This must hit the
     // depth cap, not overflow the stack.
     let concats = repeat_n("\"a\"", 50_000).collect::<Vec<_>>().join("..");
@@ -78,7 +78,7 @@ fn deep_concat_chain_no_crash() {
 }
 
 #[test]
-fn deep_power_chain_no_crash() {
+fn power_chain_past_the_depth_cap_is_an_error() {
     let powers = repeat_n("2", 50_000).collect::<Vec<_>>().join("^");
     let source = format!("local x = {powers}");
     let result = parse(&source, LuaVersion::Lua54);
@@ -86,7 +86,7 @@ fn deep_power_chain_no_crash() {
 }
 
 #[test]
-fn moderate_concat_chain_parses() {
+fn concat_chain_under_the_depth_cap_parses() {
     let concats = repeat_n("\"a\"", 100).collect::<Vec<_>>().join("..");
     let source = format!("local x = {concats}");
     let result = parse(&source, LuaVersion::Lua54);

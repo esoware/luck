@@ -102,7 +102,7 @@ fn if_expression_nested() {
 }
 
 #[test]
-fn interp_string_plain() {
+fn interpolated_string_plain() {
     let result = parse_luau("local x = `hello`");
     assert_no_errors(&result);
     let expr = local_value(&result);
@@ -110,7 +110,7 @@ fn interp_string_plain() {
 }
 
 #[test]
-fn interp_string_with_expression() {
+fn interpolated_string_with_expression() {
     let result = parse_luau("local x = `{y}`");
     assert_no_errors(&result);
     let expr = local_value(&result);
@@ -125,7 +125,7 @@ fn interp_string_with_expression() {
 }
 
 #[test]
-fn interp_string_multiple_expressions() {
+fn interpolated_string_multiple_expressions() {
     let result = parse_luau("local x = `a{1+2}b{3}c`");
     assert_no_errors(&result);
     let expr = local_value(&result);
@@ -139,14 +139,6 @@ fn interp_string_multiple_expressions() {
     } else {
         panic!("expected InterpolatedString");
     }
-}
-
-#[test]
-fn local_with_type_annotation() {
-    let result = parse_luau("local x: number = 5");
-    assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    assert!(matches!(&result.block.stmts[0], Statement::LocalAssignment(_)));
 }
 
 #[test]
@@ -248,20 +240,12 @@ fn type_declaration_generic() {
 
 #[test]
 fn export_type_declaration() {
-    let result = parse_luau("export type Bar = string");
+    let result = parse_luau("export type Point = { x: number, y: number }");
     assert_no_errors(&result);
-    if let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] {
-        assert!(type_declaration.is_exported);
-    } else {
+    let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] else {
         panic!("expected TypeDeclaration");
-    }
-}
-
-#[test]
-fn type_declaration_record() {
-    let result = parse_luau("export type Point = {x: number, y: number}");
-    assert_no_errors(&result);
-    assert!(matches!(&result.block.stmts[0], Statement::TypeDeclaration(_)));
+    };
+    assert!(type_declaration.is_exported);
 }
 
 #[test]
@@ -273,10 +257,13 @@ fn consecutive_type_declarations() {
 }
 
 #[test]
-fn type_function_declaration() {
-    let result = parse_luau("type function identity(t) return t end");
+fn type_function_declaration_keeps_its_body() {
+    let result = parse_luau("type function Id(t)\n\treturn t\nend");
     assert_no_errors(&result);
-    assert!(matches!(&result.block.stmts[0], Statement::TypeDeclaration(_)));
+    let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] else {
+        panic!("expected TypeDeclaration");
+    };
+    assert!(matches!(type_declaration.type_value, TypeDeclarationValue::TypeFunction(_)));
 }
 
 #[test]
@@ -291,7 +278,7 @@ fn continue_in_for_loop() {
 }
 
 #[test]
-fn continue_as_identifier() {
+fn continue_as_local_name() {
     // `continue` used as a variable name parses as a local assignment.
     let result = parse_luau("local continue = 5");
     assert_no_errors(&result);
@@ -310,29 +297,14 @@ fn continue_in_while_loop() {
 }
 
 #[test]
-fn native_function_attribute() {
-    let result = parse_luau("@native function f() end");
-    assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    assert!(matches!(&result.block.stmts[0], Statement::FunctionDecl(_)));
-}
-
-#[test]
-fn native_local_function_attribute() {
-    let result = parse_luau("@native local function f() end");
-    assert_no_errors(&result);
-    assert!(matches!(&result.block.stmts[0], Statement::LocalFunction(_)));
-}
-
-#[test]
-fn if_statement_in_luau() {
+fn if_at_statement_start_is_an_if_statement() {
     let result = parse_luau("if true then x = 1 end");
     assert_no_errors(&result);
     assert!(matches!(&result.block.stmts[0], Statement::IfStatement(_)));
 }
 
 #[test]
-fn break_in_luau() {
+fn break_is_a_last_statement_in_luau() {
     // Luau keeps 5.1's `laststat` grammar (extended with `continue`):
     // break is a last statement, not a free-standing one.
     let result = parse_luau("while true do break end");
@@ -350,22 +322,6 @@ fn break_mid_block_rejected_in_luau() {
     // Statements after `break` are a grammar error in Luau.
     let result = parse_luau("while true do break print(1) end");
     assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
-}
-
-#[test]
-fn numeric_for_with_type_annotation() {
-    let result = parse_luau("for i: number = 1, 10 do end");
-    assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    assert!(matches!(&result.block.stmts[0], Statement::NumericFor(_)));
-}
-
-#[test]
-fn generic_for_with_type_annotations() {
-    let result = parse_luau("for k: string, v: number in pairs(t) do end");
-    assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    assert!(matches!(&result.block.stmts[0], Statement::GenericFor(_)));
 }
 
 #[test]
@@ -393,7 +349,7 @@ fn continue_as_field_access() {
 }
 
 #[test]
-fn nested_interpolated_strings() {
+fn nested_interpolated_string_statement_is_an_error() {
     // A bare string isn't a statement, so this has to report errors, and the
     // nesting mustn't make the parser panic.
     let source = "`outer{`inner{x}`}`";
@@ -658,7 +614,7 @@ fn value_exports_parse_and_enforce_module_rules() {
 }
 
 #[test]
-fn merged_luau_features_are_version_gated() {
+fn luau_only_features_are_errors_in_lua54() {
     for source in ["return 1i", "return f<<number>>()", "export local x = 1", "type T = ~nil"] {
         let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
         assert!(!result.errors.is_empty(), "{source} must be Luau-only");

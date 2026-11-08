@@ -1,28 +1,21 @@
 mod attributes;
+mod declaration;
 mod expr;
+mod function;
 mod stmt;
 mod types;
 
 use core::mem;
 use core::ops::Range;
 
-use luck_ast::Block;
+use luck_ast::{Block, Literal};
 use luck_lexer::Lexer;
 use luck_token::{Comment, CompactString, LuaVersion, Span, Token, TokenKind};
 use rustc_hash::FxHashSet;
 
+use crate::{ParseError, ParseResult};
+
 const MAX_NESTING_DEPTH: u32 = 256;
-
-/// The AST, comments, and errors from one parse, plus the parsed source.
-#[derive(Debug)]
-pub struct ParseResult {
-    pub block: Block,
-    pub comments: Vec<Comment>,
-    pub errors: Vec<ParseError>,
-    pub source: String,
-}
-
-pub type ParseError = luck_token::SourceError;
 
 /// Parse `source` as a chunk of `version`.
 ///
@@ -52,7 +45,7 @@ fn parse_owned(source: String, version: LuaVersion) -> ParseResult {
 ///
 /// Lua needs only one token of lookahead, so `current` and `next` stand in
 /// for a materialized token stream.
-pub(crate) struct Parser<'source> {
+struct Parser<'source> {
     lexer: Lexer<'source>,
     source: &'source str,
     current: Token,
@@ -62,25 +55,32 @@ pub(crate) struct Parser<'source> {
     nesting_depth: u32,
     /// Lexical block depth. The chunk's own block is 1.
     block_depth: u32,
-    /// Function nesting depth, used to distinguish module returns.
-    function_depth: u32,
+    function_scope: FunctionScope,
     has_module_return: bool,
     has_value_exports: bool,
     exported_names: FxHashSet<CompactString>,
-    /// Number of enclosing loops, reset inside function bodies. `break` or
-    /// `continue` at 0 is a compile error in every Lua.
-    loop_depth: u32,
-    /// Whether `...` is valid here. Main chunks are vararg; function
-    /// bodies are vararg only when their params end in `...`.
-    is_vararg_scope: bool,
     errors: Vec<ParseError>,
+}
+
+/// What the innermost function body, or the main chunk, allows. Entering a
+/// function body swaps in a fresh one.
+#[derive(Clone, Copy)]
+struct FunctionScope {
+    /// Whether this is the main chunk, whose `return` is the module's.
+    is_chunk: bool,
+    /// Whether `...` is valid. The main chunk is vararg; a function body is
+    /// only when its params end in `...`.
+    is_vararg: bool,
+    /// Whether a loop body encloses this point. `break` or `continue` outside
+    /// one is a compile error in every Lua.
+    is_in_loop: bool,
 }
 
 impl<'source> Parser<'source> {
     /// # Errors
     ///
     /// Returns the lexer's refusal of a source too large for `u32` spans.
-    pub(crate) fn new(source: &'source str, version: LuaVersion) -> Result<Self, ParseError> {
+    fn new(source: &'source str, version: LuaVersion) -> Result<Self, ParseError> {
         let mut lexer = Lexer::new(source, version)?;
         let current = lexer.next_token();
         let next = lexer.next_token();
@@ -93,19 +93,17 @@ impl<'source> Parser<'source> {
             version,
             nesting_depth: 0,
             block_depth: 0,
-            function_depth: 0,
+            function_scope: FunctionScope { is_chunk: true, is_vararg: true, is_in_loop: false },
             has_module_return: false,
             has_value_exports: false,
             exported_names: FxHashSet::default(),
-            loop_depth: 0,
-            is_vararg_scope: true,
             errors: Vec::new(),
         })
     }
 
     /// Parse the whole source as one chunk. Returns its block, every comment,
     /// and every lex and parse error sorted by position.
-    pub(crate) fn parse_chunk(mut self) -> (Block, Vec<Comment>, Vec<ParseError>) {
+    fn parse_chunk(mut self) -> (Block, Vec<Comment>, Vec<ParseError>) {
         let block = self.parse_block();
         // `parse_block` stops at a block boundary such as `return` or a stray
         // `end`, and anything after it would silently drop out of the AST. After
@@ -173,6 +171,17 @@ impl<'source> Parser<'source> {
     #[inline]
     fn advance_span(&mut self) -> Span {
         self.advance().span
+    }
+
+    /// Consume the current number or string token as a [`Literal`]. The
+    /// caller has already matched its kind.
+    fn advance_literal(&mut self) -> Literal {
+        let token = self.advance();
+        #[expect(clippy::unreachable, reason = "the caller has already matched this token kind")]
+        let (TokenKind::Number(text) | TokenKind::StringLiteral(text)) = token.kind else {
+            unreachable!("caller matched a literal token kind");
+        };
+        Literal { text, span: token.span }
     }
 
     /// Consume a token of `kind` and return its span. On a mismatch, record
@@ -274,29 +283,6 @@ impl<'source> Parser<'source> {
                 return;
             }
             self.advance();
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn owned_source_storage_survives_repeated_parsing() {
-        for text in ["return 1", "local = 5"] {
-            let mut source = String::with_capacity(256);
-            source.push_str(text);
-            let pointer = source.as_ptr();
-            let capacity = source.capacity();
-            for _ in 0u8..3 {
-                let parsed = parse(source, LuaVersion::Lua54);
-                assert_eq!(parsed.source.as_ptr(), pointer);
-                assert_eq!(parsed.source.capacity(), capacity);
-                assert_eq!(parsed.source, text);
-                assert_eq!(parsed.errors.is_empty(), text == "return 1", "{:?}", parsed.errors);
-                source = parsed.source;
-            }
         }
     }
 }
