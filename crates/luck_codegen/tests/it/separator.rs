@@ -153,14 +153,18 @@ fn semicolon_separates_a_statement_that_starts_with_a_paren() {
         // Lua 5.2+: a bare `;` is an EmptyStatement, which survives the round
         // trip.
         ("do end\n;(f)()", "do end;(f)()", LuaVersion::Lua52),
-        // Lua 5.1 has no empty statement, so the input carries no `;`, but the
-        // printer adds one before any statement that starts with `(`.
+        // Lua 5.1 has no empty statement, so its `;` is only an optional
+        // separator, but the printer adds one before any statement that
+        // starts with `(`.
+        ("do end\n;(f)()", "do end;(f)()", LuaVersion::Lua51),
         ("do end\n(f)()", "do end;(f)()", LuaVersion::Lua51),
         // Two statements. Without the `;`, `1(f)` reads as a call.
         ("x = 1\n(f)()", "x=1;(f)()", LuaVersion::Lua51),
         // The `;` separates two call statements. Dropping it would leave the
         // chained call `f(x)(g)(y)`.
         ("f(x);(g)(y)", "f(x);(g)(y)", LuaVersion::Lua52),
+        // Without the `;` this is one chained call, and it stays one.
+        ("f(x)(g)(y)", "f(x)(g)(y)", LuaVersion::Lua51),
         // Dropping the `;` would leave one chained call, `f()(g or h)<<T>>()`,
         // which still parses, so only the exact output catches it.
         ("f();(g or h)<<T>>()", "f();(g or h)<<T>>()", LuaVersion::Luau),

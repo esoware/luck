@@ -1,15 +1,7 @@
 use luck_ast::Synth;
 use luck_token::LuaVersion;
 
-use crate::common::{assert_compacts_to, compact_source};
-
-/// Asserts that compacting the compact output of `source` changes nothing,
-/// which catches output that re-parses but with a different meaning.
-fn assert_idempotent(source: &str, version: LuaVersion) {
-    let first = compact_source(source, version);
-    let second = compact_source(&first, version);
-    assert_eq!(first, second, "compact output of {source:?} changed when compacted again");
-}
+use crate::common::assert_compacts_to;
 
 #[test]
 fn output_capacity_hint_never_changes_output() {
@@ -45,6 +37,7 @@ fn statements_compact_to_minimal_whitespace() {
         ("while  true  do  end", "while true do end"),
         ("while true do  break  end", "while true do break end"),
         ("repeat  until  false", "repeat until false"),
+        ("repeat local x = f() until not x", "repeat local x=f()until not x"),
         ("if  true  then  end", "if true then end"),
         ("if  x  then  a = 1  else  b = 2  end", "if x then a=1 else b=2 end"),
         ("if a then  elseif b then  else  end", "if a then elseif b then else end"),
@@ -52,8 +45,14 @@ fn statements_compact_to_minimal_whitespace() {
             "if a then\n  x = 1\n  y = 2\nelseif b then\n  z = 3\nelse\n  w = 4\nend",
             "if a then x=1 y=2 elseif b then z=3 else w=4 end",
         ),
+        (
+            "if a then x = 1 elseif b then y = 2 else z = 3 end",
+            "if a then x=1 elseif b then y=2 else z=3 end",
+        ),
+        ("if not a and not b then return -c .. d end", "if not a and not b then return-c..d end"),
         ("for  i = 1 , 10  do  end", "for i=1,10 do end"),
         ("for  i = 1 , 10 , 2  do  end", "for i=1,10,2 do end"),
+        ("for i = 1, #t do x = t[i] .. 'suffix' end", "for i=1,#t do x=t[i]..'suffix'end"),
         ("for  k , v  in  pairs ( t )  do  end", "for k,v in pairs(t)do end"),
         ("return", "return"),
         ("return  1 , 2", "return 1,2"),
@@ -68,9 +67,15 @@ fn functions_compact_to_minimal_whitespace() {
         ("function  f ( )  end", "function f()end"),
         ("function  a . b : c ( )  end", "function a.b:c()end"),
         ("local  function  f ( x , y )  return  x  end", "local function f(x,y)return x end"),
+        ("local function f(a, b) return a + b end", "local function f(a,b)return a+b end"),
         ("x  =  function ( )  end", "x=function()end"),
+        ("x = function(a) return a end", "x=function(a)return a end"),
         ("function  f ( ... )  return  ...  end", "function f(...)return...end"),
         ("function  f ( a , ... )  return  ...  end", "function f(a,...)return...end"),
+        (
+            "local f = function(a, b, ...) return a + b, ... end",
+            "local f=function(a,b,...)return a+b,...end",
+        ),
         ("x  =  {  f  =  function ( a )  return  a  end  }", "x={f=function(a)return a end}"),
     ] {
         assert_compacts_to(source, expected, LuaVersion::Lua51);
@@ -97,6 +102,42 @@ fn expressions_compact_to_minimal_whitespace() {
 }
 
 #[test]
+fn operators_compact_to_minimal_whitespace() {
+    for (source, expected, version) in [
+        ("x = a + b", "x=a+b", LuaVersion::Lua51),
+        ("x = a - b", "x=a-b", LuaVersion::Lua51),
+        ("x = a * b", "x=a*b", LuaVersion::Lua51),
+        ("x = a / b", "x=a/b", LuaVersion::Lua51),
+        ("x = a % b", "x=a%b", LuaVersion::Lua51),
+        ("x = a ^ b", "x=a^b", LuaVersion::Lua51),
+        ("x = a .. b", "x=a..b", LuaVersion::Lua51),
+        ("x = a == b", "x=a==b", LuaVersion::Lua51),
+        ("x = a ~= b", "x=a~=b", LuaVersion::Lua51),
+        ("x = a < b", "x=a<b", LuaVersion::Lua51),
+        ("x = a <= b", "x=a<=b", LuaVersion::Lua51),
+        ("x = a > b", "x=a>b", LuaVersion::Lua51),
+        ("x = a >= b", "x=a>=b", LuaVersion::Lua51),
+        ("x = a and b", "x=a and b", LuaVersion::Lua51),
+        ("x = a or b", "x=a or b", LuaVersion::Lua51),
+        ("x = -a", "x=-a", LuaVersion::Lua51),
+        ("x = not a", "x=not a", LuaVersion::Lua51),
+        ("x = #a", "x=#a", LuaVersion::Lua51),
+        ("x = - -a", "x=- -a", LuaVersion::Lua51),
+        ("x = not not a", "x=not not a", LuaVersion::Lua51),
+        // Lua 5.3+
+        ("x = a // b", "x=a//b", LuaVersion::Lua53),
+        ("x = a & b", "x=a&b", LuaVersion::Lua53),
+        ("x = a | b", "x=a|b", LuaVersion::Lua53),
+        ("x = a ~ b", "x=a~b", LuaVersion::Lua53),
+        ("x = a << b", "x=a<<b", LuaVersion::Lua53),
+        ("x = a >> b", "x=a>>b", LuaVersion::Lua53),
+        ("x = ~a", "x=~a", LuaVersion::Lua53),
+    ] {
+        assert_compacts_to(source, expected, version);
+    }
+}
+
+#[test]
 fn tables_compact_to_minimal_whitespace() {
     for (source, expected) in [
         ("x  =  {  1 ,  2 ,  3  }", "x={1,2,3}"),
@@ -104,6 +145,8 @@ fn tables_compact_to_minimal_whitespace() {
         ("x  =  {  [ 1 ]  =  2  }", "x={[1]=2}"),
         ("x  =  {  }", "x={}"),
         ("x  =  { { 1 } , { 2 } }", "x={{1},{2}}"),
+        ("x = {1, 2, a = 3, [4] = 5}", "x={1,2,a=3,[4]=5}"),
+        ("x = {a = 1, b = {c = 2}, [3] = function() end}", "x={a=1,b={c=2},[3]=function()end}"),
     ] {
         assert_compacts_to(source, expected, LuaVersion::Lua51);
     }
@@ -132,6 +175,7 @@ fn compact_input_prints_unchanged() {
         "x=#t+#s",
         "return 1,2,3",
         "return'a'..'b'..'c'",
+        "f()",
         "f()()()",
         "a.b.c:d()()",
         "x={[1]=2,[3]=4}",
@@ -145,6 +189,7 @@ fn compact_input_prints_unchanged() {
 fn version_gated_statements_compact_to_minimal_whitespace() {
     for (source, expected, version) in [
         ("goto  skip  :: skip ::", "goto skip::skip::", LuaVersion::Lua52),
+        (";", ";", LuaVersion::Lua52),
         ("; ;", ";;", LuaVersion::Lua52),
         ("global  x", "global x", LuaVersion::Lua55),
         ("global  function  f ( )  end", "global function f()end", LuaVersion::Lua55),
@@ -227,115 +272,5 @@ fn luau_types_compact_to_minimal_whitespace() {
         ("for  i :  number  = 1 , 10  do  end", "for i:number=1,10 do end"),
     ] {
         assert_compacts_to(source, expected, LuaVersion::Luau);
-    }
-}
-
-#[test]
-fn compact_is_idempotent_on_lua51() {
-    for source in [
-        "local x = 1",
-        "x = 1",
-        "f()",
-        "do end",
-        "while true do end",
-        "repeat until false",
-        "if true then end",
-        "if a then x = 1 elseif b then y = 2 else z = 3 end",
-        "for i = 1, 10 do end",
-        "for k, v in pairs(t) do end",
-        "function f() end",
-        "local function f(a, b) return a + b end",
-        "return 1, 2, 3",
-        "x = a + b * (c - d) / e",
-        "x = {1, 2, a = 3, [4] = 5}",
-        "x = \"a\" .. \"b\" .. \"c\"",
-        "f(g(h(1)))",
-        "x = a.b.c.d",
-        "x = function(a) return a end",
-        "if not a and not b then return -c .. d end",
-        "for i = 1, #t do x = t[i] .. 'suffix' end",
-        "local f = function(a, b, ...) return a + b, ... end",
-        "x = {a = 1, b = {c = 2}, [3] = function() end}",
-        "repeat local x = f() until not x",
-    ] {
-        assert_idempotent(source, LuaVersion::Lua51);
-    }
-}
-
-#[test]
-fn compact_is_idempotent_on_every_lua51_operator() {
-    for source in [
-        "x = a + b",
-        "x = a - b",
-        "x = a * b",
-        "x = a / b",
-        "x = a % b",
-        "x = a ^ b",
-        "x = a .. b",
-        "x = a == b",
-        "x = a ~= b",
-        "x = a < b",
-        "x = a <= b",
-        "x = a > b",
-        "x = a >= b",
-        "x = a and b",
-        "x = a or b",
-        "x = -a",
-        "x = not a",
-        "x = #a",
-        "x = - -a",
-        "x = not not a",
-        "x = ##t",
-    ] {
-        assert_idempotent(source, LuaVersion::Lua51);
-    }
-}
-
-#[test]
-fn compact_is_idempotent_on_every_lua53_operator() {
-    for source in
-        ["x = a // b", "x = a & b", "x = a | b", "x = a ~ b", "x = a << b", "x = a >> b", "x = ~a"]
-    {
-        assert_idempotent(source, LuaVersion::Lua53);
-    }
-}
-
-#[test]
-fn compact_is_idempotent_across_separators() {
-    for (source, version) in [
-        // The space in `1 ..2` must survive; `1..2` is a malformed number.
-        ("return 1 .. 2", LuaVersion::Lua51),
-        // `a- -b` must not reparse as `a--b` (a comment).
-        ("x = a - -b", LuaVersion::Lua51),
-        (r#"x = "a" .. .5"#, LuaVersion::Lua51),
-        ("x = 1 .. .5", LuaVersion::Lua51),
-        ("x = {[ [[key]] ] = 1}", LuaVersion::Lua51),
-        // `>` `=` must not become `>=`.
-        ("local x <const> = 1", LuaVersion::Lua54),
-        // After `end`, a statement starting with `(` must stay its own
-        // statement.
-        ("do end\n;(f)()", LuaVersion::Lua51),
-        ("f(x);(g)(y)", LuaVersion::Lua52),
-        // Without the `;` this is one chained call, and must stay one.
-        ("f(x)(g)(y)", LuaVersion::Lua51),
-    ] {
-        assert_idempotent(source, version);
-    }
-}
-
-#[test]
-fn compact_is_idempotent_on_version_gated_syntax() {
-    for (source, version) in [
-        ("goto skip ::skip::", LuaVersion::Lua52),
-        (";", LuaVersion::Lua52),
-        ("global x", LuaVersion::Lua55),
-        ("global function f() end", LuaVersion::Lua55),
-        ("global *", LuaVersion::Lua55),
-        ("local x = if a then 1 else 2", LuaVersion::Luau),
-        ("x += 1", LuaVersion::Luau),
-        ("type Foo = number", LuaVersion::Luau),
-        ("for i = 1, 10 do continue end", LuaVersion::Luau),
-    ] {
-        assert_idempotent(source, version);
     }
 }

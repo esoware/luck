@@ -17,7 +17,7 @@ Code generation from Lua ASTs back to source text. Supports Lua 5.1-5.5 and Luau
 
 ### Compact printer
 
-`compact.rs` holds the two entry points and the tree-walking printer behind them. Each AST variant has an emitter that calls the printer's spacing primitives and recurses into children. The printer builds output into a `luck_token::CodeBuffer` (a byte buffer with an ASCII fast path). `compact(block)` starts with no reserved capacity, and `compact_with_capacity(block, capacity)` takes a byte estimate. Fixpoint loops pass the previous output's length. Source length can badly over-reserve for comment-heavy input, and transformed or synthetic ASTs can emit more bytes than their original source.
+`compact.rs` holds the two entry points, the tree-walking printer behind them, and its spacing primitives. The emitters live in `compact/`, split by node family as the parser's grammar is: `stmt.rs` (blocks and statements), `declaration.rs` (function, `local`, `type`, and `global` declarations), `expr.rs`, `function.rs` (the bodies, parameters, and attributes that function statements and expressions share), and `types.rs` (Luau types). Each AST variant has an emitter that calls the spacing primitives and recurses into children. The printer builds output into a `luck_token::CodeBuffer` (a byte buffer with an ASCII fast path). `compact(block)` starts with no reserved capacity, and `compact_with_capacity(block, capacity)` takes a byte estimate. Fixpoint loops pass the previous output's length. Source length can badly over-reserve for comment-heavy input, and transformed or synthetic ASTs can emit more bytes than their original source.
 
 ### Separator logic
 
@@ -25,4 +25,4 @@ Code generation from Lua ASTs back to source text. Supports Lua 5.1-5.5 and Luau
 
 ## Testing
 
-Public-API tests live in `tests/it/` as a single binary: `compact.rs` pins the output and idempotency per construct, `separator.rs` pins where the printer inserts a space or `;` and where it glues pieces together, and `fixtures.rs` checks that every shared fixture's compact output reparses. `src/separator.rs` additionally keeps inline white-box tests of the merge rules at the bottom of the file.
+Public-API tests live in `tests/it/` as a single binary. Every exact-output case goes through `assert_compacts_to`, which also checks that the output re-parses and compacts to itself. `compact.rs` pins the output per construct, `separator.rs` pins where the printer inserts a space or `;` and where it glues pieces together, and `fixtures.rs` checks that every shared fixture's compact output reparses. `src/separator.rs` additionally keeps inline white-box tests of the merge rules at the bottom of the file.
