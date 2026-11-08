@@ -4,17 +4,26 @@
 //! arguments into the set of files to process, and runs the path-oriented
 //! commands over them in parallel.
 
+use std::env;
 use std::path::{Path, PathBuf};
 
-use ignore::WalkBuilder;
+use ignore::{DirEntry, WalkBuilder};
 use luck_core::{
     DynamicRequire, LuaTarget, LuckConfig, ProjectConfig, ProjectFilter, discover_config,
     load_or_discover_config,
 };
 use rayon::prelude::*;
 
-use crate::exit::Exit;
-use crate::output::{current_directory, usage_error};
+use crate::exit::{Exit, usage_error};
+
+/// # Errors
+///
+/// Reports the failure and returns [`Exit::Usage`] when the working
+/// directory can't be read.
+pub(crate) fn current_directory() -> Result<PathBuf, Exit> {
+    env::current_dir()
+        .map_err(|error| usage_error(format!("failed to get current directory: {error}")))
+}
 
 /// Resolve the target for the one-shot `bundle`/`minify`/`graph` commands.
 ///
@@ -27,9 +36,9 @@ use crate::output::{current_directory, usage_error};
 /// Reports the failure and returns [`Exit::Usage`] on a bad `-t` value or a
 /// bad dialect in `config`.
 pub(crate) fn resolve_configured_target(
+    config: &LuckConfig,
     target: Option<&str>,
     input_path: &str,
-    config: &LuckConfig,
 ) -> Result<LuaTarget, Exit> {
     target.map_or_else(
         || config.target_for_path(Path::new(input_path)).map_err(usage_error),
@@ -179,18 +188,19 @@ where
 }
 
 fn collect_lua_files(directory: &Path, filter: &ProjectFilter) -> Vec<PathBuf> {
-    let mut files = Vec::new();
     let walker = WalkBuilder::new(directory).add_custom_ignore_filename(".luckignore").build();
-    for entry in walker.flatten() {
-        let path = entry.path();
-        if path.is_file()
-            && let Some(extension) = path.extension()
-            && (extension == "lua" || extension == "luau")
-            && filter.is_included(path)
-        {
-            files.push(path.to_path_buf());
-        }
-    }
+    let mut files: Vec<PathBuf> = walker
+        .flatten()
+        .filter(|entry| {
+            let path = entry.path();
+            path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "lua" || extension == "luau")
+                && filter.is_included(path)
+        })
+        .map(DirEntry::into_path)
+        .collect();
     files.sort();
     files
 }
@@ -203,11 +213,15 @@ mod tests {
 
     use super::*;
 
+    fn file_names(files: &[PathBuf]) -> Vec<String> {
+        files.iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect()
+    }
+
     /// Discovers the governing config and resolves against it, as the
     /// one-shot commands do.
     fn target_for(target: Option<&str>, input_path: &str) -> LuaTarget {
         let config = config_for_one_shot(None, input_path).expect("config resolves");
-        resolve_configured_target(target, input_path, &config).expect("target resolves")
+        resolve_configured_target(&config, target, input_path).expect("target resolves")
     }
 
     /// Discovery finds no config in a fresh tempdir, so this tests the
@@ -240,9 +254,16 @@ mod tests {
     }
 
     #[test]
-    fn configured_target_parses_when_provided() {
-        assert_eq!(target_for(Some("54"), "main.luau"), LuaTarget::Lua54);
-        assert_eq!(target_for(Some("roblox"), "main.lua"), LuaTarget::LuauRoblox);
+    fn configured_target_prefers_an_explicit_target_over_the_extension() {
+        let config = LuckConfig::default();
+        assert_eq!(
+            resolve_configured_target(&config, Some("54"), "main.luau"),
+            Ok(LuaTarget::Lua54)
+        );
+        assert_eq!(
+            resolve_configured_target(&config, Some("roblox"), "main.lua"),
+            Ok(LuaTarget::LuauRoblox)
+        );
     }
 
     #[test]
@@ -303,10 +324,7 @@ mod tests {
             ProjectFilter::new(root, None, Some(&["gen/**".to_owned()])).expect("valid globs");
         let files = collect_lua_files(root, &filter);
 
-        let names: Vec<String> = files
-            .iter()
-            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
-            .collect();
+        let names = file_names(&files);
         assert!(names.contains(&"keep.lua".to_owned()), "kept file present");
         assert!(!names.contains(&"skip.lua".to_owned()), "excluded file skipped");
     }
@@ -321,10 +339,7 @@ mod tests {
 
         let filter = ProjectFilter::new(root, None, None).expect("valid globs");
         let files = collect_lua_files(root, &filter);
-        let names: Vec<String> = files
-            .iter()
-            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
-            .collect();
+        let names = file_names(&files);
         assert!(names.contains(&"a.lua".to_owned()));
         assert!(names.contains(&"b.luau".to_owned()));
         assert!(!names.contains(&"c.txt".to_owned()));

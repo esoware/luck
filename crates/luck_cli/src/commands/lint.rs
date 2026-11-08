@@ -9,14 +9,14 @@ use clap::{Args, ValueEnum};
 use luck_core::{Diagnostic, LuaTarget, LuckConfig, read_source_file};
 use luck_linter::{Category, LintConfig, LintDiagnostic, RuleSetting, Severity};
 
-use crate::exit::Exit;
-use crate::output::{read_stdin_source, usage_error};
+use crate::exit::{Exit, usage_error};
+use crate::output::read_stdin_source;
 use crate::project::{outcomes_in_order, project_files, resolve_project};
 use crate::render::{render_document_diags, severity_label};
 use crate::verbosity::Verbosity;
 
-#[derive(Clone, Copy, ValueEnum)]
-pub(crate) enum LintFormat {
+#[derive(Clone, ValueEnum)]
+enum LintFormat {
     Default,
     Json,
 }
@@ -153,13 +153,11 @@ impl LintArgs {
             }
         }
 
-        if !self.silent && self.fix && total_fixed > 0 && verbosity == Verbosity::Normal {
+        if !self.silent && self.fix && total_fixed > 0 && verbosity != Verbosity::Quiet {
             eprintln!("Fixed {total_fixed} file(s)");
         }
 
-        if !self.silent
-            && verbosity == Verbosity::Normal
-            && (total_errors > 0 || total_warnings > 0)
+        if !self.silent && verbosity != Verbosity::Quiet && (total_errors > 0 || total_warnings > 0)
         {
             eprintln!(
                 "{total_errors} error(s), {total_warnings} warning(s) in {} file(s)",
@@ -442,7 +440,7 @@ mod tests {
     use clap::Parser as _;
 
     use super::*;
-    use crate::args::{Cli, Command};
+    use crate::cli::{Cli, Command};
 
     /// `luck lint` parsed with `flags`, as clap builds it.
     fn lint_args(flags: &[&str]) -> LintArgs {
@@ -531,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn category_name_classification() {
+    fn category_from_name_recognizes_categories_and_the_perf_alias() {
         assert_eq!(category_from_name("style"), Some(Category::Style));
         assert_eq!(category_from_name("perf"), Some(Category::Performance));
         assert_eq!(category_from_name("undefined_variable"), None);
@@ -565,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn lint_warn_category_accumulates() {
+    fn lint_warn_flag_adds_a_category() {
         let (_directory, config_arg) = project_with_config(r#"{"lua":"lua54"}"#);
 
         let lint_config = resolved_lint_config(&lint_args(&["-c", &config_arg, "-W", "style"]));

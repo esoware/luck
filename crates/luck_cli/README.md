@@ -55,11 +55,11 @@ luck lsp [--socket <port>]                   # Run the language server over stdi
 | File | Purpose |
 |------|---------|
 | `main.rs` | Crate root: module wiring, the global allocator, and the entry point that spawns the 16 MB-stack worker thread |
-| `exit.rs` | Exit codes (`Exit`) |
+| `exit.rs` | Exit codes (`Exit`) and the error reports that end a run with one |
 | `verbosity.rs` | `Verbosity`, set by `--quiet` |
-| `args.rs` | Top-level `clap` model (`Cli`/`Command`) and dispatch |
+| `cli.rs` | Top-level `clap` model (`Cli`/`Command`) and dispatch |
 | `commands/` | One module per subcommand, each owning its `clap` args struct, its `run` handler, and its tests |
 | `project.rs` | Target/config resolution, file discovery, and the in-order parallel walk shared by the path commands |
-| `output.rs` | Error reporting, output, and stdin plumbing |
+| `output.rs` | Output and stdin plumbing, and size display |
 | `minify_flags.rs` | The `--<pass>`/`--no-<pass>` toggles shared by `bundle` and `minify` |
 | `render.rs` | `ariadne`-based diagnostic rendering and file cache |

@@ -1,18 +1,19 @@
 //! `luck graph` - print the dependency graph as JSON or Graphviz DOT.
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use clap::{Args, ValueEnum};
 use luck_bundler::{DependencyGraph, ModuleId};
 
-use crate::exit::Exit;
-use crate::output::{current_directory, fail_with_diags, usage_error};
-use crate::project::{config_for_one_shot, resolve_configured_target, resolve_dynamic_require};
+use crate::exit::{Exit, fail_with_diags, usage_error};
+use crate::project::{
+    config_for_one_shot, current_directory, resolve_configured_target, resolve_dynamic_require,
+};
 use crate::render::print_diags;
 use crate::verbosity::Verbosity;
 
 #[derive(Clone, ValueEnum)]
-pub(crate) enum GraphFormat {
+enum GraphFormat {
     Json,
     Dot,
 }
@@ -47,10 +48,10 @@ impl GraphArgs {
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         // `graph` takes no `-c`, so its config is always the discovered one.
         let config = config_for_one_shot(None, &self.entry)?;
-        let target = resolve_configured_target(self.target.as_deref(), &self.entry, &config)?;
+        let target = resolve_configured_target(&config, self.target.as_deref(), &self.entry)?;
         let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require.as_deref())?;
 
-        let entry_path = PathBuf::from(&self.entry);
+        let entry_path = Path::new(&self.entry);
         if !entry_path.is_file() {
             return Err(usage_error(format!("entry file not found: `{}`", self.entry)));
         }
@@ -58,15 +59,15 @@ impl GraphArgs {
         let working_directory = current_directory()?;
 
         let dependency_graph = DependencyGraph::build(
-            &entry_path,
+            entry_path,
             target.lua_version(),
             &self.search_paths,
             &working_directory,
             dynamic_require,
         )
-        .map_err(|errors| fail_with_diags(&errors, None))?;
+        .map_err(|errors| fail_with_diags(&errors))?;
 
-        if !dependency_graph.warnings.is_empty() && verbosity != Verbosity::Quiet {
+        if verbosity != Verbosity::Quiet {
             print_diags(&dependency_graph.warnings);
         }
 
@@ -133,7 +134,7 @@ mod tests {
     use clap::Parser as _;
 
     use super::{GraphArgs, GraphFormat};
-    use crate::args::{Cli, Command};
+    use crate::cli::{Cli, Command};
 
     #[test]
     fn graph_accepts_target_and_format() {

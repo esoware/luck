@@ -7,14 +7,14 @@ use std::io::{self, Write};
 
 use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
 use luck_core::{Diagnostic, DiagnosticSeverity, native_path, read_source_file};
-use luck_token::offset_to_index;
+use luck_token::{SourceError, offset_to_index};
 use rustc_hash::FxHashMap;
 
-/// Above this line length (bytes), ariadne's caret rendering effectively hangs.
+/// Above this line length, ariadne's caret rendering effectively hangs.
 ///
 /// A minified or obfuscated file is one multi-megabyte line, so such
 /// diagnostics get a compact, snippet-free rendering instead.
-const MAX_RENDERABLE_LINE_LENGTH: usize = 10_000;
+const MAX_RENDERABLE_LINE_BYTES: usize = 10_000;
 
 /// Source text by file path, for ariadne to render snippets from.
 #[derive(Default)]
@@ -57,13 +57,13 @@ impl FileCache {
     }
 }
 
-/// A path that isn't in the [`FileCache`].
-#[derive(Debug)]
+/// A path that isn't in the [`FileCache`]. ariadne prints it to stderr with
+/// `Debug`.
 struct CacheMiss(String);
 
-impl fmt::Display for CacheMiss {
+impl fmt::Debug for CacheMiss {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "file not in cache: `{}`", self.0)
+        f.debug_tuple("CacheMiss").field(&self.0).finish()
     }
 }
 
@@ -109,6 +109,18 @@ pub(crate) fn render_document_diags(path: String, source: String, diags: &[Diagn
     let mut rendered_bytes = Vec::new();
     write_diags(diags, &mut cache, &mut rendered_bytes);
     rendered_bytes
+}
+
+/// Renders a document's parse or validation errors, each as an E008, the same
+/// way [`render_document_diags`] renders diagnostics.
+pub(crate) fn render_source_errors(
+    path: String,
+    source: String,
+    errors: &[SourceError],
+) -> Vec<u8> {
+    let diags: Vec<Diagnostic> =
+        errors.iter().map(|error| Diagnostic::e008(&path, error.span, &error.message)).collect();
+    render_document_diags(path, source, &diags)
 }
 
 /// Writes each diagnostic with ariadne's pretty-printer, or a compact
@@ -161,7 +173,7 @@ fn write_compact(diag: &Diagnostic, output: &mut impl Write) {
 
 fn is_line_too_long(diag: &Diagnostic, cache: &FileCache) -> bool {
     cache.line_length_at(&diag.file_path, offset_to_index(diag.span.start))
-        > MAX_RENDERABLE_LINE_LENGTH
+        > MAX_RENDERABLE_LINE_BYTES
 }
 
 #[cfg(test)]
@@ -175,7 +187,8 @@ mod tests {
         use ariadne::Cache as _;
         let mut cache = FileCache::with_file("test.lua".to_owned(), "local x = 1".to_owned());
         cache.fetch(&"test.lua").expect("test.lua is cached");
-        cache.fetch(&"nonexistent.lua").expect_err("nonexistent.lua is not cached");
+        let miss = cache.fetch(&"nonexistent.lua").expect_err("nonexistent.lua is not cached");
+        assert_eq!(format!("{miss:?}"), r#"CacheMiss("nonexistent.lua")"#);
     }
 
     #[test]

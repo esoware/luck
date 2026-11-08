@@ -4,7 +4,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::commands::{build, bundle, check, fmt, graph, init, lint, lsp, minify};
+use crate::commands::{
+    BuildArgs, BundleArgs, CheckArgs, FmtArgs, GraphArgs, InitArgs, LintArgs, LspArgs, MinifyArgs,
+};
 use crate::verbosity::Verbosity;
 
 #[derive(Parser)]
@@ -27,31 +29,31 @@ pub(crate) struct Cli {
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// Create luck.json and a src/main entry file in the current directory.
-    Init(init::InitArgs),
+    Init(InitArgs),
 
     /// Build the project in luck.json: bundle, then minify if enabled.
-    Build(build::BuildArgs),
+    Build(BuildArgs),
 
     /// Bundle a multi-file project into a single file.
-    Bundle(bundle::BundleArgs),
+    Bundle(BundleArgs),
 
     /// Minify a source file.
-    Minify(minify::MinifyArgs),
+    Minify(MinifyArgs),
 
     /// Print the dependency graph of an entry file.
-    Graph(graph::GraphArgs),
+    Graph(GraphArgs),
 
     /// Lint Lua/Luau source files.
-    Lint(lint::LintArgs),
+    Lint(LintArgs),
 
     /// Format Lua/Luau source files.
-    Fmt(fmt::FmtArgs),
+    Fmt(FmtArgs),
 
     /// Check Lua/Luau source files for syntax and compile errors.
-    Check(check::CheckArgs),
+    Check(CheckArgs),
 
     /// Run the language server (LSP) over stdio, or TCP with --socket.
-    Lsp(lsp::LspArgs),
+    Lsp(LspArgs),
 }
 
 /// Parses the process arguments, runs the chosen command, and returns its

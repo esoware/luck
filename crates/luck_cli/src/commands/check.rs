@@ -4,11 +4,11 @@ use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_core::{Diagnostic, LuaTarget, read_source_file};
+use luck_core::{LuaTarget, read_source_file};
 
 use crate::exit::Exit;
 use crate::project::{outcomes_in_order, project_files, resolve_project};
-use crate::render::render_document_diags;
+use crate::render::render_source_errors;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -67,7 +67,6 @@ fn check_file(file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
         }
     };
 
-    let file_label = file_path.to_string_lossy().to_string();
     let mut result = luck_parser::parse(source, target.lua_version());
     if result.errors.is_empty() {
         // The compile-time errors real Lua reports beyond the grammar, such as
@@ -78,12 +77,11 @@ fn check_file(file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
         return None;
     }
 
-    let diags: Vec<Diagnostic> = result
-        .errors
-        .iter()
-        .map(|error| Diagnostic::e008(&file_label, error.span, &error.message))
-        .collect();
-    Some(render_document_diags(file_label, result.source, &diags))
+    Some(render_source_errors(
+        file_path.to_string_lossy().into_owned(),
+        result.source,
+        &result.errors,
+    ))
 }
 
 #[cfg(test)]
@@ -93,7 +91,7 @@ mod tests {
     use clap::Parser as _;
 
     use super::CheckArgs;
-    use crate::args::{Cli, Command};
+    use crate::cli::{Cli, Command};
 
     #[test]
     fn check_is_top_level_command_with_paths_and_config() {

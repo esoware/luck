@@ -4,17 +4,16 @@
 use core::time::Duration;
 use std::env;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
 use clap::Args;
 use luck_bundler::bundle;
 use luck_core::{BuildConfig, discover_config, native_path, resolve_build_config};
-use notify_debouncer_mini::new_debouncer;
-use notify_debouncer_mini::notify::RecursiveMode;
+use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
-use crate::exit::Exit;
-use crate::output::{format_size, operation_error, usage_error, write_output_file};
+use crate::exit::{Exit, operation_error, usage_error};
+use crate::output::{format_size, write_output_file};
 use crate::render::{print_diags, print_document_diags};
 use crate::verbosity::Verbosity;
 
@@ -116,37 +115,10 @@ impl BuildArgs {
     /// Returns [`Exit::Failure`] when the file watcher can't start or a
     /// build's output can't be written.
     fn rebuild_on_change(&self, verbosity: Verbosity) -> Result<(), Exit> {
-        let config_path = self.config.as_deref();
-        let mut watched_paths = self.build_for_watch(verbosity)?;
+        let mut source_files = self.build_for_watch(verbosity)?;
 
         loop {
-            let mut directories: Vec<PathBuf> = Vec::new();
-            for file in &watched_paths {
-                if let Some(parent) = native_path(file).parent() {
-                    directories.push(parent.to_path_buf());
-                }
-            }
-            if let Some(parent) = config_path.and_then(Path::parent) {
-                directories.push(parent.to_path_buf());
-            }
-            // Watch the discovered config too, or editing it never triggers a
-            // rebuild.
-            if config_path.is_none()
-                && let Ok(working_directory) = env::current_dir()
-                && let Ok(Some(discovered)) = discover_config(&working_directory)
-            {
-                directories.push(discovered.root);
-            }
-            // With no sources and no config to watch, such as before a luck.json
-            // exists, watch the working directory so a fix still triggers a
-            // rebuild.
-            if directories.is_empty()
-                && let Ok(working_directory) = env::current_dir()
-            {
-                directories.push(working_directory);
-            }
-            directories.sort_unstable();
-            directories.dedup();
+            let directories = self.watched_directories(&source_files);
 
             let (sender, receiver) = mpsc::channel();
             let mut debouncer =
@@ -165,30 +137,50 @@ impl BuildArgs {
 
             eprintln!("\n[watching for changes...]");
 
-            loop {
-                match receiver.recv() {
-                    Ok(Ok(events)) => {
-                        if events.iter().any(|event| is_relevant_change(&event.path)) {
-                            break;
-                        }
-                    }
-                    Ok(Err(error)) => {
-                        eprintln!("watch error: {error}");
-                    }
-                    Err(_) => return Ok(()), // channel closed
-                }
+            if !wait_for_change(&receiver) {
+                return Ok(());
             }
-
-            while receiver.try_recv().is_ok() {}
 
             eprintln!();
 
-            watched_paths = self.build_for_watch(verbosity)?;
+            source_files = self.build_for_watch(verbosity)?;
         }
     }
 
-    /// One watch-mode build. Returns the files to watch: every config's
-    /// sources, and the `-c` config.
+    /// The directories to watch: each source file's, the config's, and, with
+    /// neither, the working directory.
+    fn watched_directories(&self, source_files: &[String]) -> Vec<PathBuf> {
+        let config_path = self.config.as_deref();
+        let mut directories: Vec<PathBuf> = source_files
+            .iter()
+            .filter_map(|file| native_path(file).parent().map(Path::to_path_buf))
+            .collect();
+        if let Some(parent) = config_path.and_then(Path::parent) {
+            directories.push(parent.to_path_buf());
+        }
+        // Watch the discovered config too, or editing it never triggers a
+        // rebuild.
+        if config_path.is_none()
+            && let Ok(working_directory) = env::current_dir()
+            && let Ok(Some(discovered)) = discover_config(&working_directory)
+        {
+            directories.push(discovered.root);
+        }
+        // With no sources and no config to watch, such as before a luck.json
+        // exists, watch the working directory so a fix still triggers a
+        // rebuild.
+        if directories.is_empty()
+            && let Ok(working_directory) = env::current_dir()
+        {
+            directories.push(working_directory);
+        }
+        directories.sort_unstable();
+        directories.dedup();
+        directories
+    }
+
+    /// One watch-mode build. Returns every config's sources, for the next
+    /// round to watch.
     ///
     /// # Errors
     ///
@@ -211,10 +203,6 @@ impl BuildArgs {
                 Err(BuildFailure::Failed(_)) => {}
                 Err(BuildFailure::Fatal(exit)) => return Err(exit),
             }
-        }
-
-        if let Some(path) = self.config.as_deref() {
-            all_source_files.push(path.display().to_string());
         }
 
         Ok(all_source_files)
@@ -249,7 +237,7 @@ impl BuildArgs {
             BuildFailure::Failed("build failed")
         })?;
 
-        if !result.warnings.is_empty() && verbosity != Verbosity::Quiet {
+        if verbosity != Verbosity::Quiet {
             print_diags(&result.warnings);
         }
 
@@ -303,6 +291,24 @@ fn build_preamble(config: &BuildConfig) -> String {
     }
 
     lines.join("\n")
+}
+
+/// Blocks until a relevant file changes, then drains what's queued behind it.
+/// Returns false once the watcher closes.
+fn wait_for_change(receiver: &Receiver<DebounceEventResult>) -> bool {
+    loop {
+        match receiver.recv() {
+            Ok(Ok(events)) => {
+                if events.iter().any(|event| is_relevant_change(&event.path)) {
+                    break;
+                }
+            }
+            Ok(Err(error)) => eprintln!("watch error: {error}"),
+            Err(_) => return false,
+        }
+    }
+    while receiver.try_recv().is_ok() {}
+    true
 }
 
 /// Only `.lua`, `.luau`, `.json`, and `.luaurc` changes trigger a rebuild, so

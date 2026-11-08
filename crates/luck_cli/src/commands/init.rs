@@ -6,8 +6,7 @@ use std::path::Path;
 use clap::Args;
 use luck_core::LuaTarget;
 
-use crate::exit::Exit;
-use crate::output::{operation_error, usage_error};
+use crate::exit::{Exit, operation_error, usage_error};
 
 #[derive(Args)]
 pub(crate) struct InitArgs {
@@ -33,35 +32,32 @@ impl InitArgs {
             return Err(operation_error("`luck.json` already exists"));
         }
 
-        // Any Luau dialect gets a `.luau` entry, everything else `.lua`.
-        let is_luau = target.lua_version().is_luau();
-        let extension = if is_luau { "luau" } else { "lua" };
-        let content = init_config_content(target);
-
-        if let Err(error) = fs::write(config_path, &content) {
-            eprintln!("Error: cannot write `luck.json`: {error}");
-            return Err(Exit::Failure);
-        }
+        fs::write(config_path, init_config_content(target))
+            .map_err(|error| operation_error(format!("cannot write `luck.json`: {error}")))?;
 
         let source_directory = Path::new("src");
-        if !source_directory.exists()
-            && let Err(error) = fs::create_dir_all(source_directory)
-        {
-            eprintln!("Error: cannot create `src` directory: {error}");
-            return Err(Exit::Failure);
+        if !source_directory.exists() {
+            fs::create_dir_all(source_directory).map_err(|error| {
+                operation_error(format!("cannot create `src` directory: {error}"))
+            })?;
         }
 
+        let extension = entry_extension(target);
         let entry_file = source_directory.join(format!("main.{extension}"));
-        if !entry_file.exists()
-            && let Err(error) = fs::write(&entry_file, "print(\"hello world\")\n")
-        {
-            eprintln!("Error: cannot write `{}`: {error}", entry_file.display());
-            return Err(Exit::Failure);
+        if !entry_file.exists() {
+            fs::write(&entry_file, "print(\"hello world\")\n").map_err(|error| {
+                operation_error(format!("cannot write `{}`: {error}", entry_file.display()))
+            })?;
         }
 
         eprintln!("Created luck.json and src/main.{extension}");
         Ok(())
     }
+}
+
+/// Any Luau dialect gets a `.luau` entry, everything else `.lua`.
+const fn entry_extension(target: LuaTarget) -> &'static str {
+    if target.lua_version().is_luau() { "luau" } else { "lua" }
 }
 
 /// Build the scaffolded `luck.json` contents for a fresh project.
@@ -76,7 +72,7 @@ fn init_config_content(target: LuaTarget) -> String {
     let (axis_lua, axis_luau) =
         if is_luau { ("lua54", target_name.as_str()) } else { (target_name.as_str(), "luau") };
 
-    let extension = if is_luau { "luau" } else { "lua" };
+    let extension = entry_extension(target);
     let search_paths_line = if is_luau {
         String::new()
     } else {

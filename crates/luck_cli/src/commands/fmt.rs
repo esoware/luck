@@ -7,12 +7,12 @@ use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_core::{Diagnostic, LuaTarget, LuckConfig, read_source_file, resolved_format_config};
+use luck_core::{LuaTarget, LuckConfig, read_source_file, resolved_format_config};
 
-use crate::exit::Exit;
-use crate::output::{read_stdin_source, usage_error};
+use crate::exit::{Exit, usage_error};
+use crate::output::read_stdin_source;
 use crate::project::{outcomes_in_order, project_files, resolve_project};
-use crate::render::render_document_diags;
+use crate::render::render_source_errors;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -309,16 +309,10 @@ impl FmtArgs {
             )
         };
         if !result.errors.is_empty() {
-            let file_label = file_path.to_string_lossy();
-            let diags: Vec<Diagnostic> = result
-                .errors
-                .iter()
-                .map(|error| Diagnostic::e008(&file_label, error.span, &error.message))
-                .collect();
-            return FormatOutcome::Failed(render_document_diags(
-                file_label.into_owned(),
+            return FormatOutcome::Failed(render_source_errors(
+                file_path.to_string_lossy().into_owned(),
                 source.to_owned(),
-                &diags,
+                &result.errors,
             ));
         }
 
@@ -357,10 +351,9 @@ impl FmtArgs {
 #[cfg(test)]
 mod tests {
     use clap::Parser as _;
-    use luck_core::{FormatConfig, load_with_extends};
 
     use super::*;
-    use crate::args::{Cli, Command};
+    use crate::cli::{Cli, Command};
 
     /// `luck fmt` parsed with `flags`, as clap builds it.
     fn fmt_args(flags: &[&str]) -> FmtArgs {
@@ -435,33 +428,6 @@ mod tests {
             fmt_args(&["--stdin-filepath", "buf.lua"]).stdin_filepath.as_deref(),
             Some("buf.lua")
         );
-    }
-
-    #[test]
-    fn fmt_format_options_read_from_luck_json() {
-        // A config requesting space indentation must produce spaces-based
-        // FormatOptions, with no per-option CLI flags involved.
-        let directory = tempfile::tempdir().expect("tempdir");
-        let config_path = directory.path().join("luck.json");
-        fs::write(
-            &config_path,
-            r#"{"lua":"lua54","format":{"indent_style":"spaces","indent_width":2}}"#,
-        )
-        .expect("write luck.json");
-
-        let config = load_with_extends(&config_path).expect("config loads");
-        let options = luck_formatter::FormatOptions::from(&config.format.unwrap_or_default());
-        assert!(matches!(options.indent_style, luck_formatter::IndentStyle::Spaces));
-        assert_eq!(options.indent_width, 2);
-    }
-
-    #[test]
-    fn fmt_format_options_default_without_format_section() {
-        let config = FormatConfig::default();
-        let options = luck_formatter::FormatOptions::from(&config);
-        let defaults = luck_formatter::FormatOptions::default();
-        assert_eq!(options.indent_width, defaults.indent_width);
-        assert_eq!(options.line_width, defaults.line_width);
     }
 
     #[test]

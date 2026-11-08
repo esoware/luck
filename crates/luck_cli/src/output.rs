@@ -1,14 +1,10 @@
-//! Helpers shared by the command handlers: error reporting, output and stdin
-//! I/O, and size display.
+//! Helpers shared by the command handlers: output and stdin I/O, and size
+//! display.
 
-use core::fmt::Display;
-use std::path::{Path, PathBuf};
-use std::{env, fs, io};
+use std::path::Path;
+use std::{fs, io};
 
-use luck_core::Diagnostic;
-
-use crate::exit::Exit;
-use crate::render::{print_diags, print_document_diags};
+use crate::exit::{Exit, operation_error};
 
 #[expect(
     clippy::as_conversions,
@@ -24,30 +20,6 @@ pub(crate) fn format_size(bytes: usize) -> String {
     } else {
         format!("{bytes} B")
     }
-}
-
-fn report_error(message: impl Display, exit: Exit) -> Exit {
-    eprintln!("Error: {message}");
-    exit
-}
-
-/// Report a bad argument or config and return [`Exit::Usage`].
-pub(crate) fn usage_error(message: impl Display) -> Exit {
-    report_error(message, Exit::Usage)
-}
-
-/// Report an operation that ran and failed, and return [`Exit::Failure`].
-pub(crate) fn operation_error(message: impl Display) -> Exit {
-    report_error(message, Exit::Failure)
-}
-
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Usage`] when the working
-/// directory can't be read.
-pub(crate) fn current_directory() -> Result<PathBuf, Exit> {
-    env::current_dir()
-        .map_err(|error| usage_error(format!("failed to get current directory: {error}")))
 }
 
 /// Writes `content` to the `output_path` file, or to stdout without one.
@@ -89,17 +61,4 @@ pub(crate) fn write_output_file(path: &Path, content: &str) -> Result<(), Exit> 
 pub(crate) fn read_stdin_source() -> Result<String, Exit> {
     io::read_to_string(io::stdin())
         .map_err(|error| operation_error(format!("failed to read stdin: {error}")))
-}
-
-/// Render the diagnostics to stderr and return [`Exit::Failure`].
-///
-/// `document` is a `(path, text)` document that isn't on disk, such as a
-/// bundle being minified or stdin, that every diagnostic points into. Without
-/// one, the files the diagnostics point into are read from disk.
-pub(crate) fn fail_with_diags(diags: &[Diagnostic], document: Option<(String, String)>) -> Exit {
-    match document {
-        Some((path, source)) => print_document_diags(path, source, diags),
-        None => print_diags(diags),
-    }
-    Exit::Failure
 }

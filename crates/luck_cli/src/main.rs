@@ -3,7 +3,7 @@
 //! The `luck` command-line interface: `init`, `build`, `bundle`, `minify`,
 //! `graph`, `lint`, `fmt`, `check`, and `lsp`.
 //!
-//! `args` holds the [`clap`] model and dispatch, and each command's arguments
+//! `cli` holds the [`clap`] model and dispatch, and each command's arguments
 //! and handler live in its own module under `commands`.
 
 #![expect(
@@ -19,7 +19,7 @@
     )
 )]
 
-mod args;
+mod cli;
 mod commands;
 mod exit;
 mod minify_flags;
@@ -37,16 +37,18 @@ use crate::exit::Exit;
 #[global_allocator]
 static GLOBAL: mimalloc_safe::MiMalloc = mimalloc_safe::MiMalloc;
 
+/// Parsing and every AST pass recurse, so deeply nested sources can outgrow
+/// the main thread's stack, which is only 1 MB on Windows.
+const WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
+
 /// # Panics
 ///
 /// Panics if the OS can't start the worker thread.
 fn main() -> ExitCode {
-    // Parsing and every AST pass recurse, so deeply nested sources can outgrow
-    // the main thread's stack, which is only 1 MB on Windows.
     #[expect(clippy::expect_used, reason = "the CLI can't run without it")]
     let thread = Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(args::run)
+        .stack_size(WORKER_STACK_BYTES)
+        .spawn(cli::run)
         .expect("failed to spawn worker thread");
 
     // A panic in the worker exits with `Exit::Failure`.

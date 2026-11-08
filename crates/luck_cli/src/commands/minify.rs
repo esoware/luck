@@ -5,11 +5,9 @@ use std::path::PathBuf;
 use clap::Args;
 use luck_core::read_source_file;
 
-use crate::exit::Exit;
+use crate::exit::{Exit, fail_with_document_diags, operation_error};
 use crate::minify_flags::MinifyFlags;
-use crate::output::{
-    fail_with_diags, format_size, operation_error, read_stdin_source, write_output,
-};
+use crate::output::{format_size, read_stdin_source, write_output};
 use crate::project::{config_for_one_shot, resolve_configured_target};
 
 #[derive(Args)]
@@ -48,7 +46,7 @@ impl MinifyArgs {
     /// result can't be written.
     pub(crate) fn run(self) -> Result<(), Exit> {
         let config = config_for_one_shot(self.config.as_deref(), &self.input)?;
-        let target = resolve_configured_target(self.target.as_deref(), &self.input, &config)?;
+        let target = resolve_configured_target(&config, self.target.as_deref(), &self.input)?;
         let transforms = self.minify_flags.apply_to(config.transforms.unwrap_or_default());
 
         let (source, file_path) = if self.input == "-" {
@@ -57,14 +55,14 @@ impl MinifyArgs {
             let source = read_source_file(&self.input).map_err(|error| {
                 operation_error(format!("failed to read `{}`: {error}", self.input))
             })?;
-            (source, self.input.clone())
+            (source, self.input)
         };
 
         let original_size = source.len();
 
         let minified =
             luck_minifier::minify(&source, target.lua_version(), &transforms, &file_path)
-                .map_err(|errors| fail_with_diags(&errors, Some((file_path, source))))?;
+                .map_err(|errors| fail_with_document_diags(file_path, source, &errors))?;
 
         if self.stats {
             let minified_size = minified.len();
@@ -94,7 +92,7 @@ mod tests {
     use clap::Parser as _;
 
     use super::MinifyArgs;
-    use crate::args::{Cli, Command};
+    use crate::cli::{Cli, Command};
 
     #[test]
     fn minify_target_is_optional() {

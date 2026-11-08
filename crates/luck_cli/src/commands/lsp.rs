@@ -3,6 +3,7 @@
 use clap::Args;
 use tokio::runtime::Builder;
 
+use crate::WORKER_STACK_BYTES;
 use crate::exit::Exit;
 
 #[derive(Args)]
@@ -18,10 +19,9 @@ impl LspArgs {
     /// Reports the failure and returns [`Exit::Failure`] when the async
     /// runtime can't start or the socket transport fails.
     pub(crate) fn run(self) -> Result<(), Exit> {
-        // The same 16 MB stack as the CLI's worker thread, for deep parses.
         let runtime = Builder::new_multi_thread()
             .enable_all()
-            .thread_stack_size(16 * 1024 * 1024)
+            .thread_stack_size(WORKER_STACK_BYTES)
             .build()
             .map_err(|error| {
                 eprintln!("luck lsp: failed to start async runtime: {error}");
@@ -46,7 +46,7 @@ mod tests {
     use clap::Parser as _;
 
     use super::LspArgs;
-    use crate::args::{Cli, Command};
+    use crate::cli::{Cli, Command};
 
     #[test]
     fn lsp_subcommand_parses() {

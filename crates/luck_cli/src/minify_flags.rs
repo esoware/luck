@@ -24,8 +24,10 @@ macro_rules! transform_flags {
         }
 
         impl MinifyFlags {
+            /// An explicit flag of either polarity wins over `config`, and
+            /// `overrides_with` guarantees at most one of them is set.
             pub(crate) const fn apply_to(&self, mut config: TransformConfig) -> TransformConfig {
-                $(config.$pass = resolve(config.$pass, self.$pass, self.$no_pass);)+
+                $(config.$pass = (config.$pass || self.$pass) && !self.$no_pass;)+
                 config
             }
         }
@@ -48,10 +50,4 @@ transform_flags! {
     /// self-contained script, since anything that looks them up by their
     /// original names breaks.
     rename_globals / no_rename_globals,
-}
-
-/// Project one pass onto its configured value: an explicit flag of either
-/// polarity wins, and `overrides_with` guarantees at most one is set.
-const fn resolve(is_configured: bool, should_enable: bool, should_disable: bool) -> bool {
-    (is_configured || should_enable) && !should_disable
 }

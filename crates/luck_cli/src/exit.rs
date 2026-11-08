@@ -1,4 +1,11 @@
+//! Exit codes, and the failure reports that end a run with one.
+
+use core::fmt::Display;
 use std::process::ExitCode;
+
+use luck_core::Diagnostic;
+
+use crate::render::{print_diags, print_document_diags};
 
 /// How a command failed, once it has reported why. A command that ran and
 /// found no problems returns `Ok` and exits 0.
@@ -20,4 +27,34 @@ impl From<Exit> for ExitCode {
             Exit::Usage => Self::from(2u8),
         }
     }
+}
+
+fn report_error(message: impl Display, exit: Exit) -> Exit {
+    eprintln!("Error: {message}");
+    exit
+}
+
+/// Report a bad argument or config and return [`Exit::Usage`].
+pub(crate) fn usage_error(message: impl Display) -> Exit {
+    report_error(message, Exit::Usage)
+}
+
+/// Report an operation that ran and failed, and return [`Exit::Failure`].
+pub(crate) fn operation_error(message: impl Display) -> Exit {
+    report_error(message, Exit::Failure)
+}
+
+/// Render the diagnostics to stderr, reading the files they point into from
+/// disk, and return [`Exit::Failure`].
+pub(crate) fn fail_with_diags(diags: &[Diagnostic]) -> Exit {
+    print_diags(diags);
+    Exit::Failure
+}
+
+/// Render diagnostics that all point into `source`, a document that isn't on
+/// disk, such as a bundle being minified or stdin, and return
+/// [`Exit::Failure`].
+pub(crate) fn fail_with_document_diags(path: String, source: String, diags: &[Diagnostic]) -> Exit {
+    print_document_diags(path, source, diags);
+    Exit::Failure
 }
