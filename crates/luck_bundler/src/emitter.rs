@@ -1,15 +1,31 @@
 use core::fmt::Write as _;
 use core::ops::Range;
 
-use luck_ast::{Block, Statement};
-use luck_token::{LuaVersion, Span, offset_to_index};
+use luck_token::{LuaVersion, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::LineMapEntry;
+use crate::exports::lower_exports;
 use crate::graph::DependencyGraph;
 use crate::hot_comments::leading_hot_comments;
-use crate::loader::loader_text;
+use crate::loader::{dynamic_entry_text, loader_text};
 use crate::module::{Dependency, ModuleInfo};
+
+/// One contiguous run of bundle lines that came from a single module.
+///
+/// Line 1 of the module's source lands on `bundle_start_line`, so a
+/// runtime traceback line `L` inside the range maps back to source line
+/// `L - bundle_start_line + 1`. Require rewrites preserve the newline
+/// count of the call they replace, so the correspondence is 1:1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineMapEntry {
+    /// 1-based first bundle line of the module body (inclusive).
+    pub bundle_start_line: usize,
+    /// 1-based last bundle line of the module body (inclusive).
+    pub bundle_end_line: usize,
+    /// The module's canonical path. The line map is local debug data, so it
+    /// may name the host.
+    pub path: String,
+}
 
 /// Generates the bundled Lua output from a resolved dependency graph, with
 /// the module->bundle line map for it.
@@ -77,10 +93,13 @@ pub(crate) fn emit(graph: &DependencyGraph, version: LuaVersion) -> (String, Vec
         }
     }
 
-    let has_dynamic_require = modules.iter().any(|module| !module.dynamic_callees.is_empty());
-
     writer.push("do\n");
-    writer.push(&loader_text(&prefix, version, has_dynamic_require));
+    writer.push(&loader_text(&prefix, version));
+    // Only Lua targets record dynamic callees, so only a Lua loader gets the
+    // entry point they're retargeted at.
+    if modules.iter().any(|module| !module.dynamic_callees.is_empty()) {
+        writer.push(&dynamic_entry_text(&prefix));
+    }
 
     if version.is_luau() {
         writer.push_luau_modules(graph, entry);
@@ -351,74 +370,6 @@ fn quote_lua_string(value: &str) -> String {
     quoted
 }
 
-/// The rewrites that lower module-level `export` declarations, and the
-/// exported value names.
-///
-/// Luau rejects `export` below the top level, and every bundled body sits
-/// inside a loader function. Type exports become private aliases, and value
-/// exports become plain declarations plus the frozen table Luau would
-/// implicitly return for the module.
-fn lower_exports(block: &Block) -> (Vec<(Span, String)>, Vec<&str>) {
-    let mut edits = Vec::new();
-    let mut value_exports = Vec::new();
-    for stmt in &block.stmts {
-        match stmt {
-            // Luau
-            Statement::TypeDeclaration(type_declaration) if type_declaration.is_exported => {
-                edits.push((export_keyword_span(type_declaration.span), String::new()));
-            }
-            Statement::LocalAssignment(local) if local.is_exported => {
-                value_exports
-                    .extend(local.names.iter().filter_map(|binding| binding.name.identifier()));
-                edits.push((export_keyword_span(local.span), String::new()));
-            }
-            Statement::LocalFunction(function) if function.is_exported => {
-                value_exports.extend(function.name.identifier());
-                // `export function` declares a local function. An
-                // attributed statement's span starts at its first
-                // attribute, so the rewrite covers everything from the
-                // last attribute to the name, comments included.
-                if let Some(attribute) = function.attributes.last() {
-                    edits.push((
-                        Span::new(attribute.span.end, function.name.span.start),
-                        "\nlocal function ".to_owned(),
-                    ));
-                } else {
-                    edits.push((export_keyword_span(function.span), "local".to_owned()));
-                }
-            }
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-    }
-    (edits, value_exports)
-}
-
-/// The `export` keyword opening a statement that starts at `stmt_span`.
-fn export_keyword_span(stmt_span: Span) -> Span {
-    let start = offset_to_index(stmt_span.start);
-    Span::from_indices(start, start.saturating_add("export".len()))
-}
-
 #[cfg(test)]
 mod tests {
     use luck_core::DynamicRequire;
@@ -463,11 +414,12 @@ mod tests {
         }
     }
 
-    /// Modules in topological order, with the last one as entry.
-    fn graph(modules: Vec<ModuleInfo>) -> DependencyGraph {
-        let topological_order = (0..modules.len()).map(ModuleId).collect();
-        let entry_id = ModuleId(modules.len().saturating_sub(1));
-        DependencyGraph { modules, topological_order, entry_id, warnings: vec![] }
+    /// The graph of `modules`, given in topological order with the last one as
+    /// entry, laid out as `DependencyGraph::build` lays it out, entry first.
+    fn graph(mut modules: Vec<ModuleInfo>) -> DependencyGraph {
+        modules.rotate_right(1);
+        let topological_order = (1..modules.len()).chain([0]).map(ModuleId).collect();
+        DependencyGraph { modules, topological_order, entry_id: ModuleId(0), warnings: vec![] }
     }
 
     /// The bundle for `modules`, with the last one as entry.
@@ -475,7 +427,7 @@ mod tests {
         emit(&graph(modules), version).0
     }
 
-    fn reparses(output: &str, version: LuaVersion) {
+    fn assert_reparses(output: &str, version: LuaVersion) {
         let result = luck_parser::parse(output, version);
         assert!(result.errors.is_empty(), "bundle must reparse: {:?}\n{output}", result.errors);
     }
@@ -501,7 +453,7 @@ mod tests {
         );
         assert!(output.contains("local __luck_entry=function(...)"), "{output}");
         assert!(output.contains("return __luck_entry(...)"), "{output}");
-        reparses(&output, LuaVersion::Lua54);
+        assert_reparses(&output, LuaVersion::Lua54);
     }
 
     #[test]
@@ -537,7 +489,7 @@ mod tests {
             "all modules registered"
         );
         assert!(!output.contains("local __luck_src_mod"), "no per-module locals");
-        reparses(&output, LuaVersion::Lua54);
+        assert_reparses(&output, LuaVersion::Lua54);
     }
 
     #[test]
@@ -568,7 +520,7 @@ mod tests {
             "no raw require may survive: {output}"
         );
         assert!(output.contains("__luck_require(\"a\")"), "{output}");
-        reparses(&output, LuaVersion::Lua54);
+        assert_reparses(&output, LuaVersion::Lua54);
     }
 
     #[test]
@@ -592,7 +544,7 @@ mod tests {
             output.contains("__luck_modules[\"foo.init\"]=__luck_modules[\"foo\"]"),
             "{output}"
         );
-        reparses(&output, LuaVersion::Lua54);
+        assert_reparses(&output, LuaVersion::Lua54);
     }
 
     #[test]
@@ -610,7 +562,7 @@ mod tests {
         );
         assert!(output.contains("local d = __luck1_require(\"dep\")"), "{output}");
         assert!(output.contains("local __luck_require = 1"), "user identifier untouched: {output}");
-        reparses(&output, LuaVersion::Lua54);
+        assert_reparses(&output, LuaVersion::Lua54);
     }
 
     #[test]
@@ -630,7 +582,7 @@ mod tests {
         // Source line 4 is print(d); it must land exactly 3 lines below
         // the entry body start despite the rewritten multiline call.
         assert_eq!(output_lines[entry.bundle_start_line - 1 + 3], "print(d)");
-        reparses(&output, LuaVersion::Lua54);
+        assert_reparses(&output, LuaVersion::Lua54);
     }
 
     #[test]
@@ -650,7 +602,7 @@ mod tests {
             !output.contains("__luck_paths"),
             "5.1 chunks receive only the module name: {output}"
         );
-        reparses(&output, LuaVersion::Lua51);
+        assert_reparses(&output, LuaVersion::Lua51);
     }
 
     #[test]
@@ -674,7 +626,7 @@ mod tests {
             "5.2+ chunks receive (name, path): {output}"
         );
         assert!(!output.contains(":preload:"), "loaderdata second result is 5.4+ only: {output}");
-        reparses(&output, LuaVersion::Lua52);
+        assert_reparses(&output, LuaVersion::Lua52);
     }
 
     #[test]
@@ -691,7 +643,7 @@ mod tests {
         let output = bundle(modules, LuaVersion::Lua54);
         assert!(output.contains(":preload:"), "{output}");
         assert!(output.contains("return value,loaderdata"), "{output}");
-        reparses(&output, LuaVersion::Lua54);
+        assert_reparses(&output, LuaVersion::Lua54);
     }
 
     #[test]
@@ -712,7 +664,7 @@ mod tests {
             "Luau modules must return exactly one value: {output}"
         );
         assert!(!output.contains("package.loaded"), "Luau has no package table: {output}");
-        reparses(&output, LuaVersion::Luau);
+        assert_reparses(&output, LuaVersion::Luau);
     }
 
     #[test]
@@ -728,7 +680,7 @@ mod tests {
             output.contains("    require(\"dep\")"),
             "shadowed call keeps user semantics: {output}"
         );
-        reparses(&output, LuaVersion::Lua54);
+        assert_reparses(&output, LuaVersion::Lua54);
     }
 
     #[test]
@@ -761,7 +713,7 @@ end
             output.contains("return table.freeze({value=value,LIMIT=LIMIT,get=get})"),
             "{output}"
         );
-        reparses(&output, LuaVersion::Luau);
+        assert_reparses(&output, LuaVersion::Luau);
     }
 
     #[test]
@@ -786,11 +738,11 @@ print(field, lazy())
         assert!(output.contains("return __luck_require(\"dep\")"), "{output}");
         assert!(output.contains("local inner = __luck_require(\"dep\")"), "{output}");
         assert!(!output.contains("= require(\"dep\")"), "no raw require may survive: {output}");
-        reparses(&output, LuaVersion::Lua54);
+        assert_reparses(&output, LuaVersion::Lua54);
     }
 
     #[test]
-    fn require_inside_string_literal_untouched() {
+    fn require_inside_string_literal_is_untouched() {
         let source = "local d = require(\"dep\")\nlocal msg = 'use require(\"dep\") to load'\nprint(d, msg)\n";
         let modules = vec![
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua54),
@@ -813,7 +765,7 @@ print(field, lazy())
         let output = bundle(modules, LuaVersion::Lua54);
         assert_eq!(output.matches("__luck_require(\"a.b\")").count(), 2, "{output}");
         assert!(output.contains("__luck_modules[\"a.b\"]=function(...)"), "{output}");
-        reparses(&output, LuaVersion::Lua54);
+        assert_reparses(&output, LuaVersion::Lua54);
     }
 
     fn find_line_entry<'map>(line_map: &'map [LineMapEntry], path: &str) -> &'map LineMapEntry {
@@ -884,7 +836,7 @@ print(field, lazy())
         assert_eq!(line_map.len(), 3);
         assert!(utils.bundle_end_line < helper.bundle_start_line);
         assert!(helper.bundle_end_line < entry.bundle_start_line);
-        reparses(&output, LuaVersion::Lua54);
+        assert_reparses(&output, LuaVersion::Lua54);
     }
 
     #[test]
@@ -920,7 +872,7 @@ print(field, lazy())
     }
 
     #[test]
-    fn quote_lua_string_escapes() {
+    fn quote_lua_string_escapes_specials_and_zero_pads_unprintable_bytes() {
         assert_eq!(quote_lua_string("plain"), "\"plain\"");
         assert_eq!(quote_lua_string("a\"b"), "\"a\\\"b\"");
         assert_eq!(quote_lua_string("a\\b"), "\"a\\\\b\"");

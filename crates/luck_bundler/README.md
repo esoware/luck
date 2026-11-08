@@ -27,7 +27,7 @@ The bundler takes a multi-file Lua project and produces one self-contained outpu
 
 1. **Require extraction.** `require_extraction.rs` walks each module's entire AST for `require()` calls, using `luck_semantic` scope analysis to skip calls that resolve to local bindings, and decodes each string literal to its runtime value. It produces a list of require sites (decoded string plus call span), the callee spans of the dynamic requires the emitter retargets, and validation diagnostics (W007/E002 non-string-literal argument, E006 `package.loaded` write on Luau, W001 duplicate require, W005 shadowed/aliased require).
 
-2. **Graph construction.** `graph.rs` starts at the entry file and does a breadth-first walk, resolving each require through `luck_resolver` and enqueuing newly discovered modules. A `GraphBuilder` holds the in-progress graph: modules, the path-to-id map, the queue, the resolver, and the collected diagnostics. An unreadable file reports E010, an oversized one E012, a parse failure E008, more than 10,000 modules E009, and a missing entry E011, while resolver failures pass through as E004 and E007. An inert hot comment in a non-entry Luau module reports W006. `hot_comments.rs` holds the one scan for a chunk's leading hot comments, which this warning and the emitter's hoisting share.
+2. **Graph construction.** `graph.rs` starts at the entry file and does a breadth-first walk, resolving each require through `luck_resolver` and enqueuing newly discovered modules. A `GraphBuilder` holds the in-progress graph: modules, the path-to-id map, the queue, the resolver, and the collected diagnostics. An unreadable file, a missing entry included, reports E010, an oversized one E012, a parse failure E008, and more than 10,000 modules E009, while resolver failures pass through as E004 and E007. An inert hot comment in a non-entry Luau module reports W006. `hot_comments.rs` holds the one scan for a chunk's leading hot comments, which this warning and the emitter's hoisting share.
 
 3. **Topological sort.** Once discovery succeeds, the modules and their require edges go into a `petgraph` graph in discovery order. Its standard toposort orders roots first. The bundler reverses the result so leaves come first, which is cosmetic, since the loader doesn't depend on it. A cycle falls back to discovery order and records W003.
 
@@ -37,13 +37,13 @@ The bundler takes a multi-file Lua project and produces one self-contained outpu
 
 `module.rs` defines `ModuleId` (an index into the graph's module list), `Dependency` (a resolved require edge: decoded require string, resolved path, and call span), and `ModuleInfo`, which carries a module's path, source text, discovered dependencies, project-relative path, the callee spans of its dynamic requires, and the parsed `Block` from graph construction, kept so the emitter doesn't reparse.
 
-`ModuleInfo::path` is the canonical absolute path and the graph's identity key. `ModuleInfo::relative_path` is the only path the emitted bundle may name. `graph::make_relative` builds it against the project root, which is normalized once per build and resolved against the working directory when it's empty or relative. `BundleResult::source_files` and the `LineMapEntry` paths stay canonical, because they're local build and debug data that never reach the bundle.
+`ModuleInfo::path` is the canonical absolute path and the graph's identity key. `ModuleInfo::relative_path` is the only path the emitted bundle may name. `relative_path::make_relative` builds it against the project root, which is normalized once per build and resolved against the working directory when it's empty or relative. `BundleResult::source_files` and the `LineMapEntry` paths stay canonical, because they're local build and debug data that never reach the bundle.
 
 ### Span-based rewriting
 
 Require rewriting splices over the exact byte ranges the require scan recorded, so the extractor and the emitter can never disagree about which calls are bundled. Unusually formatted requires survive bundling too: multi-line calls, long-bracket arguments, escaped strings, Luau type casts. `require(...)` text inside string literals stays untouched, and shadowed calls stay exactly as written.
 
-When a Luau value-export module goes inside a generated loader wrapper, the emitter lowers its top-level `export` declarations to local declarations and appends the frozen export table the module would otherwise return implicitly. Type-only exports become private inside wrappers.
+When a Luau value-export module goes inside a generated loader wrapper, the emitter lowers its top-level `export` declarations to local declarations through `exports.rs` and appends the frozen export table the module would otherwise return implicitly. Type-only exports become private inside wrappers.
 
 ### Testing
 

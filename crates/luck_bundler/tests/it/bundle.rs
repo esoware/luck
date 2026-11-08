@@ -143,6 +143,20 @@ fn circular_dependency_bundles_with_w003() {
 }
 
 #[test]
+fn missing_entry_flags_e010() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let errors = bundle(
+        &directory.path().join("main.lua"),
+        LuaVersion::Lua54,
+        &[],
+        directory.path(),
+        DynamicRequire::default(),
+    )
+    .expect_err("a missing entry must not bundle");
+    assert_eq!(codes(&errors), ["E010"], "{errors:?}");
+}
+
+#[test]
 fn unresolved_module_flags_e004() {
     let errors = run_bundle("lua54", "errors/unresolved_module", LuaVersion::Lua54, "main.lua")
         .expect_err("an unresolved module must not bundle");
@@ -214,7 +228,7 @@ fn require_after_code_bundles() {
 }
 
 #[test]
-fn package_loaded_manip_is_allowed_on_lua_targets() {
+fn package_loaded_write_bundles_on_lua_targets() {
     // On Lua targets the bundle cache is package.loaded itself, so
     // preseeding an entry behaves as in real Lua and needs no E006.
     let output = run_bundle("lua54", "errors/package_loaded_manip", LuaVersion::Lua54, "main.lua")
@@ -223,7 +237,7 @@ fn package_loaded_manip_is_allowed_on_lua_targets() {
 }
 
 #[test]
-fn package_loaded_manip_flags_e006_on_luau() {
+fn package_loaded_write_flags_e006_on_luau() {
     let errors = run_bundle("luau", "errors/package_loaded_manip", LuaVersion::Luau, "main.luau")
         .expect_err("a package.loaded write must not bundle on Luau");
     assert!(codes(&errors).contains(&"E006"), "Expected E006, got: {:?}", codes(&errors));

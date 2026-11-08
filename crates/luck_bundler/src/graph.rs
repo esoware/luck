@@ -1,5 +1,4 @@
 use alloc::collections::VecDeque;
-use std::env;
 use std::path::Path;
 
 use luck_core::{
@@ -14,6 +13,7 @@ use rustc_hash::FxHashMap;
 
 use crate::hot_comments::leading_hot_comments;
 use crate::module::{Dependency, ModuleId, ModuleInfo};
+use crate::relative_path::{absolute_project_root, make_relative};
 use crate::require_extraction::{ExtractedRequires, extract_requires};
 
 const MAX_MODULE_COUNT: usize = 10_000;
@@ -41,8 +41,8 @@ impl DependencyGraph {
     /// # Errors
     ///
     /// Returns every error found during discovery, such as unreadable,
-    /// oversized, or unparsable files, unresolved or ambiguous requires, and a
-    /// missing entry.
+    /// oversized, or unparsable files, the entry included, and unresolved or
+    /// ambiguous requires.
     pub fn build(
         entry_path: &Path,
         version: LuaVersion,
@@ -74,32 +74,11 @@ impl DependencyGraph {
             errors: Vec::new(),
             warnings: Vec::new(),
         };
-        let entry = normalize_path(entry_path);
-        builder.discover(entry.clone());
-        builder.finish(&entry)
-    }
-}
-
-/// The project root as a normalized absolute path.
-///
-/// An empty or relative root resolves against the working directory. If that's
-/// unavailable too, the input comes back unchanged and the build goes on, even
-/// though host paths can then reach the output.
-fn absolute_project_root(project_root: &Path) -> String {
-    let normalized = normalize_path(project_root);
-    if Path::new(&normalized).is_absolute() {
-        return normalized;
-    }
-    match env::current_dir() {
-        Ok(current_directory) => {
-            let working_directory = normalize_path(&current_directory);
-            if normalized.is_empty() || normalized == "." {
-                working_directory
-            } else {
-                format!("{}/{normalized}", working_directory.trim_end_matches('/'))
-            }
-        }
-        Err(_) => normalized,
+        let Some(entry_id) = builder.add_module(normalize_path(entry_path)) else {
+            return Err(builder.errors);
+        };
+        builder.discover_dependencies();
+        builder.finish(entry_id)
     }
 }
 
@@ -118,10 +97,9 @@ struct GraphBuilder<'input> {
 }
 
 impl GraphBuilder<'_> {
-    /// Walks breadth-first from the entry, stopping with E009 at the module
-    /// limit.
-    fn discover(&mut self, entry: String) {
-        self.queue.push_back(entry);
+    /// Walks breadth-first from the modules added so far, stopping with E009
+    /// at the module limit.
+    fn discover_dependencies(&mut self) {
         while let Some(file_path) = self.queue.pop_front() {
             if self.path_to_id.contains_key(&file_path) {
                 continue;
@@ -135,7 +113,10 @@ impl GraphBuilder<'_> {
     }
 
     /// Reads and parses one module and adds it with its resolved requires.
-    fn add_module(&mut self, file_path: String) {
+    ///
+    /// `None` when the file can't be read or is too large, which records the
+    /// error and adds nothing.
+    fn add_module(&mut self, file_path: String) -> Option<ModuleId> {
         let source = match read_source_file(native_path(&file_path)) {
             Ok(source) => source,
             Err(io_error) => {
@@ -144,7 +125,7 @@ impl GraphBuilder<'_> {
                     Span::default(),
                     &io_error.to_string(),
                 ));
-                return;
+                return None;
             }
         };
 
@@ -155,7 +136,7 @@ impl GraphBuilder<'_> {
                 source.len(),
                 MAX_FILE_SIZE,
             ));
-            return;
+            return None;
         }
 
         let parsed = luck_parser::parse(source, self.version);
@@ -196,7 +177,8 @@ impl GraphBuilder<'_> {
         }
 
         let relative_path = make_relative(&file_path, self.project_root);
-        self.path_to_id.insert(file_path.clone(), ModuleId(self.modules.len()));
+        let id = ModuleId(self.modules.len());
+        self.path_to_id.insert(file_path.clone(), id);
         self.modules.push(ModuleInfo {
             path: file_path,
             source: parsed.source,
@@ -205,23 +187,18 @@ impl GraphBuilder<'_> {
             dynamic_callees,
             block: parsed.block,
         });
+        Some(id)
     }
 
     /// # Errors
     ///
-    /// Returns the errors collected during discovery, or E011 when the entry
-    /// isn't in the graph.
-    fn finish(mut self, entry: &str) -> Result<DependencyGraph, Vec<Diagnostic>> {
+    /// Returns the errors collected during discovery.
+    fn finish(mut self, entry_id: ModuleId) -> Result<DependencyGraph, Vec<Diagnostic>> {
         if !self.errors.is_empty() {
             return Err(self.errors);
         }
 
         let topological_order = self.topological_order();
-        let entry_id = *self
-            .path_to_id
-            .get(entry)
-            .ok_or_else(|| vec![Diagnostic::e011(entry, Span::default())])?;
-
         self.warn_inert_hot_comments(entry_id);
 
         Ok(DependencyGraph {
@@ -345,77 +322,9 @@ fn find_cycle(graph: &DiGraph<(), ()>, start_node: NodeIndex) -> Vec<ModuleId> {
     if cycle.is_empty() { vec![ModuleId(start_node.index())] } else { cycle }
 }
 
-/// The project-relative form of `path`, which is what the bundle carries.
-/// `root` comes from [`absolute_project_root`].
-///
-/// A module above the root gets `..` segments, so none of the names on the
-/// root's side reach the output. When the two share no root at all, as with
-/// another Windows drive or a UNC share, only the file name is kept.
-fn make_relative(path: &str, root: &str) -> String {
-    let root_directory = root.trim_end_matches('/');
-    if let Some(relative) =
-        path.strip_prefix(root_directory).and_then(|rest| rest.strip_prefix('/'))
-    {
-        return relative.to_owned();
-    }
-
-    let path_parts: Vec<&str> = path.split('/').collect();
-    let root_parts: Vec<&str> = root_directory.split('/').collect();
-    let shared = path_parts
-        .iter()
-        .zip(&root_parts)
-        .take_while(|(from_path, from_root)| from_path == from_root)
-        .count();
-
-    if shared == 0 {
-        return path_parts.last().unwrap_or(&path).to_string();
-    }
-
-    let mut relative = "../".repeat(root_parts.len().saturating_sub(shared));
-    relative.push_str(&path_parts.get(shared..).unwrap_or_default().join("/"));
-    relative
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn path_inside_the_project_root_loses_the_prefix() {
-        assert_eq!(make_relative("D:/proj/src/utils.lua", "D:/proj"), "src/utils.lua");
-        // A trailing separator on the root must not survive into the path.
-        assert_eq!(make_relative("D:/proj/main.lua", "D:/proj/"), "main.lua");
-    }
-
-    /// A vendored dependency above the root keeps its shape, but nothing from
-    /// the root's own side of the tree is emitted.
-    #[test]
-    fn path_above_the_project_root_walks_up() {
-        assert_eq!(
-            make_relative("D:/work/shared/util.lua", "D:/work/proj/src"),
-            "../../shared/util.lua"
-        );
-        assert_eq!(make_relative("D:/work/sibling/a.lua", "D:/work/proj"), "../sibling/a.lua");
-    }
-
-    /// A path on another drive or share can't be made relative, and an
-    /// absolute path must never reach the output.
-    #[test]
-    fn path_without_a_shared_root_keeps_only_the_file_name() {
-        assert_eq!(make_relative("E:/elsewhere/lib.lua", "D:/proj"), "lib.lua");
-    }
-
-    /// `luck bundle main.lua` passes the entry's parent, which is empty for a
-    /// bare file name.
-    #[test]
-    fn empty_project_root_resolves_to_the_working_directory() {
-        let working_directory = normalize_path(&env::current_dir().expect("cwd"));
-        assert_eq!(absolute_project_root(Path::new("")), working_directory);
-        assert_eq!(absolute_project_root(Path::new(".")), working_directory);
-
-        let root = absolute_project_root(Path::new(""));
-        assert_eq!(make_relative(&format!("{root}/main.lua"), &root), "main.lua");
-    }
 
     /// Builds a graph of `node_count` nodes from `(from, to)` edges.
     fn graph(node_count: usize, edges: &[(usize, usize)]) -> DiGraph<(), ()> {

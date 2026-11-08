@@ -39,12 +39,15 @@ extern crate alloc;
 
 mod bundle;
 mod emitter;
+mod exports;
 mod graph;
 mod hot_comments;
 mod loader;
 mod module;
+mod relative_path;
 mod require_extraction;
 
-pub use bundle::{BundleResult, LineMapEntry, bundle};
+pub use bundle::{BundleResult, bundle};
+pub use emitter::LineMapEntry;
 pub use graph::DependencyGraph;
 pub use module::{Dependency, ModuleId, ModuleInfo};

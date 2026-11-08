@@ -4,10 +4,7 @@
 use luck_token::LuaVersion;
 
 /// The loader, with every generated name starting with `prefix`.
-///
-/// `has_dynamic_require` adds the entry point that `require(expr)` calls are
-/// retargeted at.
-pub(crate) fn loader_text(prefix: &str, version: LuaVersion, has_dynamic_require: bool) -> String {
+pub(crate) fn loader_text(prefix: &str, version: LuaVersion) -> String {
     if version.is_luau() {
         return luau_loader_text(prefix);
     }
@@ -26,9 +23,7 @@ pub(crate) fn loader_text(prefix: &str, version: LuaVersion, has_dynamic_require
     } else {
         String::new()
     };
-    let dynamic_entry =
-        if has_dynamic_require { dynamic_entry_text(prefix) } else { String::new() };
-    [cache_tables, paths_table, lua_require_text(prefix, version), dynamic_entry].concat()
+    [cache_tables, paths_table, lua_require_text(prefix, version)].concat()
 }
 
 /// Luau/Roblox require: private cache keyed by file, cycles and repeated
@@ -135,12 +130,13 @@ fn lua_require_text(prefix: &str, version: LuaVersion) -> String {
     )
 }
 
-/// Serves a runtime-computed name from the bundle when it's bundled or
+/// The Lua loader's entry point for retargeted `require(expr)` calls. It
+/// serves a runtime-computed name from the bundle when it's bundled or
 /// preloaded, since the Lua cache is keyed by module name.
 ///
 /// Anything else goes to the host's own `require`, looked up at call time so
 /// one the host installs later still counts.
-fn dynamic_entry_text(prefix: &str) -> String {
+pub(crate) fn dynamic_entry_text(prefix: &str) -> String {
     format!(
         "local function {prefix}dynamic(name)\n\
          if {prefix}modules[name]~=nil or {prefix}preload[name]~=nil then return {prefix}require(name)end\n\
