@@ -47,6 +47,8 @@ pub(crate) fn scan_short_string(
             }
             Some(_) => {
                 cursor.advance();
+                // Most strings end within 8 bytes, so the table checks those
+                // before `memchr` takes over.
                 let bytes = cursor.rest();
                 let (prefix, rest) = bytes.split_at(bytes.len().min(8));
                 let prefix_stop = find_match(prefix, &SHORT_STRING_STOP);
@@ -131,7 +133,7 @@ pub(crate) fn scan_interpolated_segment(
             }
             Some(_) => {
                 cursor.advance();
-                cursor.advance_until_match(&INTERPOLATED_STRING_STOP);
+                cursor.advance_by(find_match(cursor.rest(), &INTERPOLATED_STRING_STOP));
             }
         }
     }
@@ -256,16 +258,12 @@ fn scan_unicode_escape(cursor: &mut Cursor<'_>) -> Result<(), LexError> {
     Ok(())
 }
 
-/// Build the error for an undefined escape, with the cursor on the escaped
-/// `character`.
+/// Consume the escaped `character` at the cursor and build the error for its
+/// undefined escape.
 fn invalid_escape(cursor: &mut Cursor<'_>, character: u8) -> LexError {
     let character_start = cursor.position();
     cursor.advance();
-    // Consume the full UTF-8 sequence so recovery resumes
-    // on a char boundary; continuation bytes are 0b10xxxxxx.
-    cursor.eat_while(|byte| (byte & 0xC0) == 0x80);
-    let escaped =
-        cursor.text_since(character_start).chars().next().unwrap_or_else(|| char::from(character));
+    let escaped = cursor.eat_rest_of_char(character_start).unwrap_or_else(|| char::from(character));
     lex_error(
         cursor.span_since(character_start.saturating_sub(1)),
         format!("invalid escape sequence `\\{escaped}`"),
@@ -285,12 +283,12 @@ pub(crate) fn eat_long_bracket_open(cursor: &mut Cursor<'_>) -> Option<usize> {
     Some(level)
 }
 
-/// Scan from just past a long-bracket opener to its matching `]=*]` closer.
+/// Advance from just past a long-bracket opener to its matching `]=*]` closer.
 ///
 /// Consumes the closer and returns `true` when it's found. At EOF it consumes
 /// the rest and returns `false`, so the caller can report its own
 /// unterminated error. Shared by long-bracket strings and block comments.
-pub(crate) fn scan_to_long_bracket_close(cursor: &mut Cursor<'_>, level: usize) -> bool {
+pub(crate) fn advance_past_long_bracket_close(cursor: &mut Cursor<'_>, level: usize) -> bool {
     loop {
         let rest = cursor.rest();
         let Some(bracket_offset) = memchr::memchr(b']', rest) else {
@@ -320,7 +318,7 @@ pub(crate) fn scan_long_string(
     start: usize,
     level: usize,
 ) -> Result<TokenKind, LexError> {
-    if !scan_to_long_bracket_close(cursor, level) {
+    if !advance_past_long_bracket_close(cursor, level) {
         return Err(lex_error(cursor.span_since(start), "unterminated long bracket string"));
     }
     Ok(TokenKind::StringLiteral(cursor.text_since(start).into()))

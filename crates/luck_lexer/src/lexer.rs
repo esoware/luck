@@ -7,8 +7,8 @@ use crate::lex_error::{LexError, lex_error};
 use crate::lex_result::LexResult;
 use crate::number::scan_number;
 use crate::string::{
-    InterpolatedSegmentEnd, eat_long_bracket_open, scan_interpolated_segment, scan_long_string,
-    scan_short_string, scan_to_long_bracket_close,
+    InterpolatedSegmentEnd, advance_past_long_bracket_close, eat_long_bracket_open,
+    scan_interpolated_segment, scan_long_string, scan_short_string,
 };
 
 /// Lex all of `source` at once.
@@ -175,6 +175,10 @@ impl<'source> Lexer<'source> {
             b'[' => self.lex_long_string_or_bracket(),
             // Luau
             b'`' if self.version.has_interpolated_strings() => self.lex_interpolated_string(),
+            // Luau: a `}` at depth 0 closes the expression and resumes the string.
+            b'}' if self.interpolation_brace_depths.last() == Some(&0) => {
+                self.lex_interpolated_string_continuation()
+            }
             b'-' if self.cursor.peek_at(1) == Some(b'-') => {
                 self.lex_comment();
                 None
@@ -226,7 +230,7 @@ impl<'source> Lexer<'source> {
 
     /// Record an error spanning `start` to the cursor and yield no token.
     #[cold]
-    fn reject<T>(&mut self, start: usize, message: impl Into<String>) -> Option<T> {
+    fn reject(&mut self, start: usize, message: impl Into<String>) -> Option<Token> {
         self.errors.push(lex_error(self.cursor.span_since(start), message));
         None
     }
@@ -247,7 +251,7 @@ impl<'source> Lexer<'source> {
         self.cursor.advance_by(2); // `--`
 
         let kind = if let Some(level) = eat_long_bracket_open(&mut self.cursor) {
-            if !scan_to_long_bracket_close(&mut self.cursor, level) {
+            if !advance_past_long_bracket_close(&mut self.cursor, level) {
                 self.errors
                     .push(lex_error(self.cursor.span_since(start), "unterminated block comment"));
                 return;
@@ -327,9 +331,8 @@ impl<'source> Lexer<'source> {
         let result = scan_interpolated_segment(&mut self.cursor, self.version, start);
         let token = match self.ok_or_record(result)? {
             (text, InterpolatedSegmentEnd::OpenBrace) => {
-                let token = self.make_token(TokenKind::InterpolatedStringBegin(text), start);
                 self.interpolation_brace_depths.push(0);
-                token
+                self.make_token(TokenKind::InterpolatedStringBegin(text), start)
             }
             (text, InterpolatedSegmentEnd::Backtick) => {
                 let closing_backtick = self.cursor.position().saturating_sub(1);
@@ -345,16 +348,18 @@ impl<'source> Lexer<'source> {
         Some(token)
     }
 
-    /// Resume an interpolated string after the `}` that closes an expression,
+    /// Resume an interpolated string at the `}` that closes an expression,
     /// producing `InterpolatedStringMiddle` at the next `{` or
     /// `InterpolatedStringEnd` at the closing backtick.
-    fn lex_interpolated_string_continuation(&mut self, start: usize) -> Option<Token> {
+    fn lex_interpolated_string_continuation(&mut self) -> Option<Token> {
+        self.interpolation_brace_depths.pop();
+        let start = self.cursor.position();
+        self.cursor.advance();
         let result = scan_interpolated_segment(&mut self.cursor, self.version, start);
         let token = match self.ok_or_record(result)? {
             (text, InterpolatedSegmentEnd::OpenBrace) => {
-                let token = self.make_token(TokenKind::InterpolatedStringMiddle(text), start);
                 self.interpolation_brace_depths.push(0);
-                token
+                self.make_token(TokenKind::InterpolatedStringMiddle(text), start)
             }
             (text, InterpolatedSegmentEnd::Backtick) => {
                 self.make_token(TokenKind::InterpolatedStringEnd(text), start)
@@ -382,13 +387,7 @@ impl<'source> Lexer<'source> {
             }
             b'}' => {
                 if let Some(depth) = self.interpolation_brace_depths.last_mut() {
-                    let Some(remaining) = depth.checked_sub(1) else {
-                        // Depth 0 means this `}` closes the interpolation, so
-                        // string scanning resumes.
-                        self.interpolation_brace_depths.pop();
-                        return self.lex_interpolated_string_continuation(start);
-                    };
-                    *depth = remaining;
+                    *depth = depth.saturating_sub(1);
                 }
                 TokenKind::RightBrace
             }
@@ -411,7 +410,7 @@ impl<'source> Lexer<'source> {
                     self.compound_or(TokenKind::SlashEqual, TokenKind::Slash)
                 }
             }
-            b'.' => self.lex_after_dot(),
+            b'.' => self.dot_kind(),
             b':' => {
                 if self.cursor.eat(b':') {
                     TokenKind::DoubleColon
@@ -449,13 +448,10 @@ impl<'source> Lexer<'source> {
             b'|' => TokenKind::Pipe,
             b'@' => TokenKind::At,
             b'?' => TokenKind::Question,
-            b'<' => self.lex_after_angle(
-                byte,
-                TokenKind::LessEqual,
-                TokenKind::ShiftLeft,
-                TokenKind::Less,
-            ),
-            b'>' => self.lex_after_angle(
+            b'<' => {
+                self.angle_kind(byte, TokenKind::LessEqual, TokenKind::ShiftLeft, TokenKind::Less)
+            }
+            b'>' => self.angle_kind(
                 byte,
                 TokenKind::GreaterEqual,
                 TokenKind::ShiftRight,
@@ -479,7 +475,7 @@ impl<'source> Lexer<'source> {
     }
 
     #[inline]
-    fn lex_after_dot(&mut self) -> TokenKind {
+    fn dot_kind(&mut self) -> TokenKind {
         if !self.cursor.eat(b'.') {
             return TokenKind::Dot;
         }
@@ -493,7 +489,7 @@ impl<'source> Lexer<'source> {
     /// Finish `<` or `>`: `or_equal` before `=`, `shift` before a second
     /// `angle` where the version has shifts, else `plain`.
     #[inline]
-    fn lex_after_angle(
+    fn angle_kind(
         &mut self,
         angle: u8,
         or_equal: TokenKind,
@@ -517,11 +513,7 @@ impl<'source> Lexer<'source> {
 
     #[cold]
     fn reject_unexpected_symbol(&mut self, start: usize, byte: u8) -> Option<Token> {
-        // Consume the full UTF-8 sequence so a multi-byte char
-        // yields one error, not one mojibake error per byte.
-        self.cursor.eat_while(|next| (next & 0xC0) == 0x80);
-        let unexpected =
-            self.cursor.text_since(start).chars().next().unwrap_or_else(|| char::from(byte));
+        let unexpected = self.cursor.eat_rest_of_char(start).unwrap_or_else(|| char::from(byte));
         self.reject(start, format!("unexpected character `{unexpected}`"))
     }
 }

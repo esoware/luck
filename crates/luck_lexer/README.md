@@ -23,7 +23,7 @@ Two entry points share the same machine:
 
 ### Cursor (`cursor.rs`)
 
-A zero-copy forward-only byte cursor: `peek`, `peek_at`, `advance`, `rest`, and batched `advance_until_match`, all tracking a single byte position.
+A zero-copy forward-only byte cursor: `peek`, `peek_at`, `advance`, `eat`, and `rest`, all tracking a single byte position. Scanners take a token's text and span from it with `text_since` and `span_since`, and the batched search in `search.rs` runs over `rest`.
 
 ### Body scanning (`search.rs`, `string.rs`)
 

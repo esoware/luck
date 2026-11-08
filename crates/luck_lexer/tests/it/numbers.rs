@@ -47,7 +47,7 @@ fn number_adjacent_to_concat_is_malformed() {
 }
 
 #[test]
-fn hex_number_adjacent_to_concat_per_version() {
+fn hex_number_adjacent_to_concat_is_malformed_outside_lua51() {
     // 5.1's hex scanner stops at the dot, so `0xFF..2` is a valid concat
     // there. Luau's consumes the dots, and 5.2+ fails in the hex-float path.
     assert_eq!(lex("return 0xFF..2", LuaVersion::Lua51).errors, Vec::<SourceError>::new());
@@ -57,7 +57,7 @@ fn hex_number_adjacent_to_concat_per_version() {
 }
 
 #[test]
-fn hex_no_digits_is_error() {
+fn hex_literal_without_digits_is_error() {
     let result = lex("0x", LuaVersion::Lua54);
     assert_ne!(result.errors, Vec::<SourceError>::new());
     assert!(result.errors[0].message.contains("hex literal requires at least one digit"));
@@ -78,7 +78,7 @@ fn digitless_hex_prefix_is_error_in_every_version() {
 }
 
 #[test]
-fn hex_floats_lex_in_every_version_that_has_them() {
+fn hex_floats_lex_in_lua52_plus() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         for source in ["0x1.Fp10", "0xAp4", "0xA23p-4", "0x1.0p+3"] {
             assert_eq!(
@@ -91,7 +91,7 @@ fn hex_floats_lex_in_every_version_that_has_them() {
 }
 
 #[test]
-fn hex_float_rejected_in_unsupported_versions() {
+fn hex_float_is_error_in_lua51_and_luau() {
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
         let result = lex("0x1.Fp10", version);
         assert!(!result.errors.is_empty(), "hex float should error in {version:?}");
@@ -133,7 +133,7 @@ fn hex_numeral_touching_a_letter_is_error() {
 }
 
 #[test]
-fn binary_literal_luau_only() {
+fn binary_literal_lexes_only_in_luau() {
     assert_eq!(first_kind_in("0b1010", LuaVersion::Luau), TokenKind::Number("0b1010".into()));
     assert_eq!(first_kind_in("0B11", LuaVersion::Luau), TokenKind::Number("0B11".into()));
     // Outside Luau, `0b1010` splits into the number `0` and the name `b1010`.
@@ -143,14 +143,14 @@ fn binary_literal_luau_only() {
 }
 
 #[test]
-fn binary_no_digits_is_error() {
+fn binary_literal_without_digits_is_error() {
     let result = lex("0b", LuaVersion::Luau);
     assert_ne!(result.errors, Vec::<SourceError>::new());
     assert!(result.errors[0].message.contains("binary literal requires at least one digit"));
 }
 
 #[test]
-fn underscore_separators_luau_only() {
+fn underscore_separators_lex_only_in_luau() {
     for source in ["1_000_000", "0xFF_FF", "0b1010_0101", "0b1111_0000", "1_0e1_0", "0xDEAD_BEEF"] {
         assert_eq!(
             first_kind_in(source, LuaVersion::Luau),
@@ -173,7 +173,7 @@ fn underscore_separators_luau_only() {
 }
 
 #[test]
-fn luau_integer_literal_suffix_and_range() {
+fn integer_suffix_lexes_only_on_luau_integers_within_64_bits() {
     for source in [
         "1i",
         "1_000_000i",

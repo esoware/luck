@@ -33,7 +33,7 @@ fn interpolated_string_begin_stops_at_the_open_brace() {
 }
 
 #[test]
-fn interpolated_string_nested_index_expression() {
+fn interpolated_index_expression_lexes_token_by_token() {
     assert_eq!(
         kinds_in("`{t[1]}`", LuaVersion::Luau),
         vec![
@@ -62,7 +62,7 @@ fn interpolated_string_double_brace_is_error() {
 }
 
 #[test]
-fn backtick_strings_rejected_in_lua() {
+fn backtick_is_an_unexpected_character_outside_luau() {
     for version in [
         LuaVersion::Lua51,
         LuaVersion::Lua52,
@@ -157,7 +157,7 @@ fn interpolated_segments_preserve_raw_escapes_and_spans() {
 }
 
 #[test]
-fn interpolated_string_line_continuations_luau() {
+fn escaped_line_breaks_continue_interpolated_strings() {
     for newline in ["\r\n", "\n", "\r"] {
         let cases = [
             (

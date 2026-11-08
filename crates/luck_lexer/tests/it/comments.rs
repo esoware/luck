@@ -133,7 +133,7 @@ fn comment_at_end_of_file_leads_eof() {
 }
 
 #[test]
-fn comment_is_followed_by_newline() {
+fn line_comment_is_followed_by_newline() {
     let result = lex_lua51("x -- trailing\ny");
     assert_eq!(result.comments.len(), 1);
     assert!(result.comments[0].is_followed_by_newline);

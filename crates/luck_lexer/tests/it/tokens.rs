@@ -198,7 +198,7 @@ fn non_ascii_unexpected_char_is_one_error() {
 }
 
 #[test]
-fn goto_version_gating() {
+fn goto_is_a_keyword_only_in_lua52_plus() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         assert_eq!(
             first_kind_in("goto", version),
@@ -216,7 +216,7 @@ fn goto_version_gating() {
 }
 
 #[test]
-fn global_version_gating() {
+fn global_is_a_keyword_only_in_lua55() {
     assert_eq!(first_kind_in("global", LuaVersion::Lua55), TokenKind::Global);
     for version in [
         LuaVersion::Lua51,
@@ -234,7 +234,7 @@ fn global_version_gating() {
 }
 
 #[test]
-fn lua52_goto_label() {
+fn lua52_goto_and_label_lex_token_by_token() {
     assert_eq!(
         kinds_in("goto done :: done ::", LuaVersion::Lua52),
         vec![
@@ -248,7 +248,7 @@ fn lua52_goto_label() {
 }
 
 #[test]
-fn lua55_global_statement() {
+fn lua55_global_statement_lexes_token_by_token() {
     assert_eq!(
         kinds_in("global x = 5", LuaVersion::Lua55),
         vec![
@@ -261,7 +261,7 @@ fn lua55_global_statement() {
 }
 
 #[test]
-fn floor_div_version_gating() {
+fn floor_div_lexes_only_in_lua53_plus_and_luau() {
     for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55, LuaVersion::Luau] {
         assert_eq!(
             first_kind_in("//", version),
@@ -284,7 +284,7 @@ fn floor_div_not_confused_with_comment() {
 }
 
 #[test]
-fn lua52_floor_div_in_expression() {
+fn lua52_double_slash_lexes_as_two_slashes() {
     assert_eq!(
         kinds_in("a // b", LuaVersion::Lua52),
         vec![
@@ -297,7 +297,7 @@ fn lua52_floor_div_in_expression() {
 }
 
 #[test]
-fn tilde_standalone_version_gating() {
+fn standalone_tilde_lexes_only_in_lua53_plus() {
     // Lua 5.3+ supports bitwise NOT; Luau doesn't.
     for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         let result = lex("~", version);
@@ -320,7 +320,7 @@ fn tilde_equal_lexes_in_every_version() {
 }
 
 #[test]
-fn ampersand_and_pipe_version_gating() {
+fn ampersand_and_pipe_lex_only_in_lua53_plus_and_luau() {
     // Luau uses `&` and `|` for intersection and union types.
     for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55, LuaVersion::Luau] {
         assert_eq!(
@@ -337,7 +337,7 @@ fn ampersand_and_pipe_version_gating() {
 }
 
 #[test]
-fn shift_operators_version_gating() {
+fn shift_operators_lex_only_in_lua53_plus() {
     for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         assert_eq!(first_kind_in("<<", version), TokenKind::ShiftLeft, "<< in {version:?}");
         assert_eq!(first_kind_in(">>", version), TokenKind::ShiftRight, ">> in {version:?}");
@@ -348,7 +348,7 @@ fn shift_operators_version_gating() {
 }
 
 #[test]
-fn lua53_bitwise_expression() {
+fn lua53_bitwise_expression_lexes_token_by_token() {
     assert_eq!(
         kinds_in("a & b | c", LuaVersion::Lua53),
         vec![
@@ -362,7 +362,7 @@ fn lua53_bitwise_expression() {
 }
 
 #[test]
-fn lua53_shift_expression() {
+fn lua53_shift_expression_lexes_token_by_token() {
     assert_eq!(
         kinds_in("x << 2 >> 1", LuaVersion::Lua53),
         vec![
@@ -376,7 +376,7 @@ fn lua53_shift_expression() {
 }
 
 #[test]
-fn lua53_full_expression_with_bitwise() {
+fn lua53_mixed_bitwise_expression_lexes_token_by_token() {
     assert_eq!(
         kinds_in("(a & b) | (~c >> 2)", LuaVersion::Lua53),
         vec![
@@ -422,7 +422,7 @@ fn lua54_close_attribute_lexes_as_separate_tokens() {
 }
 
 #[test]
-fn compound_assignment_operators_luau_only() {
+fn compound_assignment_operators_lex_only_in_luau() {
     let operators = [
         ("+=", TokenKind::PlusEqual),
         ("-=", TokenKind::MinusEqual),
@@ -458,7 +458,7 @@ fn compound_assignment_operators_luau_only() {
 }
 
 #[test]
-fn at_token_luau_only() {
+fn at_lexes_only_in_luau() {
     assert_eq!(first_kind_in("@", LuaVersion::Luau), TokenKind::At);
     for version in [
         LuaVersion::Lua51,
@@ -472,7 +472,7 @@ fn at_token_luau_only() {
 }
 
 #[test]
-fn luau_at_in_context() {
+fn luau_attribute_lexes_as_at_and_a_name() {
     assert_eq!(
         kinds_in("@native", LuaVersion::Luau),
         vec![TokenKind::At, TokenKind::Identifier("native".into())]

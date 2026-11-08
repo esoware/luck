@@ -42,7 +42,7 @@ fn decimal_escape_over_255_is_error() {
 }
 
 #[test]
-fn string_line_continuations_all_versions() {
+fn escaped_line_breaks_continue_short_strings_in_every_version() {
     for version in LuaVersion::ALL {
         for quote in ['\'', '"'] {
             for newline in ["\r\n", "\n", "\r"] {
@@ -156,7 +156,7 @@ fn whitespace_escape_lexes_outside_lua51() {
 }
 
 #[test]
-fn unicode_escape_only_53_plus_and_luau() {
+fn unicode_escape_lexes_everywhere_but_lua52() {
     for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55, LuaVersion::Luau] {
         let result = lex("\"\\u{41}\"", version);
         assert!(result.errors.is_empty(), "\\u{{41}} should work in {version:?}");
@@ -184,7 +184,7 @@ fn unicode_escape_without_open_brace_is_error() {
 }
 
 #[test]
-fn unicode_escape_codepoint_bounds() {
+fn unicode_escape_codepoint_must_be_below_2_pow_31() {
     let result = lex(r#""\u{7FFFFFFF}""#, LuaVersion::Lua54);
     assert_eq!(result.errors, Vec::<SourceError>::new());
     assert_eq!(result.tokens[0].kind, TokenKind::StringLiteral(r#""\u{7FFFFFFF}""#.into()));
@@ -197,7 +197,7 @@ fn unicode_escape_codepoint_bounds() {
 }
 
 #[test]
-fn long_string_levels() {
+fn long_strings_keep_their_spelling_at_every_level() {
     for source in ["[[text]]", "[=[text]=]", "[==[text]==]", "[===[text]===]"] {
         assert_eq!(
             first_kind(source),
@@ -208,7 +208,7 @@ fn long_string_levels() {
 }
 
 #[test]
-fn long_string_with_newlines() {
+fn long_string_keeps_its_line_breaks() {
     let source = "[[line1\nline2]]";
     assert_eq!(first_kind(source), TokenKind::StringLiteral(source.into()));
 }

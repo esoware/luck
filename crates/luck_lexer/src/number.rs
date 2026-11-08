@@ -15,13 +15,14 @@ pub(crate) fn scan_number(
 ) -> Result<TokenKind, LexError> {
     let start = cursor.position();
     match cursor.rest() {
-        [b'0', b'x' | b'X', ..] => scan_hex_number(cursor, version, start),
+        [b'0', b'x' | b'X', ..] => scan_hex_number(cursor, version, start)?,
         // Luau
         [b'0', b'b' | b'B', ..] if version.has_binary_literals() => {
-            scan_binary_number(cursor, version, start)
+            scan_binary_number(cursor, version, start)?;
         }
-        _ => scan_decimal_number(cursor, version, start),
+        _ => scan_decimal_number(cursor, version, start)?,
     }
+    Ok(TokenKind::Number(cursor.text_since(start).into()))
 }
 
 /// # Errors
@@ -31,7 +32,7 @@ fn scan_hex_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
-) -> Result<TokenKind, LexError> {
+) -> Result<(), LexError> {
     cursor.advance_by(2); // `0x`
 
     let digits_start = cursor.position();
@@ -105,8 +106,7 @@ fn scan_hex_number(
             "malformed hexadecimal number",
         ));
     }
-
-    finish_number(cursor, version, start)
+    Ok(())
 }
 
 /// # Errors
@@ -116,7 +116,7 @@ fn scan_binary_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
-) -> Result<TokenKind, LexError> {
+) -> Result<(), LexError> {
     cursor.advance_by(2); // `0b`
 
     let digits_start = cursor.position();
@@ -134,8 +134,7 @@ fn scan_binary_number(
     if version.has_luau_integer_literals() && cursor.eat(b'i') {
         validate_integer_range(cursor, start, 2)?;
     }
-
-    finish_number(cursor, version, start)
+    Ok(())
 }
 
 /// # Errors
@@ -145,7 +144,7 @@ fn scan_decimal_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
-) -> Result<TokenKind, LexError> {
+) -> Result<(), LexError> {
     eat_digits(cursor, version, u8::is_ascii_digit);
 
     let mut is_float = false;
@@ -184,12 +183,15 @@ fn scan_decimal_number(
         }
         validate_integer_range(cursor, start, 10)?;
     }
-
-    finish_number(cursor, version, start)
+    Ok(())
 }
 
 /// Consume digits that satisfy `is_digit`, plus underscore separators where
 /// `version` has them.
+///
+/// Elsewhere an underscore ends the digits. Luau strips underscores
+/// anywhere in the literal before conversion, so `0b_01`, `1__2`, and `12_`
+/// are all valid there, with no placement rules.
 fn eat_digits(cursor: &mut Cursor<'_>, version: LuaVersion, is_digit: impl Fn(&u8) -> bool) {
     if version.has_underscore_separators() {
         cursor.eat_while(|byte| is_digit(&byte) || byte == b'_');
@@ -228,30 +230,6 @@ fn reject_adjacent_concat(cursor: &Cursor<'_>, start: usize) -> Result<(), LexEr
         ));
     }
     Ok(())
-}
-
-/// Build the token for the numeral ending at the cursor.
-///
-/// Rejects underscore separators outside Luau. Luau itself strips underscores
-/// anywhere in the literal before conversion, so `0b_01`, `1__2`, and `12_`
-/// are all valid there, with no placement rules.
-///
-/// # Errors
-///
-/// Returns a [`LexError`] for an underscore when `version` has no separators.
-fn finish_number(
-    cursor: &Cursor<'_>,
-    version: LuaVersion,
-    start: usize,
-) -> Result<TokenKind, LexError> {
-    let raw = cursor.text_since(start);
-    if raw.contains('_') && !version.has_underscore_separators() {
-        return Err(lex_error(
-            cursor.span_since(start),
-            "underscore separators in numbers are not supported in this Lua version",
-        ));
-    }
-    Ok(TokenKind::Number(raw.into()))
 }
 
 /// Range-check a numeral ending at the cursor with its `i` suffix consumed.

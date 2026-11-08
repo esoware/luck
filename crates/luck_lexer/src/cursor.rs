@@ -1,7 +1,5 @@
 use luck_token::Span;
 
-use crate::search::{ByteMatchTable, find_match};
-
 /// Zero-copy, forward-only byte cursor over source text.
 #[derive(Debug)]
 pub(crate) struct Cursor<'source> {
@@ -71,12 +69,6 @@ impl<'source> Cursor<'source> {
         self.position = self.position.wrapping_add(count);
     }
 
-    /// Advance to the first byte matching `table`, or EOF.
-    #[inline]
-    pub(crate) fn advance_until_match(&mut self, table: &ByteMatchTable) {
-        self.advance_by(find_match(self.rest(), table));
-    }
-
     /// Advance to the next line break, or EOF.
     pub(crate) fn advance_to_line_break(&mut self) {
         let rest = self.rest();
@@ -87,6 +79,15 @@ impl<'source> Cursor<'source> {
         while self.peek().is_some_and(&predicate) {
             self.advance_by(1);
         }
+    }
+
+    /// Consume the rest of the UTF-8 sequence that begins at `start` and
+    /// return its char, so a multi-byte char yields one error that names it
+    /// and lexing resumes on a char boundary.
+    pub(crate) fn eat_rest_of_char(&mut self, start: usize) -> Option<char> {
+        // Continuation bytes are 0b10xxxxxx.
+        self.eat_while(|byte| (byte & 0xC0) == 0x80);
+        self.text_since(start).chars().next()
     }
 
     /// Whether only spaces and tabs stand between the cursor and a line break

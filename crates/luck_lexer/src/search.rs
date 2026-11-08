@@ -2,8 +2,6 @@
 //! must stop at, and `find_match` walks fixed-size batches of scalar table
 //! lookups to keep long runs branch-light.
 
-const SEARCH_BATCH_SIZE: usize = 32;
-
 /// 256-entry stop-byte table, cache-line aligned. Build with
 /// `byte_match_table!` at compile time.
 #[repr(C, align(64))]
@@ -19,7 +17,7 @@ impl ByteMatchTable {
         clippy::indexing_slicing,
         reason = "a u8 can't index past 256 entries, and this is the per-byte scan"
     )]
-    pub(crate) fn matches(&self, byte: u8) -> bool {
+    fn matches(&self, byte: u8) -> bool {
         self.0[usize::from(byte)]
     }
 }
@@ -52,11 +50,12 @@ pub(crate) use byte_match_table;
 #[inline]
 pub(crate) fn find_match(bytes: &[u8], table: &ByteMatchTable) -> usize {
     const SCALAR_PREFIX: usize = 8;
+    const BATCH_SIZE: usize = 32;
     let (prefix, mut remaining) = bytes.split_at(bytes.len().min(SCALAR_PREFIX));
     if let Some(offset) = prefix.iter().position(|&byte| table.matches(byte)) {
         return offset;
     }
-    while let Some((batch, after_batch)) = remaining.split_first_chunk::<SEARCH_BATCH_SIZE>() {
+    while let Some((batch, after_batch)) = remaining.split_first_chunk::<BATCH_SIZE>() {
         let mut has_match = false;
         for &byte in batch {
             has_match |= table.matches(byte);
