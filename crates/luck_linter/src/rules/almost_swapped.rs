@@ -1,4 +1,4 @@
-use luck_ast::{Block, Expression, Statement, Var, Visitor};
+use luck_ast::{Expression, Statement, Var};
 
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
@@ -23,53 +23,41 @@ impl Rule for AlmostSwapped {
 
 impl WholeRule for AlmostSwapped {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut checker = SwapChecker { findings: Vec::new() };
-        checker.visit_block(context.block);
-        checker.findings
+        context
+            .blocks
+            .iter()
+            .flat_map(|block| block.stmts.windows(2))
+            .filter_map(failed_swap)
+            .collect()
     }
 }
 
-struct SwapChecker {
-    findings: Vec<Finding>,
-}
-
-impl<'ast> Visitor<'ast> for SwapChecker {
-    fn visit_block(&mut self, block: &'ast Block) {
-        for pair in block.stmts.windows(2) {
-            let [Statement::Assignment(first), Statement::Assignment(second)] = pair else {
-                continue;
-            };
-            let ([first_target], [first_value], [second_target], [second_value]) = (
-                first.targets.items.as_slice(),
-                first.values.items.as_slice(),
-                second.targets.items.as_slice(),
-                second.values.items.as_slice(),
-            ) else {
-                continue;
-            };
-            let (Some(target_a), Some(value_a), Some(target_b), Some(value_b)) = (
-                var_name(first_target),
-                expr_var_name(first_value),
-                var_name(second_target),
-                expr_var_name(second_value),
-            ) else {
-                continue;
-            };
-            // After `a = b`, `b = a` copies `b` back and the old `a` is lost.
-            if target_a == value_b && target_b == value_a {
-                self.findings.push(
-                    Finding::new(
-                        format!("`{target_a} = {value_a}; {target_b} = {value_b}` doesn't swap"),
-                        first.span.merge(second.span),
-                    )
-                    .with_help(format!(
-                        "use `{target_a}, {target_b} = {target_b}, {target_a}` to swap both at once"
-                    )),
-                );
-            }
-        }
-        self.walk_block(block);
-    }
+fn failed_swap(pair: &[Statement]) -> Option<Finding> {
+    let [Statement::Assignment(first), Statement::Assignment(second)] = pair else {
+        return None;
+    };
+    let ([first_target], [first_value], [second_target], [second_value]) = (
+        first.targets.items.as_slice(),
+        first.values.items.as_slice(),
+        second.targets.items.as_slice(),
+        second.values.items.as_slice(),
+    ) else {
+        return None;
+    };
+    let target_a = var_name(first_target)?;
+    let value_a = expr_var_name(first_value)?;
+    let target_b = var_name(second_target)?;
+    let value_b = expr_var_name(second_value)?;
+    // After `a = b`, `b = a` copies `b` back and the old `a` is lost.
+    (target_a == value_b && target_b == value_a).then(|| {
+        Finding::new(
+            format!("`{target_a} = {value_a}; {target_b} = {value_b}` doesn't swap"),
+            first.span.merge(second.span),
+        )
+        .with_help(format!(
+            "use `{target_a}, {target_b} = {target_b}, {target_a}` to swap both at once"
+        ))
+    })
 }
 
 fn var_name(var: &Var) -> Option<&str> {

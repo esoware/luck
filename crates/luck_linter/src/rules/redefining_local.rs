@@ -1,4 +1,4 @@
-use luck_ast::{Block, Statement, Visitor};
+use luck_ast::{Block, Statement};
 use luck_token::{Span, Token};
 
 use crate::diagnostic::{Category, Finding, Severity, line_column};
@@ -35,7 +35,9 @@ impl WholeRule for RedefiningLocal {
             declarations: Vec::new(),
             findings: Vec::new(),
         };
-        checker.visit_block(context.block);
+        for block in context.blocks {
+            checker.check_block(block);
+        }
         checker.findings
     }
 }
@@ -103,13 +105,6 @@ impl<'ast> RedefineChecker<'ast> {
             );
         }
         self.declarations.push((name, name_token.span));
-    }
-}
-
-impl<'ast> Visitor<'ast> for RedefineChecker<'ast> {
-    fn visit_block(&mut self, block: &'ast Block) {
-        self.check_block(block);
-        self.walk_block(block);
     }
 }
 

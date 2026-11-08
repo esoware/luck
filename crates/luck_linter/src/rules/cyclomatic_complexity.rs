@@ -1,9 +1,9 @@
-use luck_ast::{Expression, FunctionBody, Statement};
-use luck_token::Span;
+use luck_ast::{Expression, Statement};
 
 use crate::cfg::analyze_full_block;
 use crate::diagnostic::{Category, Finding, Severity};
-use crate::node_type::{NodeType, NodeTypeSet};
+use crate::function_node::FunctionNode;
+use crate::node_type::NodeTypeSet;
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -28,93 +28,47 @@ impl Rule for CyclomaticComplexity {
 
 impl NodeRule for CyclomaticComplexity {
     fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[
-            NodeType::FunctionDecl,
-            NodeType::LocalFunction,
-            NodeType::GlobalFunction,
-            NodeType::FunctionDef,
-        ])
+        FunctionNode::NODE_TYPES
     }
-
     fn on_statement(
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        let Some(threshold) = context.config.max_cyclomatic_complexity else {
-            return;
-        };
-        // Slice the name from source so `mod.f` and `a.b:c` appear whole.
-        let (body, span, name_span) = match stmt {
-            Statement::FunctionDecl(decl) => (&decl.body, decl.span, decl.name.span),
-            Statement::LocalFunction(local_function) => {
-                (&local_function.body, local_function.span, local_function.name.span)
-            }
-            // Lua 5.5
-            Statement::GlobalFunction(global_function) => {
-                (&global_function.body, global_function.span, global_function.name.span)
-            }
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => return,
-        };
-        findings.extend(check_function(
-            body,
-            span,
-            Some(name_span.text(context.source)),
-            threshold,
-        ));
+        findings.extend(
+            FunctionNode::of_statement(stmt).and_then(|function| check_function(function, context)),
+        );
     }
-
     fn on_expression(
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        let Some(threshold) = context.config.max_cyclomatic_complexity else {
-            return;
-        };
-        if let Expression::FunctionDef(function) = expr {
-            findings.extend(check_function(&function.body, function.span, None, threshold));
-        }
+        findings.extend(
+            FunctionNode::of_expression(expr)
+                .and_then(|function| check_function(function, context)),
+        );
     }
 }
 
-/// Flags the function at `span`, named `name` unless it's anonymous, when
-/// its complexity is over `threshold`.
-fn check_function(
-    body: &FunctionBody,
-    span: Span,
-    name: Option<&str>,
-    threshold: u32,
-) -> Option<Finding> {
+/// Flags `function` when its complexity is over the configured threshold.
+fn check_function(function: FunctionNode<'_>, context: &LintContext<'_>) -> Option<Finding> {
+    let threshold = context.config.max_cyclomatic_complexity?;
     // McCabe: one straight-line path plus one per decision point.
-    let complexity = analyze_full_block(&body.block).decision_points.saturating_add(1);
+    let complexity = analyze_full_block(&function.body.block).decision_points.saturating_add(1);
     (complexity > threshold).then(|| {
-        let label = name
-            .map_or_else(|| "(anonymous)".to_owned(), |function_name| format!("`{function_name}`"));
+        // Slice the name from source so `mod.f` and `a.b:c` appear whole.
+        let label = function.name_span.map_or_else(
+            || "(anonymous)".to_owned(),
+            |name_span| format!("`{}`", name_span.text(context.source)),
+        );
         Finding::new(
             format!(
                 "function {label} has cyclomatic complexity {complexity} (threshold: {threshold})"
             ),
-            span,
+            function.span,
         )
         .with_help("split this function into smaller helpers")
     })
@@ -122,6 +76,7 @@ fn check_function(
 
 #[cfg(test)]
 mod tests {
+    use luck_core::LintConfig;
     use luck_token::LuaVersion;
 
     use super::*;
@@ -129,10 +84,7 @@ mod tests {
     use crate::fixtures::run_rule_with_config;
 
     fn run(source: &str, threshold: Option<u32>) -> Vec<LintDiagnostic> {
-        let config = crate::LintConfig {
-            max_cyclomatic_complexity: threshold,
-            ..crate::LintConfig::default()
-        };
+        let config = LintConfig { max_cyclomatic_complexity: threshold, ..LintConfig::default() };
         run_rule_with_config(&CyclomaticComplexity, source, LuaVersion::Lua54, &config)
     }
 

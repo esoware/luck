@@ -75,8 +75,10 @@ fn check(
     config: &LintConfig,
 ) -> Vec<LintDiagnostic> {
     let semantic = driver::analyze(&parse.block, version, environment, config);
+    let nodes = Nodes::collect(&parse.block);
     let context = LintContext {
         block: &parse.block,
+        blocks: nodes.blocks(),
         semantic: &semantic,
         source: &parse.source,
         comments: &parse.comments,
@@ -89,7 +91,6 @@ fn check(
     let findings = match *entry {
         RuleEntry::Whole(whole_rule) => whole_rule.check(&context),
         RuleEntry::Node(node_rule) => {
-            let nodes = Nodes::collect(&parse.block);
             bus::run(&[node_rule], nodes.as_slice(), &context).pop().unwrap_or_default()
         }
     };

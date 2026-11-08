@@ -1,4 +1,4 @@
-use luck_ast::{Attribute, Block, LocalAssignment, Statement, Visitor};
+use luck_ast::{Attribute, LocalAssignment, Statement};
 use luck_token::{Comment, Span};
 
 use crate::diagnostic::{Category, Finding, Severity};
@@ -27,89 +27,71 @@ impl Rule for MergeAdjacentLocals {
 
 impl WholeRule for MergeAdjacentLocals {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut checker = MergeChecker {
-            source: context.source,
-            comments: context.comments,
-            findings: Vec::new(),
-        };
-        checker.visit_block(context.block);
-        checker.findings
-    }
-}
-
-struct MergeChecker<'document> {
-    source: &'document str,
-    comments: &'document [Comment],
-    findings: Vec<Finding>,
-}
-
-impl MergeChecker<'_> {
-    fn check_block(&mut self, block: &Block) {
-        let mut pairs = block.stmts.windows(2);
-        while let Some(pair) = pairs.next() {
-            let [Statement::LocalAssignment(first_local), Statement::LocalAssignment(second_local)] =
-                pair
-            else {
-                continue;
-            };
-
-            let (Some(first), Some(second)) =
-                (simple_binding(first_local), simple_binding(second_local))
-            else {
-                continue;
-            };
-
-            if self.has_comment_between(first_local.span.end, second_local.span.start) {
-                continue;
+        let mut findings = Vec::new();
+        for block in context.blocks {
+            let mut pairs = block.stmts.windows(2);
+            while let Some(pair) = pairs.next() {
+                let [
+                    Statement::LocalAssignment(first_local),
+                    Statement::LocalAssignment(second_local),
+                ] = pair
+                else {
+                    continue;
+                };
+                let Some(merged) = merged_local(first_local, second_local, context) else {
+                    continue;
+                };
+                findings.push(
+                    Finding::new("adjacent `local` declarations can be merged", first_local.span)
+                        .with_help("combine into a single multi-binding `local`")
+                        .with_fix(Fix {
+                            description: "merge adjacent `local` declarations".to_owned(),
+                            edits: vec![TextEdit {
+                                span: Span::new(first_local.span.start, second_local.span.end),
+                                replacement: merged,
+                            }],
+                        }),
+                );
+                // Skip the window that starts at `second_local`, so no two
+                // fixes touch the same statement.
+                pairs.next();
             }
-
-            if !annotations_match(self.source, &first, &second) {
-                continue;
-            }
-
-            // Lua allows only one `<close>` variable per local list.
-            if first.attribute.is_some_and(|attribute| attribute.name.identifier() == Some("close"))
-            {
-                continue;
-            }
-
-            // Both values in `local a, b = x, y` are evaluated before either
-            // name is bound, so merging `local a = 1 local b = a` would make
-            // `b` read an outer or global `a`.
-            let first_name = first.name.text(self.source);
-            let second_initializer = second.initializer.text(self.source);
-            if references_identifier(second_initializer, first_name) {
-                continue;
-            }
-
-            self.findings.push(
-                Finding::new("adjacent `local` declarations can be merged", first_local.span)
-                    .with_help("combine into a single multi-binding `local`")
-                    .with_fix(Fix {
-                        description: "merge adjacent `local` declarations".to_owned(),
-                        edits: vec![TextEdit {
-                            span: Span::new(first_local.span.start, second_local.span.end),
-                            replacement: build_merged(self.source, &first, &second),
-                        }],
-                    }),
-            );
-
-            // Skip the window that starts at `second_local`, so no two
-            // fixes touch the same statement.
-            pairs.next();
         }
-    }
-
-    fn has_comment_between(&self, start: u32, end: u32) -> bool {
-        self.comments.iter().any(|comment| comment.span.start >= start && comment.span.end <= end)
+        findings
     }
 }
 
-impl<'ast> Visitor<'ast> for MergeChecker<'_> {
-    fn visit_block(&mut self, block: &'ast Block) {
-        self.check_block(block);
-        self.walk_block(block);
+/// The one `local` that declares both bindings, unless merging them could
+/// change what the code does or drop a comment.
+fn merged_local(
+    first_local: &LocalAssignment,
+    second_local: &LocalAssignment,
+    context: &LintContext<'_>,
+) -> Option<String> {
+    let first = simple_binding(first_local)?;
+    let second = simple_binding(second_local)?;
+    if has_comment_between(context.comments, first_local.span.end, second_local.span.start) {
+        return None;
     }
+    let source = context.source;
+    if !annotations_match(source, &first, &second) {
+        return None;
+    }
+    // Lua allows only one `<close>` variable per local list.
+    if first.attribute.is_some_and(|attribute| attribute.name.identifier() == Some("close")) {
+        return None;
+    }
+    // Both values in `local a, b = x, y` are evaluated before either name is
+    // bound, so merging `local a = 1 local b = a` would make `b` read an outer
+    // or global `a`.
+    if references_identifier(second.initializer.text(source), first.name.text(source)) {
+        return None;
+    }
+    Some(build_merged(source, &first, &second))
+}
+
+fn has_comment_between(comments: &[Comment], start: u32, end: u32) -> bool {
+    comments.iter().any(|comment| comment.span.start >= start && comment.span.end <= end)
 }
 
 /// A `local` with one name and one value: the name, its attribute if any,
@@ -190,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn fix_merges_two_simple_locals() {
+    fn flags_and_fixes_two_simple_locals() {
         let source = "local a = 1\nlocal b = 2";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
@@ -199,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn fix_repeats_shared_attribute() {
+    fn flags_and_fixes_repeating_shared_attribute() {
         let source = "local a <const> = 1\nlocal b <const> = 2";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");

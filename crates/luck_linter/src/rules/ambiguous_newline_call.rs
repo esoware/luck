@@ -12,15 +12,12 @@ impl Rule for AmbiguousNewlineCall {
     fn name(&self) -> &'static str {
         "ambiguous_newline_call"
     }
-
     fn category(&self) -> Category {
         Category::Suspicious
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "call arguments open on a new line, which reads ambiguously"
     }
@@ -37,10 +34,9 @@ impl NodeRule for AmbiguousNewlineCall {
         findings: &mut Vec<Finding>,
     ) {
         if let Statement::FunctionCall(call) = stmt {
-            check_call(call, context, findings);
+            findings.extend(check_call(call, context.source));
         }
     }
-
     fn on_expression(
         &self,
         expr: &Expression,
@@ -48,28 +44,24 @@ impl NodeRule for AmbiguousNewlineCall {
         findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionCall(call) = expr {
-            check_call(call, context, findings);
+            findings.extend(check_call(call, context.source));
         }
     }
 }
 
-fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+fn check_call(call: &FunctionCall, source: &str) -> Option<Finding> {
     let FunctionArgs::Parenthesized { span: args_span, .. } = &call.args else {
-        return;
+        return None;
     };
     let prefix_end = call
         .method
         .as_ref()
         .map_or_else(|| call.callee.span().end, |method_token| method_token.span.end);
     let open_start = args_span.start;
-    if open_start <= prefix_end {
-        return;
+    if open_start <= prefix_end || !Span::new(prefix_end, open_start).text(source).contains('\n') {
+        return None;
     }
-    let gap = Span::new(prefix_end, open_start).text(context.source);
-    if !gap.contains('\n') {
-        return;
-    }
-    findings.push(
+    Some(
         Finding::new(
             "call arguments start on a new line, but Lua joins this with the previous expression",
             Span::new(open_start, open_start.saturating_add(1)),
@@ -78,7 +70,7 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
             "keep `(` on the same line as the callee, or add a semicolon if a new statement was \
              intended",
         ),
-    );
+    )
 }
 
 #[cfg(test)]

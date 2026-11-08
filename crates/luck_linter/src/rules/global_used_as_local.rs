@@ -10,15 +10,12 @@ impl Rule for GlobalUsedAsLocal {
     fn name(&self) -> &'static str {
         "global_used_as_local"
     }
-
     fn category(&self) -> Category {
         Category::Style
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "global variable is only used inside one function; use a local"
     }

@@ -1,4 +1,5 @@
 use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement};
+use luck_semantic::SemanticAnalysis;
 
 use crate::call::is_global_call;
 use crate::diagnostic::{Category, Finding, Severity};
@@ -12,15 +13,12 @@ impl Rule for UnnecessaryAssert {
     fn name(&self) -> &'static str {
         "unnecessary_assert"
     }
-
     fn category(&self) -> Category {
         Category::Suspicious
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "`assert` on a constant value always passes or always errors"
     }
@@ -37,10 +35,9 @@ impl NodeRule for UnnecessaryAssert {
         findings: &mut Vec<Finding>,
     ) {
         if let Statement::FunctionCall(call) = stmt {
-            check_call(call, context, findings);
+            findings.extend(check_call(call, context.semantic));
         }
     }
-
     fn on_expression(
         &self,
         expr: &Expression,
@@ -48,22 +45,19 @@ impl NodeRule for UnnecessaryAssert {
         findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionCall(call) = expr {
-            check_call(call, context, findings);
+            findings.extend(check_call(call, context.semantic));
         }
     }
 }
 
-fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-    if !is_global_call(call, "assert", context.semantic) {
-        return;
+fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<Finding> {
+    if !is_global_call(call, "assert", semantic) {
+        return None;
     }
     let FunctionArgs::Parenthesized { args, .. } = &call.args else {
-        return;
+        return None;
     };
-    let Some(condition) = args.first() else {
-        return;
-    };
-    match condition {
+    let finding = match args.first()? {
         // 0 and "" are truthy in Lua, so every number and string passes.
         Expression::True(_)
         | Expression::Number(_)
@@ -72,16 +66,12 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
         | Expression::InterpolatedString(_)
         | Expression::TableConstructor(_)
         | Expression::FunctionDef(_) => {
-            findings.push(
-                Finding::new("`assert` on a constant value always passes", call.span)
-                    .with_help("remove the `assert` or check a real condition"),
-            );
+            Finding::new("`assert` on a constant value always passes", call.span)
+                .with_help("remove the `assert` or check a real condition")
         }
         Expression::False(_) | Expression::Nil(_) => {
-            findings.push(
-                Finding::new("`assert` on a constant falsy value always errors", call.span)
-                    .with_help("use `error()` to raise unconditionally"),
-            );
+            Finding::new("`assert` on a constant falsy value always errors", call.span)
+                .with_help("use `error()` to raise unconditionally")
         }
         Expression::VarArg(_)
         | Expression::Var(_)
@@ -92,8 +82,9 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
         | Expression::IfExpression(_)
         | Expression::TypeCast(_)
         | Expression::TypeInstantiation(_)
-        | Expression::Error(_) => {}
-    }
+        | Expression::Error(_) => return None,
+    };
+    Some(finding)
 }
 
 #[cfg(test)]

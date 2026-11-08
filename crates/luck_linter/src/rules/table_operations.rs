@@ -3,6 +3,7 @@ use luck_token::{BinOp, Token, UnOp};
 
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::node_type::{NodeType, NodeTypeSet};
+use crate::number::is_decimal_literal;
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -12,15 +13,12 @@ impl Rule for TableOperations {
     fn name(&self) -> &'static str {
         "table_operations"
     }
-
     fn category(&self) -> Category {
         Category::Suspicious
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "misuse of `table.insert`, `table.remove`, `table.move`, or `table.create`"
     }
@@ -40,7 +38,6 @@ impl NodeRule for TableOperations {
             check_call(call, context, findings);
         }
     }
-
     fn on_expression(
         &self,
         expr: &Expression,
@@ -63,7 +60,7 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
     let finding = |message: &str| Finding::new(message, call.span);
     match (function_name, args.items.as_slice()) {
         ("insert", [table, index, _]) => {
-            if is_number_literal(index, 0.0) {
+            if is_decimal_literal(index, 0.0) {
                 findings.push(
                     finding("`table.insert` with index 0, but Lua arrays are 1-based")
                         .with_help("did you mean index 1?"),
@@ -89,7 +86,7 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
             }
         }
         ("remove", [table, index]) => {
-            if is_number_literal(index, 0.0) {
+            if is_decimal_literal(index, 0.0) {
                 findings.push(
                     finding("`table.remove` with index 0, but Lua arrays are 1-based")
                         .with_help("did you mean index 1?"),
@@ -106,11 +103,11 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
             }
         }
         ("move", move_args) => {
-            if move_args.get(1).is_some_and(|start| is_number_literal(start, 0.0)) {
+            if move_args.get(1).is_some_and(|start| is_decimal_literal(start, 0.0)) {
                 findings
                     .push(finding("`table.move` with start index 0, but Lua arrays are 1-based"));
             }
-            if move_args.get(3).is_some_and(|destination| is_number_literal(destination, 0.0)) {
+            if move_args.get(3).is_some_and(|destination| is_decimal_literal(destination, 0.0)) {
                 findings.push(finding(
                     "`table.move` with destination index 0, but Lua arrays are 1-based",
                 ));
@@ -151,13 +148,6 @@ fn table_stdlib_function<'call>(
     Some(field)
 }
 
-fn is_number_literal(expr: &Expression, value: f64) -> bool {
-    let Expression::Number(literal) = expr else {
-        return false;
-    };
-    literal.text.parse::<f64>() == Ok(value)
-}
-
 fn length_operand(expr: &Expression) -> Option<&Expression> {
     let Expression::UnaryOp(unary) = expr else {
         return None;
@@ -170,7 +160,7 @@ fn length_offset_operand(expr: &Expression, op: BinOp) -> Option<&Expression> {
     let Expression::BinaryOp(binary) = expr else {
         return None;
     };
-    if binary.op != op || !is_number_literal(&binary.right, 1.0) {
+    if binary.op != op || !is_decimal_literal(&binary.right, 1.0) {
         return None;
     }
     length_operand(&binary.left)

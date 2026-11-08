@@ -1,4 +1,4 @@
-use luck_ast::{Block, FunctionName, Statement, Visitor};
+use luck_ast::{FunctionName, Statement};
 use luck_token::Span;
 
 use crate::diagnostic::{Category, Finding, Severity, line_column};
@@ -11,15 +11,12 @@ impl Rule for DuplicateFunction {
     fn name(&self) -> &'static str {
         "duplicate_function"
     }
-
     fn category(&self) -> Category {
         Category::Suspicious
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "function with the same name is defined twice in the same block"
     }
@@ -27,9 +24,34 @@ impl Rule for DuplicateFunction {
 
 impl WholeRule for DuplicateFunction {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut checker = DuplicateChecker { source: context.source, findings: Vec::new() };
-        checker.visit_block(context.block);
-        checker.findings
+        let mut findings = Vec::new();
+        let mut definitions: Vec<(String, Span)> = Vec::new();
+        for block in context.blocks {
+            definitions.clear();
+            for stmt in &block.stmts {
+                // `redefining_local` covers local functions.
+                let Statement::FunctionDecl(decl) = stmt else {
+                    continue;
+                };
+                let Some(name) = full_name(&decl.name) else {
+                    continue;
+                };
+                if let Some((_, first_span)) =
+                    definitions.iter().find(|(defined_name, _)| *defined_name == name)
+                {
+                    let (line, _) = line_column(context.source, first_span.start);
+                    findings.push(Finding::new(
+                        format!(
+                            "duplicate function definition `{name}`, also defined on line {line}"
+                        ),
+                        decl.name.span,
+                    ));
+                } else {
+                    definitions.push((name, decl.name.span));
+                }
+            }
+        }
+        findings
     }
 }
 
@@ -47,45 +69,6 @@ fn full_name(function_name: &FunctionName) -> Option<String> {
         joined.push_str(method_token.identifier()?);
     }
     Some(joined)
-}
-
-struct DuplicateChecker<'document> {
-    source: &'document str,
-    findings: Vec<Finding>,
-}
-
-impl DuplicateChecker<'_> {
-    fn check_block(&mut self, block: &Block) {
-        let mut definitions: Vec<(String, Span)> = Vec::new();
-
-        for stmt in &block.stmts {
-            // `redefining_local` covers local functions.
-            let Statement::FunctionDecl(decl) = stmt else {
-                continue;
-            };
-            let Some(name) = full_name(&decl.name) else {
-                continue;
-            };
-            if let Some((_, first_span)) =
-                definitions.iter().find(|(defined_name, _)| *defined_name == name)
-            {
-                let (line, _) = line_column(self.source, first_span.start);
-                self.findings.push(Finding::new(
-                    format!("duplicate function definition `{name}`, also defined on line {line}"),
-                    decl.name.span,
-                ));
-            } else {
-                definitions.push((name, decl.name.span));
-            }
-        }
-    }
-}
-
-impl<'ast> Visitor<'ast> for DuplicateChecker<'_> {
-    fn visit_block(&mut self, block: &'ast Block) {
-        self.check_block(block);
-        self.walk_block(block);
-    }
 }
 
 #[cfg(test)]

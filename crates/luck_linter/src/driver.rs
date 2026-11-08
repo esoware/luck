@@ -53,6 +53,7 @@ pub fn lint_parsed(
     let nodes = Nodes::collect(&parse.block);
     let context = LintContext {
         block: &parse.block,
+        blocks: nodes.blocks(),
         semantic: &semantic,
         source: &parse.source,
         comments: &parse.comments,

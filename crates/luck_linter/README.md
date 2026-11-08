@@ -25,13 +25,13 @@ Migrating from 0.2.x: `global_usage` named that broader policy through 0.2 and n
 
 ### Pipeline
 
-`lint()` parses the source. If it doesn't parse, each parse error comes back as a `parse_error` diagnostic and no rules run. Otherwise it runs `luck_semantic` analysis to build the scope tree and resolve stdlib symbols, flattens the AST into a node table, runs every enabled rule, turns each rule's findings into diagnostics with the rule's name, its category, and its severity from the config override or the rule's default, applies suppression directives, and sorts the diagnostics by position. `lint_target()` takes a `LuaTarget` so Roblox globals resolve, and `lint_parsed()` lints a parse the caller already has, which the language server uses.
+`lint()` parses the source. If it doesn't parse, each parse error comes back as a `parse_error` diagnostic and no rules run. Otherwise it runs `luck_semantic` analysis to build the scope tree and resolve stdlib symbols, flattens the AST into node and block tables, runs every enabled rule, turns each rule's findings into diagnostics with the rule's name, its category, and its severity from the config override or the rule's default, applies suppression directives, and sorts the diagnostics by position. `lint_target()` takes a `LuaTarget` so Roblox globals resolve, and `lint_parsed()` lints a parse the caller already has, which the language server uses.
 
 ### Rules
 
 Every rule implements the `Rule` trait, which holds its identity: `name`, `category`, `default_severity`, and `description`. It also implements exactly one of two checking traits, and its `RULES` entry (`RuleEntry::Whole` or `RuleEntry::Node`) names which.
 
-Rules that need traversal state (scope stacks, statement sequences) implement `WholeRule`, whose `fn check(&self, context: &LintContext<'_>) -> Vec<Finding>` walks the AST, usually through `Visitor`. The `LintContext` bundles the block, the semantic analysis, the source text, the comment array, and the resolved config.
+Rules that need state across nodes (scope stacks, statement sequences, the scope tree's symbols) implement `WholeRule`, whose `fn check(&self, context: &LintContext<'_>) -> Vec<Finding>` sees the whole document at once. A rule that checks each block's statement list reads `context.blocks` instead of walking the tree, and any other walk goes through `Visitor`. The `LintContext` bundles the block, every block in pre-order, the semantic analysis, the source text, the comment array, and the resolved config.
 
 Rules whose logic is node-local implement `NodeRule` instead: per-node hooks (`on_statement`, `on_expression`, `on_last_statement`) that push onto a `Vec<Finding>`, and a `NodeTypeSet` of the `NodeType`s they act on. The `bus` makes one pass over the node table and calls each node rule only for the node types it declared, so every node rule shares a single traversal, and a node rule whose types don't occur in a file is skipped. In debug builds the driver re-runs every node rule on every node and asserts the results match, which catches a `node_types` set that misses a type.
 
@@ -50,7 +50,7 @@ A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix`
 | `rule.rs` | `Rule`, `WholeRule`, and `NodeRule` traits, `LintContext` |
 | `rules.rs` | `RULES` registry, `rules()`, and the registered rule names |
 | `bus.rs` | The single-pass dispatch that drives every `NodeRule` in one shared walk |
-| `nodes.rs` | Flat pre-order node table (`Nodes::collect`) of borrowed `NodeKind` views that the bus walks, with the set of node types present |
+| `nodes.rs` | Flat pre-order node table (`Nodes::collect`) of borrowed `NodeKind` views that the bus walks, with the set of node types present, and the pre-order block table whole rules read |
 | `node_type.rs` | `NodeType`, one discriminant per statement, last-statement, and expression variant, and the `NodeTypeSet` bitset node rules declare |
 | `cfg.rs` | Control-flow analysis over statement slices (exits, decision points), used by some rules |
 | `diagnostic.rs` | `LintDiagnostic`, the `Finding` rules report, `Severity` and `Category` from `luck_core`, and the `line_column` positions that messages quote |
@@ -58,7 +58,8 @@ A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix`
 | `fix.rs` | `Fix` and `TextEdit`, and auto-fix application |
 | `format_pattern.rs` | Validators for `string.format`, pattern, `string.pack`, `gsub` replacement, and `os.date` literals |
 | `call.rs` | Whether a call names an unshadowed global, plus positional arguments, argument count, and raw string-argument text, shared by the rules that match calls |
-| `number.rs` | Literal values of numeric `for` bounds, shared by `for_range` and `reversed_for_loop` |
+| `number.rs` | Values of decimal number literals, shared by `for_range`, `reversed_for_loop`, `manual_table_clone`, and `table_operations` |
+| `function_node.rs` | `FunctionNode`, one view of function statements and function expressions, for the node rules that check every function |
 | `path.rs` | Dotted `Name(.Name)*` path extraction shared by stdlib-resolving rules |
 | `roblox.rs` | Shared helpers for the Roblox `<Global>.new(...)` constructor rules |
 | `suggest.rs` | Levenshtein distance and the nearest-candidate search behind "did you mean" suggestions |

@@ -12,15 +12,12 @@ impl Rule for RobloxSuspiciousUdim2New {
     fn name(&self) -> &'static str {
         "roblox_suspicious_udim2_new"
     }
-
     fn category(&self) -> Category {
         Category::Suspicious
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "`UDim2.new` called with fewer components than expected"
     }
@@ -60,6 +57,8 @@ impl NodeRule for RobloxSuspiciousUdim2New {
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{run_rule, run_rule_roblox};
@@ -121,11 +120,8 @@ mod tests {
 
     #[test]
     fn ignores_standalone_environment() {
-        let diags = run_rule(
-            &RobloxSuspiciousUdim2New,
-            "local u = UDim2.new(1, 2)",
-            luck_token::LuaVersion::Luau,
-        );
+        let diags =
+            run_rule(&RobloxSuspiciousUdim2New, "local u = UDim2.new(1, 2)", LuaVersion::Luau);
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

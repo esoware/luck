@@ -1,11 +1,10 @@
-use luck_ast::{
-    Assignment, Block, Expression, GenericFor, LocalAssignment, NumericFor, Statement, Var, Visitor,
-};
+use luck_ast::{Block, Expression, GenericFor, LocalAssignment, NumericFor, Statement, Var};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{LuaVersion, Span, UnOp};
 
 use crate::call::is_global_call;
 use crate::diagnostic::{Category, Finding, Severity};
+use crate::number::is_decimal_literal;
 use crate::rule::{LintContext, Rule, WholeRule};
 
 /// Flags the two common hand-written table copies:
@@ -41,9 +40,16 @@ impl WholeRule for ManualTableClone {
         let Some(suggestion) = Suggestion::for_version(semantic.version) else {
             return Vec::new();
         };
-        let mut checker = CloneChecker { semantic, suggestion, findings: Vec::new() };
-        checker.visit_block(context.block);
-        checker.findings
+        context
+            .blocks
+            .iter()
+            .flat_map(|block| block.stmts.windows(2))
+            .filter_map(|pair| manual_copy_span(pair, suggestion, semantic))
+            .map(|span| {
+                Finding::new("manual table copy can be replaced with a stdlib call", span)
+                    .with_help(suggestion.help())
+            })
+            .collect()
     }
 }
 
@@ -73,75 +79,46 @@ impl Suggestion {
     }
 }
 
-struct CloneChecker<'document> {
-    semantic: &'document SemanticAnalysis,
+/// The span from the `local` through the loop, when `pair` is
+/// `local out = {}` and then a copy loop that `suggestion` can replace.
+fn manual_copy_span(
+    pair: &[Statement],
     suggestion: Suggestion,
-    findings: Vec<Finding>,
-}
-
-impl CloneChecker<'_> {
-    fn check_block(&mut self, block: &Block) {
-        for window in block.stmts.windows(2) {
-            let [Statement::LocalAssignment(local), next] = window else {
-                continue;
-            };
-            let Some(destination) = single_empty_table_local(local) else {
-                continue;
-            };
-            let loop_span = match next {
-                Statement::GenericFor(loop_node) => {
-                    if !is_generic_clone(loop_node, destination, self.semantic) {
-                        continue;
-                    }
-                    // `table.move` copies only the array part, so it can't
-                    // stand in for a `pairs` loop.
-                    if matches!(self.suggestion, Suggestion::TableMove) {
-                        continue;
-                    }
-                    loop_node.span
-                }
-                Statement::NumericFor(loop_node) => {
-                    if !is_numeric_clone(loop_node, destination) {
-                        continue;
-                    }
-                    loop_node.span
-                }
-                Statement::Assignment(_)
-                | Statement::FunctionCall(_)
-                | Statement::DoBlock(_)
-                | Statement::WhileLoop(_)
-                | Statement::RepeatLoop(_)
-                | Statement::IfStatement(_)
-                | Statement::FunctionDecl(_)
-                | Statement::LocalFunction(_)
-                | Statement::LocalAssignment(_)
-                | Statement::EmptyStatement(_)
-                | Statement::Goto(_)
-                | Statement::Label(_)
-                | Statement::GlobalDeclaration(_)
-                | Statement::GlobalFunction(_)
-                | Statement::GlobalStar(_)
-                | Statement::Break(_)
-                | Statement::CompoundAssignment(_)
-                | Statement::TypeDeclaration(_)
-                | Statement::Error(_) => continue,
-            };
-            self.findings.push(
-                Finding::new(
-                    "manual table copy can be replaced with a stdlib call",
-                    Span::new(local.span.start, loop_span.end),
-                )
-                .with_help(self.suggestion.help()),
-            );
+    semantic: &SemanticAnalysis,
+) -> Option<Span> {
+    let [Statement::LocalAssignment(local), next] = pair else {
+        return None;
+    };
+    let destination = single_empty_table_local(local)?;
+    let is_copy = match next {
+        // `table.move` copies only the array part, so it can't stand in for
+        // a `pairs` loop.
+        Statement::GenericFor(loop_node) => {
+            is_generic_clone(loop_node, destination, semantic)
+                && !matches!(suggestion, Suggestion::TableMove)
         }
-    }
-}
-
-impl<'ast> Visitor<'ast> for CloneChecker<'_> {
-    fn visit_block(&mut self, block: &'ast Block) {
-        self.check_block(block);
-        self.walk_block(block);
-    }
+        Statement::NumericFor(loop_node) => is_numeric_clone(loop_node, destination),
+        Statement::Assignment(_)
+        | Statement::FunctionCall(_)
+        | Statement::DoBlock(_)
+        | Statement::WhileLoop(_)
+        | Statement::RepeatLoop(_)
+        | Statement::IfStatement(_)
+        | Statement::FunctionDecl(_)
+        | Statement::LocalFunction(_)
+        | Statement::LocalAssignment(_)
+        | Statement::EmptyStatement(_)
+        | Statement::Goto(_)
+        | Statement::Label(_)
+        | Statement::GlobalDeclaration(_)
+        | Statement::GlobalFunction(_)
+        | Statement::GlobalStar(_)
+        | Statement::Break(_)
+        | Statement::CompoundAssignment(_)
+        | Statement::TypeDeclaration(_)
+        | Statement::Error(_) => false,
+    };
+    is_copy.then(|| Span::new(local.span.start, next.span().end))
 }
 
 /// If the local assignment is `local NAME = {}`, return `NAME`.
@@ -169,21 +146,12 @@ fn is_generic_clone(
     else {
         return false;
     };
-
     let [iterator] = loop_node.exprs.items.as_slice() else {
         return false;
     };
-    if !is_pairs_call(iterator, semantic) {
-        return false;
-    }
-
-    if loop_node.block.last_stmt.is_some() {
-        return false;
-    }
-    let [Statement::Assignment(assignment)] = loop_node.block.stmts.as_slice() else {
-        return false;
-    };
-    is_index_copy_assignment(assignment, destination, key_name, value_name, None)
+    is_pairs_call(iterator, semantic)
+        && copied_value(&loop_node.block, destination, key_name)
+            .is_some_and(|copied| is_named_var(copied, value_name))
 }
 
 /// Is this `for i = 1, #src do out[i] = src[i] end`?
@@ -191,63 +159,33 @@ fn is_numeric_clone(loop_node: &NumericFor, destination: &str) -> bool {
     let Some(loop_variable) = loop_node.name.identifier() else {
         return false;
     };
-
-    if !is_number_one(&loop_node.start) {
-        return false;
-    }
     let Some(source_table) = length_of_identifier(&loop_node.limit) else {
         return false;
     };
-    if let Some(step) = &loop_node.step
-        && !is_number_one(step)
-    {
-        return false;
-    }
-
-    if loop_node.block.last_stmt.is_some() {
-        return false;
-    }
-    let [Statement::Assignment(assignment)] = loop_node.block.stmts.as_slice() else {
-        return false;
-    };
-    is_index_copy_assignment(
-        assignment,
-        destination,
-        loop_variable,
-        loop_variable,
-        Some(source_table),
-    )
+    let has_unit_step = loop_node.step.as_ref().is_none_or(|step| is_decimal_literal(step, 1.0));
+    is_decimal_literal(&loop_node.start, 1.0)
+        && has_unit_step
+        && copied_value(&loop_node.block, destination, loop_variable).is_some_and(|copied| {
+            matches!(copied, Expression::Var(Var::Index(copied_index))
+                if is_named_var(&copied_index.prefix, source_table)
+                    && is_named_var(&copied_index.index, loop_variable))
+        })
 }
 
-/// Matches `dest[key] = value`, or `dest[key] = src[key]` when
-/// `indexed_source` names `src`.
-fn is_index_copy_assignment(
-    assignment: &Assignment,
-    destination: &str,
-    key_name: &str,
-    value_name: &str,
-    indexed_source: Option<&str>,
-) -> bool {
-    let ([Var::Index(index_expr)], [value]) =
+/// The value assigned when `body` is exactly `destination[key] = value`.
+fn copied_value<'ast>(body: &'ast Block, destination: &str, key: &str) -> Option<&'ast Expression> {
+    if body.last_stmt.is_some() {
+        return None;
+    }
+    let [Statement::Assignment(assignment)] = body.stmts.as_slice() else {
+        return None;
+    };
+    let ([Var::Index(target)], [value]) =
         (assignment.targets.items.as_slice(), assignment.values.items.as_slice())
     else {
-        return false;
+        return None;
     };
-    if !is_named_var(&index_expr.prefix, destination) {
-        return false;
-    }
-    if !is_named_var(&index_expr.index, key_name) {
-        return false;
-    }
-
-    indexed_source.map_or_else(
-        || is_named_var(value, value_name),
-        |source_table| {
-            matches!(value, Expression::Var(Var::Index(value_index))
-                if is_named_var(&value_index.prefix, source_table)
-                    && is_named_var(&value_index.index, key_name))
-        },
-    )
+    (is_named_var(&target.prefix, destination) && is_named_var(&target.index, key)).then_some(value)
 }
 
 /// Matches a call to the global `pairs` or `ipairs`. A shadowed one is a
@@ -271,10 +209,6 @@ fn length_of_identifier(expr: &Expression) -> Option<&str> {
         return None;
     };
     token.identifier()
-}
-
-fn is_number_one(expr: &Expression) -> bool {
-    matches!(expr, Expression::Number(literal) if literal.text.parse::<f64>() == Ok(1.0))
 }
 
 fn is_named_var(expr: &Expression, name: &str) -> bool {

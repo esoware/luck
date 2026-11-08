@@ -25,17 +25,6 @@ impl Rule for MustUse {
     }
 }
 
-fn must_use_name(semantic: &SemanticAnalysis, call: &FunctionCall) -> Option<String> {
-    let callee = semantic.resolve_callee(call)?;
-    if let StdlibEntry::Function(function) = callee.entry
-        && function.is_must_use
-    {
-        Some(callee.name)
-    } else {
-        None
-    }
-}
-
 impl NodeRule for MustUse {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt])
@@ -57,11 +46,22 @@ impl NodeRule for MustUse {
     }
 }
 
+fn must_use_name(semantic: &SemanticAnalysis, call: &FunctionCall) -> Option<String> {
+    let callee = semantic.resolve_callee(call)?;
+    if let StdlibEntry::Function(function) = callee.entry
+        && function.is_must_use
+    {
+        Some(callee.name)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::MustUse;
+    use super::*;
     use crate::fixtures::run_rule;
 
     fn run(source: &str, version: LuaVersion) -> Vec<String> {

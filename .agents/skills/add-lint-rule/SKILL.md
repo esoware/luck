@@ -15,8 +15,8 @@ Rules are stateless `Rule` impls reporting `Finding`s, and everything they see a
 
 Either way the `Rule` impl holds only the rule's identity: `name`, `category`, `default_severity`, and `description`.
 
-- **Node-local (preferred).** The rule fires by matching a single statement or expression with no traversal state. Implement `NodeRule`: its hooks and `node_types()`, a `NodeTypeSet` built from the `NodeType`s in `crate::node_type`. Omitting a type the hooks match would silently disable the rule for it, though the debug-build dual-dispatch verifier catches the mismatch in any test run. Never recurse inside hooks: the bus walks, and hooks fire once per node. A hook sees only its own node and what hangs below it, such as a function or loop body to run `cfg.rs` analysis on.
-- **Whole-tree.** The rule needs traversal state (scope stacks, statement-sequence windows). Implement `WholeRule::check` with an internal `Visitor`, never hand-rolled recursion, which misses nested blocks.
+- **Node-local (preferred).** The rule fires by matching a single statement or expression with no traversal state. Implement `NodeRule`: its hooks and `node_types()`, a `NodeTypeSet` built from the `NodeType`s in `crate::node_type`. Omitting a type the hooks match would silently disable the rule for it, though the debug-build dual-dispatch verifier catches the mismatch in any test run. Never recurse inside hooks: the bus walks, and hooks fire once per node. A hook sees only its own node and what hangs below it, such as a function or loop body to run `cfg.rs` analysis on. A rule that checks every function declares `FunctionNode::NODE_TYPES` and reads each one through `FunctionNode::of_statement` and `of_expression`.
+- **Whole-tree.** The rule needs state across nodes (scope stacks, statement-sequence windows). Implement `WholeRule::check`. A check of each block's statement list iterates `context.blocks`, every block in pre-order. Any other walk uses an internal `Visitor`, never hand-rolled recursion, which misses nested blocks.
 
 Cross-cutting rules:
 

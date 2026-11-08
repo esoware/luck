@@ -73,7 +73,7 @@ use crate::rule::{NodeRule, Rule, WholeRule};
 /// How a rule takes part in the lint pass.
 #[derive(Clone, Copy)]
 pub(crate) enum RuleEntry {
-    /// Walks the tree itself in `WholeRule::check`.
+    /// Checks the whole document in `WholeRule::check`.
     Whole(&'static dyn WholeRule),
     /// Driven by the bus's shared walk.
     Node(&'static dyn NodeRule),

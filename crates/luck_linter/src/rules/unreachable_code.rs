@@ -1,4 +1,4 @@
-use luck_ast::{Block, Statement, Visitor};
+use luck_ast::Statement;
 
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
@@ -23,26 +23,16 @@ impl Rule for UnreachableCode {
 
 impl WholeRule for UnreachableCode {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut checker = UnreachableChecker { findings: Vec::new() };
-        checker.visit_block(context.block);
-        checker.findings
-    }
-}
-
-struct UnreachableChecker {
-    findings: Vec<Finding>,
-}
-
-impl<'ast> Visitor<'ast> for UnreachableChecker {
-    fn visit_block(&mut self, block: &'ast Block) {
         // Lua 5.2+ lets `break` sit mid-block, which leaves the rest of the
         // block unreachable. Only the first unreachable statement is reported.
-        let first_unreachable =
-            block.stmts.iter().skip_while(|stmt| !matches!(stmt, Statement::Break(_))).nth(1);
-        if let Some(stmt) = first_unreachable {
-            self.findings.push(Finding::new("unreachable code", stmt.span()));
-        }
-        self.walk_block(block);
+        context
+            .blocks
+            .iter()
+            .filter_map(|block| {
+                block.stmts.iter().skip_while(|stmt| !matches!(stmt, Statement::Break(_))).nth(1)
+            })
+            .map(|stmt| Finding::new("unreachable code", stmt.span()))
+            .collect()
     }
 }
 

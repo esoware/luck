@@ -12,6 +12,9 @@ use crate::node_type::NodeTypeSet;
 #[derive(Debug)]
 pub(crate) struct LintContext<'document> {
     pub block: &'document Block,
+    /// Every block in the document, `block` first, in the default
+    /// visitor's pre-order.
+    pub blocks: &'document [&'document Block],
     pub semantic: &'document SemanticAnalysis,
     pub source: &'document str,
     pub comments: &'document [Comment],
@@ -31,8 +34,9 @@ pub trait Rule: Send + Sync {
     fn description(&self) -> &'static str;
 }
 
-/// A rule that walks the tree itself, because it needs traversal state such
-/// as scope stacks or statement sequences.
+/// A rule that checks the whole document in one call, because it needs
+/// state that spans nodes, such as scope stacks, statement sequences, or the
+/// scope tree.
 pub(crate) trait WholeRule: Rule {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding>;
 }

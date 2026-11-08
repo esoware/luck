@@ -13,15 +13,12 @@ impl Rule for RobloxManualFromScaleOrFromOffset {
     fn name(&self) -> &'static str {
         "roblox_manual_fromscale_or_fromoffset"
     }
-
     fn category(&self) -> Category {
         Category::Style
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "`UDim2.new` that could be `UDim2.fromScale` or `UDim2.fromOffset`"
     }
@@ -43,12 +40,16 @@ impl NodeRule for RobloxManualFromScaleOrFromOffset {
         let [x_scale_arg, x_offset_arg, y_scale_arg, y_offset_arg] = args.items.as_slice() else {
             return;
         };
-        let values: Vec<f64> = args.iter().filter_map(literal_arg_value).collect();
-        let [x_scale, x_offset, y_scale, y_offset] = values.as_slice() else {
+        let (Some(x_scale), Some(x_offset), Some(y_scale), Some(y_offset)) = (
+            literal_arg_value(x_scale_arg),
+            literal_arg_value(x_offset_arg),
+            literal_arg_value(y_scale_arg),
+            literal_arg_value(y_offset_arg),
+        ) else {
             return;
         };
-        let is_scale_zero = *x_scale == 0.0f64 && *y_scale == 0.0f64;
-        let is_offset_zero = *x_offset == 0.0f64 && *y_offset == 0.0f64;
+        let is_scale_zero = x_scale == 0.0f64 && y_scale == 0.0f64;
+        let is_offset_zero = x_offset == 0.0f64 && y_offset == 0.0f64;
         let (constructor, first_arg, second_arg) = if is_offset_zero && !is_scale_zero {
             ("fromScale", x_scale_arg, y_scale_arg)
         } else if is_scale_zero && !is_offset_zero {

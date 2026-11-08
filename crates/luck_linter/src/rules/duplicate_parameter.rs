@@ -1,7 +1,8 @@
-use luck_ast::{Expression, FunctionBody, Statement};
+use luck_ast::{Expression, Statement};
 
 use crate::diagnostic::{Category, Finding, Severity};
-use crate::node_type::{NodeType, NodeTypeSet};
+use crate::function_node::FunctionNode;
+use crate::node_type::NodeTypeSet;
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -24,12 +25,7 @@ impl Rule for DuplicateParameter {
 
 impl NodeRule for DuplicateParameter {
     fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[
-            NodeType::FunctionDecl,
-            NodeType::LocalFunction,
-            NodeType::GlobalFunction,
-            NodeType::FunctionDef,
-        ])
+        FunctionNode::NODE_TYPES
     }
     fn on_statement(
         &self,
@@ -37,31 +33,9 @@ impl NodeRule for DuplicateParameter {
         _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        let (body, is_method) = match stmt {
-            Statement::FunctionDecl(decl) => (&decl.body, decl.name.method.is_some()),
-            Statement::LocalFunction(local_function) => (&local_function.body, false),
-            // Lua 5.5
-            Statement::GlobalFunction(global_function) => (&global_function.body, false),
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => return,
-        };
-        findings.extend(duplicate_params(body, is_method));
+        if let Some(function) = FunctionNode::of_statement(stmt) {
+            findings.extend(duplicate_params(function));
+        }
     }
     fn on_expression(
         &self,
@@ -69,19 +43,19 @@ impl NodeRule for DuplicateParameter {
         _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        if let Expression::FunctionDef(function) = expr {
-            findings.extend(duplicate_params(&function.body, false));
+        if let Some(function) = FunctionNode::of_expression(expr) {
+            findings.extend(duplicate_params(function));
         }
     }
 }
 
 /// Flags each parameter named like an earlier one, or `self` in a colon
 /// method, which already has an implicit `self`. `_` may repeat.
-fn duplicate_params(body: &FunctionBody, is_method: bool) -> impl Iterator<Item = Finding> {
-    let params = body.params.items.as_slice();
+fn duplicate_params(function: FunctionNode<'_>) -> impl Iterator<Item = Finding> {
+    let params = function.body.params.items.as_slice();
     params.iter().enumerate().filter_map(move |(index, param)| {
         let name = param.name.identifier().filter(|&name| name != "_")?;
-        let is_duplicate = (is_method && name == "self")
+        let is_duplicate = (function.is_method && name == "self")
             || params.iter().take(index).any(|earlier| earlier.name.identifier() == Some(name));
         is_duplicate.then(|| {
             Finding::new(format!("parameter `{name}` is already defined"), param.name.span)

@@ -1,4 +1,4 @@
-use luck_ast::Statement;
+use luck_ast::{LastStatement, Statement};
 use luck_token::{CommentKind, Span, offset_to_index};
 
 use crate::diagnostic::{Category, Finding, Severity};
@@ -13,15 +13,12 @@ impl Rule for RedundantNativeAttribute {
     fn name(&self) -> &'static str {
         "redundant_native_attribute"
     }
-
     fn category(&self) -> Category {
         Category::Style
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "`@native` attribute is redundant in a `--!native` module"
     }
@@ -60,8 +57,8 @@ impl NodeRule for RedundantNativeAttribute {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => return,
         };
-        // Check for attributes first, since the directive scan walks every
-        // comment.
+        // Check for attributes first, since the directive scan reads the
+        // comments.
         if attributes.is_empty()
             || !context.semantic.version.is_luau()
             || !has_native_directive(context)
@@ -101,29 +98,26 @@ impl NodeRule for RedundantNativeAttribute {
 /// Whether a `--!native` hot comment comes before any code. Luau ignores one
 /// placed later.
 fn has_native_directive(context: &LintContext<'_>) -> bool {
-    let first_stmt_start = context.block.stmts.first().map(|stmt| stmt.span().start);
-    let last_stmt_start = context.block.last_stmt.as_ref().map(|last_stmt| last_stmt.span().start);
-    let first_code_start = match (first_stmt_start, last_stmt_start) {
-        (Some(first), Some(last)) => Some(first.min(last)),
-        (first, last) => first.or(last),
-    };
-    context.comments.iter().any(|comment| {
-        if comment.kind != CommentKind::Line {
-            return false;
-        }
-        if first_code_start.is_some_and(|start| comment.span.start > start) {
-            return false;
-        }
-        let Some(body) = comment
-            .span
-            .text(context.source)
-            .strip_prefix("--")
-            .and_then(|rest| rest.strip_prefix('!'))
-        else {
-            return false;
-        };
-        body.split(char::is_whitespace).next() == Some("native")
-    })
+    let block = context.block;
+    let first_code_start = block
+        .stmts
+        .first()
+        .map(Statement::span)
+        .or_else(|| block.last_stmt.as_deref().map(LastStatement::span))
+        .map(|span| span.start);
+    // Comments come in source order, so the scan stops at the first code.
+    context
+        .comments
+        .iter()
+        .take_while(|comment| first_code_start.is_none_or(|start| comment.span.start <= start))
+        .any(|comment| {
+            comment.kind == CommentKind::Line
+                && comment
+                    .span
+                    .text(context.source)
+                    .strip_prefix("--!")
+                    .is_some_and(|body| body.split(char::is_whitespace).next() == Some("native"))
+        })
 }
 
 #[cfg(test)]

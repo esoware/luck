@@ -1,4 +1,4 @@
-use luck_ast::{Block, Statement, Visitor};
+use luck_ast::{LastStatement, Statement};
 use luck_token::{Span, index_to_offset};
 
 use crate::diagnostic::{Category, Finding, Severity};
@@ -30,10 +30,38 @@ impl Rule for MultipleStatementsPerLine {
 
 impl WholeRule for MultipleStatementsPerLine {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut checker =
-            SameLineChecker { findings: Vec::new(), lines: LineIndex::new(context.source) };
-        checker.visit_block(context.block);
-        checker.findings
+        let lines = LineIndex::new(context.source);
+        let mut findings = Vec::new();
+        let mut spans: Vec<Span> = Vec::new();
+        for block in context.blocks {
+            // A bare `;` is a separator, not a statement.
+            let stmt_spans = block
+                .stmts
+                .iter()
+                .filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_)))
+                .map(Statement::span);
+            spans.clear();
+            spans.extend(stmt_spans.chain(block.last_stmt.as_deref().map(LastStatement::span)));
+
+            for [previous, next] in spans.array_windows() {
+                // `end` is exclusive, so step back one byte to stay on the
+                // line where `previous` ends.
+                let previous_line = lines.line_of(previous.end.saturating_sub(1));
+                if previous_line == lines.line_of(next.start) {
+                    findings.push(
+                        Finding::new(
+                            format!(
+                                "statement starts on the same line as the previous statement \
+                                 (line {previous_line})"
+                            ),
+                            *next,
+                        )
+                        .with_help("put each statement on its own line"),
+                    );
+                }
+            }
+        }
+        findings
     }
 }
 
@@ -52,52 +80,6 @@ impl LineIndex {
 
     fn line_of(&self, offset: u32) -> usize {
         self.line_breaks.partition_point(|&line_break| line_break < offset).saturating_add(1)
-    }
-}
-
-struct SameLineChecker {
-    findings: Vec<Finding>,
-    lines: LineIndex,
-}
-
-impl SameLineChecker {
-    fn check_block(&mut self, block: &Block) {
-        let mut spans: Vec<Span> = Vec::with_capacity(block.stmts.len().saturating_add(1));
-        for stmt in &block.stmts {
-            // A bare `;` is a separator, not a statement.
-            if matches!(stmt, Statement::EmptyStatement(_)) {
-                continue;
-            }
-            spans.push(stmt.span());
-        }
-        if let Some(last) = &block.last_stmt {
-            spans.push(last.span());
-        }
-
-        for [previous, next] in spans.array_windows() {
-            // `end` is exclusive, so step back one byte to stay on the line
-            // where `previous` ends.
-            let previous_line = self.lines.line_of(previous.end.saturating_sub(1));
-            if previous_line == self.lines.line_of(next.start) {
-                self.findings.push(
-                    Finding::new(
-                        format!(
-                            "statement starts on the same line as the previous statement (line \
-                             {previous_line})"
-                        ),
-                        *next,
-                    )
-                    .with_help("put each statement on its own line"),
-                );
-            }
-        }
-    }
-}
-
-impl<'ast> Visitor<'ast> for SameLineChecker {
-    fn visit_block(&mut self, block: &'ast Block) {
-        self.check_block(block);
-        self.walk_block(block);
     }
 }
 

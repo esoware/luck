@@ -35,7 +35,6 @@ impl NodeRule for LoopExecutesOnce {
             NodeType::GenericFor,
         ])
     }
-
     fn on_statement(
         &self,
         stmt: &Statement,
@@ -115,7 +114,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_when_some_path_continues() {
+    fn ignores_when_some_path_falls_through() {
         let diags = run("local x = 1\nlocal c = 1\nwhile x do if c then break end print() end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }

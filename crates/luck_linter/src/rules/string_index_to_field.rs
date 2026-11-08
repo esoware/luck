@@ -36,7 +36,6 @@ impl NodeRule for StringIndexToField {
             NodeType::CompoundAssignment,
         ])
     }
-
     fn on_statement(
         &self,
         stmt: &Statement,
@@ -75,7 +74,6 @@ impl NodeRule for StringIndexToField {
             | Statement::Error(_) => {}
         }
     }
-
     fn on_expression(
         &self,
         expr: &Expression,

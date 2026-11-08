@@ -36,6 +36,7 @@ mod fix;
 #[cfg(test)]
 mod fixtures;
 mod format_pattern;
+mod function_node;
 mod node_type;
 mod nodes;
 mod number;

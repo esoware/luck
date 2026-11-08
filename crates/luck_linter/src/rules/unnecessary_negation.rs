@@ -13,43 +13,14 @@ impl Rule for UnnecessaryNegation {
     fn name(&self) -> &'static str {
         "unnecessary_negation"
     }
-
     fn category(&self) -> Category {
         Category::Style
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "negated comparison that could use the opposite operator"
-    }
-}
-
-const fn flipped_op(op: BinOp) -> Option<&'static str> {
-    match op {
-        BinOp::Eq => Some("~="),
-        BinOp::Ne => Some("=="),
-        BinOp::Lt => Some(">="),
-        BinOp::Le => Some(">"),
-        BinOp::Gt => Some("<="),
-        BinOp::Ge => Some("<"),
-        BinOp::Add
-        | BinOp::Sub
-        | BinOp::Mul
-        | BinOp::Div
-        | BinOp::FloorDiv
-        | BinOp::Mod
-        | BinOp::Pow
-        | BinOp::Concat
-        | BinOp::And
-        | BinOp::Or
-        | BinOp::BitAnd
-        | BinOp::BitOr
-        | BinOp::BitXor
-        | BinOp::Shl
-        | BinOp::Shr => None,
     }
 }
 
@@ -75,11 +46,12 @@ impl NodeRule for UnnecessaryNegation {
         let Expression::BinaryOp(comparison) = &parenthesized.expr else {
             return;
         };
-        let Some(flipped_op) = flipped_op(comparison.op) else {
+        let Some(opposite_op) = opposite_comparison(comparison.op) else {
             return;
         };
         let lhs = comparison.left.span().text(context.source);
         let rhs = comparison.right.span().text(context.source);
+        let op_text = opposite_op.static_text();
         // Only `==` and `~=` get a fix, since `a ~= b` is defined as
         // `not (a == b)`. Flipping `<` or `<=` changes the result for NaN
         // and can call a different metamethod.
@@ -91,16 +63,43 @@ impl NodeRule for UnnecessaryNegation {
             // or comparison operator.
             edits: vec![TextEdit {
                 span: unary.span,
-                replacement: format!("({lhs} {flipped_op} {rhs})"),
+                replacement: format!("({lhs} {op_text} {rhs})"),
             }],
         });
         findings.push(
             Finding::new(
-                format!("negated comparison, consider `{lhs} {flipped_op} {rhs}`"),
+                format!("negated comparison, consider `{lhs} {op_text} {rhs}`"),
                 unary.span,
             )
             .with_optional_fix(fix),
         );
+    }
+}
+
+/// The comparison that holds exactly when `op` doesn't, NaN aside.
+const fn opposite_comparison(op: BinOp) -> Option<BinOp> {
+    match op {
+        BinOp::Eq => Some(BinOp::Ne),
+        BinOp::Ne => Some(BinOp::Eq),
+        BinOp::Lt => Some(BinOp::Ge),
+        BinOp::Le => Some(BinOp::Gt),
+        BinOp::Gt => Some(BinOp::Le),
+        BinOp::Ge => Some(BinOp::Lt),
+        BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::FloorDiv
+        | BinOp::Mod
+        | BinOp::Pow
+        | BinOp::Concat
+        | BinOp::And
+        | BinOp::Or
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::BitXor
+        | BinOp::Shl
+        | BinOp::Shr => None,
     }
 }
 

@@ -11,15 +11,12 @@ impl Rule for RedundantReturn {
     fn name(&self) -> &'static str {
         "redundant_return"
     }
-
     fn category(&self) -> Category {
         Category::Style
     }
-
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
-
     fn description(&self) -> &'static str {
         "trailing bare `return` has no effect"
     }

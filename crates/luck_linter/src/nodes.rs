@@ -1,7 +1,8 @@
-//! Flat table of every `Statement`, `LastStatement`, and `Expression` node,
-//! in the default visitor's pre-order.
+//! Flat tables of every `Statement`, `LastStatement`, and `Expression` node,
+//! and of every `Block`, each in the default visitor's pre-order.
 //!
-//! The bus iterates this once instead of each rule re-walking the tree.
+//! The bus iterates the node table once, and rules that check each block
+//! read the block table, instead of each rule re-walking the tree.
 
 use luck_ast::{Block, Expression, LastStatement, Statement, Visitor};
 
@@ -22,23 +23,35 @@ pub(crate) struct AstNode<'ast> {
     pub node_type: NodeType,
 }
 
-/// The flat node table for one chunk.
+/// The flat node and block tables for one chunk.
 #[derive(Debug)]
 pub(crate) struct Nodes<'ast> {
-    nodes: Vec<AstNode<'ast>>,
+    table: Vec<AstNode<'ast>>,
+    blocks: Vec<&'ast Block>,
     present_types: NodeTypeSet,
 }
 
 impl<'ast> Nodes<'ast> {
-    /// Collects the node table for `block`, in default [`Visitor`] order.
+    /// Collects the tables for `block`, in default [`Visitor`] order.
     pub(crate) fn collect(block: &'ast Block) -> Self {
-        let mut collector = NodeCollector { nodes: Vec::new(), present_types: NodeTypeSet::new() };
+        let mut collector = NodeCollector {
+            nodes: Self {
+                table: Vec::new(),
+                blocks: Vec::new(),
+                present_types: NodeTypeSet::new(),
+            },
+        };
         collector.visit_block(block);
-        Self { nodes: collector.nodes, present_types: collector.present_types }
+        collector.nodes
     }
 
     pub(crate) fn as_slice(&self) -> &[AstNode<'ast>] {
-        &self.nodes
+        &self.table
+    }
+
+    /// Every block, the chunk's own first.
+    pub(crate) fn blocks(&self) -> &[&'ast Block] {
+        &self.blocks
     }
 
     pub(crate) const fn contains_any(&self, node_types: NodeTypeSet) -> bool {
@@ -47,18 +60,22 @@ impl<'ast> Nodes<'ast> {
 }
 
 struct NodeCollector<'ast> {
-    nodes: Vec<AstNode<'ast>>,
-    present_types: NodeTypeSet,
+    nodes: Nodes<'ast>,
 }
 
 impl<'ast> NodeCollector<'ast> {
     fn push_node(&mut self, kind: NodeKind<'ast>, node_type: NodeType) {
-        self.present_types.insert(node_type);
-        self.nodes.push(AstNode { kind, node_type });
+        self.nodes.present_types.insert(node_type);
+        self.nodes.table.push(AstNode { kind, node_type });
     }
 }
 
 impl<'ast> Visitor<'ast> for NodeCollector<'ast> {
+    fn visit_block(&mut self, block: &'ast Block) {
+        self.nodes.blocks.push(block);
+        self.walk_block(block);
+    }
+
     fn visit_statement(&mut self, stmt: &'ast Statement) {
         self.push_node(NodeKind::Statement(stmt), NodeType::of_stmt(stmt));
         self.walk_statement(stmt);
@@ -102,5 +119,19 @@ mod tests {
         );
         assert!(nodes.contains_any(NodeTypeSet::from_types(&[NodeType::BinaryOp])));
         assert!(!nodes.contains_any(NodeTypeSet::from_types(&[NodeType::WhileLoop])));
+    }
+
+    #[test]
+    fn blocks_match_visitor_preorder() {
+        let source = "do local a = 1 end\nlocal function f()\n  if a then print(a) else end\nend";
+        let parse = luck_parser::parse(source, LuaVersion::Lua54);
+        assert!(parse.errors.is_empty(), "{:?}", parse.errors);
+        let nodes = Nodes::collect(&parse.block);
+        assert_eq!(nodes.blocks().first(), Some(&&parse.block));
+        // The chunk, the `do` body, the function body, then the `if` and
+        // `else` bodies.
+        let stmt_counts: Vec<usize> =
+            nodes.blocks().iter().map(|block| block.stmts.len()).collect();
+        assert_eq!(stmt_counts, [2, 1, 1, 1, 0]);
     }
 }

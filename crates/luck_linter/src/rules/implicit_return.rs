@@ -1,9 +1,9 @@
-use luck_ast::{Expression, FunctionBody, Statement};
-use luck_token::Span;
+use luck_ast::{Expression, Statement};
 
 use crate::cfg::analyze_full_block;
 use crate::diagnostic::{Category, Finding, Severity};
-use crate::node_type::{NodeType, NodeTypeSet};
+use crate::function_node::FunctionNode;
+use crate::node_type::NodeTypeSet;
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags functions that return on some paths but fall off the end on
@@ -32,65 +32,30 @@ impl Rule for ImplicitReturn {
 
 impl NodeRule for ImplicitReturn {
     fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[
-            NodeType::FunctionDecl,
-            NodeType::LocalFunction,
-            NodeType::GlobalFunction,
-            NodeType::FunctionDef,
-        ])
+        FunctionNode::NODE_TYPES
     }
-
     fn on_statement(
         &self,
         stmt: &Statement,
         _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        let (body, span) = match stmt {
-            Statement::FunctionDecl(decl) => (&decl.body, decl.span),
-            Statement::LocalFunction(local_function) => (&local_function.body, local_function.span),
-            // Lua 5.5
-            Statement::GlobalFunction(global_function) => {
-                (&global_function.body, global_function.span)
-            }
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => return,
-        };
-        findings.extend(check_function(body, span));
+        findings.extend(FunctionNode::of_statement(stmt).and_then(check_function));
     }
-
     fn on_expression(
         &self,
         expr: &Expression,
         _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        if let Expression::FunctionDef(function) = expr {
-            findings.extend(check_function(&function.body, function.span));
-        }
+        findings.extend(FunctionNode::of_expression(expr).and_then(check_function));
     }
 }
 
-fn check_function(body: &FunctionBody, span: Span) -> Option<Finding> {
-    let summary = analyze_full_block(&body.block);
+fn check_function(function: FunctionNode<'_>) -> Option<Finding> {
+    let summary = analyze_full_block(&function.body.block);
     (summary.can_return && !summary.always_returns()).then(|| {
-        Finding::new("function returns on some paths but falls through on others", span)
+        Finding::new("function returns on some paths but falls through on others", function.span)
             .with_help("add a `return` on the fallthrough path to make the implicit `nil` explicit")
     })
 }
