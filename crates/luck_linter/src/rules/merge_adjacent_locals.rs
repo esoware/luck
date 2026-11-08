@@ -1,7 +1,7 @@
 use luck_ast::{Attribute, Block, LocalAssignment, Statement, Visitor};
 use luck_token::{Comment, Span};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::fix::{Fix, TextEdit};
 use crate::rule::{LintContext, Rule, WholeRule};
 
@@ -26,18 +26,21 @@ impl Rule for MergeAdjacentLocals {
 }
 
 impl WholeRule for MergeAdjacentLocals {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
-        let mut checker =
-            MergeChecker { source: context.source, comments: context.comments, diags: Vec::new() };
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let mut checker = MergeChecker {
+            source: context.source,
+            comments: context.comments,
+            findings: Vec::new(),
+        };
         checker.visit_block(context.block);
-        checker.diags
+        checker.findings
     }
 }
 
 struct MergeChecker<'document> {
     source: &'document str,
     comments: &'document [Comment],
-    diags: Vec<LintDiagnostic>,
+    findings: Vec<Finding>,
 }
 
 impl MergeChecker<'_> {
@@ -79,20 +82,16 @@ impl MergeChecker<'_> {
                 continue;
             }
 
-            self.diags.push(
-                LintDiagnostic::new(
-                    "merge_adjacent_locals",
-                    "adjacent `local` declarations can be merged",
-                    first_local.span,
-                )
-                .with_help("combine into a single multi-binding `local`")
-                .with_fix(Fix {
-                    description: "merge adjacent `local` declarations".to_owned(),
-                    edits: vec![TextEdit {
-                        span: Span::new(first_local.span.start, second_local.span.end),
-                        replacement: build_merged(self.source, &first, &second),
-                    }],
-                }),
+            self.findings.push(
+                Finding::new("adjacent `local` declarations can be merged", first_local.span)
+                    .with_help("combine into a single multi-binding `local`")
+                    .with_fix(Fix {
+                        description: "merge adjacent `local` declarations".to_owned(),
+                        edits: vec![TextEdit {
+                            span: Span::new(first_local.span.start, second_local.span.end),
+                            replacement: build_merged(self.source, &first, &second),
+                        }],
+                    }),
             );
 
             // Skip the window that starts at `second_local`, so no two
@@ -183,6 +182,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

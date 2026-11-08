@@ -1,12 +1,13 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, NodeType, NodeTypeSet, Statement, Var};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement, Var};
 use luck_semantic::{
     ResolvedCallee, SemanticAnalysis, StdlibDeprecation, StdlibEntry, StdlibFunction,
     expand_replace_template,
 };
 
 use crate::call::{positional_args, string_literal_value};
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::fix::{Fix, TextEdit};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::path::dotted_path;
 use crate::rule::{LintContext, NodeRule, Rule};
 
@@ -40,23 +41,23 @@ impl NodeRule for Deprecated {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Statement::FunctionCall(call) = stmt {
-            check_call(call, CallPosition::Statement, context, diags);
+            check_call(call, CallPosition::Statement, context, findings);
         }
     }
     fn on_expression(
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         match expr {
             Expression::FunctionCall(call) => {
-                check_call(call, CallPosition::Expression, context, diags);
+                check_call(call, CallPosition::Expression, context, findings);
             }
-            Expression::Var(var) => check_field_access(var, context.semantic, diags),
+            Expression::Var(var) => check_field_access(var, context.semantic, findings),
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
@@ -90,7 +91,7 @@ fn check_call(
     call: &FunctionCall,
     position: CallPosition,
     context: &LintContext<'_>,
-    diags: &mut Vec<LintDiagnostic>,
+    findings: &mut Vec<Finding>,
 ) {
     let Some(ResolvedCallee { name, entry }) = context.semantic.resolve_callee(call) else {
         return;
@@ -98,8 +99,8 @@ fn check_call(
 
     if let Some(deprecation) = entry.deprecation() {
         let fix = replacement_fix(call, position, &name, deprecation, context);
-        diags.push(
-            LintDiagnostic::new("deprecated", format!("`{name}` is deprecated"), call.span)
+        findings.push(
+            Finding::new(format!("`{name}` is deprecated"), call.span)
                 .with_help(deprecation.message.as_str())
                 .with_optional_fix(fix),
         );
@@ -107,8 +108,8 @@ fn check_call(
     }
 
     if let StdlibEntry::Function(function) = entry {
-        check_deprecated_constants(call, &name, function, diags);
-        check_deprecated_params(call, &name, function, diags);
+        check_deprecated_constants(call, &name, function, findings);
+        check_deprecated_params(call, &name, function, findings);
     }
 }
 
@@ -120,7 +121,7 @@ fn check_deprecated_params(
     call: &FunctionCall,
     display_name: &str,
     function: &StdlibFunction,
-    diags: &mut Vec<LintDiagnostic>,
+    findings: &mut Vec<Finding>,
 ) {
     let FunctionArgs::Parenthesized { args, .. } = &call.args else {
         return;
@@ -135,9 +136,8 @@ fn check_deprecated_params(
             && deprecations.all(|later| later.is_some())
         {
             let arg_number = index.saturating_add(1);
-            diags.push(
-                LintDiagnostic::new(
-                    "deprecated",
+            findings.push(
+                Finding::new(
                     format!("argument {arg_number} of `{display_name}` is deprecated"),
                     expr.span(),
                 )
@@ -157,7 +157,7 @@ fn check_deprecated_constants(
     call: &FunctionCall,
     display_name: &str,
     function: &StdlibFunction,
-    diags: &mut Vec<LintDiagnostic>,
+    findings: &mut Vec<Finding>,
 ) {
     let (args, arg_count) = positional_args(&call.args);
     for (index, expr) in args.iter().enumerate() {
@@ -174,9 +174,8 @@ fn check_deprecated_constants(
             .filter_map(|values| values.iter().find(|constant| constant.value == value))
             .find_map(|constant| constant.deprecated.as_ref())
         {
-            diags.push(
-                LintDiagnostic::new(
-                    "deprecated",
+            findings.push(
+                Finding::new(
                     format!("`{value}` is a deprecated argument of `{display_name}`"),
                     span,
                 )
@@ -226,7 +225,7 @@ fn arg_texts<'source>(function_args: &FunctionArgs, source: &'source str) -> Vec
 /// namespace, such as a deprecated Roblox enum item or type.
 ///
 /// Functions are skipped because `check_call` reports them at the call.
-fn check_field_access(var: &Var, semantic: &SemanticAnalysis, diags: &mut Vec<LintDiagnostic>) {
+fn check_field_access(var: &Var, semantic: &SemanticAnalysis, findings: &mut Vec<Finding>) {
     let Var::FieldAccess(_) = var else {
         return;
     };
@@ -252,13 +251,9 @@ fn check_field_access(var: &Var, semantic: &SemanticAnalysis, diags: &mut Vec<Li
     let Some(deprecation) = entry.deprecation() else {
         return;
     };
-    diags.push(
-        LintDiagnostic::new(
-            "deprecated",
-            format!("`{}` is deprecated", segments.join(".")),
-            leaf_span,
-        )
-        .with_help(deprecation.message.as_str()),
+    findings.push(
+        Finding::new(format!("`{}` is deprecated", segments.join(".")), leaf_span)
+            .with_help(deprecation.message.as_str()),
     );
 }
 

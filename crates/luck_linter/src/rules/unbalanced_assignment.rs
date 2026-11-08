@@ -1,7 +1,8 @@
-use luck_ast::{NodeType, NodeTypeSet, Statement};
+use luck_ast::Statement;
 
 use crate::call::has_multi_value_tail;
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -30,7 +31,7 @@ impl NodeRule for UnbalancedAssignment {
         &self,
         stmt: &Statement,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         match stmt {
             Statement::LocalAssignment(local) => {
@@ -43,8 +44,7 @@ impl NodeRule for UnbalancedAssignment {
                     && name_count != value_count
                     && value_count > 0
                 {
-                    diags.push(LintDiagnostic::new(
-                        "unbalanced_assignment",
+                    findings.push(Finding::new(
                         format!("{name_count} name(s) but {value_count} value(s) in assignment"),
                         local.span,
                     ));
@@ -54,8 +54,7 @@ impl NodeRule for UnbalancedAssignment {
                 let target_count = assignment.targets.len();
                 let value_count = assignment.values.len();
                 if !has_multi_value_tail(&assignment.values.items) && target_count != value_count {
-                    diags.push(LintDiagnostic::new(
-                        "unbalanced_assignment",
+                    findings.push(Finding::new(
                         format!(
                             "{target_count} target(s) but {value_count} value(s) in assignment"
                         ),
@@ -91,6 +90,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

@@ -1,7 +1,8 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, NodeType, NodeTypeSet, Statement};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement};
 
 use crate::call::is_global_call;
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -33,10 +34,10 @@ impl NodeRule for UnnecessaryAssert {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Statement::FunctionCall(call) = stmt {
-            check_call(call, context, diags);
+            check_call(call, context, findings);
         }
     }
 
@@ -44,15 +45,15 @@ impl NodeRule for UnnecessaryAssert {
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionCall(call) = expr {
-            check_call(call, context, diags);
+            check_call(call, context, findings);
         }
     }
 }
 
-fn check_call(call: &FunctionCall, context: &LintContext<'_>, diags: &mut Vec<LintDiagnostic>) {
+fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
     if !is_global_call(call, "assert", context.semantic) {
         return;
     }
@@ -71,23 +72,15 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, diags: &mut Vec<Li
         | Expression::InterpolatedString(_)
         | Expression::TableConstructor(_)
         | Expression::FunctionDef(_) => {
-            diags.push(
-                LintDiagnostic::new(
-                    "unnecessary_assert",
-                    "`assert` on a constant value always passes",
-                    call.span,
-                )
-                .with_help("remove the `assert` or check a real condition"),
+            findings.push(
+                Finding::new("`assert` on a constant value always passes", call.span)
+                    .with_help("remove the `assert` or check a real condition"),
             );
         }
         Expression::False(_) | Expression::Nil(_) => {
-            diags.push(
-                LintDiagnostic::new(
-                    "unnecessary_assert",
-                    "`assert` on a constant falsy value always errors",
-                    call.span,
-                )
-                .with_help("use `error()` to raise unconditionally"),
+            findings.push(
+                Finding::new("`assert` on a constant falsy value always errors", call.span)
+                    .with_help("use `error()` to raise unconditionally"),
             );
         }
         Expression::VarArg(_)
@@ -108,6 +101,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

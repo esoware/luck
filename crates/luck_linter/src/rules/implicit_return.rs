@@ -1,8 +1,9 @@
-use luck_ast::{Expression, FunctionBody, NodeType, NodeTypeSet, Statement};
+use luck_ast::{Expression, FunctionBody, Statement};
 use luck_token::Span;
 
 use crate::cfg::analyze_full_block;
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags functions that return on some paths but fall off the end on
@@ -43,7 +44,7 @@ impl NodeRule for ImplicitReturn {
         &self,
         stmt: &Statement,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let (body, span) = match stmt {
             Statement::FunctionDecl(decl) => (&decl.body, decl.span),
@@ -71,30 +72,26 @@ impl NodeRule for ImplicitReturn {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => return,
         };
-        diags.extend(check_function(body, span));
+        findings.extend(check_function(body, span));
     }
 
     fn on_expression(
         &self,
         expr: &Expression,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionDef(function) = expr {
-            diags.extend(check_function(&function.body, function.span));
+            findings.extend(check_function(&function.body, function.span));
         }
     }
 }
 
-fn check_function(body: &FunctionBody, span: Span) -> Option<LintDiagnostic> {
+fn check_function(body: &FunctionBody, span: Span) -> Option<Finding> {
     let summary = analyze_full_block(&body.block);
     (summary.can_return && !summary.always_returns()).then(|| {
-        LintDiagnostic::new(
-            "implicit_return",
-            "function returns on some paths but falls through on others",
-            span,
-        )
-        .with_help("add a `return` on the fallthrough path to make the implicit `nil` explicit")
+        Finding::new("function returns on some paths but falls through on others", span)
+            .with_help("add a `return` on the fallthrough path to make the implicit `nil` explicit")
     })
 }
 
@@ -103,6 +100,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

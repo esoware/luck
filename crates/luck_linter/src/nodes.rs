@@ -3,9 +3,17 @@
 //!
 //! The bus iterates this once instead of each rule re-walking the tree.
 
-use luck_ast::{
-    Block, Expression, LastStatement, NodeKind, NodeType, NodeTypeSet, Statement, Visitor,
-};
+use luck_ast::{Block, Expression, LastStatement, Statement, Visitor};
+
+use crate::node_type::{NodeType, NodeTypeSet};
+
+/// Borrowed view of one AST node, as dispatched to node rules.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum NodeKind<'ast> {
+    Statement(&'ast Statement),
+    LastStatement(&'ast LastStatement),
+    Expression(&'ast Expression),
+}
 
 /// One AST node, with its type computed once for the bus's buckets.
 #[derive(Debug)]
@@ -44,8 +52,7 @@ struct NodeCollector<'ast> {
 }
 
 impl<'ast> NodeCollector<'ast> {
-    fn push_node(&mut self, kind: NodeKind<'ast>) {
-        let node_type = kind.node_type();
+    fn push_node(&mut self, kind: NodeKind<'ast>, node_type: NodeType) {
         self.present_types.insert(node_type);
         self.nodes.push(AstNode { kind, node_type });
     }
@@ -53,17 +60,17 @@ impl<'ast> NodeCollector<'ast> {
 
 impl<'ast> Visitor<'ast> for NodeCollector<'ast> {
     fn visit_statement(&mut self, stmt: &'ast Statement) {
-        self.push_node(NodeKind::Statement(stmt));
+        self.push_node(NodeKind::Statement(stmt), NodeType::of_stmt(stmt));
         self.walk_statement(stmt);
     }
 
     fn visit_expression(&mut self, expr: &'ast Expression) {
-        self.push_node(NodeKind::Expression(expr));
+        self.push_node(NodeKind::Expression(expr), NodeType::of_expr(expr));
         self.walk_expression(expr);
     }
 
     fn visit_last_statement(&mut self, last: &'ast LastStatement) {
-        self.push_node(NodeKind::LastStatement(last));
+        self.push_node(NodeKind::LastStatement(last), NodeType::of_last_stmt(last));
         self.walk_last_statement(last);
     }
 }

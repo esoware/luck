@@ -1,7 +1,8 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet};
+use luck_ast::Expression;
 use luck_token::{BinOp, UnOp};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags chained comparisons like `a < b == c`, and a `not` on the left of
@@ -36,7 +37,7 @@ impl NodeRule for ComparisonPrecedence {
         &self,
         expr: &Expression,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let Expression::BinaryOp(outer) = expr else {
             return;
@@ -53,9 +54,8 @@ impl NodeRule for ComparisonPrecedence {
             None
         };
         if let Some(side) = chained_side {
-            diags.push(
-                LintDiagnostic::new(
-                    "comparison_precedence",
+            findings.push(
+                Finding::new(
                     format!(
                         "chained comparison on the {side} side parses as `(a op b) op c`, not as a math-style chain"
                     ),
@@ -91,9 +91,8 @@ impl NodeRule for ComparisonPrecedence {
                 | BinOp::Shl
                 | BinOp::Shr => return,
             };
-            diags.push(
-                LintDiagnostic::new(
-                    "comparison_precedence",
+            findings.push(
+                Finding::new(
                     format!(
                         "`not` applies only to the left operand, so this parses as `(not x) {} y`",
                         outer.op.static_text()
@@ -123,6 +122,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

@@ -1,6 +1,6 @@
 use luck_ast::{Block, Expression, Statement, Var, Visitor};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 #[derive(Debug, Clone, Copy)]
@@ -22,15 +22,15 @@ impl Rule for AlmostSwapped {
 }
 
 impl WholeRule for AlmostSwapped {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
-        let mut checker = SwapChecker { diags: Vec::new() };
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let mut checker = SwapChecker { findings: Vec::new() };
         checker.visit_block(context.block);
-        checker.diags
+        checker.findings
     }
 }
 
 struct SwapChecker {
-    diags: Vec<LintDiagnostic>,
+    findings: Vec<Finding>,
 }
 
 fn var_name(var: &Var) -> Option<&str> {
@@ -70,9 +70,8 @@ impl<'ast> Visitor<'ast> for SwapChecker {
             };
             // After `a = b`, `b = a` copies `b` back and the old `a` is lost.
             if target_a == value_b && target_b == value_a {
-                self.diags.push(
-                    LintDiagnostic::new(
-                        "almost_swapped",
+                self.findings.push(
+                    Finding::new(
                         format!("`{target_a} = {value_a}; {target_b} = {value_b}` doesn't swap"),
                         first.span.merge(second.span),
                     )
@@ -91,6 +90,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

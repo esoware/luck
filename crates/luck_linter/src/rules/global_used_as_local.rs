@@ -1,6 +1,6 @@
 use luck_semantic::{Reference, ScopeId, ScopeKind, ScopeTree};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 #[derive(Debug, Clone, Copy)]
@@ -25,12 +25,12 @@ impl Rule for GlobalUsedAsLocal {
 }
 
 impl WholeRule for GlobalUsedAsLocal {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let tree = &context.semantic.scope_tree;
         let mut unresolved_references: Vec<&Reference> = tree.unresolved_references().collect();
         unresolved_references.sort_by(|left, right| left.name.cmp(&right.name));
 
-        let mut diags = Vec::new();
+        let mut findings = Vec::new();
         for references in unresolved_references.chunk_by(|left, right| left.name == right.name) {
             let Some(first) = references.iter().min_by_key(|reference| reference.span.start) else {
                 continue;
@@ -52,17 +52,16 @@ impl WholeRule for GlobalUsedAsLocal {
             if !functions.all(|other| other == Some(function)) {
                 continue;
             }
-            diags.push(
-                LintDiagnostic::new(
-                    "global_used_as_local",
+            findings.push(
+                Finding::new(
                     format!("global `{name}` is only used inside one function"),
                     first.span,
                 )
                 .with_help("declare it `local` inside that function"),
             );
         }
-        diags.sort_by_key(|diag| diag.span.start);
-        diags
+        findings.sort_by_key(|finding| finding.span.start);
+        findings
     }
 }
 
@@ -85,6 +84,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

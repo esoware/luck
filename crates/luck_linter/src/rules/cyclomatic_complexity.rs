@@ -1,8 +1,9 @@
-use luck_ast::{Expression, FunctionBody, NodeType, NodeTypeSet, Statement};
+use luck_ast::{Expression, FunctionBody, Statement};
 use luck_token::Span;
 
 use crate::cfg::analyze_full_block;
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -39,7 +40,7 @@ impl NodeRule for CyclomaticComplexity {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let Some(threshold) = context.config.max_cyclomatic_complexity else {
             return;
@@ -73,20 +74,25 @@ impl NodeRule for CyclomaticComplexity {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => return,
         };
-        diags.extend(check_function(body, span, Some(name_span.text(context.source)), threshold));
+        findings.extend(check_function(
+            body,
+            span,
+            Some(name_span.text(context.source)),
+            threshold,
+        ));
     }
 
     fn on_expression(
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let Some(threshold) = context.config.max_cyclomatic_complexity else {
             return;
         };
         if let Expression::FunctionDef(function) = expr {
-            diags.extend(check_function(&function.body, function.span, None, threshold));
+            findings.extend(check_function(&function.body, function.span, None, threshold));
         }
     }
 }
@@ -98,14 +104,13 @@ fn check_function(
     span: Span,
     name: Option<&str>,
     threshold: u32,
-) -> Option<LintDiagnostic> {
+) -> Option<Finding> {
     // McCabe: one straight-line path plus one per decision point.
     let complexity = analyze_full_block(&body.block).decision_points.saturating_add(1);
     (complexity > threshold).then(|| {
         let label = name
             .map_or_else(|| "(anonymous)".to_owned(), |function_name| format!("`{function_name}`"));
-        LintDiagnostic::new(
-            "cyclomatic_complexity",
+        Finding::new(
             format!(
                 "function {label} has cyclomatic complexity {complexity} (threshold: {threshold})"
             ),
@@ -120,6 +125,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule_with_config;
 
     fn run(source: &str, threshold: Option<u32>) -> Vec<LintDiagnostic> {

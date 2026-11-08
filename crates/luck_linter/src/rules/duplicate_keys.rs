@@ -1,10 +1,11 @@
 use alloc::borrow::Cow;
 
-use luck_ast::{Expression, Field, NodeType, NodeTypeSet};
+use luck_ast::{Expression, Field};
 use luck_token::{Span, decode_string};
 use rustc_hash::FxHashMap;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity, line_column};
+use crate::diagnostic::{Category, Finding, Severity, line_column};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -33,7 +34,7 @@ impl NodeRule for DuplicateKeys {
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let Expression::TableConstructor(table) = expr else {
             return;
@@ -58,13 +59,9 @@ impl NodeRule for DuplicateKeys {
             };
             if let Some(first_span) = first_spans.get(key.as_ref()) {
                 let (line, column) = line_column(context.source, first_span.start);
-                diags.push(
-                    LintDiagnostic::new(
-                        "duplicate_keys",
-                        format!("duplicate key `{key}` in table constructor"),
-                        span,
-                    )
-                    .with_help(format!("previous definition at {line}:{column}")),
+                findings.push(
+                    Finding::new(format!("duplicate key `{key}` in table constructor"), span)
+                        .with_help(format!("previous definition at {line}:{column}")),
                 );
             } else {
                 first_spans.insert(key, span);
@@ -78,6 +75,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

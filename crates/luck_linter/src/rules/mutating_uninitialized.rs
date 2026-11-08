@@ -1,7 +1,7 @@
 use luck_ast::{Expression, Statement, Var, Visitor};
 use luck_semantic::ReferenceKind;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 use crate::uninitialized::{UninitializedLocals, first_reference};
 
@@ -31,7 +31,7 @@ impl Rule for MutatingUninitialized {
 }
 
 impl WholeRule for MutatingUninitialized {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let tree = &context.semantic.scope_tree;
         let mut collector = MutationCollector::default();
         collector.visit_block(context.block);
@@ -46,8 +46,7 @@ impl WholeRule for MutatingUninitialized {
                 let is_mutation = collector.field_write_prefix_starts.contains(&first.span.start)
                     && first.kind == ReferenceKind::Read;
                 is_mutation.then(|| {
-                    LintDiagnostic::new(
-                        "mutating_uninitialized",
+                    Finding::new(
                         format!(
                             "field/index assignment on uninitialized `{}` (value is `nil`)",
                             symbol.name
@@ -124,6 +123,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

@@ -5,7 +5,7 @@ use luck_semantic::SemanticAnalysis;
 use luck_token::{LuaVersion, Span, UnOp};
 
 use crate::call::is_global_call;
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 /// Flags the two common hand-written table copies:
@@ -36,14 +36,14 @@ impl Rule for ManualTableClone {
 }
 
 impl WholeRule for ManualTableClone {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
         let Some(suggestion) = Suggestion::for_version(semantic.version) else {
             return Vec::new();
         };
-        let mut checker = CloneChecker { semantic, suggestion, diags: Vec::new() };
+        let mut checker = CloneChecker { semantic, suggestion, findings: Vec::new() };
         checker.visit_block(context.block);
-        checker.diags
+        checker.findings
     }
 }
 
@@ -76,7 +76,7 @@ impl Suggestion {
 struct CloneChecker<'document> {
     semantic: &'document SemanticAnalysis,
     suggestion: Suggestion,
-    diags: Vec<LintDiagnostic>,
+    findings: Vec<Finding>,
 }
 
 impl CloneChecker<'_> {
@@ -126,9 +126,8 @@ impl CloneChecker<'_> {
                 | Statement::TypeDeclaration(_)
                 | Statement::Error(_) => continue,
             };
-            self.diags.push(
-                LintDiagnostic::new(
-                    "manual_table_clone",
+            self.findings.push(
+                Finding::new(
                     "manual table copy can be replaced with a stdlib call",
                     Span::new(local.span.start, loop_span.end),
                 )
@@ -285,6 +284,7 @@ fn is_named_var(expr: &Expression, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {

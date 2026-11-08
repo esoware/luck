@@ -1,7 +1,8 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet};
+use luck_ast::Expression;
 use luck_token::BinOp;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -30,15 +31,14 @@ impl NodeRule for CompareNan {
         &self,
         expr: &Expression,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::BinaryOp(binary) = expr
             && matches!(binary.op, BinOp::Eq | BinOp::Ne)
             && (is_nan_expr(&binary.left) || is_nan_expr(&binary.right))
         {
-            diags.push(
-                LintDiagnostic::new(
-                    "compare_nan",
+            findings.push(
+                Finding::new(
                     "NaN (`0/0`) equals nothing, so this comparison always has the same result",
                     binary.span,
                 )
@@ -65,6 +65,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

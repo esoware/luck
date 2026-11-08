@@ -1,7 +1,8 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, NodeType, NodeTypeSet, Statement};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -33,10 +34,10 @@ impl NodeRule for AmbiguousNewlineCall {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Statement::FunctionCall(call) = stmt {
-            check_call(call, context, diags);
+            check_call(call, context, findings);
         }
     }
 
@@ -44,15 +45,15 @@ impl NodeRule for AmbiguousNewlineCall {
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionCall(call) = expr {
-            check_call(call, context, diags);
+            check_call(call, context, findings);
         }
     }
 }
 
-fn check_call(call: &FunctionCall, context: &LintContext<'_>, diags: &mut Vec<LintDiagnostic>) {
+fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
     let FunctionArgs::Parenthesized { span: args_span, .. } = &call.args else {
         return;
     };
@@ -68,9 +69,8 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, diags: &mut Vec<Li
     if !gap.contains('\n') {
         return;
     }
-    diags.push(
-        LintDiagnostic::new(
-            "ambiguous_newline_call",
+    findings.push(
+        Finding::new(
             "call arguments start on a new line, but Lua joins this with the previous expression",
             Span::new(open_start, open_start.saturating_add(1)),
         )
@@ -86,6 +86,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

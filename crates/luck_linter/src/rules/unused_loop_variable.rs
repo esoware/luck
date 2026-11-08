@@ -1,6 +1,6 @@
 use luck_semantic::SymbolKind;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::fix::{Fix, TextEdit};
 use crate::rule::{LintContext, Rule, WholeRule};
 
@@ -28,9 +28,9 @@ impl Rule for UnusedLoopVariable {
 }
 
 impl WholeRule for UnusedLoopVariable {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let mut diags = Vec::new();
+        let mut findings = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
             if !matches!(symbol.kind, SymbolKind::IteratorVariable | SymbolKind::NumericForVariable)
@@ -49,9 +49,8 @@ impl WholeRule for UnusedLoopVariable {
                 continue;
             }
 
-            diags.push(
-                LintDiagnostic::new(
-                    "unused_loop_variable",
+            findings.push(
+                Finding::new(
                     format!("unused loop variable `{}`", symbol.name),
                     symbol.definition_span,
                 )
@@ -66,7 +65,7 @@ impl WholeRule for UnusedLoopVariable {
             );
         }
 
-        diags
+        findings
     }
 }
 
@@ -75,6 +74,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

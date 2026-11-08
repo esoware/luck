@@ -1,8 +1,9 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, NodeType, NodeTypeSet, Statement, Var};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement, Var};
 use luck_semantic::SemanticAnalysis;
 use luck_token::BinOp;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags `type(x == "string")` written for `type(x) == "string"`.
@@ -32,25 +33,25 @@ impl NodeRule for TypeCheckInsideCall {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Statement::FunctionCall(call) = stmt {
-            diags.extend(check_call(call, context.semantic));
+            findings.extend(check_call(call, context.semantic));
         }
     }
     fn on_expression(
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionCall(call) = expr {
-            diags.extend(check_call(call, context.semantic));
+            findings.extend(check_call(call, context.semantic));
         }
     }
 }
 
-fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<LintDiagnostic> {
+fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<Finding> {
     let Expression::Var(Var::Name(token)) = &call.callee else {
         return None;
     };
@@ -66,8 +67,7 @@ fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<LintDi
         return None;
     };
     matches!(binary.op, BinOp::Eq | BinOp::Ne).then(|| {
-        LintDiagnostic::new(
-            "type_check_inside_call",
+        Finding::new(
             "comparison is inside the `type()` call, did you mean `type(x) == \"string\"`?",
             call.span,
         )
@@ -80,6 +80,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

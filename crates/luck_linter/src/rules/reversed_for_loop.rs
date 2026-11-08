@@ -1,9 +1,10 @@
 use core::ops::Neg;
 
-use luck_ast::{Expression, NodeType, NodeTypeSet, Statement};
+use luck_ast::{Expression, Statement};
 use luck_token::UnOp;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -32,7 +33,7 @@ impl NodeRule for ReversedForLoop {
         &self,
         stmt: &Statement,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Statement::NumericFor(numeric_for) = stmt
             && let Some(start) = literal_value(&numeric_for.start)
@@ -40,9 +41,8 @@ impl NodeRule for ReversedForLoop {
             && start > limit
             && numeric_for.step.is_none()
         {
-            diags.push(
-                LintDiagnostic::new(
-                    "reversed_for_loop",
+            findings.push(
+                Finding::new(
                     format!(
                         "`for` loop from {start} to {limit} without a negative step never runs"
                     ),
@@ -74,6 +74,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

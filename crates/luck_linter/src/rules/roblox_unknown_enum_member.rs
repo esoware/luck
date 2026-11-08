@@ -1,6 +1,7 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet, Var};
+use luck_ast::{Expression, Var};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::path::dotted_path;
 use crate::rule::{LintContext, NodeRule, Rule};
 
@@ -37,7 +38,7 @@ impl NodeRule for RobloxUnknownEnumMember {
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let Expression::Var(var @ Var::FieldAccess(_)) = expr else {
             return;
@@ -75,8 +76,8 @@ impl NodeRule for RobloxUnknownEnumMember {
             3 => format!("`{last_segment}` is not an item of `{prefix_path}`"),
             _ => format!("`{last_segment}` is not a member of `{prefix_path}`"),
         };
-        diags.push(
-            LintDiagnostic::new(self.name(), message, *last_span).with_help(
+        findings.push(
+            Finding::new(message, *last_span).with_help(
                 "enum data is generated from the Roblox API dump, so check the spelling",
             ),
         );

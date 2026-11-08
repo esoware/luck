@@ -1,8 +1,9 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, NodeType, NodeTypeSet, Statement};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement};
 use luck_token::short_string_body;
 
 use crate::call::is_global_call;
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -31,25 +32,25 @@ impl NodeRule for RestrictedModulePaths {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Statement::FunctionCall(call) = stmt {
-            diags.extend(check_call(call, context));
+            findings.extend(check_call(call, context));
         }
     }
     fn on_expression(
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionCall(call) = expr {
-            diags.extend(check_call(call, context));
+            findings.extend(check_call(call, context));
         }
     }
 }
 
-fn check_call(call: &FunctionCall, context: &LintContext<'_>) -> Option<LintDiagnostic> {
+fn check_call(call: &FunctionCall, context: &LintContext<'_>) -> Option<Finding> {
     let restricted_paths = &context.config.restricted_module_paths;
     if restricted_paths.is_empty() {
         return None;
@@ -75,12 +76,8 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>) -> Option<LintDiag
     let path = short_string_body(&literal.text)?;
     let pattern = restricted_paths.iter().find(|pattern| path_matches(path, pattern))?;
     Some(
-        LintDiagnostic::new(
-            "restricted_module_paths",
-            format!("`require` of restricted module `{path}`"),
-            literal.span,
-        )
-        .with_help(format!("`{pattern}` is listed in `restricted_module_paths`")),
+        Finding::new(format!("`require` of restricted module `{path}`"), literal.span)
+            .with_help(format!("`{pattern}` is listed in `restricted_module_paths`")),
     )
 }
 
@@ -99,6 +96,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule_with_config;
 
     fn run(source: &str, paths: Vec<String>) -> Vec<LintDiagnostic> {

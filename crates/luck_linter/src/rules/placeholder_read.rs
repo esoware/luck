@@ -1,6 +1,7 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet, Var};
+use luck_ast::{Expression, Var};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags reads of `_`, which by convention names a value being thrown away.
@@ -35,14 +36,13 @@ impl NodeRule for PlaceholderRead {
         &self,
         expr: &Expression,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::Var(Var::Name(token)) = expr
             && token.identifier() == Some("_")
         {
-            diags.push(
-                LintDiagnostic::new(
-                    "placeholder_read",
+            findings.push(
+                Finding::new(
                     "read of `_`, but convention is to use `_` only for ignored bindings",
                     token.span,
                 )
@@ -57,6 +57,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

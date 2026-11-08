@@ -1,7 +1,8 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet, NumericFor, Statement, Var};
+use luck_ast::{Expression, NumericFor, Statement, Var};
 use luck_token::UnOp;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags numeric `for` ranges that can't iterate or are likely off by one.
@@ -35,12 +36,12 @@ impl NodeRule for ForRange {
         &self,
         stmt: &Statement,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Statement::NumericFor(numeric_for) = stmt
             && let Some((message, help)) = range_problem(numeric_for)
         {
-            diags.push(LintDiagnostic::new("for_range", message, numeric_for.span).with_help(help));
+            findings.push(Finding::new(message, numeric_for.span).with_help(help));
         }
     }
 }
@@ -197,6 +198,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

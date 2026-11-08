@@ -1,8 +1,9 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet};
+use luck_ast::Expression;
 use luck_token::{BinOp, UnOp};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::fix::{Fix, TextEdit};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -60,7 +61,7 @@ impl NodeRule for UnnecessaryNegation {
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let Expression::UnaryOp(unary) = expr else {
             return;
@@ -93,9 +94,8 @@ impl NodeRule for UnnecessaryNegation {
                 replacement: format!("({lhs} {flipped_op} {rhs})"),
             }],
         });
-        diags.push(
-            LintDiagnostic::new(
-                "unnecessary_negation",
+        findings.push(
+            Finding::new(
                 format!("negated comparison, consider `{lhs} {flipped_op} {rhs}`"),
                 unary.span,
             )
@@ -109,6 +109,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

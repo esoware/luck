@@ -1,6 +1,6 @@
 use luck_ast::{Block, FunctionBody, LastStatement, Visitor};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::fix::{Fix, TextEdit};
 use crate::rule::{LintContext, Rule, WholeRule};
 
@@ -26,16 +26,16 @@ impl Rule for RedundantReturn {
 }
 
 impl WholeRule for RedundantReturn {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
-        let mut checker = ReturnChecker { diags: Vec::new() };
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let mut checker = ReturnChecker { findings: Vec::new() };
         checker.check_tail(context.block);
         checker.visit_block(context.block);
-        checker.diags
+        checker.findings
     }
 }
 
 struct ReturnChecker {
-    diags: Vec<LintDiagnostic>,
+    findings: Vec<Finding>,
 }
 
 impl ReturnChecker {
@@ -48,9 +48,8 @@ impl ReturnChecker {
         if !return_stmt.exprs.is_empty() {
             return;
         }
-        self.diags.push(
-            LintDiagnostic::new(
-                "redundant_return",
+        self.findings.push(
+            Finding::new(
                 "bare `return` at the end of the function has no effect",
                 return_stmt.span,
             )
@@ -74,6 +73,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

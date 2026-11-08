@@ -1,7 +1,8 @@
-use luck_ast::{Block, NodeType, NodeTypeSet, Statement};
+use luck_ast::{Block, Statement};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -37,16 +38,16 @@ impl NodeRule for EmptyBlock {
         &self,
         stmt: &Statement,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let (block, message, span) = match stmt {
             Statement::IfStatement(if_stmt) => {
-                diags.extend(check_body(&if_stmt.block, "empty `if` block", if_stmt.span));
+                findings.extend(check_body(&if_stmt.block, "empty `if` block", if_stmt.span));
                 for clause in &if_stmt.elseif_clauses {
-                    diags.extend(check_body(&clause.block, "empty `elseif` block", clause.span));
+                    findings.extend(check_body(&clause.block, "empty `elseif` block", clause.span));
                 }
                 if let Some(else_clause) = &if_stmt.else_clause {
-                    diags.extend(check_body(
+                    findings.extend(check_body(
                         &else_clause.block,
                         "empty `else` block",
                         else_clause.span,
@@ -79,14 +80,13 @@ impl NodeRule for EmptyBlock {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => return,
         };
-        diags.extend(check_body(block, message, span));
+        findings.extend(check_body(block, message, span));
     }
 }
 
 /// Flags `span` with `message` when `block` holds no statements.
-fn check_body(block: &Block, message: &str, span: Span) -> Option<LintDiagnostic> {
-    (block.stmts.is_empty() && block.last_stmt.is_none())
-        .then(|| LintDiagnostic::new("empty_block", message, span))
+fn check_body(block: &Block, message: &str, span: Span) -> Option<Finding> {
+    (block.stmts.is_empty() && block.last_stmt.is_none()).then(|| Finding::new(message, span))
 }
 
 #[cfg(test)]
@@ -94,6 +94,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

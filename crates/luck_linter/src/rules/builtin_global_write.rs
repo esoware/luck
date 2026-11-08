@@ -2,7 +2,7 @@ use luck_ast::{Expression, FunctionName, Statement, Var, Visitor};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, Token};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::path::dotted_path;
 use crate::rule::{LintContext, Rule, WholeRule};
 
@@ -28,9 +28,9 @@ impl Rule for BuiltinGlobalWrite {
 }
 
 impl WholeRule for BuiltinGlobalWrite {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let mut diags = Vec::new();
+        let mut findings = Vec::new();
 
         for reference in semantic.scope_tree.unresolved_references() {
             if !reference.kind.is_write() {
@@ -39,12 +39,12 @@ impl WholeRule for BuiltinGlobalWrite {
             if !is_overwritable_builtin(semantic, &reference.name) {
                 continue;
             }
-            diags.push(overwrite_diag(&reference.name, reference.span));
+            findings.push(overwrite_finding(&reference.name, reference.span));
         }
 
-        let mut checker = FieldWriteChecker { semantic, diags };
+        let mut checker = FieldWriteChecker { semantic, findings };
         checker.visit_block(context.block);
-        checker.diags
+        checker.findings
     }
 }
 
@@ -59,9 +59,8 @@ fn is_overwritable_builtin(semantic: &SemanticAnalysis, name: &str) -> bool {
         && !semantic.extra_globals.contains(name)
 }
 
-fn overwrite_diag(name: &str, span: Span) -> LintDiagnostic {
-    LintDiagnostic::new(
-        "builtin_global_write",
+fn overwrite_finding(name: &str, span: Span) -> Finding {
+    Finding::new(
         format!(
             "built-in global `{name}` is overwritten here, consider a local or a different name"
         ),
@@ -82,7 +81,7 @@ fn expr_base_identifier(expr: &Expression) -> Option<(&str, Span)> {
 
 struct FieldWriteChecker<'semantic> {
     semantic: &'semantic SemanticAnalysis,
-    diags: Vec<LintDiagnostic>,
+    findings: Vec<Finding>,
 }
 
 impl FieldWriteChecker<'_> {
@@ -115,7 +114,7 @@ impl FieldWriteChecker<'_> {
             return;
         }
         let display = path_segments.map_or_else(|| name.to_owned(), |segments| segments.join("."));
-        self.diags.push(overwrite_diag(&display, span));
+        self.findings.push(overwrite_finding(&display, span));
     }
 
     fn check_function_name(&mut self, function_name: &FunctionName) {
@@ -144,7 +143,7 @@ impl FieldWriteChecker<'_> {
             display.push(':');
             display.push_str(part);
         }
-        self.diags.push(overwrite_diag(&display, function_name.span));
+        self.findings.push(overwrite_finding(&display, function_name.span));
     }
 }
 
@@ -187,6 +186,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{run_rule, run_rule_roblox, run_rule_with_config};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

@@ -1,8 +1,8 @@
 use luck_core::LintConfig;
 use luck_parser::ParseResult;
-use luck_token::{LuaVersion, StdlibEnvironment};
+use luck_token::{LuaVersion, Span, StdlibEnvironment};
 
-use crate::diagnostic::LintDiagnostic;
+use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
 use crate::nodes::Nodes;
 use crate::rule::{LintContext, Rule};
 use crate::rules::{RULES, RuleEntry};
@@ -65,7 +65,8 @@ fn parse_cleanly(source: &str, version: LuaVersion) -> ParseResult {
     parse
 }
 
-/// Runs `rule` alone through the same analysis and dispatch as the driver.
+/// Runs `rule` alone through the same analysis, dispatch, and diagnostic
+/// stamping as the driver.
 fn check(
     rule: &dyn Rule,
     parse: &ParseResult,
@@ -85,11 +86,18 @@ fn check(
         .iter()
         .find(|entry| entry.rule().name() == rule.name())
         .expect("only registered rules are tested");
-    match *entry {
+    let findings = match *entry {
         RuleEntry::Whole(whole_rule) => whole_rule.check(&context),
         RuleEntry::Node(node_rule) => {
             let nodes = Nodes::collect(&parse.block);
             bus::run(&[node_rule], nodes.as_slice(), &context).pop().unwrap_or_default()
         }
-    }
+    };
+    driver::into_diagnostics(entry.rule(), findings, config).collect()
+}
+
+/// A diagnostic of `rule` at `span`, for tests of what happens to
+/// diagnostics after the rules run.
+pub(crate) fn diagnostic(rule: &'static str, span: Span) -> LintDiagnostic {
+    Finding::new("test", span).into_diagnostic(rule, Category::Correctness, Severity::Warning)
 }

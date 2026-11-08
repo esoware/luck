@@ -1,7 +1,7 @@
 use luck_ast::{Block, FunctionBody, Statement, Visitor};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 /// Flags labels (`::name::`) that no `goto` in the same function targets.
@@ -27,15 +27,15 @@ impl Rule for UnusedLabel {
 }
 
 impl WholeRule for UnusedLabel {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
-        let mut diags = Vec::new();
-        check_scope(context.block, &mut diags);
-        diags
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        check_scope(context.block, &mut findings);
+        findings
     }
 }
 
 /// Checks one function body, then each function nested in it.
-fn check_scope(block: &Block, diags: &mut Vec<LintDiagnostic>) {
+fn check_scope(block: &Block, findings: &mut Vec<Finding>) {
     let mut scope = LabelScope::default();
     scope.visit_block(block);
 
@@ -44,19 +44,15 @@ fn check_scope(block: &Block, diags: &mut Vec<LintDiagnostic>) {
         // already enforces label visibility, so matching by name alone
         // avoids false positives on jumps between blocks.
         if !scope.goto_names.iter().any(|goto_name| goto_name == name) {
-            diags.push(
-                LintDiagnostic::new(
-                    "unused_label",
-                    format!("label `{name}` is never targeted by a `goto`"),
-                    *span,
-                )
-                .with_help("remove the label or add a `goto` that targets it"),
+            findings.push(
+                Finding::new(format!("label `{name}` is never targeted by a `goto`"), *span)
+                    .with_help("remove the label or add a `goto` that targets it"),
             );
         }
     }
 
     for body in scope.nested_bodies {
-        check_scope(&body.block, diags);
+        check_scope(&body.block, findings);
     }
 }
 
@@ -118,6 +114,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

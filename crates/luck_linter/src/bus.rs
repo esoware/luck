@@ -2,16 +2,16 @@
 //!
 //! One pass over the flat node table calls each [`NodeRule`]'s hooks for
 //! the node types it declares in [`NodeRule::node_types`]. Each rule
-//! collects into its own list, so its diagnostics come out in the order a
+//! collects into its own list, so its findings come out in the order a
 //! walk of its own would give.
 
 use core::cell::RefCell;
 
-use luck_ast::{NodeKind, NodeType};
 use rayon::prelude::*;
 
-use crate::diagnostic::LintDiagnostic;
-use crate::nodes::AstNode;
+use crate::diagnostic::Finding;
+use crate::node_type::NodeType;
+use crate::nodes::{AstNode, NodeKind};
 use crate::rule::{LintContext, NodeRule};
 
 /// Below this many nodes the chunk setup costs more than it saves.
@@ -29,49 +29,49 @@ fn dispatch(
     rule: &dyn NodeRule,
     node: &AstNode<'_>,
     context: &LintContext<'_>,
-    diags: &mut Vec<LintDiagnostic>,
+    findings: &mut Vec<Finding>,
 ) {
     match node.kind {
-        NodeKind::Statement(stmt) => rule.on_statement(stmt, context, diags),
-        NodeKind::LastStatement(last_stmt) => rule.on_last_statement(last_stmt, context, diags),
-        NodeKind::Expression(expr) => rule.on_expression(expr, context, diags),
+        NodeKind::Statement(stmt) => rule.on_statement(stmt, context, findings),
+        NodeKind::LastStatement(last_stmt) => rule.on_last_statement(last_stmt, context, findings),
+        NodeKind::Expression(expr) => rule.on_expression(expr, context, findings),
     }
 }
 
-/// Runs `rules` over `nodes` and returns one diagnostics list per rule, in
+/// Runs `rules` over `nodes` and returns one findings list per rule, in
 /// the order of `rules`.
 ///
 /// Large tables are split into contiguous chunks across the rayon pool.
-/// Chunk results concatenate in order, so each rule's diagnostics come out
+/// Chunk results concatenate in order, so each rule's findings come out
 /// as a sequential pass would give them.
 pub(crate) fn run(
     rules: &[&dyn NodeRule],
     nodes: &[AstNode<'_>],
     context: &LintContext<'_>,
-) -> Vec<Vec<LintDiagnostic>> {
+) -> Vec<Vec<Finding>> {
     if nodes.len() < MIN_PARALLEL_NODES {
         return run_chunk(rules, nodes, context);
     }
 
     let nodes_per_chunk = nodes.len().div_ceil(rayon::current_num_threads());
-    let chunk_results: Vec<Vec<Vec<LintDiagnostic>>> =
+    let chunk_results: Vec<Vec<Vec<Finding>>> =
         nodes.par_chunks(nodes_per_chunk).map(|chunk| run_chunk(rules, chunk, context)).collect();
 
-    let mut diags_by_rule = vec![Vec::new(); rules.len()];
+    let mut findings_by_rule = vec![Vec::new(); rules.len()];
     for chunk in chunk_results {
-        for (rule_diags, mut chunk_diags) in diags_by_rule.iter_mut().zip(chunk) {
-            rule_diags.append(&mut chunk_diags);
+        for (rule_findings, mut chunk_findings) in findings_by_rule.iter_mut().zip(chunk) {
+            rule_findings.append(&mut chunk_findings);
         }
     }
-    diags_by_rule
+    findings_by_rule
 }
 
 fn run_chunk(
     rules: &[&dyn NodeRule],
     nodes: &[AstNode<'_>],
     context: &LintContext<'_>,
-) -> Vec<Vec<LintDiagnostic>> {
-    let mut diags_by_rule = vec![Vec::new(); rules.len()];
+) -> Vec<Vec<Finding>> {
+    let mut findings_by_rule = vec![Vec::new(); rules.len()];
     RULE_BUCKETS.with_borrow_mut(|buckets| {
         for bucket in buckets.iter_mut() {
             bucket.clear();
@@ -93,11 +93,11 @@ fn run_chunk(
         )]
         for node in nodes {
             for &slot in &buckets[node.node_type.index()] {
-                dispatch(rules[slot], node, context, &mut diags_by_rule[slot]);
+                dispatch(rules[slot], node, context, &mut findings_by_rule[slot]);
             }
         }
     });
-    diags_by_rule
+    findings_by_rule
 }
 
 /// Re-runs every node rule on every node and checks that bucketed dispatch
@@ -111,7 +111,7 @@ fn run_chunk(
 pub(crate) fn assert_dispatch_is_pure(
     dispatched_rules: &[&dyn NodeRule],
     skipped_rules: &[&dyn NodeRule],
-    bus_results: &[Vec<LintDiagnostic>],
+    bus_results: &[Vec<Finding>],
     nodes: &[AstNode<'_>],
     context: &LintContext<'_>,
 ) {
@@ -122,8 +122,8 @@ pub(crate) fn assert_dispatch_is_pure(
         assert_eq!(
             bucketed,
             reference,
-            "rule '{}': bucketed dispatch diverged from every-node dispatch; \
-             its node_types() declaration is missing a type",
+            "rule `{}`: bucketed dispatch diverged from every-node dispatch; \
+             its `node_types()` declaration is missing a type",
             rule.name()
         );
     }
@@ -131,8 +131,8 @@ pub(crate) fn assert_dispatch_is_pure(
     {
         assert!(
             reference.is_empty(),
-            "rule '{}' was skipped for this file but produces diagnostics; \
-             its node_types() declaration is missing a type",
+            "rule `{}` was skipped for this file but produces findings; \
+             its `node_types()` declaration is missing a type",
             rule.name()
         );
     }
@@ -144,12 +144,12 @@ fn run_every_node(
     rules: &[&dyn NodeRule],
     nodes: &[AstNode<'_>],
     context: &LintContext<'_>,
-) -> Vec<Vec<LintDiagnostic>> {
-    let mut diags_by_rule = vec![Vec::new(); rules.len()];
+) -> Vec<Vec<Finding>> {
+    let mut findings_by_rule = vec![Vec::new(); rules.len()];
     for node in nodes {
-        for (rule, rule_diags) in rules.iter().zip(&mut diags_by_rule) {
-            dispatch(*rule, node, context, rule_diags);
+        for (rule, rule_findings) in rules.iter().zip(&mut findings_by_rule) {
+            dispatch(*rule, node, context, rule_findings);
         }
     }
-    diags_by_rule
+    findings_by_rule
 }

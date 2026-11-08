@@ -1,6 +1,6 @@
 use luck_semantic::SymbolKind;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::fix::{Fix, TextEdit};
 use crate::rule::{LintContext, Rule, WholeRule};
 
@@ -28,9 +28,9 @@ impl Rule for UnusedArgument {
 }
 
 impl WholeRule for UnusedArgument {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let mut diags = Vec::new();
+        let mut findings = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
             if symbol.kind != SymbolKind::Parameter {
@@ -48,24 +48,20 @@ impl WholeRule for UnusedArgument {
                 continue;
             }
 
-            diags.push(
-                LintDiagnostic::new(
-                    "unused_argument",
-                    format!("unused argument `{}`", symbol.name),
-                    symbol.definition_span,
-                )
-                .with_help("prefix with `_` to suppress this warning")
-                .with_fix(Fix {
-                    description: format!("prefix `{}` with `_`", symbol.name),
-                    edits: vec![TextEdit {
-                        span: symbol.definition_span,
-                        replacement: format!("_{}", symbol.name),
-                    }],
-                }),
+            findings.push(
+                Finding::new(format!("unused argument `{}`", symbol.name), symbol.definition_span)
+                    .with_help("prefix with `_` to suppress this warning")
+                    .with_fix(Fix {
+                        description: format!("prefix `{}` with `_`", symbol.name),
+                        edits: vec![TextEdit {
+                            span: symbol.definition_span,
+                            replacement: format!("_{}", symbol.name),
+                        }],
+                    }),
             );
         }
 
-        diags
+        findings
     }
 }
 
@@ -74,6 +70,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

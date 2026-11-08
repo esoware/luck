@@ -1,8 +1,8 @@
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 use crate::rules::{is_registered_rule_name, registered_rule_names};
 use crate::suggest::levenshtein;
-use crate::suppression::parse_directive;
+use crate::suppression::{DirectiveRule, parse_directive};
 
 /// Flags unknown rule names in lint directives. A typo like
 /// `-- luck: allow(unsued_variable)` would otherwise do nothing.
@@ -25,8 +25,8 @@ impl Rule for InvalidLintFilter {
 }
 
 impl WholeRule for InvalidLintFilter {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
-        let mut diags = Vec::new();
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let mut findings = Vec::new();
 
         for comment in context.comments {
             // A directive that a bad trailing word disables still has its
@@ -36,8 +36,11 @@ impl WholeRule for InvalidLintFilter {
             else {
                 continue;
             };
-            for (name, name_span) in directive.names {
-                if name == "*" || is_registered_rule_name(name) {
+            for (rule, name_span) in directive.rules {
+                let DirectiveRule::Named(name) = rule else {
+                    continue;
+                };
+                if is_registered_rule_name(name) {
                     continue;
                 }
 
@@ -56,13 +59,11 @@ impl WholeRule for InvalidLintFilter {
                     },
                 );
 
-                diags.push(
-                    LintDiagnostic::new("invalid_lint_filter", message, name_span).with_help(help),
-                );
+                findings.push(Finding::new(message, name_span).with_help(help));
             }
         }
 
-        diags
+        findings
     }
 }
 

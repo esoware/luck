@@ -1,7 +1,8 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet};
+use luck_ast::Expression;
 use luck_token::BinOp;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags the `(cond and a) or b` ternary idiom when `a` is a literal `false`
@@ -45,7 +46,7 @@ impl NodeRule for MisleadingAndOr {
         &self,
         expr: &Expression,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::BinaryOp(outer) = expr
             && outer.op == BinOp::Or
@@ -55,13 +56,9 @@ impl NodeRule for MisleadingAndOr {
                 && inner.op == BinOp::And
                 && is_falsy_literal(&inner.right)
             {
-                diags.push(
-                    LintDiagnostic::new(
-                        "misleading_and_or",
-                        "`(x and FALSY) or y` always evaluates to `y`",
-                        outer.span,
-                    )
-                    .with_help("use an `if` statement, or an if-then-else expression in Luau"),
+                findings.push(
+                    Finding::new("`(x and FALSY) or y` always evaluates to `y`", outer.span)
+                        .with_help("use an `if` statement, or an if-then-else expression in Luau"),
                 );
             }
         }
@@ -73,6 +70,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

@@ -1,8 +1,9 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet, Statement};
+use luck_ast::{Expression, Statement};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::fix::{Fix, TextEdit};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -31,22 +32,24 @@ impl NodeRule for ParenthesizedConditions {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let source = context.source;
         match stmt {
             Statement::IfStatement(if_stmt) => {
-                diags.extend(
+                findings.extend(
                     check_condition(
                         &if_stmt.condition,
                         "unnecessary parentheses around `if` condition",
                         if_stmt.span,
                         source,
                     )
-                    .map(|diag| diag.with_help("Lua doesn't need parentheses around conditions")),
+                    .map(|finding| {
+                        finding.with_help("Lua doesn't need parentheses around conditions")
+                    }),
                 );
                 for clause in &if_stmt.elseif_clauses {
-                    diags.extend(check_condition(
+                    findings.extend(check_condition(
                         &clause.condition,
                         "unnecessary parentheses around `elseif` condition",
                         clause.span,
@@ -55,7 +58,7 @@ impl NodeRule for ParenthesizedConditions {
                 }
             }
             Statement::WhileLoop(while_loop) => {
-                diags.extend(check_condition(
+                findings.extend(check_condition(
                     &while_loop.condition,
                     "unnecessary parentheses around `while` condition",
                     while_loop.span,
@@ -92,11 +95,11 @@ fn check_condition(
     message: &str,
     span: Span,
     source: &str,
-) -> Option<LintDiagnostic> {
+) -> Option<Finding> {
     let Expression::Parenthesized(parenthesized) = condition else {
         return None;
     };
-    Some(LintDiagnostic::new("parenthesized_conditions", message, span).with_fix(Fix {
+    Some(Finding::new(message, span).with_fix(Fix {
         description: "remove unnecessary parentheses".to_owned(),
         edits: vec![TextEdit {
             span: parenthesized.span,
@@ -110,6 +113,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

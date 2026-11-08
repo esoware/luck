@@ -33,7 +33,6 @@ mod expr;
 mod function;
 #[cfg(test)]
 mod layout;
-mod node;
 mod punctuated;
 mod query;
 mod span;
@@ -49,7 +48,6 @@ pub use expr::{
     Literal, ParenthesizedExpression, TableConstructor, TypeCast, TypeInstantiation, UnaryOp, Var,
 };
 pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
-pub use node::{NodeKind, NodeType, NodeTypeSet};
 pub use punctuated::Punctuated;
 pub use query::{
     expr_starts_with_brace, is_multi_value, is_prefix_expression, stmt_starts_with_paren,

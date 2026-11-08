@@ -1,9 +1,10 @@
 use core::iter;
 
-use luck_ast::{NodeType, NodeTypeSet, Statement};
+use luck_ast::Statement;
 use luck_token::Span;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -32,7 +33,7 @@ impl NodeRule for DuplicateConditions {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let Statement::IfStatement(if_stmt) = stmt else {
             return;
@@ -56,9 +57,8 @@ impl NodeRule for DuplicateConditions {
             if !text.is_empty()
                 && conditions.iter().take(index).any(|&(earlier_text, _)| earlier_text == text)
             {
-                diags.push(
-                    LintDiagnostic::new(
-                        "duplicate_conditions",
+                findings.push(
+                    Finding::new(
                         format!("duplicate condition `{text}` in `if`/`elseif` chain"),
                         span,
                     )
@@ -76,6 +76,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

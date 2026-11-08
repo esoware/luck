@@ -4,7 +4,7 @@ use luck_token::Span;
 use rustc_hash::FxHashMap;
 
 use crate::call::{has_multi_value_tail, positional_args};
-use crate::diagnostic::{Category, LintDiagnostic, Severity, line_column};
+use crate::diagnostic::{Category, Finding, Severity, line_column};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 #[derive(Debug, Clone, Copy)]
@@ -29,7 +29,7 @@ impl Rule for MismatchedArgCount {
 }
 
 impl WholeRule for MismatchedArgCount {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let tree = &context.semantic.scope_tree;
         let mut definitions = DefinitionCollector { tree, functions: FxHashMap::default() };
         definitions.visit_block(context.block);
@@ -40,10 +40,10 @@ impl WholeRule for MismatchedArgCount {
             tree,
             source: context.source,
             functions: definitions.functions,
-            diags: Vec::new(),
+            findings: Vec::new(),
         };
         checker.visit_block(context.block);
-        checker.diags
+        checker.findings
     }
 }
 
@@ -125,7 +125,7 @@ struct CallChecker<'context> {
     tree: &'context ScopeTree,
     source: &'context str,
     functions: FxHashMap<SymbolId, FunctionSignature>,
-    diags: Vec<LintDiagnostic>,
+    findings: Vec<Finding>,
 }
 
 impl CallChecker<'_> {
@@ -154,9 +154,8 @@ impl CallChecker<'_> {
             return;
         }
         let (line, _) = line_column(self.source, signature.definition_start);
-        self.diags.push(
-            LintDiagnostic::new(
-                "mismatched_arg_count",
+        self.findings.push(
+            Finding::new(
                 format!(
                     "call passes {guaranteed_arg_count} arguments to function `{name}`, \
                      which accepts only {} (defined on line {line})",

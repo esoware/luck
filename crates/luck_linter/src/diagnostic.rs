@@ -21,25 +21,25 @@ pub struct LintDiagnostic {
     pub fix: Option<Fix>,
 }
 
-impl LintDiagnostic {
-    /// Builds a diagnostic for `rule` at `span`.
-    ///
-    /// `category` and `severity` are placeholders. The driver overwrites them
-    /// with the rule's `category()` and its configured or default severity.
+/// What a rule reports at one span.
+///
+/// The driver makes each one a [`LintDiagnostic`] carrying the reporting
+/// rule's name and category and its resolved severity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Finding {
+    pub message: String,
+    pub span: Span,
+    pub help: Option<String>,
+    pub fix: Option<Fix>,
+}
+
+impl Finding {
     #[must_use]
-    pub(crate) fn new<Message>(rule: &'static str, message: Message, span: Span) -> Self
+    pub(crate) fn new<Message>(message: Message, span: Span) -> Self
     where
         Message: Into<String>,
     {
-        Self {
-            rule,
-            category: Category::Correctness,
-            severity: Severity::Warning,
-            message: message.into(),
-            span,
-            help: None,
-            fix: None,
-        }
+        Self { message: message.into(), span, help: None, fix: None }
     }
 
     #[must_use]
@@ -61,6 +61,16 @@ impl LintDiagnostic {
     pub(crate) fn with_optional_fix(mut self, fix: Option<Fix>) -> Self {
         self.fix = fix;
         self
+    }
+
+    pub(crate) fn into_diagnostic(
+        self,
+        rule: &'static str,
+        category: Category,
+        severity: Severity,
+    ) -> LintDiagnostic {
+        let Self { message, span, help, fix } = self;
+        LintDiagnostic { rule, category, severity, message, span, help, fix }
     }
 }
 

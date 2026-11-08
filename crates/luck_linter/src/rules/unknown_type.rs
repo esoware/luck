@@ -1,9 +1,8 @@
-use luck_ast::{
-    BinaryOp, Expression, FunctionArgs, FunctionCall, Literal, NodeType, NodeTypeSet, Var,
-};
+use luck_ast::{BinaryOp, Expression, FunctionArgs, FunctionCall, Literal, Var};
 use luck_token::{BinOp, LuaVersion, StdlibEnvironment, short_string_body};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 use crate::suggest::levenshtein;
 
@@ -36,7 +35,7 @@ impl NodeRule for UnknownType {
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let Expression::BinaryOp(binary) = expr else {
             return;
@@ -68,15 +67,14 @@ impl NodeRule for UnknownType {
         let suggestion = case_match.copied().or_else(|| {
             primitives.iter().copied().find(|primitive| levenshtein(primitive, name) <= 2)
         });
-        let mut diag = LintDiagnostic::new(
-            "unknown_type",
+        let mut finding = Finding::new(
             format!("`{name}` is not a value that `{callee}` can return"),
             literal.span,
         );
         if let Some(primitive) = suggestion {
-            diag = diag.with_help(format!("did you mean `{primitive}`?"));
+            finding = finding.with_help(format!("did you mean `{primitive}`?"));
         }
-        diags.push(diag);
+        findings.push(finding);
     }
 }
 

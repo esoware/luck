@@ -1,4 +1,4 @@
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 /// Flags every read or write of a global, stdlib names like `print`
@@ -25,9 +25,9 @@ impl Rule for NoImplicitGlobals {
 }
 
 impl WholeRule for NoImplicitGlobals {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let mut diags = Vec::new();
+        let mut findings = Vec::new();
 
         for reference in semantic.scope_tree.unresolved_references() {
             // `_` is a conventional discard name, not a real global.
@@ -38,16 +38,12 @@ impl WholeRule for NoImplicitGlobals {
                 continue;
             }
 
-            diags.push(
-                LintDiagnostic::new(
-                    self.name(),
-                    format!("global variable `{}` used", reference.name),
-                    reference.span,
-                )
-                .with_help("pass it in explicitly, or add it to `extra_globals`"),
+            findings.push(
+                Finding::new(format!("global variable `{}` used", reference.name), reference.span)
+                    .with_help("pass it in explicitly, or add it to `extra_globals`"),
             );
         }
-        diags
+        findings
     }
 }
 
@@ -57,6 +53,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule_with_config;
 
     fn run(source: &str, extra_globals: &[&str]) -> Vec<LintDiagnostic> {

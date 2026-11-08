@@ -1,6 +1,7 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet};
+use luck_ast::Expression;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::roblox::{global_new_call, literal_arg_value};
 use crate::rule::{LintContext, NodeRule, Rule};
 
@@ -33,7 +34,7 @@ impl NodeRule for RobloxSuspiciousUdim2New {
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let Some((call, args)) = global_new_call(expr, "UDim2", context.semantic) else {
             return;
@@ -47,9 +48,8 @@ impl NodeRule for RobloxSuspiciousUdim2New {
         }
         let is_scale_sized = values.iter().all(|value| (-1.0f64..=1.0f64).contains(value));
         let suggestion = if is_scale_sized { "UDim2.fromScale" } else { "UDim2.fromOffset" };
-        diags.push(
-            LintDiagnostic::new(
-                self.name(),
+        findings.push(
+            Finding::new(
                 "`UDim2.new` takes 4 components (`xScale`, `xOffset`, `yScale`, `yOffset`)",
                 call.span,
             )
@@ -61,6 +61,7 @@ impl NodeRule for RobloxSuspiciousUdim2New {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{run_rule, run_rule_roblox};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

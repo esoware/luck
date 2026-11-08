@@ -1,6 +1,6 @@
 use luck_ast::{Block, Statement, Visitor};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 #[derive(Debug, Clone, Copy)]
@@ -22,15 +22,15 @@ impl Rule for UnreachableCode {
 }
 
 impl WholeRule for UnreachableCode {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
-        let mut checker = UnreachableChecker { diags: Vec::new() };
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let mut checker = UnreachableChecker { findings: Vec::new() };
         checker.visit_block(context.block);
-        checker.diags
+        checker.findings
     }
 }
 
 struct UnreachableChecker {
-    diags: Vec<LintDiagnostic>,
+    findings: Vec<Finding>,
 }
 
 impl<'ast> Visitor<'ast> for UnreachableChecker {
@@ -40,11 +40,7 @@ impl<'ast> Visitor<'ast> for UnreachableChecker {
         let first_unreachable =
             block.stmts.iter().skip_while(|stmt| !matches!(stmt, Statement::Break(_))).nth(1);
         if let Some(stmt) = first_unreachable {
-            self.diags.push(LintDiagnostic::new(
-                "unreachable_code",
-                "unreachable code",
-                stmt.span(),
-            ));
+            self.findings.push(Finding::new("unreachable code", stmt.span()));
         }
         self.walk_block(block);
     }
@@ -55,6 +51,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

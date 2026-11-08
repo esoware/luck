@@ -1,7 +1,8 @@
-use luck_ast::{Expression, FunctionBody, NodeType, NodeTypeSet, Statement};
+use luck_ast::{Expression, FunctionBody, Statement};
 use luck_token::TokenKind;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -25,7 +26,7 @@ impl Rule for DuplicateParameter {
     }
 }
 
-fn check_params(body: &FunctionBody, is_method: bool, diags: &mut Vec<LintDiagnostic>) {
+fn check_params(body: &FunctionBody, is_method: bool, findings: &mut Vec<Finding>) {
     let mut seen_names: Vec<&str> = Vec::new();
     // A colon method already has an implicit `self`.
     if is_method {
@@ -39,8 +40,7 @@ fn check_params(body: &FunctionBody, is_method: bool, diags: &mut Vec<LintDiagno
             continue;
         }
         if seen_names.iter().any(|previous| *previous == name.as_str()) {
-            diags.push(LintDiagnostic::new(
-                "duplicate_parameter",
+            findings.push(Finding::new(
                 format!("parameter `{name}` is already defined"),
                 param.name.span,
             ));
@@ -63,18 +63,18 @@ impl NodeRule for DuplicateParameter {
         &self,
         stmt: &Statement,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         match stmt {
             Statement::FunctionDecl(decl) => {
-                check_params(&decl.body, decl.name.method.is_some(), diags);
+                check_params(&decl.body, decl.name.method.is_some(), findings);
             }
             Statement::LocalFunction(local_function) => {
-                check_params(&local_function.body, false, diags);
+                check_params(&local_function.body, false, findings);
             }
             // Lua 5.5
             Statement::GlobalFunction(global_function) => {
-                check_params(&global_function.body, false, diags);
+                check_params(&global_function.body, false, findings);
             }
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
@@ -101,10 +101,10 @@ impl NodeRule for DuplicateParameter {
         &self,
         expr: &Expression,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionDef(function) = expr {
-            check_params(&function.body, false, diags);
+            check_params(&function.body, false, findings);
         }
     }
 }
@@ -114,6 +114,7 @@ mod tests {
     use luck_token::{LuaVersion, offset_to_index};
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

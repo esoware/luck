@@ -1,7 +1,8 @@
-use luck_ast::{FunctionCall, NodeType, NodeTypeSet, Statement};
+use luck_ast::{FunctionCall, Statement};
 use luck_semantic::{SemanticAnalysis, StdlibEntry};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags a call statement to a stdlib function marked `must_use`, which
@@ -43,18 +44,14 @@ impl NodeRule for MustUse {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Statement::FunctionCall(call) = stmt
             && let Some(name) = must_use_name(context.semantic, call)
         {
-            diags.push(
-                LintDiagnostic::new(
-                    "must_use",
-                    format!("return value of `{name}` is discarded"),
-                    call.span,
-                )
-                .with_help("assign the result or remove the call"),
+            findings.push(
+                Finding::new(format!("return value of `{name}` is discarded"), call.span)
+                    .with_help("assign the result or remove the call"),
             );
         }
     }

@@ -1,7 +1,7 @@
 use luck_ast::{Block, Statement, Visitor};
 use luck_token::{Span, Token};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity, line_column};
+use crate::diagnostic::{Category, Finding, Severity, line_column};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 /// Flags a local declared again in the same block (Luacheck 411), which
@@ -29,11 +29,14 @@ impl Rule for RedefiningLocal {
 }
 
 impl WholeRule for RedefiningLocal {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
-        let mut checker =
-            RedefineChecker { source: context.source, declarations: Vec::new(), diags: Vec::new() };
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let mut checker = RedefineChecker {
+            source: context.source,
+            declarations: Vec::new(),
+            findings: Vec::new(),
+        };
         checker.visit_block(context.block);
-        checker.diags
+        checker.findings
     }
 }
 
@@ -42,7 +45,7 @@ struct RedefineChecker<'ast> {
     /// Each local declared so far in the block being checked, with its
     /// name's span.
     declarations: Vec<(&'ast str, Span)>,
-    diags: Vec<LintDiagnostic>,
+    findings: Vec<Finding>,
 }
 
 impl<'ast> RedefineChecker<'ast> {
@@ -91,9 +94,8 @@ impl<'ast> RedefineChecker<'ast> {
             self.declarations.iter().find(|(declared_name, _)| *declared_name == name)
         {
             let (line, column) = line_column(self.source, first_span.start);
-            self.diags.push(
-                LintDiagnostic::new(
-                    "redefining_local",
+            self.findings.push(
+                Finding::new(
                     format!("local `{name}` is redeclared in the same block"),
                     name_token.span,
                 )
@@ -116,6 +118,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

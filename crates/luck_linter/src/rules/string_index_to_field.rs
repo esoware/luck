@@ -1,8 +1,9 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet, Statement, Var};
+use luck_ast::{Expression, Statement, Var};
 use luck_token::{LuaVersion, Span, TokenKind, short_string_body};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::fix::{Fix, TextEdit};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags `t["foo"]` where `foo` is a valid identifier and not a keyword, since
@@ -40,18 +41,18 @@ impl NodeRule for StringIndexToField {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let version = context.semantic.version;
         match stmt {
             Statement::Assignment(assignment) => {
                 for target in assignment.targets.iter() {
-                    diags.extend(check_var(target, version));
+                    findings.extend(check_var(target, version));
                 }
             }
             // Luau
             Statement::CompoundAssignment(compound_assignment) => {
-                diags.extend(check_var(&compound_assignment.var, version));
+                findings.extend(check_var(&compound_assignment.var, version));
             }
             Statement::FunctionCall(_)
             | Statement::DoBlock(_)
@@ -79,15 +80,15 @@ impl NodeRule for StringIndexToField {
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::Var(var) = expr {
-            diags.extend(check_var(var, context.semantic.version));
+            findings.extend(check_var(var, context.semantic.version));
         }
     }
 }
 
-fn check_var(var: &Var, version: LuaVersion) -> Option<LintDiagnostic> {
+fn check_var(var: &Var, version: LuaVersion) -> Option<Finding> {
     let Var::Index(index_expr) = var else {
         return None;
     };
@@ -104,22 +105,19 @@ fn check_var(var: &Var, version: LuaVersion) -> Option<LintDiagnostic> {
     // Replace everything after the prefix, brackets included.
     let span = Span::new(index_expr.prefix.span().end, index_expr.span.end);
     Some(
-        LintDiagnostic::new(
-            "string_index_to_field",
-            format!("`[\"{name}\"]` is equivalent to `.{name}`"),
-            span,
-        )
-        .with_help("prefer dot access for identifier-safe keys")
-        .with_fix(Fix {
-            description: format!("rewrite `[\"{name}\"]` as `.{name}`"),
-            edits: vec![TextEdit { span, replacement: format!(".{name}") }],
-        }),
+        Finding::new(format!("`[\"{name}\"]` is equivalent to `.{name}`"), span)
+            .with_help("prefer dot access for identifier-safe keys")
+            .with_fix(Fix {
+                description: format!("rewrite `[\"{name}\"]` as `.{name}`"),
+                edits: vec![TextEdit { span, replacement: format!(".{name}") }],
+            }),
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

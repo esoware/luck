@@ -1,11 +1,10 @@
 //! `-- luck:` directive comments, and what they do to the diagnostics they
 //! cover.
 
-use luck_ast::NodeKind;
 use luck_token::{Comment, Span, index_to_offset};
 
 use crate::diagnostic::{LintDiagnostic, Severity};
-use crate::nodes::Nodes;
+use crate::nodes::{NodeKind, Nodes};
 
 /// Verb of a `-- luck:` directive.
 ///
@@ -33,6 +32,24 @@ pub(crate) enum Extent {
     RegionEnd,
 }
 
+/// One entry of a directive's rule list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DirectiveRule<'source> {
+    /// `*`, which matches every rule.
+    Wildcard,
+    /// A rule name as written, which may not name a registered rule.
+    Named(&'source str),
+}
+
+impl DirectiveRule<'_> {
+    fn matches(self, rule: &str) -> bool {
+        match self {
+            Self::Wildcard => true,
+            Self::Named(name) => name == rule,
+        }
+    }
+}
+
 /// A `-- luck:` or `-- #luck:` comment, before resolution to what it covers.
 #[derive(Debug)]
 pub(crate) struct DirectiveComment<'source> {
@@ -40,8 +57,8 @@ pub(crate) struct DirectiveComment<'source> {
     /// `None` when the word after `)` is anything else, which disables the
     /// directive.
     pub extent: Option<Extent>,
-    /// Each rule name as written, `*` included, with its span in the source.
-    pub names: Vec<(&'source str, Span)>,
+    /// Each entry of the rule list, with its span in the source.
+    pub rules: Vec<(DirectiveRule<'source>, Span)>,
 }
 
 /// Parses `-- luck: <verb>(rule, ...)` or `-- #luck: <verb>(rule, ...)`.
@@ -66,7 +83,7 @@ pub(crate) fn parse_directive(text: &str, comment_start: u32) -> Option<Directiv
     let inside = after_verb.trim_start().strip_prefix('(')?;
     let (name_list, after_close) = inside.split_once(')')?;
 
-    let mut names = Vec::new();
+    let mut rules = Vec::new();
     // Every step trims from the front, so `inside` is a tail of `text` and
     // its length alone locates it in the comment.
     let mut entry_start = text.len().saturating_sub(inside.len());
@@ -79,12 +96,14 @@ pub(crate) fn parse_directive(text: &str, comment_start: u32) -> Option<Directiv
             let name_start = comment_start
                 .saturating_add(index_to_offset(entry_start.saturating_add(leading_whitespace)));
             let name_end = name_start.saturating_add(index_to_offset(name.len()));
-            names.push((name, Span::new(name_start, name_end)));
+            let rule =
+                if name == "*" { DirectiveRule::Wildcard } else { DirectiveRule::Named(name) };
+            rules.push((rule, Span::new(name_start, name_end)));
         }
         // Step over the entry and the comma `split` consumed.
         entry_start = entry_start.saturating_add(entry.len()).saturating_add(1);
     }
-    if names.is_empty() {
+    if rules.is_empty() {
         return None;
     }
 
@@ -99,21 +118,20 @@ pub(crate) fn parse_directive(text: &str, comment_start: u32) -> Option<Directiv
         _ => None,
     };
 
-    Some(DirectiveComment { verb, extent, names })
+    Some(DirectiveComment { verb, extent, rules })
 }
 
-/// A directive resolved to the byte range it covers. `rule` may be the `*`
-/// wildcard.
+/// A directive resolved to the byte range it covers.
 #[derive(Debug)]
 struct Directive<'source> {
-    rule: &'source str,
+    rule: DirectiveRule<'source>,
     verb: Verb,
     range: Span,
 }
 
 impl Directive<'_> {
     fn covers(&self, diag: &LintDiagnostic) -> bool {
-        (self.rule == "*" || self.rule == diag.rule)
+        self.rule.matches(diag.rule)
             && diag.span.start >= self.range.start
             && diag.span.start < self.range.end
     }
@@ -141,13 +159,13 @@ fn resolve<'source>(
     // Open regions as (rule, verb, start). An `end` closes the latest one
     // with the same rule and verb, so `allow(x) start` and
     // `deny(x) start` don't collide.
-    let mut open_regions: Vec<(&str, Verb, u32)> = Vec::new();
+    let mut open_regions: Vec<(DirectiveRule<'_>, Verb, u32)> = Vec::new();
     // Built on first use, since most files have no statement directive.
     let mut sorted_spans: Option<Vec<Span>> = None;
     let source_end = index_to_offset(source.len());
 
     for comment in comments {
-        let Some(DirectiveComment { verb, extent: Some(extent), names }) =
+        let Some(DirectiveComment { verb, extent: Some(extent), rules }) =
             parse_directive(comment.span.text(source), comment.span.start)
         else {
             continue;
@@ -156,18 +174,18 @@ fn resolve<'source>(
         match extent {
             Extent::File => {
                 let range = Span::new(0, source_end);
-                directives.extend(names.iter().map(|&(rule, _)| Directive { rule, verb, range }));
+                directives.extend(rules.iter().map(|&(rule, _)| Directive { rule, verb, range }));
             }
             Extent::Statement => {
                 let stmt_spans = sorted_spans.get_or_insert_with(|| sorted_stmt_spans(nodes));
                 let range = stmt_range(comment.span, stmt_spans, source, source_end);
-                directives.extend(names.iter().map(|&(rule, _)| Directive { rule, verb, range }));
+                directives.extend(rules.iter().map(|&(rule, _)| Directive { rule, verb, range }));
             }
             Extent::RegionStart => {
-                open_regions.extend(names.iter().map(|&(rule, _)| (rule, verb, comment.span.end)));
+                open_regions.extend(rules.iter().map(|&(rule, _)| (rule, verb, comment.span.end)));
             }
             Extent::RegionEnd => {
-                for &(rule, _) in &names {
+                for &(rule, _) in &rules {
                     if let Some(position) =
                         open_regions.iter().rposition(|&(open_rule, open_verb, _)| {
                             open_rule == rule && open_verb == verb
@@ -259,13 +277,10 @@ fn apply_directives(directives: &[Directive<'_>], diags: &mut Vec<LintDiagnostic
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::diagnostic;
 
-    fn directive(rule: &str, verb: Verb) -> Directive<'_> {
+    fn directive(rule: DirectiveRule<'_>, verb: Verb) -> Directive<'_> {
         Directive { rule, verb, range: Span::new(0, 100) }
-    }
-
-    fn diag_at(rule: &'static str, start: u32, end: u32) -> LintDiagnostic {
-        LintDiagnostic::new(rule, "test", Span::new(start, end))
     }
 
     #[test]
@@ -273,8 +288,8 @@ mod tests {
         let parsed = parse_directive("-- luck: allow(foo)", 0).expect("parse");
         assert_eq!(parsed.verb, Verb::Allow);
         assert_eq!(parsed.extent, Some(Extent::Statement));
-        assert_eq!(parsed.names.len(), 1);
-        assert_eq!(parsed.names[0].0, "foo");
+        assert_eq!(parsed.rules.len(), 1);
+        assert_eq!(parsed.rules[0].0, DirectiveRule::Named("foo"));
     }
 
     #[test]
@@ -288,15 +303,18 @@ mod tests {
     fn parse_warn_multi() {
         let parsed = parse_directive("-- luck: warn(a, b, c)", 0).expect("parse");
         assert_eq!(parsed.verb, Verb::Warn);
-        let rule_names: Vec<&str> = parsed.names.iter().map(|&(rule, _)| rule).collect();
-        assert_eq!(rule_names, ["a", "b", "c"]);
+        let rules: Vec<DirectiveRule<'_>> = parsed.rules.iter().map(|&(rule, _)| rule).collect();
+        assert_eq!(
+            rules,
+            [DirectiveRule::Named("a"), DirectiveRule::Named("b"), DirectiveRule::Named("c")]
+        );
     }
 
     #[test]
     fn parse_file_level() {
         let parsed = parse_directive("-- #luck: allow(foo)", 0).expect("parse");
         assert_eq!(parsed.extent, Some(Extent::File));
-        assert_eq!(parsed.names[0].0, "foo");
+        assert_eq!(parsed.rules[0].0, DirectiveRule::Named("foo"));
         let with_start = parse_directive("-- #luck: allow(foo) start", 0).expect("parse");
         assert_eq!(with_start.extent, Some(Extent::File));
     }
@@ -312,7 +330,7 @@ mod tests {
         // -- luck: allow(foo, bar)
         // 012345678901234567890123, shifted by the comment's start of 10
         let parsed = parse_directive("-- luck: allow(foo, bar)", 10).expect("parse");
-        let spans: Vec<Span> = parsed.names.iter().map(|&(_, span)| span).collect();
+        let spans: Vec<Span> = parsed.rules.iter().map(|&(_, span)| span).collect();
         assert_eq!(spans, [Span::new(25, 28), Span::new(30, 33)]);
     }
 
@@ -332,38 +350,38 @@ mod tests {
         // directive.
         let parsed = parse_directive("-- luck: allow(foo) strat", 0).expect("parse");
         assert_eq!(parsed.extent, None);
-        assert_eq!(parsed.names[0].0, "foo");
+        assert_eq!(parsed.rules[0].0, DirectiveRule::Named("foo"));
     }
 
     #[test]
     fn allow_drops_covered_diag() {
-        let mut diags = vec![diag_at("x", 10, 20)];
-        apply_directives(&[directive("x", Verb::Allow)], &mut diags);
+        let mut diags = vec![diagnostic("x", Span::new(10, 20))];
+        apply_directives(&[directive(DirectiveRule::Named("x"), Verb::Allow)], &mut diags);
         assert_eq!(diags, Vec::<LintDiagnostic>::new());
     }
 
     #[test]
     fn deny_makes_covered_diag_an_error() {
-        let mut diags = vec![diag_at("x", 10, 20)];
-        apply_directives(&[directive("x", Verb::Deny)], &mut diags);
+        let mut diags = vec![diagnostic("x", Span::new(10, 20))];
+        apply_directives(&[directive(DirectiveRule::Named("x"), Verb::Deny)], &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Severity::Error);
     }
 
     #[test]
     fn warn_makes_covered_diag_a_warning() {
-        let mut diag = diag_at("x", 10, 20);
+        let mut diag = diagnostic("x", Span::new(10, 20));
         diag.severity = Severity::Error;
         let mut diags = vec![diag];
-        apply_directives(&[directive("x", Verb::Warn)], &mut diags);
+        apply_directives(&[directive(DirectiveRule::Named("x"), Verb::Warn)], &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Severity::Warning);
     }
 
     #[test]
     fn wildcard_matches_any_rule() {
-        let mut diags = vec![diag_at("anything", 10, 20)];
-        apply_directives(&[directive("*", Verb::Allow)], &mut diags);
+        let mut diags = vec![diagnostic("anything", Span::new(10, 20))];
+        apply_directives(&[directive(DirectiveRule::Wildcard, Verb::Allow)], &mut diags);
         assert_eq!(diags, Vec::<LintDiagnostic>::new());
     }
 }

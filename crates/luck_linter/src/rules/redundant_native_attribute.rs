@@ -1,8 +1,9 @@
-use luck_ast::{NodeType, NodeTypeSet, Statement};
+use luck_ast::Statement;
 use luck_token::{CommentKind, Span, offset_to_index};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::fix::{Fix, TextEdit};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -34,7 +35,7 @@ impl NodeRule for RedundantNativeAttribute {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let attributes = match stmt {
             Statement::FunctionDecl(function_decl) => &function_decl.attributes,
@@ -80,9 +81,8 @@ impl NodeRule for RedundantNativeAttribute {
                 Some(b' ' | b'\t' | b'\n' | b'\r')
             );
             let edit_end = name_end.saturating_add(u32::from(has_trailing_space));
-            diags.push(
-                LintDiagnostic::new(
-                    "redundant_native_attribute",
+            findings.push(
+                Finding::new(
                     "`@native` attribute is redundant in a `--!native` module",
                     attribute.span,
                 )
@@ -131,6 +131,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

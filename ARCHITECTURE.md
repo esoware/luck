@@ -14,7 +14,7 @@ Everything else consumes the parsed AST. `luck_minifier`, `luck_formatter`, and 
 |-------|------|-----------|
 | `luck_token` | Spans, `LuaVersion`, `StdlibEnvironment`, `SourceError`, shared literal decode/encode, `CompactString` storage, `CodeBuffer` byte-level output builder | `span.rs`, `version.rs`, `token.rs`, `operator.rs`, `number.rs`, `string.rs`, `code_buffer.rs` |
 | `luck_lexer` | Single-pass tokenizer, comments emitted separately, memchr + byte-table batched scanning | `lexer.rs`, `search.rs` |
-| `luck_ast` | `Expression`/`Statement`/`Type` <=64 B, `Visitor`, `Transform`, `Synth` builder (source-free AST construction), `NodeType`/`NodeKind`/`NodeTypeSet` for node-table dispatch | `expr.rs`, `stmt.rs`, `types.rs`, `transform.rs`, `synth.rs`, `node.rs` |
+| `luck_ast` | `Expression`/`Statement`/`Type` <=64 B, `Visitor`, `Transform`, `Synth` builder (source-free AST construction) | `expr.rs`, `stmt.rs`, `types.rs`, `transform.rs`, `synth.rs` |
 | `luck_parser` | Pratt expressions + recursive-descent statements + full Luau type grammar, version-gated | `parser.rs`, `parser/expr.rs`, `parser/stmt.rs`, `parser/types.rs` |
 | `luck_codegen` | Compact printer (ambiguity cases live in `separator.rs` + its tests) | `compact.rs`, `separator.rs` |
 | `luck_core` | `LuaTarget`, typed config, `TransformConfig`, diagnostic codes, schemars schema, `read_source_file` (SIMD-validated file reads), `normalize_path`/`native_path` (the forward-slash path form modules are keyed on) | `config.rs`, `diagnostic/codes.rs`, `lua_target.rs` |
@@ -22,7 +22,7 @@ Everything else consumes the parsed AST. `luck_minifier`, `luck_formatter`, and 
 | `luck_bundler` | Scope-aware require extraction (via `luck_semantic`), dep graph with cycle detection, version-exact lazy loader emit + line maps, collision-proof `__luck` prefix, runtime-resolved `require(expr)` kept via the loader's dynamic entry point (`dynamic_require`) | `require_extraction.rs`, `graph.rs`, `emitter.rs`, `loader.rs`, `module.rs` |
 | `luck_minifier` | AST transform pipeline, with `TransformConfig` flags turning passes on and off | `pipeline.rs` `minify()`, `transforms/` |
 | `luck_formatter` | Wadler-style engine: `Format` trait + combinator IR, AST-in `format_block` formats synthetic ASTs (no source needed), idempotency invariant | `ir.rs`, `printer.rs`, `format_*.rs`, `comments.rs` |
-| `luck_linter` | `Rule` identity trait, `WholeRule`/`NodeRule` checking traits + `LintContext`, stateless rules in a static `RULES` registry, node-type-bucketed single-pass bus over a flat pre-order node table, suppressions, `--fix` | `rules/`, `rule.rs`, `bus.rs`, `nodes.rs` |
+| `luck_linter` | `Rule` identity trait, `WholeRule`/`NodeRule` checking traits + `LintContext`, stateless rules in a static `RULES` registry reporting `Finding`s the driver turns into `LintDiagnostic`s, `NodeType`-bucketed single-pass bus over a flat pre-order node table, suppressions, `--fix` | `rules/`, `rule.rs`, `bus.rs`, `nodes.rs`, `node_type.rs` |
 | `luck_semantic` | Scope tree, refs (R/W/RW), upvalues, typed `NonZeroU32` ids, per-environment stdlib catalog TOMLs (5.1-5.5, luau, luau_roblox) with overloads, shapes, and deprecations, and generated Roblox API data | `analysis.rs`, `builder.rs`, `stdlib_model.rs`, `resolve.rs` |
 | `luck_lsp` | Library-only LSP backend (no binary), served by `luck lsp` | `backend.rs`, `transport.rs`, `providers/` |
 | `luck_cli` | Binary only: flat Clap commands, one module per command, rayon-parallel lint/fmt/check, ariadne rendering, exit codes 0/1/2, 16 MB-stack worker thread | `main.rs`, `args.rs`, `commands/`, `render.rs` |
@@ -46,7 +46,7 @@ One typed source of truth: `luck.json`, discovered by walking up from cwd for pr
 
 ## Diagnostics
 
-One scheme: codes live in `luck_core`'s `diagnostic/codes.rs` as numbered `Diagnostic` constructors (`Diagnostic::e008`), the only way to build a coded diagnostic, so consumers never inline literal codes. Parse failures are always E008. Lint diagnostics render with the rule name as the code, and the driver stamps category and severity from the rule's `category()` and the resolved severity. The CLI exits 0 (success), 1 (problems found), or 2 (usage/config error).
+One scheme: codes live in `luck_core`'s `diagnostic/codes.rs` as numbered `Diagnostic` constructors (`Diagnostic::e008`), the only way to build a coded diagnostic, so consumers never inline literal codes. Parse failures are always E008. Lint diagnostics render with the rule name as the code. Rules report bare findings, and the driver stamps each with the rule's name, its `category()`, and the resolved severity. The CLI exits 0 (success), 1 (problems found), or 2 (usage/config error).
 
 ## Design decisions
 

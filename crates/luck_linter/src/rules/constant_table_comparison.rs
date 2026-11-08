@@ -1,7 +1,8 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet};
+use luck_ast::Expression;
 use luck_token::BinOp;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -30,16 +31,15 @@ impl NodeRule for ConstantTableComparison {
         &self,
         expr: &Expression,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::BinaryOp(binary) = expr
             && matches!(binary.op, BinOp::Eq | BinOp::Ne)
             && (matches!(&binary.left, Expression::TableConstructor(_))
                 || matches!(&binary.right, Expression::TableConstructor(_)))
         {
-            diags.push(
-                LintDiagnostic::new(
-                    "constant_table_comparison",
+            findings.push(
+                Finding::new(
                     "tables compare by identity, so a table literal never equals another value",
                     binary.span,
                 )
@@ -54,6 +54,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

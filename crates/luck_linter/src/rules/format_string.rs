@@ -1,15 +1,13 @@
-use luck_ast::{
-    Expression, FunctionArgs, FunctionCall, Literal, NodeType, NodeTypeSet, Statement, Var,
-    is_multi_value,
-};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Literal, Statement, Var, is_multi_value};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, Token, short_string_body};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::format_pattern::{
     PatternError, count_pattern_captures, validate_format, validate_gsub_replacement,
     validate_lua_pattern, validate_os_date, validate_pack_format,
 };
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Validates a literal format string, Lua pattern, or pack format passed to
@@ -43,22 +41,22 @@ impl NodeRule for FormatString {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Statement::FunctionCall(call) = stmt {
-            check_dsl_literal(call, context.semantic, diags);
-            check_gsub_replacement(call, context.semantic, diags);
+            check_dsl_literal(call, context.semantic, findings);
+            check_gsub_replacement(call, context.semantic, findings);
         }
     }
     fn on_expression(
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionCall(call) = expr {
-            check_dsl_literal(call, context.semantic, diags);
-            check_gsub_replacement(call, context.semantic, diags);
+            check_dsl_literal(call, context.semantic, findings);
+            check_gsub_replacement(call, context.semantic, findings);
         }
     }
 }
@@ -103,7 +101,7 @@ impl DslKind {
 fn check_dsl_literal(
     call: &FunctionCall,
     semantic: &SemanticAnalysis,
-    diags: &mut Vec<LintDiagnostic>,
+    findings: &mut Vec<Finding>,
 ) {
     // `trailing_args` are the arguments after the literal, or `None` when
     // string or table call syntax leaves no argument list to count.
@@ -152,9 +150,9 @@ fn check_dsl_literal(
         DslKind::OsDate => ("date format", validate_os_date(body).map(|()| None)),
     };
     match expected_arg_count {
-        Ok(Some(expected)) => check_arg_count(trailing_args, literal.span, expected, diags),
+        Ok(Some(expected)) => check_arg_count(trailing_args, literal.span, expected, findings),
         Ok(None) => {}
-        Err(error) => diags.push(literal_error(error, literal, noun)),
+        Err(error) => findings.push(literal_error(error, literal, noun)),
     }
 }
 
@@ -202,7 +200,7 @@ fn check_arg_count(
     trailing_args: Option<&[Expression]>,
     literal_span: Span,
     expected: usize,
-    diags: &mut Vec<LintDiagnostic>,
+    findings: &mut Vec<Finding>,
 ) {
     let Some(args) = trailing_args else {
         return;
@@ -213,8 +211,7 @@ fn check_arg_count(
     }
     let given = args.len();
     if given != expected {
-        diags.push(LintDiagnostic::new(
-            "format_string",
+        findings.push(Finding::new(
             format!("wrong argument count, format takes {expected}, got {given}"),
             literal_span,
         ));
@@ -227,7 +224,7 @@ fn check_arg_count(
 fn check_gsub_replacement(
     call: &FunctionCall,
     semantic: &SemanticAnalysis,
-    diags: &mut Vec<LintDiagnostic>,
+    findings: &mut Vec<Finding>,
 ) {
     let pattern_index: usize = if let Some(method) = &call.method {
         if method.identifier() != Some("gsub") {
@@ -259,15 +256,14 @@ fn check_gsub_replacement(
         None
     };
     if let Err(error) = validate_gsub_replacement(replacement_body, capture_count) {
-        diags.push(literal_error(error, replacement, "replacement"));
+        findings.push(literal_error(error, replacement, "replacement"));
     }
 }
 
 /// Reports `error` at its offset in the body of the quoted `literal`.
-fn literal_error(error: PatternError, literal: &Literal, noun: &str) -> LintDiagnostic {
+fn literal_error(error: PatternError, literal: &Literal, noun: &str) -> Finding {
     let offset = error.offset();
-    LintDiagnostic::new(
-        "format_string",
+    Finding::new(
         format!("invalid {noun}: {error}"),
         Span::from_indices(offset, offset.saturating_add(1))
             .shifted(literal.span.start.saturating_add(1)),
@@ -279,6 +275,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

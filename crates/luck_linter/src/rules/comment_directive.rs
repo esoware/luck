@@ -3,7 +3,7 @@ use core::mem;
 use luck_ast::Block;
 use luck_token::{CommentKind, Span};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 use crate::suggest::levenshtein;
 
@@ -32,13 +32,13 @@ impl Rule for CommentDirective {
 }
 
 impl WholeRule for CommentDirective {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         if !context.semantic.version.is_luau() {
             return Vec::new();
         }
         let first_code_start = first_code_start(context.block);
         let mut has_seen_mode = false;
-        let mut diags = Vec::new();
+        let mut findings = Vec::new();
         for comment in context.comments {
             if comment.kind != CommentKind::Line {
                 continue;
@@ -48,17 +48,16 @@ impl WholeRule for CommentDirective {
             };
             // Luau ignores hot comments after the first statement.
             let problem = if first_code_start.is_some_and(|start| comment.span.start > start) {
-                Some(LintDiagnostic::new(
-                    "comment_directive",
+                Some(Finding::new(
                     "comment directive after the first statement has no effect",
                     comment.span,
                 ))
             } else {
                 directive_problem(body, comment.span.start.saturating_add(3), &mut has_seen_mode)
             };
-            diags.extend(problem);
+            findings.extend(problem);
         }
-        diags
+        findings
     }
 }
 
@@ -70,11 +69,7 @@ fn first_code_start(block: &Block) -> Option<u32> {
 
 /// Checks the directive `body` that follows `--!`, starting at `word_start`
 /// in source. A valid type checking mode directive sets `has_seen_mode`.
-fn directive_problem(
-    body: &str,
-    word_start: u32,
-    has_seen_mode: &mut bool,
-) -> Option<LintDiagnostic> {
+fn directive_problem(body: &str, word_start: u32, has_seen_mode: &mut bool) -> Option<Finding> {
     let word_length = body.find(char::is_whitespace).unwrap_or(body.len());
     let (word, rest) = body.split_at(word_length);
     let word_span = Span::from_indices(0, word_length).shifted(word_start);
@@ -100,8 +95,7 @@ fn directive_problem(
         }
         "optimize" => {
             let Some(level_span) = trailing_symbols_span(rest, word_span.end) else {
-                return Some(LintDiagnostic::new(
-                    "comment_directive",
+                return Some(Finding::new(
                     "`optimize` directive requires an optimization level",
                     word_span,
                 ));
@@ -118,7 +112,7 @@ fn directive_problem(
             (format!("unknown comment directive `{unknown}`{suggestion_hint}"), word_span)
         }
     };
-    Some(LintDiagnostic::new("comment_directive", message, span))
+    Some(Finding::new(message, span))
 }
 
 /// Returns the span of whatever follows a directive word, or `None` if only
@@ -144,6 +138,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

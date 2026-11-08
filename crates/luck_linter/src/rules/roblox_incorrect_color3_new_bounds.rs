@@ -1,6 +1,7 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet};
+use luck_ast::Expression;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::roblox::{global_new_call, literal_arg_value};
 use crate::rule::{LintContext, NodeRule, Rule};
 
@@ -33,7 +34,7 @@ impl NodeRule for RobloxIncorrectColor3NewBounds {
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let Some((call, args)) = global_new_call(expr, "Color3", context.semantic) else {
             return;
@@ -43,13 +44,9 @@ impl NodeRule for RobloxIncorrectColor3NewBounds {
             .filter_map(literal_arg_value)
             .any(|value| !(0.0f64..=1.0f64).contains(&value));
         if has_out_of_bounds {
-            diags.push(
-                LintDiagnostic::new(
-                    self.name(),
-                    "`Color3.new` components are on a 0 to 1 scale",
-                    call.span,
-                )
-                .with_help("use `Color3.fromRGB` for 0 to 255 values"),
+            findings.push(
+                Finding::new("`Color3.new` components are on a 0 to 1 scale", call.span)
+                    .with_help("use `Color3.fromRGB` for 0 to 255 values"),
             );
         }
     }
@@ -58,6 +55,7 @@ impl NodeRule for RobloxIncorrectColor3NewBounds {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{run_rule, run_rule_roblox};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

@@ -1,11 +1,12 @@
 //! The traits lint rules implement, and the context their checks read.
 
-use luck_ast::{Block, Expression, LastStatement, NodeTypeSet, Statement};
+use luck_ast::{Block, Expression, LastStatement, Statement};
 use luck_core::LintConfig;
 use luck_semantic::SemanticAnalysis;
 use luck_token::Comment;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::NodeTypeSet;
 
 /// The parsed document, its analysis, and the config, for one lint pass.
 #[derive(Debug)]
@@ -33,7 +34,7 @@ pub trait Rule: Send + Sync {
 /// A rule that walks the tree itself, because it needs traversal state such
 /// as scope stacks or statement sequences.
 pub(crate) trait WholeRule: Rule {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic>;
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding>;
 }
 
 /// A rule that gets one callback per node from the bus's shared walk
@@ -49,7 +50,7 @@ pub(crate) trait NodeRule: Rule {
         &self,
         _stmt: &Statement,
         _context: &LintContext<'_>,
-        _diags: &mut Vec<LintDiagnostic>,
+        _findings: &mut Vec<Finding>,
     ) {
     }
 
@@ -57,7 +58,7 @@ pub(crate) trait NodeRule: Rule {
         &self,
         _expr: &Expression,
         _context: &LintContext<'_>,
-        _diags: &mut Vec<LintDiagnostic>,
+        _findings: &mut Vec<Finding>,
     ) {
     }
 
@@ -65,7 +66,7 @@ pub(crate) trait NodeRule: Rule {
         &self,
         _last_stmt: &LastStatement,
         _context: &LintContext<'_>,
-        _diags: &mut Vec<LintDiagnostic>,
+        _findings: &mut Vec<Finding>,
     ) {
     }
 }

@@ -49,6 +49,6 @@ The hooks cover blocks, statements, last statements, expressions, vars, function
 
 The difference is ownership. `Visitor` borrows, so it can only read. `Transform` consumes, so it can restructure, replace, or remove nodes.
 
-### Node discriminants and structural queries
+### Structural queries
 
-`node.rs` defines `NodeType` (one variant per `Statement`/`LastStatement`/`Expression` variant, read off a node by `NodeKind::node_type` through exhaustive matches), a borrowed `NodeKind` view, and `NodeTypeSet`, a fixed-size bitset over `NodeType` used by `luck_linter`'s flat node table and node-type-bucketed rule dispatch. `query.rs` holds small read-only structural predicates. One says whether an expression is a call or `...`, the forms that yield any number of values, and `Synth`, the minifier, and the linter share it. The rest decide where a reprinted node needs parentheses or a separator: whether an expression may stand bare in a prefix position (shared by `Synth` and the minifier), and whether a statement's or expression's first emitted token is `(` or `{`, which the codegen and formatter printers both guard against reprinting into a different parse.
+`query.rs` holds small read-only structural predicates. One says whether an expression is a call or `...`, the forms that yield any number of values, and `Synth`, the minifier, and the linter share it. The rest decide where a reprinted node needs parentheses or a separator: whether an expression may stand bare in a prefix position (shared by `Synth` and the minifier), and whether a statement's or expression's first emitted token is `(` or `{`, which the codegen and formatter printers both guard against reprinting into a different parse.

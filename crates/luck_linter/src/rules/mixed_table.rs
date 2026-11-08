@@ -1,6 +1,7 @@
-use luck_ast::{Expression, Field, NodeType, NodeTypeSet};
+use luck_ast::{Expression, Field};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags table constructors that mix positional fields with `name = value`
@@ -31,7 +32,7 @@ impl NodeRule for MixedTable {
         &self,
         expr: &Expression,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let Expression::TableConstructor(table) = expr else {
             return;
@@ -48,9 +49,8 @@ impl NodeRule for MixedTable {
             }
         }
         if has_positional && has_named {
-            diags.push(
-                LintDiagnostic::new(
-                    "mixed_table",
+            findings.push(
+                Finding::new(
                     "table mixes positional and record fields, so iteration with `ipairs` will \
                      skip the record fields",
                     table.span,
@@ -68,6 +68,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

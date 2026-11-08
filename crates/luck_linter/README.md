@@ -25,19 +25,21 @@ Migrating from 0.2.x: `global_usage` named that broader policy through 0.2 and n
 
 ### Pipeline
 
-`lint()` parses the source. If it doesn't parse, each parse error comes back as a `parse_error` diagnostic and no rules run. Otherwise it runs `luck_semantic` analysis to build the scope tree and resolve stdlib symbols, flattens the AST into a node table, runs every enabled rule, sets each diagnostic's severity from the config override or the rule's default, applies suppression directives, and sorts the diagnostics by position. `lint_target()` takes a `LuaTarget` so Roblox globals resolve, and `lint_parsed()` lints a parse the caller already has, which the language server uses.
+`lint()` parses the source. If it doesn't parse, each parse error comes back as a `parse_error` diagnostic and no rules run. Otherwise it runs `luck_semantic` analysis to build the scope tree and resolve stdlib symbols, flattens the AST into a node table, runs every enabled rule, turns each rule's findings into diagnostics with the rule's name, its category, and its severity from the config override or the rule's default, applies suppression directives, and sorts the diagnostics by position. `lint_target()` takes a `LuaTarget` so Roblox globals resolve, and `lint_parsed()` lints a parse the caller already has, which the language server uses.
 
 ### Rules
 
 Every rule implements the `Rule` trait, which holds its identity: `name`, `category`, `default_severity`, and `description`. It also implements exactly one of two checking traits, and its `RULES` entry (`RuleEntry::Whole` or `RuleEntry::Node`) names which.
 
-Rules that need traversal state (scope stacks, statement sequences) implement `WholeRule`, whose `fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic>` walks the AST, usually through `Visitor`. The `LintContext` bundles the block, the semantic analysis, the source text, the comment array, and the resolved config.
+Rules that need traversal state (scope stacks, statement sequences) implement `WholeRule`, whose `fn check(&self, context: &LintContext<'_>) -> Vec<Finding>` walks the AST, usually through `Visitor`. The `LintContext` bundles the block, the semantic analysis, the source text, the comment array, and the resolved config.
 
-Rules whose logic is node-local implement `NodeRule` instead: per-node hooks (`on_statement`, `on_expression`, `on_last_statement`) and a `node_types` set. The `bus` makes one pass over the node table and calls each node rule only for the node types it declared, so every node rule shares a single traversal, and a node rule whose types don't occur in a file is skipped. In debug builds the driver re-runs every node rule on every node and asserts the results match, which catches a `node_types` set that misses a type.
+Rules whose logic is node-local implement `NodeRule` instead: per-node hooks (`on_statement`, `on_expression`, `on_last_statement`) that push onto a `Vec<Finding>`, and a `NodeTypeSet` of the `NodeType`s they act on. The `bus` makes one pass over the node table and calls each node rule only for the node types it declared, so every node rule shares a single traversal, and a node rule whose types don't occur in a file is skipped. In debug builds the driver re-runs every node rule on every node and asserts the results match, which catches a `node_types` set that misses a type.
+
+A `Finding` holds only what differs per report: the message, span, optional help, and optional fix. The driver turns it into a public `LintDiagnostic` by adding the reporting rule's name and category and the severity the config resolves for it, so a rule can't report under another rule's name or set its own severity.
 
 ### Auto-fix
 
-A rule with an always-safe transformation attaches a `Fix` to its diagnostic. `Fix` holds a description and a list of `TextEdit`s, each a span and its replacement. `apply_fixes` sorts the edits, skips any that overlap an edit already applied, applies the rest in a single pass, and returns the original source if the result doesn't parse. `apply_fixes_fixpoint` re-lints and repeats until no fixes remain. Fixes that are sometimes wrong aren't shipped. There is no unsafe-fix tier.
+A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix` holds a description and a list of `TextEdit`s, each a span and its replacement. `apply_fixes` sorts the edits, skips any that overlap an edit already applied, applies the rest in a single pass, and returns the original source if the result doesn't parse. `apply_fixes_fixpoint` re-lints and repeats until no fixes remain. Fixes that are sometimes wrong aren't shipped. There is no unsafe-fix tier.
 
 ### Module layout
 
@@ -48,9 +50,10 @@ A rule with an always-safe transformation attaches a `Fix` to its diagnostic. `F
 | `rule.rs` | `Rule`, `WholeRule`, and `NodeRule` traits, `LintContext` |
 | `rules.rs` | `RULES` registry, `rules()`, and the registered rule names |
 | `bus.rs` | The single-pass dispatch that drives every `NodeRule` in one shared walk |
-| `nodes.rs` | Flat pre-order node table (`Nodes::collect`) the bus walks, with the set of node types present |
+| `nodes.rs` | Flat pre-order node table (`Nodes::collect`) of borrowed `NodeKind` views that the bus walks, with the set of node types present |
+| `node_type.rs` | `NodeType`, one discriminant per statement, last-statement, and expression variant, and the `NodeTypeSet` bitset node rules declare |
 | `cfg.rs` | Control-flow analysis over statement slices (exits, decision points), used by some rules |
-| `diagnostic.rs` | `LintDiagnostic`, `Severity` and `Category` from `luck_core`, and the `line_column` positions that messages quote |
+| `diagnostic.rs` | `LintDiagnostic`, the `Finding` rules report, `Severity` and `Category` from `luck_core`, and the `line_column` positions that messages quote |
 | `suppression.rs` | `-- luck:` directive parsing, shared with `invalid_lint_filter`, and suppression |
 | `fix.rs` | `Fix` and `TextEdit`, and auto-fix application |
 | `format_pattern.rs` | Validators for `string.format`, pattern, `string.pack`, `gsub` replacement, and `os.date` literals |

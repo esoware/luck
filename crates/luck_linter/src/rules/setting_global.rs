@@ -1,4 +1,4 @@
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 #[derive(Debug, Clone, Copy)]
@@ -20,9 +20,9 @@ impl Rule for SettingGlobal {
 }
 
 impl WholeRule for SettingGlobal {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let mut diags = Vec::new();
+        let mut findings = Vec::new();
 
         for reference in semantic.scope_tree.unresolved_references() {
             if !reference.kind.is_write() {
@@ -37,9 +37,8 @@ impl WholeRule for SettingGlobal {
                 continue;
             }
 
-            diags.push(
-                LintDiagnostic::new(
-                    "setting_global",
+            findings.push(
+                Finding::new(
                     format!("setting global variable `{}` (missing `local`?)", reference.name),
                     reference.span,
                 )
@@ -47,7 +46,7 @@ impl WholeRule for SettingGlobal {
             );
         }
 
-        diags
+        findings
     }
 }
 
@@ -56,6 +55,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

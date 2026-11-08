@@ -144,7 +144,7 @@ fn fixpoint_within(
                 message: parse
                     .errors
                     .iter()
-                    .map(|error| error.message.clone())
+                    .map(|error| error.message.as_str())
                     .collect::<Vec<_>>()
                     .join("; "),
             });
@@ -159,13 +159,17 @@ mod tests {
     use luck_core::RuleSetting;
 
     use super::*;
+    use crate::fixtures::diagnostic;
 
     fn diag_with_edit(start: u32, end: u32, replacement: &str) -> LintDiagnostic {
         let span = Span { start, end };
-        LintDiagnostic::new("test", "test", span).with_fix(Fix {
-            description: "test fix".to_owned(),
-            edits: vec![TextEdit { span, replacement: replacement.to_owned() }],
-        })
+        LintDiagnostic {
+            fix: Some(Fix {
+                description: "test fix".to_owned(),
+                edits: vec![TextEdit { span, replacement: replacement.to_owned() }],
+            }),
+            ..diagnostic("test", span)
+        }
     }
 
     /// The default config with `name` turned on.
@@ -213,7 +217,7 @@ mod tests {
     #[test]
     fn diags_without_fixes_leave_source_unchanged() {
         let source = "local x = 1";
-        let diags = vec![LintDiagnostic::new("test", "test", Span { start: 6, end: 7 })];
+        let diags = vec![diagnostic("test", Span { start: 6, end: 7 })];
         let fixed = apply_fixes(source, &diags, LuaVersion::Lua54);
         assert_eq!(fixed, source);
     }
@@ -226,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn fixpoint_converges_in_one_pass() {
+    fn fixpoint_applies_fix_from_one_rule() {
         // unused_variable will rename `unused` -> `_unused`; once renamed
         // it's no longer flagged.
         let config = enable("unused_variable");

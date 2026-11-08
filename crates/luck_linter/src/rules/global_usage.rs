@@ -1,4 +1,4 @@
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 /// Flags reads and writes of `_G`, and of `shared` under the Roblox stdlib.
@@ -23,7 +23,7 @@ impl Rule for GlobalUsage {
 }
 
 impl WholeRule for GlobalUsage {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let is_roblox = context.semantic.environment.is_roblox();
         context
             .semantic
@@ -36,8 +36,7 @@ impl WholeRule for GlobalUsage {
                 _ => false,
             })
             .map(|reference| {
-                LintDiagnostic::new(
-                    self.name(),
+                Finding::new(
                     format!("global environment `{}` used", reference.name),
                     reference.span,
                 )

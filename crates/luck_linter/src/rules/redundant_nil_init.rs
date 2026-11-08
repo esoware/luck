@@ -1,8 +1,9 @@
-use luck_ast::{Expression, LocalAssignment, NodeType, NodeTypeSet, Statement, is_multi_value};
+use luck_ast::{Expression, LocalAssignment, Statement, is_multi_value};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::fix::{Fix, TextEdit};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags `nil` initializers on locals, as in `local x = nil` or the trailing
@@ -33,15 +34,15 @@ impl NodeRule for RedundantNilInit {
         &self,
         stmt: &Statement,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Statement::LocalAssignment(local) = stmt {
-            diags.extend(check_local(local));
+            findings.extend(check_local(local));
         }
     }
 }
 
-fn check_local(local: &LocalAssignment) -> Option<LintDiagnostic> {
+fn check_local(local: &LocalAssignment) -> Option<Finding> {
     let exprs = local.exprs.as_ref()?;
     let trailing_nil_count =
         exprs.items.iter().rev().take_while(|expr| matches!(expr, Expression::Nil(_))).count();
@@ -51,8 +52,7 @@ fn check_local(local: &LocalAssignment) -> Option<LintDiagnostic> {
 
     let Some(last_kept_expr) = exprs.items.iter().rev().nth(trailing_nil_count) else {
         return Some(
-            LintDiagnostic::new(
-                "redundant_nil_init",
+            Finding::new(
                 "redundant `= nil` initializer, because uninitialized locals are `nil`",
                 local.span,
             )
@@ -78,8 +78,7 @@ fn check_local(local: &LocalAssignment) -> Option<LintDiagnostic> {
     let delete_start = last_kept_expr.span().end;
     let delete_end = exprs.last().map_or(delete_start, |last_expr| last_expr.span().end);
     Some(
-        LintDiagnostic::new(
-            "redundant_nil_init",
+        Finding::new(
             format!(
                 "{trailing_nil_count} trailing `nil` value{} in local initializer",
                 if trailing_nil_count == 1 { "" } else { "s" }
@@ -114,6 +113,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

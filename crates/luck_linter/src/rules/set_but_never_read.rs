@@ -1,6 +1,6 @@
 use luck_semantic::SymbolKind;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 /// Flags a local that's assigned after its declaration but never read
@@ -28,9 +28,9 @@ impl Rule for SetButNeverRead {
 }
 
 impl WholeRule for SetButNeverRead {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let mut diags = Vec::new();
+        let mut findings = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
             if symbol.kind != SymbolKind::Local {
@@ -57,9 +57,8 @@ impl WholeRule for SetButNeverRead {
                 continue;
             }
 
-            diags.push(
-                LintDiagnostic::new(
-                    "set_but_never_read",
+            findings.push(
+                Finding::new(
                     format!("value assigned to `{}` is never read", symbol.name),
                     symbol.definition_span,
                 )
@@ -67,7 +66,7 @@ impl WholeRule for SetButNeverRead {
             );
         }
 
-        diags
+        findings
     }
 }
 
@@ -76,6 +75,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

@@ -3,7 +3,7 @@ use luck_semantic::SemanticAnalysis;
 use luck_token::{LuaVersion, SourceError, StdlibEnvironment};
 use rayon::prelude::*;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
 use crate::nodes::Nodes;
 use crate::rule::{LintContext, NodeRule, Rule, WholeRule};
 use crate::rules::{PARSE_ERROR_PSEUDO_RULE, RULES, RuleEntry};
@@ -89,8 +89,8 @@ fn parse_error_diag(error: &SourceError) -> LintDiagnostic {
     }
 }
 
-/// Runs every enabled rule and stamps each diagnostic with its rule's
-/// category and resolved severity, in registry order.
+/// Runs every enabled rule and returns the rules' findings as diagnostics, in
+/// registry order.
 ///
 /// Node rules share one bus pass while whole-tree rules run in parallel
 /// beside it. Results go back into registry order, so the caller's stable
@@ -140,36 +140,39 @@ fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic
         context,
     );
 
-    let mut diags_by_slot = vec![Vec::new(); RULES.len()];
-    for (slot, rule_diags) in
+    let mut findings_by_slot = vec![Vec::new(); RULES.len()];
+    for (slot, rule_findings) in
         whole_results.into_iter().chain(node_slots.into_iter().zip(node_results))
     {
-        if let Some(slot_diags) = diags_by_slot.get_mut(slot) {
-            *slot_diags = rule_diags;
+        if let Some(slot_findings) = findings_by_slot.get_mut(slot) {
+            *slot_findings = rule_findings;
         }
     }
 
     let mut diags: Vec<LintDiagnostic> = Vec::new();
-    for (entry, mut rule_diags) in RULES.iter().zip(diags_by_slot) {
-        if rule_diags.is_empty() {
-            continue;
+    for (entry, rule_findings) in RULES.iter().zip(findings_by_slot) {
+        if !rule_findings.is_empty() {
+            diags.extend(into_diagnostics(entry.rule(), rule_findings, config));
         }
-        let rule = entry.rule();
-        let severity = config
-            .rule_overrides
-            .get(rule.name())
-            .and_then(|setting| setting.severity)
-            .unwrap_or_else(|| rule.default_severity());
-        // `category()` decided whether the rule ran, so it overrides
-        // whatever category each diagnostic was built with.
-        let category = rule.category();
-        for diag in &mut rule_diags {
-            diag.severity = severity;
-            diag.category = category;
-        }
-        diags.extend(rule_diags);
     }
     diags
+}
+
+/// `rule`'s findings as diagnostics, carrying its name and category and the
+/// severity `config` resolves for it.
+pub(crate) fn into_diagnostics(
+    rule: &dyn Rule,
+    findings: Vec<Finding>,
+    config: &LintConfig,
+) -> impl Iterator<Item = LintDiagnostic> {
+    let name = rule.name();
+    let category = rule.category();
+    let severity = config
+        .rule_overrides
+        .get(name)
+        .and_then(|setting| setting.severity)
+        .unwrap_or_else(|| rule.default_severity());
+    findings.into_iter().map(move |finding| finding.into_diagnostic(name, category, severity))
 }
 
 /// A rule's own `enabled` override wins. Otherwise `disable_default_rules`

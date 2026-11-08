@@ -5,7 +5,7 @@ description: Adds a new lint rule to luck_linter end-to-end, covering the rule f
 
 # Add a lint rule
 
-Rules are stateless `Rule` impls emitting `LintDiagnostic`s, and everything they see arrives through `LintContext`. Before writing anything, read one existing rule of similar shape from `crates/luck_linter/src/rules/` and mirror it. The code is the source of truth, not this file.
+Rules are stateless `Rule` impls reporting `Finding`s, and everything they see arrives through `LintContext`. Before writing anything, read one existing rule of similar shape from `crates/luck_linter/src/rules/` and mirror it. The code is the source of truth, not this file.
 
 ## 1. Pick a category
 
@@ -15,14 +15,14 @@ Rules are stateless `Rule` impls emitting `LintDiagnostic`s, and everything they
 
 Either way the `Rule` impl holds only the rule's identity: `name`, `category`, `default_severity`, and `description`.
 
-- **Node-local (preferred).** The rule fires by matching a single statement or expression with no traversal state. Implement `NodeRule`: its hooks and `node_types()`. Omitting a type the hooks match would silently disable the rule for it, though the debug-build dual-dispatch verifier catches the mismatch in any test run. Never recurse inside hooks: the bus walks, and hooks fire once per node. A hook sees only its own node and what hangs below it, such as a function or loop body to run `cfg.rs` analysis on.
+- **Node-local (preferred).** The rule fires by matching a single statement or expression with no traversal state. Implement `NodeRule`: its hooks and `node_types()`, a `NodeTypeSet` built from the `NodeType`s in `crate::node_type`. Omitting a type the hooks match would silently disable the rule for it, though the debug-build dual-dispatch verifier catches the mismatch in any test run. Never recurse inside hooks: the bus walks, and hooks fire once per node. A hook sees only its own node and what hangs below it, such as a function or loop body to run `cfg.rs` analysis on.
 - **Whole-tree.** The rule needs traversal state (scope stacks, statement-sequence windows). Implement `WholeRule::check` with an internal `Visitor`, never hand-rolled recursion, which misses nested blocks.
 
 Cross-cutting rules:
 
 - Name/scope questions resolve through `context.semantic`'s scope tree, never by slicing identifier text out of source (breaks on shadowed names).
 - Config-driven behavior reads `context.config` at check time. Rules never carry constructor state.
-- Build diagnostics with `LintDiagnostic::new(self.name(), "message", span)` plus optional `.with_help(..)`. Rules never set category or severity per diagnostic. The driver stamps them.
+- Report with `Finding::new("message", span)` plus optional `.with_help(..)` or `.with_fix(..)`. A finding carries no rule name, category, or severity. The driver adds them when it turns the finding into a `LintDiagnostic`.
 
 ## 3. Auto-fix (optional)
 

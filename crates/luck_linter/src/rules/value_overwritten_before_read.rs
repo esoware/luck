@@ -1,7 +1,7 @@
 use luck_semantic::{ReferenceKind, SymbolKind};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 use crate::uninitialized::UninitializedLocals;
 
@@ -31,10 +31,10 @@ impl Rule for ValueOverwrittenBeforeRead {
 }
 
 impl WholeRule for ValueOverwrittenBeforeRead {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let scope_tree = &context.semantic.scope_tree;
         let uninitialized_locals = UninitializedLocals::collect(context.block);
-        let mut diags = Vec::new();
+        let mut findings = Vec::new();
 
         for symbol in &scope_tree.symbols {
             if symbol.kind != SymbolKind::Local || symbol.name.starts_with('_') {
@@ -73,7 +73,7 @@ impl WholeRule for ValueOverwrittenBeforeRead {
                     ReferenceKind::Read => unread_write = None,
                     ReferenceKind::Write => {
                         if let Some(span) = unread_write {
-                            diags.push(overwritten_diag(&symbol.name, span));
+                            findings.push(overwritten_finding(&symbol.name, span));
                         }
                         unread_write = Some(Span::new(start, start));
                     }
@@ -84,17 +84,13 @@ impl WholeRule for ValueOverwrittenBeforeRead {
             }
         }
 
-        diags
+        findings
     }
 }
 
-fn overwritten_diag(name: &str, span: Span) -> LintDiagnostic {
-    LintDiagnostic::new(
-        "value_overwritten_before_read",
-        format!("value assigned to `{name}` is overwritten before it is read"),
-        span,
-    )
-    .with_help("remove the earlier assignment or read it first")
+fn overwritten_finding(name: &str, span: Span) -> Finding {
+    Finding::new(format!("value assigned to `{name}` is overwritten before it is read"), span)
+        .with_help("remove the earlier assignment or read it first")
 }
 
 #[cfg(test)]
@@ -102,6 +98,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

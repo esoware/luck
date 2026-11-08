@@ -1,6 +1,7 @@
-use luck_ast::{NodeType, NodeTypeSet, Statement};
+use luck_ast::Statement;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -29,7 +30,7 @@ impl NodeRule for IfSameThenElse {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         let Statement::IfStatement(if_stmt) = stmt else {
             return;
@@ -40,13 +41,9 @@ impl NodeRule for IfSameThenElse {
         let then_text = if_stmt.block.span.text(context.source);
         let else_text = else_clause.block.span.text(context.source);
         if !then_text.is_empty() && then_text.trim() == else_text.trim() {
-            diags.push(
-                LintDiagnostic::new(
-                    "if_same_then_else",
-                    "`if` and `else` branches have identical bodies",
-                    if_stmt.span,
-                )
-                .with_help("the condition has no effect, so remove the `if`"),
+            findings.push(
+                Finding::new("`if` and `else` branches have identical bodies", if_stmt.span)
+                    .with_help("the condition has no effect, so remove the `if`"),
             );
         }
     }
@@ -57,6 +54,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

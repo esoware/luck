@@ -1,6 +1,6 @@
 use luck_token::{Comment, LuaVersion, Span, index_to_offset, offset_to_index};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 /// Flags backslash escapes in short strings that the target version
@@ -29,7 +29,7 @@ impl Rule for BadStringEscape {
 }
 
 impl WholeRule for BadStringEscape {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         scan_source(context.source, context.semantic.version, context.comments)
     }
 }
@@ -73,9 +73,9 @@ fn escape_length(rest: &[u8], version: LuaVersion) -> Option<usize> {
 ///
 /// Long-bracket strings (`[[...]]`, `[=[...]=]`) have no escapes, so
 /// they're skipped whole.
-fn scan_source(source: &str, version: LuaVersion, comments: &[Comment]) -> Vec<LintDiagnostic> {
+fn scan_source(source: &str, version: LuaVersion, comments: &[Comment]) -> Vec<Finding> {
     let bytes = source.as_bytes();
-    let mut diags = Vec::new();
+    let mut findings = Vec::new();
     // The list is sorted and the scan only moves forward, so a comment that
     // ends behind the scan is done with.
     let mut pending_comments = comments.iter().peekable();
@@ -90,7 +90,7 @@ fn scan_source(source: &str, version: LuaVersion, comments: &[Comment]) -> Vec<L
             continue;
         }
         index = if byte == b'"' || byte == b'\'' {
-            scan_short_string(bytes, index, byte, version, &mut diags)
+            scan_short_string(bytes, index, byte, version, &mut findings)
         } else if byte == b'['
             && let Some(skip_to) = skip_long_bracket(bytes, index)
         {
@@ -99,7 +99,7 @@ fn scan_source(source: &str, version: LuaVersion, comments: &[Comment]) -> Vec<L
             index.saturating_add(1)
         };
     }
-    diags
+    findings
 }
 
 /// Returns the offset just past a long-bracket string `[==[...]==]` that
@@ -133,7 +133,7 @@ fn scan_short_string(
     start: usize,
     quote: u8,
     version: LuaVersion,
-    diags: &mut Vec<LintDiagnostic>,
+    findings: &mut Vec<Finding>,
 ) -> usize {
     let mut index = start.saturating_add(1);
     while let Some(&byte) = bytes.get(index) {
@@ -153,9 +153,8 @@ fn scan_short_string(
                     } else {
                         format!("\\x{bad_char:02x}")
                     };
-                    diags.push(
-                        LintDiagnostic::new(
-                            "bad_string_escape",
+                    findings.push(
+                        Finding::new(
                             format!("invalid string escape `{display}`"),
                             Span::from_indices(index, index.saturating_add(2)),
                         )
@@ -182,6 +181,7 @@ fn scan_short_string(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule_on_parse;
 
     fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {

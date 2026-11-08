@@ -1,7 +1,8 @@
-use luck_ast::{Expression, NodeType, NodeTypeSet};
+use luck_ast::Expression;
 use luck_token::BinOp;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Flags `/`, `%`, and `//` with a literal zero divisor.
@@ -81,19 +82,16 @@ impl NodeRule for DivideByZero {
         &self,
         expr: &Expression,
         _context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::BinaryOp(binary) = expr
             && let Some(op_name) = divisive_op_name(binary.op)
             && is_zero_literal(&binary.right)
         {
-            diags.push(
-                LintDiagnostic::new(
-                    "divide_by_zero",
-                    format!("{op_name} by literal zero"),
-                    binary.span,
-                )
-                .with_help("guard with an `if divisor ~= 0 then` check or use a nonzero constant"),
+            findings.push(
+                Finding::new(format!("{op_name} by literal zero"), binary.span).with_help(
+                    "guard with an `if divisor ~= 0 then` check or use a nonzero constant",
+                ),
             );
         }
     }
@@ -104,6 +102,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {

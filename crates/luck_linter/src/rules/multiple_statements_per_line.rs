@@ -1,7 +1,7 @@
 use luck_ast::{Block, Statement, Visitor};
 use luck_token::{Span, index_to_offset};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 /// Flags a statement that starts on the line where the previous one ends
@@ -29,11 +29,11 @@ impl Rule for MultipleStatementsPerLine {
 }
 
 impl WholeRule for MultipleStatementsPerLine {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let mut checker =
-            SameLineChecker { diags: Vec::new(), lines: LineIndex::new(context.source) };
+            SameLineChecker { findings: Vec::new(), lines: LineIndex::new(context.source) };
         checker.visit_block(context.block);
-        checker.diags
+        checker.findings
     }
 }
 
@@ -56,7 +56,7 @@ impl LineIndex {
 }
 
 struct SameLineChecker {
-    diags: Vec<LintDiagnostic>,
+    findings: Vec<Finding>,
     lines: LineIndex,
 }
 
@@ -79,9 +79,8 @@ impl SameLineChecker {
             // where `previous` ends.
             let previous_line = self.lines.line_of(previous.end.saturating_sub(1));
             if previous_line == self.lines.line_of(next.start) {
-                self.diags.push(
-                    LintDiagnostic::new(
-                        "multiple_statements_per_line",
+                self.findings.push(
+                    Finding::new(
                         format!(
                             "statement starts on the same line as the previous statement (line \
                              {previous_line})"
@@ -107,6 +106,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

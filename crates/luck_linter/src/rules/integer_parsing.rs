@@ -1,9 +1,10 @@
 use core::num::ParseIntError;
 
-use luck_ast::{Expression, Literal, NodeType, NodeTypeSet};
+use luck_ast::{Expression, Literal};
 use luck_token::LuaVersion;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// Every integer up to this value is exact in a double.
@@ -40,15 +41,15 @@ impl NodeRule for IntegerParsing {
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::Number(literal) = expr {
-            diags.extend(check_number(literal, context.semantic.version));
+            findings.extend(check_number(literal, context.semantic.version));
         }
     }
 }
 
-fn check_number(literal: &Literal, version: LuaVersion) -> Option<LintDiagnostic> {
+fn check_number(literal: &Literal, version: LuaVersion) -> Option<Finding> {
     let raw = literal.text.as_str();
     let has_integer_subtype = version.has_integer_subtype();
     let (message, help) = match classify(raw) {
@@ -86,7 +87,7 @@ fn check_number(literal: &Literal, version: LuaVersion) -> Option<LintDiagnostic
             )
         }
     };
-    Some(LintDiagnostic::new("integer_parsing", message, literal.span).with_help(help))
+    Some(Finding::new(message, literal.span).with_help(help))
 }
 
 /// Whether parsed integer text is above 2^53, where doubles start skipping
@@ -131,6 +132,7 @@ fn classify(text: &str) -> LiteralShape<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {

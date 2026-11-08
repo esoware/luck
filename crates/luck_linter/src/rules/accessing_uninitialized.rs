@@ -1,4 +1,4 @@
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::rule::{LintContext, Rule, WholeRule};
 use crate::uninitialized::{UninitializedLocals, first_reference};
 
@@ -26,7 +26,7 @@ impl Rule for AccessingUninitialized {
 }
 
 impl WholeRule for AccessingUninitialized {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let tree = &context.semantic.scope_tree;
         let uninitialized_locals = UninitializedLocals::collect(context.block);
         tree.symbols
@@ -35,8 +35,7 @@ impl WholeRule for AccessingUninitialized {
             .filter_map(|symbol| {
                 let first = first_reference(symbol, tree)?;
                 first.kind.is_read().then(|| {
-                    LintDiagnostic::new(
-                        "accessing_uninitialized",
+                    Finding::new(
                         format!(
                             "`{}` is read before any value is assigned, so it is `nil`",
                             symbol.name
@@ -55,6 +54,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

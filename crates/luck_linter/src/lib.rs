@@ -36,6 +36,7 @@ mod fix;
 #[cfg(test)]
 mod fixtures;
 mod format_pattern;
+mod node_type;
 mod nodes;
 mod path;
 mod roblox;

@@ -1,16 +1,15 @@
-//! Per-variant node discriminants and the borrowed node view used by the
-//! linter's flat node table and bucketed dispatch.
+//! Per-variant node discriminants, which key the bus's buckets and the node
+//! types each node rule declares.
 
-use crate::expr::Expression;
-use crate::stmt::{LastStatement, Statement};
+use luck_ast::{Expression, LastStatement, Statement};
 
 /// One variant per `Statement`, `LastStatement`, and `Expression` variant.
 ///
 /// `of_stmt`, `of_last_stmt`, and `of_expr` match exhaustively, so a new AST
 /// variant doesn't compile until it has a `NodeType`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum NodeType {
+pub(crate) enum NodeType {
     Assignment,
     FunctionCallStmt,
     DoBlock,
@@ -59,19 +58,18 @@ pub enum NodeType {
 
 impl NodeType {
     /// `ErrorLastStmt` must stay the last variant for this to count them all.
-    pub const COUNT: usize = Self::ErrorLastStmt.index() + 1;
+    pub(crate) const COUNT: usize = Self::ErrorLastStmt.index() + 1;
 
-    /// Discriminant value, for callers indexing bucket arrays.
-    #[must_use]
+    /// Discriminant value, for indexing bucket arrays.
     #[expect(
         clippy::as_conversions,
         reason = "a const fn has no other way to read a fieldless enum discriminant"
     )]
-    pub const fn index(self) -> usize {
+    pub(crate) const fn index(self) -> usize {
         self as usize
     }
 
-    const fn of_stmt(stmt: &Statement) -> Self {
+    pub(crate) const fn of_stmt(stmt: &Statement) -> Self {
         match stmt {
             Statement::Assignment(_) => Self::Assignment,
             Statement::FunctionCall(_) => Self::FunctionCallStmt,
@@ -105,8 +103,8 @@ impl NodeType {
         }
     }
 
-    const fn of_last_stmt(last: &LastStatement) -> Self {
-        match last {
+    pub(crate) const fn of_last_stmt(last_stmt: &LastStatement) -> Self {
+        match last_stmt {
             LastStatement::Return(_) => Self::Return,
             LastStatement::Break(_) => Self::LastBreak,
             // Luau
@@ -115,7 +113,7 @@ impl NodeType {
         }
     }
 
-    const fn of_expr(expr: &Expression) -> Self {
+    pub(crate) const fn of_expr(expr: &Expression) -> Self {
         match expr {
             Expression::Nil(_) => Self::Nil,
             Expression::False(_) => Self::False,
@@ -145,40 +143,19 @@ impl NodeType {
     }
 }
 
-/// Borrowed view of one AST node, as dispatched to lint rules.
-#[derive(Clone, Copy, Debug)]
-pub enum NodeKind<'ast> {
-    Statement(&'ast Statement),
-    LastStatement(&'ast LastStatement),
-    Expression(&'ast Expression),
-}
-
-impl NodeKind<'_> {
-    #[must_use]
-    pub const fn node_type(self) -> NodeType {
-        match self {
-            NodeKind::Statement(stmt) => NodeType::of_stmt(stmt),
-            NodeKind::LastStatement(last) => NodeType::of_last_stmt(last),
-            NodeKind::Expression(expr) => NodeType::of_expr(expr),
-        }
-    }
-}
-
 const _: () = assert!(NodeType::COUNT <= 64, "NodeTypeSet holds one bit per NodeType in a u64");
 
-/// Fixed-size set of [`NodeType`]s, const-constructible so lint rules can
-/// declare the node types they run on as a constant.
+/// Fixed-size set of [`NodeType`]s, const-constructible so a node rule can
+/// declare the node types it runs on as a constant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct NodeTypeSet(u64);
+pub(crate) struct NodeTypeSet(u64);
 
 impl NodeTypeSet {
-    #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self(0)
     }
 
-    #[must_use]
-    pub const fn from_types(types: &[NodeType]) -> Self {
+    pub(crate) const fn from_types(types: &[NodeType]) -> Self {
         let mut set = Self::new();
         let mut remaining = types;
         while let [first, rest @ ..] = remaining {
@@ -188,18 +165,16 @@ impl NodeTypeSet {
         set
     }
 
-    /// Membership by [`NodeType::index`], for callers walking bucket arrays.
-    #[must_use]
-    pub const fn has_index(self, type_index: usize) -> bool {
+    /// Membership by [`NodeType::index`], for walking bucket arrays.
+    pub(crate) const fn has_index(self, type_index: usize) -> bool {
         self.0 & (1u64 << type_index) != 0
     }
 
-    pub const fn insert(&mut self, node_type: NodeType) {
+    pub(crate) const fn insert(&mut self, node_type: NodeType) {
         self.0 |= 1u64 << node_type.index();
     }
 
-    #[must_use]
-    pub const fn intersects(self, other: Self) -> bool {
+    pub(crate) const fn intersects(self, other: Self) -> bool {
         self.0 & other.0 != 0
     }
 }

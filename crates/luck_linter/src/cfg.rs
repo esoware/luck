@@ -7,11 +7,12 @@
 //! It doesn't descend into nested function bodies. Their exits and decision
 //! points belong to that function, not to the enclosing block.
 
+use core::iter;
 use core::num::Saturating;
 
 use luck_ast::{
-    Block, Expression, Field, FunctionArgs, FunctionCall, IfStatement, LastStatement, Punctuated,
-    Statement, Var,
+    Block, Expression, FunctionArgs, FunctionCall, IfStatement, LastStatement, Punctuated,
+    Statement, Type, Var, Visitor,
 };
 use luck_token::BinOp;
 
@@ -49,10 +50,19 @@ impl BranchSummary {
         self.decision_points = self.decision_points.saturating_add(points);
     }
 
+    /// Count the decision points inside `exprs`.
+    fn add_exprs<'ast>(&mut self, exprs: impl IntoIterator<Item = &'ast Expression>) {
+        let mut points = DecisionPoints::default();
+        for expr in exprs {
+            points.visit_expression(expr);
+        }
+        self.add_decision_points(points.count.0);
+    }
+
     /// Count a branch point on `condition`, plus any inside the condition.
     fn add_branch(&mut self, condition: &Expression) {
         self.add_decision_points(1);
-        self.add_decision_points(count_decision_points_expr(condition));
+        self.add_exprs([condition]);
     }
 
     /// Fold in a nested block. Its exit stays with the caller, because what
@@ -110,13 +120,12 @@ fn analyze_stmt(stmt: &Statement) -> BranchSummary {
     let mut summary = BranchSummary::default();
 
     match stmt {
-        Statement::Assignment(node) => {
-            summary.add_decision_points(count_decision_points_punctuated_exprs(&node.values));
-        }
+        Statement::Assignment(node) => summary.add_exprs(node.values.iter()),
         Statement::FunctionCall(node) => {
-            let is_unconditional_error = call_is_error(node);
-            summary.add_decision_points(count_decision_points_call(node));
-            if is_unconditional_error {
+            let mut points = DecisionPoints::default();
+            points.visit_function_call(node);
+            summary.add_decision_points(points.count.0);
+            if call_is_error(node) {
                 summary.exit = Exit::Error;
             }
         }
@@ -162,39 +171,30 @@ fn analyze_stmt(stmt: &Statement) -> BranchSummary {
         Statement::IfStatement(node) => analyze_if(node, &mut summary),
         Statement::NumericFor(node) => {
             summary.add_branch(&node.start);
-            summary.add_decision_points(count_decision_points_expr(&node.limit));
-            if let Some(step) = &node.step {
-                summary.add_decision_points(count_decision_points_expr(step));
-            }
+            summary.add_exprs(iter::once(&node.limit).chain(&node.step));
             summary.absorb(analyze_full_block(&node.block));
             // The body may run zero times, so the loop falls through.
             summary.exit = Exit::Normal;
         }
         Statement::GenericFor(node) => {
             summary.add_decision_points(1);
-            summary.add_decision_points(count_decision_points_punctuated_exprs(&node.exprs));
+            summary.add_exprs(node.exprs.iter());
             summary.absorb(analyze_full_block(&node.block));
             summary.exit = Exit::Normal;
         }
         Statement::LocalAssignment(node) => {
-            if let Some(exprs) = &node.exprs {
-                summary.add_decision_points(count_decision_points_punctuated_exprs(exprs));
-            }
+            summary.add_exprs(node.exprs.iter().flat_map(Punctuated::iter));
         }
         // Lua 5.5
         Statement::GlobalDeclaration(node) => {
-            if let Some(exprs) = &node.exprs {
-                summary.add_decision_points(count_decision_points_punctuated_exprs(exprs));
-            }
+            summary.add_exprs(node.exprs.iter().flat_map(Punctuated::iter));
         }
         // Lua 5.2+: `break` as an ordinary statement.
         Statement::Break(_) => {
             summary.exit = Exit::Break;
         }
         // Luau
-        Statement::CompoundAssignment(node) => {
-            summary.add_decision_points(count_decision_points_expr(&node.expr));
-        }
+        Statement::CompoundAssignment(node) => summary.add_exprs([&node.expr]),
         // A function's exits and decision points are its own, so callers
         // analyze each body separately. The walker doesn't model `goto`,
         // and the other statements here don't affect control flow.
@@ -302,95 +302,62 @@ fn call_is_error(call: &FunctionCall) -> bool {
     token.identifier() == Some("error")
 }
 
-fn count_decision_points_punctuated_exprs(exprs: &Punctuated<Expression>) -> u32 {
-    exprs.iter().map(count_decision_points_expr).sum()
-}
-
-fn count_decision_points_call(call: &FunctionCall) -> u32 {
-    let mut total = Saturating(count_decision_points_expr(&call.callee));
-    match &call.args {
-        FunctionArgs::Parenthesized { args, .. } => {
-            total += count_decision_points_punctuated_exprs(args);
-        }
-        FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => {}
-    }
-    total.0
-}
-
-/// McCabe-style decision points in an expression.
+/// Counts McCabe-style decision points in the expressions it visits.
 ///
 /// Each `and`/`or` adds 1, as does each `if`/`elseif` of a Luau
-/// if-expression. Function literals add nothing; their points are their own.
-fn count_decision_points_expr(expr: &Expression) -> u32 {
-    match expr {
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Error(_) => 0,
-        Expression::Var(var) => count_decision_points_var(var),
-        Expression::FunctionCall(call) => count_decision_points_call(call),
-        Expression::Parenthesized(node) => count_decision_points_expr(&node.expr),
-        Expression::TableConstructor(node) => {
-            let mut total = Saturating(0u32);
-            for field in node.fields.iter() {
-                match field {
-                    Field::Bracketed { key, value, .. } => {
-                        total += count_decision_points_expr(key);
-                        total += count_decision_points_expr(value);
-                    }
-                    Field::Named { value, .. } | Field::Positional { value, .. } => {
-                        total += count_decision_points_expr(value);
-                    }
-                }
-            }
-            total.0
-        }
-        Expression::BinaryOp(node) => {
-            let mut total = Saturating(u32::from(matches!(node.op, BinOp::And | BinOp::Or)));
-            total += count_decision_points_expr(&node.left);
-            total += count_decision_points_expr(&node.right);
-            total.0
-        }
-        Expression::UnaryOp(node) => count_decision_points_expr(&node.operand),
-        // Luau: each `if`/`elseif` in an if-expression is a branch point.
-        Expression::IfExpression(node) => {
-            let mut total = Saturating(1u32);
-            total += count_decision_points_expr(&node.condition);
-            total += count_decision_points_expr(&node.then_expr);
-            for clause in &node.elseif_clauses {
-                total += 1;
-                total += count_decision_points_expr(&clause.condition);
-                total += count_decision_points_expr(&clause.expr);
-            }
-            total += count_decision_points_expr(&node.else_expr);
-            total.0
-        }
-        // Luau
-        Expression::InterpolatedString(node) => node
-            .segments
-            .iter()
-            .filter_map(|segment| segment.expr.as_ref())
-            .map(count_decision_points_expr)
-            .sum(),
-        // Luau
-        Expression::TypeCast(node) => count_decision_points_expr(&node.expr),
-        // Luau
-        Expression::TypeInstantiation(node) => count_decision_points_expr(&node.expr),
-    }
+/// if-expression. A function literal's points are its own, and a type
+/// annotation never runs, so neither is visited.
+#[derive(Default)]
+struct DecisionPoints {
+    count: Saturating<u32>,
 }
 
-fn count_decision_points_var(var: &Var) -> u32 {
-    match var {
-        Var::Name(_) => 0,
-        Var::Index(node) => count_decision_points_expr(&node.prefix)
-            .saturating_add(count_decision_points_expr(&node.index)),
-        Var::FieldAccess(node) => count_decision_points_expr(&node.prefix),
+impl<'ast> Visitor<'ast> for DecisionPoints {
+    fn visit_expression(&mut self, expr: &'ast Expression) {
+        match expr {
+            Expression::FunctionDef(_) => return,
+            Expression::BinaryOp(node) => {
+                if matches!(node.op, BinOp::And | BinOp::Or) {
+                    self.count += 1;
+                }
+            }
+            // Luau
+            Expression::IfExpression(node) => {
+                let branch_count = node.elseif_clauses.len().saturating_add(1);
+                self.count += u32::try_from(branch_count).unwrap_or(u32::MAX);
+            }
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::Var(_)
+            | Expression::FunctionCall(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::UnaryOp(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::TypeInstantiation(_)
+            | Expression::Error(_) => {}
+        }
+        self.walk_expression(expr);
     }
+
+    /// Only the callee and a parenthesized argument list count, so a table
+    /// argument adds nothing, as in `f{a and b}`.
+    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+        self.visit_expression(&call.callee);
+        if let FunctionArgs::Parenthesized { args, .. } = &call.args {
+            for arg in args.iter() {
+                self.visit_expression(arg);
+            }
+        }
+    }
+
+    fn visit_type(&mut self, _type_value: &'ast Type) {}
 }
 
 #[cfg(test)]

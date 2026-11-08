@@ -1,4 +1,4 @@
-use crate::diagnostic::{Category, LintDiagnostic, Severity, line_column};
+use crate::diagnostic::{Category, Finding, Severity, line_column};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 #[derive(Debug, Clone, Copy)]
@@ -20,9 +20,9 @@ impl Rule for Shadowing {
 }
 
 impl WholeRule for Shadowing {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let mut diags = Vec::new();
+        let mut findings = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
             let Some(shadowed_id) = symbol.shadows else {
@@ -34,9 +34,8 @@ impl WholeRule for Shadowing {
             }
             let shadowed = semantic.scope_tree.symbol(shadowed_id);
             let (line, column) = line_column(context.source, shadowed.definition_span.start);
-            diags.push(
-                LintDiagnostic::new(
-                    "shadowing",
+            findings.push(
+                Finding::new(
                     format!("variable `{}` shadows outer variable", symbol.name),
                     symbol.definition_span,
                 )
@@ -44,7 +43,7 @@ impl WholeRule for Shadowing {
             );
         }
 
-        diags
+        findings
     }
 }
 
@@ -53,6 +52,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

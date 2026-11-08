@@ -1,7 +1,7 @@
 use luck_ast::{Block, FunctionName, Statement, Visitor};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity, line_column};
+use crate::diagnostic::{Category, Finding, Severity, line_column};
 use crate::rule::{LintContext, Rule, WholeRule};
 
 #[derive(Debug, Clone, Copy)]
@@ -26,10 +26,10 @@ impl Rule for DuplicateFunction {
 }
 
 impl WholeRule for DuplicateFunction {
-    fn check(&self, context: &LintContext<'_>) -> Vec<LintDiagnostic> {
-        let mut checker = DuplicateChecker { source: context.source, diags: Vec::new() };
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let mut checker = DuplicateChecker { source: context.source, findings: Vec::new() };
         checker.visit_block(context.block);
-        checker.diags
+        checker.findings
     }
 }
 
@@ -51,7 +51,7 @@ fn full_name(function_name: &FunctionName) -> Option<String> {
 
 struct DuplicateChecker<'document> {
     source: &'document str,
-    diags: Vec<LintDiagnostic>,
+    findings: Vec<Finding>,
 }
 
 impl DuplicateChecker<'_> {
@@ -70,8 +70,7 @@ impl DuplicateChecker<'_> {
                 definitions.iter().find(|(defined_name, _)| *defined_name == name)
             {
                 let (line, _) = line_column(self.source, first_span.start);
-                self.diags.push(LintDiagnostic::new(
-                    "duplicate_function",
+                self.findings.push(Finding::new(
                     format!("duplicate function definition `{name}`, also defined on line {line}"),
                     decl.name.span,
                 ));
@@ -94,6 +93,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {

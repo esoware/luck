@@ -1,7 +1,8 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, NodeType, NodeTypeSet, Statement, Var};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement, Var};
 use luck_token::{BinOp, Token, UnOp};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -33,10 +34,10 @@ impl NodeRule for TableOperations {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Statement::FunctionCall(call) = stmt {
-            check_call(call, context, diags);
+            check_call(call, context, findings);
         }
     }
 
@@ -44,34 +45,34 @@ impl NodeRule for TableOperations {
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionCall(call) = expr {
-            check_call(call, context, diags);
+            check_call(call, context, findings);
         }
     }
 }
 
-fn check_call(call: &FunctionCall, context: &LintContext<'_>, diags: &mut Vec<LintDiagnostic>) {
+fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
     let Some(function_name) = table_stdlib_function(call, context) else {
         return;
     };
     let FunctionArgs::Parenthesized { args, .. } = &call.args else {
         return;
     };
-    let diag = |message: &str| LintDiagnostic::new("table_operations", message, call.span);
+    let finding = |message: &str| Finding::new(message, call.span);
     match (function_name, args.items.as_slice()) {
         ("insert", [table, index, _]) => {
             if is_number_literal(index, 0.0) {
-                diags.push(
-                    diag("`table.insert` with index 0, but Lua arrays are 1-based")
+                findings.push(
+                    finding("`table.insert` with index 0, but Lua arrays are 1-based")
                         .with_help("did you mean index 1?"),
                 );
                 return;
             }
             if length_operand(index).is_some_and(|target| same_target(target, table)) {
-                diags.push(
-                    diag("`table.insert(t, #t, v)` inserts the value before the last element")
+                findings.push(
+                    finding("`table.insert(t, #t, v)` inserts the value before the last element")
                         .with_help("to append, use `table.insert(t, v)`"),
                 );
                 return;
@@ -79,8 +80,8 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, diags: &mut Vec<Li
             if length_offset_operand(index, BinOp::Add)
                 .is_some_and(|target| same_target(target, table))
             {
-                diags.push(
-                    diag(
+                findings.push(
+                    finding(
                         "`table.insert(t, #t + 1, v)` appends, so the index argument is redundant",
                     )
                     .with_help("use `table.insert(t, v)` instead"),
@@ -89,8 +90,8 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, diags: &mut Vec<Li
         }
         ("remove", [table, index]) => {
             if is_number_literal(index, 0.0) {
-                diags.push(
-                    diag("`table.remove` with index 0, but Lua arrays are 1-based")
+                findings.push(
+                    finding("`table.remove` with index 0, but Lua arrays are 1-based")
                         .with_help("did you mean index 1?"),
                 );
                 return;
@@ -98,25 +99,26 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, diags: &mut Vec<Li
             if length_offset_operand(index, BinOp::Sub)
                 .is_some_and(|target| same_target(target, table))
             {
-                diags.push(
-                    diag("`table.remove(t, #t - 1)` removes the value before the last element")
+                findings.push(
+                    finding("`table.remove(t, #t - 1)` removes the value before the last element")
                         .with_help("`table.remove(t)` removes the last element"),
                 );
             }
         }
         ("move", move_args) => {
             if move_args.get(1).is_some_and(|start| is_number_literal(start, 0.0)) {
-                diags.push(diag("`table.move` with start index 0, but Lua arrays are 1-based"));
+                findings
+                    .push(finding("`table.move` with start index 0, but Lua arrays are 1-based"));
             }
             if move_args.get(3).is_some_and(|destination| is_number_literal(destination, 0.0)) {
-                diags.push(diag(
+                findings.push(finding(
                     "`table.move` with destination index 0, but Lua arrays are 1-based",
                 ));
             }
         }
         ("create", [_, Expression::TableConstructor(_)]) => {
-            diags.push(
-                diag("`table.create(n, {...})` fills every slot with the same table object")
+            findings.push(
+                finding("`table.create(n, {...})` fills every slot with the same table object")
                     .with_help("use a `for` loop to give each element its own table"),
             );
         }
@@ -199,6 +201,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
 
     fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {

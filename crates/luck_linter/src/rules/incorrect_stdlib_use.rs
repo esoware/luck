@@ -1,8 +1,9 @@
-use luck_ast::{Expression, FunctionCall, NodeType, NodeTypeSet, Statement};
+use luck_ast::{Expression, FunctionCall, Statement};
 use luck_semantic::{ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction};
 
 use crate::call::{has_multi_value_tail, positional_args, string_literal_value};
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, Rule};
 
 /// How many allowed values a message lists. Generated sets (Roblox service
@@ -35,25 +36,25 @@ impl NodeRule for IncorrectStdlibUse {
         &self,
         stmt: &Statement,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Statement::FunctionCall(call) = stmt {
-            check_call(call, context.semantic, diags);
+            check_call(call, context.semantic, findings);
         }
     }
     fn on_expression(
         &self,
         expr: &Expression,
         context: &LintContext<'_>,
-        diags: &mut Vec<LintDiagnostic>,
+        findings: &mut Vec<Finding>,
     ) {
         if let Expression::FunctionCall(call) = expr {
-            check_call(call, context.semantic, diags);
+            check_call(call, context.semantic, findings);
         }
     }
 }
 
-fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, diags: &mut Vec<LintDiagnostic>) {
+fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, findings: &mut Vec<Finding>) {
     let Some(ResolvedCallee { name, entry }) = semantic.resolve_callee(call) else {
         return;
     };
@@ -81,9 +82,9 @@ fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, diags: &mut Vec<
     };
     match arity_message {
         Some(message) => {
-            diags.push(LintDiagnostic::new("incorrect_stdlib_use", message, call.span));
+            findings.push(Finding::new(message, call.span));
         }
-        None => check_constant_args(&name, function, args, arg_count, diags),
+        None => check_constant_args(&name, function, args, arg_count, findings),
     }
 }
 
@@ -98,7 +99,7 @@ fn check_constant_args(
     function: &StdlibFunction,
     args: &[Expression],
     arg_count: usize,
-    diags: &mut Vec<LintDiagnostic>,
+    findings: &mut Vec<Finding>,
 ) {
     for (index, expr) in args.iter().enumerate() {
         let Some((value, span)) = string_literal_value(expr) else {
@@ -123,8 +124,7 @@ fn check_constant_args(
             String::new()
         };
         let arg_number = index.saturating_add(1);
-        diags.push(LintDiagnostic::new(
-            "incorrect_stdlib_use",
+        findings.push(Finding::new(
             format!(
                 "`{name}` argument {arg_number} must be one of \
                  {allowed_list}{truncation_note}, got `{value}`",
