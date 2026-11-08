@@ -50,12 +50,7 @@ fn resolve_alias(
     }
 
     let alias_path = aliases.in_effect(from_directory).get(&alias_lower).ok_or_else(|| {
-        Diagnostic::e004(
-            request.from_file,
-            request.span,
-            request.module,
-            &[format!("alias `@{alias_name}` not found in any `.luaurc`")],
-        )
+        Diagnostic::e004_unknown_alias(request.from_file, request.span, request.module, alias_name)
     })?;
 
     sub_path.map_or_else(
@@ -118,14 +113,11 @@ fn probe(base_path: &Path, request: &ResolveRequest<'_>) -> Result<ResolvedModul
     let directory_match = existing_one(&init_luau, &init_lua, request)?;
 
     match (file_match, directory_match) {
-        (Some(file), Some(directory)) => Err(Diagnostic::e007(
+        (Some(file), Some(directory)) => Err(Diagnostic::e007_file_and_directory(
             request.from_file,
             request.span,
-            &format!(
-                "both file `{}` and directory init file `{}` exist",
-                normalize_path(file),
-                normalize_path(directory)
-            ),
+            &normalize_path(file),
+            &normalize_path(directory),
         )),
         (Some(found), None) | (None, Some(found)) => {
             Ok(ResolvedModule { path: normalize_path(found), warnings: Vec::new() })
@@ -134,8 +126,7 @@ fn probe(base_path: &Path, request: &ResolveRequest<'_>) -> Result<ResolvedModul
             request.from_file,
             request.span,
             request.module,
-            &[&file_luau, &file_lua, &init_luau, &init_lua]
-                .map(|path| format!("`{}`", normalize_path(path))),
+            &[&file_luau, &file_lua, &init_luau, &init_lua].map(|path| normalize_path(path)),
         )),
     }
 }
@@ -151,10 +142,11 @@ fn existing_one<'path>(
     request: &ResolveRequest<'_>,
 ) -> Result<Option<&'path Path>, Diagnostic> {
     match (luau.is_file(), lua.is_file()) {
-        (true, true) => Err(Diagnostic::e007(
+        (true, true) => Err(Diagnostic::e007_both_extensions(
             request.from_file,
             request.span,
-            &format!("both `{}` and `{}` exist", normalize_path(luau), normalize_path(lua)),
+            &normalize_path(luau),
+            &normalize_path(lua),
         )),
         (true, false) => Ok(Some(luau)),
         (false, true) => Ok(Some(lua)),
@@ -170,14 +162,12 @@ fn append_extension(base_path: &Path, extension: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use luck_core::{Diagnostic, normalize_path};
-    use luck_token::{LuaVersion, Span};
+    use luck_core::Diagnostic;
+    use luck_token::LuaVersion;
     use tempfile::TempDir;
 
-    use crate::fixtures::{luau_project, write_files};
-    use crate::{ResolveRequest, ResolvedModule, Resolver};
+    use crate::fixtures::{luau_project, normalized, request, write_files};
+    use crate::{ResolvedModule, Resolver};
 
     /// Resolves `module` as required from `requiring_file`, a path relative to
     /// `project`.
@@ -191,16 +181,7 @@ mod tests {
         module: &str,
     ) -> Result<ResolvedModule, Diagnostic> {
         let from_file = normalized(project, requiring_file);
-        Resolver::new(LuaVersion::Luau, &[], Path::new(".")).resolve(&ResolveRequest {
-            module,
-            from_file: &from_file,
-            span: Span::new(0, 10),
-        })
-    }
-
-    /// The normalized path of `relative_path` under `project`.
-    fn normalized(project: &TempDir, relative_path: &str) -> String {
-        normalize_path(&project.path().join(relative_path))
+        Resolver::new(LuaVersion::Luau, &[], project.path()).resolve(&request(module, &from_file))
     }
 
     #[test]
@@ -227,6 +208,12 @@ mod tests {
         );
         let error = resolve_luau(&project, "src/main.luau", "./both").expect_err("ambiguous");
         assert_eq!(error.code, "E007");
+        let expected_help = format!(
+            "ambiguity: both `{}` and `{}` exist, so remove one of the conflicting files",
+            normalized(&project, "src/both.luau"),
+            normalized(&project, "src/both.lua")
+        );
+        assert_eq!(error.help, Some(expected_help));
     }
 
     #[test]
@@ -256,6 +243,13 @@ mod tests {
         );
         let error = resolve_luau(&project, "src/main.luau", "./widget").expect_err("ambiguous");
         assert_eq!(error.code, "E007");
+        let expected_help = format!(
+            "ambiguity: both file `{}` and directory init file `{}` exist, so remove one of the \
+             conflicting files",
+            normalized(&project, "src/widget.luau"),
+            normalized(&project, "src/widget/init.luau")
+        );
+        assert_eq!(error.help, Some(expected_help));
     }
 
     #[test]
@@ -267,13 +261,41 @@ mod tests {
         );
         let error = resolve_luau(&project, "src/main.luau", "./ambig").expect_err("ambiguous");
         assert_eq!(error.code, "E007");
+        let expected_help = format!(
+            "ambiguity: both `{}` and `{}` exist, so remove one of the conflicting files",
+            normalized(&project, "src/ambig/init.luau"),
+            normalized(&project, "src/ambig/init.lua")
+        );
+        assert_eq!(error.help, Some(expected_help));
     }
 
+    /// Missing candidates aren't canonicalized, so they keep the require's
+    /// `./`.
     #[test]
-    fn reports_e004_when_relative_module_missing() {
+    fn reports_e004_with_searched_paths_when_relative_module_missing() {
         let project = luau_project();
         let error = resolve_luau(&project, "src/main.luau", "./nonexistent").expect_err("missing");
         assert_eq!(error.code, "E004");
+        assert_eq!(error.message, "module not found: `./nonexistent`");
+        let base = format!("{}/./nonexistent", normalized(&project, "src"));
+        let expected_help = format!(
+            "searched paths:\n  - `{base}.luau`\n  - `{base}.lua`\n  - `{base}/init.luau`\n  - \
+             `{base}/init.lua`"
+        );
+        assert_eq!(error.help, Some(expected_help));
+    }
+
+    #[test]
+    fn reports_e004_when_no_luaurc_declares_the_alias() {
+        let project = luau_project();
+        let error =
+            resolve_luau(&project, "src/main.luau", "@Missing/utils").expect_err("unknown alias");
+        assert_eq!(error.code, "E004");
+        assert_eq!(error.message, "module not found: `@Missing/utils`");
+        assert_eq!(
+            error.help.as_deref(),
+            Some("searched paths:\n  - alias `@Missing` not found in any `.luaurc`")
+        );
     }
 
     #[test]
@@ -284,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_parent_relative() {
+    fn resolves_parent_relative_luau_file() {
         let project = luau_project();
         write_files(project.path(), &[("src/sub/child.luau", "-- child")]);
         let resolved =

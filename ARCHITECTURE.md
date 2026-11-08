@@ -18,7 +18,7 @@ Everything else consumes the parsed AST. `luck_minifier`, `luck_formatter`, and 
 | `luck_parser` | Pratt expressions + recursive-descent statements + full Luau type grammar, version-gated | `parser.rs`, `parser/expr.rs`, `parser/stmt.rs`, `parser/types.rs` |
 | `luck_codegen` | Compact printer (ambiguity cases live in `separator.rs` + its tests) | `compact.rs`, `separator.rs` |
 | `luck_core` | `LuaTarget`, typed config, `TransformConfig`, diagnostic codes, schemars schema, `read_source_file` (SIMD-validated file reads), `normalize_path`/`native_path` (the forward-slash path form modules are keyed on) | `config.rs`, `diagnostic/codes.rs`, `lua_target.rs` |
-| `luck_resolver` | Lua search paths, Luau `@aliases`, `.luaurc` chain | `lib.rs`, `lua.rs`, `luau.rs`, `luaurc.rs` |
+| `luck_resolver` | Lua search paths, Luau `@aliases`, `.luaurc` chain | `resolver.rs`, `lua.rs`, `luau.rs`, `luaurc.rs` |
 | `luck_bundler` | Scope-aware require extraction (via `luck_semantic`), dep graph with cycle detection, version-exact lazy loader emit + line maps, collision-proof `__luck` prefix, runtime-resolved `require(expr)` kept via the loader's dynamic entry point (`dynamic_require`) | `require_extraction.rs`, `graph.rs`, `emitter.rs`, `loader.rs`, `module.rs` |
 | `luck_minifier` | AST transform pipeline, with `TransformConfig` flags turning passes on and off | `lib.rs` `minify()`, `transforms/` |
 | `luck_formatter` | Wadler-style engine: `Format` trait + combinator IR, AST-in `format_block` formats synthetic ASTs (no source needed), idempotency invariant | `ir.rs`, `printer.rs`, `format_*.rs`, `comments.rs` |

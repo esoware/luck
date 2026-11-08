@@ -19,11 +19,33 @@ impl Diagnostic {
             .with_help("use a string literal: `require(\"module_name\")`")
     }
 
+    /// `tried_paths` holds the candidate files in probe order, unquoted.
     #[must_use]
     pub fn e004(file_path: &str, span: Span, module_name: &str, tried_paths: &[String]) -> Self {
-        let paths_list = tried_paths.join("\n  - ");
+        let quoted_paths: Vec<String> =
+            tried_paths.iter().map(|path| format!("`{path}`")).collect();
+        Self::module_not_found(file_path, span, module_name, &quoted_paths.join("\n  - "))
+    }
+
+    /// An `@alias` require whose alias no `.luaurc` declares.
+    #[must_use]
+    pub fn e004_unknown_alias(
+        file_path: &str,
+        span: Span,
+        module_name: &str,
+        alias_name: &str,
+    ) -> Self {
+        Self::module_not_found(
+            file_path,
+            span,
+            module_name,
+            &format!("alias `@{alias_name}` not found in any `.luaurc`"),
+        )
+    }
+
+    fn module_not_found(file_path: &str, span: Span, module_name: &str, searched: &str) -> Self {
         Self::error_at("E004", format!("module not found: `{module_name}`"), file_path, span)
-            .with_help(format!("searched paths:\n  - {paths_list}"))
+            .with_help(format!("searched paths:\n  - {searched}"))
     }
 
     /// A Luau require string that doesn't begin with `./`, `../`, or `@`.
@@ -63,8 +85,37 @@ impl Diagnostic {
             )
     }
 
+    /// A module that exists as both a `.luau` and a `.lua` file.
     #[must_use]
-    pub fn e007(file_path: &str, span: Span, details: &str) -> Self {
+    pub fn e007_both_extensions(
+        file_path: &str,
+        span: Span,
+        luau_path: &str,
+        lua_path: &str,
+    ) -> Self {
+        Self::ambiguous_resolution(
+            file_path,
+            span,
+            &format!("both `{luau_path}` and `{lua_path}` exist"),
+        )
+    }
+
+    /// A module that exists as both a file and a directory's init file.
+    #[must_use]
+    pub fn e007_file_and_directory(
+        file_path: &str,
+        span: Span,
+        module_path: &str,
+        init_path: &str,
+    ) -> Self {
+        Self::ambiguous_resolution(
+            file_path,
+            span,
+            &format!("both file `{module_path}` and directory init file `{init_path}` exist"),
+        )
+    }
+
+    fn ambiguous_resolution(file_path: &str, span: Span, details: &str) -> Self {
         Self::error_at("E007", "ambiguous module resolution", file_path, span)
             .with_help(format!("ambiguity: {details}, so remove one of the conflicting files"))
     }
@@ -245,7 +296,7 @@ mod tests {
 
         let e4 =
             Diagnostic::e004("f.lua", Span::new(0, 10), "mymod", &["src/mymod.lua".to_owned()]);
-        assert!(e4.help.as_deref().expect("e004 always sets help").contains("src/mymod.lua"));
+        assert_eq!(e4.help.as_deref(), Some("searched paths:\n  - `src/mymod.lua`"));
 
         let w1 = Diagnostic::w001("f.lua", Span::new(0, 5), "utils");
         assert_eq!(w1.code, "W001");

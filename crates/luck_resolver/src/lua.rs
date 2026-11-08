@@ -25,7 +25,7 @@ pub(crate) fn resolve(
             return Ok(ResolvedModule { path: normalize_path(&candidate), warnings: Vec::new() });
         }
 
-        tried_paths.push(format!("`{relative_path}`"));
+        tried_paths.push(relative_path);
     }
 
     Err(Diagnostic::e004(request.from_file, request.span, request.module, &tried_paths))
@@ -33,12 +33,12 @@ pub(crate) fn resolve(
 
 #[cfg(test)]
 mod tests {
-    use luck_core::{Diagnostic, normalize_path};
-    use luck_token::{LuaVersion, Span};
+    use luck_core::Diagnostic;
+    use luck_token::LuaVersion;
     use tempfile::TempDir;
 
-    use crate::fixtures::project_with;
-    use crate::{ResolveRequest, ResolvedModule, Resolver};
+    use crate::fixtures::{normalized, project_with, request};
+    use crate::{ResolvedModule, Resolver};
 
     fn lua_project() -> TempDir {
         project_with(&[
@@ -63,12 +63,9 @@ mod tests {
     ) -> Result<ResolvedModule, Diagnostic> {
         let search_paths: Vec<String> =
             templates.iter().map(|template| (*template).to_owned()).collect();
-        let from_file = normalize_path(&project.path().join("src/main.lua"));
-        Resolver::new(LuaVersion::Lua54, &search_paths, project.path()).resolve(&ResolveRequest {
-            module,
-            from_file: &from_file,
-            span: Span::new(0, 10),
-        })
+        let from_file = normalized(project, "src/main.lua");
+        Resolver::new(LuaVersion::Lua54, &search_paths, project.path())
+            .resolve(&request(module, &from_file))
     }
 
     #[test]
@@ -76,14 +73,14 @@ mod tests {
         let project = lua_project();
         let resolved = resolve_lua(&project, &["src/?.lua", "src/?/init.lua"], "utils")
             .expect("resolve utils");
-        assert_eq!(resolved.path, normalize_path(&project.path().join("src/utils.lua")));
+        assert_eq!(resolved.path, normalized(&project, "src/utils.lua"));
     }
 
     #[test]
     fn resolves_dotted_module_to_nested_path() {
         let project = lua_project();
         let resolved = resolve_lua(&project, &["src/?.lua"], "foo.bar").expect("resolve foo.bar");
-        assert_eq!(resolved.path, normalize_path(&project.path().join("src/foo/bar.lua")));
+        assert_eq!(resolved.path, normalized(&project, "src/foo/bar.lua"));
     }
 
     #[test]
@@ -91,7 +88,7 @@ mod tests {
         let project = lua_project();
         let resolved = resolve_lua(&project, &["src/?.lua", "src/?/init.lua"], "components")
             .expect("resolve components");
-        assert_eq!(resolved.path, normalize_path(&project.path().join("src/components/init.lua")));
+        assert_eq!(resolved.path, normalized(&project, "src/components/init.lua"));
     }
 
     #[test]
@@ -99,17 +96,19 @@ mod tests {
         let project = lua_project();
         let resolved =
             resolve_lua(&project, &["src/?.lua", "lib/?.lua"], "helper").expect("resolve helper");
-        assert_eq!(resolved.path, normalize_path(&project.path().join("lib/helper.lua")));
+        assert_eq!(resolved.path, normalized(&project, "lib/helper.lua"));
     }
 
     #[test]
     fn reports_e004_with_searched_paths_when_missing() {
         let project = lua_project();
-        let error = resolve_lua(&project, &["src/?.lua"], "nonexistent")
+        let error = resolve_lua(&project, &["src/?.lua", "src/?/init.lua"], "nonexistent")
             .expect_err("a missing module must not resolve");
         assert_eq!(error.code, "E004");
-        assert!(
-            error.help.as_deref().expect("e004 always sets help").contains("src/nonexistent.lua")
+        assert_eq!(error.message, "module not found: `nonexistent`");
+        assert_eq!(
+            error.help.as_deref(),
+            Some("searched paths:\n  - `src/nonexistent.lua`\n  - `src/nonexistent/init.lua`")
         );
     }
 }

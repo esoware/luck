@@ -71,15 +71,8 @@ mod tests {
     use luck_token::{LuaVersion, Span};
 
     use super::*;
-    use crate::fixtures::{luau_project, project_with, write_files};
+    use crate::fixtures::{luau_project, project_with, request, write_files};
     use crate::{ResolveRequest, Resolver, luau};
-
-    fn request<'request>(
-        module: &'request str,
-        from_file: &'request str,
-    ) -> ResolveRequest<'request> {
-        ResolveRequest { module, from_file, span: Span::new(0, 10) }
-    }
 
     #[test]
     fn caches_only_requested_merged_maps_and_reuses_them() {
