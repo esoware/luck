@@ -1,8 +1,7 @@
 # Lua 5.2 standard library, verified against the 5.2 reference manual
 # (https://www.lua.org/manual/5.2/). Notable vs 5.1:
-#   - getfenv, setfenv, gcinfo, newproxy, and module dropped (5.2
-#     deprecates module; the rest are gone); loadstring kept as a
-#     deprecated compat alias for load
+#   - getfenv, setfenv, gcinfo, and newproxy dropped; module and
+#     loadstring kept as deprecated compat entries
 #   - unpack, math.log10, math.mod, string.gfind, table.getn,
 #     table.maxn, table.foreach, table.foreachi kept as deprecated compat
 #     entries (their replacements exist in 5.2 itself)
@@ -33,7 +32,7 @@ kind = "function"
 min_args = 0
 max_args = 2
 params = [
-  { kind = "constant", values = ["collect", "count", "generational", "incremental", "isrunning", "restart", "setpause", "setstepmul", "step", "stop"], is_required = false },
+  { kind = "constant", values = ["collect", "count", "generational", "incremental", "isrunning", "restart", "setmajorinc", "setpause", "setstepmul", "step", "stop"], is_required = false },
   { kind = "number", is_required = false },
 ]
 
@@ -63,7 +62,6 @@ params = [{ kind = "any" }]
 kind = "function"
 min_args = 1
 max_args = 1
-is_pure = true
 is_must_use = true
 params = [{ kind = "any" }]
 
@@ -100,6 +98,16 @@ params = [
   { kind = "string", is_required = false },
 ]
 
+[globals.module]
+kind = "function"
+min_args = 1
+max_args = -1
+deprecated = { message = "deprecated in Lua 5.2; set up the module with regular Lua code" }
+params = [
+  { kind = "string" },
+  { kind = "vararg", is_required = false },
+]
+
 [globals.next]
 kind = "function"
 min_args = 1
@@ -113,7 +121,6 @@ params = [
 kind = "function"
 min_args = 1
 max_args = 1
-is_pure = true
 is_must_use = true
 params = [{ kind = "any" }]
 
@@ -203,7 +210,6 @@ params = [
 kind = "function"
 min_args = 1
 max_args = 1
-is_pure = true
 is_must_use = true
 params = [{ kind = "any" }]
 
@@ -444,7 +450,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_must_use = true
-deprecated = { message = "deprecated since Lua 5.2; use the '#' length operator instead", replace_template = "#%1" }
+deprecated = { message = "deprecated since Lua 5.2; '#' only agrees with it on sequences" }
 params = [{ kind = "table" }]
 
 [globals.table.members.pack]
@@ -891,7 +897,7 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "string" },
-  { kind = "constant", values = ["r", "rb", "w", "wb", "a", "ab", "r+", "rb+", "r+b", "w+", "wb+", "w+b", "a+", "ab+", "a+b"], is_required = false },
+  { kind = "constant", values = ["r", "rb", "w", "wb", "a", "ab", "r+", "r+b", "w+", "w+b", "a+", "a+b"], is_required = false },
 ]
 returns = "file"
 

@@ -71,8 +71,7 @@ pub(crate) fn completion(document: &DocumentState, position: Position) -> Comple
         }
         // Every local or parameter declared before the cursor, whether or not
         // it's still in scope there, because completion is best-effort. The
-        // implicit `self` has the whole body as its span, so it fails the text
-        // check.
+        // implicit `self` has an empty span, so it fails the text check.
         for symbol in &document.semantic.scope_tree.symbols {
             let span = symbol.definition_span;
             if span.end <= offset && span.text(document.text()) == symbol.name.as_str() {

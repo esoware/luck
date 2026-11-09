@@ -29,8 +29,7 @@ impl WholeRule for UnusedArgument {
             if symbol.kind != SymbolKind::Parameter {
                 continue;
             }
-            // `function obj:method()` declares `self` implicitly, and there's
-            // no way to mark it unused.
+            // A parameter spelled `self` is a receiver the interface requires.
             if symbol.name == "self" {
                 continue;
             }

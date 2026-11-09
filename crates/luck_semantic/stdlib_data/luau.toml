@@ -39,9 +39,8 @@ params = [
 kind = "function"
 min_args = 0
 max_args = 1
-is_must_use = true
 params = [
-  { kind = "constant", values = ["count"], is_required = false },
+  { kind = "constant", values = ["collect", "count"], is_required = false },
 ]
 
 [globals.error]
@@ -204,7 +203,6 @@ params = [
 kind = "function"
 min_args = 1
 max_args = 1
-is_pure = true
 is_must_use = true
 params = [{ kind = "any" }]
 
@@ -229,7 +227,6 @@ kind = "function"
 min_args = 1
 max_args = 3
 is_must_use = true
-deprecated = { message = "use 'table.unpack' instead", replace_template = "table.unpack(%1)" }
 params = [
   { kind = "table" },
   { kind = "number", is_required = false },
@@ -850,9 +847,9 @@ params = [
 
 [globals.math.members.randomseed]
 kind = "function"
-min_args = 0
+min_args = 1
 max_args = 1
-params = [{ kind = "number", is_required = false }]
+params = [{ kind = "number" }]
 
 [globals.math.members.round]
 kind = "function"
@@ -1129,6 +1126,12 @@ min_args = 1
 max_args = 1
 is_must_use = true
 params = [{ kind = "function" }]
+
+[globals.coroutine.members.finally]
+kind = "function"
+min_args = 2
+max_args = 2
+params = [{ kind = "display", display = "thread" }, { kind = "any" }]
 
 [globals.coroutine.members.isyieldable]
 kind = "function"
@@ -1800,10 +1803,10 @@ kind = "function"
 is_pure = true
 is_must_use = true
 overloads = [
-  { min_args = 3, max_args = 3, params = [
+  { min_args = 2, max_args = 3, params = [
     { kind = "number" },
     { kind = "number" },
-    { kind = "number" },
+    { kind = "number", is_required = false },
   ] },
   { min_args = 4, max_args = 4, params = [
     { kind = "number" },
@@ -1836,6 +1839,18 @@ max_args = 1
 is_pure = true
 is_must_use = true
 params = [{ kind = "display", display = "vector" }]
+
+[globals.vector.members.lerp]
+kind = "function"
+min_args = 3
+max_args = 3
+is_pure = true
+is_must_use = true
+params = [
+  { kind = "display", display = "vector" },
+  { kind = "display", display = "vector" },
+  { kind = "number" },
+]
 
 [globals.vector.members.magnitude]
 kind = "function"

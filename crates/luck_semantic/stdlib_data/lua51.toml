@@ -231,7 +231,6 @@ params = [
 kind = "function"
 min_args = 1
 max_args = 1
-is_pure = true
 is_must_use = true
 params = [{ kind = "any" }]
 

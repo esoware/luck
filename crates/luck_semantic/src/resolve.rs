@@ -46,7 +46,10 @@ impl<'input> ShapeResolver<'input> {
                 let name = token.identifier()?;
                 match self.tree.resolved_symbol(name, token.span) {
                     Some(symbol_id) => self.symbol_shapes.get(&symbol_id),
-                    None => self.library.globals.get(name)?.shape(),
+                    None if self.tree.reaches_host_global(name, token.span) => {
+                        self.library.globals.get(name)?.shape()
+                    }
+                    None => None,
                 }
             }
             Expression::Var(Var::FieldAccess(_)) => {
@@ -101,16 +104,14 @@ impl<'input> ShapeResolver<'input> {
     }
 
     /// Unwind a `Name(.Name)*` chain into path segments, root first. Any
-    /// non-name link (indexing, calls, parens) aborts, as does a local root.
+    /// non-name link (indexing, calls, parens) aborts, as does a root that
+    /// doesn't reach the host's global.
     pub(crate) fn global_path(self, expr: &Expression) -> Option<Vec<&str>> {
         let Expression::Var(var) = expr else {
             return None;
         };
         let DottedPath { segments, root_span, .. } = dotted_path(var)?;
-        if self.tree.resolves_to_local(segments.first()?, root_span) {
-            return None;
-        }
-        Some(segments)
+        self.tree.reaches_host_global(segments.first()?, root_span).then_some(segments)
     }
 
     /// Shape of a call's first return value.
@@ -246,7 +247,7 @@ mod tests {
     fn shapes_for(source: &str, library: &StdlibLibrary) -> (ScopeTree, SymbolShapes) {
         let parsed = luck_parser::parse(source, LuaVersion::Lua54);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        let tree = builder::build(&parsed.block);
+        let tree = builder::build(&parsed.block, LuaVersion::Lua54);
         let shapes = symbol_shapes(&tree, library, &parsed.block);
         (tree, shapes)
     }

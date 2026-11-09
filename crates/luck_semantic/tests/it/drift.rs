@@ -142,8 +142,9 @@ fn deprecation_fingerprint(entry: &StdlibEntry) -> String {
 #[test]
 fn luau_and_roblox_shared_surface_agrees() {
     // Signature divergence: Roblox vectors are 3-wide, while standalone Luau
-    // also has the 4-arg form of LUA_VECTOR_SIZE=4 builds.
-    const SIGNATURE_ALLOWLIST: [&str; 1] = ["vector.create"];
+    // also has the 4-arg form of LUA_VECTOR_SIZE=4 builds. And the standalone
+    // CLI's collectgarbage also accepts "collect", which returns nothing.
+    const SIGNATURE_ALLOWLIST: [&str; 2] = ["vector.create", "collectgarbage"];
     // Deprecation divergence: Roblox deprecates these while they stay fully
     // supported in standalone Luau.
     const DEPRECATION_ALLOWLIST: [&str; 3] = ["collectgarbage", "getfenv", "setfenv"];
@@ -224,6 +225,8 @@ fn numbered_lua_adjacent_versions_agree() {
         // 5.2 io.write returns the file handle (chainable); 5.1 doesn't
         // document a return.
         ("io.write", LuaVersion::Lua51),
+        // 5.2 io.open rejects modes outside `[rwa]%+?b*`, such as rb+.
+        ("io.open", LuaVersion::Lua51),
         // 5.2 string.rep gains the separator argument.
         ("string.rep", LuaVersion::Lua51),
         // 5.2 math.log gains the optional base argument.
@@ -250,6 +253,16 @@ fn numbered_lua_adjacent_versions_agree() {
         ("collectgarbage", LuaVersion::Lua54),
         // 5.4 math.randomseed becomes optional and two-seed.
         ("math.randomseed", LuaVersion::Lua53),
+        // 5.4 string.gmatch gains the init argument.
+        ("string.gmatch", LuaVersion::Lua53),
+        ("string:gmatch", LuaVersion::Lua53),
+        // 5.4 coroutine.isyieldable gains the coroutine argument.
+        ("coroutine.isyieldable", LuaVersion::Lua53),
+        // 5.4 drops the __ipairs metamethod 5.3 still runs, so ipairs is
+        // pure again.
+        ("ipairs", LuaVersion::Lua53),
+        // 5.5 coroutine.close defaults to the running coroutine.
+        ("coroutine.close", LuaVersion::Lua54),
         // 5.4 utf8 gains the lax flag on codes/codepoint/len.
         ("utf8.codes", LuaVersion::Lua53),
         ("utf8.codepoint", LuaVersion::Lua53),

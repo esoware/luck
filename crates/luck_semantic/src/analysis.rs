@@ -4,7 +4,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::builder;
 use crate::resolve::{ShapeResolver, symbol_shapes};
-use crate::scope::{ScopeTree, SymbolId};
+use crate::scope::{Reference, ScopeTree, Symbol, SymbolId};
 use crate::stdlib_load::library_for;
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
@@ -43,7 +43,7 @@ pub fn analyze_with_environment(
     version: LuaVersion,
     environment: StdlibEnvironment,
 ) -> SemanticAnalysis {
-    let scope_tree = builder::build(block);
+    let scope_tree = builder::build(block, version);
     let symbol_shapes = symbol_shapes(&scope_tree, library_for(version, environment), block);
     SemanticAnalysis {
         scope_tree,
@@ -101,6 +101,14 @@ impl SemanticAnalysis {
         self.scope_tree.resolves_to_local(name, span)
     }
 
+    /// True when the identifier `name` at `span` reads the host's global of
+    /// that name, so a stdlib fact about `name` holds there. See
+    /// [`ScopeTree::reaches_host_global`].
+    #[must_use]
+    pub fn reaches_host_global(&self, name: &str, span: Span) -> bool {
+        self.scope_tree.reaches_host_global(name, span)
+    }
+
     /// Whether `name` is recognized as a global: a stdlib entry for this
     /// environment, an entry in `extra_globals`, or a name a `global` statement
     /// in this chunk declares.
@@ -109,6 +117,14 @@ impl SemanticAnalysis {
         self.stdlib().globals.contains_key(name)
             || self.extra_globals.contains(name)
             || self.scope_tree.declared_globals.contains(name)
+    }
+
+    /// Whether a global's name is defined where `reference` uses it: known
+    /// to [`Self::is_known_global`], or covered by a Lua 5.5 `global`
+    /// statement in scope there, `global *` included.
+    #[must_use]
+    pub fn is_defined_global(&self, reference: &Reference) -> bool {
+        reference.is_declared_global || self.is_known_global(&reference.name)
     }
 
     /// Whether the stdlib marks the global `name` read-only, so code
@@ -158,9 +174,10 @@ impl SemanticAnalysis {
     /// be a shaped local.
     ///
     /// With `local f = io.open(...)`, `["f", "read"]` resolves through the
-    /// `file` shape. A non-local root is a plain library lookup, and a local
-    /// root without a known shape resolves to nothing, which keeps shadowed
-    /// names out of hover and semantic tokens.
+    /// `file` shape. A root that reaches the host's global is a plain library
+    /// lookup. Any other root resolves to nothing unless it's a local of
+    /// known shape, which keeps shadowed names out of hover and semantic
+    /// tokens.
     #[must_use]
     pub fn resolve_stdlib_path(
         &self,
@@ -178,25 +195,31 @@ impl SemanticAnalysis {
                 }
                 Some(current)
             }
-            None => library.lookup(segments),
+            None if self.scope_tree.reaches_host_global(first, root_span) => {
+                library.lookup(segments)
+            }
+            None => None,
         }
     }
 
-    /// For completion: the shape of the last local named `name` declared
-    /// before `offset`.
+    /// For completion: the last local named `name` declared before `offset`.
     ///
     /// Half-typed text like `f:` has no parsed reference to resolve by span.
     /// Scope isn't checked, so a local from a block that already closed can
     /// still match.
     #[must_use]
-    pub fn shape_of_nearest_local(&self, name: &str, offset: u32) -> Option<&CompactString> {
-        let symbol = self
-            .scope_tree
+    pub fn nearest_local(&self, name: &str, offset: u32) -> Option<&Symbol> {
+        self.scope_tree
             .symbols
             .iter()
             .filter(|symbol| symbol.name == name && symbol.definition_span.end <= offset)
-            .max_by_key(|symbol| symbol.definition_span.start)?;
-        self.symbol_shapes.get(&symbol.id)
+            .max_by_key(|symbol| symbol.definition_span.start)
+    }
+
+    /// For completion: the shape of [`Self::nearest_local`].
+    #[must_use]
+    pub fn shape_of_nearest_local(&self, name: &str, offset: u32) -> Option<&CompactString> {
+        self.symbol_shapes.get(&self.nearest_local(name, offset)?.id)
     }
 }
 
@@ -205,7 +228,6 @@ mod tests {
     use luck_ast::Statement;
 
     use super::*;
-    use crate::scope::Symbol;
 
     fn analyze_lua54(source: &str) -> SemanticAnalysis {
         let parsed = luck_parser::parse(source, LuaVersion::Lua54);
@@ -219,6 +241,54 @@ mod tests {
         assert!(analysis.is_known_global("print"));
         assert!(analysis.is_known_global("table"));
         assert!(!analysis.is_known_global("not_a_real_name"));
+    }
+
+    fn reaches_host_print(source: &str, version: LuaVersion) -> bool {
+        let parsed = luck_parser::parse(source, version);
+        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+        let analysis = analyze(&parsed.block, version);
+        let print = analysis
+            .scope_tree
+            .references
+            .iter()
+            .rfind(|reference| reference.name == "print")
+            .expect("the source references print");
+        analysis.reaches_host_global("print", print.span)
+    }
+
+    #[test]
+    fn reaches_host_global_requires_a_global_the_chunk_leaves_alone() {
+        assert!(reaches_host_print("print(1)", LuaVersion::Lua54));
+        assert!(!reaches_host_print("function print() end\nprint(1)", LuaVersion::Lua54));
+    }
+
+    #[test]
+    fn reaches_host_global_is_false_for_a_local_or_a_field_of_env() {
+        assert!(!reaches_host_print("local print = 1\nprint(1)", LuaVersion::Lua54));
+        assert!(!reaches_host_print("local _ENV = {}\nprint(1)", LuaVersion::Lua54));
+        assert!(reaches_host_print("local _ENV = {}\nprint(1)", LuaVersion::Lua51));
+    }
+
+    #[test]
+    fn reaches_host_global_is_false_when_the_chunk_assigns_its_env() {
+        assert!(!reaches_host_print("_ENV = {}\nprint(1)", LuaVersion::Lua54));
+        assert!(reaches_host_print("_ENV = {}\nprint(1)", LuaVersion::Lua51));
+    }
+
+    #[test]
+    fn reaches_host_global_is_true_for_a_declared_global_without_a_value() {
+        assert!(reaches_host_print("global print\nprint(1)", LuaVersion::Lua55));
+        assert!(!reaches_host_print("global print = 1\nprint(1)", LuaVersion::Lua55));
+    }
+
+    #[test]
+    fn is_defined_global_counts_a_global_star_in_scope() {
+        let parsed = luck_parser::parse("global *\nreturn y", LuaVersion::Lua55);
+        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+        let analysis = analyze(&parsed.block, LuaVersion::Lua55);
+        let y = &analysis.scope_tree.references[0];
+        assert!(analysis.is_defined_global(y));
+        assert!(!analysis.is_known_global("y"), "rename still treats `y` as a free name");
     }
 
     #[test]
@@ -278,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_free_name_in_nested_function_captures_local_env() {
+    fn free_name_in_nested_function_captures_local_env() {
         let analysis =
             analyze_lua54("local _ENV = {}\nlocal function f() return missing end\nreturn f");
         assert!(
@@ -288,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_resolve_callee_bails_under_a_local_env() {
+    fn resolve_callee_bails_under_a_local_env() {
         let source = "local _ENV = { print = function() end }\nprint(1, 2)";
         assert_eq!(
             resolve_last_statement_call(source, LuaVersion::Lua54),
@@ -298,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_resolve_callee_bails_on_a_global_the_file_rebinds() {
+    fn resolve_callee_bails_on_a_global_the_file_rebinds() {
         let source = "function tostring(a, b) return a end\ntostring(1, 2)";
         assert_eq!(
             resolve_last_statement_call(source, LuaVersion::Lua54),
@@ -308,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_type_function_body_knows_the_types_library() {
+    fn type_function_body_knows_the_types_library() {
         let unknown = unknown_globals("type function f(t)\n  return types.number\nend");
         assert!(
             unknown.is_empty(),
@@ -318,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_type_function_body_knows_sibling_type_functions() {
+    fn type_function_body_knows_sibling_type_functions() {
         let unknown = unknown_globals(
             "type function f(t)\n  return t\nend\ntype function g(t)\n  return f(t)\nend",
         );

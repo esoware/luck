@@ -69,7 +69,6 @@ params = [{ kind = "any" }]
 kind = "function"
 min_args = 1
 max_args = 1
-is_pure = true
 is_must_use = true
 params = [{ kind = "any" }]
 
@@ -132,7 +131,6 @@ params = [
 kind = "function"
 min_args = 1
 max_args = 1
-is_pure = true
 is_must_use = true
 params = [{ kind = "any" }]
 
@@ -222,7 +220,6 @@ params = [
 kind = "function"
 min_args = 1
 max_args = 1
-is_pure = true
 is_must_use = true
 params = [{ kind = "any" }]
 
@@ -472,7 +469,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_must_use = true
-deprecated = { message = "deprecated since Lua 5.2; use the '#' length operator instead", replace_template = "#%1" }
+deprecated = { message = "deprecated since Lua 5.2; '#' only agrees with it on sequences" }
 params = [{ kind = "table" }]
 
 [globals.table.members.insert]
@@ -901,7 +898,7 @@ min_args = 2
 max_args = 2
 is_pure = true
 is_must_use = true
-deprecated = { message = "use the '>>' shift operator instead", replace_template = "(%1 >> %2)" }
+deprecated = { message = "no operator matches it, since '>>' is a logical shift" }
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.bit32.members.band]
@@ -919,7 +916,7 @@ min_args = 1
 max_args = 1
 is_pure = true
 is_must_use = true
-deprecated = { message = "use the '~' operator instead", replace_template = "(~%1)" }
+deprecated = { message = "use the '~' operator instead" }
 params = [{ kind = "number" }]
 
 [globals.bit32.members.bor]
@@ -977,7 +974,7 @@ min_args = 2
 max_args = 2
 is_pure = true
 is_must_use = true
-deprecated = { message = "use the '<<' shift operator instead", replace_template = "(%1 << %2)" }
+deprecated = { message = "use the '<<' shift operator instead" }
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.bit32.members.replace]
@@ -1009,7 +1006,7 @@ min_args = 2
 max_args = 2
 is_pure = true
 is_must_use = true
-deprecated = { message = "use the '>>' shift operator instead", replace_template = "(%1 >> %2)" }
+deprecated = { message = "use the '>>' shift operator instead" }
 params = [{ kind = "number" }, { kind = "number" }]
 
 # ---- io / os / coroutine / debug / package ----
@@ -1052,7 +1049,7 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "string" },
-  { kind = "constant", values = ["r", "rb", "w", "wb", "a", "ab", "r+", "rb+", "r+b", "w+", "wb+", "w+b", "a+", "ab+", "a+b"], is_required = false },
+  { kind = "constant", values = ["r", "rb", "w", "wb", "a", "ab", "r+", "r+b", "w+", "w+b", "a+", "a+b"], is_required = false },
 ]
 returns = "file"
 

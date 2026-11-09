@@ -540,7 +540,7 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
 
 const fn symbol_classify(kind: SymbolKind) -> Classification {
     match kind {
-        SymbolKind::Parameter => Classification::plain(TYPE_PARAMETER),
+        SymbolKind::Parameter | SymbolKind::ImplicitSelf => Classification::plain(TYPE_PARAMETER),
         SymbolKind::FunctionName => Classification::plain(TYPE_FUNCTION),
         SymbolKind::Local | SymbolKind::IteratorVariable | SymbolKind::NumericForVariable => {
             Classification::plain(TYPE_VARIABLE)

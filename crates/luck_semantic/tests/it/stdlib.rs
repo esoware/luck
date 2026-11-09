@@ -1203,7 +1203,7 @@ fn standalone_luau_has_no_enum() {
 }
 
 #[test]
-fn bug_string_gmatch_accepts_init_from_54() {
+fn string_gmatch_accepts_init_from_54() {
     for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
         let library = standalone_library(version);
         assert!(
@@ -1218,7 +1218,7 @@ fn bug_string_gmatch_accepts_init_from_54() {
 }
 
 #[test]
-fn bug_coroutine_isyieldable_accepts_coroutine_from_54() {
+fn coroutine_isyieldable_accepts_coroutine_from_54() {
     for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
         assert!(
             function_at(standalone_library(version), &["coroutine", "isyieldable"])
@@ -1229,7 +1229,7 @@ fn bug_coroutine_isyieldable_accepts_coroutine_from_54() {
 }
 
 #[test]
-fn bug_lua55_coroutine_close_coroutine_is_optional() {
+fn lua55_coroutine_close_coroutine_is_optional() {
     assert!(
         function_at(standalone_library(LuaVersion::Lua55), &["coroutine", "close"])
             .accepts_arg_count(0),
@@ -1238,7 +1238,7 @@ fn bug_lua55_coroutine_close_coroutine_is_optional() {
 }
 
 #[test]
-fn bug_io_open_mode_rejects_b_before_plus_from_52() {
+fn io_open_mode_rejects_b_before_plus_from_52() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         let modes = constant_set(standalone_library(version), &["io", "open"], 1)
             .expect("io.open's mode is a constant set");
@@ -1253,7 +1253,7 @@ fn bug_io_open_mode_rejects_b_before_plus_from_52() {
 }
 
 #[test]
-fn bug_lua52_module_is_deprecated_not_removed() {
+fn lua52_module_is_deprecated_not_removed() {
     let module = standalone_library(LuaVersion::Lua52).lookup(&["module"]);
     assert!(
         module.is_some_and(|entry| entry.deprecation().is_some()),
@@ -1263,7 +1263,7 @@ fn bug_lua52_module_is_deprecated_not_removed() {
 }
 
 #[test]
-fn bug_lua52_collectgarbage_accepts_setmajorinc() {
+fn lua52_collectgarbage_accepts_setmajorinc() {
     let options = constant_set(standalone_library(LuaVersion::Lua52), &["collectgarbage"], 0)
         .expect("collectgarbage's option is a constant set");
     assert!(
@@ -1273,7 +1273,7 @@ fn bug_lua52_collectgarbage_accepts_setmajorinc() {
 }
 
 #[test]
-fn bug_luau_collectgarbage_accepts_collect() {
+fn luau_collectgarbage_accepts_collect() {
     let options = constant_set(luau(), &["collectgarbage"], 0)
         .expect("collectgarbage's option is a constant set");
     assert!(
@@ -1283,7 +1283,7 @@ fn bug_luau_collectgarbage_accepts_collect() {
 }
 
 #[test]
-fn bug_luau_collectgarbage_is_not_must_use() {
+fn luau_collectgarbage_is_not_must_use() {
     assert!(
         !function_at(luau(), &["collectgarbage"]).is_must_use,
         "collectgarbage() runs a collection and returns nothing in the standalone Luau CLI"
@@ -1291,7 +1291,7 @@ fn bug_luau_collectgarbage_is_not_must_use() {
 }
 
 #[test]
-fn bug_luau_math_randomseed_requires_a_seed() {
+fn luau_math_randomseed_requires_a_seed() {
     for library in [luau(), roblox()] {
         assert_eq!(
             function_at(library, &["math", "randomseed"]).min_args(),
@@ -1302,7 +1302,7 @@ fn bug_luau_math_randomseed_requires_a_seed() {
 }
 
 #[test]
-fn bug_luau_vector_create_accepts_two_components() {
+fn luau_vector_create_accepts_two_components() {
     assert!(
         function_at(luau(), &["vector", "create"]).accepts_arg_count(2),
         "the 2-component constructor RFC is implemented: vector.create(x, y) zeroes z"
@@ -1310,7 +1310,7 @@ fn bug_luau_vector_create_accepts_two_components() {
 }
 
 #[test]
-fn bug_luau_vector_lerp_is_cataloged() {
+fn luau_vector_lerp_is_cataloged() {
     for library in [luau(), roblox()] {
         assert!(
             matches!(library.lookup(&["vector", "lerp"]), Some(StdlibEntry::Function(_))),
@@ -1321,7 +1321,7 @@ fn bug_luau_vector_lerp_is_cataloged() {
 }
 
 #[test]
-fn bug_luau_coroutine_finally_is_cataloged() {
+fn luau_coroutine_finally_is_cataloged() {
     for library in [luau(), roblox()] {
         assert!(
             matches!(library.lookup(&["coroutine", "finally"]), Some(StdlibEntry::Function(_))),
@@ -1332,7 +1332,7 @@ fn bug_luau_coroutine_finally_is_cataloged() {
 }
 
 #[test]
-fn bug_tostring_is_not_pure() {
+fn tostring_is_not_pure() {
     for (file, library) in all_libraries() {
         assert!(
             !function_at(library, &["tostring"]).is_pure,
@@ -1342,7 +1342,7 @@ fn bug_tostring_is_not_pure() {
 }
 
 #[test]
-fn bug_metamethod_iterators_are_not_pure_from_52() {
+fn metamethod_iterators_are_not_pure_from_52() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         assert!(
             !function_at(standalone_library(version), &["pairs"]).is_pure,
@@ -1356,7 +1356,7 @@ fn bug_metamethod_iterators_are_not_pure_from_52() {
 }
 
 #[test]
-fn bug_table_maxn_has_no_length_operator_fix() {
+fn table_maxn_has_no_length_operator_fix() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         let function = function_at(standalone_library(version), &["table", "maxn"]);
         let deprecation = function.deprecated.as_ref().expect("table.maxn is deprecated");
@@ -1374,7 +1374,7 @@ fn lua53_bit32_replacement(name: &str) -> Option<&'static str> {
 }
 
 #[test]
-fn bug_bit32_bnot_fix_keeps_the_32_bit_result() {
+fn bit32_bnot_fix_keeps_the_32_bit_result() {
     assert_ne!(
         lua53_bit32_replacement("bnot"),
         Some("(~%1)"),
@@ -1383,7 +1383,7 @@ fn bug_bit32_bnot_fix_keeps_the_32_bit_result() {
 }
 
 #[test]
-fn bug_bit32_arshift_fix_is_not_a_logical_shift() {
+fn bit32_arshift_fix_is_not_a_logical_shift() {
     assert_ne!(
         lua53_bit32_replacement("arshift"),
         Some("(%1 >> %2)"),
@@ -1393,7 +1393,7 @@ fn bug_bit32_arshift_fix_is_not_a_logical_shift() {
 }
 
 #[test]
-fn bug_bit32_lshift_fix_keeps_the_32_bit_result() {
+fn bit32_lshift_fix_keeps_the_32_bit_result() {
     assert_ne!(
         lua53_bit32_replacement("lshift"),
         Some("(%1 << %2)"),
@@ -1402,7 +1402,7 @@ fn bug_bit32_lshift_fix_keeps_the_32_bit_result() {
 }
 
 #[test]
-fn bug_bit32_rshift_fix_keeps_the_32_bit_result() {
+fn bit32_rshift_fix_keeps_the_32_bit_result() {
     assert_ne!(
         lua53_bit32_replacement("rshift"),
         Some("(%1 >> %2)"),
@@ -1411,7 +1411,7 @@ fn bug_bit32_rshift_fix_keeps_the_32_bit_result() {
 }
 
 #[test]
-fn bug_luau_unpack_is_not_deprecated() {
+fn luau_unpack_is_not_deprecated() {
     for library in [luau(), roblox()] {
         assert!(
             function_at(library, &["unpack"]).deprecated.is_none(),
@@ -1444,7 +1444,7 @@ fn returned_expr(text: &str, version: LuaVersion) -> Expression {
 }
 
 #[test]
-fn bug_math_pow_fix_groups_a_compound_base() {
+fn math_pow_fix_groups_a_compound_base() {
     let version = LuaVersion::Lua53;
     let Some(template) = fix_template(standalone_library(version), &["math", "pow"]) else {
         return;
@@ -1461,7 +1461,7 @@ fn bug_math_pow_fix_groups_a_compound_base() {
 }
 
 #[test]
-fn bug_table_getn_fix_groups_a_compound_operand() {
+fn table_getn_fix_groups_a_compound_operand() {
     let version = LuaVersion::Lua51;
     let Some(template) = fix_template(standalone_library(version), &["table", "getn"]) else {
         return;
@@ -1475,7 +1475,7 @@ fn bug_table_getn_fix_groups_a_compound_operand() {
 }
 
 #[test]
-fn bug_unpack_fix_keeps_the_range_arguments() {
+fn unpack_fix_keeps_the_range_arguments() {
     let Some(template) = fix_template(standalone_library(LuaVersion::Lua52), &["unpack"]) else {
         return;
     };
@@ -1488,7 +1488,7 @@ fn bug_unpack_fix_keeps_the_range_arguments() {
 }
 
 #[test]
-fn bug_loadstring_fix_keeps_the_chunk_name() {
+fn loadstring_fix_keeps_the_chunk_name() {
     let Some(template) = fix_template(standalone_library(LuaVersion::Lua52), &["loadstring"])
     else {
         return;
@@ -1502,7 +1502,7 @@ fn bug_loadstring_fix_keeps_the_chunk_name() {
 }
 
 #[test]
-fn bug_ypcall_fix_keeps_the_forwarded_arguments() {
+fn ypcall_fix_keeps_the_forwarded_arguments() {
     let Some(template) = fix_template(roblox(), &["ypcall"]) else {
         return;
     };

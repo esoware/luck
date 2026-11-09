@@ -1,4 +1,4 @@
-use luck_token::{CompactString, Span};
+use luck_token::{CompactString, LuaVersion, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Defines an index newtype over `NonZeroU32` holding `index + 1`, so
@@ -37,6 +37,7 @@ define_index_id!(ReferenceId);
 /// Every scope, symbol, and reference in one chunk, indexed by id.
 #[derive(Debug)]
 pub struct ScopeTree {
+    pub version: LuaVersion,
     pub scopes: Vec<Scope>,
     pub symbols: Vec<Symbol>,
     pub references: Vec<Reference>,
@@ -45,6 +46,12 @@ pub struct ScopeTree {
     /// Lua 5.5: names a `global` statement declares, which are defined
     /// wherever they're read.
     pub declared_globals: FxHashSet<CompactString>,
+    /// Globals this chunk writes as free names, so the host's value of each
+    /// can't be assumed anywhere in the chunk.
+    pub assigned_globals: FxHashSet<CompactString>,
+    /// Lua 5.2+: the chunk assigns its own `_ENV`, which redirects every
+    /// free name. A local `_ENV` is [`Reference::env`] instead.
+    pub is_env_assigned: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,7 +87,7 @@ pub struct Symbol {
     pub is_modified: bool,
     /// Luau: true for `export local`, `export const`, and `export function`
     /// bindings. The module's export table reads them, so they're used even
-    /// with no references in the module.
+    /// with no references in the module, and their name is the module's API.
     pub is_exported: bool,
     pub shadows: Option<SymbolId>,
 }
@@ -92,6 +99,9 @@ pub enum SymbolKind {
     IteratorVariable,
     NumericForVariable,
     FunctionName,
+    /// The `self` of a `function t:m()` header. No token spells it, so its
+    /// definition span is empty, at the start of the signature.
+    ImplicitSelf,
 }
 
 /// One use of a name, local or global.
@@ -101,8 +111,14 @@ pub struct Reference {
     pub name: CompactString,
     pub kind: ReferenceKind,
     pub scope: ScopeId,
-    /// The symbol this name resolves to, or `None` for a global.
+    /// The symbol this name resolves to, or `None` for a free name.
     pub resolved: Option<SymbolId>,
+    /// Lua 5.2+: the local `_ENV` a free name is a field of, in which case
+    /// it's no global.
+    pub env: Option<SymbolId>,
+    /// Lua 5.5: a free name in the scope of a `global` statement that covers
+    /// it, by name or with `*`.
+    pub is_declared_global: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,11 +174,16 @@ impl ScopeTree {
         &self.references[id.index()]
     }
 
-    /// The local that the identifier `name` at `span` resolves to: `None`
-    /// for a global, and for a span that holds no reference.
-    pub(crate) fn resolved_symbol(&self, name: &str, span: Span) -> Option<SymbolId> {
+    /// The reference to the identifier `name` at `span`, if any.
+    fn reference_at(&self, name: &str, span: Span) -> Option<&Reference> {
         let reference = self.reference(*self.references_by_span.get(&span)?);
-        if reference.name == name { reference.resolved } else { None }
+        (reference.name == name).then_some(reference)
+    }
+
+    /// The local that the identifier `name` at `span` resolves to: `None`
+    /// for a free name, and for a span that holds no reference.
+    pub(crate) fn resolved_symbol(&self, name: &str, span: Span) -> Option<SymbolId> {
+        self.reference_at(name, span)?.resolved
     }
 
     /// True when the identifier `name` at `span` resolves to a local rather
@@ -172,9 +193,34 @@ impl ScopeTree {
         self.resolved_symbol(name, span).is_some()
     }
 
-    /// All unresolved references, which are the globals.
+    /// True when the identifier `name` at `span` reads the host's global of
+    /// that name, so a stdlib fact about `name` holds there.
+    ///
+    /// False for a local, a field of a local `_ENV`, a chunk that assigns its
+    /// own `_ENV`, a global this chunk writes anywhere, and a span that holds
+    /// no reference.
+    #[must_use]
+    pub fn reaches_host_global(&self, name: &str, span: Span) -> bool {
+        self.reference_at(name, span).is_some_and(|reference| {
+            self.is_global(reference) && !self.assigned_globals.contains(name)
+        })
+    }
+
+    /// Whether `symbol` is a Lua 5.2+ `_ENV`, which every free name in its
+    /// scope indexes.
+    #[must_use]
+    pub fn is_env_binding(&self, symbol: SymbolId) -> bool {
+        self.version.has_env_upvalue() && self.symbol(symbol).name == "_ENV"
+    }
+
+    const fn is_global(&self, reference: &Reference) -> bool {
+        reference.resolved.is_none() && reference.env.is_none() && !self.is_env_assigned
+    }
+
+    /// Every reference to a global. A free name that indexes a `_ENV` the
+    /// chunk controls isn't one.
     pub fn unresolved_references(&self) -> impl Iterator<Item = &Reference> {
-        self.references.iter().filter(|reference| reference.resolved.is_none())
+        self.references.iter().filter(|reference| self.is_global(reference))
     }
 }
 

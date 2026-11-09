@@ -39,7 +39,7 @@ pub(crate) fn extract_requires(
     version: LuaVersion,
     dynamic_require: DynamicRequire,
 ) -> ExtractedRequires {
-    let scope_tree = luck_semantic::build_scope_tree(block);
+    let scope_tree = luck_semantic::build_scope_tree(block, version);
     let mut finder = RequireFinder {
         file_path,
         version,

@@ -37,6 +37,7 @@ impl WholeRule for UnusedVariable {
                 SymbolKind::Local => "variable",
                 SymbolKind::FunctionName => "function",
                 SymbolKind::Parameter
+                | SymbolKind::ImplicitSelf
                 | SymbolKind::IteratorVariable
                 | SymbolKind::NumericForVariable => continue,
             };

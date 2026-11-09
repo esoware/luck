@@ -30,9 +30,11 @@ Each scope records its kind and its parent, and each symbol records its scope an
 
 ### Symbols and references
 
-A `Symbol` is a declared variable with a `SymbolKind` (`Local`, `Parameter`, `IteratorVariable`, `NumericForVariable`, `FunctionName`) and the span of its declaration. A `Reference` is a usage site with a `ReferenceKind`: Read, Write, or ReadWrite, the last for Luau compound assignments such as `x += 1`.
+A `Symbol` is a declared variable with a `SymbolKind` (`Local`, `Parameter`, `IteratorVariable`, `NumericForVariable`, `FunctionName`, `ImplicitSelf`) and the span of its declaration, which is empty for the implicit `self`. A `Reference` is a usage site with a `ReferenceKind`: Read, Write, or ReadWrite, the last for Luau compound assignments such as `x += 1`.
 
-A name with no visible declaration stays unresolved and is treated as a global, which may be a stdlib entry, a configured extra global, a name a Lua 5.5 `global` statement declares (`ScopeTree::declared_globals`), or unknown.
+A name with no visible declaration is a free name and stays unresolved. Under a Lua 5.2+ local `_ENV`, or in a chunk that assigns its own `_ENV`, it's a table field and not a global, so `ScopeTree::unresolved_references` leaves it out. Inside a Luau `type function`, the `types` library and the type declarations in scope belong to the type runtime and get no reference.
+
+A free name that is a global may be a stdlib entry, a configured extra global, a name a Lua 5.5 `global` statement declares (`ScopeTree::declared_globals`), or unknown. `ScopeTree::reaches_host_global` answers the question the stdlib rules ask: does this identifier still read the host's value? A name the chunk writes anywhere (`ScopeTree::assigned_globals`) doesn't.
 
 ### Standard library
 
@@ -51,7 +53,7 @@ Entries model:
 - **Overloaded signatures.** Typed parameters with per-signature arity (`CFrame.new`, `collectgarbage`).
 - **Shapes.** Named member sets for kinds of values (`file`, the derived `string` receiver, `Instance`, `DataModel`, `EnumItem`, ...), and a shape can name a base shape with `extends`. Functions declare the shape they return and values the shape they have, so method chains resolve.
 - **Constant parameters.** Closed string-value sets (`game:GetService` service names, `Instance.new` class names, `collectgarbage` options), shareable across parameters via named `constant_sets`.
-- **Deprecation.** At entry, parameter, and constant-value level, with `%n` replace templates for auto-fixes.
+- **Deprecation.** At entry, parameter, and constant-value level, with `%n` replace templates for auto-fixes. A placeholder before a call's `)` forwards the remaining arguments, and an operand placeholder groups a compound argument. A deprecation carries no template when none can keep the behavior (`table.maxn`, most of `bit32`).
 - **Purity / must-use / read-only** markers.
 
 ### Module layout

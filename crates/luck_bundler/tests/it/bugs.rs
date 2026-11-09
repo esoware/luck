@@ -55,7 +55,7 @@ fn bundle_files(files: &[(&str, &[u8])], entry: &str, version: LuaVersion) -> Bu
 fn scope_tree_of(output: &str, version: LuaVersion) -> ScopeTree {
     let parsed = luck_parser::parse(output, version);
     assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
-    luck_semantic::build_scope_tree(&parsed.block)
+    luck_semantic::build_scope_tree(&parsed.block, version)
 }
 
 fn line_map_entry<'map>(result: &'map BundleResult, file_name: &str) -> &'map LineMapEntry {
