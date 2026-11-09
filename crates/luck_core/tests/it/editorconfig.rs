@@ -8,7 +8,7 @@ use crate::common::{finishes_within, in_directory, project_with};
 /// The spec reads a key with nothing after `=` as a valid pair with an empty
 /// value.
 #[test]
-fn bug_editorconfig_empty_value_keeps_the_other_properties() {
+fn editorconfig_empty_value_keeps_the_other_properties() {
     let project = project_with(&[(".editorconfig", "[*.lua]\nindent_size = 2\ncharset =\n")]);
     let config = resolved_format_config(None, Some(&project.path().join("main.lua")));
     assert_eq!(
@@ -19,7 +19,7 @@ fn bug_editorconfig_empty_value_keeps_the_other_properties() {
 }
 
 #[test]
-fn bug_editorconfig_bom_before_the_first_section_keeps_its_properties() {
+fn editorconfig_bom_before_the_first_section_keeps_its_properties() {
     let project = project_with(&[(".editorconfig", "\u{feff}[*.lua]\nindent_size = 2\n")]);
     let config = resolved_format_config(None, Some(&project.path().join("main.lua")));
     assert_eq!(
@@ -32,7 +32,7 @@ fn bug_editorconfig_bom_before_the_first_section_keeps_its_properties() {
 /// A section with a `/` is relative to the `.editorconfig` that holds it, and
 /// the CLI passes the paths its walk yields, which are relative to cwd.
 #[test]
-fn bug_editorconfig_slash_section_applies_to_a_path_relative_to_a_subdirectory() {
+fn editorconfig_slash_section_applies_to_a_path_relative_to_a_subdirectory() {
     let project = project_with(&[
         (".editorconfig", "root = true\n[src/*.lua]\nindent_size = 3\n"),
         ("src/a.lua", ""),
@@ -48,7 +48,7 @@ fn bug_editorconfig_slash_section_applies_to_a_path_relative_to_a_subdirectory()
 }
 
 #[test]
-fn bug_editorconfig_alternative_after_a_starred_one_still_matches() {
+fn editorconfig_alternative_after_a_starred_one_still_matches() {
     let project =
         project_with(&[(".editorconfig", "root = true\n[{a*b,xb}.lua]\nindent_size = 2\n")]);
     let config = resolved_format_config(None, Some(&project.path().join("xb.lua")));
@@ -56,11 +56,10 @@ fn bug_editorconfig_alternative_after_a_starred_one_still_matches() {
 }
 
 #[test]
-fn bug_deeply_nested_editorconfig_section_does_not_crash() {
+fn deeply_nested_editorconfig_section_does_not_crash() {
     let section =
         format!("root = true\n[{}a{}]\nindent_size = 2\n", "{a,".repeat(5000), "}".repeat(5000));
     let project = project_with(&[(".editorconfig", &section)]);
-    // The bug aborts the process before this call returns.
     let config = resolved_format_config(None, Some(&project.path().join("a.lua")));
     assert!(
         matches!(config.indent_width, None | Some(2)),
@@ -69,7 +68,7 @@ fn bug_deeply_nested_editorconfig_section_does_not_crash() {
 }
 
 #[test]
-fn bug_editorconfig_alternation_section_matches_promptly() {
+fn editorconfig_alternation_section_matches_promptly() {
     let section = format!("root = true\n[b{}.lua]\nindent_size = 2\n", "{a,aa}".repeat(40));
     let project = project_with(&[(".editorconfig", &section)]);
     let file_path = project.path().join(format!("{}.lua", "a".repeat(60)));

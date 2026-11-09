@@ -8,7 +8,7 @@ use tempfile::TempDir;
 use crate::common::{finishes_within, in_directory, project_with};
 
 #[test]
-fn bug_root_config_rejects_an_escape_through_a_transitive_extends() {
+fn root_config_rejects_an_escape_through_a_transitive_extends() {
     let project = project_with(&[
         ("outside.json", r#"{ "lua": "lua51" }"#),
         ("project/base.json", r#"{ "extends": ["../outside.json"] }"#),
@@ -20,7 +20,7 @@ fn bug_root_config_rejects_an_escape_through_a_transitive_extends() {
 }
 
 #[test]
-fn bug_parse_error_in_an_extended_file_names_that_file() {
+fn parse_error_in_an_extended_file_names_that_file() {
     let project = project_with(&[
         ("base.json", "{ broken"),
         ("luck.json", r#"{ "extends": ["base.json"] }"#),
@@ -34,7 +34,7 @@ fn bug_parse_error_in_an_extended_file_names_that_file() {
 }
 
 #[test]
-fn bug_repeated_extends_layers_resolve_promptly() {
+fn repeated_extends_layers_resolve_promptly() {
     const LAYER_COUNT: usize = 40;
     let project = TempDir::new().expect("create temp dir");
     for layer in 0..LAYER_COUNT {
@@ -53,7 +53,7 @@ fn bug_repeated_extends_layers_resolve_promptly() {
 }
 
 #[test]
-fn bug_long_extends_chain_does_not_overflow_the_stack() {
+fn long_extends_chain_does_not_overflow_the_stack() {
     const LAYER_COUNT: usize = 5000;
     let project = TempDir::new().expect("create temp dir");
     for layer in 0..LAYER_COUNT {
@@ -65,7 +65,6 @@ fn bug_long_extends_chain_does_not_overflow_the_stack() {
         };
         fs::write(project.path().join(format!("layer{layer}.json")), body).expect("write layer");
     }
-    // Reaching the assertion at all is the point: the bug aborts the process.
     if let Err(message) = load_with_extends(&project.path().join("layer0.json")) {
         assert!(
             message.contains("extends"),
@@ -75,7 +74,7 @@ fn bug_long_extends_chain_does_not_overflow_the_stack() {
 }
 
 #[test]
-fn bug_discover_config_walks_above_a_relative_start_directory() {
+fn discover_config_walks_above_a_relative_start_directory() {
     let project = project_with(&[("luck.json", r#"{ "lua": "lua53" }"#), ("sub/keep.lua", "")]);
     let discovered =
         in_directory(&project.path().join("sub"), || discover_config(Path::new("."))).unwrap();

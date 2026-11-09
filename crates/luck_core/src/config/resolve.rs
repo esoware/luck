@@ -2,7 +2,9 @@
 //! selected profile, resolving entry and output paths, and expanding the
 //! single-entry or multi-entry (`entries`) form.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use rustc_hash::FxHashSet;
 
 use super::CONFIG_FILE_NAME;
 use super::dynamic_require::DynamicRequire;
@@ -10,6 +12,7 @@ use super::load::ProjectConfig;
 use super::luck_config::{LuckConfig, ProfileOverrides};
 use super::transform_config::TransformConfig;
 use crate::lua_target::LuaTarget;
+use crate::path::canonicalize_existing;
 
 /// The resolved settings for building one entry.
 #[derive(Debug, Clone)]
@@ -31,8 +34,9 @@ pub struct BuildConfig {
 ///
 /// # Errors
 ///
-/// Returns a message when `profile` isn't defined, or when the entry, output,
-/// or dialect settings are missing or invalid.
+/// Returns a message when `profile` isn't defined, when the entry, output, or
+/// dialect settings are missing or invalid, or when an output collides with an
+/// entry or another output.
 pub fn resolve_build_config(
     project: &ProjectConfig,
     profile: Option<&str>,
@@ -71,9 +75,11 @@ pub fn resolve_build_config(
         Ok((target, entry))
     };
 
-    match (&config.entries, &config.entry) {
+    let builds: Vec<BuildConfig> = match (&config.entries, &config.entry) {
         (Some(_), Some(_)) => {
-            Err(format!("cannot specify both `entry` and `entries` in `{CONFIG_FILE_NAME}`"))
+            return Err(format!(
+                "cannot specify both `entry` and `entries` in `{CONFIG_FILE_NAME}`"
+            ));
         }
         (Some(entries), None) => {
             if entries.is_empty() {
@@ -87,9 +93,9 @@ pub fn resolve_build_config(
                     let (target, entry) = resolve_entry(&entry_config.entry)?;
                     Ok(build_config(target, entry, project_root.join(&entry_config.output)))
                 })
-                .collect()
+                .collect::<Result<_, String>>()?
         }
-        (None, None) => Err(format!("missing `entry` in `{CONFIG_FILE_NAME}`")),
+        (None, None) => return Err(format!("missing `entry` in `{CONFIG_FILE_NAME}`")),
         (None, Some(relative_entry)) => {
             let (target, entry) = resolve_entry(relative_entry)?;
             let output = if let Some(output_path) = &config.output {
@@ -102,9 +108,50 @@ pub fn resolve_build_config(
                     entry.file_name().ok_or_else(|| "entry path has no filename".to_owned())?;
                 project_root.join(relative_output_directory).join(entry_filename)
             };
-            Ok(vec![build_config(target, entry, output)])
+            vec![build_config(target, entry, output)]
+        }
+    };
+    check_output_paths(
+        builds.iter().map(|build| &build.entry),
+        builds.iter().map(|build| &build.output),
+    )?;
+    Ok(builds)
+}
+
+/// Rejects `outputs` that would replace one of `inputs` or each other. Paths
+/// compare by where they really lead, so two spellings of one path collide
+/// and an output not on disk yet is still checked.
+///
+/// # Errors
+///
+/// Returns a message naming the first output that collides.
+pub fn check_output_paths<Inputs, Outputs>(inputs: Inputs, outputs: Outputs) -> Result<(), String>
+where
+    Inputs: IntoIterator,
+    Inputs::Item: AsRef<Path>,
+    Outputs: IntoIterator,
+    Outputs::Item: AsRef<Path>,
+{
+    let read_paths: FxHashSet<PathBuf> =
+        inputs.into_iter().map(|input| canonicalize_existing(input.as_ref())).collect();
+    let mut written_paths = FxHashSet::default();
+    for output in outputs {
+        let output_path = output.as_ref();
+        let canonical = canonicalize_existing(output_path);
+        if read_paths.contains(&canonical) {
+            return Err(format!(
+                "output `{}` would overwrite a source file of the build",
+                output_path.display()
+            ));
+        }
+        if !written_paths.insert(canonical) {
+            return Err(format!(
+                "output `{}` is written more than once, so one result would replace another",
+                output_path.display()
+            ));
         }
     }
+    Ok(())
 }
 
 /// Looks up the overrides for `profile`, if one was requested.
@@ -131,6 +178,8 @@ fn select_profile(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::config::parse_luck_config;
 
@@ -141,5 +190,17 @@ mod tests {
 
         let error = resolve_build_config(&project, None).expect_err("empty entries resolved");
         assert!(error.contains("`entries`"), "{error}");
+    }
+
+    #[test]
+    fn output_paths_collide_through_a_directory_not_on_disk() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let entry = directory.path().join("main.lua");
+        fs::write(&entry, "return 1").expect("write entry");
+        let same_as_entry = directory.path().join("gone/../main.lua");
+        assert!(check_output_paths([&entry], [&same_as_entry]).is_err());
+        let spare = directory.path().join("out/bundle.lua");
+        check_output_paths([&entry], [&spare]).expect("a spare output doesn't collide");
+        assert!(check_output_paths([&entry], [&spare, &spare]).is_err());
     }
 }

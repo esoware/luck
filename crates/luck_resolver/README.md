@@ -22,10 +22,10 @@ The cache lives on the resolver, not in global state, and is never invalidated. 
 ## Key features
 
 - **Lua 5.x template paths.** Substitutes the module name, with dots turned into slashes, into template strings (`./?.lua`, `./lib/?/init.lua`, ...) and returns the first hit. An empty list means `luck_core::DEFAULT_SEARCH_PATHS`, so builds and editor links read `"search_paths": []` the same way.
-- **Luau relative imports.** `./module`, `../module`, with init-file resolution and `.luau` / `.lua` extension probing.
-- **Luau aliases.** `@utils` and similar prefixes resolve through `.luaurc` files discovered up the directory tree, with the closest definition winning.
+- **Luau relative imports.** `./module`, `../module`, with init-file resolution and `.luau` / `.lua` extension probing. A require is walked one component at a time, as Luau's navigator does.
+- **Luau aliases.** `@utils` and similar prefixes resolve through `.luaurc` files discovered up the directory tree, with the closest definition winning. An alias may name another alias, as in `"outer": "@inner/sub"`.
 - **`@self`** is a built-in Luau alias resolving to the current file's own directory, including for init files, with no `.luaurc` entry needed. A `.luaurc` alias named `self` can't override it and raises W004.
-- **Ambiguity detection.** When both `.luau` and `.lua` exist, both `init.luau` and `init.lua` exist, or both a file and a directory init file exist, the resolver reports E007 instead of silently picking one.
+- **Ambiguity detection.** When both `.luau` and `.lua` exist, both `init.luau` and `init.lua` exist, or a file exists beside a same-named directory, the resolver reports E007 instead of silently picking one. That applies to every component of a require and to the requiring module itself.
 
 ## Architecture
 
@@ -33,7 +33,7 @@ The cache lives on the resolver, not in global state, and is never invalidated. 
 
 `lua.rs` implements the template resolver. For `require("foo.bar")`, the resolver:
 
-1. Replaces every `.` in the require string with `/`, turning `foo.bar` into `foo/bar`.
+1. Replaces every `.` in the require string with `/`, turning `foo.bar` into `foo/bar`, and drops any leading `/` that produces so `.foo` stays under the project root.
 2. Substitutes the result for every `?` in each template.
 3. Probes each candidate on disk in order, relative to the project root, and the first existing file wins.
 
@@ -41,11 +41,11 @@ The cache lives on the resolver, not in global state, and is never invalidated. 
 
 `luau.rs` implements the relative-import and alias resolver, and `luaurc.rs` the `.luaurc` chain behind the aliases.
 
-**Relative paths.** `./module` and `../module` resolve from the requiring file's directory. The resolver probes `module.luau`, `module.lua`, `module/init.luau`, and `module/init.lua`, and exactly one of them must exist.
+**Relative paths.** `./module` and `../module` resolve from the requiring file's directory. Each component is probed as `name.luau`, `name.lua`, and `name/` with an `init.luau` or `init.lua`, and at most one of the file and the directory may exist. The last component must name a module. `init` can't be named as a file and `.config` can't be named at all. Empty and `.` components are skipped, and `\` reads as `/`.
 
-**Init file rule.** When the requiring file is itself an `init.lua` or `init.luau`, relative paths resolve from the parent's parent directory, the one containing the folder that holds the init file. This matches Roblox's resolver semantics.
+**Init file rule.** When the requiring file is itself an `init.lua` or `init.luau`, relative paths resolve from the parent's parent directory, the one containing the folder that holds the init file, and the `.luaurc` search starts there too, so the `.luaurc` beside an init file doesn't apply to it. This matches Roblox's resolver semantics.
 
-**Alias prefixes.** Aliases like `@utils` map to directories defined in `.luaurc` files, and a relative target resolves against the directory of the `.luaurc` that declares it. The resolver walks upward from the requiring file, reading each directory's `.luaurc` as JSON5 and caching its `aliases`. When multiple `.luaurc` files define the same alias, the closest one wins. Alias matching is case-insensitive, and when one file declares names that are equal after lowercasing, the last one wins, as in Luau. A merged alias map is cached only for directories that actually make alias requests, and each ancestor caches just its own raw table. Both caches live as long as the resolver, and a missing or malformed `.luaurc` is cached too.
+**Alias prefixes.** Aliases like `@utils` map to directories defined in `.luaurc` files, and a relative target resolves against the directory of the `.luaurc` that declares it. The resolver walks upward from the requiring module's parent, reading each directory's `.luaurc` and caching its `aliases`. The reader follows Luau's own grammar: quoted keys, `//` and `--` comments, trailing commas, raw bytes rather than UTF-8, and a repeated key that merges. When multiple `.luaurc` files define the same alias, the closest one wins. Alias matching is ASCII case-insensitive, and when one file declares names that are equal after lowercasing, the last one wins, as in Luau. A file that doesn't parse, or that declares an invalid alias name, reports E004 for any alias that would have to be found at or above it. A merged alias map is cached only for directories that actually make alias requests, and each ancestor caches just its own raw table. Both caches live as long as the resolver, and a missing or malformed `.luaurc` is cached too.
 
 ### Extension preference
 

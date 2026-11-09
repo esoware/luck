@@ -1,18 +1,26 @@
 //! `.editorconfig` support for the formatter.
 //!
-//! `ec4rs` handles the spec (the upward walk, `root = true`, and section
-//! matching), and this module maps its properties onto the [`FormatConfig`]
-//! fields they cover. It lives here so the CLI and the LSP share one
-//! precedence order: built-in defaults < `.editorconfig` < the luck.json
-//! `format` section.
+//! This module reads the spec's upward chain of files, stopping at
+//! `root = true`, and maps the properties that apply to a file onto the
+//! [`FormatConfig`] fields they cover. It lives here so the CLI and the LSP
+//! share one precedence order: built-in defaults < `.editorconfig` < the
+//! luck.json `format` section.
 
-use std::path::Path;
+mod glob;
 
-use ec4rs::property::{
-    EndOfLine, IndentSize, IndentStyle as EditorconfigIndentStyle, MaxLineLen, TabWidth,
-};
+use std::fs;
+use std::path::{self, Path};
 
+use rustc_hash::FxHashMap;
+
+use self::glob::SectionGlob;
 use super::format_config::{FormatConfig, IndentStyle, LineEndings};
+
+const EDITORCONFIG_FILE_NAME: &str = ".editorconfig";
+
+/// The longest section name read, past the 1024 bytes the spec requires. This
+/// bounds what a hostile section can cost to compile and match.
+const MAX_SECTION_NAME_BYTES: usize = 4096;
 
 /// Resolves the [`FormatConfig`] for a file, with the luck.json `format`
 /// section winning over the `.editorconfig` chain of `file_path`.
@@ -38,40 +46,34 @@ pub fn resolved_format_config(
 /// found or none match. Only `indent_style`, `indent_width`, `line_endings`,
 /// and `line_width` are ever set.
 fn format_config_for(file_path: &Path) -> FormatConfig {
-    let Ok(properties) = ec4rs::properties_of(file_path) else {
+    // A relative path would hide the directories above the working directory
+    // from the walk and from sections anchored at them.
+    let Ok(absolute_path) = path::absolute(file_path) else {
         return FormatConfig::default();
     };
+    let properties = editorconfig_properties(&absolute_path);
+    let lowercase_value = |key: &str| properties.get(key).map(|value| value.to_ascii_lowercase());
+    let number_value = |key: &str| properties.get(key)?.parse::<usize>().ok();
 
-    let indent_style = match properties.get::<EditorconfigIndentStyle>() {
-        Ok(EditorconfigIndentStyle::Tabs) => Some(IndentStyle::Tabs),
-        Ok(EditorconfigIndentStyle::Spaces) => Some(IndentStyle::Spaces),
-        Err(_) => None,
+    let indent_style = match lowercase_value("indent_style").as_deref() {
+        Some("tab") => Some(IndentStyle::Tabs),
+        Some("space") => Some(IndentStyle::Spaces),
+        _ => None,
     };
 
     // `indent_size` takes precedence over `tab_width`; either alone works.
-    let indent_width = match properties.get::<IndentSize>() {
-        Ok(IndentSize::Value(width)) => Some(width),
-        Ok(IndentSize::UseTabWidth) | Err(_) => match properties.get::<TabWidth>() {
-            Ok(TabWidth::Value(width)) => Some(width),
-            Err(_) => None,
-        },
-    };
+    let indent_width = number_value("indent_size").or_else(|| number_value("tab_width"));
 
-    let line_endings = match properties.get::<EndOfLine>() {
-        Ok(EndOfLine::Lf) => Some(LineEndings::Unix),
-        Ok(EndOfLine::CrLf) => Some(LineEndings::Windows),
+    let line_endings = match lowercase_value("end_of_line").as_deref() {
+        Some("lf") => Some(LineEndings::Unix),
+        Some("crlf") => Some(LineEndings::Windows),
         // `LineEndings` has no bare-CR option.
-        Ok(EndOfLine::Cr) | Err(_) => None,
-    };
-
-    let line_width = match properties.get::<MaxLineLen>() {
-        Ok(MaxLineLen::Value(length)) => u16::try_from(length).ok(),
-        // `off` disables the limit; leave `line_width` unset.
-        Ok(MaxLineLen::Off) | Err(_) => None,
+        _ => None,
     };
 
     FormatConfig {
-        line_width,
+        // `off`, like any other non-number, leaves `line_width` unset.
+        line_width: number_value("max_line_length").and_then(|width| u16::try_from(width).ok()),
         indent_style,
         indent_width: indent_width.and_then(|width| u8::try_from(width).ok()),
         line_endings,
@@ -79,10 +81,100 @@ fn format_config_for(file_path: &Path) -> FormatConfig {
     }
 }
 
+/// The properties applying to `file_path`, an absolute path, keyed by
+/// lowercased name. Nearer files override farther ones, and within a file
+/// later sections override earlier ones.
+fn editorconfig_properties(file_path: &Path) -> FxHashMap<String, String> {
+    let mut files = Vec::new();
+    for directory in file_path.ancestors().skip(1) {
+        if let Ok(bytes) = fs::read(directory.join(EDITORCONFIG_FILE_NAME)) {
+            let contents = String::from_utf8_lossy(&bytes).into_owned();
+            let is_root = is_root_file(&contents);
+            files.push((directory, contents));
+            if is_root {
+                break;
+            }
+        }
+    }
+
+    let mut properties = FxHashMap::default();
+    for (directory, contents) in files.iter().rev() {
+        let relative_path = file_path.strip_prefix(directory).unwrap_or(file_path);
+        let mut subject = Vec::new();
+        for component in relative_path.components() {
+            subject.push('/');
+            subject.extend(component.as_os_str().to_string_lossy().chars());
+        }
+        apply_file(contents, &subject, &mut properties);
+    }
+    properties
+}
+
+/// Whether the preamble, the pairs before the first section, sets
+/// `root = true`.
+fn is_root_file(contents: &str) -> bool {
+    parsed_lines(contents)
+        .map_while(|line| match line {
+            EditorconfigLine::Pair(key, value) => Some((key, value)),
+            EditorconfigLine::Section(_) => None,
+        })
+        .filter(|(key, _)| key.eq_ignore_ascii_case("root"))
+        .last()
+        .is_some_and(|(_, value)| value.eq_ignore_ascii_case("true"))
+}
+
+fn apply_file(contents: &str, subject: &[char], properties: &mut FxHashMap<String, String>) {
+    let mut is_applicable = false;
+    for line in parsed_lines(contents) {
+        match line {
+            EditorconfigLine::Section(name) => {
+                is_applicable =
+                    name.len() <= MAX_SECTION_NAME_BYTES && SectionGlob::new(name).matches(subject);
+            }
+            EditorconfigLine::Pair(key, value) if is_applicable => {
+                properties.insert(key.to_ascii_lowercase(), value.to_owned());
+            }
+            EditorconfigLine::Pair(..) => {}
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum EditorconfigLine<'text> {
+    Section(&'text str),
+    Pair(&'text str, &'text str),
+}
+
+/// The sections and pairs of `contents`, skipping comments, blanks, and any
+/// invalid line.
+fn parsed_lines(contents: &str) -> impl Iterator<Item = EditorconfigLine<'_>> {
+    contents.strip_prefix('\u{feff}').unwrap_or(contents).lines().filter_map(parse_line)
+}
+
+fn parse_line(untrimmed: &str) -> Option<EditorconfigLine<'_>> {
+    let line = untrimmed.trim();
+    if line.is_empty() || line.starts_with(['#', ';']) {
+        return None;
+    }
+    if let Some(name) = section_name(line) {
+        return Some(EditorconfigLine::Section(name));
+    }
+    let (raw_key, value) = line.split_once('=')?;
+    let key = raw_key.trim_end();
+    (!key.is_empty()).then_some(EditorconfigLine::Pair(key, value.trim_start()))
+}
+
+/// The name in a `[name]` header. A name may hold `]`, and only a comment may
+/// follow the last one.
+fn section_name(line: &str) -> Option<&str> {
+    let (name, after_closing) = line.strip_prefix('[')?.rsplit_once(']')?;
+    let trailing = after_closing.trim_start();
+    let has_only_a_comment_after = trailing.is_empty() || trailing.starts_with(['#', ';']);
+    (!name.is_empty() && has_only_a_comment_after).then_some(name)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
 
     #[test]
@@ -203,6 +295,34 @@ mod tests {
         fs::write(directory.path().join(".editorconfig"), "[*]\ntab_width = 6\n").expect("write");
         let config = format_config_for(&directory.path().join("main.lua"));
         assert_eq!(config.indent_width, Some(6));
+    }
+
+    #[test]
+    fn invalid_lines_are_skipped_without_losing_the_rest() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join(".editorconfig"), "[*]\nnot a pair\nindent_size = 2\n")
+            .expect("write");
+        let config = format_config_for(&directory.path().join("main.lua"));
+        assert_eq!(config.indent_width, Some(2));
+    }
+
+    #[test]
+    fn unset_clears_a_value_from_a_farther_file() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        fs::write(parent.path().join(".editorconfig"), "[*]\nindent_size = 8\n")
+            .expect("write parent");
+        let child = parent.path().join("project");
+        fs::create_dir_all(&child).expect("mkdir");
+        fs::write(child.join(".editorconfig"), "[*]\nindent_size = unset\n").expect("write child");
+        let config = format_config_for(&child.join("main.lua"));
+        assert!(config.indent_width.is_none());
+    }
+
+    #[test]
+    fn section_header_may_hold_brackets_and_a_trailing_comment() {
+        assert_eq!(parse_line("[[ab]].g] ; note"), Some(EditorconfigLine::Section("[ab]].g")));
+        assert_eq!(parse_line("[]"), None);
+        assert_eq!(parse_line("key ="), Some(EditorconfigLine::Pair("key", "")));
     }
 
     #[test]

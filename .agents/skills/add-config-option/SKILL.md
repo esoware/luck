@@ -26,7 +26,7 @@ Find where the option's struct is used (formatter, minifier, bundler, linter dri
 
 ## 4. Respect precedence (format options only)
 
-defaults < `.editorconfig` < `luck.json` `format`. If the option has an `.editorconfig` equivalent, map the `ec4rs::property` type onto the field in `luck_core/src/config/editorconfig.rs` and add a precedence test.
+defaults < `.editorconfig` < `luck.json` `format`. If the option has an `.editorconfig` equivalent, map the property onto the field in `format_config_for` in `luck_core/src/config/editorconfig.rs` and add a precedence test.
 
 ## 5. CLI flag (only if warranted)
 

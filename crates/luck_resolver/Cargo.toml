@@ -18,9 +18,7 @@ workspace = true
 luck_core  = { workspace = true }
 luck_token = { workspace = true }
 
-json5      = { workspace = true }
 rustc-hash = { workspace = true }
-serde      = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

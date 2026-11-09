@@ -14,11 +14,13 @@ pub(crate) fn resolve(
     project_root: &Path,
     request: &ResolveRequest<'_>,
 ) -> Result<ResolvedModule, Diagnostic> {
-    let module_path = request.module.replace('.', "/");
+    let dotted_path = request.module.replace('.', "/");
+    // A leading dot must not turn a relative template into a rooted path.
+    let module_path = dotted_path.trim_start_matches('/');
     let mut tried_paths = Vec::new();
 
     for template in search_paths {
-        let relative_path = template.replace('?', &module_path);
+        let relative_path = template.replace('?', module_path);
         let candidate = project_root.join(&relative_path);
 
         if candidate.is_file() {

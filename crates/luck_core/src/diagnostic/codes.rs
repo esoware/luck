@@ -43,6 +43,40 @@ impl Diagnostic {
         )
     }
 
+    /// An `@alias` require stopped by a `.luaurc` that doesn't parse.
+    #[must_use]
+    pub fn e004_malformed_luaurc(
+        file_path: &str,
+        span: Span,
+        module_name: &str,
+        luaurc_path: &str,
+    ) -> Self {
+        Self::module_not_found(
+            file_path,
+            span,
+            module_name,
+            &format!("`{luaurc_path}`, which failed to parse"),
+        )
+    }
+
+    /// An `@alias` require whose aliases lead back to themselves. `cycle`
+    /// holds the alias names in order, without their `@`.
+    #[must_use]
+    pub fn e004_alias_cycle(
+        file_path: &str,
+        span: Span,
+        module_name: &str,
+        cycle: &[String],
+    ) -> Self {
+        let quoted_aliases: Vec<String> = cycle.iter().map(|alias| format!("`@{alias}`")).collect();
+        Self::module_not_found(
+            file_path,
+            span,
+            module_name,
+            &format!("alias cycle: {}", quoted_aliases.join(" -> ")),
+        )
+    }
+
     fn module_not_found(file_path: &str, span: Span, module_name: &str, searched: &str) -> Self {
         Self::error_at("E004", format!("module not found: `{module_name}`"), file_path, span)
             .with_help(format!("searched paths:\n  - {searched}"))
@@ -112,6 +146,21 @@ impl Diagnostic {
             file_path,
             span,
             &format!("both file `{module_path}` and directory init file `{init_path}` exist"),
+        )
+    }
+
+    /// A module file beside a same-named directory that has no init file.
+    #[must_use]
+    pub fn e007_file_beside_directory(
+        file_path: &str,
+        span: Span,
+        module_path: &str,
+        directory_path: &str,
+    ) -> Self {
+        Self::ambiguous_resolution(
+            file_path,
+            span,
+            &format!("both file `{module_path}` and directory `{directory_path}` exist"),
         )
     }
 

@@ -5,6 +5,7 @@
 
 use alloc::collections::BTreeMap;
 
+use super::luck_config::concat;
 use crate::diagnostic::DiagnosticSeverity;
 
 /// Linter settings from luck.json.
@@ -39,26 +40,26 @@ pub struct LintConfig {
 impl LintConfig {
     /// Merges `self` over `base`.
     ///
-    /// Lists concatenate base-first, a `rule_overrides` entry from `self`
-    /// replaces the base's entry for the same rule, and
+    /// Lists concatenate base-first without repeats, a `rule_overrides` entry
+    /// from `self` replaces the base's entry for the same rule, and
     /// `max_cyclomatic_complexity` is self-or-base. `disable_default_rules` is
     /// true if either side sets it: a bare `bool` can't tell "omitted" from
     /// `false`, and silently re-enabling a parent's disabled defaults is the
     /// worse failure.
     pub(super) fn merge_onto(self, mut base: Self) -> Self {
         base.rule_overrides.extend(self.rule_overrides);
-        base.extra_globals.extend(self.extra_globals);
-        base.restricted_module_paths.extend(self.restricted_module_paths);
-        base.categories.extend(self.categories);
         Self {
             rule_overrides: base.rule_overrides,
-            extra_globals: base.extra_globals,
-            restricted_module_paths: base.restricted_module_paths,
+            extra_globals: concat(self.extra_globals, base.extra_globals),
+            restricted_module_paths: concat(
+                self.restricted_module_paths,
+                base.restricted_module_paths,
+            ),
             max_cyclomatic_complexity: self
                 .max_cyclomatic_complexity
                 .or(base.max_cyclomatic_complexity),
             disable_default_rules: self.disable_default_rules || base.disable_default_rules,
-            categories: base.categories,
+            categories: concat(self.categories, base.categories),
         }
     }
 }
@@ -75,7 +76,7 @@ pub struct RuleSetting {
 }
 
 /// A group of lint rules, enabled together through `categories`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Category {
     /// Outright wrong or useless code.

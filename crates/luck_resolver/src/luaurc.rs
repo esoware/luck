@@ -1,104 +1,258 @@
-use core::fmt;
-use core::marker::PhantomData;
+use core::ops::Deref;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
+use luck_core::native_path;
 use rustc_hash::FxHashMap;
-use serde::de::{MapAccess, Visitor};
-use serde::{Deserialize, Deserializer};
 
-/// The parts of a `.luaurc` (JSON5) the resolver reads.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Luaurc {
-    #[expect(
-        dead_code,
-        reason = "never read, but a non-string value still rejects the whole file"
-    )]
-    language_mode: Option<String>,
-    aliases: Option<DeclaredAliases>,
-}
-
-/// An `aliases` object in file order, which decides between names that are
-/// equal after lowercasing.
-struct DeclaredAliases(Vec<(String, String)>);
-
-impl<'de> Deserialize<'de> for DeclaredAliases {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_map(DeclaredAliasesVisitor(PhantomData))
-    }
-}
-
-struct DeclaredAliasesVisitor<'de>(PhantomData<&'de ()>);
-
-impl<'de> Visitor<'de> for DeclaredAliasesVisitor<'de> {
-    type Value = DeclaredAliases;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a map of alias names to directories")
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut aliases = Vec::with_capacity(map.size_hint().unwrap_or(0));
-        while let Some(entry) = map.next_entry()? {
-            aliases.push(entry);
-        }
-        Ok(DeclaredAliases(aliases))
-    }
+/// What an alias names once its `.luaurc` is read.
+#[derive(Debug)]
+pub(crate) enum AliasTarget {
+    Directory(PathBuf),
+    /// Another alias, as written after its `@`, and any sub path.
+    Chained(String),
 }
 
 /// The `.luaurc` alias tables read so far, which are never reread.
 #[derive(Debug, Default)]
 pub(crate) struct AliasCache {
-    /// Each directory's own `.luaurc` aliases, keyed by lowercased name.
-    declared_tables: FxHashMap<PathBuf, FxHashMap<String, String>>,
+    /// Each directory's own `.luaurc` aliases.
+    declared_tables: FxHashMap<PathBuf, DeclaredTable>,
     /// The aliases in effect in each directory a require came from.
-    merged_tables: FxHashMap<PathBuf, FxHashMap<String, PathBuf>>,
+    merged_tables: FxHashMap<PathBuf, FxHashMap<String, AliasTarget>>,
 }
 
 impl AliasCache {
-    /// Resolved `@alias` -> directory map for `directory`, keyed by lowercased
-    /// alias name. Closer `.luaurc` files win; relative alias targets resolve
-    /// against the `.luaurc` that declared them.
-    pub(crate) fn in_effect(&mut self, directory: &Path) -> &FxHashMap<String, PathBuf> {
+    /// The aliases in effect for a search starting at `directory`, keyed by
+    /// lowercased name. Closer `.luaurc` files win, relative targets resolve
+    /// against the `.luaurc` that declared them, and a malformed `.luaurc`
+    /// hides everything declared above it, because Luau's upward search stops
+    /// with an error there.
+    pub(crate) fn in_effect(&mut self, directory: &Path) -> &FxHashMap<String, AliasTarget> {
         self.merged_tables.entry(directory.to_path_buf()).or_insert_with(|| {
             let mut aliases = FxHashMap::default();
             // Only the requested directory gets a merged map. Each ancestor
             // caches just its raw table.
             let ancestors: Vec<&Path> = directory.ancestors().collect();
             for ancestor in ancestors.into_iter().rev() {
-                let ancestor_aliases = self
+                let table = self
                     .declared_tables
                     .entry(ancestor.to_path_buf())
                     .or_insert_with(|| read_declared_aliases(ancestor));
-                aliases.extend(ancestor_aliases.iter().map(|(name, target)| {
-                    (name.clone(), ancestor.join(target.replace('\\', "/")))
-                }));
+                if table.is_malformed {
+                    aliases.clear();
+                }
+                aliases.extend(
+                    table
+                        .iter()
+                        .map(|(name, target)| (name.clone(), alias_target(ancestor, target))),
+                );
             }
             aliases
         })
     }
+
+    /// The nearest malformed `.luaurc` a search from `directory` hits. Call
+    /// after [`Self::in_effect`] for `directory`, which reads them.
+    pub(crate) fn malformed_luaurc(&self, directory: &Path) -> Option<PathBuf> {
+        directory
+            .ancestors()
+            .find(|ancestor| {
+                self.declared_tables.get(*ancestor).is_some_and(|table| table.is_malformed)
+            })
+            .map(|ancestor| ancestor.join(".luaurc"))
+    }
 }
 
-/// The aliases `directory/.luaurc` declares, keyed by lowercased name, with
-/// the last of any names equal after lowercasing kept, as in Luau. Empty when
-/// the file is missing, malformed, or declares none.
-fn read_declared_aliases(directory: &Path) -> FxHashMap<String, String> {
+fn alias_target(declaring_directory: &Path, written_target: &str) -> AliasTarget {
+    let target = written_target.replace('\\', "/");
+    target.strip_prefix('@').map_or_else(
+        || {
+            AliasTarget::Directory(lexically_normalized(
+                &declaring_directory.join(native_path(&target)),
+            ))
+        },
+        |chained| AliasTarget::Chained(chained.to_owned()),
+    )
+}
+
+/// `path` with `.` and `..` collapsed, since walking `..` from an alias's
+/// target must leave the directory it names, not a literal `..` segment.
+fn lexically_normalized(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            named @ (Component::Normal(_) | Component::Prefix(_) | Component::RootDir) => {
+                normalized.push(named);
+            }
+        }
+    }
+    normalized
+}
+
+/// One `.luaurc`'s aliases, keyed by lowercased name.
+#[derive(Debug, Default)]
+struct DeclaredTable {
+    aliases: FxHashMap<String, String>,
+    is_malformed: bool,
+}
+
+impl Deref for DeclaredTable {
+    type Target = FxHashMap<String, String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.aliases
+    }
+}
+
+/// The aliases `directory/.luaurc` declares, with the last of any names equal
+/// after lowercasing kept, as in Luau. Empty when the file is missing,
+/// malformed, or declares none.
+fn read_declared_aliases(directory: &Path) -> DeclaredTable {
     let candidate = directory.join(".luaurc");
-    if candidate.is_file()
-        && let Ok(contents) = fs::read_to_string(&candidate)
-        && let Ok(Luaurc { aliases: Some(DeclaredAliases(aliases)), .. }) =
-            json5::from_str::<Luaurc>(&contents)
-    {
-        aliases.into_iter().map(|(name, target)| (name.to_lowercase(), target)).collect()
-    } else {
-        FxHashMap::default()
+    if !candidate.is_file() {
+        return DeclaredTable::default();
+    }
+    let parsed = fs::read(&candidate).ok().and_then(|contents| parse_aliases(&contents));
+    let is_malformed = parsed.is_none();
+    DeclaredTable { aliases: parsed.unwrap_or_default(), is_malformed }
+}
+
+/// The `aliases` of a `.luaurc`, or `None` when it doesn't parse.
+///
+/// This reads Luau's own grammar: bytes rather than UTF-8, nesting on the heap,
+/// and a repeated key merging into the earlier ones.
+fn parse_aliases(file_bytes: &[u8]) -> Option<FxHashMap<String, String>> {
+    let mut reader =
+        LuaurcReader { rest: file_bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(file_bytes) };
+    let mut aliases = FxHashMap::default();
+    let mut keys: Vec<&[u8]> = Vec::new();
+    let mut is_in_array = false;
+    if !reader.eat(b'{') {
+        return None;
+    }
+    loop {
+        if is_in_array {
+            if reader.eat(b']') {
+                is_in_array = false;
+                keys.pop();
+                reader.expect_separator(b'}')?;
+            } else {
+                reader.string()?;
+                reader.expect_separator(b']')?;
+            }
+        } else if reader.eat(b'}') {
+            if keys.pop().is_none() {
+                return reader.peek().is_none().then_some(aliases);
+            }
+            reader.expect_separator(b'}')?;
+        } else {
+            keys.push(reader.string()?);
+            if !reader.eat(b':') {
+                return None;
+            }
+            if reader.eat(b'[') {
+                is_in_array = true;
+            } else if reader.eat(b'{') {
+                // Its keys come next, under this one.
+            } else {
+                let value = if reader.eat_word(b"true") || reader.eat_word(b"false") {
+                    None
+                } else {
+                    Some(reader.string()?)
+                };
+                match (keys.as_slice(), value) {
+                    ([b"aliases", name], Some(target)) if is_valid_alias_name(name) => {
+                        aliases.insert(
+                            String::from_utf8_lossy(name).to_ascii_lowercase(),
+                            String::from_utf8_lossy(target).into_owned(),
+                        );
+                    }
+                    ([b"aliases", _], _) | ([b"languageMode"], None) => return None,
+                    _ => {}
+                }
+                keys.pop();
+                reader.expect_separator(b'}')?;
+            }
+        }
+    }
+}
+
+/// Mirrors Luau's `isValidAlias`, which fails the whole file on a bad name.
+fn is_valid_alias_name(name: &[u8]) -> bool {
+    let unprefixed = name.strip_prefix(b"@").unwrap_or(name);
+    !name.is_empty()
+        && !matches!(name, b"." | b"..")
+        && unprefixed
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+struct LuaurcReader<'contents> {
+    rest: &'contents [u8],
+}
+
+impl<'contents> LuaurcReader<'contents> {
+    /// The next byte past any whitespace and `//` or `--` comments.
+    fn peek(&mut self) -> Option<u8> {
+        loop {
+            match self.rest {
+                [byte, tail @ ..] if byte.is_ascii_whitespace() => self.rest = tail,
+                [b'/', b'/', ..] | [b'-', b'-', ..] => {
+                    let line_end =
+                        self.rest.iter().position(|byte| *byte == b'\n').unwrap_or(self.rest.len());
+                    self.rest = self.rest.get(line_end..).unwrap_or_default();
+                }
+                [byte, ..] => return Some(*byte),
+                [] => return None,
+            }
+        }
+    }
+
+    fn eat(&mut self, byte: u8) -> bool {
+        let is_next = self.peek() == Some(byte);
+        if is_next {
+            self.rest = self.rest.get(1..).unwrap_or_default();
+        }
+        is_next
+    }
+
+    fn eat_word(&mut self, word: &[u8]) -> bool {
+        self.peek();
+        let after_word = self.rest.strip_prefix(word);
+        if let Some(tail) = after_word {
+            self.rest = tail;
+        }
+        after_word.is_some()
+    }
+
+    /// A value's trailing `,`, or the `closer` left for the next read.
+    fn expect_separator(&mut self, closer: u8) -> Option<()> {
+        (self.eat(b',') || self.peek() == Some(closer)).then_some(())
+    }
+
+    /// The next quoted string's raw bytes. Luau keeps escapes as written, so
+    /// this only needs them to find the closing quote.
+    fn string(&mut self) -> Option<&'contents [u8]> {
+        let quote = self.peek().filter(|byte| matches!(byte, b'"' | b'\''))?;
+        let body = self.rest.get(1..)?;
+        let mut remaining = body;
+        loop {
+            match remaining {
+                [] | [b'\n', ..] => return None,
+                [b'\\', _, tail @ ..] => remaining = tail,
+                [byte, tail @ ..] if *byte == quote => {
+                    self.rest = tail;
+                    let text_length = body.len().saturating_sub(tail.len()).saturating_sub(1);
+                    return body.get(..text_length);
+                }
+                [_, tail @ ..] => remaining = tail,
+            }
+        }
     }
 }
 

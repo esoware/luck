@@ -11,7 +11,7 @@ fn load_project(project_root: &Path) -> ProjectConfig {
 }
 
 #[test]
-fn bug_rejects_an_output_that_overwrites_the_entry() {
+fn rejects_an_output_that_overwrites_the_entry() {
     let project = project_with(&[
         ("main.lua", "return 1"),
         ("luck.json", r#"{ "entry": "main.lua", "output_dir": "." }"#),
@@ -24,7 +24,7 @@ fn bug_rejects_an_output_that_overwrites_the_entry() {
 }
 
 #[test]
-fn bug_rejects_two_entries_writing_the_same_output() {
+fn rejects_two_entries_writing_the_same_output() {
     let project = project_with(&[
         ("a.lua", "return 1"),
         ("b.lua", "return 2"),

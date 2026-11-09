@@ -93,7 +93,7 @@ fn empty_search_paths_try_the_default_templates() {
 // the working directory, and the relative default template must keep it under
 // the project root rather than on the filesystem root.
 #[test]
-fn bug_leading_dot_module_stays_under_the_project_root() {
+fn leading_dot_module_stays_under_the_project_root() {
     let project = project_with(&[("dep.lua", "return {}"), ("main.lua", "")]);
     let from_file = normalized(&project, "main.lua");
     let module = Resolver::new(LuaVersion::Lua54, &[], project.path())

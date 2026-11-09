@@ -32,7 +32,7 @@ pub use load::{
 pub use luck_config::{
     DEFAULT_SEARCH_PATHS, DialectKey, EntryConfig, LuckConfig, ProfileOverrides,
 };
-pub use resolve::{BuildConfig, resolve_build_config};
+pub use resolve::{BuildConfig, check_output_paths, resolve_build_config};
 pub use transform_config::TransformConfig;
 
 const CONFIG_FILE_NAME: &str = "luck.json";

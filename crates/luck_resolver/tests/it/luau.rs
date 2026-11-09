@@ -250,7 +250,7 @@ fn last_declared_alias_wins_among_names_equal_after_lowercasing() {
 // Luau chains an alias whose value starts with `@`, per the require-by-string
 // aliases RFC and the `chained_aliases` fixtures.
 #[test]
-fn bug_chained_alias_resolves_through_the_aliased_directory() {
+fn chained_alias_resolves_through_the_aliased_directory() {
     let project = luau_project();
     write_files(
         project.path(),
@@ -265,7 +265,7 @@ fn bug_chained_alias_resolves_through_the_aliased_directory() {
 }
 
 #[test]
-fn bug_alias_cycle_reports_an_error_instead_of_a_literal_directory() {
+fn alias_cycle_reports_an_error_instead_of_a_literal_directory() {
     let project = luau_project();
     write_files(
         project.path(),
@@ -292,7 +292,7 @@ fn bug_self_alias_from_a_non_init_file_does_not_name_a_sibling() {
 // `pkg`'s parent. Luau's own fixture names the value
 // `this_should_not_be_read_by_init_luau`.
 #[test]
-fn bug_init_file_ignores_the_luaurc_beside_it() {
+fn init_file_ignores_the_luaurc_beside_it() {
     let project = luau_project();
     write_files(
         project.path(),
@@ -308,7 +308,7 @@ fn bug_init_file_ignores_the_luaurc_beside_it() {
 }
 
 #[test]
-fn bug_relative_require_cannot_name_an_init_file_directly() {
+fn relative_require_cannot_name_an_init_file_directly() {
     let project = luau_project();
     write_files(project.path(), &[("src/init.luau", "return {}")]);
     let error = resolve_luau(&project, "src/main.luau", "./init")
@@ -317,7 +317,7 @@ fn bug_relative_require_cannot_name_an_init_file_directly() {
 }
 
 #[test]
-fn bug_relative_require_cannot_name_the_config_luau_file() {
+fn relative_require_cannot_name_the_config_luau_file() {
     let project = luau_project();
     write_files(project.path(), &[("src/.config.luau", "return {}")]);
     let error = resolve_luau(&project, "src/main.luau", "./.config")
@@ -328,7 +328,7 @@ fn bug_relative_require_cannot_name_the_config_luau_file() {
 // Luau's navigator reports Ambiguous as soon as both `mod.luau` and a `mod`
 // directory exist, whether or not the directory has an init file.
 #[test]
-fn bug_file_and_same_named_directory_without_init_is_ambiguous() {
+fn file_and_same_named_directory_without_init_is_ambiguous() {
     let project = luau_project();
     write_files(project.path(), &[("src/mod.luau", "return {}"), ("src/mod/other.luau", "")]);
     let error = resolve_luau(&project, "src/main.luau", "./mod")
@@ -337,7 +337,7 @@ fn bug_file_and_same_named_directory_without_init_is_ambiguous() {
 }
 
 #[test]
-fn bug_intermediate_component_with_same_named_file_is_ambiguous() {
+fn intermediate_component_with_same_named_file_is_ambiguous() {
     let project = luau_project();
     write_files(project.path(), &[("src/mod.luau", "return {}"), ("src/mod/child.luau", "")]);
     let error = resolve_luau(&project, "src/main.luau", "./mod/child")
@@ -347,7 +347,7 @@ fn bug_intermediate_component_with_same_named_file_is_ambiguous() {
 
 // Luau: `could not reset to requiring context (ambiguous)`.
 #[test]
-fn bug_requiring_file_with_same_named_directory_is_ambiguous() {
+fn requiring_file_with_same_named_directory_is_ambiguous() {
     let project = luau_project();
     write_files(project.path(), &[("src/main/x.luau", "return {}")]);
     let error = resolve_luau(&project, "src/main.luau", "./utils")
@@ -356,7 +356,7 @@ fn bug_requiring_file_with_same_named_directory_is_ambiguous() {
 }
 
 #[test]
-fn bug_relative_require_accepts_backslash_separators() {
+fn relative_require_accepts_backslash_separators() {
     let project = luau_project();
     let resolved = resolve_luau(&project, "src/main.luau", ".\\utils")
         .expect("Luau maps `\\` to `/` before reading the require string");
@@ -364,7 +364,7 @@ fn bug_relative_require_accepts_backslash_separators() {
 }
 
 #[test]
-fn bug_trailing_slash_still_names_the_module() {
+fn trailing_slash_still_names_the_module() {
     let project = luau_project();
     let resolved = resolve_luau(&project, "src/main.luau", "./utils/")
         .expect("an empty path component is ignored, so `./utils/` is `./utils`");
@@ -373,7 +373,7 @@ fn bug_trailing_slash_still_names_the_module() {
 
 // `str::to_lowercase` folds U+212A KELVIN SIGN to `k`; Luau lowers ASCII only.
 #[test]
-fn bug_alias_lookup_lowercases_ascii_only() {
+fn alias_lookup_lowercases_ascii_only() {
     let project = luau_project();
     write_files(
         project.path(),
@@ -386,7 +386,7 @@ fn bug_alias_lookup_lowercases_ascii_only() {
 
 // Luau reports the parse error, so the parent's `x` must not stand in for it.
 #[test]
-fn bug_malformed_closer_luaurc_does_not_fall_through_to_a_parent_alias() {
+fn malformed_closer_luaurc_does_not_fall_through_to_a_parent_alias() {
     let project = luau_project();
     write_files(
         project.path(),
@@ -404,7 +404,7 @@ fn bug_malformed_closer_luaurc_does_not_fall_through_to_a_parent_alias() {
 }
 
 #[test]
-fn bug_luaurc_with_non_utf8_bytes_keeps_its_aliases() {
+fn luaurc_with_non_utf8_bytes_keeps_its_aliases() {
     let project = luau_project();
     write_files(project.path(), &[("lib/m.luau", "return {}")]);
     fs::write(project.path().join(".luaurc"), b"{// caf\xe9\n\"aliases\":{\"x\":\"./lib\"}}")
@@ -415,7 +415,7 @@ fn bug_luaurc_with_non_utf8_bytes_keeps_its_aliases() {
 }
 
 #[test]
-fn bug_luaurc_with_repeated_aliases_key_merges_them() {
+fn luaurc_with_repeated_aliases_key_merges_them() {
     let project = luau_project();
     write_files(
         project.path(),
@@ -429,9 +429,8 @@ fn bug_luaurc_with_repeated_aliases_key_merges_them() {
     assert_eq!(resolved.path, normalized(&project, "lib/m.luau"));
 }
 
-// Without a depth limit this aborts the whole process with a stack overflow.
 #[test]
-fn bug_deeply_nested_luaurc_does_not_overflow_the_stack() {
+fn deeply_nested_luaurc_does_not_overflow_the_stack() {
     let project = luau_project();
     let contents = format!(r#"{{"globals":{}"#, "[".repeat(200_000));
     write_files(project.path(), &[(".luaurc", contents.as_str())]);
@@ -442,7 +441,7 @@ fn bug_deeply_nested_luaurc_does_not_overflow_the_stack() {
 
 // Alias names are limited to `[A-Za-z0-9.\-_]`; Luau fails with `Invalid alias`.
 #[test]
-fn bug_invalid_alias_name_is_rejected() {
+fn invalid_alias_name_is_rejected() {
     let project = luau_project();
     write_files(
         project.path(),
@@ -453,10 +452,9 @@ fn bug_invalid_alias_name_is_rejected() {
     assert_eq!(error.code, "E004");
 }
 
-// The empty component is ignored, so `@x//m` is `lib/m`. `Path::join` instead
-// treats `/m` as rooted and leaves the alias.
+// The empty component is ignored, so `@x//m` is `lib/m`.
 #[test]
-fn bug_double_slash_after_alias_stays_inside_the_alias() {
+fn double_slash_after_alias_stays_inside_the_alias() {
     let project = luau_project();
     write_files(
         project.path(),
@@ -468,9 +466,8 @@ fn bug_double_slash_after_alias_stays_inside_the_alias() {
 }
 
 // Luau navigates per component, so a missing `nope` fails even before `..`.
-// Windows collapses `nope\..` lexically, so the file probe finds `utils.luau`.
 #[test]
-fn bug_parent_of_a_missing_directory_does_not_resolve() {
+fn parent_of_a_missing_directory_does_not_resolve() {
     let project = luau_project();
     let error = resolve_luau(&project, "src/main.luau", "./nope/../utils")
         .expect_err("`./nope/../utils` must fail: `nope` doesn't exist");

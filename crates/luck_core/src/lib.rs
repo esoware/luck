@@ -41,9 +41,9 @@ pub use config::{
     BlockNewlineGaps, BuildConfig, CallParentheses, Category, CollapseSimpleStatement,
     DEFAULT_SEARCH_PATHS, DialectKey, DynamicRequire, EntryConfig, FormatConfig, HexCase,
     IndentStyle, LineEndings, LintConfig, LuckConfig, ProfileOverrides, ProjectConfig,
-    ProjectFilter, QuoteStyle, RuleSetting, SpaceAfterFunction, TransformConfig, config_directory,
-    discover_config, load_or_discover_config, load_with_extends, parse_luck_config,
-    resolve_build_config, resolved_format_config,
+    ProjectFilter, QuoteStyle, RuleSetting, SpaceAfterFunction, TransformConfig,
+    check_output_paths, config_directory, discover_config, load_or_discover_config,
+    load_with_extends, parse_luck_config, resolve_build_config, resolved_format_config,
 };
 pub use diagnostic::{Diagnostic, DiagnosticSeverity};
 pub use lua_target::LuaTarget;

@@ -3,7 +3,7 @@ use luck_core::ProjectFilter;
 use crate::common::project_with;
 
 #[test]
-fn bug_star_in_include_stays_inside_one_directory() {
+fn star_in_include_stays_inside_one_directory() {
     let project = project_with(&[("src/a.lua", ""), ("src/nested/b.lua", "")]);
     let filter = ProjectFilter::new(project.path(), Some(&["src/*.lua".to_owned()]), None)
         .expect("valid globs");
@@ -15,7 +15,7 @@ fn bug_star_in_include_stays_inside_one_directory() {
 }
 
 #[test]
-fn bug_a_file_not_yet_on_disk_matches_relative_to_the_root() {
+fn a_file_not_yet_on_disk_matches_relative_to_the_root() {
     let project = project_with(&[("src/a.lua", "")]);
     let filter = ProjectFilter::new(project.path(), Some(&["src/**/*.lua".to_owned()]), None)
         .expect("valid globs");
@@ -26,10 +26,9 @@ fn bug_a_file_not_yet_on_disk_matches_relative_to_the_root() {
 }
 
 #[test]
-fn bug_deeply_nested_glob_is_an_error_instead_of_a_crash() {
+fn deeply_nested_glob_is_an_error_instead_of_a_crash() {
     let project = project_with(&[("a.lua", "")]);
     let pattern = format!("{}a{}", "{".repeat(20_000), "}".repeat(20_000));
-    // The bug aborts the process before this call returns.
     let filter = ProjectFilter::new(project.path(), Some(&[pattern]), None);
     assert!(filter.is_err(), "a pathologically nested glob must be reported as invalid");
 }

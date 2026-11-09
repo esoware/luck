@@ -17,7 +17,6 @@ workspace = true
 [dependencies]
 luck_token = { workspace = true }
 
-ec4rs      = { workspace = true }
 globset    = { workspace = true }
 json5      = { workspace = true }
 rustc-hash = { workspace = true }

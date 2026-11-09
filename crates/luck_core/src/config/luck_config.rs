@@ -2,9 +2,10 @@
 //! `extends` merges one config over another. Nothing here touches the
 //! filesystem.
 
+use core::hash::Hash;
 use std::path::Path;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::dynamic_require::DynamicRequire;
 use super::filter::ProjectFilter;
@@ -148,8 +149,9 @@ impl LuckConfig {
 
     /// Merges `self` over `base`, with `self` winning.
     ///
-    /// `include`, `exclude`, and `search_paths` concatenate base-first,
-    /// `format` and `lint` merge field by field, and `extends` is cleared.
+    /// `include`, `exclude`, and `search_paths` concatenate base-first without
+    /// repeats, `format` and `lint` merge field by field, and `extends` is
+    /// cleared.
     /// Every other key, including `entries`, `profiles`, and `transforms`,
     /// comes whole from `self` when set there and from `base` otherwise.
     #[must_use]
@@ -188,8 +190,15 @@ where
     }
 }
 
-fn concat<T>(child: Vec<T>, mut base: Vec<T>) -> Vec<T> {
-    base.extend(child);
+/// `base` followed by the items of `child` it lacks, so a file layered twice
+/// through `extends` can't double a list.
+pub(super) fn concat<T>(child: Vec<T>, mut base: Vec<T>) -> Vec<T>
+where
+    T: Eq + Hash,
+{
+    let present: FxHashSet<&T> = base.iter().collect();
+    let added: Vec<T> = child.into_iter().filter(|item| !present.contains(item)).collect();
+    base.extend(added);
     base
 }
 
