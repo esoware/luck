@@ -4,7 +4,7 @@ use luck_token::LuaVersion;
 
 /// Minifies `source` for `version` with `config`, which must succeed.
 pub(crate) fn minify_with(source: &str, version: LuaVersion, config: &TransformConfig) -> String {
-    minify(source, version, config, "<test>").expect("minify failed")
+    minify(source, version, config).expect("minify failed")
 }
 
 pub(crate) fn minify_lua54(source: &str) -> String {

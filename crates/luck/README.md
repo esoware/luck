@@ -40,7 +40,7 @@ use luck::bundler;
 use luck::minifier;
 
 let bundled = bundler::bundle(&entry_path, target.lua_version(), &search_paths, &project_root, dynamic_require)?;
-let minified = minifier::minify(&bundled.output, target.lua_version(), &Default::default(), "bundle.lua")?;
+let minified = minifier::minify(&bundled.output, target.lua_version(), &Default::default())?;
 ```
 
 The underlying crates stay published, so you can depend on a single one if that's all you need.

@@ -64,12 +64,9 @@ impl ProjectSettings {
             // Without `include`/`exclude` the default globs are constants that
             // always build, so the fallback's `unwrap_or_default` is never
             // reached.
-            filter: ProjectFilter::new(
-                filter_base,
-                config.include.as_deref(),
-                config.exclude.as_deref(),
-            )
-            .unwrap_or_else(|_| ProjectFilter::new(filter_base, None, None).unwrap_or_default()),
+            filter: config.project_filter(filter_base).unwrap_or_else(|_| {
+                ProjectFilter::new(filter_base, None, None).unwrap_or_default()
+            }),
             search_paths: config.search_paths_or_default(),
             root,
         }

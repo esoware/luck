@@ -35,7 +35,7 @@ pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hove
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: render_entry(path, entry, document.target.lua_version()),
+            value: render_entry(path, entry, document.lua_version),
         }),
         range: Some(document.range(node.span())),
     })

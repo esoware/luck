@@ -9,12 +9,15 @@ use std::time::Instant;
 
 use clap::Args;
 use luck_bundler::bundle;
-use luck_core::{BuildConfig, discover_config, native_path, resolve_build_config};
+use luck_core::{
+    BuildConfig, discover_config, load_or_discover_config, native_path, resolve_build_config,
+};
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
 use crate::exit::{Exit, operation_error, usage_error};
 use crate::output::{format_size, write_output_file};
-use crate::render::{print_diags, print_document_diags};
+use crate::project::current_directory;
+use crate::render::{print_diags, print_source_errors};
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -73,6 +76,26 @@ impl BuildArgs {
             .or_else(|| self.dev.then_some("dev"))
     }
 
+    /// The project's build configs under the resolved profile. Loads `-c`, or
+    /// else discovers `luck.json` from the working directory.
+    ///
+    /// # Errors
+    ///
+    /// Reports the failure and returns [`Exit::Usage`] when the working
+    /// directory is unavailable, no `luck.json` is found or it fails to load,
+    /// or the build settings are invalid.
+    fn resolved_configs(&self) -> Result<Vec<BuildConfig>, Exit> {
+        let working_directory = current_directory()?;
+        let project = load_or_discover_config(self.config.as_deref(), &working_directory)
+            .map_err(usage_error)?
+            .ok_or_else(|| {
+                usage_error(
+                    "no `luck.json` found, so run from a project directory or use `--config`",
+                )
+            })?;
+        resolve_build_config(&project, self.resolved_profile()).map_err(usage_error)
+    }
+
     /// Build every config once.
     ///
     /// # Errors
@@ -81,8 +104,7 @@ impl BuildArgs {
     /// build fails or its output can't be written.
     fn build_once(&self, verbosity: Verbosity) -> Result<(), Exit> {
         let total_start = Instant::now();
-        let configs = resolve_build_config(self.config.as_deref(), self.resolved_profile())
-            .map_err(usage_error)?;
+        let configs = self.resolved_configs()?;
 
         if verbosity != Verbosity::Quiet
             && let Some(first_config) = configs.first()
@@ -188,12 +210,8 @@ impl BuildArgs {
     /// failed build or a bad config isn't an error here: watch mode reports it
     /// and keeps watching.
     fn build_for_watch(&self, verbosity: Verbosity) -> Result<Vec<String>, Exit> {
-        let configs = match resolve_build_config(self.config.as_deref(), self.resolved_profile()) {
-            Ok(configs) => configs,
-            Err(error) => {
-                eprintln!("Error: {error}");
-                return Ok(Vec::new());
-            }
+        let Ok(configs) = self.resolved_configs() else {
+            return Ok(Vec::new());
         };
 
         let mut all_source_files = Vec::new();
@@ -246,10 +264,9 @@ impl BuildArgs {
         let pre_minify_size = output.len();
 
         if config.minify {
-            let file_path = config.entry.display().to_string();
-            output = luck_minifier::minify(&output, version, &config.transforms, &file_path)
-                .map_err(|errors| {
-                    print_document_diags(file_path, output, &errors);
+            output =
+                luck_minifier::minify(&output, version, &config.transforms).map_err(|errors| {
+                    print_source_errors(config.entry.display().to_string(), output, &errors);
                     BuildFailure::Failed("minification failed")
                 })?;
         }

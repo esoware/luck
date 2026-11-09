@@ -37,7 +37,7 @@ compact_str           = "0.10"
 criterion2            = { version = "3", default-features = false }
 ec4rs                 = "1.2"
 flate2                = "1"
-globset               = "0.4"
+globset               = { version = "0.4", default-features = false }
 ignore                = "0.4"
 insta                 = "1"
 itoa                  = "1"
@@ -45,8 +45,8 @@ json5                 = "1.3"
 memchr                = "2"
 mimalloc-safe         = "0.1.64"
 notify-debouncer-mini = "0.7"
-petgraph              = "0.8"
-predicates            = "3"
+petgraph              = { version = "0.8", default-features = false, features = ["std"] }
+predicates            = { version = "3", default-features = false }
 rayon                 = "1"
 rustc-hash            = "2"
 ryu                   = "1"
@@ -57,9 +57,9 @@ simdutf8              = { version = "0.1.5", features = ["aarch64_neon"] }
 tar                   = "0.4"
 tempfile              = "3"
 tokio                 = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "net", "macros", "sync"] }
-toml                  = "1.1"
+toml                  = { version = "1.1", default-features = false, features = ["parse", "serde", "std"] }
 tower-lsp             = "0.20"
-unicode-width         = "0.2"
+unicode-width         = { version = "0.2", default-features = false }
 ureq                  = "3"
 
 # Full debuginfo makes MSVC linking of the test binaries the slowest part of

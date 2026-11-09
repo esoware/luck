@@ -1,8 +1,8 @@
 use core::mem;
 
 use luck_ast::Block;
-use luck_core::{Diagnostic, TransformConfig};
-use luck_token::{LuaVersion, Span};
+use luck_core::TransformConfig;
+use luck_token::{LuaVersion, SourceError, Span};
 
 use crate::transforms;
 
@@ -12,8 +12,7 @@ use crate::transforms;
 /// pathological oscillation.
 const MAX_PIPELINE_ROUNDS: usize = 8;
 
-/// Minifies Lua source, returning the compact output or the parse
-/// diagnostics.
+/// Minifies Lua source, returning the compact output or the parse errors.
 ///
 /// The transform chain repeats until its output stops changing, since each
 /// pass can expose work for the others: inlining opens folds, folding opens
@@ -21,20 +20,15 @@ const MAX_PIPELINE_ROUNDS: usize = 8;
 ///
 /// # Errors
 ///
-/// Returns one E008 diagnostic per parse error when `source` doesn't parse.
+/// Returns the parse errors when `source` doesn't parse.
 pub fn minify(
     source: &str,
     version: LuaVersion,
     config: &TransformConfig,
-    file_path: &str,
-) -> Result<String, Vec<Diagnostic>> {
+) -> Result<String, Vec<SourceError>> {
     let result = luck_parser::parse(source, version);
     if !result.errors.is_empty() {
-        return Err(result
-            .errors
-            .iter()
-            .map(|error| Diagnostic::e008(file_path, error.span, &error.message))
-            .collect());
+        return Err(result.errors);
     }
     // Luau hot comments (--!strict, --!native, --!optimize N, ...) only take
     // effect before any code, so the leading ones go back on top of the

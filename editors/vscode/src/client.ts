@@ -16,13 +16,8 @@ const RESTART_SETTINGS = [
 
 const RESTART_DEBOUNCE_MS = 500;
 
-interface Session {
-	readonly client: LanguageClient;
-	readonly watcher: vscode.FileSystemWatcher;
-}
-
 export class LuckClient {
-	private session: Session | undefined;
+	private client: LanguageClient | undefined;
 	private operation: Promise<void> = Promise.resolve();
 	private restartTimer: NodeJS.Timeout | undefined;
 	private readonly extensionPath: string;
@@ -44,7 +39,7 @@ export class LuckClient {
 	}
 
 	public get languageClient(): LanguageClient | undefined {
-		return this.session?.client;
+		return this.client;
 	}
 
 	public start(): Promise<void> {
@@ -76,7 +71,7 @@ export class LuckClient {
 	}
 
 	private async doStart(): Promise<void> {
-		if (this.session) {
+		if (this.client) {
 			logExtension("start ignored: state is running");
 			return;
 		}
@@ -89,32 +84,25 @@ export class LuckClient {
 			return;
 		}
 
-		const watcher = vscode.workspace.createFileSystemWatcher("**/{luck.json,.luaurc}");
-		try {
-			const client = createLanguageClient(command, watcher);
-			await client.start();
-			const version = client.initializeResult?.serverInfo?.version;
-			this.session = { client, watcher };
-			this.statusBar.update({ state: "ready", version });
-			logExtension(`start: ready (server ${version ?? "unknown"})`);
-		} catch (error) {
-			watcher.dispose();
-			throw error;
-		}
+		const client = createLanguageClient(command);
+		await client.start();
+		const version = client.initializeResult?.serverInfo?.version;
+		this.client = client;
+		this.statusBar.update({ state: "ready", version });
+		logExtension(`start: ready (server ${version ?? "unknown"})`);
 	}
 
 	private async doStop(): Promise<void> {
-		const { session } = this;
-		if (!session) {
+		const { client } = this;
+		if (!client) {
 			return;
 		}
-		this.session = undefined;
+		this.client = undefined;
 		try {
-			await session.client.stop();
+			await client.stop();
 		} catch (error) {
 			logExtension(`stop failed: ${error}`);
 		}
-		session.watcher.dispose();
 		this.statusBar.update({ state: "stopped" });
 	}
 
@@ -135,7 +123,7 @@ export class LuckClient {
 	}
 }
 
-function createLanguageClient(command: string, watcher: vscode.FileSystemWatcher): LanguageClient {
+function createLanguageClient(command: string): LanguageClient {
 	const args = ["lsp", ...(setting("server.args") ?? [])];
 	const env = { ...process.env, ...setting("server.extraEnv") };
 
@@ -148,7 +136,6 @@ function createLanguageClient(command: string, watcher: vscode.FileSystemWatcher
 			{ scheme: "untitled", language: "lua" },
 			{ scheme: "untitled", language: "luau" },
 		],
-		synchronize: { fileEvents: [watcher] },
 		outputChannel: outputChannel("server"),
 		traceOutputChannel: outputChannel("trace"),
 		revealOutputChannelOn: RevealOutputChannelOn.Never,

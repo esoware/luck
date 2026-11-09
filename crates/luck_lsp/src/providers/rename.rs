@@ -73,7 +73,7 @@ pub(crate) fn rename(
 fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), String> {
     // Checked under the document's Lua version, so keywords are rejected
     // version-accurately (`goto` is an identifier in 5.1).
-    if !is_valid_identifier_in(new_name, document.target.lua_version()) {
+    if !is_valid_identifier_in(new_name, document.lua_version) {
         return Err(format!("`{new_name}` isn't a valid identifier"));
     }
     if document.semantic.is_known_global(new_name) {

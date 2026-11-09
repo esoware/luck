@@ -135,12 +135,7 @@ pub(crate) fn project_files(
     project: &ProjectConfig,
     paths: &[String],
 ) -> Result<Vec<(PathBuf, LuaTarget)>, Exit> {
-    let filter = ProjectFilter::new(
-        &project.root,
-        project.config.include.as_deref(),
-        project.config.exclude.as_deref(),
-    )
-    .map_err(usage_error)?;
+    let filter = project.config.project_filter(&project.root).map_err(usage_error)?;
 
     let default_paths = [".".to_owned()];
     let requested_paths = if paths.is_empty() { default_paths.as_slice() } else { paths };

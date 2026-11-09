@@ -4,8 +4,9 @@ use core::fmt::Display;
 use std::process::ExitCode;
 
 use luck_core::Diagnostic;
+use luck_token::SourceError;
 
-use crate::render::{print_diags, print_document_diags};
+use crate::render::{print_diags, print_source_errors};
 
 /// How a command failed, once it has reported why. A command that ran and
 /// found no problems returns `Ok` and exits 0.
@@ -51,10 +52,14 @@ pub(crate) fn fail_with_diags(diags: &[Diagnostic]) -> Exit {
     Exit::Failure
 }
 
-/// Render diagnostics that all point into `source`, a document that isn't on
-/// disk, such as a bundle being minified or stdin, and return
-/// [`Exit::Failure`].
-pub(crate) fn fail_with_document_diags(path: String, source: String, diags: &[Diagnostic]) -> Exit {
-    print_document_diags(path, source, diags);
+/// Render a document's parse errors to stderr, each as an E008, and return
+/// [`Exit::Failure`]. `source` is a document that isn't on disk, such as a
+/// bundle being minified or stdin.
+pub(crate) fn fail_with_source_errors(
+    path: String,
+    source: String,
+    errors: &[SourceError],
+) -> Exit {
+    print_source_errors(path, source, errors);
     Exit::Failure
 }

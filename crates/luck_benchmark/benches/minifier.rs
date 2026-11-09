@@ -17,8 +17,7 @@ fn bench_minifier(criterion: &mut Criterion) {
         let source_text = file.source_text.as_str();
         let version = file.target.lua_version();
         let config = TransformConfig::default();
-        let minify =
-            || luck_minifier::minify(black_box(source_text), version, &config, "bench.lua");
+        let minify = || luck_minifier::minify(black_box(source_text), version, &config);
         let minified = minify();
         assert!(minified.is_ok(), "{:?}", minified.err());
         // `minify` has no parsed-AST entry point, so the measured section
@@ -34,18 +33,16 @@ fn bench_minifier(criterion: &mut Criterion) {
         let config = TransformConfig::default();
         let files = project.files;
         for ProjectFile { relative_path, source_text } in &files {
-            let minified =
-                luck_minifier::minify(source_text.as_str(), version, &config, relative_path);
+            let minified = luck_minifier::minify(source_text.as_str(), version, &config);
             assert!(minified.is_ok(), "{relative_path}: {:?}", minified.err());
         }
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
-                for ProjectFile { relative_path, source_text } in &files {
+                for ProjectFile { source_text, .. } in &files {
                     let _unused = black_box(luck_minifier::minify(
                         black_box(source_text.as_str()),
                         version,
                         &config,
-                        relative_path,
                     ));
                 }
             });

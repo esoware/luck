@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::Args;
 use luck_core::read_source_file;
 
-use crate::exit::{Exit, fail_with_document_diags, operation_error};
+use crate::exit::{Exit, fail_with_source_errors, operation_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::{format_size, read_stdin_source, write_output};
 use crate::project::{config_for_one_shot, resolve_configured_target};
@@ -60,9 +60,8 @@ impl MinifyArgs {
 
         let original_size = source.len();
 
-        let minified =
-            luck_minifier::minify(&source, target.lua_version(), &transforms, &file_path)
-                .map_err(|errors| fail_with_document_diags(file_path, source, &errors))?;
+        let minified = luck_minifier::minify(&source, target.lua_version(), &transforms)
+            .map_err(|errors| fail_with_source_errors(file_path, source, &errors))?;
 
         if self.stats {
             let minified_size = minified.len();

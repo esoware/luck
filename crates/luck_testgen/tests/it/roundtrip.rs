@@ -129,13 +129,13 @@ fn minify_reparses_and_reaches_a_fixpoint_by_the_second_pass() {
     let config = TransformConfig::default();
     for program in programs() {
         let Program { source, version, label } = &program;
-        let Ok(first) = luck_minifier::minify(source, *version, &config, "gen.lua") else {
+        let Ok(first) = luck_minifier::minify(source, *version, &config) else {
             panic!("{label}: minify errored on valid input:\n{source}");
         };
 
         parse_cleanly(&program, "minify", &first);
 
-        let Ok(second) = luck_minifier::minify(&first, *version, &config, "gen.lua") else {
+        let Ok(second) = luck_minifier::minify(&first, *version, &config) else {
             panic!("{label}: second minify errored.\nfirst output:\n{first}");
         };
         // Names aren't byte-stable: lift and merge run after rename, so the
@@ -147,7 +147,7 @@ fn minify_reparses_and_reaches_a_fixpoint_by_the_second_pass() {
             second.len(),
             "{label}: second minify changed size.\nfirst:\n{first}\nsecond:\n{second}"
         );
-        let Ok(third) = luck_minifier::minify(&second, *version, &config, "gen.lua") else {
+        let Ok(third) = luck_minifier::minify(&second, *version, &config) else {
             panic!("{label}: third minify errored");
         };
         assert_eq!(second, third, "{label}: minify has no fixpoint.\ninput:\n{source}");

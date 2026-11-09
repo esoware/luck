@@ -60,11 +60,7 @@ fn collect_links(
         document,
         position,
         from_file: normalize_path(&document_path),
-        resolver: Resolver::new(
-            document.target.lua_version(),
-            &settings.search_paths,
-            project_root,
-        ),
+        resolver: Resolver::new(document.lua_version, &settings.search_paths, project_root),
         links: Vec::new(),
     };
     collector.visit_block(&document.parsed.block);

@@ -141,7 +141,7 @@ impl GraphBuilder<'_> {
 
         let parsed = luck_parser::parse(source, self.version);
         for error in &parsed.errors {
-            self.errors.push(Diagnostic::e008(&file_path, error.span, &error.message));
+            self.errors.push(Diagnostic::e008(&file_path, error));
         }
 
         let ExtractedRequires { sites, dynamic_callees, diagnostics } =

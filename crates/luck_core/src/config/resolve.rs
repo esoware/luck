@@ -2,12 +2,11 @@
 //! selected profile, resolving entry and output paths, and expanding the
 //! single-entry or multi-entry (`entries`) form.
 
-use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::CONFIG_FILE_NAME;
 use super::dynamic_require::DynamicRequire;
-use super::load::{ProjectConfig, load_or_discover_config};
+use super::load::ProjectConfig;
 use super::luck_config::{LuckConfig, ProfileOverrides};
 use super::transform_config::TransformConfig;
 use crate::lua_target::LuaTarget;
@@ -27,29 +26,20 @@ pub struct BuildConfig {
     pub luck_preamble: bool,
 }
 
-/// Loads or discovers `luck.json`, applies `profile`, and resolves one
-/// [`BuildConfig`] per entry.
+/// Applies `profile` to a loaded project and resolves one [`BuildConfig`] per
+/// entry.
 ///
 /// # Errors
 ///
-/// Returns a message when no config is found or it fails to load, when
-/// `profile` isn't defined, or when the entry, output, or dialect settings are
-/// missing or invalid.
+/// Returns a message when `profile` isn't defined, or when the entry, output,
+/// or dialect settings are missing or invalid.
 pub fn resolve_build_config(
-    config_path: Option<&Path>,
+    project: &ProjectConfig,
     profile: Option<&str>,
 ) -> Result<Vec<BuildConfig>, String> {
-    let current_directory =
-        env::current_dir().map_err(|error| format!("failed to get current directory: {error}"))?;
+    let ProjectConfig { root: project_root, config } = project;
 
-    let ProjectConfig { root: project_root, config } =
-        load_or_discover_config(config_path, &current_directory)?.ok_or_else(|| {
-            format!(
-                "no `{CONFIG_FILE_NAME}` found, so run from a project directory or use `--config`"
-            )
-        })?;
-
-    let profile_overrides = select_profile(&config, profile)?;
+    let profile_overrides = select_profile(config, profile)?;
     let minify =
         profile_overrides.and_then(|overrides| overrides.minify).or(config.minify).unwrap_or(false);
     let transforms = profile_overrides
@@ -141,18 +131,15 @@ fn select_profile(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
+    use crate::config::parse_luck_config;
 
     #[test]
     fn rejects_empty_entries() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let config_path = directory.path().join(CONFIG_FILE_NAME);
-        fs::write(&config_path, r#"{"entries": []}"#).expect("write config");
+        let config = parse_luck_config(r#"{"entries": []}"#).expect("config parses");
+        let project = ProjectConfig { root: PathBuf::from("."), config };
 
-        let error =
-            resolve_build_config(Some(&config_path), None).expect_err("empty entries resolved");
+        let error = resolve_build_config(&project, None).expect_err("empty entries resolved");
         assert!(error.contains("`entries`"), "{error}");
     }
 }

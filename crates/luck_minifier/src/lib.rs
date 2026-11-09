@@ -21,7 +21,7 @@
 //! use luck_core::TransformConfig;
 //! use luck_token::LuaVersion;
 //!
-//! let output = luck_minifier::minify("return 1 + 2", LuaVersion::Lua54, &TransformConfig::default(), "input.lua").unwrap();
+//! let output = luck_minifier::minify("return 1 + 2", LuaVersion::Lua54, &TransformConfig::default()).unwrap();
 //! assert!(output.len() < "return 1 + 2".len());
 //! ```
 

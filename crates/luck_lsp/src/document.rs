@@ -7,7 +7,7 @@ use luck_core::LuaTarget;
 use luck_linter::{LintConfig, LintDiagnostic};
 use luck_parser::ParseResult;
 use luck_semantic::SemanticAnalysis;
-use luck_token::Span;
+use luck_token::{LuaVersion, Span};
 use tower_lsp::lsp_types::{Position, Range, TextDocumentContentChangeEvent};
 
 use crate::line_index::LineIndex;
@@ -20,6 +20,7 @@ use crate::line_index::LineIndex;
 pub(crate) struct DocumentState {
     pub version: i32,
     pub target: LuaTarget,
+    pub lua_version: LuaVersion,
     pub parsed: ParseResult,
     pub semantic: SemanticAnalysis,
     pub line_index: LineIndex,
@@ -27,14 +28,15 @@ pub(crate) struct DocumentState {
 
 impl DocumentState {
     pub(crate) fn new(text: String, version: i32, target: LuaTarget) -> Self {
+        let lua_version = target.lua_version();
         let line_index = LineIndex::new(&text);
-        let parsed = luck_parser::parse(text, target.lua_version());
+        let parsed = luck_parser::parse(text, lua_version);
         let semantic = luck_semantic::analyze_with_environment(
             &parsed.block,
-            target.lua_version(),
+            lua_version,
             target.stdlib_environment(),
         );
-        Self { version, target, parsed, semantic, line_index }
+        Self { version, target, lua_version, parsed, semantic, line_index }
     }
 
     pub(crate) fn text(&self) -> &str {
@@ -63,12 +65,7 @@ impl DocumentState {
     }
 
     pub(crate) fn lint(&self, config: &LintConfig) -> Vec<LintDiagnostic> {
-        luck_linter::lint_parsed(
-            &self.parsed,
-            self.target.lua_version(),
-            self.target.stdlib_environment(),
-            config,
-        )
+        luck_linter::lint_parsed(&self.parsed, self.lua_version, self.semantic.environment, config)
     }
 
     /// The text once `changes` are applied in order, or `None` when a range

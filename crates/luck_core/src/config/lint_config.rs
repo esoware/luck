@@ -89,6 +89,32 @@ pub enum Category {
     Performance,
 }
 
+impl Category {
+    /// The name `luck.json`, `--rules`, and `--print-config` spell it with.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Correctness => "correctness",
+            Self::Suspicious => "suspicious",
+            Self::Style => "style",
+            Self::Performance => "performance",
+        }
+    }
+
+    /// Parses a `-A`/`-W`/`-D` flag value, case-insensitively, or `None` when
+    /// it names no category.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "correctness" => Some(Self::Correctness),
+            "suspicious" => Some(Self::Suspicious),
+            "style" => Some(Self::Style),
+            "performance" | "perf" => Some(Self::Performance),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +197,24 @@ mod tests {
     fn parses_the_perf_category_alias() {
         let config = parse_luck_config(r#"{ "lint": { "categories": ["perf"] } }"#).unwrap();
         assert_eq!(config.lint.unwrap().categories, vec![Category::Performance]);
+    }
+
+    /// `name` is what `--rules` and `--print-config` print, so a `name` that
+    /// `from_name` doesn't take back would break scripts feeding them to `-A`.
+    #[test]
+    fn category_names_round_trip_through_from_name() {
+        for category in
+            [Category::Correctness, Category::Suspicious, Category::Style, Category::Performance]
+        {
+            assert_eq!(Category::from_name(category.name()), Some(category));
+        }
+    }
+
+    #[test]
+    fn category_from_name_recognizes_categories_and_the_perf_alias() {
+        assert_eq!(Category::from_name("style"), Some(Category::Style));
+        assert_eq!(Category::from_name("perf"), Some(Category::Performance));
+        assert_eq!(Category::from_name("undefined_variable"), None);
     }
 
     #[test]

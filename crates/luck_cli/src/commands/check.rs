@@ -67,11 +67,12 @@ fn check_file(file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
         }
     };
 
-    let mut result = luck_parser::parse(source, target.lua_version());
+    let version = target.lua_version();
+    let mut result = luck_parser::parse(source, version);
     if result.errors.is_empty() {
         // The compile-time errors real Lua reports beyond the grammar, such as
         // const writes and unresolved gotos. Only `check` pays for this pass.
-        result.errors = luck_parser::validate(&result.block, target.lua_version());
+        result.errors = luck_parser::validate(&result.block, version);
     }
     if result.errors.is_empty() {
         return None;

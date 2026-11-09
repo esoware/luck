@@ -38,7 +38,7 @@ The `config` module handles project configuration, split into focused submodules
 - **`transform_config`** and **`dynamic_require`** hold `TransformConfig` and `DynamicRequire`, the `transforms` and `dynamic_require` values.
 - **`load`** owns `parse_luck_config` (JSON5), the recursive `extends` chain with cycle and `root`-boundary checks, upward `discover_config`, and `load_or_discover_config`, which loads an explicit `-c` path or else discovers. Both return a `ProjectConfig`: the config and the directory holding it, which roots the project's relative paths and globs.
 - **`resolve`** turns a loaded `LuckConfig` into `BuildConfig`s, applying the selected profile and resolving entry/output paths for the single-entry or multi-entry (`entries`) form.
-- **`filter`** holds `ProjectFilter`, which decides from `include`/`exclude` globs whether a file belongs to the project (exclude wins).
+- **`filter`** holds `ProjectFilter`, which decides from `include`/`exclude` globs whether a file belongs to the project (exclude wins). The CLI and the LSP both build it through `LuckConfig::project_filter`.
 - **`editorconfig`** holds `resolved_format_config`, which layers `FormatConfig` precedence: built-in defaults < `.editorconfig` < the luck.json `format` section. Without a file path, for an untitled document or `fmt --no-editorconfig`, the `format` section stands alone.
 
 `.luaurc` files belong to `luck_resolver`, which parses and caches them for Luau alias resolution.
@@ -61,7 +61,7 @@ The VS Code schema at `editors/vscode/schemas/luckrc.schema.json` is **generated
 | E008 | parse error |
 | E009 | too many modules (bundle module-count limit exceeded) |
 | E010 | cannot read file (IO error) |
-| E011 | entry file not found |
+| E011 | entry file not found (not emitted, since a missing entry reports E010) |
 | E012 | file too large (byte-length limit exceeded) |
 | W001 | duplicate require |
 | W002 | top-level vararg in bundled module (not emitted) |

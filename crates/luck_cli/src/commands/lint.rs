@@ -332,7 +332,7 @@ impl LintArgs {
         // CLI overrides win over the config. All -A apply first, then -W, then -D,
         // so for one name -D beats -W beats -A, whatever the command-line order.
         for name in &self.allow {
-            if let Some(category) = category_from_name(name) {
+            if let Some(category) = Category::from_name(name) {
                 lint_config.categories.retain(|existing| *existing != category);
             } else {
                 lint_config
@@ -342,7 +342,7 @@ impl LintArgs {
         }
         for (names, severity) in [(&self.warn, Severity::Warning), (&self.deny, Severity::Error)] {
             for name in names {
-                if let Some(category) = category_from_name(name) {
+                if let Some(category) = Category::from_name(name) {
                     if !lint_config.categories.contains(&category) {
                         lint_config.categories.push(category);
                     }
@@ -379,30 +379,10 @@ fn severity_counts(diags: &[LintDiagnostic]) -> (usize, usize) {
     (count(Severity::Error), count(Severity::Warning))
 }
 
-/// Map an `-A`/`-W`/`-D` name to a lint category, if it names one.
-fn category_from_name(name: &str) -> Option<Category> {
-    match name.to_ascii_lowercase().as_str() {
-        "correctness" => Some(Category::Correctness),
-        "suspicious" => Some(Category::Suspicious),
-        "style" => Some(Category::Style),
-        "performance" | "perf" => Some(Category::Performance),
-        _ => None,
-    }
-}
-
-const fn category_label(category: Category) -> &'static str {
-    match category {
-        Category::Correctness => "correctness",
-        Category::Suspicious => "suspicious",
-        Category::Style => "style",
-        Category::Performance => "performance",
-    }
-}
-
 /// Print every registered rule with its category, sorted by name.
 fn print_lint_rules() {
     let mut rules: Vec<(&str, &str)> =
-        luck_linter::rules().map(|rule| (rule.name(), category_label(rule.category()))).collect();
+        luck_linter::rules().map(|rule| (rule.name(), rule.category().name())).collect();
     rules.sort_unstable();
     for (name, category) in rules {
         println!("{name}\t{category}");
@@ -423,7 +403,7 @@ fn print_lint_config(lint_config: &LintConfig) {
         })
         .collect();
     let categories: Vec<&str> =
-        lint_config.categories.iter().map(|category| category_label(*category)).collect();
+        lint_config.categories.iter().map(|category| category.name()).collect();
     let value = serde_json::json!({
         "rule_overrides": serde_json::Value::Object(overrides),
         "extra_globals": lint_config.extra_globals,
@@ -526,13 +506,6 @@ mod tests {
             lint_args(&["--stdin-filepath", "buf.luau"]).stdin_filepath.as_deref(),
             Some("buf.luau")
         );
-    }
-
-    #[test]
-    fn category_from_name_recognizes_categories_and_the_perf_alias() {
-        assert_eq!(category_from_name("style"), Some(Category::Style));
-        assert_eq!(category_from_name("perf"), Some(Category::Performance));
-        assert_eq!(category_from_name("undefined_variable"), None);
     }
 
     #[test]

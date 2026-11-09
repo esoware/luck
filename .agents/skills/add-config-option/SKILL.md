@@ -22,7 +22,7 @@ On the right struct, mirroring its neighbors:
 
 ## 3. Thread it to the consumer, in BOTH paths
 
-Find where the option's struct is used (formatter, minifier, bundler, linter driver) and read the field there. Grep for a neighboring field to find every site: a field read in only one of the CLI (`luck_cli`) and LSP (`luck_lsp/src/settings.rs`) paths is a recurring bug. When both paths read a key the same way, give `luck_core` one function they both go through, as `LuckConfig::target`, `LuckConfig::search_paths_or_default`, and `resolved_format_config` do, instead of reading the raw field twice.
+Find where the option's struct is used (formatter, minifier, bundler, linter driver) and read the field there. Grep for a neighboring field to find every site: a field read in only one of the CLI (`luck_cli`) and LSP (`luck_lsp/src/settings.rs`) paths is a recurring bug. When both paths read a key the same way, give `luck_core` one function they both go through, as `LuckConfig::target`, `LuckConfig::project_filter`, `LuckConfig::search_paths_or_default`, and `resolved_format_config` do, instead of reading the raw field twice.
 
 ## 4. Respect precedence (format options only)
 

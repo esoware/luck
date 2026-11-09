@@ -1,10 +1,10 @@
 //! Constructors for every numbered diagnostic, the only place their codes and
 //! wording are written.
 //!
-//! E001, E003, E005, and W002 are never emitted, and their numbers stay
+//! E001, E003, E005, E011, and W002 are never emitted, and their numbers stay
 //! reserved.
 
-use luck_token::Span;
+use luck_token::{SourceError, Span};
 
 use super::Diagnostic;
 
@@ -120,9 +120,10 @@ impl Diagnostic {
             .with_help(format!("ambiguity: {details}, so remove one of the conflicting files"))
     }
 
+    /// A parse failure, the only error a [`SourceError`] ever reports as.
     #[must_use]
-    pub fn e008(file_path: &str, span: Span, parse_error: &str) -> Self {
-        Self::error_at("E008", format!("parse error: {parse_error}"), file_path, span)
+    pub fn e008(file_path: &str, error: &SourceError) -> Self {
+        Self::error_at("E008", format!("parse error: {}", error.message), file_path, error.span)
     }
 
     #[must_use]
@@ -148,12 +149,6 @@ impl Diagnostic {
             span,
         )
         .with_help("check that the file exists and is readable")
-    }
-
-    #[must_use]
-    pub fn e011(entry_path: &str, span: Span) -> Self {
-        Self::error_at("E011", format!("entry file not found: `{entry_path}`"), entry_path, span)
-            .with_help("check that the entry path points at an existing file")
     }
 
     #[must_use]

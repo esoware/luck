@@ -7,6 +7,7 @@ use std::path::Path;
 use rustc_hash::FxHashMap;
 
 use super::dynamic_require::DynamicRequire;
+use super::filter::ProjectFilter;
 use super::format_config::FormatConfig;
 use super::lint_config::LintConfig;
 use super::transform_config::TransformConfig;
@@ -124,6 +125,15 @@ impl LuckConfig {
     /// Returns a message when the selected key names no known target.
     pub fn target_for_path(&self, path: &Path) -> Result<LuaTarget, String> {
         self.target(DialectKey::for_path(path))
+    }
+
+    /// The filter `include` and `exclude` make for a project rooted at `root`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the first invalid glob pattern.
+    pub fn project_filter(&self, root: &Path) -> Result<ProjectFilter, String> {
+        ProjectFilter::new(root, self.include.as_deref(), self.exclude.as_deref())
     }
 
     /// The Lua search path templates: `search_paths` when it's set, even to an

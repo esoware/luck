@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use luck_bundler::{LineMapEntry, bundle};
 
-use crate::exit::{Exit, fail_with_diags, fail_with_document_diags, operation_error, usage_error};
+use crate::exit::{Exit, fail_with_diags, fail_with_source_errors, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::write_output;
 use crate::project::{
@@ -61,6 +61,7 @@ impl BundleArgs {
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let config = config_for_one_shot(self.config.as_deref(), &self.entry)?;
         let target = resolve_configured_target(&config, self.target.as_deref(), &self.entry)?;
+        let version = target.lua_version();
         let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require.as_deref())?;
         let transforms = self.minify_flags.apply_to(config.transforms.unwrap_or_default());
 
@@ -75,14 +76,8 @@ impl BundleArgs {
             .parent()
             .map_or_else(current_directory, |parent| Ok(parent.to_path_buf()))?;
 
-        let result = bundle(
-            entry_path,
-            target.lua_version(),
-            &self.search_paths,
-            &search_root,
-            dynamic_require,
-        )
-        .map_err(|errors| fail_with_diags(&errors))?;
+        let result = bundle(entry_path, version, &self.search_paths, &search_root, dynamic_require)
+            .map_err(|errors| fail_with_diags(&errors))?;
 
         if verbosity != Verbosity::Quiet {
             print_diags(&result.warnings);
@@ -91,8 +86,8 @@ impl BundleArgs {
         let mut code = result.output;
 
         if self.minify {
-            code = luck_minifier::minify(&code, target.lua_version(), &transforms, &self.entry)
-                .map_err(|errors| fail_with_document_diags(self.entry, code, &errors))?;
+            code = luck_minifier::minify(&code, version, &transforms)
+                .map_err(|errors| fail_with_source_errors(self.entry, code, &errors))?;
         }
 
         if let Some(map_path) = self.line_map.as_deref() {

@@ -52,7 +52,7 @@ fn measure(name: &str, source: &str, target: LuaTarget) -> Result<Row, Box<dyn E
     // so byte counts match CI.
     let normalized = source.replace("\r\n", "\n");
     let config = TransformConfig::default();
-    let minified = luck_minifier::minify(&normalized, target.lua_version(), &config, name)
+    let minified = luck_minifier::minify(&normalized, target.lua_version(), &config)
         .map_err(|errors| format!("{name} failed to minify: {errors:?}"))?;
     Ok(Row {
         name: name.to_owned(),

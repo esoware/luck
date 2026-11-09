@@ -180,7 +180,7 @@ impl<N: Notifier> Backend<N> {
         let file_path = uri.to_file_path().ok();
         let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
         let options = settings.format_options(file_path.as_deref());
-        let lua_version = document.target.lua_version();
+        let lua_version = document.lua_version;
         let (result, action) = byte_range.map_or_else(
             || (luck_formatter::format(document.text(), lua_version, &options), "format"),
             // `format_range` returns the whole file with text outside the

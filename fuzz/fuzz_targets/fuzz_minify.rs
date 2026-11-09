@@ -15,7 +15,7 @@ fuzz_target!(|data: &[u8]| {
     }
 
     let config = TransformConfig::default();
-    let Ok(first) = luck_minifier::minify(source, version, &config, "fuzz.lua") else {
+    let Ok(first) = luck_minifier::minify(source, version, &config) else {
         // Unreachable: `minify` only fails on a parse error, and this input
         // just parsed clean.
         return;
@@ -24,7 +24,7 @@ fuzz_target!(|data: &[u8]| {
     let reparsed = luck_parser::parse(&first, version);
     assert!(reparsed.errors.is_empty(), "minified output failed to reparse");
 
-    let Ok(second) = luck_minifier::minify(&first, version, &config, "fuzz.lua") else {
+    let Ok(second) = luck_minifier::minify(&first, version, &config) else {
         panic!("second minify pass errored on its own output");
     };
     assert_eq!(first, second, "minify not idempotent");

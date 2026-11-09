@@ -94,11 +94,17 @@ pub(crate) fn print_diags(diags: &[Diagnostic]) {
     write_diags(diags, &mut cache, &mut io::stderr());
 }
 
-/// Prints diagnostics that all point into `source`, a document that isn't on
-/// disk, such as stdin or a bundle being minified, to stderr.
-pub(crate) fn print_document_diags(path: String, source: String, diags: &[Diagnostic]) {
+/// Each of `errors` in `path`, as the E008 it reports as.
+fn source_error_diags(path: &str, errors: &[SourceError]) -> Vec<Diagnostic> {
+    errors.iter().map(|error| Diagnostic::e008(path, error)).collect()
+}
+
+/// Prints a document's parse errors, each as an E008, to stderr. `source` is a
+/// document that isn't on disk, such as stdin or a bundle being minified.
+pub(crate) fn print_source_errors(path: String, source: String, errors: &[SourceError]) {
+    let diags = source_error_diags(&path, errors);
     let mut cache = FileCache::with_file(path, source);
-    write_diags(diags, &mut cache, &mut io::stderr());
+    write_diags(&diags, &mut cache, &mut io::stderr());
 }
 
 /// Renders diagnostics that all point into `source` into a buffer, so
@@ -118,8 +124,7 @@ pub(crate) fn render_source_errors(
     source: String,
     errors: &[SourceError],
 ) -> Vec<u8> {
-    let diags: Vec<Diagnostic> =
-        errors.iter().map(|error| Diagnostic::e008(&path, error.span, &error.message)).collect();
+    let diags = source_error_diags(&path, errors);
     render_document_diags(path, source, &diags)
 }
 
@@ -182,6 +187,10 @@ mod tests {
 
     use super::*;
 
+    fn boom_at(span: Span) -> SourceError {
+        SourceError { span, message: "boom".to_owned() }
+    }
+
     #[test]
     fn file_cache_fetches_only_the_files_it_holds() {
         use ariadne::Cache as _;
@@ -211,7 +220,7 @@ mod tests {
         // taken and finish instantly.
         let huge = format!("local x = {}", "1+".repeat(1_000_000));
         let offset = huge.len() - 1;
-        let diag = Diagnostic::e008("big.lua", Span::from_indices(offset, offset + 1), "boom");
+        let diag = Diagnostic::e008("big.lua", &boom_at(Span::from_indices(offset, offset + 1)));
         let rendered = render_document_diags("big.lua".to_owned(), huge, &[diag]);
         let text = String::from_utf8(rendered).unwrap();
         assert_eq!(
@@ -224,7 +233,7 @@ mod tests {
     #[test]
     fn short_line_is_not_too_long() {
         let cache = FileCache::with_file("small.lua".to_owned(), "local x = 1\n".to_owned());
-        let diag = Diagnostic::e008("small.lua", Span::new(6, 7), "boom");
+        let diag = Diagnostic::e008("small.lua", &boom_at(Span::new(6, 7)));
         assert!(!is_line_too_long(&diag, &cache));
     }
 }

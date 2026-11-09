@@ -121,7 +121,7 @@ fn is_screaming_case(name: &str) -> bool {
 }
 
 fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> SemanticTokens {
-    let lex_result = luck_lexer::lex(document.text(), document.target.lua_version());
+    let lex_result = luck_lexer::lex(document.text(), document.lua_version);
     let mut classifier =
         Classifier { document, tokens: &lex_result.tokens, raw_tokens: RawTokens::new() };
     classifier.classify_scope_names();
