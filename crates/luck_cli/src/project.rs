@@ -347,7 +347,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn collect_lua_files_does_not_enter_an_excluded_tree() {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::PermissionsExt as _;
 
         let directory = tempfile::tempdir().expect("tempdir");
         let root = directory.path();
