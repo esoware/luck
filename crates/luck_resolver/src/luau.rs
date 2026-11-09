@@ -37,7 +37,7 @@ pub(crate) fn resolve(
     if module.starts_with("./") || module.starts_with("../") {
         navigate(parent, &module, request)
     } else if let Some(alias) = module.strip_prefix('@') {
-        resolve_alias(aliases, alias, parent, &from_path, request)
+        resolve_alias(aliases, alias, parent, &requiring_module, request)
     } else {
         Err(Diagnostic::e004_luau_scheme(request.from_file, request.span, request.module))
     }
@@ -67,15 +67,14 @@ fn resolve_alias(
     aliases: &mut AliasCache,
     alias: &str,
     lookup_directory: &Path,
-    from_path: &Path,
+    requiring_module: &Path,
     request: &ResolveRequest<'_>,
 ) -> Result<ResolvedModule, Diagnostic> {
     let (alias_name, sub_path) =
         alias.split_once('/').map_or((alias, None), |(name, rest)| (name, Some(rest)));
 
     if alias_name.eq_ignore_ascii_case("self") {
-        let self_directory = from_path.parent().unwrap_or_else(|| Path::new("."));
-        return resolve_self(aliases, sub_path, self_directory, lookup_directory, request);
+        return resolve_self(aliases, sub_path, requiring_module, lookup_directory, request);
     }
 
     let (directory, full_sub_path) =
@@ -149,8 +148,9 @@ fn follow_alias(
     }
 }
 
-/// `@self` resolves against the requiring file's own directory. A `.luaurc`
-/// alias named `self` can't override it and gets W004.
+/// `@self` walks down from the requiring module itself, so `@self/x` is `dir/x`
+/// from `dir/init.luau` and `main/x` from `main.luau`, never a sibling. A
+/// `.luaurc` alias named `self` can't override it and gets W004.
 ///
 /// # Errors
 ///
@@ -159,7 +159,7 @@ fn follow_alias(
 fn resolve_self(
     aliases: &mut AliasCache,
     sub_path: Option<&str>,
-    self_directory: &Path,
+    requiring_module: &Path,
     lookup_directory: &Path,
     request: &ResolveRequest<'_>,
 ) -> Result<ResolvedModule, Diagnostic> {
@@ -167,7 +167,7 @@ fn resolve_self(
         .ok_or_else(|| Diagnostic::e004_self_needs_subpath(request.from_file, request.span))?;
 
     let is_shadowed = aliases.in_effect(lookup_directory).contains_key("self");
-    let mut resolved = navigate(self_directory, relative_path, request)?;
+    let mut resolved = navigate(requiring_module, relative_path, request)?;
     if is_shadowed {
         resolved.warnings.push(Diagnostic::w004(request.from_file, request.span));
     }

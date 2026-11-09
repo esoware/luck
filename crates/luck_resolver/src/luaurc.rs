@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(cache.merged_tables.len(), 1);
         assert_eq!(cache.declared_tables.len(), source_directory.ancestors().count());
         assert_eq!(cache.in_effect(&source_directory).len(), 64);
-        for module in ["@alias0/utils", "@ALIAS63/utils", "@self/utils", "@alias0/utils"] {
+        for module in ["@alias0/utils", "@ALIAS63/utils", "@alias0/utils"] {
             let resolved = luau::resolve(&mut cache, &request(module, &current))
                 .expect("resolve cached alias");
             assert_eq!(resolved.path, normalize_path(&source_directory.join("utils.luau")));

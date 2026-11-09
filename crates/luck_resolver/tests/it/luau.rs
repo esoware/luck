@@ -281,7 +281,7 @@ fn alias_cycle_reports_an_error_instead_of_a_literal_directory() {
 // `@self` is the current module, so from `main.luau` it names `main/...`, not a
 // sibling. Luau: `could not resolve child component "utils"`.
 #[test]
-fn bug_self_alias_from_a_non_init_file_does_not_name_a_sibling() {
+fn self_alias_from_a_non_init_file_does_not_name_a_sibling() {
     let project = luau_project();
     let error = resolve_luau(&project, "src/main.luau", "@self/utils")
         .expect_err("`@self/utils` from `main.luau` must not resolve to the sibling `utils.luau`");
