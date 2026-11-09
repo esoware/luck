@@ -1,78 +1,56 @@
-use luck_ast::node::{AstTypesBitset, NodeType};
-use luck_ast::shared::Block;
+use luck_ast::Statement;
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::diagnostic::Finding;
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
-pub struct IfSameThenElse;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IfSameThenElse;
 
-impl Rule for IfSameThenElse {
-    fn name(&self) -> &'static str {
-        "if_same_then_else"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "if and else branches have identical bodies"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
-
-fn block_source<'a>(source: &'a str, block: &Block) -> &'a str {
-    let start = block.span.start as usize;
-    let end = block.span.end as usize;
-    if start <= end && end <= source.len() {
-        &source[start..end]
-    } else {
-        ""
-    }
-}
+impl_rule!(
+    IfSameThenElse,
+    "if_same_then_else",
+    Suspicious,
+    Warning,
+    "`if` and `else` branches have identical bodies"
+);
 
 impl NodeRule for IfSameThenElse {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::IfStatement]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::IfStatement])
     }
-    fn on_statement(
-        &self,
-        stmt: &luck_ast::Statement,
-        ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
-    ) {
-        if let luck_ast::Statement::IfStatement(if_stmt) = stmt
-            && let Some(else_clause) = &if_stmt.else_clause
-        {
-            let then_src = block_source(ctx.source, &if_stmt.block);
-            let else_src = block_source(ctx.source, &else_clause.block);
-
-            if !then_src.is_empty() && then_src.trim() == else_src.trim() {
-                out.push(
-                    LintDiagnostic::new(
-                        "if_same_then_else",
-                        "if and else branches have identical bodies".to_string(),
-                        if_stmt.span,
-                    )
-                    .with_help("the condition has no effect; consider removing the if".to_string()),
-                );
-            }
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let Statement::IfStatement(if_stmt) = stmt else {
+            return;
+        };
+        let Some(else_clause) = &if_stmt.else_clause else {
+            return;
+        };
+        let then_text = if_stmt.block.span.text(context.source);
+        let else_text = else_clause.block.span.text(context.source);
+        if !then_text.is_empty() && then_text.trim() == else_text.trim() {
+            let finding =
+                Finding::new("`if` and `else` branches have identical bodies", if_stmt.span);
+            // An `elseif` keeps the first condition meaningful.
+            findings.push(if if_stmt.elseif_clauses.is_empty() {
+                finding.with_help("the condition has no effect, so remove the `if`")
+            } else {
+                finding
+            });
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&IfSameThenElse, source, LuaVersion::Lua54)
+        run_rule(&IfSameThenElse, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -97,5 +75,14 @@ mod tests {
     fn ignores_if_without_else() {
         let diags = run("if a then print(1) end");
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_identical_branches_with_elseif_without_dead_condition_help() {
+        let diags = run("if a then f() elseif b then g() else f() end");
+        assert!(
+            diags.iter().all(|diag| !diag.help.as_deref().unwrap_or("").contains("no effect")),
+            "the condition decides whether `elseif` runs, so removing the `if` isn't safe: {diags:?}"
+        );
     }
 }

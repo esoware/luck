@@ -1,150 +1,166 @@
-use luck_ast::Statement;
-use luck_ast::stmt::FunctionAttribute;
-use luck_token::{CommentKind, Span};
+use luck_ast::{Expression, FunctionAttribute, LastStatement, Statement};
+use luck_token::{CommentKind, Span, offset_to_index};
 
-use crate::diagnostic::{Category, Fix, LintDiagnostic, Severity, TextEdit};
-use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
+use crate::diagnostic::Finding;
+use crate::fix::{Fix, TextEdit};
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
-pub struct RedundantNativeAttribute;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RedundantNativeAttribute;
 
-impl Rule for RedundantNativeAttribute {
-    fn name(&self) -> &'static str {
-        "redundant_native_attribute"
+impl_rule!(
+    RedundantNativeAttribute,
+    "redundant_native_attribute",
+    Style,
+    Warning,
+    "`@native` attribute is redundant in a `--!native` module"
+);
+
+impl NodeRule for RedundantNativeAttribute {
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[
+            NodeType::FunctionDecl,
+            NodeType::LocalFunction,
+            NodeType::FunctionDef,
+        ])
     }
-
-    fn category(&self) -> Category {
-        Category::Style
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let attributes = match stmt {
+            Statement::FunctionDecl(function_decl) => &function_decl.attributes,
+            Statement::LocalFunction(local_function) => &local_function.attributes,
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::LocalAssignment(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => return,
+        };
+        check_attributes(attributes, context, findings);
     }
-
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-
-    fn description(&self) -> &'static str {
-        "@native attribute is redundant in a --!native module"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        if let Expression::FunctionDef(function) = expr {
+            check_attributes(&function.attributes, context, findings);
+        }
     }
 }
 
-/// Whether the chunk carries a `--!native` hot comment before any code.
-/// Luau ignores hot comments placed after the first statement, so a late
-/// directive does not make attributes redundant.
-fn has_native_directive(ctx: &LintContext) -> bool {
-    let stmt_start = ctx.block.stmts.first().map(|stmt| stmt.span().start);
-    let last_start = ctx.block.last_stmt.as_ref().map(|last| last.span().start);
-    let first_code_start = match (stmt_start, last_start) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    };
-    ctx.comments.iter().any(|comment| {
-        if comment.kind != CommentKind::Line {
-            return false;
+fn check_attributes(
+    attributes: &[FunctionAttribute],
+    context: &LintContext<'_>,
+    findings: &mut Vec<Finding>,
+) {
+    // Check for attributes first, since the directive scan reads the
+    // comments.
+    if attributes.is_empty()
+        || !context.semantic.version.is_luau()
+        || !has_native_directive(context)
+    {
+        return;
+    }
+    for attribute in attributes {
+        if attribute.name.identifier() != Some("native") {
+            continue;
         }
-        if first_code_start.is_some_and(|start| comment.span.start > start) {
-            return false;
+        findings.push(
+            Finding::new(
+                "`@native` attribute is redundant in a `--!native` module",
+                attribute.span,
+            )
+            .with_optional_fix(removal_fix(attribute, attributes, context.source)),
+        );
+    }
+}
+
+/// Deletes `attribute` and one whitespace byte after it, so no doubled
+/// separator is left behind. A `@[...]` list keeps the fix only when
+/// `attribute` is its sole entry and nothing but its name sits in brackets.
+fn removal_fix(
+    attribute: &FunctionAttribute,
+    attributes: &[FunctionAttribute],
+    source: &str,
+) -> Option<Fix> {
+    let bytes = source.as_bytes();
+    let after_at = offset_to_index(attribute.span.start).saturating_add(1);
+    let mut edit_end = offset_to_index(attribute.name.span.end);
+    if bytes.get(after_at) == Some(&b'[') {
+        if attribute.args.is_some()
+            || attributes.iter().filter(|other| other.span.start == attribute.span.start).count()
+                > 1
+        {
+            return None;
         }
-        let text = &ctx.source[comment.span.start as usize..comment.span.end as usize];
-        let Some(body) = text
-            .strip_prefix("--")
-            .and_then(|rest| rest.strip_prefix('!'))
-        else {
-            return false;
-        };
-        let word_len = body.find(char::is_whitespace).unwrap_or(body.len());
-        &body[..word_len] == "native"
+        let whitespace_length = bytes
+            .get(edit_end..)
+            .unwrap_or_default()
+            .iter()
+            .take_while(|b| b.is_ascii_whitespace())
+            .count();
+        let close_index = edit_end.saturating_add(whitespace_length);
+        if bytes.get(close_index) != Some(&b']') {
+            return None;
+        }
+        edit_end = close_index.saturating_add(1);
+    }
+    let has_trailing_space = matches!(bytes.get(edit_end), Some(b' ' | b'\t' | b'\n' | b'\r'));
+    let span = Span::from_indices(
+        offset_to_index(attribute.span.start),
+        edit_end.saturating_add(usize::from(has_trailing_space)),
+    );
+    Some(Fix {
+        description: "remove the redundant `@native` attribute".to_owned(),
+        edits: vec![TextEdit { span, replacement: String::new() }],
     })
 }
 
-struct AttributeChecker<'src, 'out> {
-    source: &'src str,
-    out: &'out mut Vec<LintDiagnostic>,
-}
-
-impl AttributeChecker<'_, '_> {
-    fn check_attributes(&mut self, attributes: &[FunctionAttribute]) {
-        for attribute in attributes {
-            let name =
-                &self.source[attribute.name.span.start as usize..attribute.name.span.end as usize];
-            if name != "native" {
-                continue;
-            }
-            // Eat one trailing whitespace byte so deleting the attribute
-            // leaves no doubled separator. The text re-parses either
-            // way, so this is only about tidy output.
-            let mut edit_end = attribute.name.span.end;
-            if matches!(
-                self.source.as_bytes().get(edit_end as usize),
-                Some(b' ' | b'\t' | b'\n' | b'\r')
-            ) {
-                edit_end += 1;
-            }
-            self.out.push(
-                LintDiagnostic::new(
-                    "redundant_native_attribute",
-                    "@native attribute is redundant in a --!native module",
-                    attribute.span,
-                )
-                .with_fix(Fix {
-                    description: "remove the redundant @native attribute".into(),
-                    edits: vec![TextEdit {
-                        span: Span::new(attribute.span.start, edit_end),
-                        replacement: String::new(),
-                    }],
-                }),
-            );
-        }
-    }
-}
-
-impl NodeRule for RedundantNativeAttribute {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset =
-            AstTypesBitset::from_types(&[NodeType::FunctionDecl, NodeType::LocalFunction]);
-        Some(&TYPES)
-    }
-    fn on_statement(&self, stmt: &Statement, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        let attributes = match stmt {
-            Statement::FunctionDecl(decl) => &decl.attributes,
-            Statement::LocalFunction(local) => &local.attributes,
-            _ => return,
-        };
-        // The attribute check comes first because the directive scan
-        // walks the whole comment list. Only functions that carry
-        // attributes pay for it.
-        if attributes.is_empty() || !ctx.semantic.version.is_luau() || !has_native_directive(ctx) {
-            return;
-        }
-        AttributeChecker {
-            source: ctx.source,
-            out,
-        }
-        .check_attributes(attributes);
-    }
+/// Whether a `--!native` hot comment comes before any code. Luau ignores one
+/// placed later.
+fn has_native_directive(context: &LintContext<'_>) -> bool {
+    let block = context.block;
+    let first_code_start = block
+        .stmts
+        .first()
+        .map(Statement::span)
+        .or_else(|| block.last_stmt.as_deref().map(LastStatement::span))
+        .map(|span| span.start);
+    // Comments come in source order, so the scan stops at the first code.
+    context
+        .comments
+        .iter()
+        .take_while(|comment| first_code_start.is_none_or(|start| comment.span.start <= start))
+        .any(|comment| {
+            comment.kind == CommentKind::Line
+                && comment
+                    .span
+                    .text(context.source)
+                    .strip_prefix("--!")
+                    .is_some_and(|body| body.trim_end() == "native")
+        })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&RedundantNativeAttribute, source, LuaVersion::Luau)
-    }
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::{fix_and_reparse, run_rule};
 
-    fn apply(source: &str, diag: &LintDiagnostic) -> String {
-        let fix = diag.fix.as_ref().expect("fix");
-        let edit = &fix.edits[0];
-        let mut out = String::with_capacity(source.len());
-        out.push_str(&source[..edit.span.start as usize]);
-        out.push_str(&edit.replacement);
-        out.push_str(&source[edit.span.end as usize..]);
-        let parse = luck_parser::parse(&out, LuaVersion::Luau);
-        assert!(parse.errors.is_empty(), "reparse: {:?}", parse.errors);
-        out
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        run_rule(&RedundantNativeAttribute, source, LuaVersion::Luau)
     }
 
     #[test]
@@ -152,7 +168,7 @@ mod tests {
         let source = "--!native\n@native function f() end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = apply(source, &diags[0]);
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
         assert_eq!(fixed, "--!native\nfunction f() end");
     }
 
@@ -161,7 +177,7 @@ mod tests {
         let source = "--!native\n@native\nlocal function f() end\nf()";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = apply(source, &diags[0]);
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
         assert_eq!(fixed, "--!native\nlocal function f() end\nf()");
     }
 
@@ -170,7 +186,16 @@ mod tests {
         let source = "--!native\ndo\n@native function f() end\nend";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        apply(source, &diags[0]);
+        fix_and_reparse(source, &diags, LuaVersion::Luau);
+    }
+
+    #[test]
+    fn flags_function_expr_attribute() {
+        let source = "--!native\n@native\nlocal function a() end\nlocal f = @native function() end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
+        assert_eq!(fixed, "--!native\nlocal function a() end\nlocal f = function() end");
     }
 
     #[test]
@@ -193,11 +218,39 @@ mod tests {
 
     #[test]
     fn ignores_non_luau() {
-        let diags = crate::test_support::run_rule(
-            &RedundantNativeAttribute,
-            "--!native\nlocal _x = 1",
-            LuaVersion::Lua54,
-        );
+        let diags =
+            run_rule(&RedundantNativeAttribute, "--!native\nlocal _x = 1", LuaVersion::Lua54);
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_and_fixes_bracketed_attribute() {
+        let source = "--!native\n@[native] function f() end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
+        assert_eq!(
+            fixed, "--!native\nfunction f() end",
+            "the fix should remove the whole attribute"
+        );
+    }
+
+    #[test]
+    fn ignores_native_directive_with_trailing_text() {
+        let diags = run("--!native on\n@native function f() end");
+        assert!(diags.is_empty(), "the compiler ignores `--!native on`: {diags:?}");
+    }
+
+    #[test]
+    fn flags_without_fix_when_attribute_shares_a_list() {
+        let diags = run("--!native\n@[native, deprecated] function f() end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].fix.is_none(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_with_directive_followed_by_trailing_space() {
+        let diags = run("--!native \n@native function f() end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }

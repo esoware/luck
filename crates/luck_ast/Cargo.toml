@@ -1,16 +1,22 @@
 [package]
-name = "luck_ast"
-version.workspace = true
-authors.workspace = true
-categories.workspace = true
-description = "Lua and Luau AST node types, visitors, and transforms"
-edition.workspace = true
-homepage.workspace = true
-keywords.workspace = true
-license.workspace = true
-repository.workspace = true
+name                   = "luck_ast"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "Lua and Luau AST node types, visitors, and transforms"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
 rust-version.workspace = true
 
-[dependencies]
-luck_token.workspace = true
+[lints]
+workspace = true
 
+[dependencies]
+luck_token = { workspace = true }
+stacker    = { workspace = true }
+
+[dev-dependencies]
+rustc-hash = { workspace = true }

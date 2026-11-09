@@ -1,156 +1,78 @@
-//! # luck_ast
+//! # `luck_ast`
 //!
 //! AST node types and traversal infrastructure for Lua/Luau. A [`Block`] holds
 //! [`Statement`]s and an optional last statement; every value position is an
 //! [`Expression`].
 //!
-//! Two traversals share one shape: [`Visitor`](visitor::Visitor) borrows the
-//! tree, [`AstTransform`](transform::AstTransform) consumes and returns it
-//! (`fn(Node) -> Node`, what the minifier's passes use). Override the `visit_*`
-//! or `transform_*` method you care about and call `self.walk_*` to recurse.
+//! Two traversals share one shape: [`Visitor`] borrows the tree, and
+//! [`Transform`] takes each node by value and returns its replacement, as the
+//! minifier's passes do. Override the `visit_*` or `transform_*` method you
+//! care about and call `self.walk_*` to recurse. A manual walk that follows a
+//! chain link, such as a call's callee or a field access's prefix, recurses
+//! through [`ensure_sufficient_stack`] the way `walk_*` does.
 //!
 //! # Usage
 //!
 //! ```
-//! use luck_ast::Expression;
-//! use luck_ast::synth::Synth;
+//! use luck_ast::{Expression, Synth};
 //!
 //! let synth = Synth::new();
 //! let expr = synth.number("42");
 //! assert!(matches!(expr, Expression::Number(_)));
 //! ```
 
-pub mod expr;
-pub mod node;
-pub mod query;
-pub mod shared;
-pub mod span;
-pub mod stmt;
-pub mod synth;
-pub mod transform;
-pub mod types;
-pub mod visitor;
+#![cfg_attr(
+    test,
+    expect(
+        clippy::missing_panics_doc,
+        reason = "a test panics to fail, so a Panics section says nothing"
+    )
+)]
 
-pub use expr::{Expression, Literal};
-pub use shared::*;
-pub use stmt::{LastStatement, Statement};
-pub use types::Type;
+extern crate alloc;
 
+mod expr;
+mod function;
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod layout;
+mod punctuated;
+mod query;
+mod span;
+mod stack;
+mod stmt;
+mod synth;
+mod transform;
+mod types;
+mod visitor;
 
-    #[test]
-    fn ast_enum_sizes() {
-        assert!(
-            std::mem::size_of::<Expression>() <= 64,
-            "Expression enum is {} bytes, should be <= 64",
-            std::mem::size_of::<Expression>()
-        );
-        assert!(
-            std::mem::size_of::<Statement>() <= 64,
-            "Statement enum is {} bytes, should be <= 64",
-            std::mem::size_of::<Statement>()
-        );
-        assert!(
-            std::mem::size_of::<Type>() <= 64,
-            "Type enum is {} bytes, should be <= 64",
-            std::mem::size_of::<Type>()
-        );
-    }
-
-    // Pins the size of every AST node so a field addition that balloons a
-    // node fails loudly with the numbers instead of silently regressing
-    // memory. On mismatch, paste the printed rows back into the table.
-    #[test]
-    #[cfg(target_pointer_width = "64")]
-    fn ast_node_layouts() {
-        macro_rules! check_layouts {
-            ($($node:ty => $expected:expr,)*) => {{
-                let mut mismatches = Vec::new();
-                $(
-                    let actual = std::mem::size_of::<$node>();
-                    if actual != $expected {
-                        mismatches.push(format!(
-                            concat!("        ", stringify!($node), " => {},"),
-                            actual
-                        ));
-                    }
-                )*
-                assert!(
-                    mismatches.is_empty(),
-                    "node sizes changed; update the table:\n{}",
-                    mismatches.join("\n")
-                );
-            }};
-        }
-        check_layouts! {
-            Expression => 40,
-            expr::Var => 40,
-            expr::FunctionCall => 136,
-            expr::FunctionArgs => 40,
-            expr::BinaryOp => 96,
-            expr::UnaryOp => 56,
-            expr::ParenExpression => 48,
-            expr::TableConstructor => 40,
-            expr::IndexExpression => 88,
-            expr::FieldAccess => 88,
-            expr::FunctionDef => 168,
-            expr::IfExpression => 152,
-            expr::ElseIfExprClause => 88,
-            expr::InterpolatedString => 32,
-            expr::InterpSegment => 80,
-            expr::TypeCast => 88,
-            expr::TypeInstantiation => 88,
-            Statement => 16,
-            LastStatement => 16,
-            stmt::Assignment => 72,
-            stmt::DoBlock => 48,
-            stmt::WhileLoop => 88,
-            stmt::RepeatLoop => 88,
-            stmt::IfStatement => 160,
-            stmt::ElseIfClause => 88,
-            stmt::ElseClause => 48,
-            stmt::NumericFor => 248,
-            stmt::GenericFor => 112,
-            stmt::FuncName => 72,
-            stmt::FunctionAttribute => 80,
-            stmt::FunctionDecl => 240,
-            stmt::LocalFunction => 216,
-            stmt::Attribute => 48,
-            stmt::AttributedName => 88,
-            stmt::LocalAssignment => 80,
-            stmt::GotoStatement => 48,
-            stmt::LabelStatement => 48,
-            stmt::ReturnStatement => 40,
-            stmt::CompoundAssignment => 96,
-            stmt::TypeDeclaration => 104,
-            stmt::TypeDeclarationValue => 40,
-            stmt::GlobalDeclaration => 72,
-            stmt::GlobalFunction => 184,
-            stmt::GlobalStar => 56,
-            Type => 40,
-            types::NamedType => 128,
-            types::TypeArgs => 40,
-            types::TypeofType => 48,
-            types::TableType => 40,
-            types::TypeField => 136,
-            types::FunctionType => 120,
-            types::FunctionTypeParam => 88,
-            types::OptionalType => 48,
-            types::UnionType => 48,
-            types::IntersectionType => 48,
-            types::ParenType => 48,
-            types::TypePack => 40,
-            types::VariadicType => 48,
-            types::GenericPackType => 48,
-            types::GenericTypeList => 40,
-            types::GenericTypeParam => 96,
-            FunctionBody => 136,
-            Parameter => 88,
-            VarArgParam => 88,
-            Block => 40,
-            Field => 96,
-        }
-    }
-}
+pub use expr::{
+    BinaryOp, ElseIfExprClause, Expression, Field, FieldAccess, FunctionArgs, FunctionCall,
+    FunctionDef, IfExpression, IndexExpression, InterpolatedString, InterpolatedStringSegment,
+    Literal, ParenthesizedExpression, TableConstructor, TypeCast, TypeInstantiation, UnaryOp, Var,
+};
+pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
+pub use punctuated::Punctuated;
+pub use query::{
+    DottedPath, dotted_path, expr_starts_with_brace, is_multi_value, is_prefix_expr,
+    stmt_starts_with_paren, unwrap_parentheses,
+};
+pub use stack::ensure_sufficient_stack;
+pub use stmt::{
+    Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
+    ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
+    GlobalStar, GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment,
+    LocalFunction, NumericFor, RepeatLoop, ReturnStatement, Statement, TypeDeclaration,
+    TypeDeclarationValue, WhileLoop,
+};
+pub use synth::{
+    FieldSpec, FunctionSignature, InterpolatedStringPart, Synth, SyntheticComment, TypeFieldAccess,
+    TypeFieldSpec, is_valid_identifier, is_valid_identifier_in, sanitize_identifier,
+    sanitize_identifier_in,
+};
+pub use transform::Transform;
+pub use types::{
+    FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
+    IntersectionType, NamedType, OptionalType, ParenthesizedType, TableType, Type, TypeArgs,
+    TypeField, TypePack, TypeofType, UnionType, VariadicType,
+};
+pub use visitor::Visitor;

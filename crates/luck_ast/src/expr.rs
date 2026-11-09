@@ -1,12 +1,16 @@
 use luck_token::{BinOp, CompactString, Span, Token, UnOp};
 
-use crate::shared::{Field, FunctionBody, Punctuated};
-use crate::types::Type;
+use crate::function::{FunctionAttribute, FunctionBody};
+use crate::punctuated::Punctuated;
+use crate::types::{Type, TypeArgs};
 
 /// Fixed-spelling leaves (`nil`, `true`, `false`, `...`) carry only their
-/// span; literal leaves carry a [`Literal`] because the text is the
-/// payload.
+/// span; number and string leaves carry a [`Literal`] with their text.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "each variant is named for its payload, and the syntax tree view prints these names"
+)]
 pub enum Expression {
     Nil(Span),
     False(Span),
@@ -19,20 +23,18 @@ pub enum Expression {
     FunctionDef(Box<FunctionDef>),
     Var(Var),
     FunctionCall(Box<FunctionCall>),
-    Parenthesized(Box<ParenExpression>),
+    Parenthesized(Box<ParenthesizedExpression>),
     TableConstructor(Box<TableConstructor>),
     BinaryOp(Box<BinaryOp>),
     UnaryOp(Box<UnaryOp>),
     IfExpression(Box<IfExpression>),
     InterpolatedString(Box<InterpolatedString>),
     TypeCast(Box<TypeCast>),
-    /// Luau: explicit type-parameter instantiation (`f<<T>>`).
     TypeInstantiation(Box<TypeInstantiation>),
     Error(Span),
 }
 
-/// A literal leaf: the exact source spelling plus its span. The owning
-/// variant implies the token kind, so none is stored.
+/// The owning variant implies the token kind, so none is stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Literal {
     pub text: CompactString,
@@ -46,17 +48,16 @@ pub enum Var {
     FieldAccess(Box<FieldAccess>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct FunctionCall {
     pub span: Span,
     pub callee: Expression,
     pub args: FunctionArgs,
-    /// `:method` name.
     pub method: Option<Token>,
     /// Luau: explicit type arguments between a method name and its call
-    /// arguments (`receiver:method<<T>>()`). Non-method instantiation is
-    /// represented by [`Expression::TypeInstantiation`] instead.
-    pub explicit_type_args: Option<Box<crate::types::TypeArgs>>,
+    /// arguments (`receiver:method<<T>>()`). Non-method instantiation is an
+    /// [`Expression::TypeInstantiation`] instead.
+    pub explicit_type_args: Option<Box<TypeArgs>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,23 +71,23 @@ pub enum FunctionArgs {
     StringLiteral(Literal),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct BinaryOp {
     pub span: Span,
-    pub left: Expression,
+    pub lhs: Expression,
     pub op: BinOp,
-    pub right: Expression,
+    pub rhs: Expression,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct UnaryOp {
     pub span: Span,
     pub op: UnOp,
     pub operand: Expression,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParenExpression {
+#[derive(Eq)]
+pub struct ParenthesizedExpression {
     pub span: Span,
     pub expr: Expression,
 }
@@ -98,29 +99,34 @@ pub struct TableConstructor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Field {
+    Bracketed { span: Span, key: Expression, value: Expression },
+    Named { span: Span, name: Token, value: Expression },
+    Positional { span: Span, value: Expression },
+}
+
+#[derive(Eq)]
 pub struct IndexExpression {
     pub span: Span,
     pub prefix: Expression,
     pub index: Expression,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct FieldAccess {
     pub span: Span,
     pub prefix: Expression,
     pub name: Token,
 }
 
-/// Anonymous function definition: `function(params) body end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionDef {
     pub span: Span,
     /// Luau: `@attr` list preceding `function`. Empty outside Luau.
-    pub attributes: Vec<crate::stmt::FunctionAttribute>,
+    pub attributes: Vec<FunctionAttribute>,
     pub body: FunctionBody,
 }
 
-/// Luau if-expression: `if cond then expr {elseif cond then expr} else expr`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IfExpression {
     pub span: Span,
@@ -130,7 +136,6 @@ pub struct IfExpression {
     pub else_expr: Expression,
 }
 
-/// An `elseif` clause within a Luau if-expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElseIfExprClause {
     pub span: Span,
@@ -138,31 +143,28 @@ pub struct ElseIfExprClause {
     pub expr: Expression,
 }
 
-/// Luau interpolated string: `` `text{expr}text` ``.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterpolatedString {
     pub span: Span,
-    pub segments: Vec<InterpSegment>,
+    pub segments: Vec<InterpolatedStringSegment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InterpSegment {
+pub struct InterpolatedStringSegment {
     pub literal: Token,
     pub expr: Option<Expression>,
 }
 
-/// Luau type cast (`expr :: Type`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct TypeCast {
     pub span: Span,
     pub expr: Expression,
     pub type_annotation: Type,
 }
 
-/// Luau explicit type-parameter instantiation (`expr<<T, U>>`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct TypeInstantiation {
     pub span: Span,
     pub expr: Expression,
-    pub type_args: crate::types::TypeArgs,
+    pub type_args: TypeArgs,
 }

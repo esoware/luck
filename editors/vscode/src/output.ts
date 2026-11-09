@@ -1,49 +1,34 @@
 import * as vscode from "vscode";
+import { setting } from "./settings";
 
-let serverChannel: vscode.LogOutputChannel | undefined;
-let extensionChannel: vscode.LogOutputChannel | undefined;
-let traceChannel: vscode.LogOutputChannel | undefined;
+const CHANNEL_NAMES = {
+	server: "Luck Language Server",
+	extension: "Luck Extension",
+	trace: "Luck LSP Trace",
+} as const satisfies Record<string, string>;
 
-export function serverOutput(): vscode.LogOutputChannel {
-	if (!serverChannel) {
-		serverChannel = vscode.window.createOutputChannel("Luck Language Server", {
-			log: true,
-		});
+type ChannelId = keyof typeof CHANNEL_NAMES;
+
+const channels = new Map<ChannelId, vscode.LogOutputChannel>();
+
+export function outputChannel(id: ChannelId): vscode.LogOutputChannel {
+	let channel = channels.get(id);
+	if (!channel) {
+		channel = vscode.window.createOutputChannel(CHANNEL_NAMES[id], { log: true });
+		channels.set(id, channel);
 	}
-	return serverChannel;
-}
-
-export function extensionOutput(): vscode.LogOutputChannel {
-	if (!extensionChannel) {
-		extensionChannel = vscode.window.createOutputChannel("Luck Extension", {
-			log: true,
-		});
-	}
-	return extensionChannel;
-}
-
-export function traceOutput(): vscode.LogOutputChannel {
-	if (!traceChannel) {
-		traceChannel = vscode.window.createOutputChannel("Luck LSP Trace", {
-			log: true,
-		});
-	}
-	return traceChannel;
+	return channel;
 }
 
 export function logExtension(message: string): void {
-	const config = vscode.workspace.getConfiguration("luck");
-	if (!config.get<boolean>("trace.extension", false)) {
-		return;
+	if (setting("trace.extension")) {
+		outputChannel("extension").info(message);
 	}
-	extensionOutput().info(message);
 }
 
 export function disposeChannels(): void {
-	serverChannel?.dispose();
-	extensionChannel?.dispose();
-	traceChannel?.dispose();
-	serverChannel = undefined;
-	extensionChannel = undefined;
-	traceChannel = undefined;
+	for (const channel of channels.values()) {
+		channel.dispose();
+	}
+	channels.clear();
 }

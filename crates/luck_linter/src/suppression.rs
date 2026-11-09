@@ -1,405 +1,335 @@
-use luck_token::{Comment, Span};
+use luck_token::{Comment, LuaVersion, Span, has_line_break, index_to_offset};
 
 use crate::diagnostic::{LintDiagnostic, Severity};
+use crate::nodes::{NodeKind, Nodes};
 
-/// Suppression verb specified by a `-- luck:` directive.
-///
-/// `Allow` filters diagnostics out, `Deny` forces them to `Error`, and
-/// `Warn` forces them to `Warning`. The same verb-set Selene uses.
+/// `Allow` drops diagnostics, `Deny` makes them errors, and `Warn` makes them
+/// warnings. Selene uses the same three.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SuppressionKind {
+pub(crate) enum Verb {
     Allow,
     Deny,
     Warn,
 }
 
-/// One resolved suppression directive, covering the `[start, end)` byte
-/// range for `rule` (or the `*` wildcard) with the given verb.
-#[derive(Debug, Clone)]
-pub struct Directive {
-    pub rule: String,
-    pub kind: SuppressionKind,
-    pub start: u32,
-    pub end: u32,
+/// What a directive covers, from its prefix and the word after its `)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Extent {
+    /// `-- #luck:`, which covers the whole file and ignores any `start` or
+    /// `end`.
+    File,
+    /// No word: the statement the comment trails on its line, or else the
+    /// next one.
+    Statement,
+    /// `start`: up to the matching `end`, or the end of the file.
+    RegionStart,
+    /// `end`: closes the latest open region with the same rule and verb.
+    RegionEnd,
 }
 
-/// One parsed comment that referenced suppression directives. Used by the
-/// `invalid_lint_filter` meta-rule to point diagnostics back at the comment.
-#[derive(Debug, Clone)]
-pub struct DirectiveSite {
-    pub rule: String,
-    pub kind: SuppressionKind,
-    /// Span of the rule-name token inside the comment.
-    pub name_span: Span,
-    /// A file-level prefix (`-- #luck:`) has no target statement.
-    /// Invalid filters still get flagged, but they do not count against
-    /// statement-level region tracking.
-    pub is_file_level: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DirectiveRule<'source> {
+    /// `*`, which matches every rule.
+    Wildcard,
+    /// A rule name as written, which may not name a registered rule.
+    Named(&'source str),
 }
 
-/// Lint suppression parsed from a file's comments.
-#[derive(Default)]
-pub struct Suppression {
-    directives: Vec<Directive>,
-    /// Every rule-name reference in the file, including file-level ones
-    /// and any that produced no directive. The meta-rule consumes this.
-    sites: Vec<DirectiveSite>,
-}
-
-impl Suppression {
-    /// Parse `-- luck:` and `-- #luck:` directives.
-    ///
-    /// `statement_spans` is a sorted list of `(start, end)` byte offsets
-    /// for every statement in the file, nested ones included. It resolves
-    /// the end of single-statement (non-region) suppressions.
-    pub fn from_comments(
-        comments: &[Comment],
-        source: &str,
-        statement_spans: &[(u32, u32)],
-    ) -> Self {
-        let mut directives = Vec::new();
-        let mut sites = Vec::new();
-        // (rule, kind, start_byte). One stack per (rule, kind) pair so
-        // `allow(x) start` and `deny(x) start` don't collide.
-        let mut region_starts: Vec<(String, SuppressionKind, u32)> = Vec::new();
-        let source_end = source.len() as u32;
-
-        for comment in comments {
-            let text = &source[comment.span.start as usize..comment.span.end as usize];
-
-            let Some(parsed) = parse_directive(text, comment.span.start) else {
-                continue;
-            };
-
-            for entry in &parsed.entries {
-                sites.push(DirectiveSite {
-                    rule: entry.rule.clone(),
-                    kind: parsed.kind,
-                    name_span: entry.name_span,
-                    is_file_level: parsed.is_file_level,
-                });
-            }
-
-            // File-level directives ignore region and single-statement
-            // semantics and cover the entire file.
-            if parsed.is_file_level {
-                for entry in parsed.entries {
-                    directives.push(Directive {
-                        rule: entry.rule,
-                        kind: parsed.kind,
-                        start: 0,
-                        end: source_end,
-                    });
-                }
-                continue;
-            }
-
-            match parsed.modifier {
-                Modifier::Start => {
-                    for entry in parsed.entries {
-                        region_starts.push((entry.rule, parsed.kind, comment.span.end));
-                    }
-                }
-                Modifier::End => {
-                    for entry in &parsed.entries {
-                        if let Some(position) = region_starts.iter().rposition(|(name, kind, _)| {
-                            name == &entry.rule && *kind == parsed.kind
-                        }) {
-                            let (rule, kind, start) = region_starts.remove(position);
-                            directives.push(Directive {
-                                rule,
-                                kind,
-                                start,
-                                end: comment.span.start,
-                            });
-                        }
-                    }
-                }
-                Modifier::None => {
-                    let comment_end = comment.span.end;
-                    // A trailing directive on a statement's own line covers
-                    // THAT statement (`local x = 1 -- luck: allow(...)`),
-                    // matching Luacheck/ESLint same-line semantics.
-                    // Otherwise it covers the next statement.
-                    let same_line_stmt = statement_spans
-                        .iter()
-                        .filter(|(_start, end)| *end <= comment.span.start)
-                        .max_by_key(|(_start, end)| *end)
-                        .filter(|(_start, end)| {
-                            !source[*end as usize..comment.span.start as usize].contains('\n')
-                        })
-                        .copied();
-                    let (range_start, range_end) = match same_line_stmt {
-                        Some((stmt_start, stmt_end)) => (stmt_start, stmt_end),
-                        None => {
-                            let next_end = statement_spans
-                                .iter()
-                                .find(|(start, _end)| *start >= comment_end)
-                                .map(|(_start, end)| *end)
-                                .unwrap_or(source_end);
-                            (comment_end, next_end)
-                        }
-                    };
-                    for entry in parsed.entries {
-                        directives.push(Directive {
-                            rule: entry.rule,
-                            kind: parsed.kind,
-                            start: range_start,
-                            end: range_end,
-                        });
-                    }
-                }
-            }
+impl DirectiveRule<'_> {
+    fn matches(self, rule: &str) -> bool {
+        match self {
+            Self::Wildcard => true,
+            Self::Named(name) => name == rule,
         }
-
-        // Unclosed regions extend to the end of the file, which matches
-        // the intent of "I forgot the end" better than dropping them.
-        for (rule, kind, start) in region_starts {
-            directives.push(Directive {
-                rule,
-                kind,
-                start,
-                end: source_end,
-            });
-        }
-
-        Suppression { directives, sites }
-    }
-
-    /// All directives in source order. Exposed for the meta-rule.
-    pub fn directives(&self) -> &[Directive] {
-        &self.directives
-    }
-
-    /// Every rule-name reference parsed from comments (allow/deny/warn,
-    /// statement / region / file). Used by `invalid_lint_filter`.
-    pub fn sites(&self) -> &[DirectiveSite] {
-        &self.sites
-    }
-
-    /// Apply suppression to diagnostics. Drops those covered by `allow`
-    /// and adjusts severity for those covered by `deny` or `warn`.
-    pub fn apply(&self, diagnostics: &mut Vec<LintDiagnostic>) {
-        diagnostics.retain_mut(|diag| {
-            // The narrowest covering directive wins, so a statement-level
-            // marker beats a region and a region beats file-level, no
-            // matter what order they were parsed in. Settling collisions
-            // by parse order would let an unclosed region, which is
-            // appended last, override every narrower directive.
-            let winner = self
-                .directives
-                .iter()
-                .filter(|directive| covers(directive, diag))
-                .min_by_key(|directive| directive.end - directive.start);
-            match winner.map(|directive| directive.kind) {
-                Some(SuppressionKind::Allow) => false,
-                Some(SuppressionKind::Deny) => {
-                    diag.severity = Severity::Error;
-                    true
-                }
-                Some(SuppressionKind::Warn) => {
-                    diag.severity = Severity::Warning;
-                    true
-                }
-                None => true,
-            }
-        });
     }
 }
 
-fn covers(directive: &Directive, diag: &LintDiagnostic) -> bool {
-    (directive.rule == "*" || directive.rule == diag.rule)
-        && diag.span.start >= directive.start
-        && diag.span.start < directive.end
+#[derive(Debug)]
+pub(crate) struct DirectiveComment<'source> {
+    pub verb: Verb,
+    /// `None` when the word after `)` is anything else, which disables the
+    /// directive.
+    pub extent: Option<Extent>,
+    pub rules: Vec<(DirectiveRule<'source>, Span)>,
 }
 
-/// Parsed directive header, before resolution to a span.
-struct Parsed {
-    kind: SuppressionKind,
-    modifier: Modifier,
-    is_file_level: bool,
-    entries: Vec<ParsedEntry>,
-}
+/// `comment_start` is the comment's offset in the source, so name spans come
+/// out absolute.
+pub(crate) fn parse_directive(text: &str, comment_start: u32) -> Option<DirectiveComment<'_>> {
+    // Strip the dashes and a block comment's `[[` or `[=[`.
+    let body = text.trim_start_matches('-').trim_start_matches(['[', '=']).trim_start();
 
-struct ParsedEntry {
-    rule: String,
-    /// Absolute byte span of the rule-name token inside the source.
-    name_span: Span,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Modifier {
-    None,
-    Start,
-    End,
-}
-
-/// Parse `-- luck: <verb>(rule, ...)` or `-- #luck: <verb>(rule, ...)`.
-///
-/// `comment_base` is the absolute byte offset of the comment's first
-/// character, which the name spans for the meta-rule are measured from.
-fn parse_directive(text: &str, comment_base: u32) -> Option<Parsed> {
-    // Strip leading dashes (line comment) or block-comment delimiters.
-    // The comment kind does not matter here, only the `luck:` or
-    // `#luck:` marker inside it.
-    let trimmed = text.trim_start_matches('-');
-    let trimmed = trimmed.trim_start_matches('[').trim_start_matches('[');
-    let body = trimmed.trim_start();
-
-    let leading_offset = (text.len() - body.len()) as u32;
     let (after_prefix, is_file_level) = if let Some(rest) = body.strip_prefix("#luck:") {
         (rest, true)
     } else {
         (body.strip_prefix("luck:")?, false)
     };
 
-    let prefix_len = (body.len() - after_prefix.len()) as u32;
-    let after_prefix_trimmed = after_prefix.trim_start();
-    let verb_offset =
-        leading_offset + prefix_len + (after_prefix.len() - after_prefix_trimmed.len()) as u32;
+    let verb_text = after_prefix.trim_start();
+    let (verb, after_verb) = [("allow", Verb::Allow), ("deny", Verb::Deny), ("warn", Verb::Warn)]
+        .into_iter()
+        .find_map(|(word, verb)| Some((verb, verb_text.strip_prefix(word)?)))?;
 
-    let kind = after_prefix_trimmed
-        .strip_prefix("allow")
-        .map(|rest| (SuppressionKind::Allow, rest, "allow"))
-        .or_else(|| {
-            after_prefix_trimmed
-                .strip_prefix("deny")
-                .map(|rest| (SuppressionKind::Deny, rest, "deny"))
-        })
-        .or_else(|| {
-            after_prefix_trimmed
-                .strip_prefix("warn")
-                .map(|rest| (SuppressionKind::Warn, rest, "warn"))
-        })?;
+    let inside = after_verb.trim_start().strip_prefix('(')?;
+    let (name_list, after_close) = inside.split_once(')')?;
 
-    let (verb_kind, after_verb, verb_str) = kind;
-    // Measure the gap BEFORE trimming. Trimming into the same binding
-    // first would zero the whitespace term and skew the name spans in
-    // `allow (rule)`.
-    let after_verb_trimmed = after_verb.trim_start();
-    let after_verb_offset =
-        verb_offset + verb_str.len() as u32 + (after_verb.len() - after_verb_trimmed.len()) as u32;
-    let after_verb = after_verb_trimmed;
-
-    let inside = after_verb.strip_prefix('(')?;
-    let close_paren = inside.find(')')?;
-    let names_str = &inside[..close_paren];
-    let after_close = inside[close_paren + 1..].trim();
-
-    // Parenthesis sits one byte before the name list.
-    let names_base = after_verb_offset + 1;
-
-    let mut entries = Vec::new();
-    let mut cursor = 0usize;
-    for raw in names_str.split(',') {
-        let raw_len = raw.len();
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            // `allow()` is a syntax error, left for validation to note
-            // elsewhere. Returning None would silently drop the comment.
-            cursor += raw_len + 1;
-            continue;
+    let mut rules = Vec::new();
+    // Every step trims from the front, so `inside` is a tail of `text` and
+    // its length alone locates it in the comment.
+    let mut entry_start = text.len().saturating_sub(inside.len());
+    for entry in name_list.split(',') {
+        let name = entry.trim();
+        // Skip empty names like the one in `allow(a,)`. A list with no names
+        // at all rejects the directive below.
+        if !name.is_empty() {
+            let leading_whitespace = entry.len().saturating_sub(entry.trim_start().len());
+            let name_start = comment_start
+                .saturating_add(index_to_offset(entry_start.saturating_add(leading_whitespace)));
+            let name_end = name_start.saturating_add(index_to_offset(name.len()));
+            let rule =
+                if name == "*" { DirectiveRule::Wildcard } else { DirectiveRule::Named(name) };
+            rules.push((rule, Span::new(name_start, name_end)));
         }
-        let leading_ws = raw.find(|c: char| !c.is_whitespace()).unwrap_or(0);
-        let name_start = comment_base + names_base + cursor as u32 + leading_ws as u32;
-        let name_end = name_start + trimmed.len() as u32;
-        entries.push(ParsedEntry {
-            rule: trimmed.to_string(),
-            name_span: Span::new(name_start, name_end),
-        });
-        cursor += raw_len + 1; // +1 for the comma we split on
+        // Step over the entry and the comma `split` consumed.
+        entry_start = entry_start.saturating_add(entry.len()).saturating_add(1);
     }
-    if entries.is_empty() {
+    if rules.is_empty() {
         return None;
     }
 
-    let modifier = match after_close {
-        "start" => Modifier::Start,
-        "end" => Modifier::End,
-        "" => Modifier::None,
-        // Block comments may have a trailing `]]`. Strip it. Anything
-        // else (`strat`, `ned`, stray words) rejects the whole
-        // directive, because silently downgrading a typo'd region marker
-        // to statement-level would change what gets suppressed with no
-        // signal to the user.
-        other => {
-            let stripped = other.trim_end_matches(']').trim();
-            match stripped {
-                "start" => Modifier::Start,
-                "end" => Modifier::End,
-                "" => Modifier::None,
-                _ => return None,
-            }
-        }
+    // A block comment leaves a trailing `]]` or `]=]`. Any other word, like a
+    // misspelled `start`, disables the whole directive instead of quietly
+    // turning a region into a single-statement directive.
+    let extent = match (after_close.trim().trim_end_matches([']', '=']).trim(), is_file_level) {
+        ("" | "start" | "end", true) => Some(Extent::File),
+        ("", false) => Some(Extent::Statement),
+        ("start", false) => Some(Extent::RegionStart),
+        ("end", false) => Some(Extent::RegionEnd),
+        _ => None,
     };
 
-    Some(Parsed {
-        kind: verb_kind,
-        modifier,
-        is_file_level,
-        entries,
-    })
+    Some(DirectiveComment { verb, extent, rules })
+}
+
+#[derive(Debug)]
+struct Directive<'source> {
+    rule: DirectiveRule<'source>,
+    verb: Verb,
+    range: Span,
+}
+
+impl Directive<'_> {
+    fn covers(&self, diag: &LintDiagnostic) -> bool {
+        self.rule.matches(diag.rule)
+            && diag.span.start >= self.range.start
+            && diag.span.start < self.range.end
+    }
+}
+
+pub(crate) fn apply(
+    diags: &mut Vec<LintDiagnostic>,
+    comments: &[Comment],
+    source: &str,
+    nodes: &Nodes<'_>,
+    version: LuaVersion,
+) {
+    apply_directives(&resolve(comments, source, nodes, version), diags);
+}
+
+/// Regions appear where they close, and unclosed ones come last.
+fn resolve<'source>(
+    comments: &[Comment],
+    source: &'source str,
+    nodes: &Nodes<'_>,
+    version: LuaVersion,
+) -> Vec<Directive<'source>> {
+    let mut directives = Vec::new();
+    // Open regions as (rule, verb, start). An `end` closes the latest one
+    // with the same rule and verb, so `allow(x) start` and
+    // `deny(x) start` don't collide.
+    let mut open_regions: Vec<(DirectiveRule<'_>, Verb, u32)> = Vec::new();
+    // Built on first use, since most files have no statement directive.
+    let mut sorted_spans: Option<Vec<Span>> = None;
+    let source_end = index_to_offset(source.len());
+
+    for comment in comments {
+        let Some(DirectiveComment { verb, extent: Some(extent), rules }) =
+            parse_directive(comment.span.text(source), comment.span.start)
+        else {
+            continue;
+        };
+
+        match extent {
+            Extent::File => {
+                let range = Span::new(0, source_end);
+                directives.extend(rules.iter().map(|&(rule, _)| Directive { rule, verb, range }));
+            }
+            Extent::Statement => {
+                let stmt_spans = sorted_spans.get_or_insert_with(|| sorted_stmt_spans(nodes));
+                let range = stmt_range(comment.span, stmt_spans, source, source_end, version);
+                directives.extend(rules.iter().map(|&(rule, _)| Directive { rule, verb, range }));
+            }
+            Extent::RegionStart => {
+                open_regions.extend(rules.iter().map(|&(rule, _)| (rule, verb, comment.span.end)));
+            }
+            Extent::RegionEnd => {
+                for &(rule, _) in &rules {
+                    if let Some(position) =
+                        open_regions.iter().rposition(|&(open_rule, open_verb, _)| {
+                            open_rule == rule && open_verb == verb
+                        })
+                    {
+                        let (_, _, start) = open_regions.remove(position);
+                        directives.push(Directive {
+                            rule,
+                            verb,
+                            range: Span::new(start, comment.span.start),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // A region with no `end` runs to the end of the file.
+    directives.extend(open_regions.into_iter().map(|(rule, verb, start)| Directive {
+        rule,
+        verb,
+        range: Span::new(start, source_end),
+    }));
+    directives
+}
+
+fn sorted_stmt_spans(nodes: &Nodes<'_>) -> Vec<Span> {
+    let mut stmt_spans: Vec<Span> = nodes
+        .as_slice()
+        .iter()
+        .filter_map(|node| match node.kind {
+            NodeKind::Statement(stmt) => Some(stmt.span()),
+            NodeKind::LastStatement(last_stmt) => Some(last_stmt.span()),
+            NodeKind::Expression(_) | NodeKind::Table(_) => None,
+        })
+        .collect();
+    stmt_spans.sort_unstable_by_key(|span| span.start);
+    stmt_spans
+}
+
+/// A directive trailing a statement on the same line
+/// (`local x = 1 -- luck: allow(...)`) covers that statement. Otherwise it
+/// covers the next one.
+fn stmt_range(
+    comment_span: Span,
+    stmt_spans: &[Span],
+    source: &str,
+    source_end: u32,
+    version: LuaVersion,
+) -> Span {
+    let trailed_span = stmt_spans
+        .iter()
+        .filter(|stmt_span| stmt_span.end <= comment_span.start)
+        .max_by_key(|stmt_span| stmt_span.end)
+        .filter(|stmt_span| {
+            !has_line_break(Span::new(stmt_span.end, comment_span.start).text(source), version)
+        });
+    if let Some(&stmt_span) = trailed_span {
+        return stmt_span;
+    }
+    let next_end = stmt_spans
+        .iter()
+        .find(|stmt_span| stmt_span.start >= comment_span.end)
+        .map_or(source_end, |stmt_span| stmt_span.end);
+    Span::new(comment_span.end, next_end)
+}
+
+fn apply_directives(directives: &[Directive<'_>], diags: &mut Vec<LintDiagnostic>) {
+    diags.retain_mut(|diag| {
+        // The narrowest covering directive wins, so a statement-level one
+        // beats a region and a region beats the whole file. Parse order
+        // would let an unclosed region, appended last, override them all.
+        let winner = directives
+            .iter()
+            .filter(|directive| directive.covers(diag))
+            .min_by_key(|directive| directive.range.len());
+        match winner.map(|directive| directive.verb) {
+            Some(Verb::Allow) => false,
+            Some(Verb::Deny) => {
+                diag.severity = Severity::Error;
+                true
+            }
+            Some(Verb::Warn) => {
+                diag.severity = Severity::Warning;
+                true
+            }
+            None => true,
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostic::{Category, LintDiagnostic};
-    use luck_token::Span;
+    use crate::fixtures::diagnostic;
 
-    fn diag(rule: &'static str, start: u32, end: u32) -> LintDiagnostic {
-        LintDiagnostic {
-            rule,
-            category: Category::Correctness,
-            severity: Severity::Warning,
-            message: "test".into(),
-            span: Span::new(start, end),
-            help: None,
-            fix: None,
-        }
+    fn directive(rule: DirectiveRule<'_>, verb: Verb) -> Directive<'_> {
+        Directive { rule, verb, range: Span::new(0, 100) }
     }
 
     #[test]
     fn parse_allow_single() {
         let parsed = parse_directive("-- luck: allow(foo)", 0).expect("parse");
-        assert_eq!(parsed.kind, SuppressionKind::Allow);
-        assert!(matches!(parsed.modifier, Modifier::None));
-        assert_eq!(parsed.entries.len(), 1);
-        assert_eq!(parsed.entries[0].rule, "foo");
+        assert_eq!(parsed.verb, Verb::Allow);
+        assert_eq!(parsed.extent, Some(Extent::Statement));
+        assert_eq!(parsed.rules.len(), 1);
+        assert_eq!(parsed.rules[0].0, DirectiveRule::Named("foo"));
     }
 
     #[test]
     fn parse_deny_region() {
         let parsed = parse_directive("-- luck: deny(foo) start", 0).expect("parse");
-        assert_eq!(parsed.kind, SuppressionKind::Deny);
-        assert!(matches!(parsed.modifier, Modifier::Start));
+        assert_eq!(parsed.verb, Verb::Deny);
+        assert_eq!(parsed.extent, Some(Extent::RegionStart));
     }
 
     #[test]
     fn parse_warn_multi() {
         let parsed = parse_directive("-- luck: warn(a, b, c)", 0).expect("parse");
-        assert_eq!(parsed.kind, SuppressionKind::Warn);
-        assert_eq!(parsed.entries.len(), 3);
-        assert_eq!(parsed.entries[0].rule, "a");
-        assert_eq!(parsed.entries[1].rule, "b");
-        assert_eq!(parsed.entries[2].rule, "c");
+        assert_eq!(parsed.verb, Verb::Warn);
+        let rules: Vec<DirectiveRule<'_>> = parsed.rules.iter().map(|&(rule, _)| rule).collect();
+        assert_eq!(
+            rules,
+            [DirectiveRule::Named("a"), DirectiveRule::Named("b"), DirectiveRule::Named("c")]
+        );
     }
 
     #[test]
     fn parse_file_level() {
         let parsed = parse_directive("-- #luck: allow(foo)", 0).expect("parse");
-        assert!(parsed.is_file_level);
-        assert_eq!(parsed.entries[0].rule, "foo");
+        assert_eq!(parsed.extent, Some(Extent::File));
+        assert_eq!(parsed.rules[0].0, DirectiveRule::Named("foo"));
+        let with_start = parse_directive("-- #luck: allow(foo) start", 0).expect("parse");
+        assert_eq!(with_start.extent, Some(Extent::File));
     }
 
     #[test]
-    fn name_span_points_at_token() {
-        // -- luck: allow(foo)
-        // 0123456789012345678
-        let parsed = parse_directive("-- luck: allow(foo)", 0).expect("parse");
-        let span = parsed.entries[0].name_span;
-        assert_eq!(span.start, 15);
-        assert_eq!(span.end, 18);
+    fn parse_block_comment_ignores_closing_brackets() {
+        let parsed = parse_directive("--[[ luck: allow(foo) end ]]", 0).expect("parse");
+        assert_eq!(parsed.extent, Some(Extent::RegionEnd));
+    }
+
+    #[test]
+    fn parse_leveled_block_comment_ignores_its_brackets() {
+        let parsed = parse_directive("--[==[ luck: allow(foo) start ]==]", 0).expect("parse");
+        assert_eq!(parsed.extent, Some(Extent::RegionStart));
+        assert_eq!(parsed.rules[0].0, DirectiveRule::Named("foo"));
+    }
+
+    #[test]
+    fn name_spans_point_at_each_name() {
+        // -- luck: allow(foo, bar)
+        // 012345678901234567890123, shifted by the comment's start of 10
+        let parsed = parse_directive("-- luck: allow(foo, bar)", 10).expect("parse");
+        let spans: Vec<Span> = parsed.rules.iter().map(|&(_, span)| span).collect();
+        assert_eq!(spans, [Span::new(25, 28), Span::new(30, 33)]);
     }
 
     #[test]
@@ -408,70 +338,48 @@ mod tests {
     }
 
     #[test]
-    fn covers_allow_filters() {
-        let supp = Suppression {
-            directives: vec![Directive {
-                rule: "x".into(),
-                kind: SuppressionKind::Allow,
-                start: 0,
-                end: 100,
-            }],
-            sites: Vec::new(),
-        };
-        let mut diags = vec![diag("x", 10, 20)];
-        supp.apply(&mut diags);
-        assert!(diags.is_empty());
+    fn plain_comment_rejected() {
+        assert!(parse_directive("-- just a comment", 0).is_none());
     }
 
     #[test]
-    fn covers_deny_escalates_severity() {
-        let supp = Suppression {
-            directives: vec![Directive {
-                rule: "x".into(),
-                kind: SuppressionKind::Deny,
-                start: 0,
-                end: 100,
-            }],
-            sites: Vec::new(),
-        };
-        let mut diags = vec![diag("x", 10, 20)];
-        supp.apply(&mut diags);
+    fn misspelled_extent_disables_directive_but_keeps_names() {
+        // `invalid_lint_filter` still checks the names of a disabled
+        // directive.
+        let parsed = parse_directive("-- luck: allow(foo) strat", 0).expect("parse");
+        assert_eq!(parsed.extent, None);
+        assert_eq!(parsed.rules[0].0, DirectiveRule::Named("foo"));
+    }
+
+    #[test]
+    fn allow_drops_covered_diag() {
+        let mut diags = vec![diagnostic("x", Span::new(10, 20))];
+        apply_directives(&[directive(DirectiveRule::Named("x"), Verb::Allow)], &mut diags);
+        assert_eq!(diags, Vec::<LintDiagnostic>::new());
+    }
+
+    #[test]
+    fn deny_makes_covered_diag_an_error() {
+        let mut diags = vec![diagnostic("x", Span::new(10, 20))];
+        apply_directives(&[directive(DirectiveRule::Named("x"), Verb::Deny)], &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Severity::Error);
     }
 
     #[test]
-    fn covers_warn_downgrades_severity() {
-        let mut d = diag("x", 10, 20);
-        d.severity = Severity::Error;
-        let supp = Suppression {
-            directives: vec![Directive {
-                rule: "x".into(),
-                kind: SuppressionKind::Warn,
-                start: 0,
-                end: 100,
-            }],
-            sites: Vec::new(),
-        };
-        let mut diags = vec![d];
-        supp.apply(&mut diags);
+    fn warn_makes_covered_diag_a_warning() {
+        let mut diag = diagnostic("x", Span::new(10, 20));
+        diag.severity = Severity::Error;
+        let mut diags = vec![diag];
+        apply_directives(&[directive(DirectiveRule::Named("x"), Verb::Warn)], &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Severity::Warning);
     }
 
     #[test]
     fn wildcard_matches_any_rule() {
-        let supp = Suppression {
-            directives: vec![Directive {
-                rule: "*".into(),
-                kind: SuppressionKind::Allow,
-                start: 0,
-                end: 100,
-            }],
-            sites: Vec::new(),
-        };
-        let mut diags = vec![diag("anything", 10, 20)];
-        supp.apply(&mut diags);
-        assert!(diags.is_empty());
+        let mut diags = vec![diagnostic("anything", Span::new(10, 20))];
+        apply_directives(&[directive(DirectiveRule::Wildcard, Verb::Allow)], &mut diags);
+        assert_eq!(diags, Vec::<LintDiagnostic>::new());
     }
 }

@@ -1,96 +1,82 @@
-//! `luck init` - scaffold a fresh `luck.json` and `src/main.{lua,luau}`.
+use std::fs;
+use std::path::Path;
 
-use crate::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE};
 use clap::Args;
-use luck_core::types::LuaTarget;
-use std::path::PathBuf;
-use std::process::ExitCode;
+use luck_core::LuaTarget;
+
+use crate::exit::{Exit, operation_error};
+use crate::verbosity::Verbosity;
 
 #[derive(Args)]
 pub(crate) struct InitArgs {
-    /// Lua target [default: Lua54]
+    /// Lua target [default: Lua54].
     #[arg(short = 't', long = "target", value_name = "TARGET")]
-    target: Option<String>,
+    target: Option<LuaTarget>,
 }
 
 impl InitArgs {
-    pub(crate) fn run(self) -> ExitCode {
-        let target: LuaTarget = match self.target.as_deref() {
-            Some(target) => match target.parse() {
-                Ok(target) => target,
-                Err(error) => {
-                    eprintln!("Error: {error}");
-                    return ExitCode::from(EXIT_USAGE);
-                }
-            },
-            None => LuaTarget::Lua54,
-        };
+    /// # Errors
+    ///
+    /// Reports the failure and returns [`Exit::Failure`] when `luck.json`
+    /// exists or a scaffold file can't be written.
+    pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
+        let target = self.target.unwrap_or(LuaTarget::Lua54);
 
-        let config_path = PathBuf::from("luck.json");
+        let config_path = Path::new("luck.json");
         if config_path.exists() {
-            eprintln!("Error: luck.json already exists");
-            return ExitCode::from(EXIT_FAILURE);
+            return Err(operation_error("`luck.json` already exists"));
         }
 
-        // The scaffolded entry file and search paths follow the chosen target's
-        // family; `.luau` for any Luau dialect, `.lua` otherwise.
-        let ext = if target.is_luau() { "luau" } else { "lua" };
-        let content = init_config_content(target);
+        let source_directory = Path::new("src");
+        fs::create_dir_all(source_directory)
+            .map_err(|e| operation_error(format!("cannot create `src` directory: {e}")))?;
 
-        if let Err(error) = std::fs::write(&config_path, &content) {
-            eprintln!("Error writing luck.json: {error}");
-            return ExitCode::from(EXIT_FAILURE);
+        let extension = entry_extension(target);
+        let entry_file = source_directory.join(format!("main.{extension}"));
+        if !entry_file.exists() {
+            fs::write(&entry_file, "print(\"hello world\")\n").map_err(|e| {
+                operation_error(format!("cannot write `{}`: {e}", entry_file.display()))
+            })?;
         }
 
-        let src_dir = PathBuf::from("src");
-        if !src_dir.exists()
-            && let Err(error) = std::fs::create_dir_all(&src_dir)
-        {
-            eprintln!("Error creating src directory: {error}");
-            return ExitCode::from(EXIT_FAILURE);
-        }
+        // Last, because an existing `luck.json` is what blocks another `init`.
+        fs::write(config_path, init_config_content(target))
+            .map_err(|e| operation_error(format!("cannot write `luck.json`: {e}")))?;
 
-        let entry_file = src_dir.join(format!("main.{ext}"));
-        if !entry_file.exists()
-            && let Err(error) = std::fs::write(&entry_file, "print(\"hello world\")\n")
-        {
-            eprintln!("Error writing {}: {error}", entry_file.display());
-            return ExitCode::from(EXIT_FAILURE);
+        if verbosity != Verbosity::Quiet {
+            eprintln!("Created luck.json and src/main.{extension}");
         }
-
-        eprintln!("Created luck.json and src/main.{ext}");
-        ExitCode::from(EXIT_SUCCESS)
+        Ok(())
     }
 }
 
-/// Build the scaffolded `luck.json` contents for a fresh project.
-///
-/// The config model is per-extension: `.lua` files use the `lua` axis,
-/// `.luau` files use the `luau` axis. A complete scaffold sets both. The
-/// chosen target overrides its own axis (lowercased canonical, e.g. `lua53`
-/// or `roblox`); the other axis keeps its default (`lua54` / `luau`). The
-/// `entry` and `search_paths` follow the chosen target's family.
-fn init_config_content(target: LuaTarget) -> String {
-    let mut lua_value = "lua54".to_string();
-    let mut luau_value = "luau".to_string();
-    if target.is_luau() {
-        luau_value = target.to_string().to_lowercase();
-    } else {
-        lua_value = target.to_string().to_lowercase();
-    }
+const fn entry_extension(target: LuaTarget) -> &'static str {
+    if target.lua_version().is_luau() { "luau" } else { "lua" }
+}
 
-    let ext = if target.is_luau() { "luau" } else { "lua" };
-    let search_paths_line = if target.is_luau() {
+/// Both the `lua` and `luau` keys are set.
+///
+/// The chosen target fills its own key (lowercased, e.g. `lua53` or `roblox`)
+/// and the other keeps its default (`lua54` or `luau`). A Luau target gets a
+/// `.luau` entry and no `search_paths`.
+fn init_config_content(target: LuaTarget) -> String {
+    let target_name = target.to_string().to_lowercase();
+    let is_luau = target.lua_version().is_luau();
+    let (axis_lua, axis_luau) =
+        if is_luau { ("lua54", target_name.as_str()) } else { (target_name.as_str(), "luau") };
+
+    let extension = entry_extension(target);
+    let search_paths_line = if is_luau {
         String::new()
     } else {
-        format!("\n    \"search_paths\": [\"src/?.{ext}\", \"src/?/init.{ext}\"],")
+        format!("\n    \"search_paths\": [\"src/?.{extension}\", \"src/?/init.{extension}\"],")
     };
 
     format!(
         r#"{{
-    "lua": "{lua_value}",
-    "luau": "{luau_value}",
-    "entry": "src/main.{ext}",
+    "lua": "{axis_lua}",
+    "luau": "{axis_luau}",
+    "entry": "src/main.{extension}",
     "output_dir": "dist",{search_paths_line}
     "minify": false,
     "profiles": {{
@@ -108,13 +94,14 @@ fn init_config_content(target: LuaTarget) -> String {
 
 #[cfg(test)]
 mod tests {
+    use luck_core::parse_luck_config;
+
     use super::*;
 
     #[test]
     fn init_config_default_sets_both_axes() {
         let content = init_config_content(LuaTarget::Lua54);
-        let config = luck_core::config::parse_luck_config(&content)
-            .expect("generated luck.json should parse");
+        let config = parse_luck_config(&content).expect("generated luck.json should parse");
         assert_eq!(config.lua.as_deref(), Some("lua54"));
         assert_eq!(config.luau.as_deref(), Some("luau"));
         assert!(content.contains("\"entry\": \"src/main.lua\""));
@@ -124,8 +111,7 @@ mod tests {
     #[test]
     fn init_config_lua_dialect_sets_lua_axis_only() {
         let content = init_config_content(LuaTarget::Lua53);
-        let config = luck_core::config::parse_luck_config(&content)
-            .expect("generated luck.json should parse");
+        let config = parse_luck_config(&content).expect("generated luck.json should parse");
         assert_eq!(config.lua.as_deref(), Some("lua53"));
         assert_eq!(config.luau.as_deref(), Some("luau"));
         assert!(content.contains("\"entry\": \"src/main.lua\""));
@@ -134,8 +120,7 @@ mod tests {
     #[test]
     fn init_config_roblox_sets_luau_axis_and_luau_entry() {
         let content = init_config_content(LuaTarget::LuauRoblox);
-        let config = luck_core::config::parse_luck_config(&content)
-            .expect("generated luck.json should parse");
+        let config = parse_luck_config(&content).expect("generated luck.json should parse");
         assert_eq!(config.lua.as_deref(), Some("lua54"));
         assert_eq!(config.luau.as_deref(), Some("roblox"));
         assert!(content.contains("\"entry\": \"src/main.luau\""));

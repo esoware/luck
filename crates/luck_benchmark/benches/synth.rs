@@ -1,16 +1,14 @@
-//! Programmatic AST construction (`luck_ast::synth`)
+//! Programmatic AST construction (`luck_ast::Synth`).
 
-use luck_ast::shared::Block;
-use luck_ast::stmt::Statement;
-use luck_ast::synth::Synth;
+use luck_ast::{Block, Statement, Synth};
 use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use luck_formatter::{Comments, FormatOptions, format_block};
 use luck_token::{BinOp, UnOp};
 
 const MODULE_COUNT: usize = 150;
 
-/// One OOP-style module: class table, constructor, two methods with loops
-/// and conditionals.
+/// One OOP-style module: a class table, a constructor, and two methods, one
+/// with a loop and a conditional.
 fn build_module(synth: &Synth, module_index: usize) -> Vec<Statement> {
     let class = format!("Module{module_index}");
 
@@ -25,7 +23,7 @@ fn build_module(synth: &Synth, module_index: usize) -> Vec<Statement> {
             ),
             synth.assign(
                 vec![synth.field_var(synth.name_expr("self"), "size")],
-                vec![synth.binop(synth.name_expr("size"), BinOp::Or, synth.number_int(0))],
+                vec![synth.binary_op(synth.name_expr("size"), BinOp::Or, synth.number_i64(0))],
             ),
             synth.assign(
                 vec![synth.field_var(synth.name_expr("self"), "items")],
@@ -39,10 +37,10 @@ fn build_module(synth: &Synth, module_index: usize) -> Vec<Statement> {
         vec![synth.assign(
             vec![synth.index_var(
                 synth.field(synth.name_expr("self"), "items"),
-                synth.binop(
-                    synth.unop(UnOp::Len, synth.field(synth.name_expr("self"), "items")),
+                synth.binary_op(
+                    synth.unary_op(UnOp::Len, synth.field(synth.name_expr("self"), "items")),
                     BinOp::Add,
-                    synth.number_int(1),
+                    synth.number_i64(1),
                 ),
             )],
             vec![synth.name_expr("value")],
@@ -50,32 +48,33 @@ fn build_module(synth: &Synth, module_index: usize) -> Vec<Statement> {
         Some(synth.return_(vec![synth.name_expr("self")])),
     );
 
-    let loop_body = synth.block(
-        vec![synth.assign(
-            vec![synth.name_var("sum")],
-            vec![synth.binop(
-                synth.name_expr("sum"),
-                BinOp::Add,
-                synth.var_expr(synth.index_var(
-                    synth.field(synth.name_expr("self"), "items"),
-                    synth.name_expr("index"),
-                )),
+    let loop_body =
+        synth.block(
+            vec![synth.assign(
+                vec![synth.name_var("sum")],
+                vec![synth.binary_op(
+                    synth.name_expr("sum"),
+                    BinOp::Add,
+                    synth.index(
+                        synth.field(synth.name_expr("self"), "items"),
+                        synth.name_expr("index"),
+                    ),
+                )],
             )],
-        )],
-        None,
-    );
+            None,
+        );
     let total_body = synth.block(
         vec![
-            synth.local(&["sum"], vec![synth.number_int(0)]),
+            synth.local(&["sum"], vec![synth.number_i64(0)]),
             synth.numeric_for(
                 synth.param("index"),
-                synth.number_int(1),
-                synth.unop(UnOp::Len, synth.field(synth.name_expr("self"), "items")),
+                synth.number_i64(1),
+                synth.unary_op(UnOp::Len, synth.field(synth.name_expr("self"), "items")),
                 None,
                 loop_body,
             ),
             synth.if_(
-                synth.binop(
+                synth.binary_op(
                     synth.name_expr("sum"),
                     BinOp::Gt,
                     synth.field(synth.name_expr("self"), "size"),
@@ -113,27 +112,27 @@ fn build_program(module_count: usize) -> Block {
     for module_index in 0..module_count {
         stmts.extend(build_module(&synth, module_index));
     }
-    let last = synth.return_(vec![synth.name_expr("Module0")]);
-    synth.block(stmts, Some(last))
+    let module_return = synth.return_(vec![synth.name_expr("Module0")]);
+    synth.block(stmts, Some(module_return))
 }
 
 fn bench_synth(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("synth");
 
-    group.bench_function(BenchmarkId::from_parameter("build"), |b| {
-        b.iter(|| black_box(build_program(black_box(MODULE_COUNT))));
+    group.bench_function(BenchmarkId::from_parameter("build"), |bencher| {
+        bencher.iter(|| black_box(build_program(black_box(MODULE_COUNT))));
     });
 
     let block = build_program(MODULE_COUNT);
 
-    // Source-less emit: token-carried text only (hard invariant 11).
-    group.bench_function(BenchmarkId::from_parameter("codegen"), |b| {
-        b.iter_with_large_drop(|| luck_codegen::compact(black_box(&block), ""));
+    // No source: emitters take every leaf's text from its token.
+    group.bench_function(BenchmarkId::from_parameter("codegen"), |bencher| {
+        bencher.iter_with_large_drop(|| luck_codegen::compact(black_box(&block)));
     });
 
     let options = FormatOptions::default();
-    group.bench_function(BenchmarkId::from_parameter("format"), |b| {
-        b.iter_with_setup_wrapper(|runner| {
+    group.bench_function(BenchmarkId::from_parameter("format"), |bencher| {
+        bencher.iter_with_setup_wrapper(|runner| {
             let comments = Comments::none();
             runner.run(|| format_block(black_box(&block), comments, &options));
         });

@@ -4,35 +4,35 @@ Pratt expression parser with recursive-descent statement parsing for Lua 5.1-5.5
 
 ## Overview
 
-The parser consumes a token stream from `luck_lexer` and produces an AST from `luck_ast`. It is depth-limited, error-recovering, and version-gated. It never panics on malformed input; every error becomes a `SourceError`, and parsing continues to the next synchronization point.
+The parser consumes a token stream from `luck_lexer` and produces an AST from `luck_ast`. It is depth-limited, error-recovering, and version-gated. It never panics on malformed input. Every error becomes a `SourceError`, and parsing continues to the next synchronization point.
 
 ## Key features
 
-- **Pratt expression parsing.** Binding power tables encode operator precedence across every Lua version, including the multi-step precedence climb for `or`, `and`, comparisons, bitwise, arithmetic, unary, and power.
-- **Recursive descent for statements.** Control flow, declarations, and assignments parse top-down with explicit context markers.
-- **Depth limiting.** Recursive parser work caps at 256 entries to protect the host stack. This is a tool resource limit, not a dialect grammar rule or an emulation of a VM's configurable compiler limits; deeply nested valid programs can exceed it.
-- **Error recovery.** On failure, the parser pushes a `SourceError` and synchronizes at the next statement keyword (`if`, `while`, `for`, `local`, and the rest), so one pass reports many errors.
-- **Context stack.** The parser tracks the active context ("if-statement", "for-loop", "function declaration") so diagnostics report where a problem occurred, not only what.
-- **Version-gated syntax.** Goto and labels (5.2+), bitwise operators (5.3+), local attributes (5.4+), generalized iteration (5.5+), and the Luau extensions, including 64-bit integer literals, explicit type instantiation, value exports, and the full Luau type grammar.
+- **Pratt expression parsing.** One precedence table covers every Lua version, from `or` and `and` through comparisons, bitwise operators, concatenation, arithmetic, unary operators, and power. Bitwise operators only bind where the version has them.
+- **Recursive descent for statements.** Control flow, declarations, and assignments parse top-down.
+- **Depth limiting.** Nesting caps at 256 levels to protect the host stack. This is a tool resource limit, not a dialect grammar rule or an emulation of a VM's configurable compiler limits, and deeply nested valid programs can exceed it.
+- **Error recovery.** On failure, the parser records a `SourceError` and skips to the next statement start or block boundary, so one pass reports many errors.
+- **Construct-aware errors.** A compound statement that is missing one of its own keywords says which construct expected it: ``missing `then` in if-statement``.
+- **Version-gated syntax.** Goto and labels (5.2+), bitwise operators (5.3+), local attributes (5.4+), `global` declarations, leading attributes, and named varargs (5.5), plus the Luau extensions. `global` is an ordinary name, as in stock 5.5 builds, and opens a declaration only at the start of a statement when `<`, a name, `*`, or `function` follows. The Luau extensions cover 64-bit integer literals, explicit type instantiation, value exports, and the full Luau type grammar.
 
 ## Architecture
 
 ### Pipeline
 
-The parser walks the token stream produced by `luck_lexer`. `parser.rs` holds the cursor, the context stack, the depth counter, the block-parsing loop, and the shared recovery primitives (`expect`/`expect_identifier_recover`, which record one error and hand back a placeholder span or token so parsing continues). `expr.rs` implements the Pratt parser. `stmt.rs` implements the recursive-descent dispatch over statement keywords. `attributes.rs` owns the attribute micro-grammar for both dialects and its parse-time validation: Lua `<const>`/`<close>` variable attributes, Luau `@native`/`@[deprecated(...)]` function attributes. `validate.rs` holds the opt-in post-parse scope checks (const writes, goto/label resolution, Luau continue/until).
+The parser pulls tokens from `luck_lexer` one at a time, with one token of lookahead. `parser.rs` holds the cursor, the depth counter, the function scope (whether `...`, `break`, and `continue` are valid where the parser is, and whether a `return` there is the module's), the chunk entry point, and the shared recovery primitives (`expect`, `expect_identifier`, and `expect_identifier_recover`, which record the error themselves and hand back the current span, nothing, or a placeholder token, so parsing continues). `stmt.rs` holds the block-parsing loop, the recursive-descent dispatch over statement keywords, control flow, and assignments. `declaration.rs` parses function statements and the `local`, `const`, `global`, `export`, and `type` declarations, with the attributed name lists they share and Luau's module-level export rules. `expr.rs` implements the Pratt parser, with the table constructors that statements share, and `function.rs` parses the function bodies and parameter lists that function statements and expressions share. `attributes.rs` owns the attribute micro-grammar for both dialects and its parse-time validation: Lua `<const>`/`<close>` variable attributes, Luau `@native`/`@[deprecated(...)]` function attributes. `types.rs` parses Luau types. `validate.rs` runs the opt-in post-parse scope checks as one walk over the active-variable stack in `scope.rs`, which also rejects a Luau type function referencing an outer local during `parse`: writes to read-only bindings, names undeclared under Lua 5.5 `global`, and the Luau continue/until rule, with goto and label bookkeeping in `gotos.rs` and the continue scan in `continue_until.rs`.
 
 ### Expression parsing
 
-The Pratt parser uses left and right binding powers for each operator. Each call to `parse_expression(min_bp)` consumes a prefix, then iterates infix and postfix forms as long as their left binding power exceeds `min_bp`. This handles function calls, indexing, method calls, table constructors, and Luau type casts uniformly.
+Each binary operator has a precedence level and an associativity, defined in `luck_token`. `parse_expr(min_precedence)` parses a unary operator or a primary expression with its suffix chain (field access, indexing, calls, method calls, Luau type instantiation) and any Luau `::` cast, then loops over binary operators whose precedence is at least `min_precedence`. A left-associative operator parses its right operand one level higher, so chains like `a + b + c` grow in the loop, while the right-associative `..` and `^` recurse, under the depth limit.
 
 ### Statement parsing
 
-Each compound statement (`if`, `for`, `while`, `repeat`, function declarations) pushes a context label before parsing its body and pops it afterward. When recovery synchronizes, the context stack tells the diagnostic where in the program the cursor was.
+When a compound statement (`if`, `while`, `do`, `for`, `repeat`) is missing one of its own keywords, such as `then`, `do`, or `end`, the error names the statement: ``missing `then` in if-statement``. Other missing tokens, such as a function body's `end` or a closing bracket, report `expected X, found Y`.
 
 ### Luau type annotations
 
-`luau.rs` is a full recursive-descent parser for the Luau type grammar. It produces real `luck_ast::types::Type` nodes, not opaque spans, for every annotation site (`x: T`, `<T>`, function return types, type-declaration bodies). The grammar covers unions and intersections (including the leading-separator multiline form `| A | B`), optionals (`T?`), table types, function types (`(params) -> R`), generic lists with defaults, type packs, `typeof(expr)`, singletons, and variadic packs. Parsing splits `>>` and `>=` back into closing angle brackets for the nested-generic cases that need it. Codegen reconstructs types by walking these typed nodes; there is no source slicing.
+`types.rs` is a full recursive-descent parser for the Luau type grammar. It produces real `luck_ast::Type` nodes, not opaque spans, for every annotation site (`x: T`, `<T>`, function return types, type-declaration bodies). The grammar covers unions and intersections (including the leading-separator multiline form `| A | B`), optionals (`T?`), table types with `read`/`write` access, function types (`(params) -> R`), generic lists with defaults, type packs, `typeof(expr)`, singletons, and variadic and generic packs. The lexer reads `>>` and `>=` greedily, so the parser splits off the leading `>` when it closes a generic list. Codegen reconstructs types by walking these typed nodes, with no source slicing.
 
 ## Testing
 
-Public-API tests live in `tests/it/` as a single binary: one file per Lua version (`lua51.rs`...`lua55.rs`, `luau.rs`, `luau_types.rs`), plus `errors.rs`, `depth.rs`, `validate.rs`, and `fixtures.rs`, which sweeps the shared `tests/fixtures/` corpus at the repo root.
+Public-API tests live in `tests/it/` as a single binary: one file per dialect (`lua51.rs`...`lua55.rs`, `luau.rs`) plus `luau_types.rs` for the type grammar, `version.rs` for syntax gating across versions, `errors.rs`, `depth.rs`, `validate.rs`, `parse_result.rs` for what `parse` hands back, and `fixtures.rs`, which sweeps the shared `tests/fixtures/` corpus at the repo root.

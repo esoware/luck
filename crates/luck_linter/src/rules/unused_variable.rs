@@ -1,99 +1,83 @@
-use luck_semantic::scope::{ReferenceKind, SymbolKind};
+use luck_semantic::SymbolKind;
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::underscore_fix::UnderscoreFixes;
 
-pub struct UnusedVariable;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UnusedVariable;
 
-impl Rule for UnusedVariable {
-    fn name(&self) -> &'static str {
-        "unused_variable"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "variable is declared but never read"
-    }
+impl_rule!(
+    UnusedVariable,
+    "unused_variable",
+    Correctness,
+    Warning,
+    "variable is declared but never read"
+);
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let semantic = ctx.semantic;
-        let mut diagnostics = Vec::new();
+impl WholeRule for UnusedVariable {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let semantic = context.semantic;
+        let fixes = UnderscoreFixes::new(semantic);
+        let mut findings = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
-            if symbol.name == "_" || symbol.name.starts_with('_') {
+            if symbol.name.starts_with('_') {
                 continue;
             }
 
-            // Luau: an exported binding's identifier is the export
-            // table's key, so it is read externally and renaming it
-            // would change the module's public API.
-            if symbol.is_exported {
+            // Luau: an exported binding is read through the module's export
+            // table, and renaming it would change the module's API. A
+            // `<close>` local is used by its scope exit.
+            if symbol.is_exported || symbol.is_close {
                 continue;
             }
 
-            // unused_argument and unused_loop_variable own parameters and
-            // loop variables. Reporting them here would double-fire.
-            let kind_str = match symbol.kind {
+            // `unused_argument` and `unused_loop_variable` cover parameters
+            // and loop variables.
+            let kind_name = match symbol.kind {
                 SymbolKind::Local => "variable",
                 SymbolKind::FunctionName => "function",
                 SymbolKind::Parameter
+                | SymbolKind::ImplicitSelf
                 | SymbolKind::IteratorVariable
                 | SymbolKind::NumericForVariable => continue,
             };
 
-            let has_read = symbol.reference_ids.iter().any(|&ref_id| {
-                matches!(
-                    semantic.scope_tree.reference(ref_id).kind,
-                    ReferenceKind::Read | ReferenceKind::ReadWrite
-                )
-            });
+            let has_read = symbol
+                .reference_ids
+                .iter()
+                .any(|&reference_id| semantic.scope_tree.reference(reference_id).kind.is_read());
 
             if has_read {
                 continue;
             }
 
-            // Write-only symbols get a diagnostic but no fix, because
-            // renaming only the declaration turns every later write into
-            // a global write. The `_` rename is safe only when nothing
-            // references the symbol at all.
-            let fix = if symbol.reference_ids.is_empty() {
-                Some(Fix {
-                    description: format!("prefix `{}` with `_`", symbol.name),
-                    edits: vec![TextEdit {
-                        span: symbol.definition_span,
-                        replacement: format!("_{}", symbol.name),
-                    }],
-                })
-            } else {
-                None
-            };
-
-            diagnostics.push(
-                LintDiagnostic::new(
-                    "unused_variable",
-                    format!("unused {kind_str} `{}`", symbol.name),
+            findings.push(
+                Finding::new(
+                    format!("unused {kind_name} `{}`", symbol.name),
                     symbol.definition_span,
                 )
-                .with_help("prefix with `_` to suppress this warning".to_string())
-                .with_fix_opt(fix),
+                .with_help("prefix with `_` to suppress this warning")
+                .with_optional_fix(fixes.fix_for(symbol)),
             );
         }
 
-        diagnostics
+        findings
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fix::apply_one_pass;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&UnusedVariable, source, LuaVersion::Luau)
+        run_rule(&UnusedVariable, source, LuaVersion::Luau)
     }
 
     #[test]
@@ -129,5 +113,38 @@ mod tests {
     fn flags_variable_unused_despite_type_alias() {
         let diags = run("local n = 1\ntype T = number\nexport type U = T");
         assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_without_fix_that_captures_existing_underscore_name() {
+        let source = "local _x = 1\nlocal x = 2\nprint(_x)";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_ne!(
+            apply_one_pass(source, &diags),
+            "local _x = 1\nlocal _x = 2\nprint(_x)",
+            "the rename shouldn't make `print(_x)` read the second local"
+        );
+    }
+
+    #[test]
+    fn ignores_close_variable() {
+        let source = "local lock <close> = acquire()\nprint(1)";
+        let diags = run_rule(&UnusedVariable, source, LuaVersion::Lua54);
+        assert!(diags.is_empty(), "a `<close>` local is used by its scope exit: {diags:?}");
+    }
+
+    #[test]
+    fn flags_without_fix_that_would_bind_env() {
+        let diags = run_rule(&UnusedVariable, "local ENV = 1", LuaVersion::Lua54);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].fix.is_none(), "a local `_ENV` redirects every global: {diags:?}");
+    }
+
+    #[test]
+    fn flags_with_fix_when_prefixed_name_is_free() {
+        let diags = run("local x = 2\nprint(_y)");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].fix.is_some(), "{diags:?}");
     }
 }

@@ -1,58 +1,33 @@
-//! Go-to-definition. Local symbols jump to their declaration through the
-//! scope tree; `require("path")` strings jump to the resolved module file.
 //! Globals have no definition site in a single-file view and return `None`.
 
-use tower_lsp::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location, Position, Url};
+use tower_lsp::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location, Range};
 
-use crate::backend::DocumentState;
-use crate::config::ProjectSettings;
-use crate::providers::cursor::symbol_at;
+use crate::document::DocumentState;
+use crate::providers::cursor::local_at;
 use crate::providers::document_link;
+use crate::settings::ProjectSettings;
 
-#[must_use]
-pub fn goto_definition(
-    doc: &DocumentState,
-    uri: &Url,
+pub(crate) fn goto(
+    document: &DocumentState,
     settings: &ProjectSettings,
     params: &GotoDefinitionParams,
 ) -> Option<GotoDefinitionResponse> {
+    let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
 
-    if let Some(location) = require_target_at(doc, uri, settings, position) {
-        return Some(GotoDefinitionResponse::Scalar(location));
+    // A `require("...")` string under the cursor that resolves to a file
+    // jumps to the top of that file.
+    if let Some(module_uri) = document_link::target_at(document, uri, settings, position) {
+        return Some(GotoDefinitionResponse::Scalar(Location {
+            uri: module_uri,
+            range: Range::default(),
+        }));
     }
 
-    let offset = doc.line_index.offset(&doc.text, position);
-    let symbol_id = symbol_at(&doc.semantic.scope_tree, offset)?;
-    let symbol = &doc.semantic.scope_tree.symbols[symbol_id.index()];
-    let range = doc.line_index.range(
-        &doc.text,
-        symbol.definition_span.start,
-        symbol.definition_span.end,
-    );
+    let tree = &document.semantic.scope_tree;
+    let (symbol_id, _) = local_at(tree, document.offset(position))?;
     Some(GotoDefinitionResponse::Scalar(Location {
         uri: uri.clone(),
-        range,
+        range: document.range(tree.symbol(symbol_id).definition_span),
     }))
-}
-
-/// If the cursor sits inside a `require("...")` string that resolves to a
-/// file, jump to the top of that file.
-fn require_target_at(
-    doc: &DocumentState,
-    uri: &Url,
-    settings: &ProjectSettings,
-    position: Position,
-) -> Option<Location> {
-    document_link::document_links(doc, uri, settings)
-        .into_iter()
-        .find(|link| {
-            position >= link.range.start && position <= link.range.end && link.target.is_some()
-        })
-        .and_then(|link| {
-            Some(Location {
-                uri: link.target?,
-                range: tower_lsp::lsp_types::Range::default(),
-            })
-        })
 }

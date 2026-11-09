@@ -1,500 +1,386 @@
-//! `luck fmt` - config-driven, oxfmt-style formatting with `--check`,
-//! `--list-different`, range formatting, and stdin mode.
-
-use crate::output::parallel_chunk_size;
-use crate::project::{
-    collect_target_files, project_filter, resolve_file_targets, resolve_project_config,
-};
-use crate::render::{FileCache, render_diagnostics_to_buffer};
-use crate::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE, Verbosity};
-use clap::Args;
-use luck_core::config::LuckConfig;
-use luck_core::diagnostics::Diagnostic;
-use luck_core::types::LuaTarget;
+use core::ops::Range;
+use std::fs;
+use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
-use std::process;
-use std::process::ExitCode;
+
+use clap::Args;
+use luck_core::{LuaTarget, LuckConfig, read_source_file, resolved_format_config};
+
+use crate::exit::{Exit, usage_error};
+use crate::output::read_stdin_source;
+use crate::project::{outcomes_in_order, project_files, resolve_project};
+use crate::render::render_source_errors;
+use crate::verbosity::Verbosity;
 
 #[derive(Args)]
+#[expect(clippy::struct_excessive_bools, reason = "clap derive needs one bool field per flag")]
 pub(crate) struct FmtArgs {
-    /// Files or directories to format [default: current directory]
+    /// Files or directories to format [default: current directory].
     paths: Vec<String>,
 
-    /// Format and write files in place (the default mode)
+    /// Format and write files in place (the default mode).
     #[arg(long)]
     write: bool,
 
-    /// Check if files are formatted; exit 1 and list files that would change
+    /// Check if files are formatted; exit 1 and list files that would change.
     #[arg(long, conflicts_with = "write")]
     check: bool,
 
-    /// List files that would change without writing them
+    /// List files that would change without writing them.
     #[arg(long, conflicts_with_all = ["write", "check"])]
     list_different: bool,
 
-    /// Path to config file [default: discover luck.json upward from cwd]
+    /// Path to config file [default: discover luck.json upward from cwd].
     #[arg(short, long, value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// Ignore any `.editorconfig` files when resolving formatting defaults
+    /// Ignore any `.editorconfig` files when resolving formatting defaults.
     #[arg(long)]
     no_editorconfig: bool,
 
-    /// Read source from stdin, using PATH only to pick the target and
-    /// label diagnostics; the formatted result is written to stdout
+    /// Read source from stdin, using PATH to pick the target and
+    /// `.editorconfig` settings and to label diagnostics; the result is
+    /// written to stdout.
     #[arg(long, value_name = "PATH")]
     stdin_filepath: Option<String>,
 
     /// Format only statements overlapping the byte range starting at this
-    /// offset; requires a single input file or --stdin-filepath [default: 0]
+    /// offset; requires a single input file or --stdin-filepath [default: 0].
     #[arg(long, value_name = "BYTE")]
     range_start: Option<usize>,
 
     /// End of the format range as an exclusive byte offset, clamped to the
     /// file length; requires a single input file or --stdin-filepath
-    /// [default: end of file]
+    /// [default: end of file].
     #[arg(long, value_name = "BYTE")]
     range_end: Option<usize>,
 
-    /// Re-parse the formatted output and verify it is structurally
-    /// equivalent to the input, failing the run if formatting changed the
-    /// program's meaning; a safety net at the cost of an extra parse.
-    /// Incompatible with range formatting
+    /// Re-parse the output and fail if it isn't structurally equivalent to
+    /// the input. Costs an extra parse; incompatible with range formatting.
     #[arg(long, conflicts_with_all = ["range_start", "range_end"])]
     verify: bool,
 }
 
+enum FormatOutcome {
+    Unchanged,
+    Changed(String),
+    /// The source didn't parse, or `--verify` found the output structurally
+    /// different from the input. Holds the errors ready for stderr, buffered
+    /// so parallel workers never interleave them.
+    Failed(Vec<u8>),
+}
+
+enum FileOutcome {
+    /// The file couldn't be read, parsed, or verified. Holds the errors ready
+    /// for stderr.
+    Failed(Vec<u8>),
+    RangeError(String),
+    Unchanged,
+    /// The file would change, under `--check` or `--list-different`.
+    Changed(String),
+    WriteError(String),
+    Written(String),
+}
+
 impl FmtArgs {
-    pub(crate) fn run(self, verbosity: Verbosity) -> ExitCode {
-        let (luck_config, config_dir) = resolve_project_config(self.config.as_deref());
+    /// # Errors
+    ///
+    /// Returns [`Exit::Usage`] on a bad config, path, or range, and
+    /// [`Exit::Failure`] when a file can't be formatted or `--check` finds one
+    /// that would change.
+    pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
+        let project = resolve_project(self.config.as_deref())?;
 
-        // Resolve the stdin target from the config dialects. The file walk
-        // resolves targets through resolve_file_targets instead: this closure
-        // exits the process, which must never happen on a rayon worker.
-        let target_for = |path: &Path| -> LuaTarget {
-            luck_config.target_for_path(path).unwrap_or_else(|message| {
-                eprintln!("Error: {message}");
-                process::exit(EXIT_USAGE as i32);
-            })
-        };
-
-        // Stdin mode formats a single virtual document and writes the result to
-        // stdout, ignoring positional paths (the editor "format stdin" contract).
+        // Stdin mode ignores positional paths.
         if let Some(stdin_path) = self.stdin_filepath.as_deref() {
-            return self.run_stdin(stdin_path, &luck_config, target_for);
+            return self.run_stdin(stdin_path, &project.config);
         }
 
         // Range formatting is per-document: byte offsets are meaningless across
         // a directory walk or multiple files.
         let has_range = self.range_start.is_some() || self.range_end.is_some();
-        if has_range && (self.paths.len() != 1 || !Path::new(&self.paths[0]).is_file()) {
-            eprintln!(
-                "Error: --range-start/--range-end require exactly one input file or --stdin-filepath"
-            );
-            return ExitCode::from(EXIT_USAGE);
+        if has_range && !matches!(self.paths.as_slice(), [path] if Path::new(path).is_file()) {
+            return Err(usage_error(
+                "`--range-start`/`--range-end` require exactly one input file or \
+                 `--stdin-filepath`",
+            ));
         }
 
-        let filter = project_filter(&config_dir, &luck_config);
-        let files = collect_target_files(&self.paths, &filter);
-        let files = resolve_file_targets(files, &luck_config);
+        let files = project_files(&project, &self.paths)?;
 
-        // --check and --list-different only report; --write (or no mode flag at
-        // all) writes in place. --write is the implicit default, so its presence
-        // does not change behavior beyond documenting intent.
-        let _ = self.write;
-        let report_only = self.check || self.list_different;
+        // Writing in place is the default, so --write needs no handling here.
+        let _: bool = self.write;
 
-        let opts = FormatOpts {
-            luck_config: &luck_config,
-            use_editorconfig: !self.no_editorconfig,
-            verify: self.verify,
-        };
-
-        // Files format in parallel; per-file output is buffered and flushed
-        // in input order so results match the sequential loop byte-for-byte.
-        use rayon::prelude::*;
-        let mut changed: Vec<String> = Vec::new();
-        let mut had_parse_error = false;
+        let mut changed_paths: Vec<String> = Vec::new();
+        let mut has_failed_file = false;
         {
-            // One lock and one flush per stream for the whole run; the early
-            // returns flush through BufWriter's drop. Bounded sorted groups
-            // keep peak outcome memory flat on huge projects.
-            use std::io::Write;
-            let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
-            let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
-            for chunk in files.chunks(parallel_chunk_size()) {
-                let outcomes: Vec<FileOutcome> = chunk
-                    .par_iter()
-                    .map(|(file_path, target)| {
-                        format_file(
-                            file_path,
-                            *target,
-                            self.range_start,
-                            self.range_end,
-                            report_only,
-                            opts,
-                        )
-                    })
-                    .collect();
-
-                for outcome in outcomes {
-                    match outcome {
-                        FileOutcome::ReadError(message) => {
-                            let _ = writeln!(stderr, "{message}");
-                            // A skipped file must fail the run, same as a parse error.
-                            had_parse_error = true;
-                        }
-                        FileOutcome::RangeError(message) => {
-                            let _ = writeln!(stderr, "{message}");
-                            return ExitCode::from(EXIT_USAGE);
-                        }
-                        FileOutcome::ParseError(rendered) => {
-                            let _ = stderr.write_all(&rendered);
-                            had_parse_error = true;
-                        }
-                        FileOutcome::VerifyError(message) => {
-                            let _ = writeln!(stderr, "{message}");
-                            // A verification failure fails the run like a parse error.
-                            had_parse_error = true;
-                        }
-                        FileOutcome::Unchanged => {}
-                        FileOutcome::Changed(path_str) => changed.push(path_str),
-                        FileOutcome::WriteError(message) => {
-                            let _ = writeln!(stderr, "{message}");
-                            return ExitCode::from(EXIT_FAILURE);
-                        }
-                        FileOutcome::Written(path_str) => {
-                            if verbosity != Verbosity::Quiet {
-                                let _ = writeln!(stdout, "{path_str}");
-                            }
+            // One lock and one flush per stream for the whole run (the early
+            // returns flush on drop).
+            let mut stderr = BufWriter::new(io::stderr().lock());
+            let mut stdout = BufWriter::new(io::stdout().lock());
+            let outcomes = outcomes_in_order(&files, |file_path, target| {
+                self.format_file(file_path, target, &project.config)
+            });
+            for outcome in outcomes {
+                match outcome {
+                    FileOutcome::Failed(rendered) => {
+                        let _unused = stderr.write_all(&rendered);
+                        has_failed_file = true;
+                    }
+                    FileOutcome::RangeError(message) => {
+                        let _unused = writeln!(stderr, "{message}");
+                        return Err(Exit::Usage);
+                    }
+                    FileOutcome::Unchanged => {}
+                    FileOutcome::Changed(path) => changed_paths.push(path),
+                    FileOutcome::WriteError(message) => {
+                        let _unused = writeln!(stderr, "{message}");
+                        return Err(Exit::Failure);
+                    }
+                    FileOutcome::Written(path) => {
+                        if verbosity != Verbosity::Quiet {
+                            let _unused = writeln!(stdout, "{path}");
                         }
                     }
                 }
             }
         }
 
-        if report_only {
-            for path_str in &changed {
-                println!("{path_str}");
+        if self.is_report_only() {
+            for path in &changed_paths {
+                println!("{path}");
             }
-            // --check exits non-zero when any file would change; --list-different
-            // is purely informational and always exits 0.
-            if self.check && !changed.is_empty() {
-                return ExitCode::from(EXIT_FAILURE);
+            // Only --check fails on files that would change; --list-different
+            // just lists them.
+            if self.check && !changed_paths.is_empty() {
+                return Err(Exit::Failure);
             }
         }
 
-        // An unformattable file is a failure in every mode, aligning with
-        // `--check`'s non-zero convention.
-        if had_parse_error {
-            return ExitCode::from(EXIT_FAILURE);
+        // A file that couldn't be read, parsed, or verified fails the run in
+        // every mode.
+        if has_failed_file {
+            return Err(Exit::Failure);
         }
 
-        ExitCode::from(EXIT_SUCCESS)
+        Ok(())
     }
 
-    /// Format a single document read from stdin, labeled and targeted by the
-    /// `--stdin-filepath` value. The standard mode writes the formatted result
-    /// to stdout; `--check`/`--list-different` only report (and `--check` sets
-    /// a non-zero exit when the document would change).
-    fn run_stdin(
-        &self,
-        stdin_path: &str,
-        luck_config: &LuckConfig,
-        target_for: impl Fn(&Path) -> LuaTarget,
-    ) -> ExitCode {
-        let source = match crate::output::read_stdin_source() {
-            Ok(text) => text,
-            Err(code) => return code,
-        };
+    /// The default mode writes the result to stdout. `--check` and
+    /// `--list-different` only report, and `--check` fails when the document
+    /// would change.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Exit::Usage`] on a bad range or dialect, and
+    /// [`Exit::Failure`] when stdin can't be read or formatted or `--check`
+    /// finds a difference.
+    fn run_stdin(&self, stdin_path: &str, luck_config: &LuckConfig) -> Result<(), Exit> {
+        let source = read_stdin_source()?;
 
-        let range = match resolve_format_range(self.range_start, self.range_end, source.len()) {
-            Ok(range) => range,
-            Err(message) => {
-                eprintln!("{message}");
-                return ExitCode::from(EXIT_USAGE);
-            }
-        };
+        let range = self.format_range(source.len()).map_err(|message| {
+            eprintln!("{message}");
+            Exit::Usage
+        })?;
 
         let file_path = PathBuf::from(stdin_path);
-        let target = target_for(&file_path);
-        let report_only = self.check || self.list_different;
-        let opts = FormatOpts {
-            luck_config,
-            use_editorconfig: !self.no_editorconfig,
-            verify: self.verify,
-        };
+        let target = luck_config.target_for_path(&file_path).map_err(usage_error)?;
 
-        match format_document(&source, stdin_path, &file_path, target, range, opts) {
-            FormatOutcome::ParseError(rendered) => {
-                use std::io::Write;
-                let _ = std::io::stderr().write_all(&rendered);
-                ExitCode::from(EXIT_FAILURE)
-            }
-            FormatOutcome::VerifyError(message) => {
-                eprintln!("{message}");
-                ExitCode::from(EXIT_FAILURE)
+        match self.format_document(luck_config, &source, &file_path, target, range) {
+            FormatOutcome::Failed(rendered) => {
+                let _unused = io::stderr().write_all(&rendered);
+                Err(Exit::Failure)
             }
             FormatOutcome::Unchanged => {
                 // Editors expect the (already-formatted) source echoed back;
                 // report modes stay silent on an unchanged document.
-                if !report_only {
+                if !self.is_report_only() {
                     print!("{source}");
                 }
-                ExitCode::from(EXIT_SUCCESS)
+                Ok(())
             }
             FormatOutcome::Changed(output) => {
                 if self.list_different {
                     println!("{stdin_path}");
-                    ExitCode::from(EXIT_SUCCESS)
+                    Ok(())
                 } else if self.check {
-                    // --check prints nothing to stdout and signals the
-                    // difference through the exit code alone.
-                    ExitCode::from(EXIT_FAILURE)
+                    // --check reports through the exit code alone.
+                    Err(Exit::Failure)
                 } else {
                     print!("{output}");
-                    ExitCode::from(EXIT_SUCCESS)
+                    Ok(())
                 }
             }
         }
     }
-}
 
-/// Outcome of formatting one file on the parallel walk, including the IO steps.
-enum FileOutcome {
-    ReadError(String),
-    RangeError(String),
-    ParseError(Vec<u8>),
-    VerifyError(String),
-    Unchanged,
-    Changed(String),
-    WriteError(String),
-    Written(String),
-}
+    const fn is_report_only(&self) -> bool {
+        self.check || self.list_different
+    }
 
-/// Run-wide formatting knobs shared by the file-walk and stdin paths, threaded
-/// as one value to keep the format helpers under the argument-count budget.
-#[derive(Clone, Copy)]
-struct FormatOpts<'a> {
-    luck_config: &'a LuckConfig,
-    use_editorconfig: bool,
-    verify: bool,
-}
+    fn format_file(
+        &self,
+        file_path: &Path,
+        target: LuaTarget,
+        luck_config: &LuckConfig,
+    ) -> FileOutcome {
+        let source = match read_source_file(file_path) {
+            Ok(text) => text,
+            Err(error) => {
+                return FileOutcome::Failed(
+                    format!("error: cannot read `{}`: {error}\n", file_path.display()).into_bytes(),
+                );
+            }
+        };
 
-/// Read, format, and (unless `report_only`) write one file.
-fn format_file(
-    file_path: &Path,
-    target: LuaTarget,
-    range_start: Option<usize>,
-    range_end: Option<usize>,
-    report_only: bool,
-    opts: FormatOpts,
-) -> FileOutcome {
-    let source = match luck_core::source_io::read_source_file(file_path) {
-        Ok(text) => text,
-        Err(error) => {
-            return FileOutcome::ReadError(format!(
-                "Error: cannot read {}: {error}",
-                file_path.display()
+        let range = match self.format_range(source.len()) {
+            Ok(range) => range,
+            Err(message) => return FileOutcome::RangeError(message),
+        };
+
+        let formatted = match self.format_document(luck_config, &source, file_path, target, range) {
+            FormatOutcome::Failed(rendered) => return FileOutcome::Failed(rendered),
+            FormatOutcome::Unchanged => return FileOutcome::Unchanged,
+            FormatOutcome::Changed(output) => output,
+        };
+
+        let path = file_path.display().to_string();
+        if self.is_report_only() {
+            FileOutcome::Changed(path)
+        } else if let Err(error) = fs::write(file_path, &formatted) {
+            FileOutcome::WriteError(format!("error: cannot write `{path}`: {error}"))
+        } else {
+            FileOutcome::Written(path)
+        }
+    }
+
+    /// Writes nothing; callers decide whether the result goes to disk or stdout.
+    fn format_document(
+        &self,
+        luck_config: &LuckConfig,
+        source: &str,
+        file_path: &Path,
+        target: LuaTarget,
+        range: Option<Range<usize>>,
+    ) -> FormatOutcome {
+        let editorconfig_path = (!self.no_editorconfig).then_some(file_path);
+        let options = luck_formatter::FormatOptions::from(&resolved_format_config(
+            luck_config.format,
+            editorconfig_path,
+        ));
+        let version = target.lua_version();
+        // Clap rejects `--verify` with a range, so a verified run formats the
+        // whole document.
+        let result = if self.verify {
+            match luck_formatter::format_and_verify(source, version, &options) {
+                Ok(result) => result,
+                Err((_result, diff)) => {
+                    return FormatOutcome::Failed(
+                        format!(
+                            "error: `{}`: formatting verification failed at `{}`: {}\n",
+                            file_path.to_string_lossy(),
+                            diff.path,
+                            diff.reason
+                        )
+                        .into_bytes(),
+                    );
+                }
+            }
+        } else {
+            range.map_or_else(
+                || luck_formatter::format(source, version, &options),
+                |byte_range| luck_formatter::format_range(source, version, &options, byte_range),
+            )
+        };
+        if !result.errors.is_empty() {
+            return FormatOutcome::Failed(render_source_errors(
+                file_path.to_string_lossy().into_owned(),
+                source,
+                &result.errors,
+                version,
             ));
         }
-    };
 
-    let range = match resolve_format_range(range_start, range_end, source.len()) {
-        Ok(range) => range,
-        Err(message) => return FileOutcome::RangeError(message),
-    };
-
-    let file_label = file_path.to_string_lossy().to_string();
-    let formatted = match format_document(&source, &file_label, file_path, target, range, opts) {
-        FormatOutcome::ParseError(rendered) => return FileOutcome::ParseError(rendered),
-        FormatOutcome::VerifyError(message) => return FileOutcome::VerifyError(message),
-        FormatOutcome::Unchanged => return FileOutcome::Unchanged,
-        FormatOutcome::Changed(output) => output,
-    };
-
-    let path_str = file_path.display().to_string();
-    if report_only {
-        FileOutcome::Changed(path_str)
-    } else if let Err(error) = std::fs::write(file_path, &formatted) {
-        FileOutcome::WriteError(format!("Error: cannot write {path_str}: {error}"))
-    } else {
-        FileOutcome::Written(path_str)
-    }
-}
-
-/// Outcome of formatting one in-memory document, shared by the file-walk and
-/// stdin paths.
-enum FormatOutcome {
-    /// The source parsed and the formatted result is identical to the input.
-    Unchanged,
-    /// The source parsed and formatting produced different output.
-    Changed(String),
-    /// The source did not parse; carries the rendered diagnostics (buffered so
-    /// parallel workers never interleave stderr).
-    ParseError(Vec<u8>),
-    /// `--verify` re-parsed the formatted output and found it structurally
-    /// divergent from the input; carries a ready-to-print error message.
-    VerifyError(String),
-}
-
-/// Format one in-memory document, rendering parse-error diagnostics under
-/// `path_label` when the source does not parse. Does no IO of its own; callers
-/// decide whether to write the result to disk or stdout.
-fn format_document(
-    source: &str,
-    path_label: &str,
-    file_path: &Path,
-    target: LuaTarget,
-    range: Option<std::ops::Range<usize>>,
-    opts: FormatOpts,
-) -> FormatOutcome {
-    // `.editorconfig` provides formatting defaults below luck.json; the
-    // luck.json `format` section always wins.
-    let resolved_format = luck_core::editorconfig::resolved_format_config(
-        opts.luck_config.format.as_ref(),
-        file_path,
-        opts.use_editorconfig,
-    );
-    let options = luck_formatter::FormatOptions::from(&resolved_format);
-    let version = target.lua_version();
-    // `--verify` conflicts with range formatting at the arg layer, so a
-    // verified run always formats the whole document through the safety net.
-    let result = if opts.verify {
-        match luck_formatter::format_and_verify(source, version, &options) {
-            Ok(result) => result,
-            Err((_result, diff)) => {
-                return FormatOutcome::VerifyError(format!(
-                    "Error: {path_label}: formatting verification failed at {}: {}",
-                    diff.path, diff.reason
-                ));
-            }
+        if result.output == source {
+            FormatOutcome::Unchanged
+        } else {
+            FormatOutcome::Changed(result.output)
         }
-    } else {
-        match range {
-            Some(range) => luck_formatter::format_range(source, version, &options, range),
-            None => luck_formatter::format(source, version, &options),
+    }
+
+    /// A missing start is 0, a missing end is the end of the source, and an
+    /// explicit end is clamped to the source length.
+    ///
+    /// # Errors
+    ///
+    /// Returns a ready-to-print message when the resolved start exceeds the
+    /// resolved end.
+    fn format_range(&self, source_length: usize) -> Result<Option<Range<usize>>, String> {
+        if self.range_start.is_none() && self.range_end.is_none() {
+            return Ok(None);
         }
-    };
-    if !result.errors.is_empty() {
-        let diagnostics: Vec<Diagnostic> = result
-            .errors
-            .iter()
-            .map(|err| {
-                luck_core::diagnostics::errors::e008(path_label, err.span.into(), &err.message)
-            })
-            .collect();
-        let mut cache = FileCache::new();
-        cache.add_file(path_label.to_string(), source.to_string());
-        let rendered = render_diagnostics_to_buffer(&diagnostics, &mut cache);
-        return FormatOutcome::ParseError(rendered);
+        let start = self.range_start.unwrap_or(0);
+        let end = self.range_end.unwrap_or(source_length).min(source_length);
+        if start > end {
+            return Err(format!(
+                "error: invalid format range: start ({start}) is greater than end ({end})"
+            ));
+        }
+        Ok(Some(start..end))
     }
-
-    if result.output == source {
-        FormatOutcome::Unchanged
-    } else {
-        FormatOutcome::Changed(result.output)
-    }
-}
-
-/// Resolve `--range-start`/`--range-end` into a byte range over a source of
-/// `source_len` bytes: a missing start is 0, a missing end is the end of the
-/// source, and an explicit end is clamped to the source length. Errors when
-/// the resolved start exceeds the resolved end.
-fn resolve_format_range(
-    range_start: Option<usize>,
-    range_end: Option<usize>,
-    source_len: usize,
-) -> Result<Option<std::ops::Range<usize>>, String> {
-    if range_start.is_none() && range_end.is_none() {
-        return Ok(None);
-    }
-    let start = range_start.unwrap_or(0);
-    let end = range_end.unwrap_or(source_len).min(source_len);
-    if start > end {
-        return Err(format!(
-            "Error: invalid format range: start ({start}) is greater than end ({end})"
-        ));
-    }
-    Ok(Some(start..end))
 }
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser as _;
+
     use super::*;
-    use crate::args::{Cli, Command};
-    use clap::Parser;
+    use crate::cli::{Cli, Command};
+
+    fn fmt_args(flags: &[&str]) -> FmtArgs {
+        let command_line = ["luck", "fmt"].iter().chain(flags);
+        let Command::Fmt(args) = Cli::try_parse_from(command_line).expect("fmt parses").command
+        else {
+            panic!("expected Command::Fmt");
+        };
+        args
+    }
+
+    fn path_arg(path: &Path) -> &str {
+        path.to_str().expect("temp paths are UTF-8")
+    }
 
     #[test]
     fn fmt_is_top_level_command_with_oxfmt_flags() {
-        let cli = Cli::try_parse_from([
-            "luck",
-            "fmt",
-            "src",
-            "main.lua",
-            "--check",
-            "-c",
-            "luck.json",
-        ])
-        .expect("fmt parses");
-        match cli.command {
-            Command::Fmt(FmtArgs {
-                paths,
-                check,
-                list_different,
-                write,
-                config,
-                ..
-            }) => {
-                assert_eq!(paths, vec!["src".to_string(), "main.lua".to_string()]);
-                assert!(check);
-                assert!(!list_different);
-                assert!(!write);
-                assert_eq!(config, Some(PathBuf::from("luck.json")));
-            }
-            _ => panic!("expected Command::Fmt"),
-        }
+        let FmtArgs { paths, check, list_different, write, config, .. } =
+            fmt_args(&["src", "main.lua", "--check", "-c", "luck.json"]);
+        assert_eq!(paths, vec!["src".to_owned(), "main.lua".to_owned()]);
+        assert!(check);
+        assert!(!list_different);
+        assert!(!write);
+        assert_eq!(config, Some(PathBuf::from("luck.json")));
     }
 
     #[test]
     fn fmt_list_different_and_write_parse() {
-        let listed = Cli::try_parse_from(["luck", "fmt", "--list-different"])
-            .expect("fmt --list-different parses");
-        assert!(matches!(
-            listed.command,
-            Command::Fmt(FmtArgs {
-                list_different: true,
-                ..
-            })
-        ));
-        let written = Cli::try_parse_from(["luck", "fmt", "--write"]).expect("fmt --write parses");
-        assert!(matches!(
-            written.command,
-            Command::Fmt(FmtArgs { write: true, .. })
-        ));
+        assert!(fmt_args(&["--list-different"]).list_different);
+        assert!(fmt_args(&["--write"]).write);
         assert!(Cli::try_parse_from(["luck", "fmt", "--check", "--write"]).is_err());
     }
 
     #[test]
     fn fmt_verify_flag_parses() {
-        let fmt = Cli::try_parse_from(["luck", "fmt", "--verify"]).expect("fmt --verify parses");
-        assert!(matches!(
-            fmt.command,
-            Command::Fmt(FmtArgs { verify: true, .. })
-        ));
-        // --verify formats whole documents, so it is mutually exclusive with
-        // range formatting.
+        assert!(fmt_args(&["--verify"]).verify);
+        // --verify formats whole documents, so it can't combine with a range.
         assert!(Cli::try_parse_from(["luck", "fmt", "--verify", "--range-start", "0"]).is_err());
         assert!(Cli::try_parse_from(["luck", "fmt", "--verify", "--range-end", "4"]).is_err());
     }
 
     #[test]
     fn fmt_verify_appears_in_help() {
-        use clap::CommandFactory;
+        use clap::CommandFactory as _;
         let mut cli = Cli::command();
-        let fmt = cli
-            .find_subcommand_mut("fmt")
-            .expect("fmt subcommand exists");
+        let fmt = cli.find_subcommand_mut("fmt").expect("fmt subcommand exists");
         let help = fmt.render_long_help().to_string();
         assert!(help.contains("--verify"), "help missing --verify:\n{help}");
     }
@@ -503,21 +389,13 @@ mod tests {
     fn format_document_verify_passes_on_valid_source() {
         // The formatter is structure-preserving, so verified formatting of any
         // parseable input succeeds and reports the ordinary Changed/Unchanged
-        // outcomes rather than a VerifyError.
-        let luck_config = LuckConfig::default();
-        let path = PathBuf::from("stdin.lua");
-        let opts = FormatOpts {
-            luck_config: &luck_config,
-            use_editorconfig: false,
-            verify: true,
-        };
-        let outcome = format_document(
+        // outcomes rather than a verification failure.
+        let outcome = fmt_args(&["--no-editorconfig", "--verify"]).format_document(
+            &LuckConfig::default(),
             "local  x=1\n",
-            "stdin.lua",
-            &path,
+            Path::new("stdin.lua"),
             LuaTarget::Lua54,
             None,
-            opts,
         );
         assert!(
             matches!(outcome, FormatOutcome::Changed(_)),
@@ -527,78 +405,32 @@ mod tests {
 
     #[test]
     fn fmt_stdin_filepath_parses() {
-        let fmt = Cli::try_parse_from(["luck", "fmt", "--stdin-filepath", "buf.lua"])
-            .expect("fmt --stdin-filepath parses");
-        assert!(matches!(
-            fmt.command,
-            Command::Fmt(FmtArgs { stdin_filepath: Some(ref path), .. }) if path == "buf.lua"
-        ));
-    }
-
-    #[test]
-    fn fmt_format_options_read_from_luck_json() {
-        // A config requesting space indentation must produce spaces-based
-        // FormatOptions, with no per-option CLI flags involved.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config_path = dir.path().join("luck.json");
-        std::fs::write(
-            &config_path,
-            r#"{"lua":"lua54","format":{"indent_style":"spaces","indent_width":2}}"#,
-        )
-        .expect("write luck.json");
-
-        let config = luck_core::config::load_with_extends(&config_path).expect("config loads");
-        let options = luck_formatter::FormatOptions::from(&config.format.unwrap_or_default());
-        assert!(matches!(
-            options.indent_style,
-            luck_formatter::IndentStyle::Spaces
-        ));
-        assert_eq!(options.indent_width, 2);
-    }
-
-    #[test]
-    fn fmt_format_options_default_without_format_section() {
-        let config = luck_core::config::FormatConfig::default();
-        let options = luck_formatter::FormatOptions::from(&config);
-        let defaults = luck_formatter::FormatOptions::default();
-        assert_eq!(options.indent_width, defaults.indent_width);
-        assert_eq!(options.line_width, defaults.line_width);
-    }
-
-    /// Build a `FmtArgs` for the given single path with everything defaulted.
-    fn fmt_args(path: PathBuf, config: PathBuf) -> FmtArgs {
-        FmtArgs {
-            paths: vec![path.to_string_lossy().into_owned()],
-            write: true,
-            check: false,
-            list_different: false,
-            config: Some(config),
-            no_editorconfig: false,
-            stdin_filepath: None,
-            range_start: None,
-            range_end: None,
-            verify: false,
-        }
+        assert_eq!(
+            fmt_args(&["--stdin-filepath", "buf.lua"]).stdin_filepath.as_deref(),
+            Some("buf.lua")
+        );
     }
 
     #[test]
     fn fmt_uses_editorconfig_when_luck_json_has_no_format() {
         // A project whose luck.json has no `format` section falls back to the
         // `.editorconfig` defaults: two-space indentation here.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config_path = dir.path().join("luck.json");
-        std::fs::write(&config_path, r#"{"lua":"lua54"}"#).expect("write luck.json");
-        std::fs::write(
-            dir.path().join(".editorconfig"),
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("luck.json");
+        fs::write(&config_path, r#"{"lua":"lua54"}"#).expect("write luck.json");
+        fs::write(
+            directory.path().join(".editorconfig"),
             "root = true\n[*.lua]\nindent_style = space\nindent_size = 2\n",
         )
         .expect("write .editorconfig");
-        let source_path = dir.path().join("main.lua");
-        std::fs::write(&source_path, "local function f()\nreturn 1\nend\n").expect("write source");
+        let source_path = directory.path().join("main.lua");
+        fs::write(&source_path, "local function f()\nreturn 1\nend\n").expect("write source");
 
-        fmt_args(source_path.clone(), config_path).run(Verbosity::Quiet);
+        fmt_args(&[path_arg(&source_path), "-c", path_arg(&config_path)])
+            .run(Verbosity::Quiet)
+            .expect("fmt succeeds");
 
-        let formatted = std::fs::read_to_string(&source_path).expect("read back");
+        let formatted = fs::read_to_string(&source_path).expect("read back");
         assert!(
             formatted.contains("\n  return 1"),
             "expected two-space indent from .editorconfig, got:\n{formatted}"
@@ -609,24 +441,26 @@ mod tests {
     fn fmt_luck_json_format_wins_over_editorconfig() {
         // With both present, the luck.json `format` section overrides the
         // `.editorconfig` value: four-space indentation wins over two.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config_path = dir.path().join("luck.json");
-        std::fs::write(
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("luck.json");
+        fs::write(
             &config_path,
             r#"{"lua":"lua54","format":{"indent_style":"spaces","indent_width":4}}"#,
         )
         .expect("write luck.json");
-        std::fs::write(
-            dir.path().join(".editorconfig"),
+        fs::write(
+            directory.path().join(".editorconfig"),
             "root = true\n[*.lua]\nindent_style = space\nindent_size = 2\n",
         )
         .expect("write .editorconfig");
-        let source_path = dir.path().join("main.lua");
-        std::fs::write(&source_path, "local function f()\nreturn 1\nend\n").expect("write source");
+        let source_path = directory.path().join("main.lua");
+        fs::write(&source_path, "local function f()\nreturn 1\nend\n").expect("write source");
 
-        fmt_args(source_path.clone(), config_path).run(Verbosity::Quiet);
+        fmt_args(&[path_arg(&source_path), "-c", path_arg(&config_path)])
+            .run(Verbosity::Quiet)
+            .expect("fmt succeeds");
 
-        let formatted = std::fs::read_to_string(&source_path).expect("read back");
+        let formatted = fs::read_to_string(&source_path).expect("read back");
         assert!(
             formatted.contains("\n    return 1"),
             "expected four-space indent from luck.json, got:\n{formatted}"
@@ -634,46 +468,53 @@ mod tests {
     }
 
     #[test]
+    fn format_document_without_editorconfig_uses_only_luck_json() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            directory.path().join(".editorconfig"),
+            "root = true\n[*.lua]\nindent_style = space\nindent_size = 2\n",
+        )
+        .expect("write .editorconfig");
+        let source_path = directory.path().join("main.lua");
+        let outcome = fmt_args(&["--no-editorconfig"]).format_document(
+            &LuckConfig::default(),
+            "local function f()\nreturn 1\nend\n",
+            &source_path,
+            LuaTarget::Lua54,
+            None,
+        );
+        let FormatOutcome::Changed(formatted) = outcome else {
+            panic!("unindented source should reformat to Changed");
+        };
+        assert!(
+            formatted.contains("\n\treturn 1"),
+            "expected the default tab indent, not .editorconfig's, got:\n{formatted}"
+        );
+    }
+
+    #[test]
     fn format_document_reports_changed_unchanged_and_parse_error() {
         // The shared per-document formatter helper backs both the file-walk and
         // the --stdin-filepath paths, so cover its three outcomes directly.
+        let args = fmt_args(&["--no-editorconfig"]);
         let luck_config = LuckConfig::default();
-        let path = PathBuf::from("stdin.lua");
-        let opts = FormatOpts {
-            luck_config: &luck_config,
-            use_editorconfig: false,
-            verify: false,
+        let format = |source: &str| {
+            args.format_document(
+                &luck_config,
+                source,
+                Path::new("stdin.lua"),
+                LuaTarget::Lua54,
+                None,
+            )
         };
 
-        let unformatted = format_document(
-            "local  x=1\n",
-            "stdin.lua",
-            &path,
-            LuaTarget::Lua54,
-            None,
-            opts,
-        );
-        let formatted = match unformatted {
-            FormatOutcome::Changed(output) => output,
-            _ => panic!("messy source should reformat to Changed"),
+        let FormatOutcome::Changed(formatted) = format("local  x=1\n") else {
+            panic!("messy source should reformat to Changed");
         };
 
         // Re-running over already-formatted text yields Unchanged (idempotency).
-        assert!(matches!(
-            format_document(&formatted, "stdin.lua", &path, LuaTarget::Lua54, None, opts),
-            FormatOutcome::Unchanged
-        ));
+        assert!(matches!(format(&formatted), FormatOutcome::Unchanged));
 
-        assert!(matches!(
-            format_document(
-                "local x =",
-                "stdin.lua",
-                &path,
-                LuaTarget::Lua54,
-                None,
-                opts
-            ),
-            FormatOutcome::ParseError(_)
-        ));
+        assert!(matches!(format("local x ="), FormatOutcome::Failed(_)));
     }
 }

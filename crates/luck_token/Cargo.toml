@@ -1,17 +1,19 @@
 [package]
-name = "luck_token"
-version.workspace = true
-authors.workspace = true
-categories.workspace = true
-description = "Tokens, spans, and Lua version flags for the luck toolchain"
-edition.workspace = true
-homepage.workspace = true
-keywords.workspace = true
-license.workspace = true
-repository.workspace = true
+name                   = "luck_token"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "Tokens, spans, and Lua version flags for the luck toolchain"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
 rust-version.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
 compact_str = { workspace = true }
-
-[dev-dependencies]
+memchr      = { workspace = true }

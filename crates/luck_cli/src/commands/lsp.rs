@@ -1,43 +1,39 @@
-//! `luck lsp` - run the language server over stdio, or TCP with `--socket`.
-
-use crate::{EXIT_FAILURE, EXIT_SUCCESS};
 use clap::Args;
-use std::process::ExitCode;
+use tokio::runtime::Builder;
+
+use crate::WORKER_STACK_BYTES;
+use crate::exit::Exit;
 
 #[derive(Args)]
 pub(crate) struct LspArgs {
-    /// Bind 127.0.0.1:<port> and accept one client instead of stdio.
+    /// Listen on 127.0.0.1 at this port and serve one client instead of stdio.
     #[arg(long)]
     socket: Option<u16>,
 }
 
 impl LspArgs {
-    pub(crate) fn run(self) -> ExitCode {
-        // Match the CLI's 16 MB worker-stack budget for deep parses.
-        let runtime = match tokio::runtime::Builder::new_multi_thread()
+    /// # Errors
+    ///
+    /// Reports the failure and returns [`Exit::Failure`] when the async
+    /// runtime can't start or the socket transport fails.
+    pub(crate) fn run(self) -> Result<(), Exit> {
+        let runtime = Builder::new_multi_thread()
             .enable_all()
-            .thread_stack_size(16 * 1024 * 1024)
+            .thread_stack_size(WORKER_STACK_BYTES)
             .build()
-        {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                eprintln!("luck lsp: failed to start async runtime: {error}");
-                return ExitCode::from(EXIT_FAILURE);
-            }
-        };
+            .map_err(|e| {
+                eprintln!("luck lsp: failed to start async runtime: {e}");
+                Exit::Failure
+            })?;
         runtime.block_on(async {
-            match self.socket {
-                Some(port) => {
-                    if let Err(error) = luck_lsp::serve_socket(port).await {
-                        eprintln!("luck lsp: socket transport failed: {error}");
-                        return ExitCode::from(EXIT_FAILURE);
-                    }
-                    ExitCode::from(EXIT_SUCCESS)
-                }
-                None => {
-                    luck_lsp::serve_stdio().await;
-                    ExitCode::from(EXIT_SUCCESS)
-                }
+            if let Some(port) = self.socket {
+                luck_lsp::serve_socket(port).await.map_err(|e| {
+                    eprintln!("luck lsp: socket transport failed: {e}");
+                    Exit::Failure
+                })
+            } else {
+                luck_lsp::serve_stdio().await;
+                Ok(())
             }
         })
     }
@@ -45,20 +41,16 @@ impl LspArgs {
 
 #[cfg(test)]
 mod tests {
-    use crate::args::{Cli, Command};
-    use clap::Parser;
+    use clap::Parser as _;
+
+    use super::LspArgs;
+    use crate::cli::{Cli, Command};
 
     #[test]
     fn lsp_subcommand_parses() {
         let cli = Cli::try_parse_from(["luck", "lsp"]).expect("lsp parses");
-        assert!(matches!(
-            cli.command,
-            Command::Lsp(super::LspArgs { socket: None })
-        ));
+        assert!(matches!(cli.command, Command::Lsp(LspArgs { socket: None })));
         let with_socket = Cli::try_parse_from(["luck", "lsp", "--socket", "9000"]).unwrap();
-        assert!(matches!(
-            with_socket.command,
-            Command::Lsp(super::LspArgs { socket: Some(9000) })
-        ));
+        assert!(matches!(with_socket.command, Command::Lsp(LspArgs { socket: Some(9000) })));
     }
 }

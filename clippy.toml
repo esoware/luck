@@ -1,0 +1,29 @@
+avoid-breaking-exported-api = false
+check-private-items = true
+allow-mixed-uninlined-format-args = false
+check-inconsistent-struct-field-initializers = true
+upper-case-acronyms-aggressive = true
+matches-for-let-else = "AllTypes"
+lint-commented-code = true
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+allowed-idents-below-min-chars = ["..", "a", "b", "c", "e", "f", "k", "v"]
+
+disallowed-names = [
+  "..",
+  "val", "tmp", "res", "buf", "str", "ctx", "cfg", "conf", "req", "resp", "msg",
+  "err", "conn", "addr", "sig", "prev", "len", "idx", "cb", "rx",
+  "vs", "dst", "src", "doc", "dir", "dest", "out", "ret", "obj", "arr",
+  "num", "cnt", "opt", "opts", "meta", "ws", "fut", "hdr", "cur", "pos", "ch", "evt",
+]
+
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "RandomState makes iteration order differ per run; use rustc_hash::FxHashMap" },
+  { path = "std::collections::HashSet", reason = "RandomState makes iteration order differ per run; use rustc_hash::FxHashSet" },
+  { path = "std::sync::Mutex", reason = "poisoning; use parking_lot::Mutex or tokio::sync::Mutex" },
+  { path = "std::sync::RwLock", reason = "poisoning; use parking_lot::RwLock or tokio::sync::RwLock" },
+  { path = "std::sync::Condvar", reason = "use tokio::sync::Notify" },
+]

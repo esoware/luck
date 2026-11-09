@@ -1,8 +1,13 @@
-//! # luck_token
+//! # `luck_token`
 //!
 //! Foundation crate for the luck toolchain. Defines [`Span`] (byte ranges),
-//! [`LuaVersion`] (version-gated feature flags), [`TokenKind`]/[`Token`] (all Lua/Luau
-//! token types), and [`Comment`] (extracted comments with position metadata).
+//! [`LuaVersion`] (version-gated feature flags), [`TokenKind`]/[`Token`]
+//! (every Lua and Luau token), the AST operators ([`BinOp`], [`UnOp`],
+//! [`CompoundOp`]), [`Comment`] (extracted comments with position metadata),
+//! [`SourceError`], the literal semantics every crate shares
+//! ([`parse_lua_number`], [`decode_string`], [`encode_string`],
+//! [`short_string_body`]), the definition of a line break ([`line_breaks`],
+//! [`has_line_break`]), and the [`CodeBuffer`] output builder.
 //!
 //! This crate has zero internal dependencies, and every other luck crate
 //! depends on it.
@@ -16,49 +21,30 @@
 //! assert_eq!(Span::new(0, 2).merge(Span::new(5, 7)), Span::new(0, 7));
 //! ```
 
-pub mod code_buffer;
-pub mod comment;
-pub mod literal;
-pub mod span;
-pub mod token;
-pub mod version;
+extern crate alloc;
 
-/// A source-level error with position and message. The single error type for
-/// the toolchain: `LexError`, `ParseError`, and `FormatError` alias it, so
-/// lexer, parser, and formatter failures flow through one rendering path.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceError {
-    pub span: Span,
-    pub message: String,
-}
+mod code_buffer;
+mod comment;
+mod number;
+mod op;
+mod source_error;
+mod span;
+mod string;
+mod token;
+mod version;
+mod whitespace;
 
-pub use comment::{Comment, CommentKind, CommentPosition};
+pub use code_buffer::CodeBuffer;
+pub use comment::{Comment, CommentKind, CommentPosition, leading_hot_comments};
 pub use compact_str::CompactString;
-pub use literal::{LuaNumber, NumberSubtypes};
-pub use span::{Span, line_col};
-pub use token::{Assoc, BinOp, CompoundOp, Token, TokenKind, UNARY_PRECEDENCE, UnOp};
+pub use number::{LuaNumber, NumberSubtypes, parse_lua_number};
+pub use op::{Associativity, BinOp, CompoundOp, OperandSide, UnOp};
+pub use source_error::SourceError;
+pub use span::{Span, index_to_offset, offset_to_index};
+pub use string::{decode_string, encode_string, short_string_body, unicode_escape_codepoint};
+pub use token::{Token, TokenKind};
 pub use version::{LuaVersion, StdlibEnvironment};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn source_error_carries_span_and_message() {
-        let error = SourceError {
-            span: Span::new(4, 9),
-            message: "unexpected token".to_string(),
-        };
-        assert_eq!(error.span, Span::new(4, 9));
-        assert_eq!(error.message, "unexpected token");
-        assert_eq!(error, error.clone());
-    }
-
-    #[test]
-    fn compact_string_keeps_short_identifiers_inline() {
-        // README contract: short strings live on the stack, not the heap.
-        assert!(!CompactString::from("short_ident").is_heap_allocated());
-        // A string well past the inline capacity must spill to the heap.
-        assert!(CompactString::from("x".repeat(64)).is_heap_allocated());
-    }
-}
+pub use whitespace::{
+    chunk_start, ends_with_line_break, has_line_break, has_shebang, is_lua_whitespace, line_breaks,
+    strip_line_break,
+};

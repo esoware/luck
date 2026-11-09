@@ -1,0 +1,48 @@
+---
+source: crates/luck_bundler/tests/it/bundle.rs
+expression: output
+---
+do
+local __luck_modules={}
+local __luck_loaded={}
+local function __luck_result(...)
+if select("#",...)~=1 then
+error("luck bundle: module must return a single value",0)
+end
+return ...
+end
+local function __luck_require(id)
+local value=__luck_loaded[id]
+if value~=nil then return value end
+value=__luck_result(__luck_modules[id]())
+__luck_loaded[id]=value
+return value
+end
+-- module #1: components/button.luau
+__luck_modules[1]=function(...)
+local button = {}
+
+button.label = "Click Me"
+
+return button
+end
+-- module #2: components/init.luau
+__luck_modules[2]=function(...)
+local button = __luck_require(1)
+
+local components = {}
+
+components.name = "ComponentLib"
+components.button = button
+
+return components
+end
+local __luck_entry=function(...)
+local components = __luck_require(2)
+
+print(components.name)
+print(components.button.label)
+return components
+end
+return __luck_entry(...)
+end

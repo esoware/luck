@@ -1,68 +1,96 @@
-name: vscode-extension
+name: VS Code extension
 
 on:
   push:
-    tags:
-      - "vscode-v*"
+    tags: ["vscode-v*"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# Any workflow run on main can write a cache entry.
+cache-mode: none
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  test:
-    name: Test before release
-    runs-on: ubuntu-latest
+  check:
+    name: Check the tagged commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read # Lists the CI runs on the tagged commit.
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+          persist-credentials: false
+
+      - name: Fail if CI hasn't passed on the tagged commit
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          commit=$(git rev-parse HEAD)
+          passed=$(gh run list --workflow ci.yml --commit "$commit" --event push --status success --json databaseId --jq length)
+          if [ "$passed" = 0 ]; then
+            echo "::error::CI hasn't passed on $commit. Wait for it to pass, then rerun this workflow."
+            exit 1
+          fi
 
   build-server:
-    name: Build luck (${{ matrix.label }})
-    needs: test
+    name: Build luck for ${{ matrix.label }}
+    needs: check
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
           - label: win32-x64
-            os: windows-latest
+            os: windows-2025-vs2026
             rust_target: x86_64-pc-windows-msvc
             binary: luck.exe
           - label: win32-arm64
-            os: windows-latest
+            os: windows-2025-vs2026
             rust_target: aarch64-pc-windows-msvc
             binary: luck.exe
           - label: linux-x64
-            os: ubuntu-latest
+            os: ubuntu-24.04
             rust_target: x86_64-unknown-linux-gnu
             binary: luck
           - label: linux-arm64
-            os: ubuntu-latest
+            os: ubuntu-24.04
             rust_target: aarch64-unknown-linux-gnu
             binary: luck
           - label: darwin-x64
-            os: macos-latest
+            os: macos-26
             rust_target: x86_64-apple-darwin
             binary: luck
           - label: darwin-arm64
-            os: macos-latest
+            os: macos-26
             rust_target: aarch64-apple-darwin
             binary: luck
+    env:
+      RUST_TARGET: ${{ matrix.rust_target }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain (${{ matrix.rust_target }})
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          targets: ${{ matrix.rust_target }}
+          persist-credentials: false
 
-      # mimalloc builds C and C++ through CMake, so the C++ cross-compiler is
-      # required alongside the linker.
-      - name: Install Linux ARM cross-compilers
+      - name: Install the Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install
+          rustup target add "$RUST_TARGET"
+
+      # mimalloc builds through CMake, which needs the C++ cross-compiler as well as the linker.
+      - name: Install the Linux ARM cross-compilers
         if: matrix.label == 'linux-arm64'
         run: |
           sudo apt-get update
@@ -75,84 +103,82 @@ jobs:
             echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar"
           } >> "$GITHUB_ENV"
 
-      - name: Cargo build
-        run: cargo build -p luck_cli --release --target ${{ matrix.rust_target }}
+      - name: Build luck
+        shell: bash
+        run: cargo build -p luck_cli --release --target "$RUST_TARGET"
 
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: luck-${{ matrix.label }}
           path: target/${{ matrix.rust_target }}/release/${{ matrix.binary }}
           if-no-files-found: error
 
   package-vsix:
-    name: Package VSIX (${{ matrix.label }})
-    runs-on: ubuntu-latest
+    name: Package the VSIX for ${{ matrix.label }}
     needs: build-server
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        label:
-          - win32-x64
-          - win32-arm64
-          - linux-x64
-          - linux-arm64
-          - darwin-x64
-          - darwin-arm64
+        label: [win32-x64, win32-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64]
+    env:
+      LABEL: ${{ matrix.label }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: "20"
+          persist-credentials: false
 
-      - name: Download server binary
-        uses: actions/download-artifact@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: luck-${{ matrix.label }}
           path: editors/vscode/server/${{ matrix.label }}
 
-      - name: Make binary executable (non-Windows)
-        if: matrix.label != 'win32-x64' && matrix.label != 'win32-arm64'
-        run: chmod +x editors/vscode/server/${{ matrix.label }}/luck
+      - name: Make the binary executable
+        if: ${{ !startsWith(matrix.label, 'win32-') }}
+        run: chmod +x "editors/vscode/server/$LABEL/luck"
 
-      - name: Install dependencies
+      - name: Install the extension's packages
         working-directory: editors/vscode
-        run: npm install --no-audit --no-fund
+        run: npm ci
 
-      - name: Compile + bundle
+      - name: Bundle the extension
         working-directory: editors/vscode
         run: npm run bundle
 
-      - name: Package VSIX for ${{ matrix.label }}
+      - name: Package the VSIX
         working-directory: editors/vscode
-        run: npx --yes @vscode/vsce package --target ${{ matrix.label }}
+        run: npx --yes @vscode/vsce package --target "$LABEL"
 
-      - name: Upload VSIX
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: luck-${{ matrix.label }}.vsix
           path: editors/vscode/*.vsix
           if-no-files-found: error
 
   publish:
-    name: Publish to Marketplace + Open VSX
-    runs-on: ubuntu-latest
+    name: Publish to the Marketplace and Open VSX
     needs: package-vsix
     if: startsWith(github.ref, 'refs/tags/vscode-v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - name: Download all VSIX artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: luck-*.vsix
           merge-multiple: true
           path: dist
-      - name: Publish to VS Code Marketplace
+
+      - name: Publish to the VS Code Marketplace
         if: env.VSCE_PAT != ''
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: npx --yes @vscode/vsce publish --packagePath dist/*.vsix
+
       - name: Publish to Open VSX
         if: env.OVSX_PAT != ''
         env:

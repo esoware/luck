@@ -1,96 +1,90 @@
-use luck_ast::shared::Block;
-use luck_ast::stmt::Statement;
-use luck_ast::visitor::Visitor;
-use luck_token::Span;
+use luck_ast::Statement;
 
-use crate::cfg::{Exit, analyze_full_block};
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::cfg::{Exit, FlowGraph};
+use crate::diagnostic::Finding;
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
-/// Detects `while`/`repeat`/`for` loops whose body terminates on every
-/// path, so the body runs at most once. A loop that always `break`s,
-/// `return`s, or `error`s is almost certainly a typo for an `if` or `do`
-/// block.
-pub struct LoopExecutesOnce;
+/// Flags loops whose body `break`s, `return`s, or `error`s on every path, so
+/// it runs at most once. Such a loop was usually meant to be an `if` or a
+/// `do` block.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoopExecutesOnce;
 
-impl Rule for LoopExecutesOnce {
-    fn name(&self) -> &'static str {
-        "loop_executes_once"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "loop body always exits on the first iteration"
-    }
+impl_rule!(
+    LoopExecutesOnce,
+    "loop_executes_once",
+    Suspicious,
+    Warning,
+    "loop body always exits on the first iteration"
+);
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let mut checker = LoopChecker {
-            diagnostics: Vec::new(),
+impl NodeRule for LoopExecutesOnce {
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[
+            NodeType::WhileLoop,
+            NodeType::RepeatLoop,
+            NodeType::NumericFor,
+            NodeType::GenericFor,
+        ])
+    }
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let (body, span, kind) = match stmt {
+            Statement::WhileLoop(node) => (&node.block, node.span, "`while`"),
+            Statement::RepeatLoop(node) => (&node.block, node.span, "`repeat`"),
+            Statement::NumericFor(node) => (&node.block, node.span, "numeric `for`"),
+            Statement::GenericFor(node) => (&node.block, node.span, "generic `for`"),
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::IfStatement(_)
+            | Statement::FunctionDecl(_)
+            | Statement::LocalFunction(_)
+            | Statement::LocalAssignment(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => return,
         };
-        checker.visit_block(block);
-        checker.diagnostics
-    }
-}
-
-struct LoopChecker {
-    diagnostics: Vec<LintDiagnostic>,
-}
-
-impl LoopChecker {
-    fn check_loop_body(&mut self, body: &Block, loop_span: Span, kind: &'static str) {
-        let summary = analyze_full_block(body);
-        // The body must terminate on every path, which means the
-        // analyzer pinned a non-Normal exit on the sequence.
-        let label = match summary.exit {
-            Exit::Return => "always returns",
-            Exit::Break => "always breaks",
-            Exit::Error => "always errors",
-            Exit::Continue | Exit::Normal => return,
-        };
-        self.diagnostics.push(
-            LintDiagnostic::new(
-                "loop_executes_once",
-                format!("{kind} loop body {label}; loop executes at most once"),
-                loop_span,
-            )
-            .with_help("if a single execution is intended, use a `do ... end` block".to_string()),
-        );
-    }
-}
-
-impl<'ast> Visitor<'ast> for LoopChecker {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
-        match stmt {
-            Statement::WhileLoop(node) => {
-                self.check_loop_body(&node.block, node.span, "while");
-            }
-            Statement::RepeatLoop(node) => {
-                self.check_loop_body(&node.block, node.span, "repeat");
-            }
-            Statement::NumericFor(node) => {
-                self.check_loop_body(&node.block, node.span, "numeric for");
-            }
-            Statement::GenericFor(node) => {
-                self.check_loop_body(&node.block, node.span, "generic for");
-            }
-            _ => {}
+        let graph = FlowGraph::of_block(body, context.semantic);
+        if graph.reaches(Exit::End) {
+            return;
         }
-        self.walk_statement(stmt);
+        let can_return = graph.reaches(Exit::ReturnValue) || graph.reaches(Exit::ReturnEmpty);
+        let label = match (can_return, graph.reaches(Exit::Break), graph.reaches(Exit::Error)) {
+            (true, false, _) => "always returns",
+            (false, true, false) => "always breaks",
+            // A body stuck in an inner infinite loop reaches no exit, and
+            // never starts another iteration either.
+            (false, false, _) => "always errors",
+            (true, true, _) | (false, true, true) => "always exits",
+        };
+        findings.push(
+            Finding::new(
+                format!("{kind} loop body {label}, so the loop executes at most once"),
+                span,
+            )
+            .with_help("if a single execution is intended, use a `do ... end` block"),
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&LoopExecutesOnce, source, LuaVersion::Lua54)
+        run_rule(&LoopExecutesOnce, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -115,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_when_some_path_continues() {
+    fn ignores_when_some_path_falls_through() {
         let diags = run("local x = 1\nlocal c = 1\nwhile x do if c then break end print() end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -138,5 +132,53 @@ mod tests {
         // returns.
         let diags = run("local c = 1\nwhile c do if c then return 1 else return 2 end end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_nested_loops_outer_first() {
+        let diags = run("while true do for i = 1, 2 do break end return end");
+        let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "`while` loop body always returns, so the loop executes at most once",
+                "numeric `for` loop body always breaks, so the loop executes at most once",
+            ],
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_loop_with_conditional_continue() {
+        let source = "for _, v in ipairs(t) do if v then continue end return v end";
+        let diags = run_rule(&LoopExecutesOnce, source, LuaVersion::Luau);
+        assert!(diags.is_empty(), "`continue` starts another iteration: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_loop_with_goto_continue() {
+        let diags = run(
+            "for _, v in ipairs(t) do if v then goto continue end do return v end ::continue:: end",
+        );
+        assert!(diags.is_empty(), "the `goto` starts another iteration: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_outer_loop_around_while_true_with_conditional_break() {
+        let diags = run("for i = 1, 3 do while true do if i then break end end end");
+        assert!(diags.is_empty(), "the inner `break` lets the outer loop go on: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_shadowed_error_call() {
+        let diags = run("local function error(text) print(text) end\nfor i = 1, 3 do error(i) end");
+        assert!(diags.is_empty(), "a local `error` doesn't raise: {diags:?}");
+    }
+
+    #[test]
+    fn flags_body_that_always_exits_one_of_two_ways() {
+        let diags = run("for i = 1, 3 do if i then break else return end end");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+        assert!(diags[0].message.contains("always exits"), "got: {diags:?}");
     }
 }

@@ -1,6 +1,4 @@
-# Benchmarks are sharded: each pipeline stage runs as a separate job,
-# built and executed under CodSpeed with the `codspeed` feature enabled.
-# Modeled on oxc's benchmark workflow.
+# One job per pipeline stage, each built with the codspeed feature and run under CodSpeed. Modeled on oxc's benchmark workflow.
 
 name: Benchmark
 
@@ -15,13 +13,11 @@ on:
       - "Cargo.lock"
       - ".github/workflows/benchmark.yml"
   push:
-    branches:
-      - main
+    branches: [main]
     paths: *paths
 
 permissions:
   contents: read
-  id-token: write # for OpenID Connect authentication with CodSpeed
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event.pull_request.number || github.sha }}
@@ -32,74 +28,72 @@ env:
 
 jobs:
   benchmark:
-    runs-on: ubuntu-latest
+    name: Bench ${{ matrix.component }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write # Authenticates with CodSpeed over OpenID Connect.
     strategy:
       fail-fast: false
       matrix:
-        component:
-          [
-            lexer,
-            parser,
-            semantic,
-            linter,
-            codegen,
-            formatter,
-            minifier,
-            bundler,
-            synth,
-          ]
-    name: Bench ${{ matrix.component }}
+        component: [lexer, parser, semantic, linter, codegen, formatter, minifier, bundler, synth]
+    env:
+      COMPONENT: ${{ matrix.component }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the Rust toolchain
+        run: rustup toolchain install
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: benchmark
           save-if: ${{ github.ref_name == 'main' }}
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
         with:
           tool: cargo-codspeed
 
-      # Network-fetched bench inputs are pinned to SHAs in corpus.rs, so a
-      # cache keyed on that file avoids refetching (and the flakes that
-      # come with it) until a pin changes.
-      - uses: actions/cache@v4
+      # The corpus pins live in corpus.rs, so keying on it refetches only when a pin changes.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: crates/luck_benchmark/corpus
           key: bench-corpus-${{ hashFiles('crates/luck_benchmark/src/corpus.rs') }}
 
-      - name: Build benchmark
-        run: |
-          cargo codspeed build -p luck_benchmark \
-            --bench ${{ matrix.component }} --features codspeed
+      - name: Build the benchmark
+        run: cargo codspeed build -p luck_benchmark --bench "$COMPONENT" --features codspeed
 
-      - name: Run benchmark
-        uses: CodSpeedHQ/action@v4
+      - name: Run the benchmark
+        uses: CodSpeedHQ/action@f22792bfac16f3e14eb9fbea76f4a48e9cc22b93 # v4.19.1
         timeout-minutes: 30
         with:
           mode: simulation
           run: cargo codspeed run ${{ matrix.component }}
 
   minsize:
-    runs-on: ubuntu-latest
     name: Minsize snapshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the Rust toolchain
+        run: rustup toolchain install
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: benchmark
           save-if: false
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: crates/luck_benchmark/corpus
           key: bench-corpus-${{ hashFiles('crates/luck_benchmark/src/corpus.rs') }}
 
-      - name: Check minsize.snap is current
-        run: cargo test -p luck_benchmark --test metrics minsize_is_up_to_date -- --ignored
+      - name: Check that minsize.snap is current
+        run: cargo test -p luck_benchmark --test it minsize_is_up_to_date -- --ignored

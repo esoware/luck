@@ -1,80 +1,59 @@
-use crate::diagnostic::*;
-use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
+use core::iter;
 
-pub struct DuplicateConditions;
+use luck_ast::Statement;
+use luck_token::Span;
 
-impl Rule for DuplicateConditions {
-    fn name(&self) -> &'static str {
-        "duplicate_conditions"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "if/elseif chain has duplicate conditions"
-    }
+use crate::diagnostic::Finding;
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DuplicateConditions;
 
-fn expression_source(source: &str, span: luck_token::Span) -> &str {
-    let start = span.start as usize;
-    let end = span.end as usize;
-    if start <= end && end <= source.len() {
-        source[start..end].trim()
-    } else {
-        ""
-    }
-}
+impl_rule!(
+    DuplicateConditions,
+    "duplicate_conditions",
+    Correctness,
+    Warning,
+    "`if`/`elseif` chain has duplicate conditions"
+);
 
 impl NodeRule for DuplicateConditions {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::IfStatement]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::IfStatement])
     }
-    fn on_statement(
-        &self,
-        stmt: &luck_ast::stmt::Statement,
-        ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
-    ) {
-        if let luck_ast::Statement::IfStatement(if_stmt) = stmt {
-            let condition_span = if_stmt.condition.span();
-            let if_condition_text = expression_source(ctx.source, condition_span);
-
-            if !if_condition_text.is_empty() {
-                let mut conditions: Vec<(&str, luck_token::Span)> =
-                    vec![(if_condition_text, condition_span)];
-
-                for clause in &if_stmt.elseif_clauses {
-                    let clause_span = clause.condition.span();
-                    let clause_text = expression_source(ctx.source, clause_span);
-                    conditions.push((clause_text, clause_span));
-                }
-
-                for index in 1..conditions.len() {
-                    let (current_text, current_span) = conditions[index];
-                    if current_text.is_empty() {
-                        continue;
-                    }
-                    for &(earlier_text, _) in conditions.iter().take(index) {
-                        if current_text == earlier_text {
-                            out.push(LintDiagnostic::new("duplicate_conditions", format!(
-                                    "duplicate condition `{}` in if/elseif chain",
-                                    current_text
-                                ), current_span).with_help(
-                                    "this branch can never execute because the same condition was already checked".to_string()
-                                ));
-                            break;
-                        }
-                    }
-                }
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let Statement::IfStatement(if_stmt) = stmt else {
+            return;
+        };
+        // Only an `elseif` can repeat an earlier condition.
+        if if_stmt.elseif_clauses.is_empty() {
+            return;
+        }
+        // Conditions compare by their source text.
+        let conditions: Vec<(&str, Span)> = iter::once(&if_stmt.condition)
+            .chain(if_stmt.elseif_clauses.iter().map(|clause| &clause.condition))
+            .map(|condition| {
+                let span = condition.span();
+                (span.text(context.source).trim(), span)
+            })
+            .collect();
+        if conditions.first().is_none_or(|(if_text, _)| if_text.is_empty()) {
+            return;
+        }
+        for (i, &(text, span)) in conditions.iter().enumerate().skip(1) {
+            if !text.is_empty()
+                && conditions.iter().take(i).any(|&(earlier_text, _)| earlier_text == text)
+            {
+                findings.push(
+                    Finding::new(
+                        format!("duplicate condition `{text}` in `if`/`elseif` chain"),
+                        span,
+                    )
+                    .with_help(
+                        "the same condition is checked earlier, so this branch is unreachable unless the condition has side effects",
+                    ),
+                );
             }
         }
     }
@@ -82,11 +61,14 @@ impl NodeRule for DuplicateConditions {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&DuplicateConditions, source, LuaVersion::Lua54)
+        run_rule(&DuplicateConditions, source, LuaVersion::Lua54)
     }
 
     #[test]

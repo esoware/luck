@@ -1,44 +1,54 @@
-//! IR -> text layout.
+//! Two passes.
 //!
-//! Two passes. `propagate_expand` first marks every group that contains a
-//! forced break (hard/empty line, `ExpandParent`, multi-line text) - such a
-//! group can never print flat, so measuring it would be wasted work and,
-//! worse, `fits` would have to re-discover the break each time. The print
-//! loop then walks the stream with a mode stack: entering an unforced group
-//! measures whether its content fits the remaining width and commits to
-//! `Flat` or `Expanded`; every decision is recorded per `GroupId` so
-//! conditional content elsewhere can query it.
+//! `propagate_expand` first marks every group that contains a
+//! forced break (a hard or empty line, `ExpandParent`, or multi-line text) as
+//! expanded, since such a group can never print flat and isn't worth
+//! measuring. The print loop then walks the stream with a mode stack.
+//! Entering an undecided group measures whether its content fits the
+//! remaining width and commits to `Flat` or `Expanded`, and each decision is
+//! recorded by `GroupId` so conditional content elsewhere can look it up.
 
-use luck_token::code_buffer::CodeBuffer;
-use unicode_width::UnicodeWidthStr;
+use core::mem::take;
 
-use crate::ir::{FormatElement, GroupId, LineMode, PrintMode, Tag};
+use luck_token::CodeBuffer;
+use unicode_width::UnicodeWidthStr as _;
 
-/// Layout knobs the printer needs; the caller maps `FormatOptions` down to
-/// this so the printer stays decoupled from config types.
-#[derive(Debug, Clone, Copy)]
-pub struct PrinterOptions {
-    pub line_width: u16,
-    pub use_tabs: bool,
-    pub indent_width: u8,
+use crate::ir::{FormatElement, GroupId, LineMode, Tag};
+use crate::{FormatOptions, IndentStyle};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrintMode {
+    Flat,
+    Expanded,
 }
 
-/// Lay out a document. `group_count` is `Formatter::group_count()`.
-pub fn print(elements: &[FormatElement], group_count: u32, options: &PrinterOptions) -> String {
+pub(crate) fn print(
+    elements: &[FormatElement],
+    group_count: usize,
+    options: &FormatOptions,
+    base_indent: &str,
+) -> String {
+    // The width model counts a tab as one column.
+    let (indent_byte, indent_width) = match options.indent_style {
+        IndentStyle::Tabs => (b'\t', 1),
+        IndentStyle::Spaces => (b' ', usize::from(options.indent_width)),
+    };
     let mut printer = Printer {
-        options: *options,
-        // Element count is the only size signal available here (synthetic
-        // ASTs have no source); a few output bytes per element is a close
-        // enough hint to avoid most realloc copies.
-        output: CodeBuffer::with_capacity(elements.len() * 4),
+        line_width: usize::from(options.line_width),
+        indent_byte,
+        indent_width,
+        base_indent: base_indent.to_owned(),
+        // Synthetic ASTs have no source, so size by element count. Four bytes
+        // per element is close enough to avoid most reallocations.
+        output: CodeBuffer::with_capacity(elements.len().saturating_mul(4)),
         line_start: 0,
-        column: 0,
-        indents: Vec::new(),
+        display_column: 0,
+        indent_level: 0,
         modes: Vec::new(),
-        group_modes: vec![None; group_count as usize],
+        group_modes: vec![None; group_count],
         suffixes: Vec::new(),
         is_pending_space: false,
-        is_pending_indent: false,
+        is_pending_indent: !base_indent.is_empty(),
     };
     propagate_expand(elements, &mut printer.group_modes);
     printer.print_elements(elements);
@@ -46,41 +56,55 @@ pub fn print(elements: &[FormatElement], group_count: u32, options: &PrinterOpti
     printer.output.into_string()
 }
 
-/// One entry on the indent stack. `None` keeps push/pop symmetric for
-/// conditional indents that resolved to "no indent".
 #[derive(Debug, Clone, Copy)]
-enum Indent {
-    Level,
-    Align(u8),
-    Inactive,
+enum Region {
+    Group,
+    Entry,
+}
+
+impl Region {
+    const fn opens(self, element: &FormatElement) -> bool {
+        match self {
+            Self::Group => matches!(element, FormatElement::Tag(Tag::StartGroup(_))),
+            Self::Entry => matches!(element, FormatElement::Tag(Tag::StartEntry)),
+        }
+    }
+
+    const fn closes(self, element: &FormatElement) -> bool {
+        match self {
+            Self::Group => matches!(element, FormatElement::Tag(Tag::EndGroup)),
+            Self::Entry => matches!(element, FormatElement::Tag(Tag::EndEntry)),
+        }
+    }
 }
 
 struct Printer {
-    options: PrinterOptions,
+    line_width: usize,
+    /// One indent level is `indent_width` copies of `indent_byte`, and as
+    /// many columns.
+    indent_byte: u8,
+    indent_width: usize,
+    /// Written before the indent of every line.
+    base_indent: String,
     output: CodeBuffer,
-    /// Byte offset in `output` where the current line begins.
     line_start: usize,
-    /// Display width of the current line so far.
-    column: usize,
-    indents: Vec<Indent>,
+    display_column: usize,
+    indent_level: usize,
     /// Effective print-mode stack; empty means `Expanded` (top level).
     modes: Vec<PrintMode>,
     /// Break decision per group id. Pre-seeded with `Expanded` for groups
     /// containing forced breaks; filled in as groups are entered.
     group_modes: Vec<Option<PrintMode>>,
-    /// Queued line-suffix elements, flushed before the next newline.
     suffixes: Vec<FormatElement>,
     is_pending_space: bool,
     is_pending_indent: bool,
 }
 
-/// Mark groups that contain a forced break as `Expanded` before printing.
-/// A stack of enclosing group ids is maintained; a forced break marks every
-/// group on it. `BestFitting` variants and line suffixes are boundaries -
-/// breaks inside them don't force the outside.
+/// A forced break marks every group on the stack of enclosing groups. Line
+/// suffixes are boundaries: breaks inside them don't force anything outside.
 fn propagate_expand(elements: &[FormatElement], group_modes: &mut [Option<PrintMode>]) {
     let mut group_stack: Vec<GroupId> = Vec::new();
-    let mut suffix_depth: u32 = 0;
+    let mut is_in_suffix = false;
 
     for element in elements {
         match element {
@@ -88,27 +112,16 @@ fn propagate_expand(elements: &[FormatElement], group_modes: &mut [Option<PrintM
             FormatElement::Tag(Tag::EndGroup) => {
                 group_stack.pop();
             }
-            FormatElement::Tag(Tag::StartLineSuffix) => suffix_depth += 1,
-            FormatElement::Tag(Tag::EndLineSuffix) => suffix_depth -= 1,
+            FormatElement::Tag(Tag::StartLineSuffix) => is_in_suffix = true,
+            FormatElement::Tag(Tag::EndLineSuffix) => is_in_suffix = false,
             FormatElement::Line(LineMode::Hard | LineMode::Empty) | FormatElement::ExpandParent => {
-                if suffix_depth == 0 {
-                    for id in &group_stack {
-                        group_modes[id.0 as usize] = Some(PrintMode::Expanded);
-                    }
+                if !is_in_suffix {
+                    mark_expanded(&group_stack, group_modes);
                 }
             }
-            FormatElement::Text(content) => {
-                if suffix_depth == 0 && content.contains('\n') {
-                    for id in &group_stack {
-                        group_modes[id.0 as usize] = Some(PrintMode::Expanded);
-                    }
-                }
-            }
-            // Boundary: variants keep their breaks to themselves, but the
-            // groups inside each variant still need their own marks.
-            FormatElement::BestFitting(variants) => {
-                for variant in variants {
-                    propagate_expand(variant, group_modes);
+            FormatElement::Text(content) | FormatElement::Verbatim(content) => {
+                if !is_in_suffix && content.contains('\n') {
+                    mark_expanded(&group_stack, group_modes);
                 }
             }
             FormatElement::Token(_)
@@ -120,139 +133,116 @@ fn propagate_expand(elements: &[FormatElement], group_modes: &mut [Option<PrintM
     }
 }
 
+fn mark_expanded(group_stack: &[GroupId], group_modes: &mut [Option<PrintMode>]) {
+    for id in group_stack {
+        if let Some(mode) = group_modes.get_mut(id.index()) {
+            *mode = Some(PrintMode::Expanded);
+        }
+    }
+}
+
 impl Printer {
     fn current_mode(&self) -> PrintMode {
         *self.modes.last().unwrap_or(&PrintMode::Expanded)
     }
 
+    fn group_mode(&self, id: GroupId) -> Option<PrintMode> {
+        self.group_modes.get(id.index()).copied().flatten()
+    }
+
     fn print_elements(&mut self, elements: &[FormatElement]) {
-        let mut index = 0;
-        while index < elements.len() {
-            index = self.print_element(elements, index);
+        let mut remaining = elements;
+        while let Some((element, rest)) = remaining.split_first() {
+            remaining = self.print_element(element, rest);
         }
     }
 
-    /// Print the element at `index`, returning the index after it (and after
-    /// any region it consumed, e.g. a skipped conditional body).
-    fn print_element(&mut self, elements: &[FormatElement], index: usize) -> usize {
-        match &elements[index] {
-            FormatElement::Token(content) => {
-                self.emit_text(content);
-                index + 1
-            }
-            FormatElement::Text(content) => {
-                self.emit_text(content);
-                index + 1
-            }
-            FormatElement::Space => {
-                self.is_pending_space = true;
-                index + 1
-            }
-            FormatElement::Line(mode) => {
-                self.print_line(*mode);
-                index + 1
-            }
-            FormatElement::ExpandParent => index + 1,
+    /// Print `element`, returning the elements left after it and after any
+    /// region it consumed from `rest`, e.g. a skipped conditional body.
+    fn print_element<'elements>(
+        &mut self,
+        element: &FormatElement,
+        rest: &'elements [FormatElement],
+    ) -> &'elements [FormatElement] {
+        match element {
+            FormatElement::Token(content) => self.emit_text(content),
+            FormatElement::Text(content) => self.emit_text(content),
+            FormatElement::Verbatim(content) => self.emit_verbatim(content),
+            FormatElement::Space => self.is_pending_space = true,
+            FormatElement::Line(mode) => self.print_line(*mode),
+            FormatElement::ExpandParent => {}
             FormatElement::LineSuffixBoundary => {
                 if !self.suffixes.is_empty() {
                     self.emit_newline(false);
                 }
-                index + 1
             }
-            FormatElement::BestFitting(variants) => {
-                self.print_best_fitting(variants);
-                index + 1
-            }
-            FormatElement::Tag(tag) => self.print_tag(elements, index, tag),
+            FormatElement::Tag(tag) => return self.print_tag(*tag, rest),
         }
+        rest
     }
 
-    fn print_tag(&mut self, elements: &[FormatElement], index: usize, tag: &Tag) -> usize {
+    fn print_tag<'elements>(
+        &mut self,
+        tag: Tag,
+        rest: &'elements [FormatElement],
+    ) -> &'elements [FormatElement] {
         match tag {
             Tag::StartGroup(id) => {
-                let mode = match self.group_modes[id.0 as usize] {
-                    // Pre-forced by propagate_expand
-                    Some(mode) => mode,
-                    None => {
-                        if self.current_mode() == PrintMode::Flat {
-                            // An enclosing flat group already measured this
-                            // content; re-measuring can't change the answer.
-                            PrintMode::Flat
-                        } else if self.fits_region(elements, index + 1, region_end_group) {
-                            PrintMode::Flat
-                        } else {
-                            PrintMode::Expanded
-                        }
+                // A mode already set was forced by `propagate_expand`.
+                let mode = self.group_mode(id).unwrap_or_else(|| {
+                    // An enclosing flat group already measured this content;
+                    // re-measuring can't change the answer.
+                    if self.current_mode() == PrintMode::Flat || self.fits(rest, Region::Group, 0) {
+                        PrintMode::Flat
+                    } else {
+                        PrintMode::Expanded
                     }
-                };
-                self.group_modes[id.0 as usize] = Some(mode);
+                });
+                if let Some(group_mode) = self.group_modes.get_mut(id.index()) {
+                    *group_mode = Some(mode);
+                }
                 self.modes.push(mode);
-                index + 1
             }
-            Tag::EndGroup => {
+            Tag::StartFlat => self.modes.push(PrintMode::Flat),
+            Tag::EndGroup | Tag::EndFlat => {
                 self.modes.pop();
-                index + 1
             }
-            Tag::StartIndent => {
-                self.indents.push(Indent::Level);
-                index + 1
-            }
-            Tag::EndIndent | Tag::EndAlign | Tag::EndIndentIfGroupBreaks => {
-                self.indents.pop();
-                index + 1
-            }
-            Tag::StartAlign(width) => {
-                self.indents.push(Indent::Align(*width));
-                index + 1
-            }
-            Tag::StartIndentIfGroupBreaks(id) => {
-                let indent = match self.group_modes[id.0 as usize] {
-                    Some(PrintMode::Expanded) => Indent::Level,
-                    Some(PrintMode::Flat) | None => Indent::Inactive,
-                };
-                self.indents.push(indent);
-                index + 1
-            }
-            Tag::StartConditional { mode, group_id } => {
-                let decided = self.group_modes[group_id.0 as usize];
+            Tag::StartIndent => self.indent_level = self.indent_level.saturating_add(1),
+            Tag::EndIndent => self.indent_level = self.indent_level.saturating_sub(1),
+            Tag::StartIfGroupBreaks(group_id) => {
+                let decided_mode = self.group_mode(group_id);
                 debug_assert!(
-                    decided.is_some(),
+                    decided_mode.is_some(),
                     "conditional references group {group_id:?} before its decision"
                 );
-                if decided == Some(*mode) {
-                    index + 1
-                } else {
-                    skip_region(
-                        elements,
-                        index + 1,
-                        is_start_conditional,
-                        is_end_conditional,
-                    )
+                if decided_mode != Some(PrintMode::Expanded) {
+                    return skip_conditional(rest);
                 }
             }
-            Tag::EndConditional => index + 1,
-            Tag::StartFill => self.print_fill(elements, index + 1),
-            // Reached only for empty fills or as print_fill's return point
-            Tag::EndFill => index + 1,
-            // Entries outside print_fill (defensive) print transparently
-            Tag::StartEntry | Tag::EndEntry => index + 1,
+            Tag::StartFill => return self.print_fill(rest),
             Tag::StartLineSuffix => {
-                let end = skip_region(elements, index + 1, is_start_suffix, is_end_suffix);
-                // `end` is one past EndLineSuffix; queue the body
-                self.suffixes
-                    .extend_from_slice(&elements[index + 1..end - 1]);
-                end
+                let (body, after_suffix) = split_line_suffix(rest);
+                self.suffixes.extend_from_slice(body);
+                return after_suffix;
             }
-            Tag::EndLineSuffix => index + 1,
+            // A taken conditional's end tag is a no-op. `print_fill` and
+            // `split_line_suffix` consume the other tags listed here, so only
+            // malformed IR reaches this arm with one of them.
+            Tag::EndIfGroupBreaks
+            | Tag::EndFill
+            | Tag::StartEntry
+            | Tag::EndEntry
+            | Tag::EndLineSuffix => {}
         }
+        rest
     }
 
     fn print_line(&mut self, mode: LineMode) {
         match (self.current_mode(), mode) {
             (PrintMode::Flat, LineMode::Soft) => {}
             (PrintMode::Flat, LineMode::SoftOrSpace) => self.is_pending_space = true,
-            // Forced breaks inside a measured-flat region can't happen -
-            // propagation expands every enclosing group - but stay safe.
+            // Propagation expands every group around a forced break, so one
+            // can't sit in a flat region, but break anyway to be safe.
             (_, LineMode::Hard) | (PrintMode::Expanded, LineMode::Soft | LineMode::SoftOrSpace) => {
                 self.emit_newline(false);
             }
@@ -260,227 +250,139 @@ impl Printer {
         }
     }
 
-    fn print_best_fitting(&mut self, variants: &[Vec<FormatElement>]) {
-        for (index, variant) in variants.iter().enumerate() {
-            let is_last = index == variants.len() - 1;
-            if is_last {
-                self.modes.push(PrintMode::Expanded);
-                self.print_elements(variant);
-                self.modes.pop();
-                return;
-            }
-            if self.fits_region(variant, 0, region_whole) {
-                self.modes.push(PrintMode::Flat);
-                self.print_elements(variant);
-                self.modes.pop();
-                return;
-            }
-        }
-    }
-
     /// Greedy fill: each entry goes on the current line if it fits,
     /// otherwise the preceding separator becomes a newline. Entries that
     /// don't fit even on a fresh line print expanded.
-    fn print_fill(&mut self, elements: &[FormatElement], mut index: usize) -> usize {
-        loop {
-            match &elements[index] {
-                FormatElement::Tag(Tag::EndFill) => return index + 1,
+    fn print_fill<'elements>(
+        &mut self,
+        elements: &'elements [FormatElement],
+    ) -> &'elements [FormatElement] {
+        let mut remaining = elements;
+        while let Some((element, rest)) = remaining.split_first() {
+            match element {
+                FormatElement::Tag(Tag::EndFill) => return rest,
                 FormatElement::Line(separator) => {
-                    // Peek the next entry's flat width to decide the break
-                    let entry_start = index + 1;
-                    debug_assert!(matches!(
-                        elements.get(entry_start),
-                        Some(FormatElement::Tag(Tag::StartEntry))
-                    ));
+                    debug_assert!(
+                        matches!(rest.first(), Some(FormatElement::Tag(Tag::StartEntry))),
+                        "a fill separator must be followed by an entry"
+                    );
+                    remaining = rest;
                     let separator_width = match separator {
                         LineMode::SoftOrSpace => 1,
                         LineMode::Soft => 0,
-                        // Hard separators always break
                         LineMode::Hard | LineMode::Empty => {
                             self.emit_newline(matches!(separator, LineMode::Empty));
-                            index = entry_start;
                             continue;
                         }
                     };
-                    if self.fits_region_with_extra(
-                        elements,
-                        entry_start + 1,
-                        region_end_entry,
-                        separator_width,
-                    ) {
+                    let entry_content = rest.get(1..).unwrap_or_default();
+                    if self.fits(entry_content, Region::Entry, separator_width) {
                         if matches!(separator, LineMode::SoftOrSpace) {
                             self.is_pending_space = true;
                         }
                     } else {
                         self.emit_newline(false);
                     }
-                    index = entry_start;
                 }
                 FormatElement::Tag(Tag::StartEntry) => {
-                    let mode = if self.fits_region(elements, index + 1, region_end_entry) {
+                    let mode = if self.fits(rest, Region::Entry, 0) {
                         PrintMode::Flat
                     } else {
                         PrintMode::Expanded
                     };
                     self.modes.push(mode);
-                    index += 1;
-                    // Entry content prints through `print_element`, not this
-                    // loop's arms: a grouped chain inside an entry carries its
-                    // own `Line` elements, and the `Line` arm above must only
-                    // ever see the separators between entries. A nested fill
-                    // consumes its own entries via recursion, so the first
-                    // `EndEntry` seen here is this entry's.
-                    while !matches!(&elements[index], FormatElement::Tag(Tag::EndEntry)) {
-                        index = self.print_element(elements, index);
+                    // Entry content goes through `print_element`, not this
+                    // loop's arms, because a group inside an entry has its own
+                    // `Line` elements and the `Line` arm above must only see
+                    // separators. A nested fill consumes its own entries, so
+                    // the first `EndEntry` here is this entry's.
+                    let mut entry_remaining = rest;
+                    while let Some((content, after_content)) = entry_remaining.split_first()
+                        && !matches!(content, FormatElement::Tag(Tag::EndEntry))
+                    {
+                        entry_remaining = self.print_element(content, after_content);
                     }
                     self.modes.pop();
-                    index += 1;
+                    remaining = entry_remaining.get(1..).unwrap_or_default();
                 }
-                _ => {
-                    index = self.print_element(elements, index);
+                FormatElement::Token(_)
+                | FormatElement::Text(_)
+                | FormatElement::Verbatim(_)
+                | FormatElement::Space
+                | FormatElement::ExpandParent
+                | FormatElement::LineSuffixBoundary
+                | FormatElement::Tag(_) => {
+                    remaining = self.print_element(element, rest);
                 }
             }
         }
+        remaining
     }
 
-    fn remaining_width(&self) -> isize {
-        // A pending indent hasn't reached `column` yet but will occupy the
+    fn occupied_width(&self) -> usize {
+        // A pending indent hasn't reached `display_column` yet but will occupy the
         // line before any measured content does.
-        let pending_indent = if self.is_pending_indent {
-            self.pending_indent_width()
-        } else {
-            0
-        };
-        self.options.line_width as isize
-            - self.column as isize
-            - pending_indent as isize
-            - if self.is_pending_space { 1 } else { 0 }
+        let pending_indent_columns = if self.is_pending_indent { self.indent_columns() } else { 0 };
+        self.display_column
+            .saturating_add(pending_indent_columns)
+            .saturating_add(usize::from(self.is_pending_space))
     }
 
-    fn pending_indent_width(&self) -> usize {
-        self.indents
-            .iter()
-            .map(|indent| match indent {
-                // Tabs occupy one column in this printer's width model
-                Indent::Level if self.options.use_tabs => 1,
-                Indent::Level => self.options.indent_width as usize,
-                Indent::Align(spaces) => *spaces as usize,
-                Indent::Inactive => 0,
-            })
-            .sum()
+    const fn indent_columns(&self) -> usize {
+        self.indent_level.saturating_mul(self.indent_width).saturating_add(self.base_indent.len())
     }
 
-    fn fits_region(
-        &self,
-        elements: &[FormatElement],
-        start: usize,
-        region: fn(&FormatElement, &mut i32) -> bool,
-    ) -> bool {
-        self.fits_region_with_extra(elements, start, region, 0)
-    }
+    /// Simulate flat printing of `elements` up to the end of `region`,
+    /// checking the content fits the remaining width. `separator_width`
+    /// charges width up front for a pending separator.
+    fn fits(&self, elements: &[FormatElement], region: Region, separator_width: usize) -> bool {
+        let mut used_width = self.occupied_width().saturating_add(separator_width);
+        let mut depth: u32 = 1;
+        let mut remaining = elements;
 
-    /// Simulate flat printing from `start` until `region` reports the end,
-    /// checking the content fits the remaining width. `extra` pre-charges
-    /// width (a pending separator).
-    fn fits_region_with_extra(
-        &self,
-        elements: &[FormatElement],
-        start: usize,
-        region: fn(&FormatElement, &mut i32) -> bool,
-        extra: isize,
-    ) -> bool {
-        let mut budget = self.remaining_width() - extra;
-        let mut depth: i32 = 1;
-        let mut suffix_depth: u32 = 0;
-        let mut index = start;
-
-        while index < elements.len() {
-            let element = &elements[index];
-            if region(element, &mut depth) && depth == 0 {
-                return true;
+        while let Some((element, rest)) = remaining.split_first() {
+            remaining = rest;
+            if region.opens(element) {
+                depth = depth.saturating_add(1);
             }
-            if suffix_depth == 0 {
-                match element {
-                    FormatElement::Token(content) => budget -= content.width() as isize,
-                    FormatElement::Text(content) => {
-                        if content.contains('\n') {
-                            return false;
-                        }
-                        budget -= content.width() as isize;
-                    }
-                    FormatElement::Space => budget -= 1,
-                    FormatElement::Line(LineMode::Soft) => {}
-                    FormatElement::Line(LineMode::SoftOrSpace) => budget -= 1,
-                    FormatElement::Line(LineMode::Hard | LineMode::Empty)
-                    | FormatElement::ExpandParent => return false,
-                    FormatElement::LineSuffixBoundary => {}
-                    // Measure by the most-flat variant
-                    FormatElement::BestFitting(variants) => {
-                        if let Some(most_flat) = variants.first()
-                            && !self.fits_slice_flat(most_flat, &mut budget)
-                        {
-                            return false;
-                        }
-                    }
-                    FormatElement::Tag(Tag::StartConditional { mode, group_id }) => {
-                        // Decided groups answer truthfully; the group being
-                        // measured right now would print flat if this
-                        // measurement succeeds.
-                        let effective =
-                            self.group_modes[group_id.0 as usize].unwrap_or(PrintMode::Flat);
-                        if effective != *mode {
-                            index = skip_region(
-                                elements,
-                                index + 1,
-                                is_start_conditional,
-                                is_end_conditional,
-                            );
-                            continue;
-                        }
-                    }
-                    FormatElement::Tag(_) => {}
+            if region.closes(element) {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return true;
                 }
-            } else if matches!(element, FormatElement::Tag(Tag::EndLineSuffix)) {
-                suffix_depth -= 1;
             }
-            if matches!(element, FormatElement::Tag(Tag::StartLineSuffix)) {
-                suffix_depth += 1;
-            }
-            if budget < 0 {
-                return false;
-            }
-            index += 1;
-        }
-        // Ran off the end of the document while under budget
-        true
-    }
-
-    /// Width-only check of a detached slice (BestFitting variant).
-    fn fits_slice_flat(&self, elements: &[FormatElement], budget: &mut isize) -> bool {
-        for element in elements {
             match element {
-                FormatElement::Token(content) => *budget -= content.width() as isize,
-                FormatElement::Text(content) => {
+                FormatElement::Token(content) => {
+                    used_width = used_width.saturating_add(content.width());
+                }
+                FormatElement::Text(content) | FormatElement::Verbatim(content) => {
                     if content.contains('\n') {
                         return false;
                     }
-                    *budget -= content.width() as isize;
+                    used_width = used_width.saturating_add(content.width());
                 }
-                FormatElement::Space | FormatElement::Line(LineMode::SoftOrSpace) => *budget -= 1,
-                FormatElement::Line(LineMode::Soft) => {}
+                FormatElement::Space | FormatElement::Line(LineMode::SoftOrSpace) => {
+                    used_width = used_width.saturating_add(1);
+                }
                 FormatElement::Line(LineMode::Hard | LineMode::Empty)
                 | FormatElement::ExpandParent => return false,
-                FormatElement::LineSuffixBoundary => {}
-                FormatElement::BestFitting(variants) => {
-                    if let Some(most_flat) = variants.first()
-                        && !self.fits_slice_flat(most_flat, budget)
-                    {
-                        return false;
+                FormatElement::Tag(Tag::StartIfGroupBreaks(group_id)) => {
+                    // A decided group answers with its decision. An undecided
+                    // one is being measured now, and prints flat if this
+                    // measurement succeeds.
+                    if self.group_mode(*group_id) != Some(PrintMode::Expanded) {
+                        remaining = skip_conditional(rest);
+                        continue;
                     }
                 }
-                FormatElement::Tag(_) => {}
+                FormatElement::Tag(Tag::StartLineSuffix) => {
+                    (_, remaining) = split_line_suffix(rest);
+                }
+                FormatElement::Line(LineMode::Soft)
+                | FormatElement::LineSuffixBoundary
+                | FormatElement::Tag(_) => {}
             }
-            if *budget < 0 {
+            if used_width > self.line_width {
                 return false;
             }
         }
@@ -494,34 +396,42 @@ impl Printer {
         if self.is_pending_space {
             self.is_pending_space = false;
             self.output.print_ascii_byte(b' ');
-            self.column += 1;
+            self.display_column = self.display_column.saturating_add(1);
         }
         self.output.print_str(content);
-        match content.rfind('\n') {
-            Some(last_newline) => {
-                // Multi-line text: column restarts after its last line
-                self.line_start = self.output.len() - (content.len() - last_newline - 1);
-                self.column = content[last_newline + 1..].width();
+        match content.rsplit_once('\n') {
+            Some((_, last_line)) => {
+                // Multi-line text: the column restarts from its last line.
+                self.line_start = self.output.len().saturating_sub(last_line.len());
+                self.display_column = last_line.width();
             }
-            None => self.column += content.width(),
+            None => self.display_column = self.display_column.saturating_add(content.width()),
         }
+    }
+
+    /// Copy source text, which brings its own indentation and keeps any
+    /// trailing whitespace. Text ending in a line break leaves the next line to
+    /// the printer's indent.
+    fn emit_verbatim(&mut self, content: &str) {
+        self.is_pending_indent = false;
+        self.emit_text(content);
+        self.line_start = self.output.len();
+        self.is_pending_indent = content.ends_with(['\n', '\r']);
     }
 
     fn emit_newline(&mut self, is_blank_line: bool) {
         self.flush_suffixes();
         self.is_pending_space = false;
         self.trim_trailing_whitespace();
-        if is_blank_line {
-            // Exactly one blank line, never a stack of them
-            while !self.output.as_bytes().ends_with(b"\n\n") {
-                self.output.print_ascii_byte(b'\n');
-            }
-        } else if !self.output.as_bytes().ends_with(b"\n\n") {
-            // A hard break directly after a blank line folds into it
+        // Blank lines never stack, so a break right after one adds nothing.
+        while !self.output.as_bytes().ends_with(b"\n\n") {
             self.output.print_ascii_byte(b'\n');
+            if !is_blank_line {
+                break;
+            }
         }
         self.line_start = self.output.len();
-        self.column = 0;
+        self.display_column = 0;
         self.is_pending_indent = true;
     }
 
@@ -529,157 +439,99 @@ impl Printer {
         if self.suffixes.is_empty() {
             return;
         }
-        let suffixes = std::mem::take(&mut self.suffixes);
+        let mut suffixes = take(&mut self.suffixes);
         for element in &suffixes {
             match element {
                 FormatElement::Token(content) => self.emit_text(content),
                 FormatElement::Text(content) => self.emit_text(content),
                 FormatElement::Space => self.is_pending_space = true,
-                // Suffix bodies are comment text; anything structural
-                // inside one is an emitter bug.
-                _ => debug_assert!(false, "unsupported element in line suffix: {element:?}"),
+                // `Formatter::write_line_suffix` writes only a space and
+                // text, so nothing structural can reach a suffix body.
+                FormatElement::Verbatim(_)
+                | FormatElement::Line(_)
+                | FormatElement::ExpandParent
+                | FormatElement::LineSuffixBoundary
+                | FormatElement::Tag(_) => {
+                    debug_assert!(false, "unsupported element in line suffix: {element:?}");
+                }
             }
         }
+        suffixes.clear();
+        self.suffixes = suffixes;
     }
 
     fn trim_trailing_whitespace(&mut self) {
         let bytes = self.output.as_bytes();
-        let mut trimmed_end = bytes.len();
-        while trimmed_end > self.line_start && matches!(bytes[trimmed_end - 1], b' ' | b'\t') {
-            trimmed_end -= 1;
-        }
+        let trailing_whitespace_bytes = bytes
+            .get(self.line_start..)
+            .unwrap_or_default()
+            .iter()
+            .rev()
+            .take_while(|b| matches!(b, b' ' | b'\t'))
+            .count();
+        let trimmed_end = bytes.len().saturating_sub(trailing_whitespace_bytes);
         self.output.truncate(trimmed_end);
     }
 
     fn flush_indent(&mut self) {
         self.is_pending_indent = false;
-        let mut width = 0usize;
-        for indent in &self.indents {
-            match indent {
-                Indent::Level => width += 1,
-                Indent::Align(_) | Indent::Inactive => {}
-            }
-        }
-        let align_extra: usize = self
-            .indents
-            .iter()
-            .map(|indent| match indent {
-                Indent::Align(spaces) => *spaces as usize,
-                Indent::Level | Indent::Inactive => 0,
-            })
-            .sum();
-
-        if self.options.use_tabs {
-            self.output.print_ascii_repeat(b'\t', width);
-            // The width model treats a tab as a single cell.
-            self.column += width;
-        } else {
-            let spaces = width * self.options.indent_width as usize;
-            self.output.print_ascii_repeat(b' ', spaces);
-            self.column += spaces;
-        }
-        self.output.print_ascii_repeat(b' ', align_extra);
-        self.column += align_extra;
+        self.output.print_str(&self.base_indent);
+        let indent_bytes = self.indent_level.saturating_mul(self.indent_width);
+        self.output.print_ascii_repeat(self.indent_byte, indent_bytes);
+        self.display_column = self.display_column.saturating_add(self.indent_columns());
     }
 }
 
-/// Region tracker for group content: depth +/-1 on group tags, end at 0.
-fn region_end_group(element: &FormatElement, depth: &mut i32) -> bool {
-    match element {
-        FormatElement::Tag(Tag::StartGroup(_)) => {
-            *depth += 1;
-            false
-        }
-        FormatElement::Tag(Tag::EndGroup) => {
-            *depth -= 1;
-            true
-        }
-        _ => false,
-    }
+const fn is_start_conditional(element: &FormatElement) -> bool {
+    matches!(element, FormatElement::Tag(Tag::StartIfGroupBreaks(_)))
 }
 
-fn region_end_entry(element: &FormatElement, depth: &mut i32) -> bool {
-    match element {
-        FormatElement::Tag(Tag::StartEntry) => {
-            *depth += 1;
-            false
-        }
-        FormatElement::Tag(Tag::EndEntry) => {
-            *depth -= 1;
-            true
-        }
-        _ => false,
-    }
+const fn is_end_conditional(element: &FormatElement) -> bool {
+    matches!(element, FormatElement::Tag(Tag::EndIfGroupBreaks))
 }
 
-/// Whole-slice measurement: never ends early.
-fn region_whole(_element: &FormatElement, _depth: &mut i32) -> bool {
-    false
-}
-
-fn is_start_conditional(element: &FormatElement) -> bool {
-    matches!(element, FormatElement::Tag(Tag::StartConditional { .. }))
-}
-
-fn is_end_conditional(element: &FormatElement) -> bool {
-    matches!(element, FormatElement::Tag(Tag::EndConditional))
-}
-
-fn is_start_suffix(element: &FormatElement) -> bool {
-    matches!(element, FormatElement::Tag(Tag::StartLineSuffix))
-}
-
-fn is_end_suffix(element: &FormatElement) -> bool {
+const fn is_end_suffix(element: &FormatElement) -> bool {
     matches!(element, FormatElement::Tag(Tag::EndLineSuffix))
 }
 
-/// Skip past a nested region: from `start` (just after the opening tag) to
-/// one past the matching close.
-fn skip_region(
-    elements: &[FormatElement],
-    start: usize,
-    is_open: fn(&FormatElement) -> bool,
-    is_close: fn(&FormatElement) -> bool,
-) -> usize {
-    let mut depth = 1;
-    let mut index = start;
-    while index < elements.len() {
-        let element = &elements[index];
-        if is_open(element) {
-            depth += 1;
-        } else if is_close(element) {
-            depth -= 1;
-            if depth == 0 {
-                return index + 1;
-            }
+fn skip_conditional(elements: &[FormatElement]) -> &[FormatElement] {
+    let mut remaining = elements;
+    while let Some((element, rest)) = remaining.split_first() {
+        if is_end_conditional(element) {
+            return rest;
         }
-        index += 1;
+        remaining = if is_start_conditional(element) { skip_conditional(rest) } else { rest };
     }
-    elements.len()
+    remaining
+}
+
+/// Split the elements after a `StartLineSuffix` into the suffix body and what
+/// follows its end tag. A body is comment text, so suffixes never nest.
+fn split_line_suffix(elements: &[FormatElement]) -> (&[FormatElement], &[FormatElement]) {
+    let mut sections = elements.splitn(2, is_end_suffix);
+    let body = sections.next().unwrap_or_default();
+    (body, sections.next().unwrap_or_default())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::comments::Comments;
     use crate::ir::{
-        Format, Formatter, best_fitting, group, group_with_id, hard_line, if_group_breaks, indent,
-        soft_line, soft_line_or_space, space, text, token,
+        Format as _, Formatter, empty_line, format_with, group, group_with_id, hard_line,
+        if_group_breaks, indent, soft_line, soft_line_or_space, space, token,
     };
+    use crate::{FormatOptions, IndentStyle};
 
     fn print_document(build: impl Fn(&mut Formatter), line_width: u16) -> String {
-        let mut formatter = Formatter::new();
-        build(&mut formatter);
-        let group_count = formatter.group_count();
-        let elements = formatter.into_elements();
-        print(
-            &elements,
-            group_count,
-            &PrinterOptions {
-                line_width,
-                use_tabs: false,
-                indent_width: 4,
-            },
-        )
+        let options = FormatOptions {
+            line_width,
+            indent_style: IndentStyle::Spaces,
+            indent_width: 4,
+            ..FormatOptions::default()
+        };
+        let mut f = Formatter::new(options, Comments::none());
+        build(&mut f);
+        f.print("")
     }
 
     #[test]
@@ -702,12 +554,15 @@ mod tests {
 
     #[test]
     fn wide_group_breaks() {
-        let long = "x".repeat(90);
+        let long_text = "x".repeat(90);
         let output = print_document(
             move |f| {
                 group((
                     token("{"),
-                    indent((soft_line_or_space(), text(long.clone()))),
+                    indent((
+                        soft_line_or_space(),
+                        format_with(|indented| indented.write_text(long_text.clone())),
+                    )),
                     soft_line_or_space(),
                     token("}"),
                 ))
@@ -733,12 +588,12 @@ mod tests {
             },
             80,
         );
-        // Both the inner and outer group must expand
+        // Both the inner and outer group must expand.
         assert_eq!(output, "a(\n\n)\nb");
     }
 
     #[test]
-    fn if_group_breaks_by_id() {
+    fn if_group_breaks_prints_when_its_group_breaks() {
         let output = print_document(
             |f| {
                 let id = f.group_id();
@@ -747,7 +602,7 @@ mod tests {
                     (
                         token("["),
                         soft_line(),
-                        text("y".repeat(100)),
+                        format_with(|grouped| grouped.write_text("y".repeat(100))),
                         if_group_breaks(id, token(",")),
                         soft_line(),
                         token("]"),
@@ -784,45 +639,10 @@ mod tests {
     }
 
     #[test]
-    fn best_fitting_picks_first_that_fits() {
-        let output = print_document(
-            |f| {
-                token("local x = ").fmt(f);
-                best_fitting(&[
-                    &(token("aaaa"), space(), token("bbbb")) as &dyn Format,
-                    &(token("aaaa"), hard_line(), token("bbbb")) as &dyn Format,
-                ])
-                .fmt(f);
-            },
-            80,
-        );
-        assert_eq!(output, "local x = aaaa bbbb");
-    }
-
-    #[test]
-    fn best_fitting_falls_back_to_last() {
-        let output = print_document(
-            |f| {
-                text("p".repeat(78)).fmt(f);
-                best_fitting(&[
-                    &(token("aaaa"), space(), token("bbbb")) as &dyn Format,
-                    &(hard_line(), token("bbbb")) as &dyn Format,
-                ])
-                .fmt(f);
-            },
-            80,
-        );
-        assert!(output.ends_with("\nbbbb"));
-    }
-
-    #[test]
     fn trailing_whitespace_is_trimmed() {
         let output = print_document(
             |f| {
-                token("a").fmt(f);
-                space().fmt(f);
-                hard_line().fmt(f);
-                token("b").fmt(f);
+                (token("a"), space(), hard_line(), token("b")).fmt(f);
             },
             80,
         );
@@ -833,10 +653,7 @@ mod tests {
     fn blank_lines_do_not_stack() {
         let output = print_document(
             |f| {
-                token("a").fmt(f);
-                crate::ir::empty_line().fmt(f);
-                crate::ir::empty_line().fmt(f);
-                token("b").fmt(f);
+                (token("a"), empty_line(), empty_line(), token("b")).fmt(f);
             },
             80,
         );
@@ -848,9 +665,8 @@ mod tests {
         let output = print_document(
             |f| {
                 token("local x = 1").fmt(f);
-                crate::ir::line_suffix((space(), text("-- trailing"))).fmt(f);
-                hard_line().fmt(f);
-                token("local y = 2").fmt(f);
+                f.write_line_suffix("-- trailing".into());
+                (hard_line(), token("local y = 2")).fmt(f);
             },
             80,
         );

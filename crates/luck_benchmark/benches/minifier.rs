@@ -1,6 +1,13 @@
-use luck_benchmark::corpus::{test_files, test_projects};
-use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use luck_core::transform_config::TransformConfig;
+#![expect(
+    clippy::missing_panics_doc,
+    reason = "a test panics to fail, so a Panics section says nothing"
+)]
+
+use luck_benchmark::{
+    BenchmarkId, Criterion, ProjectFile, black_box, criterion_group, criterion_main, test_files,
+    test_projects,
+};
+use luck_core::TransformConfig;
 
 fn bench_minifier(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("minifier");
@@ -8,35 +15,35 @@ fn bench_minifier(criterion: &mut Criterion) {
     for file in test_files() {
         let id = BenchmarkId::from_parameter(file.file_name);
         let source_text = file.source_text.as_str();
-        let target = file.target;
+        let version = file.target.lua_version();
         let config = TransformConfig::default();
+        let minify = || luck_minifier::minify(black_box(source_text), version, &config);
+        let minified = minify();
+        assert!(minified.is_ok(), "{:?}", minified.err());
         // `minify` has no parsed-AST entry point, so the measured section
         // includes the initial parse; the transform fixpoint dominates.
-        group.bench_function(id, |b| {
-            b.iter(|| {
-                luck_minifier::minify(black_box(source_text), target, &config, "bench.lua")
-                    .expect("bench corpus must minify")
-            });
+        group.bench_function(id, |bencher| {
+            bencher.iter(minify);
         });
     }
 
     for project in test_projects() {
         let id = BenchmarkId::from_parameter(project.name);
-        let target = project.target;
+        let version = project.target.lua_version();
         let config = TransformConfig::default();
         let files = project.files;
-        group.bench_function(id, |b| {
-            b.iter(|| {
-                for (name, source_text) in &files {
-                    black_box(
-                        luck_minifier::minify(
-                            black_box(source_text.as_str()),
-                            target,
-                            &config,
-                            name,
-                        )
-                        .expect("bench corpus must minify"),
-                    );
+        for ProjectFile { relative_path, source_text } in &files {
+            let minified = luck_minifier::minify(source_text.as_str(), version, &config);
+            assert!(minified.is_ok(), "{relative_path}: {:?}", minified.err());
+        }
+        group.bench_function(id, |bencher| {
+            bencher.iter(|| {
+                for ProjectFile { source_text, .. } in &files {
+                    let _unused = black_box(luck_minifier::minify(
+                        black_box(source_text.as_str()),
+                        version,
+                        &config,
+                    ));
                 }
             });
         });

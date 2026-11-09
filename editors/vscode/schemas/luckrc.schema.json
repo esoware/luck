@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "dynamic_require": {
-      "description": "How `require(expr)` - an argument that is not a string literal - is\ntreated when bundling: `\"error\"`, `\"warn\"` (default), or `\"allow\"`.",
+      "description": "How the bundler treats a `require` whose argument isn't a string\nliteral: `\"error\"`, `\"warn\"` (default), or `\"allow\"`.",
       "anyOf": [
         {
           "$ref": "#/$defs/DynamicRequire"
@@ -159,22 +159,22 @@
   "additionalProperties": false,
   "$defs": {
     "BlockNewlineGaps": {
-      "description": "Controls whether blank lines inside blocks are preserved from source.",
+      "description": "Whether a block body can start or end with a blank line.",
       "oneOf": [
         {
-          "description": "Strip blank lines at the start/end of any block body.",
+          "description": "Strip blank lines at the start and end of every block body.",
           "type": "string",
           "const": "never"
         },
         {
-          "description": "Keep blank lines at the start/end of block bodies verbatim.",
+          "description": "Keep one blank line at the start or end of a block body when the source\nhas any there.",
           "type": "string",
           "const": "preserve"
         }
       ]
     },
     "CallParentheses": {
-      "description": "Controls when parentheses are used around single-argument function calls.",
+      "description": "When a call drops the parentheses around a lone string or table argument.",
       "oneOf": [
         {
           "description": "Always use parentheses: `f(\"hello\")`, `f({1, 2})`.",
@@ -197,14 +197,14 @@
           "const": "none"
         },
         {
-          "description": "Preserve the source's choice: `f\"x\"` stays bare, `f(\"x\")` stays parenthesized.",
+          "description": "Keep the source's choice: `f\"x\"` stays bare and `f(\"x\")` keeps its\nparentheses.",
           "type": "string",
           "const": "input"
         }
       ]
     },
     "Category": {
-      "description": "Category of a lint rule. Owned here so the whole luck.json config (including\nthe typed `lint` section) deserializes without depending on the linter crate.",
+      "description": "A group of lint rules, enabled together through `categories`.",
       "oneOf": [
         {
           "description": "Outright wrong or useless code.",
@@ -229,7 +229,7 @@
       ]
     },
     "CollapseSimpleStatement": {
-      "description": "Controls collapsing of simple single-statement blocks onto one line.",
+      "description": "Which simple single-statement blocks collapse onto one line.",
       "oneOf": [
         {
           "description": "Always expand blocks.",
@@ -237,7 +237,7 @@
           "const": "never"
         },
         {
-          "description": "Collapse simple function bodies: `function() return x end`.",
+          "description": "Simple function bodies, as in `function() return x end`. The formatter\ndoesn't collapse function bodies, so this behaves like `never`.",
           "type": "string",
           "const": "function_only"
         },
@@ -247,14 +247,14 @@
           "const": "conditional_only"
         },
         {
-          "description": "Collapse both simple functions and conditionals.",
+          "description": "Simple functions and conditionals. The formatter doesn't collapse\nfunction bodies, so this behaves like `conditional_only`.",
           "type": "string",
           "const": "always"
         }
       ]
     },
     "DiagnosticSeverity": {
-      "description": "Whether a diagnostic is an error (blocks the build) or a warning (informational).",
+      "description": "Diagnostic severity: an `error` fails the run, a `warning` doesn't by\ndefault.",
       "type": "string",
       "enum": [
         "error",
@@ -262,10 +262,10 @@
       ]
     },
     "DynamicRequire": {
-      "description": "How the bundler treats `require(expr)` - a require whose argument is not a\nstring literal, so no module can be resolved for it at build time.",
+      "description": "How the bundler treats a `require` whose argument isn't a string literal\nand so can't be resolved at build time.",
       "oneOf": [
         {
-          "description": "Abort the bundle.",
+          "description": "Fail the bundle (E002).",
           "type": "string",
           "const": "error"
         },
@@ -275,14 +275,14 @@
           "const": "warn"
         },
         {
-          "description": "Keep the call silently - for trees where runtime-resolved requires are\nthe norm, such as Roblox `require(script.Parent.Child)`.",
+          "description": "Keep the call without a warning, for trees where runtime requires are\nnormal, such as Roblox's `require(script.Parent.Child)`.",
           "type": "string",
           "const": "allow"
         }
       ]
     },
     "EntryConfig": {
-      "description": "A single entry point in a multi-entry build configuration.",
+      "description": "One entry of a multi-entry build: the file to bundle and where to write\nthe bundle, both relative to the `luck.json` directory.",
       "type": "object",
       "properties": {
         "entry": {
@@ -303,7 +303,7 @@
       "type": "object",
       "properties": {
         "block_newline_gaps": {
-          "description": "`\"never\"` (default) or `\"preserve\"`. Controls whether blank lines at\nthe start/end of block bodies are preserved verbatim.",
+          "description": "Whether to keep a blank line at the start or end of a block body:\n`\"never\"` (default) or `\"preserve\"`.",
           "anyOf": [
             {
               "$ref": "#/$defs/BlockNewlineGaps"
@@ -334,7 +334,7 @@
           ]
         },
         "hexadecimal_case": {
-          "description": "`\"preserve\"` (default) / `\"lower\"` / `\"upper\"`. Case of hex digits\n`A`-`F` in numeric literals; the `0x` prefix is always lowercased.",
+          "description": "Case of the hex digits `A`-`F` in numeric literals: `\"preserve\"`\n(default), `\"lower\"`, or `\"upper\"`. The `0x` prefix is always\nlowercase.",
           "anyOf": [
             {
               "$ref": "#/$defs/HexCase"
@@ -383,7 +383,7 @@
           "minimum": 0
         },
         "magic_trailing_comma": {
-          "description": "When true, a trailing comma in a table constructor forces the\nsurrounding group to break across multiple lines (Black/Prettier\nconvention). This applies to table constructors only. No dialect's\ngrammar allows a trailing comma in a call argument list. Defaults to\n`false`, which leaves the normal pack and hug rules in charge.",
+          "description": "When true, a trailing comma in a table constructor breaks the table one\nfield per line, as in Black and Prettier. Defaults to `false`. Argument\nlists can't carry one, since no dialect allows a comma after the last\nargument.",
           "type": [
             "boolean",
             "null"
@@ -400,14 +400,14 @@
           ]
         },
         "sort_requires": {
-          "description": "When true, consecutive `local NAME = require(...)` statements at the\ntop of a block are sorted alphabetically by name.",
+          "description": "When true, sorts each run of consecutive `local NAME = require(...)`\nor `local NAME = game:GetService(...)` statements by name. A blank\nline ends a run.",
           "type": [
             "boolean",
             "null"
           ]
         },
         "space_after_function_names": {
-          "description": "`\"never\"` (default) / `\"definitions\"` / `\"calls\"` / `\"always\"`.\nInserts a space before `(` in function definitions, calls, or both.",
+          "description": "Where to put a space before `(`: `\"never\"` (default), `\"definitions\"`,\n`\"calls\"`, or `\"always\"` for both.",
           "anyOf": [
             {
               "$ref": "#/$defs/SpaceAfterFunction"
@@ -459,19 +459,19 @@
       "type": "object",
       "properties": {
         "categories": {
-          "description": "Rule categories to enable as a group (e.g. `suspicious`, `style`).",
+          "description": "Rule categories to enable on top of `correctness`, which is on by\ndefault.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Category"
           }
         },
         "disable_default_rules": {
-          "description": "When true, only rules explicitly enabled via `rule_overrides` run.\nEven correctness defaults are silenced.",
+          "description": "When true, only rules set to `\"enabled\": true` in `rule_overrides` run.\nCorrectness rules and `categories` are ignored.",
           "type": "boolean",
           "default": false
         },
         "extra_globals": {
-          "description": "Additional allowed global names (e.g. `vim`, `roblox`).",
+          "description": "Extra global names to treat as defined, such as `vim` or `love`.",
           "type": "array",
           "default": [],
           "items": {
@@ -479,7 +479,7 @@
           }
         },
         "max_cyclomatic_complexity": {
-          "description": "Maximum cyclomatic complexity threshold for the\n`cyclomatic_complexity` rule.",
+          "description": "Complexity above which the `cyclomatic_complexity` rule, a `style`\nrule, flags a function. The rule reports nothing while this is unset.",
           "type": [
             "integer",
             "null"
@@ -489,7 +489,7 @@
           "minimum": 0
         },
         "restricted_module_paths": {
-          "description": "Module paths whose `require` is restricted by the\n`restricted_module_paths` rule.",
+          "description": "Modules the `restricted_module_paths` rule forbids requiring. A\ntrailing `.*` also covers submodules: `forbidden.*` matches `forbidden`\nand `forbidden.sub`.",
           "type": "array",
           "default": [],
           "items": {
@@ -507,7 +507,7 @@
       "additionalProperties": false
     },
     "ProfileOverrides": {
-      "description": "Settings that a named profile can override (e.g. `\"release\"`).",
+      "description": "A build profile, selected with `luck build --profile <name>`.\n\nIts `minify` and `transforms` replace the top-level ones. `--release` and\n`--dev` select the `release` and `dev` profiles.",
       "type": "object",
       "properties": {
         "minify": {
@@ -554,7 +554,7 @@
       ]
     },
     "RuleSetting": {
-      "description": "Per-rule override slot. `enabled` toggles a rule on/off; `severity`\noverrides the default severity (`\"error\"` or `\"warning\"`). Both are\noptional so the user can override one without touching the other.",
+      "description": "Overrides for one lint rule.\n\n`enabled` turns the rule on or off, and `severity` replaces its default\nseverity. Either can be set alone.",
       "type": "object",
       "properties": {
         "enabled": {
@@ -577,20 +577,20 @@
       "additionalProperties": false
     },
     "SpaceAfterFunction": {
-      "description": "Controls inserting a space between `function`/callee and `(`.",
+      "description": "Where a space goes before the `(` of a function definition or call.",
       "oneOf": [
         {
-          "description": "No space inserted: `function foo()` / `foo()`.",
+          "description": "No space: `function foo()`, `foo()`.",
           "type": "string",
           "const": "never"
         },
         {
-          "description": "Space only after `function` keyword in definitions: `function foo ()`.",
+          "description": "Space before a definition's parameter list only: `function foo ()`.",
           "type": "string",
           "const": "definitions"
         },
         {
-          "description": "Space only between callee and `(` in calls: `foo ()`.",
+          "description": "Space between a callee and its `(` only: `foo ()`.",
           "type": "string",
           "const": "calls"
         },
@@ -602,7 +602,7 @@
       ]
     },
     "TransformConfig": {
-      "description": "Per-transform toggle flags for the minification pipeline.",
+      "description": "Turns individual minifier passes on or off. Every pass except\n`rename_globals` is on by default.",
       "type": "object",
       "properties": {
         "fold_constants": {
@@ -626,7 +626,7 @@
           "default": true
         },
         "rename_globals": {
-          "description": "Rename globals that this file defines (`function myHelper() end`,\n`counter = 0`). Off by default, because renamed globals live under\ndifferent `_G` keys, which breaks any cross-chunk consumer,\n`_G[\"name\"]` access, or loaded string that expects the original\nnames. Enable only for fully self-contained single-chunk scripts.",
+          "description": "Rename globals this file defines, such as `function helper() end` or\n`counter = 0`. Off by default: renamed globals land under different\n`_G` keys, which breaks other chunks, `_G[\"name\"]` lookups, and loaded\nstrings that use the original names. Only takes effect with\n`rename_locals` on.",
           "type": "boolean",
           "default": false
         },

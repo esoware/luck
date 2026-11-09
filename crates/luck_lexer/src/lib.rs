@@ -1,11 +1,11 @@
-//! # luck_lexer
+//! # `luck_lexer`
 //!
 //! Single-pass lexer for Lua 5.1-5.5 and Luau. Converts source text into a flat
-//! [`Token`] stream plus a separate [`Comment`] array.
+//! [`Token`](luck_token::Token) stream plus a separate [`Comment`](luck_token::Comment) array.
 //!
-//! Version-gated: binary literals (Luau), floor division (5.3+), hex floats
-//! (5.2+), and interpolated strings (Luau) are recognized only for the versions
-//! that have them.
+//! Version-gated tokens, such as floor division (5.3+ and Luau), hex floats
+//! (5.2+), and Luau's binary literals and interpolated strings, are recognized
+//! only for the versions that have them.
 //!
 //! # Usage
 //!
@@ -16,52 +16,22 @@
 //! assert!(result.errors.is_empty());
 //! ```
 
+#![cfg_attr(
+    test,
+    expect(
+        clippy::missing_panics_doc,
+        reason = "a test panics to fail, so a Panics section says nothing"
+    )
+)]
+
 mod cursor;
+mod lex_error;
+mod lex_result;
 mod lexer;
 mod number;
 mod search;
 mod string;
 
-pub use lexer::Lexer;
-use luck_token::{Comment, LuaVersion, Token};
-
-#[derive(Debug)]
-pub struct LexResult {
-    pub tokens: Vec<Token>,
-    pub comments: Vec<Comment>,
-    pub errors: Vec<LexError>,
-}
-
-pub type LexError = luck_token::SourceError;
-
-// Error construction stays out of the hot lexing loops; #[cold] keeps
-// these calls laid out off the fallthrough path.
-#[cold]
-#[inline(never)]
-pub(crate) fn lex_error(span: luck_token::Span, message: impl Into<String>) -> LexError {
-    LexError {
-        span,
-        message: message.into(),
-    }
-}
-
-#[must_use]
-pub fn lex(source: &str, version: LuaVersion) -> LexResult {
-    // Spans are u32 (hard invariant 2); a larger input would silently
-    // wrap every span past 4 GB, so refuse it up front.
-    if source.len() > u32::MAX as usize {
-        return LexResult {
-            tokens: Vec::new(),
-            comments: Vec::new(),
-            errors: vec![lex_error(
-                luck_token::Span::new(0, 0),
-                format!(
-                    "input is {} bytes; the maximum supported file size is 4 GiB",
-                    source.len()
-                ),
-            )],
-        };
-    }
-    let mut lexer = lexer::Lexer::new(source, version);
-    lexer.tokenize()
-}
+pub use lex_error::LexError;
+pub use lex_result::LexResult;
+pub use lexer::{Lexer, lex};

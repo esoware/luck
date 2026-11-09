@@ -1,113 +1,81 @@
-use luck_ast::Expression;
-use luck_ast::expr::{FunctionArgs, FunctionCall};
-use luck_token::Span;
+use luck_ast::{FunctionArgs, FunctionCall};
+use luck_token::{LuaVersion, Span, has_line_break};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
-use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
+use crate::diagnostic::Finding;
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
-pub struct AmbiguousNewlineCall;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AmbiguousNewlineCall;
 
-impl Rule for AmbiguousNewlineCall {
-    fn name(&self) -> &'static str {
-        "ambiguous_newline_call"
-    }
-
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-
-    fn description(&self) -> &'static str {
-        "call arguments open on a new line, which reads ambiguously"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
+impl_rule!(
+    AmbiguousNewlineCall,
+    "ambiguous_newline_call",
+    Suspicious,
+    Warning,
+    "call arguments open on a new line, which reads ambiguously"
+);
 
 impl NodeRule for AmbiguousNewlineCall {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset =
-            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_statement(
+    fn on_call(
         &self,
-        stmt: &luck_ast::stmt::Statement,
-        ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
+        call: &FunctionCall,
+        _position: CallPosition,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
     ) {
-        if let luck_ast::stmt::Statement::FunctionCall(call_stmt) = stmt {
-            check_call(call_stmt, ctx, out);
-        }
-    }
-
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if let Expression::FunctionCall(call) = expr {
-            check_call(call, ctx, out);
-        }
+        findings.extend(check_call(call, context.source, context.semantic.version));
     }
 }
 
-fn check_call(call: &FunctionCall, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-    let FunctionArgs::Parenthesized {
-        span: args_span, ..
-    } = &call.args
-    else {
-        return;
+fn check_call(call: &FunctionCall, source: &str, version: LuaVersion) -> Option<Finding> {
+    let FunctionArgs::Parenthesized { span: args_span, .. } = &call.args else {
+        return None;
     };
-    let prefix_end = match &call.method {
-        Some(method_token) => method_token.span.end,
-        None => call.callee.span().end,
-    };
+    let prefix_end = call
+        .method
+        .as_ref()
+        .map_or_else(|| call.callee.span().end, |method_token| method_token.span.end);
     let open_start = args_span.start;
-    if open_start <= prefix_end {
-        return;
+    if open_start <= prefix_end
+        || !has_line_break(Span::new(prefix_end, open_start).text(source), version)
+    {
+        return None;
     }
-    let gap = &ctx.source[prefix_end as usize..open_start as usize];
-    if !gap.contains('\n') {
-        return;
-    }
-    out.push(
-        LintDiagnostic::new(
-            "ambiguous_newline_call",
-            "call arguments start on a new line; Lua joins this with the previous expression",
-            Span::new(args_span.start, args_span.start + 1),
+    Some(
+        Finding::new(
+            "call arguments start on a new line, but Lua joins this with the previous expression",
+            Span::new(open_start, open_start.saturating_add(1)),
         )
         .with_help(
             "keep `(` on the same line as the callee, or add a semicolon if a new statement was \
-             intended"
-                .to_string(),
+             intended",
         ),
-    );
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use super::AmbiguousNewlineCall;
+    use super::*;
     use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&AmbiguousNewlineCall, source, LuaVersion::Lua54)
+        run_rule(&AmbiguousNewlineCall, source, LuaVersion::Lua54)
     }
 
     #[test]
     fn flags_paren_on_next_line() {
-        // Parses as `local x = f(3)` even though it reads as two
-        // statements, which is the ambiguity this rule flags.
+        // Parses as `local x = f(3)`, though it reads as two statements.
         let diags = run("local f = print\nlocal x = f\n(3)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
-    fn flags_statement_level_split_call() {
+    fn flags_stmt_level_split_call() {
         let diags = run("local f = print\nf\n(3)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
@@ -146,5 +114,11 @@ mod tests {
     fn ignores_string_and_table_calls() {
         let diags = run("local f = print\nf\n\"s\"\nf\n{}");
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_paren_after_cr_only_line_break() {
+        let diags = run("local f = print\nf\r(3)");
+        assert_eq!(diags.len(), 1, "Lua reads a lone CR as a line break: {diags:?}");
     }
 }

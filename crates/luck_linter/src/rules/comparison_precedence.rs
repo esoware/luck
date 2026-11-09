@@ -1,116 +1,115 @@
 use luck_ast::Expression;
 use luck_token::{BinOp, UnOp};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
+use crate::diagnostic::Finding;
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
-/// Lua's comparison operators (`<`, `<=`, `>`, `>=`, `==`, `~=`) are
-/// all left-associative with the same precedence, so `a < b == c` parses
-/// as `(a < b) == c`. The boolean result of the inner comparison is then
-/// compared by value against `c`, almost never what was intended.
-pub struct ComparisonPrecedence;
+/// Lua's comparison operators share one precedence and associate left, so
+/// `a < b == c` parses as `(a < b) == c`. Unary `not` binds tighter than
+/// any of them, so `not a == b` parses as `(not a) == b`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ComparisonPrecedence;
 
-impl Rule for ComparisonPrecedence {
-    fn name(&self) -> &'static str {
-        "comparison_precedence"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "chained comparison parses by left-associativity, not as a math chain"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
-
-/// Returns the inner comparison binop if `expr` is one and is not wrapped
-/// in explicit parentheses (parentheses signal author intent).
-fn inner_compare(expr: &Expression) -> Option<&luck_ast::expr::BinaryOp> {
-    if let Expression::BinaryOp(binop) = expr
-        && binop.op.is_comparison()
-    {
-        return Some(binop);
-    }
-    None
-}
-
-/// A bare `not ...` operand. A `Parenthesized` wrapper around the `not`
-/// means the author was explicit (`(not x) == y`), so it does not count.
-fn is_unparenthesized_not(expr: &Expression) -> bool {
-    matches!(expr, Expression::UnaryOp(unop) if unop.op == UnOp::Not)
-}
+impl_rule!(
+    ComparisonPrecedence,
+    "comparison_precedence",
+    Correctness,
+    Error,
+    "chained comparison or `not` operand that doesn't parse the way it reads"
+);
 
 impl NodeRule for ComparisonPrecedence {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::BinaryOp]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expression(&self, expr: &Expression, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if let Expression::BinaryOp(outer) = expr
-            && outer.op.is_comparison()
-        {
-            let chained_side = if inner_compare(&outer.left).is_some() {
-                Some("left")
-            } else if inner_compare(&outer.right).is_some() {
-                Some("right")
-            } else {
-                None
+    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let Expression::BinaryOp(outer) = expr else {
+            return;
+        };
+        if !outer.op.is_comparison() {
+            return;
+        }
+
+        let chained_side = if is_unparenthesized_comparison(&outer.lhs) {
+            Some("left")
+        } else if is_unparenthesized_comparison(&outer.rhs) {
+            Some("right")
+        } else {
+            None
+        };
+        if let Some(side) = chained_side {
+            findings.push(
+                Finding::new(
+                    format!(
+                        "chained comparison on the {side} side parses as `(a op b) op c`, not as a math-style chain"
+                    ),
+                    outer.span,
+                )
+                .with_help(
+                    "split into two boolean expressions joined with `and`, or parenthesize to make intent explicit",
+                ),
+            );
+        }
+
+        if is_unparenthesized_not(&outer.lhs) && !is_unparenthesized_not(&outer.rhs) {
+            let help = match outer.op {
+                BinOp::Eq => "consider `x ~= y`, or add parentheses to make intent explicit",
+                BinOp::Ne => "consider `x == y`, or add parentheses to make intent explicit",
+                BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                    "add parentheses to clarify intent"
+                }
+                // Unreachable: `outer.op` is a comparison.
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::FloorDiv
+                | BinOp::Mod
+                | BinOp::Pow
+                | BinOp::Concat
+                | BinOp::And
+                | BinOp::Or
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::Shl
+                | BinOp::Shr => return,
             };
-
-            if let Some(side) = chained_side {
-                out.push(LintDiagnostic::new("comparison_precedence", format!(
-                        "chained comparison on the {side} side; this parses as `(a op b) op c`, not as a math-style chain"
-                    ), outer.span).with_help(
-                        "split into two boolean expressions joined with `and`, or parenthesize to make intent explicit"
-                            .to_string(),
-                    ));
-            }
-
-            if is_unparenthesized_not(&outer.left) && !is_unparenthesized_not(&outer.right) {
-                let (parsed_as, help) = match outer.op {
-                    BinOp::Eq => (
-                        "(not x) == y",
-                        "consider `x ~= y`, or add parentheses to make intent explicit",
+            findings.push(
+                Finding::new(
+                    format!(
+                        "`not` applies only to the left operand, so this parses as `(not x) {} y`",
+                        outer.op.static_text()
                     ),
-                    BinOp::Ne => (
-                        "(not x) ~= y",
-                        "consider `x == y`, or add parentheses to make intent explicit",
-                    ),
-                    BinOp::Lt => ("(not x) < y", "add parentheses to clarify intent"),
-                    BinOp::Le => ("(not x) <= y", "add parentheses to clarify intent"),
-                    BinOp::Gt => ("(not x) > y", "add parentheses to clarify intent"),
-                    BinOp::Ge => ("(not x) >= y", "add parentheses to clarify intent"),
-                    _ => return,
-                };
-                out.push(
-                    LintDiagnostic::new(
-                        "comparison_precedence",
-                        format!(
-                            "`not` applies only to the left operand; this parses as `{parsed_as}`"
-                        ),
-                        outer.span,
-                    )
-                    .with_help(help.to_string()),
-                );
-            }
+                    outer.span,
+                )
+                .with_help(help),
+            );
         }
     }
 }
 
+/// The author of `(a < b) == c` was explicit.
+fn is_unparenthesized_comparison(expr: &Expression) -> bool {
+    matches!(expr, Expression::BinaryOp(binary_op) if binary_op.op.is_comparison())
+}
+
+/// The author of `(not x) == y` was explicit.
+fn is_unparenthesized_not(expr: &Expression) -> bool {
+    matches!(expr, Expression::UnaryOp(unary) if unary.op == UnOp::Not)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&ComparisonPrecedence, source, LuaVersion::Lua54)
+        run_rule(&ComparisonPrecedence, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -133,12 +132,9 @@ mod tests {
 
     #[test]
     fn ignores_parenthesized_inner() {
-        // `(a < b) == c`: the parens signal explicit author intent.
+        // The parentheses show the intent.
         let diags = run("local x = (a < b) == c");
-        assert!(
-            diags.is_empty(),
-            "parenthesized intent should be respected: {diags:?}"
-        );
+        assert!(diags.is_empty(), "parenthesized intent should be respected: {diags:?}");
     }
 
     #[test]
@@ -177,7 +173,7 @@ mod tests {
 
     #[test]
     fn ignores_logical_chain() {
-        // `a < b and b < c`: proper math-chain idiom in Lua.
+        // The idiomatic way to write a range check in Lua.
         let diags = run("local x = a < b and b < c");
         assert!(diags.is_empty(), "{diags:?}");
     }

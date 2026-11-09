@@ -1,148 +1,133 @@
-//! Luau type-AST emission.
-//!
-//! Types are formatted directly from the parsed [`Type`] tree - no source
-//! slicing, no re-tokenizing. Every leaf goes through [`crate::tokens`] so
-//! synthetic types format identically to parsed ones.
+//! Types format from the [`Type`] tree alone, never from source, so synthetic
+//! types format the same as parsed ones.
 
-use luck_ast::types::*;
+use luck_ast::{
+    FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, IntersectionType,
+    NamedType, TableType, Type, TypeArgs, TypeField, TypeofType, UnionType,
+    ensure_sufficient_stack,
+};
 
-use crate::ir::*;
-use crate::tokens::FormatToken;
+use luck_token::TokenKind;
+
+use crate::ir::{
+    Format, Formatter, group, group_with_id, if_group_breaks, indent, separated, soft_line,
+    soft_line_or_space, space, token,
+};
+use crate::quotes::normalize_quote;
 
 impl Format for Type {
     fn fmt(&self, f: &mut Formatter) {
         match self {
-            Type::Name { name, .. } => text(name.clone()).fmt(f),
-            Type::Named(named) => write_named(f, named),
-            Type::Typeof(typeof_type) => write_typeof(f, typeof_type),
-            Type::Table(table) => write_table(f, table),
-            Type::Function(function) => write_function_type(f, function),
-            Type::Optional(optional) => {
-                optional.type_value.fmt(f);
-                // `T?` is tight - no space before the question mark.
-                token("?").fmt(f);
+            Self::Name { name, .. } => f.write_text(name.clone()),
+            Self::Named(named) => named.fmt(f),
+            Self::Typeof(typeof_type) => typeof_type.fmt(f),
+            Self::Table(table) => table.fmt(f),
+            Self::Function(function) => function.fmt(f),
+            Self::Optional(optional) => {
+                ensure_sufficient_stack(|| (&optional.type_value, token("?")).fmt(f));
             }
-            Type::Union(union) => write_alternation(f, &union.types.items, "|"),
-            Type::Intersection(intersection) => {
-                write_alternation(f, &intersection.types.items, "&");
+            Self::Union(union) => union.fmt(f),
+            Self::Intersection(intersection) => intersection.fmt(f),
+            Self::Parenthesized(parenthesized) => {
+                (token("("), &parenthesized.type_value, token(")")).fmt(f);
             }
-            Type::Parenthesized(paren) => {
-                token("(").fmt(f);
-                paren.type_value.fmt(f);
-                token(")").fmt(f);
+            Self::Pack(pack) => write_delimited(f, "(", ")", &pack.types.items),
+            Self::Singleton(literal) => {
+                if let TokenKind::StringLiteral(text) = &literal.kind {
+                    let quote_style = f.options().quote_style;
+                    f.write_text(normalize_quote(text, quote_style));
+                } else {
+                    literal.fmt(f);
+                }
             }
-            Type::Pack(pack) => write_delimited(f, "(", ")", &pack.types.items),
-            Type::Singleton(literal) => FormatToken(literal).fmt(f),
-            // Luau: `...T` variadic pack element - tight.
-            Type::Variadic(variadic) => {
-                token("...").fmt(f);
-                variadic.type_value.fmt(f);
-            }
-            // Luau: `T...` generic pack reference - tight.
-            Type::GenericPack(generic_pack) => {
-                FormatToken(&generic_pack.name).fmt(f);
-                token("...").fmt(f);
-            }
-            // A parse error placeholder emits nothing; the diagnostic already
-            // reported the failure and there is no faithful text to print.
-            Type::Error(_) => {}
+            // Luau: `...T`.
+            Self::Variadic(variadic) => (token("..."), &variadic.type_value).fmt(f),
+            // Luau: `T...`.
+            Self::GenericPack(generic_pack) => (&generic_pack.name, token("...")).fmt(f),
+            // A parse-recovery placeholder has no text to print.
+            Self::Error(_) => {}
         }
     }
 }
 
-/// `Name`, `module.Name`, `Name<args>`. Qualification and generics are tight
-/// against the name.
-fn write_named(f: &mut Formatter, named: &NamedType) {
-    if let Some(module) = &named.prefix {
-        FormatToken(module).fmt(f);
-        token(".").fmt(f);
-    }
-    FormatToken(&named.name).fmt(f);
-    if let Some(generics) = &named.generics {
-        generics.fmt(f);
+/// Qualification and generics are tight against the name.
+impl Format for NamedType {
+    fn fmt(&self, f: &mut Formatter) {
+        if let Some(module) = &self.prefix {
+            (module, token(".")).fmt(f);
+        }
+        (&self.name, &self.generics).fmt(f);
     }
 }
 
-/// `typeof(expr)` - the inner expression formats through its own impl.
-fn write_typeof(f: &mut Formatter, typeof_type: &TypeofType) {
-    token("typeof").fmt(f);
-    token("(").fmt(f);
-    typeof_type.expr.fmt(f);
-    token(")").fmt(f);
+impl Format for TypeofType {
+    fn fmt(&self, f: &mut Formatter) {
+        (token("typeof"), token("("), &self.expr, token(")")).fmt(f);
+    }
 }
 
-/// `{ name: T, [K]: V }`. Flat prints with inner spaces; when the group
-/// breaks, each field lands on its own line with a trailing comma. The
-/// single-element array shorthand `{ T }` never gains a trailing comma -
-/// that would change how it parses.
-fn write_table(f: &mut Formatter, table: &TableType) {
-    if table.fields.is_empty() {
-        token("{").fmt(f);
-        token("}").fmt(f);
-        return;
+/// When the group breaks, each field gets its own line and a trailing comma,
+/// except the array shorthand `{ T }`, since Luau's grammar has no `{ T, }`.
+impl Format for TableType {
+    fn fmt(&self, f: &mut Formatter) {
+        if self.fields.is_empty() {
+            (token("{"), token("}")).fmt(f);
+            return;
+        }
+
+        let is_array_shorthand = matches!(self.fields.items.as_slice(), [TypeField::Array { .. }]);
+
+        let group_id = f.group_id();
+        group_with_id(
+            group_id,
+            (
+                token("{"),
+                indent((
+                    soft_line_or_space(),
+                    separated(&self.fields.items, (token(","), soft_line_or_space())),
+                    (!is_array_shorthand).then(|| if_group_breaks(group_id, token(","))),
+                )),
+                soft_line_or_space(),
+                token("}"),
+            ),
+        )
+        .fmt(f);
     }
+}
 
-    let is_array_shorthand =
-        table.fields.len() == 1 && matches!(table.fields.items[0], TypeField::Array { .. });
+/// The parameter list breaks like a call argument list.
+impl Format for FunctionType {
+    fn fmt(&self, f: &mut Formatter) {
+        self.generics.fmt(f);
+        write_delimited(f, "(", ")", &self.params.items);
+        (space(), token("->"), space(), &self.return_type).fmt(f);
+    }
+}
 
+impl Format for UnionType {
+    fn fmt(&self, f: &mut Formatter) {
+        write_alternation(f, &self.types.items, "|");
+    }
+}
+
+impl Format for IntersectionType {
+    fn fmt(&self, f: &mut Formatter) {
+        write_alternation(f, &self.types.items, "&");
+    }
+}
+
+/// Flat reads `A | B | C`.
+///
+/// Broken, each member gets its own line and a leading
+/// `| ` (or `& `), as Prettier does for TypeScript unions. The break decision
+/// alone places the leading operator, so the AST's `has_leading_pipe` and
+/// `has_leading_ampersand` are ignored.
+fn write_alternation(f: &mut Formatter, items: &[Type], op: &'static str) {
     let group_id = f.group_id();
+    let separator = (soft_line_or_space(), token(op), space());
     group_with_id(
         group_id,
-        format_with(move |f| {
-            token("{").fmt(f);
-            indent(format_with(move |f| {
-                soft_line_or_space().fmt(f);
-                for (index, field) in table.fields.iter().enumerate() {
-                    if index > 0 {
-                        token(",").fmt(f);
-                        soft_line_or_space().fmt(f);
-                    }
-                    field.fmt(f);
-                }
-                if !is_array_shorthand {
-                    if_group_breaks(group_id, token(",")).fmt(f);
-                }
-            }))
-            .fmt(f);
-            soft_line_or_space().fmt(f);
-            token("}").fmt(f);
-        }),
-    )
-    .fmt(f);
-}
-
-/// `<T>(a: T) -> R`. The parameter list breaks like a call argument list.
-fn write_function_type(f: &mut Formatter, function: &FunctionType) {
-    if let Some(generics) = &function.generics {
-        generics.fmt(f);
-    }
-    write_delimited(f, "(", ")", &function.params.items);
-    space().fmt(f);
-    token("->").fmt(f);
-    space().fmt(f);
-    function.return_type.fmt(f);
-}
-
-/// N-ary union/intersection. Flat reads `A | B | C`; when the group breaks
-/// each member gets a leading `| ` (`& ` for intersections) on its own line,
-/// matching how Prettier lays out TypeScript unions. The AST's
-/// `leading_pipe`/`leading_ampersand` is normalized away, because the break
-/// decision drives the leading operator, not the source.
-fn write_alternation(f: &mut Formatter, items: &[Type], operator: &'static str) {
-    let group_id = f.group_id();
-    group_with_id(
-        group_id,
-        indent(format_with(move |f| {
-            if_group_breaks(group_id, (soft_line_or_space(), token(operator), space())).fmt(f);
-            for (index, element) in items.iter().enumerate() {
-                if index > 0 {
-                    soft_line_or_space().fmt(f);
-                    token(operator).fmt(f);
-                    space().fmt(f);
-                }
-                element.fmt(f);
-            }
-        })),
+        indent((if_group_breaks(group_id, &separator), separated(items, &separator))),
     )
     .fmt(f);
 }
@@ -150,38 +135,23 @@ fn write_alternation(f: &mut Formatter, items: &[Type], operator: &'static str) 
 impl Format for TypeField {
     fn fmt(&self, f: &mut Formatter) {
         match self {
-            TypeField::Named {
-                access,
-                name,
-                value,
-                ..
-            } => {
+            Self::Named { access, name, value, .. } => {
                 // Luau `read`/`write` access modifier sits before the name.
-                if let Some(access) = access {
-                    FormatToken(access).fmt(f);
-                    space().fmt(f);
+                if let Some(modifier) = access {
+                    (modifier, space()).fmt(f);
                 }
-                FormatToken(name).fmt(f);
-                token(":").fmt(f);
-                space().fmt(f);
-                value.fmt(f);
+                (name, token(":"), space(), value).fmt(f);
             }
-            TypeField::Indexer {
-                access, key, value, ..
-            } => {
-                if let Some(access) = access {
-                    FormatToken(access).fmt(f);
-                    space().fmt(f);
+            Self::Indexer { access, key, value, .. } => {
+                if let Some(modifier) = access {
+                    (modifier, space()).fmt(f);
                 }
-                token("[").fmt(f);
-                key.fmt(f);
-                token("]").fmt(f);
-                token(":").fmt(f);
-                space().fmt(f);
-                value.fmt(f);
+                (token("["), key, token("]"), token(":"), space(), value).fmt(f);
             }
-            // Array shorthand `{ T }` - a bare element type.
-            TypeField::Array { value, .. } => {
+            Self::Array { access, value, .. } => {
+                if let Some(modifier) = access {
+                    (modifier, space()).fmt(f);
+                }
                 value.fmt(f);
             }
         }
@@ -195,9 +165,9 @@ impl Format for TypeArgs {
 }
 
 /// Luau expression-side explicit type arguments use doubled delimiters.
-pub(crate) struct FormatExplicitTypeArgs<'a>(pub &'a TypeArgs);
+pub(crate) struct ExplicitTypeArgs<'args>(pub &'args TypeArgs);
 
-impl Format for FormatExplicitTypeArgs<'_> {
+impl Format for ExplicitTypeArgs<'_> {
     fn fmt(&self, f: &mut Formatter) {
         write_delimited(f, "<<", ">>", &self.0.args.items);
     }
@@ -211,95 +181,54 @@ impl Format for GenericTypeList {
 
 impl Format for GenericTypeParam {
     fn fmt(&self, f: &mut Formatter) {
-        FormatToken(&self.name).fmt(f);
+        self.name.fmt(f);
         // Luau: `T...` marks a generic pack parameter.
         if self.is_pack {
             token("...").fmt(f);
         }
         // `= T` default - only legal in `type` declarations.
         if let Some(default) = &self.default {
-            space().fmt(f);
-            token("=").fmt(f);
-            space().fmt(f);
-            default.fmt(f);
+            (space(), token("="), space(), default).fmt(f);
         }
     }
 }
 
 impl Format for FunctionTypeParam {
     fn fmt(&self, f: &mut Formatter) {
-        // Present when the parameter is named: `x: number`.
         if let Some(name) = &self.name {
-            FormatToken(name).fmt(f);
-            token(":").fmt(f);
-            space().fmt(f);
+            (name, token(":"), space()).fmt(f);
         }
         self.type_value.fmt(f);
     }
 }
 
-/// Emit a comma-separated punctuated list, breaking one item per line when the
-/// enclosing group expands. Source separators are normalized to `,`.
-fn write_punctuated<T: Format>(f: &mut Formatter, items: &[T]) {
-    for (index, item) in items.iter().enumerate() {
-        if index > 0 {
-            token(",").fmt(f);
-            soft_line_or_space().fmt(f);
-        }
-        item.fmt(f);
-    }
-}
-
-/// Wrap a punctuated list in `open`/`close` delimiters with a breakable group.
-/// Used for `<...>`, `(...)` argument/pack lists - angle brackets emit as
-/// separate `>` tokens per nesting level (the printer never merges them; a
-/// `>>` run re-parses via the lexer's `ShiftRight` splitting).
-fn write_delimited<T: Format>(
-    f: &mut Formatter,
-    open: &'static str,
-    close: &'static str,
-    items: &[T],
-) {
+/// Nested angle brackets close with adjacent `>` tokens. The lexer reads them
+/// as one `>>`, which the parser splits again.
+fn write_delimited<T>(f: &mut Formatter, open: &'static str, close: &'static str, items: &[T])
+where
+    T: Format,
+{
     if items.is_empty() {
-        token(open).fmt(f);
-        token(close).fmt(f);
+        (token(open), token(close)).fmt(f);
         return;
     }
-    group(format_with(move |f| {
-        token(open).fmt(f);
-        indent(format_with(move |f| {
-            soft_line().fmt(f);
-            write_punctuated(f, items);
-        }))
-        .fmt(f);
-        soft_line().fmt(f);
-        token(close).fmt(f);
-    }))
+    group((
+        token(open),
+        indent((soft_line(), separated(items, (token(","), soft_line_or_space())))),
+        soft_line(),
+        token(close),
+    ))
     .fmt(f);
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_ast::synth::Synth;
-    use luck_ast::types::Type;
+    use luck_ast::{Synth, Type};
 
-    use crate::ir::{Format, Formatter};
-    use crate::printer::{PrinterOptions, print};
+    use crate::{FormatOptions, fixtures};
 
     fn render(ty: &Type) -> String {
-        let mut formatter = Formatter::new();
-        ty.fmt(&mut formatter);
-        let group_count = formatter.group_count();
-        let elements = formatter.into_elements();
-        print(
-            &elements,
-            group_count,
-            &PrinterOptions {
-                line_width: 80,
-                use_tabs: false,
-                indent_width: 2,
-            },
-        )
+        fixtures::render(ty, FormatOptions::default())
     }
 
     #[test]
@@ -327,18 +256,18 @@ mod tests {
     #[test]
     fn union_flat_has_spaced_pipes() {
         let synth = Synth::new();
-        let a = synth.ty_named("string");
-        let b = synth.ty_named("number");
-        let ty = synth.ty_union(vec![a, b]);
+        let string_ty = synth.ty_named("string");
+        let number_ty = synth.ty_named("number");
+        let ty = synth.ty_union(vec![string_ty, number_ty]);
         assert_eq!(render(&ty), "string | number");
     }
 
     #[test]
     fn intersection_flat_has_spaced_ampersands() {
         let synth = Synth::new();
-        let a = synth.ty_named("A");
-        let b = synth.ty_named("B");
-        let ty = synth.ty_intersection(vec![a, b]);
+        let left = synth.ty_named("A");
+        let right = synth.ty_named("B");
+        let ty = synth.ty_intersection(vec![left, right]);
         assert_eq!(render(&ty), "A & B");
     }
 
@@ -354,9 +283,9 @@ mod tests {
     #[test]
     fn table_type_flat_has_inner_spaces() {
         let synth = Synth::new();
-        let name_type = synth.ty_named("string");
-        let age_type = synth.ty_named("number");
-        let ty = synth.ty_record(vec![("name", name_type), ("age", age_type)]);
+        let name_ty = synth.ty_named("string");
+        let age_ty = synth.ty_named("number");
+        let ty = synth.ty_record(vec![("name", name_ty), ("age", age_ty)]);
         assert_eq!(render(&ty), "{ name: string, age: number }");
     }
 

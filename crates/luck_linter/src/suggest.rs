@@ -1,34 +1,47 @@
-//! "Did you mean" support shared by the rules that suggest a correction
-//! for a mistyped name (`comment_directive`, `invalid_lint_filter`).
-//!
-//! Only the distance metric is shared; each rule keeps its own acceptance
-//! threshold, since what counts as a plausible typo differs by domain.
+//! Each rule sets its own threshold, since what counts as a plausible typo
+//! differs by domain.
 
-/// Iterative two-row Levenshtein edit distance. The inputs here are short
-/// (rule names, directive keywords), so the quadratic cost is irrelevant.
-pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
-    if a == b {
+use core::mem;
+
+/// The inputs are short names, so the quadratic cost doesn't matter.
+fn levenshtein(left: &str, right: &str) -> usize {
+    if left == right {
         return 0;
     }
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
-    if a_bytes.is_empty() {
-        return b_bytes.len();
-    }
-    if b_bytes.is_empty() {
-        return a_bytes.len();
-    }
-    let mut prev: Vec<usize> = (0..=b_bytes.len()).collect();
-    let mut curr: Vec<usize> = vec![0; b_bytes.len() + 1];
-    for i in 1..=a_bytes.len() {
-        curr[0] = i;
-        for j in 1..=b_bytes.len() {
-            let cost = usize::from(a_bytes[i - 1] != b_bytes[j - 1]);
-            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+    let right_bytes = right.as_bytes();
+    let mut distance = right_bytes.len();
+    let mut previous_row: Vec<usize> = (0..=right_bytes.len()).collect();
+    let mut current_row: Vec<usize> = Vec::with_capacity(previous_row.len());
+    for (row, left_byte) in (1..).zip(left.bytes()) {
+        current_row.clear();
+        current_row.push(row);
+        distance = row;
+        for ((right_byte, &diagonal), &above) in
+            right_bytes.iter().zip(&previous_row).zip(previous_row.iter().skip(1))
+        {
+            let edit = above.min(distance).saturating_add(1);
+            let substitution = diagonal.saturating_add(usize::from(left_byte != *right_byte));
+            distance = edit.min(substitution);
+            current_row.push(distance);
         }
-        std::mem::swap(&mut prev, &mut curr);
+        mem::swap(&mut previous_row, &mut current_row);
     }
-    prev[b_bytes.len()]
+    distance
+}
+
+/// The candidate nearest to `needle`, among those `is_close` accepts at
+/// their distance. The first of equally near candidates wins.
+pub(crate) fn closest<'candidate>(
+    needle: &str,
+    candidates: impl IntoIterator<Item = &'candidate str>,
+    is_close: impl Fn(usize, &str) -> bool,
+) -> Option<&'candidate str> {
+    candidates
+        .into_iter()
+        .map(|candidate| (levenshtein(needle, candidate), candidate))
+        .filter(|&(distance, candidate)| is_close(distance, candidate))
+        .min_by_key(|&(distance, _)| distance)
+        .map(|(_, candidate)| candidate)
 }
 
 #[cfg(test)]
@@ -42,5 +55,22 @@ mod tests {
         assert_eq!(levenshtein("abc", "abd"), 1);
         assert_eq!(levenshtein("abc", "ab"), 1);
         assert_eq!(levenshtein("kitten", "sitting"), 3);
+    }
+
+    #[test]
+    fn closest_picks_nearest_candidate() {
+        assert_eq!(closest("abcd", ["abxy", "abcx"], |distance, _| distance <= 2), Some("abcx"));
+    }
+
+    #[test]
+    fn closest_picks_first_of_equally_near_candidates() {
+        assert_eq!(closest("abc", ["abd", "abe"], |distance, _| distance <= 2), Some("abd"));
+    }
+
+    #[test]
+    fn closest_skips_candidates_it_rejects() {
+        let is_close = |distance: usize, candidate: &str| candidate != "abd" && distance <= 3;
+        assert_eq!(closest("abc", ["abd", "xyz"], is_close), Some("xyz"));
+        assert!(closest("abc", ["abd"], is_close).is_none());
     }
 }

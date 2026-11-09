@@ -1,6 +1,6 @@
 # Lua 5.5 standard library, verified against the 5.5 reference manual
 # (https://www.lua.org/manual/5.5/). Notable vs 5.4:
-#   - table.create, math.frexp, math.ldexp added
+#   - table.create added; math.frexp and math.ldexp standard again
 #   - collectgarbage reworked: setpause/setstepmul gone, tuning goes
 #     through the "param" option; incremental/generational take no
 #     extra arguments
@@ -9,19 +9,19 @@
 
 [globals._G]
 kind = "property"
-read_only = false
+is_read_only = false
 
 [globals._VERSION]
 kind = "property"
 
-# Interactive-interpreter prompt overrides (manual, Lua Standalone).
+# Interactive-interpreter prompt overrides (manual section 7).
 [globals._PROMPT]
 kind = "property"
-read_only = false
+is_read_only = false
 
 [globals._PROMPT2]
 kind = "property"
-read_only = false
+is_read_only = false
 
 [globals.assert]
 kind = "function"
@@ -29,27 +29,27 @@ min_args = 1
 max_args = -1
 params = [
   { kind = "any" },
-  { kind = "string", required = false },
-  { kind = "vararg", required = false },
+  { kind = "string", is_required = false },
+  { kind = "vararg", is_required = false },
 ]
 
-# 5.5 reworked GC control: 'setpause'/'setstepmul' are gone; tuning goes
-# through 'param' with a parameter name and an optional new value.
-# 'incremental'/'generational' take no extra arguments in 5.5.
+# 5.5 drops 'setpause'/'setstepmul', and 'incremental'/'generational' no
+# longer take tuning arguments. Tuning goes through 'param' with a
+# parameter name and an optional new value.
 [globals.collectgarbage]
 kind = "function"
 overloads = [
   { min_args = 0, max_args = 1, params = [
-    { kind = "constant", values = ["collect", "count", "generational", "incremental", "isrunning", "restart", "stop"], required = false },
+    { kind = "constant", values = ["collect", "count", "generational", "incremental", "isrunning", "restart", "stop"], is_required = false },
   ] },
   { min_args = 1, max_args = 2, params = [
     { kind = "constant", values = ["step"] },
-    { kind = "number", required = false },
+    { kind = "number", is_required = false },
   ] },
   { min_args = 2, max_args = 3, params = [
     { kind = "constant", values = ["param"] },
     { kind = "constant", values = ["majorminor", "minormajor", "minormul", "pause", "stepmul", "stepsize"] },
-    { kind = "number", required = false },
+    { kind = "number", is_required = false },
   ] },
 ]
 
@@ -57,22 +57,22 @@ overloads = [
 kind = "function"
 min_args = 0
 max_args = 1
-params = [{ kind = "string", required = false }]
+params = [{ kind = "string", is_required = false }]
 
 [globals.error]
 kind = "function"
-min_args = 1
+min_args = 0
 max_args = 2
 params = [
-  { kind = "any" },
-  { kind = "number", required = false },
+  { kind = "any", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.getmetatable]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.ipairs]
@@ -80,7 +80,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.load]
@@ -89,9 +89,9 @@ min_args = 1
 max_args = 4
 params = [
   { kind = "any" },
-  { kind = "string", required = false },
-  { kind = "string", required = false },
-  { kind = "any", required = false },
+  { kind = "string", is_required = false },
+  { kind = "string", is_required = false },
+  { kind = "any", is_required = false },
 ]
 
 [globals.loadfile]
@@ -99,35 +99,34 @@ kind = "function"
 min_args = 0
 max_args = 3
 params = [
-  { kind = "string", required = false },
-  { kind = "string", required = false },
-  { kind = "any", required = false },
+  { kind = "string", is_required = false },
+  { kind = "string", is_required = false },
+  { kind = "any", is_required = false },
 ]
 
-# `loadstring` was removed in Lua 5.2 from the spec, but most real
-# codebases still encounter it (compatibility shims, embedded engines).
-# Keep it visible as deprecated so the diagnostic fires with an actionable
-# replace template.
+# Deprecated in 5.2 and gone since 5.3, but real code still calls it
+# (compat shims, embedded engines), so it stays with a fix that rewrites
+# it to load.
 [globals.loadstring]
 kind = "function"
 min_args = 1
 max_args = 2
-deprecated = { message = "removed in Lua 5.2+; use 'load' instead", replace_template = "load(%1)" }
+deprecated = { message = "deprecated since Lua 5.2; use 'load' instead", replace_template = "load(%1)" }
 params = [
   { kind = "string" },
-  { kind = "string", required = false },
+  { kind = "string", is_required = false },
 ]
 
 [globals.unpack]
 kind = "function"
 min_args = 1
 max_args = 3
-must_use = true
+is_must_use = true
 deprecated = { message = "deprecated in Lua 5.2+; use 'table.unpack' instead", replace_template = "table.unpack(%1)" }
 params = [
   { kind = "table" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.next]
@@ -136,39 +135,38 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "table" },
-  { kind = "any", required = false },
+  { kind = "any", is_required = false },
 ]
 
 [globals.pairs]
 kind = "function"
 min_args = 1
 max_args = 1
-is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.pcall]
 kind = "function"
 min_args = 1
 max_args = -1
-must_use = true
+is_must_use = true
 params = [
   { kind = "function" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.print]
 kind = "function"
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.rawequal]
 kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }, { kind = "any" }]
 
 [globals.rawget]
@@ -176,7 +174,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }, { kind = "any" }]
 
 [globals.rawlen]
@@ -184,7 +182,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.rawset]
@@ -203,10 +201,10 @@ params = [{ kind = "string" }]
 kind = "function"
 min_args = 1
 max_args = -1
-must_use = true
+is_must_use = true
 params = [
   { kind = "any" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.setmetatable]
@@ -215,7 +213,7 @@ min_args = 2
 max_args = 2
 params = [
   { kind = "table" },
-  { kind = "table", accepts_nil = true },
+  { kind = "table" },
 ]
 
 [globals.tonumber]
@@ -223,18 +221,17 @@ kind = "function"
 min_args = 1
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "any" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.tostring]
 kind = "function"
 min_args = 1
 max_args = 1
-is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.type]
@@ -242,7 +239,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.warn]
@@ -251,18 +248,18 @@ min_args = 1
 max_args = -1
 params = [
   { kind = "string" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.xpcall]
 kind = "function"
 min_args = 2
 max_args = -1
-must_use = true
+is_must_use = true
 params = [
   { kind = "function" },
   { kind = "function" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 # ---- string namespace ----
@@ -275,11 +272,11 @@ kind = "function"
 min_args = 1
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.string.members.char]
@@ -287,69 +284,73 @@ kind = "function"
 min_args = 0
 max_args = -1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
-  { kind = "number", required = false },
-  { kind = "vararg", required = false },
+  { kind = "number", is_required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.string.members.dump]
 kind = "function"
 min_args = 1
 max_args = 2
-must_use = true
+is_must_use = true
 params = [
   { kind = "function" },
-  { kind = "bool", required = false },
+  { kind = "bool", is_required = false },
 ]
 
 [globals.string.members.find]
 kind = "function"
 min_args = 2
 max_args = 4
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "string" },
-  { kind = "number", required = false },
-  { kind = "bool", required = false },
+  { kind = "number", is_required = false },
+  { kind = "bool", is_required = false },
 ]
 
 [globals.string.members.format]
 kind = "function"
 min_args = 1
 max_args = -1
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.string.members.gfind]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 deprecated = { message = "use 'string.gmatch' instead", replace_template = "string.gmatch(%1, %2)" }
 params = [{ kind = "string" }, { kind = "string" }]
 
 [globals.string.members.gmatch]
 kind = "function"
 min_args = 2
-max_args = 2
-must_use = true
-params = [{ kind = "string" }, { kind = "string" }]
+max_args = 3
+is_must_use = true
+params = [
+  { kind = "string" },
+  { kind = "string" },
+  { kind = "number", is_required = false },
+]
 
 [globals.string.members.gsub]
 kind = "function"
 min_args = 3
 max_args = 4
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "string" },
   { kind = "any" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.string.members.len]
@@ -357,7 +358,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 [globals.string.members.lower]
@@ -365,28 +366,28 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 [globals.string.members.match]
 kind = "function"
 min_args = 2
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "string" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.string.members.pack]
 kind = "function"
 min_args = 1
 max_args = -1
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.string.members.packsize]
@@ -394,7 +395,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 [globals.string.members.rep]
@@ -402,11 +403,11 @@ kind = "function"
 min_args = 2
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "number" },
-  { kind = "string", required = false },
+  { kind = "string", is_required = false },
 ]
 
 [globals.string.members.reverse]
@@ -414,7 +415,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 [globals.string.members.sub]
@@ -422,22 +423,22 @@ kind = "function"
 min_args = 2
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.string.members.unpack]
 kind = "function"
 min_args = 2
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "string" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.string.members.upper]
@@ -445,7 +446,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 # ---- table namespace ----
@@ -457,12 +458,12 @@ kind = "namespace"
 kind = "function"
 min_args = 1
 max_args = 4
-must_use = true
+is_must_use = true
 params = [
   { kind = "table" },
-  { kind = "string", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "string", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 # Added in Lua 5.5: pre-allocate a table with nseq sequence slots; nrec
@@ -471,10 +472,10 @@ params = [
 kind = "function"
 min_args = 1
 max_args = 2
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.table.members.foreach]
@@ -495,7 +496,7 @@ params = [{ kind = "table" }, { kind = "function" }]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 deprecated = { message = "use the '#' length operator instead", replace_template = "#%1" }
 params = [{ kind = "table" }]
 
@@ -503,8 +504,8 @@ params = [{ kind = "table" }]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
-deprecated = { message = "removed in Lua 5.2+; use '#' length operator instead", replace_template = "#%1" }
+is_must_use = true
+deprecated = { message = "deprecated since Lua 5.2; '#' only agrees with it on sequences" }
 params = [{ kind = "table" }]
 
 [globals.table.members.insert]
@@ -514,7 +515,7 @@ max_args = 3
 params = [
   { kind = "table" },
   { kind = "any" },
-  { kind = "any", required = false },
+  { kind = "any", is_required = false },
 ]
 
 [globals.table.members.move]
@@ -526,15 +527,15 @@ params = [
   { kind = "number" },
   { kind = "number" },
   { kind = "number" },
-  { kind = "table", required = false },
+  { kind = "table", is_required = false },
 ]
 
 [globals.table.members.pack]
 kind = "function"
 min_args = 0
 max_args = -1
-must_use = true
-params = [{ kind = "vararg", required = false }]
+is_must_use = true
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.table.members.remove]
 kind = "function"
@@ -542,7 +543,7 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "table" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.table.members.sort]
@@ -551,18 +552,18 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "table" },
-  { kind = "function", required = false },
+  { kind = "function", is_required = false },
 ]
 
 [globals.table.members.unpack]
 kind = "function"
 min_args = 1
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
   { kind = "table" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 # ---- math namespace ----
@@ -575,7 +576,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.acos]
@@ -583,7 +584,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.asin]
@@ -591,7 +592,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.atan]
@@ -599,10 +600,10 @@ kind = "function"
 min_args = 1
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.math.members.ceil]
@@ -610,7 +611,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.cos]
@@ -618,7 +619,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.deg]
@@ -626,7 +627,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.exp]
@@ -634,7 +635,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.floor]
@@ -642,7 +643,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.atan2]
@@ -650,7 +651,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 deprecated = { message = "merged into math.atan in Lua 5.3; pass second arg to math.atan", replace_template = "math.atan(%1, %2)" }
 params = [{ kind = "number" }, { kind = "number" }]
 
@@ -659,8 +660,8 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
-deprecated = { message = "removed in Lua 5.3; compute via math.exp" }
+is_must_use = true
+deprecated = { message = "deprecated since Lua 5.3; compute via math.exp" }
 params = [{ kind = "number" }]
 
 [globals.math.members.fmod]
@@ -668,28 +669,28 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
-# 5.5 moved frexp back into the standard math array (was compat-only in 5.3/5.4).
+# Standard again in 5.5, after being compat-only in 5.3 and 5.4.
 [globals.math.members.frexp]
 kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.huge]
 kind = "constant"
 
-# 5.5 moved ldexp back into the standard math array (was compat-only in 5.3/5.4).
+# Standard again in 5.5, after being compat-only in 5.3 and 5.4.
 [globals.math.members.ldexp]
 kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.log10]
@@ -697,7 +698,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 deprecated = { message = "deprecated in Lua 5.2; pass 10 as second arg to math.log", replace_template = "math.log(%1, 10)" }
 params = [{ kind = "number" }]
 
@@ -706,7 +707,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 deprecated = { message = "use the '%' operator instead" }
 params = [{ kind = "number" }, { kind = "number" }]
 
@@ -715,8 +716,8 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
-deprecated = { message = "removed in Lua 5.3; use '^' operator instead", replace_template = "(%1 ^ %2)" }
+is_must_use = true
+deprecated = { message = "deprecated since Lua 5.3; use '^' operator instead", replace_template = "(%1 ^ %2)" }
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.sinh]
@@ -724,8 +725,8 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
-deprecated = { message = "removed in Lua 5.3; compute via math.exp" }
+is_must_use = true
+deprecated = { message = "deprecated since Lua 5.3; compute via math.exp" }
 params = [{ kind = "number" }]
 
 [globals.math.members.tanh]
@@ -733,8 +734,8 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
-deprecated = { message = "removed in Lua 5.3; compute via math.exp" }
+is_must_use = true
+deprecated = { message = "deprecated since Lua 5.3; compute via math.exp" }
 params = [{ kind = "number" }]
 
 [globals.math.members.log]
@@ -742,10 +743,10 @@ kind = "function"
 min_args = 1
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.math.members.max]
@@ -753,10 +754,10 @@ kind = "function"
 min_args = 1
 max_args = -1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.math.members.maxinteger]
@@ -767,10 +768,10 @@ kind = "function"
 min_args = 1
 max_args = -1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.math.members.mininteger]
@@ -781,7 +782,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.pi]
@@ -792,17 +793,17 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.random]
 kind = "function"
 min_args = 0
 max_args = 2
-must_use = true
+is_must_use = true
 params = [
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.math.members.randomseed]
@@ -810,8 +811,8 @@ kind = "function"
 min_args = 0
 max_args = 2
 params = [
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.math.members.sin]
@@ -819,7 +820,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.sqrt]
@@ -827,7 +828,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.tan]
@@ -835,7 +836,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.tointeger]
@@ -843,7 +844,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.math.members.type]
@@ -851,7 +852,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.math.members.ult]
@@ -859,7 +860,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 # ---- utf8 namespace (5.3+) ----
@@ -872,37 +873,38 @@ kind = "function"
 min_args = 0
 max_args = -1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
-  { kind = "number", required = false },
-  { kind = "vararg", required = false },
+  { kind = "number", is_required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.utf8.members.charpattern]
 kind = "constant"
 
-# The trailing 'lax' flag (5.4+) accepts surrogates as code points.
+# The trailing 'lax' flag (5.4+) also accepts surrogates and values up to
+# 0x7FFFFFFF.
 [globals.utf8.members.codepoint]
 kind = "function"
 min_args = 1
 max_args = 4
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "bool", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "bool", is_required = false },
 ]
 
 [globals.utf8.members.codes]
 kind = "function"
 min_args = 1
 max_args = 2
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "bool", required = false },
+  { kind = "bool", is_required = false },
 ]
 
 [globals.utf8.members.len]
@@ -910,12 +912,12 @@ kind = "function"
 min_args = 1
 max_args = 4
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "bool", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "bool", is_required = false },
 ]
 
 [globals.utf8.members.offset]
@@ -923,11 +925,11 @@ kind = "function"
 min_args = 2
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 # ---- io / os / coroutine / debug / package ----
@@ -939,21 +941,20 @@ kind = "namespace"
 kind = "function"
 min_args = 0
 max_args = 1
-params = [{ kind = "display", display = "file", required = false }]
+params = [{ kind = "display", display = "file", is_required = false }]
 
 [globals.io.members.flush]
 kind = "function"
 min_args = 0
 max_args = 0
 
-# With an argument this sets the default input file rather than only
-# returning one; a single entry cannot express both, so the return shape
-# reflects the getter form (the setter also returns the handle in PUC).
+# With an argument this also sets the default input file. PUC Lua returns
+# the current input file either way, so returns = "file" fits both forms.
 [globals.io.members.input]
 kind = "function"
 min_args = 0
 max_args = 1
-params = [{ kind = "display", display = "file", required = false }]
+params = [{ kind = "display", display = "file", is_required = false }]
 returns = "file"
 
 [globals.io.members.lines]
@@ -961,8 +962,8 @@ kind = "function"
 min_args = 0
 max_args = -1
 params = [
-  { kind = "string", required = false },
-  { kind = "vararg", required = false },
+  { kind = "string", is_required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.io.members.open]
@@ -971,7 +972,7 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "string" },
-  { kind = "constant", values = ["r", "rb", "w", "wb", "a", "ab", "r+", "rb+", "r+b", "w+", "wb+", "w+b", "a+", "ab+", "a+b"], required = false },
+  { kind = "constant", values = ["r", "rb", "w", "wb", "a", "ab", "r+", "r+b", "w+", "w+b", "a+", "a+b"], is_required = false },
 ]
 returns = "file"
 
@@ -979,7 +980,7 @@ returns = "file"
 kind = "function"
 min_args = 0
 max_args = 1
-params = [{ kind = "display", display = "file", required = false }]
+params = [{ kind = "display", display = "file", is_required = false }]
 returns = "file"
 
 [globals.io.members.popen]
@@ -988,7 +989,7 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "string" },
-  { kind = "constant", values = ["r", "w"], required = false },
+  { kind = "constant", values = ["r", "w"], is_required = false },
 ]
 returns = "file"
 
@@ -996,7 +997,7 @@ returns = "file"
 kind = "function"
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.io.members.stderr]
 kind = "property"
@@ -1020,75 +1021,74 @@ returns = "file"
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.io.members.write]
 kind = "function"
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 returns = "file"
 
 # ---- file handle shape (io.open and friends) ----
 
 # Read formats ("l", "L", "n", "a", their star-prefixed 5.2 spellings,
-# or a byte count) are variadic and mix string constants with numbers,
-# so they stay a plain vararg - a constant set would reject numeric
-# counts.
+# or a byte count) stay a plain vararg, since a constant set would reject
+# numeric counts.
 [shapes.file.members.read]
 kind = "function"
-method = true
+is_method = true
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 
 [shapes.file.members.lines]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 
 # Returns the file itself, so writes chain.
 [shapes.file.members.write]
 kind = "function"
-method = true
+is_method = true
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 returns = "file"
 
 [shapes.file.members.seek]
 kind = "function"
-method = true
+is_method = true
 min_args = 0
 max_args = 2
 params = [
-  { kind = "constant", values = ["set", "cur", "end"], required = false },
-  { kind = "number", required = false },
+  { kind = "constant", values = ["set", "cur", "end"], is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [shapes.file.members.setvbuf]
 kind = "function"
-method = true
+is_method = true
 min_args = 1
 max_args = 2
 params = [
   { kind = "constant", values = ["no", "full", "line"] },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [shapes.file.members.close]
 kind = "function"
-method = true
+is_method = true
 min_args = 0
 max_args = 0
 
 [shapes.file.members.flush]
 kind = "function"
-method = true
+is_method = true
 min_args = 0
 max_args = 0
 
@@ -1099,16 +1099,16 @@ kind = "namespace"
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 
 [globals.os.members.date]
 kind = "function"
 min_args = 0
 max_args = 2
-must_use = true
+is_must_use = true
 params = [
-  { kind = "string", required = false },
-  { kind = "number", required = false },
+  { kind = "string", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.os.members.difftime]
@@ -1116,29 +1116,29 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.os.members.execute]
 kind = "function"
 min_args = 0
 max_args = 1
-params = [{ kind = "string", required = false }]
+params = [{ kind = "string", is_required = false }]
 
 [globals.os.members.exit]
 kind = "function"
 min_args = 0
 max_args = 2
 params = [
-  { kind = "any", required = false },
-  { kind = "bool", required = false },
+  { kind = "any", is_required = false },
+  { kind = "bool", is_required = false },
 ]
 
 [globals.os.members.getenv]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 [globals.os.members.remove]
@@ -1155,47 +1155,48 @@ params = [{ kind = "string" }, { kind = "string" }]
 
 [globals.os.members.setlocale]
 kind = "function"
-min_args = 1
+min_args = 0
 max_args = 2
 params = [
-  { kind = "string" },
-  { kind = "constant", values = ["all", "collate", "ctype", "monetary", "numeric", "time"], required = false },
+  { kind = "string", is_required = false },
+  { kind = "constant", values = ["all", "collate", "ctype", "monetary", "numeric", "time"], is_required = false },
 ]
 
 [globals.os.members.time]
 kind = "function"
 min_args = 0
 max_args = 1
-must_use = true
-params = [{ kind = "table", required = false }]
+is_must_use = true
+params = [{ kind = "table", is_required = false }]
 
 [globals.os.members.tmpname]
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 
 [globals.coroutine]
 kind = "namespace"
 
 [globals.coroutine.members.close]
 kind = "function"
-min_args = 1
+min_args = 0
 max_args = 1
-params = [{ kind = "display", display = "coroutine" }]
+params = [{ kind = "display", display = "coroutine", is_required = false }]
 
 [globals.coroutine.members.create]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "function" }]
 
 [globals.coroutine.members.isyieldable]
 kind = "function"
 min_args = 0
-max_args = 0
-must_use = true
+max_args = 1
+is_must_use = true
+params = [{ kind = "display", display = "coroutine", is_required = false }]
 
 [globals.coroutine.members.resume]
 kind = "function"
@@ -1203,34 +1204,34 @@ min_args = 1
 max_args = -1
 params = [
   { kind = "display", display = "coroutine" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.coroutine.members.running]
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 
 [globals.coroutine.members.status]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "coroutine" }]
 
 [globals.coroutine.members.wrap]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "function" }]
 
 [globals.coroutine.members.yield]
 kind = "function"
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.debug]
 kind = "namespace"
@@ -1244,59 +1245,59 @@ max_args = 0
 kind = "function"
 min_args = 0
 max_args = 1
-must_use = true
-params = [{ kind = "any", required = false }]
+is_must_use = true
+params = [{ kind = "any", is_required = false }]
 
 [globals.debug.members.getinfo]
 kind = "function"
 min_args = 1
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
   { kind = "any" },
-  { kind = "any", required = false },
-  { kind = "any", required = false },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
 ]
 
 [globals.debug.members.getlocal]
 kind = "function"
 min_args = 2
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
   { kind = "any" },
   { kind = "any" },
-  { kind = "any", required = false },
+  { kind = "any", is_required = false },
 ]
 
 [globals.debug.members.getmetatable]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.debug.members.getregistry]
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 
 [globals.debug.members.getupvalue]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 params = [{ kind = "function" }, { kind = "number" }]
 
 [globals.debug.members.getuservalue]
 kind = "function"
 min_args = 1
 max_args = 2
-must_use = true
+is_must_use = true
 params = [
   { kind = "any" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.debug.members.sethook]
@@ -1304,10 +1305,10 @@ kind = "function"
 min_args = 0
 max_args = 4
 params = [
-  { kind = "any", required = false },
-  { kind = "any", required = false },
-  { kind = "any", required = false },
-  { kind = "any", required = false },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
 ]
 
 [globals.debug.members.setlocal]
@@ -1318,7 +1319,7 @@ params = [
   { kind = "any" },
   { kind = "any" },
   { kind = "any" },
-  { kind = "any", required = false },
+  { kind = "any", is_required = false },
 ]
 
 [globals.debug.members.setmetatable]
@@ -1340,25 +1341,25 @@ max_args = 3
 params = [
   { kind = "any" },
   { kind = "any" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.debug.members.traceback]
 kind = "function"
 min_args = 0
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
-  { kind = "any", required = false },
-  { kind = "any", required = false },
-  { kind = "any", required = false },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
 ]
 
 [globals.debug.members.upvalueid]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 params = [{ kind = "function" }, { kind = "number" }]
 
 [globals.debug.members.upvaluejoin]
@@ -1375,34 +1376,34 @@ kind = "property"
 
 [globals.package.members.cpath]
 kind = "property"
-read_only = false
+is_read_only = false
 
 [globals.package.members.loaded]
 kind = "property"
-read_only = false
+is_read_only = false
 
 [globals.package.members.path]
 kind = "property"
-read_only = false
+is_read_only = false
 
 [globals.package.members.preload]
 kind = "property"
-read_only = false
+is_read_only = false
 
 [globals.package.members.searchers]
 kind = "property"
-read_only = false
+is_read_only = false
 
 [globals.package.members.searchpath]
 kind = "function"
 min_args = 2
 max_args = 4
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "string" },
-  { kind = "string", required = false },
-  { kind = "string", required = false },
+  { kind = "string", is_required = false },
+  { kind = "string", is_required = false },
 ]
 
 [globals.package.members.loadlib]
@@ -1411,13 +1412,13 @@ min_args = 2
 max_args = 2
 params = [{ kind = "string" }, { kind = "string" }]
 
-# The environment table (Lua 5.2+). Assignable: `local _ENV = ...` is the
-# sanctioned sandboxing idiom.
+# The chunk's environment (Lua 5.2+). Writable, since assigning it
+# (`_ENV = sandbox`) is the standard sandboxing idiom.
 [globals._ENV]
 kind = "property"
-read_only = false
+is_read_only = false
 
 # Script argument vector populated by the standalone lua interpreter.
 [globals.arg]
 kind = "property"
-read_only = false
+is_read_only = false

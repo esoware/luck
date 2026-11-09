@@ -1,14 +1,13 @@
-use luck_token::Span;
+use luck_token::{LuaVersion, Span, chunk_start, index_to_offset, line_breaks, offset_to_index};
 
-/// Severity of a lint diagnostic, shared with the toolchain-wide
-/// severity in `luck_core`.
+use crate::fix::Fix;
+
 pub type Severity = luck_core::DiagnosticSeverity;
 
-/// Category of a lint rule. Owned by `luck_core` so the whole config
-/// deserializes there; re-exported here for the rule code.
+/// Defined in `luck_core` so the config can deserialize it.
 pub use luck_core::Category;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LintDiagnostic {
     pub rule: &'static str,
     pub category: Category,
@@ -19,57 +18,95 @@ pub struct LintDiagnostic {
     pub fix: Option<Fix>,
 }
 
-impl LintDiagnostic {
-    /// Build a diagnostic for `rule` at `span`. `category` and `severity` are
-    /// placeholders. The lint driver overwrites them with the rule's
-    /// `category()` and the resolved (override-or-default) severity, so a rule
-    /// never restates its own category or severity per diagnostic.
+/// The driver makes each one a [`LintDiagnostic`] carrying the reporting
+/// rule's name and category and its resolved severity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Finding {
+    pub message: String,
+    pub span: Span,
+    pub help: Option<String>,
+    pub fix: Option<Fix>,
+}
+
+impl Finding {
     #[must_use]
-    pub fn new(rule: &'static str, message: impl Into<String>, span: Span) -> Self {
-        Self {
-            rule,
-            category: Category::Correctness,
-            severity: Severity::Warning,
-            message: message.into(),
-            span,
-            help: None,
-            fix: None,
-        }
+    pub(crate) fn new<Message>(message: Message, span: Span) -> Self
+    where
+        Message: Into<String>,
+    {
+        Self { message: message.into(), span, help: None, fix: None }
     }
 
     #[must_use]
-    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+    pub(crate) fn with_help<Help>(mut self, help: Help) -> Self
+    where
+        Help: Into<String>,
+    {
         self.help = Some(help.into());
         self
     }
 
     #[must_use]
-    pub fn with_fix(mut self, fix: Fix) -> Self {
+    pub(crate) fn with_fix(mut self, fix: Fix) -> Self {
         self.fix = Some(fix);
         self
     }
 
     #[must_use]
-    pub fn with_help_opt(mut self, help: Option<String>) -> Self {
-        self.help = help;
-        self
-    }
-
-    #[must_use]
-    pub fn with_fix_opt(mut self, fix: Option<Fix>) -> Self {
+    pub(crate) fn with_optional_fix(mut self, fix: Option<Fix>) -> Self {
         self.fix = fix;
         self
     }
+
+    pub(crate) fn into_diagnostic(
+        self,
+        rule: &'static str,
+        category: Category,
+        severity: Severity,
+    ) -> LintDiagnostic {
+        let Self { message, span, help, fix } = self;
+        LintDiagnostic { rule, category, severity, message, span, help, fix }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Fix {
-    pub description: String,
-    pub edits: Vec<TextEdit>,
+/// One-based `(line, column)` for a byte `offset` into `source`.
+///
+/// Columns count bytes from the line start, matching ariadne's
+/// `IndexType::Byte` rendering so a position quoted in diagnostic text lines
+/// up with what the CLI prints. A BOM that `version` skips is not a column.
+/// An out-of-range offset clamps to the end of the source.
+#[must_use]
+pub(crate) fn line_column(source: &str, offset: u32, version: LuaVersion) -> (u32, u32) {
+    let end = offset_to_index(offset).min(source.len());
+    let prefix = source.get(..end).unwrap_or_default();
+    let mut line_count = 0usize;
+    let mut line_start = chunk_start(source, version);
+    for line_break in line_breaks(prefix, version) {
+        line_count = line_count.saturating_add(1);
+        line_start = line_break.end;
+    }
+    let column = end.saturating_sub(line_start);
+    (index_to_offset(line_count).saturating_add(1), index_to_offset(column).saturating_add(1))
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct TextEdit {
-    pub span: Span,
-    pub replacement: String,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_column_is_one_based_byte_columns() {
+        let source = "local x\ndo local y\nend";
+        assert_eq!(line_column(source, 0, LuaVersion::Lua54), (1, 1));
+        assert_eq!(line_column(source, 6, LuaVersion::Lua54), (1, 7));
+        // First byte of line 2 (the `d` in `do`).
+        assert_eq!(line_column(source, 8, LuaVersion::Lua54), (2, 1));
+        // `y` on line 2.
+        assert_eq!(line_column(source, 17, LuaVersion::Lua54), (2, 10));
+    }
+
+    #[test]
+    fn line_column_clamps_out_of_range() {
+        let source = "abc\ndef";
+        assert_eq!(line_column(source, 999, LuaVersion::Lua54), (2, 4));
+    }
 }

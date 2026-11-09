@@ -1,29 +1,27 @@
+use luck_ast::{
+    Assignment, AttributedName, Block, Expression, FunctionBody, FunctionDef, LocalAssignment,
+    LocalFunction, Punctuated, Statement, Transform, Type, Var, Visitor,
+};
+use luck_token::{CompactString, LuaVersion, Span};
 use rustc_hash::FxHashSet;
 
-use luck_ast::expr::*;
-use luck_ast::shared::*;
-use luck_ast::stmt::*;
-use luck_ast::transform::AstTransform;
-use luck_token::token::{Token, TokenKind};
-use luck_token::{LuaVersion, Span};
+use crate::binding::{has_fixed_binding, identifier_name, identifier_token};
+use crate::limits::{
+    GENERIC_FOR_STATE_LOCALS, MAX_ACTIVE_LOCALS, MAX_REGISTERS, NUMERIC_FOR_STATE_LOCALS,
+    parameter_locals,
+};
 
-use crate::expr::{has_fixed_binding, ident_name};
-use crate::tokens::default_span as sp;
-use luck_token::CompactString;
-
-/// Lifts local declarations to function scope, dropping redundant `local`
-/// keywords. Runs after rename, which guarantees non-overlapping lifetimes for
-/// same-named bindings. Parent-child slot reuse still lets a child local share
-/// a name with a parent local, so a name that appears in any ancestor scope is
-/// left alone.
+/// Runs after rename, which gives same-named bindings non-overlapping
+/// lifetimes. Slot reuse can still give a child local its parent's name, so a
+/// name already bound in an enclosing scope is left alone.
 ///
-/// There is deliberately no per-lift byte-cost gate, even though a lone
-/// lift can cost a few bytes for its hoisted head. The tail fixpoint
-/// converges by annealing: each lift reshapes scopes, the next rename
-/// redistributes names, and that unblocks further lifts. Gating the
-/// "unprofitable" lone lifts freezes that cascade early and benchmarked
-/// hundreds of bytes WORSE corpus-wide than lifting unconditionally.
-pub fn lift(block: Block, version: LuaVersion) -> Block {
+/// There's deliberately no per-lift size check, even though a lone lift can
+/// cost a few bytes for the hoisted declaration. Each lift reshapes scopes,
+/// the next rename redistributes names, and that unblocks further lifts.
+/// Skipping the unprofitable lone lifts stops that cascade early, and it
+/// benchmarked hundreds of bytes worse across the corpus than lifting
+/// everything.
+pub(crate) fn lift(block: Block, version: LuaVersion) -> Block {
     let mut lifter = Lifter { version };
     lifter.transform_block(block)
 }
@@ -32,219 +30,153 @@ struct Lifter {
     version: LuaVersion,
 }
 
-impl AstTransform for Lifter {
-    fn walk_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
-        let mut param_names: FxHashSet<CompactString> = body
-            .params
-            .iter()
-            .map(|p| ident_name(&p.name).into())
-            .collect();
-        // A Lua 5.5 `...name` vararg is a binding too: a hoisted
-        // declaration sharing its name would capture its references.
-        if let Some(vararg) = &body.vararg
-            && let Some(name) = &vararg.name
-        {
-            param_names.insert(ident_name(name).into());
-        }
+impl Transform for Lifter {
+    fn transform_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
+        let scan = collect_ineligible_names(&body, self.version);
 
-        let ineligible = collect_ineligible_names(&body, self.version);
+        let mut collector = LiftableCollector {
+            scope_names: vec![param_names(&body)],
+            ineligible_names: &scan.ineligible_names,
+            liftable_names: FxHashSet::default(),
+            ordered_liftable_names: Vec::new(),
+            // Each hoisted name adds at most one local and one register
+            // anywhere in the body, so the body's own peaks bound what fits.
+            hoist_capacity: MAX_ACTIVE_LOCALS
+                .saturating_sub(scan.peak_active_locals)
+                .min(MAX_REGISTERS.saturating_sub(scan.peak_registers)),
+            version: self.version,
+        };
+        collector.collect_block(&body.block);
+        let LiftableCollector { liftable_names, ordered_liftable_names, .. } = collector;
 
-        let mut liftable_set = FxHashSet::default();
-        let mut liftable_ordered = Vec::new();
-        let mut scope_names = vec![param_names];
-        collect_liftable(
-            &body.block,
-            &mut scope_names,
-            &ineligible,
-            &mut liftable_set,
-            &mut liftable_ordered,
-            self.version,
-        );
-
-        if liftable_set.is_empty() {
+        if liftable_names.is_empty() {
             body.block = self.transform_block(body.block);
             return body;
         }
 
-        body.block = rewrite_block(body.block, &liftable_set, &mut Vec::new(), self.version);
+        let mut rewriter = LiftRewriter {
+            liftable_names: &liftable_names,
+            scope_names: Vec::new(),
+            version: self.version,
+        };
+        body.block = rewriter.rewrite_block(body.block);
         body.block = self.transform_block(body.block);
 
-        prepend_declaration(&mut body.block, &liftable_ordered);
+        prepend_declaration(&mut body.block, &ordered_liftable_names);
 
         body
     }
 }
 
-/// Walks a block and collects the locals that can be lifted.
-/// A local is liftable if:
-/// - its name doesn't appear in any ancestor scope (avoids clobbering parent bindings)
-/// - its name is not ineligible (free in the body or captured by a closure)
-/// - it has no attributes (<const>, <close>)
-fn collect_liftable(
-    block: &Block,
-    scope_names: &mut Vec<FxHashSet<CompactString>>,
-    ineligible: &FxHashSet<CompactString>,
-    liftable: &mut FxHashSet<CompactString>,
-    liftable_ordered: &mut Vec<CompactString>,
+/// A name qualifies when it isn't already bound in this or an enclosing scope
+/// of the body (rename can give a child local its parent's name) and isn't
+/// ineligible (see `collect_ineligible_names`).
+///
+/// A `local` statement also has to pass `can_lift_assignment`, which rules out attributes such as
+/// `<const>` and `<close>`.
+struct LiftableCollector<'names> {
+    scope_names: Vec<FxHashSet<CompactString>>,
+    ineligible_names: &'names FxHashSet<CompactString>,
+    liftable_names: FxHashSet<CompactString>,
+    ordered_liftable_names: Vec<CompactString>,
+    hoist_capacity: usize,
     version: LuaVersion,
-) {
-    for stmt in &block.stmts {
-        match stmt {
-            Statement::LocalAssignment(local) => {
-                if !can_lift_assignment(local, version) {
-                    for name in local.names.iter() {
-                        let n = ident_name(&name.name);
-                        scope_names.last_mut().unwrap().insert(n.into());
-                    }
-                    continue;
-                }
-                let names: Vec<CompactString> = local
-                    .names
-                    .iter()
-                    .map(|attributed| ident_name(&attributed.name).into())
-                    .collect();
-                let mut all_safe = true;
-                for name in &names {
-                    if is_in_parent(scope_names, name) {
-                        all_safe = false;
-                        break;
-                    }
-                    if ineligible.contains(name) {
-                        all_safe = false;
-                        break;
-                    }
-                }
-                if all_safe {
-                    for name in &names {
-                        if liftable.insert(name.clone()) {
-                            liftable_ordered.push(name.clone());
-                        }
-                    }
-                }
-                for name in names {
-                    scope_names.last_mut().unwrap().insert(name);
-                }
+}
+
+impl LiftableCollector<'_> {
+    const fn has_hoist_room(&self, name_count: usize) -> bool {
+        self.ordered_liftable_names.len().saturating_add(name_count) <= self.hoist_capacity
+    }
+
+    fn declare(&mut self, name: &str) {
+        if let Some(frame) = self.scope_names.last_mut() {
+            frame.insert(name.into());
+        }
+    }
+
+    fn is_safe_to_lift(&self, name: &str) -> bool {
+        !self.scope_names.iter().any(|frame| frame.contains(name))
+            && !self.ineligible_names.contains(name)
+    }
+
+    fn mark_liftable(&mut self, name: &str) {
+        if self.liftable_names.insert(name.into()) {
+            self.ordered_liftable_names.push(name.into());
+        }
+    }
+
+    fn collect_block(&mut self, block: &Block) {
+        for stmt in &block.stmts {
+            self.collect_stmt(stmt);
+        }
+    }
+
+    fn collect_block_in_frame(&mut self, block: &Block, frame: FxHashSet<CompactString>) {
+        self.scope_names.push(frame);
+        self.collect_block(block);
+        self.scope_names.pop();
+    }
+
+    fn collect_scoped_block(&mut self, block: &Block) {
+        self.collect_block_in_frame(block, FxHashSet::default());
+    }
+
+    fn collect_local(&mut self, local: &LocalAssignment) {
+        let names = local.names.items.iter().map(|attributed| identifier_name(&attributed.name));
+        if can_lift_assignment(local, self.version)
+            && self.has_hoist_room(local.names.len())
+            && names.clone().all(|name| self.is_safe_to_lift(name))
+        {
+            for name in names.clone() {
+                self.mark_liftable(name);
             }
-            Statement::LocalFunction(lf) => {
-                let name: CompactString = ident_name(&lf.name).into();
-                if !lf.is_const
-                    && !lf.is_exported
-                    && !is_in_parent(scope_names, &name)
-                    && !ineligible.contains(&name)
-                    && liftable.insert(name.clone())
+        }
+        for name in names {
+            self.declare(name);
+        }
+    }
+
+    fn collect_stmt(&mut self, stmt: &Statement) {
+        match stmt {
+            Statement::LocalAssignment(local) => self.collect_local(local),
+            Statement::LocalFunction(local_function) => {
+                let name = identifier_name(&local_function.name);
+                if !local_function.is_const
+                    && !local_function.is_exported
+                    && self.has_hoist_room(1)
+                    && self.is_safe_to_lift(name)
                 {
-                    liftable_ordered.push(name.clone());
+                    self.mark_liftable(name);
                 }
-                scope_names.last_mut().unwrap().insert(name);
+                self.declare(name);
                 // The function body gets its own lift pass, so stop here.
             }
-            Statement::DoBlock(do_block) => {
-                scope_names.push(FxHashSet::default());
-                collect_liftable(
-                    &do_block.block,
-                    scope_names,
-                    ineligible,
-                    liftable,
-                    liftable_ordered,
-                    version,
-                );
-                scope_names.pop();
-            }
-            Statement::WhileLoop(while_loop) => {
-                scope_names.push(FxHashSet::default());
-                collect_liftable(
-                    &while_loop.block,
-                    scope_names,
-                    ineligible,
-                    liftable,
-                    liftable_ordered,
-                    version,
-                );
-                scope_names.pop();
-            }
-            Statement::RepeatLoop(repeat_loop) => {
-                scope_names.push(FxHashSet::default());
-                collect_liftable(
-                    &repeat_loop.block,
-                    scope_names,
-                    ineligible,
-                    liftable,
-                    liftable_ordered,
-                    version,
-                );
-                scope_names.pop();
-            }
+            Statement::DoBlock(do_block) => self.collect_scoped_block(&do_block.block),
+            Statement::WhileLoop(while_loop) => self.collect_scoped_block(&while_loop.block),
+            Statement::RepeatLoop(repeat_loop) => self.collect_scoped_block(&repeat_loop.block),
             Statement::IfStatement(if_stmt) => {
-                scope_names.push(FxHashSet::default());
-                collect_liftable(
-                    &if_stmt.block,
-                    scope_names,
-                    ineligible,
-                    liftable,
-                    liftable_ordered,
-                    version,
-                );
-                scope_names.pop();
+                self.collect_scoped_block(&if_stmt.block);
                 for clause in &if_stmt.elseif_clauses {
-                    scope_names.push(FxHashSet::default());
-                    collect_liftable(
-                        &clause.block,
-                        scope_names,
-                        ineligible,
-                        liftable,
-                        liftable_ordered,
-                        version,
-                    );
-                    scope_names.pop();
+                    self.collect_scoped_block(&clause.block);
                 }
                 if let Some(else_clause) = &if_stmt.else_clause {
-                    scope_names.push(FxHashSet::default());
-                    collect_liftable(
-                        &else_clause.block,
-                        scope_names,
-                        ineligible,
-                        liftable,
-                        liftable_ordered,
-                        version,
-                    );
-                    scope_names.pop();
+                    self.collect_scoped_block(&else_clause.block);
                 }
             }
-            Statement::NumericFor(nf) => {
-                scope_names.push(FxHashSet::default());
-                let var_name = ident_name(&nf.name);
-                scope_names.last_mut().unwrap().insert(var_name.into());
-                collect_liftable(
-                    &nf.block,
-                    scope_names,
-                    ineligible,
-                    liftable,
-                    liftable_ordered,
-                    version,
-                );
-                scope_names.pop();
+            Statement::NumericFor(numeric_for) => {
+                let frame = FxHashSet::from_iter([identifier_name(&numeric_for.name).into()]);
+                self.collect_block_in_frame(&numeric_for.block, frame);
             }
-            Statement::GenericFor(gf) => {
-                scope_names.push(FxHashSet::default());
-                for binding in gf.names.iter() {
-                    scope_names
-                        .last_mut()
-                        .unwrap()
-                        .insert(ident_name(&binding.name).into());
-                }
-                collect_liftable(
-                    &gf.block,
-                    scope_names,
-                    ineligible,
-                    liftable,
-                    liftable_ordered,
-                    version,
-                );
-                scope_names.pop();
+            Statement::GenericFor(generic_for) => {
+                let frame = generic_for
+                    .names
+                    .iter()
+                    .map(|param| identifier_name(&param.name).into())
+                    .collect();
+                self.collect_block_in_frame(&generic_for.block, frame);
             }
-            // No `local` binding to lift at this level. Function declarations
-            // (including Lua 5.5 `global function`) get their own lift pass via
-            // walk_function_body, so their bodies are not traversed here.
+            // Nothing to lift at this level. Function bodies get their own
+            // pass through `transform_function_body`.
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::FunctionDecl(_)
@@ -263,186 +195,171 @@ fn collect_liftable(
 }
 
 fn can_lift_assignment(local: &LocalAssignment, version: LuaVersion) -> bool {
-    // Bare declarations reset to nil even when a sibling previously used
-    // the hoisted slot. Keep them local rather than extending their lifetime.
-    // An annotated name is equally unliftable: the hoisted declaration is a
-    // bare `local x`, so the annotation would be dropped, not carried along.
+    // A bare `local x` resets x to nil, which a lifted one wouldn't once a
+    // sibling has used the shared slot. A type annotation would be lost,
+    // since the hoisted declaration is a bare `local x`.
     local.exprs.is_some()
         && !has_fixed_binding(local, version)
-        && local
-            .names
-            .iter()
-            .all(|name| name.type_annotation.is_none())
-        && local.names.iter().enumerate().all(|(index, name)| {
-            local.names.items[..index]
-                .iter()
-                .all(|previous| ident_name(&previous.name) != ident_name(&name.name))
+        && local.names.iter().all(|attributed| attributed.type_annotation.is_none())
+        && local.names.iter().enumerate().all(|(i, attributed)| {
+            local.names.iter().take(i).all(|previous| {
+                identifier_name(&previous.name) != identifier_name(&attributed.name)
+            })
         })
 }
 
-fn is_in_parent(scope_names: &[FxHashSet<CompactString>], name: &str) -> bool {
-    scope_names.iter().any(|frame| frame.contains(name))
-}
-
-/// Names a hoisted declaration at the body's top must never wear, found
-/// by real scope resolution over the body:
-///
-/// - names free in the body itself (globals and upvalues): the hoisted
-///   `local` would capture every such reference in the body;
-/// - names bound in the body but free in a nested closure (true
-///   captures): the closure observes that binding's identity, and
-///   lifting merges all same-named lifted bindings into one shared
-///   function-scope binding.
-///
-/// A name a closure binds internally resolves inside that closure and blocks
-/// nothing, so merely mentioning a name in a closure does not veto its lift.
-fn collect_ineligible_names(body: &FunctionBody, version: LuaVersion) -> FxHashSet<CompactString> {
-    let mut root_frame: FxHashSet<CompactString> = body
-        .params
-        .iter()
-        .map(|p| ident_name(&p.name).into())
-        .collect();
+/// A Lua 5.5 `...name` vararg is one too, and a hoisted declaration sharing its name would
+/// capture its references.
+fn param_names(body: &FunctionBody) -> FxHashSet<CompactString> {
+    let mut names: FxHashSet<CompactString> =
+        body.params.iter().map(|param| identifier_name(&param.name).into()).collect();
     if let Some(vararg) = &body.vararg
         && let Some(name) = &vararg.name
     {
-        root_frame.insert(ident_name(name).into());
+        names.insert(identifier_name(name).into());
     }
+    names
+}
+
+/// Names a declaration hoisted to the top of `body` must never wear, found by
+/// resolving scopes over the body:
+///
+/// - names free in the body (globals and upvalues), since the hoisted `local`
+///   would capture every reference to them;
+/// - names bound in the body but captured by a nested closure, since lifting
+///   merges same-named bindings into one function-scope local that the
+///   closure would then share;
+/// - `_ENV` on targets where it's an upvalue.
+///
+/// A name a closure binds itself resolves inside that closure, so merely
+/// mentioning a name in a closure doesn't block its lift.
+///
+/// The scan also records the body's peak locals and registers, which bound
+/// what the hoisted declaration can add.
+fn collect_ineligible_names(body: &FunctionBody, version: LuaVersion) -> IneligibleScanner {
+    let parameter_count = parameter_locals(body);
     let mut scanner = IneligibleScanner {
-        frames: vec![root_frame],
-        closure_floor: Vec::new(),
-        ineligible: if version.has_env_upvalue() {
+        frames: vec![param_names(body)],
+        closure_floors: Vec::new(),
+        ineligible_names: if version.has_env_upvalue() {
             FxHashSet::from_iter([CompactString::from("_ENV")])
         } else {
             FxHashSet::default()
         },
+        active_locals: parameter_count,
+        peak_active_locals: parameter_count,
+        statement_expr_nodes: 0,
+        peak_registers: parameter_count,
     };
-    scanner.scan_block(&body.block);
-    scanner.ineligible
+    scanner.visit_block(&body.block);
+    scanner
 }
 
 struct IneligibleScanner {
     /// One name set per live scope, innermost last.
     frames: Vec<FxHashSet<CompactString>>,
     /// Frame count at each enclosing nested-closure entry.
-    closure_floor: Vec<usize>,
-    ineligible: FxHashSet<CompactString>,
+    closure_floors: Vec<usize>,
+    ineligible_names: FxHashSet<CompactString>,
+    /// Locals the walk has active in the function being lifted.
+    active_locals: usize,
+    peak_active_locals: usize,
+    /// Expressions seen in the current statement, each at most one register
+    /// beyond the locals.
+    statement_expr_nodes: usize,
+    peak_registers: usize,
 }
 
 impl IneligibleScanner {
     fn declare(&mut self, name: &str) {
-        self.frames
-            .last_mut()
-            .expect("root frame always present")
-            .insert(name.into());
+        if let Some(frame) = self.frames.last_mut() {
+            frame.insert(name.into());
+        }
+        self.add_active_locals(1);
+    }
+
+    /// A closure's locals don't count: it has its own 200.
+    fn add_active_locals(&mut self, count: usize) {
+        if self.closure_floors.is_empty() {
+            self.active_locals = self.active_locals.saturating_add(count);
+            self.peak_active_locals = self.peak_active_locals.max(self.active_locals);
+        }
+    }
+
+    fn in_new_frame(&mut self, scan: impl FnOnce(&mut Self)) {
+        let outer_active_locals = self.active_locals;
+        self.frames.push(FxHashSet::default());
+        scan(self);
+        self.frames.pop();
+        self.active_locals = outer_active_locals;
     }
 
     fn reference(&mut self, name: &str) {
         match self.frames.iter().rposition(|frame| frame.contains(name)) {
             None => {
-                self.ineligible.insert(name.into());
+                self.ineligible_names.insert(name.into());
             }
-            Some(frame_idx) => {
-                // Bound in the body proper but referenced from inside a
-                // closure: a true capture.
-                if let Some(&floor) = self.closure_floor.first()
-                    && frame_idx < floor
+            Some(frame_index) => {
+                // Bound in the body itself but referenced from inside a
+                // closure, so it's captured.
+                if let Some(&floor) = self.closure_floors.first()
+                    && frame_index < floor
                 {
-                    self.ineligible.insert(name.into());
+                    self.ineligible_names.insert(name.into());
                 }
-            }
-        }
-    }
-
-    fn scan_closure(&mut self, body: &FunctionBody) {
-        self.closure_floor.push(self.frames.len());
-        let mut frame: FxHashSet<CompactString> = body
-            .params
-            .iter()
-            .map(|p| ident_name(&p.name).into())
-            .collect();
-        if let Some(vararg) = &body.vararg
-            && let Some(name) = &vararg.name
-        {
-            frame.insert(ident_name(name).into());
-        }
-        self.frames.push(frame);
-        self.scan_block(&body.block);
-        self.frames.pop();
-        self.closure_floor.pop();
-    }
-
-    fn scan_block(&mut self, block: &Block) {
-        for stmt in &block.stmts {
-            self.scan_stmt(stmt);
-        }
-        if let Some(last) = &block.last_stmt
-            && let LastStatement::Return(ret) = &**last
-        {
-            for expr in ret.exprs.iter() {
-                self.scan_expr(expr);
             }
         }
     }
 
     fn scan_scoped_block(&mut self, block: &Block) {
-        self.frames.push(FxHashSet::default());
-        self.scan_block(block);
-        self.frames.pop();
+        self.in_new_frame(|scanner| scanner.visit_block(block));
     }
+}
 
-    fn scan_stmt(&mut self, stmt: &Statement) {
+impl<'ast> Visitor<'ast> for IneligibleScanner {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+        if self.closure_floors.is_empty() {
+            self.statement_expr_nodes = 0;
+        }
         match stmt {
             Statement::LocalAssignment(local) => {
                 // RHS before LHS: `local x = x` reads the outer x.
                 if let Some(exprs) = &local.exprs {
                     for expr in exprs.iter() {
-                        self.scan_expr(expr);
+                        self.visit_expr(expr);
                     }
                 }
-                for name_tok in local.names.iter() {
-                    self.declare(ident_name(&name_tok.name));
+                for attributed in local.names.iter() {
+                    self.declare(identifier_name(&attributed.name));
                 }
             }
-            Statement::LocalFunction(local_func) => {
-                self.declare(ident_name(&local_func.name));
-                self.scan_closure(&local_func.body);
+            Statement::LocalFunction(local_function) => {
+                self.declare(identifier_name(&local_function.name));
+                self.visit_function_body(&local_function.body);
             }
-            Statement::FunctionDecl(func_decl) => {
-                self.scan_closure(&func_decl.body);
-                if !func_decl.name.names.is_empty() {
-                    self.reference(ident_name(&func_decl.name.names[0]));
+            Statement::FunctionDecl(function_declaration) => {
+                self.visit_function_body(&function_declaration.body);
+                if let Some(root_name) = function_declaration.name.names.first() {
+                    self.reference(identifier_name(root_name));
                 }
             }
-            Statement::Assignment(assign) => {
-                for expr in assign.values.iter() {
-                    self.scan_expr(expr);
-                }
-                for var in assign.targets.iter() {
-                    self.scan_var(var);
-                }
-            }
-            Statement::FunctionCall(call_stmt) => {
-                self.scan_call(call_stmt);
-            }
-            Statement::DoBlock(do_block) => {
-                self.scan_scoped_block(&do_block.block);
-            }
+            Statement::DoBlock(do_block) => self.scan_scoped_block(&do_block.block),
             Statement::WhileLoop(while_loop) => {
-                self.scan_expr(&while_loop.condition);
+                self.visit_expr(&while_loop.condition);
                 self.scan_scoped_block(&while_loop.block);
             }
             Statement::RepeatLoop(repeat_loop) => {
                 // The condition sees the block's locals.
-                self.frames.push(FxHashSet::default());
-                self.scan_block(&repeat_loop.block);
-                self.scan_expr(&repeat_loop.condition);
-                self.frames.pop();
+                self.in_new_frame(|scanner| {
+                    scanner.visit_block(&repeat_loop.block);
+                    scanner.visit_expr(&repeat_loop.condition);
+                });
             }
             Statement::IfStatement(if_stmt) => {
-                self.scan_expr(&if_stmt.condition);
+                self.visit_expr(&if_stmt.condition);
                 self.scan_scoped_block(&if_stmt.block);
                 for clause in &if_stmt.elseif_clauses {
-                    self.scan_expr(&clause.condition);
+                    self.visit_expr(&clause.condition);
                     self.scan_scoped_block(&clause.block);
                 }
                 if let Some(else_clause) = &if_stmt.else_clause {
@@ -450,265 +367,203 @@ impl IneligibleScanner {
                 }
             }
             Statement::NumericFor(numeric_for) => {
-                self.scan_expr(&numeric_for.start);
-                self.scan_expr(&numeric_for.limit);
+                self.visit_expr(&numeric_for.start);
+                self.visit_expr(&numeric_for.limit);
                 if let Some(step) = &numeric_for.step {
-                    self.scan_expr(step);
+                    self.visit_expr(step);
                 }
-                self.frames.push(FxHashSet::default());
-                self.declare(ident_name(&numeric_for.name));
-                self.scan_block(&numeric_for.block);
-                self.frames.pop();
+                self.in_new_frame(|scanner| {
+                    scanner.add_active_locals(NUMERIC_FOR_STATE_LOCALS);
+                    scanner.declare(identifier_name(&numeric_for.name));
+                    scanner.visit_block(&numeric_for.block);
+                });
             }
             Statement::GenericFor(generic_for) => {
                 for expr in generic_for.exprs.iter() {
-                    self.scan_expr(expr);
+                    self.visit_expr(expr);
                 }
-                self.frames.push(FxHashSet::default());
-                for binding in generic_for.names.iter() {
-                    self.declare(ident_name(&binding.name));
-                }
-                self.scan_block(&generic_for.block);
-                self.frames.pop();
-            }
-            Statement::CompoundAssignment(compound) => {
-                self.scan_var(&compound.var);
-                self.scan_expr(&compound.expr);
-            }
-            Statement::GlobalFunction(global_func) => {
-                self.scan_closure(&global_func.body);
-            }
-            Statement::GlobalDeclaration(global_decl) => {
-                if let Some(exprs) = &global_decl.exprs {
-                    for expr in exprs.iter() {
-                        self.scan_expr(expr);
+                self.in_new_frame(|scanner| {
+                    scanner.add_active_locals(GENERIC_FOR_STATE_LOCALS);
+                    for param in generic_for.names.iter() {
+                        scanner.declare(identifier_name(&param.name));
                     }
-                }
+                    scanner.visit_block(&generic_for.block);
+                });
             }
-            Statement::TypeDeclaration(type_decl) => {
-                if let TypeDeclarationValue::TypeFunction(func_body) = &type_decl.type_value {
-                    self.scan_closure(func_body);
-                }
-            }
-            Statement::EmptyStatement(_)
+            // These bind nothing in the body's scopes. A `global function`
+            // or `type function` body is reached as a closure.
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::EmptyStatement(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalStar(_)
             | Statement::Break(_)
-            | Statement::Error(_) => {}
+            | Statement::Error(_) => self.walk_stmt(stmt),
         }
     }
 
-    fn scan_expr(&mut self, expr: &Expression) {
-        match expr {
-            Expression::Var(var) => self.scan_var(var),
-            Expression::FunctionCall(call) => self.scan_call(call),
-            Expression::BinaryOp(binop) => {
-                self.scan_expr(&binop.left);
-                self.scan_expr(&binop.right);
-            }
-            Expression::UnaryOp(unop) => self.scan_expr(&unop.operand),
-            Expression::Parenthesized(paren) => self.scan_expr(&paren.expr),
-            Expression::FunctionDef(func) => self.scan_closure(&func.body),
-            Expression::TableConstructor(table) => self.scan_fields(&table.fields),
-            Expression::InterpolatedString(interp) => {
-                for seg in &interp.segments {
-                    if let Some(expr) = &seg.expr {
-                        self.scan_expr(expr);
-                    }
-                }
-            }
-            Expression::IfExpression(if_expr) => {
-                self.scan_expr(&if_expr.condition);
-                self.scan_expr(&if_expr.then_expr);
-                for clause in &if_expr.elseif_clauses {
-                    self.scan_expr(&clause.condition);
-                    self.scan_expr(&clause.expr);
-                }
-                self.scan_expr(&if_expr.else_expr);
-            }
-            Expression::TypeCast(cast) => self.scan_expr(&cast.expr),
-            Expression::TypeInstantiation(instantiation) => self.scan_expr(&instantiation.expr),
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_) // Luau
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::Error(_) => {}
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if self.closure_floors.is_empty() {
+            self.statement_expr_nodes = self.statement_expr_nodes.saturating_add(1);
+            let registers = self.active_locals.saturating_add(self.statement_expr_nodes);
+            self.peak_registers = self.peak_registers.max(registers);
         }
+        self.walk_expr(expr);
     }
 
-    fn scan_var(&mut self, var: &Var) {
-        match var {
-            Var::Name(name) => self.reference(ident_name(name)),
-            Var::FieldAccess(fa) => self.scan_expr(&fa.prefix),
-            Var::Index(ie) => {
-                self.scan_expr(&ie.prefix);
-                self.scan_expr(&ie.index);
-            }
+    fn visit_var(&mut self, var: &'ast Var) {
+        if let Var::Name(name) = var {
+            self.reference(identifier_name(name));
         }
+        self.walk_var(var);
     }
 
-    fn scan_call(&mut self, call: &FunctionCall) {
-        self.scan_expr(&call.callee);
-        match &call.args {
-            FunctionArgs::Parenthesized { args, .. } => {
-                for arg in args.iter() {
-                    self.scan_expr(arg);
-                }
-            }
-            FunctionArgs::TableConstructor(table) => self.scan_fields(&table.fields),
-            FunctionArgs::StringLiteral(_) => {}
-        }
+    /// A nested closure, which sees the body's bindings as upvalues.
+    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
+        self.closure_floors.push(self.frames.len());
+        self.frames.push(param_names(body));
+        self.visit_block(&body.block);
+        self.frames.pop();
+        self.closure_floors.pop();
     }
 
-    fn scan_fields(&mut self, fields: &Punctuated<Field>) {
-        for field in fields.iter() {
-            match field {
-                Field::Bracketed { key, value, .. } => {
-                    self.scan_expr(key);
-                    self.scan_expr(value);
-                }
-                Field::Named { value, .. } => self.scan_expr(value),
-                Field::Positional { value, .. } => self.scan_expr(value),
-            }
-        }
-    }
+    // Types never run, so a name inside one is never captured.
+    fn visit_type(&mut self, _ty: &'ast Type) {}
 }
 
-/// Rewrite selected initializers while retaining the original lexical
-/// binding boundaries. Every declaration shadows, including lifted ones:
-/// sharing a spelling does not make a nested declaration the same binding.
-fn rewrite_block(
-    block: Block,
-    liftable: &FxHashSet<CompactString>,
-    shadowed: &mut Vec<FxHashSet<CompactString>>,
+/// Matching is by name, so it tracks every declaration in scope, lifted or
+/// not. A declaration under a same-named binding stays `local`, since its
+/// assignment would write to that binding instead.
+struct LiftRewriter<'names> {
+    liftable_names: &'names FxHashSet<CompactString>,
+    scope_names: Vec<FxHashSet<CompactString>>,
     version: LuaVersion,
-) -> Block {
-    let mut new_stmts: Vec<Statement> = Vec::new();
-    shadowed.push(FxHashSet::default());
+}
 
-    for stmt in block.stmts {
-        match stmt {
-            Statement::LocalAssignment(local) => {
-                let names: Vec<CompactString> = local
+impl LiftRewriter<'_> {
+    fn is_shadowed(&self, name: &str) -> bool {
+        self.scope_names.iter().any(|frame| frame.contains(name))
+    }
+
+    fn rewrite_block(&mut self, block: Block) -> Block {
+        self.rewrite_block_in_frame(block, FxHashSet::default())
+    }
+
+    fn rewrite_block_in_frame(&mut self, block: Block, frame: FxHashSet<CompactString>) -> Block {
+        self.scope_names.push(frame);
+        let stmts = block.stmts.into_iter().map(|stmt| self.rewrite_stmt(stmt)).collect();
+        self.scope_names.pop();
+        Block { span: block.span, stmts, last_stmt: block.last_stmt }
+    }
+
+    fn rewrite_local(&mut self, local: Box<LocalAssignment>) -> Statement {
+        let names = local.names.items.iter().map(|attributed| identifier_name(&attributed.name));
+        let is_lifted = can_lift_assignment(&local, self.version)
+            && names.clone().all(|name| self.liftable_names.contains(name))
+            && !names.clone().any(|name| self.is_shadowed(name));
+
+        if let Some(frame) = self.scope_names.last_mut() {
+            frame.extend(names.map(CompactString::from));
+        }
+        // local a,b=X,Y -> a,b=X,Y. `can_lift_assignment` has already
+        // rejected bare declarations, so `exprs` is always set here.
+        if is_lifted && let Some(values) = local.exprs {
+            let targets = Punctuated::from_items(
+                local
                     .names
-                    .iter()
-                    .map(|attributed| ident_name(&attributed.name).into())
-                    .collect();
-                let all_lifted = can_lift_assignment(&local, version)
-                    && names.iter().all(|n| liftable.contains(n))
-                    && !names
-                        .iter()
-                        .any(|n| shadowed.iter().any(|frame| frame.contains(n)));
+                    .items
+                    .into_iter()
+                    .map(|attributed| Var::Name(attributed.name))
+                    .collect(),
+            );
+            return Statement::Assignment(Box::new(Assignment {
+                span: local.span,
+                targets,
+                values,
+            }));
+        }
+        Statement::LocalAssignment(local)
+    }
 
-                shadowed
-                    .last_mut()
-                    .expect("frame pushed above")
-                    .extend(names);
-                if all_lifted {
-                    // local a,b=X,Y -> a,b=X,Y. `can_lift_assignment` rejects
-                    // bare declarations, whose hoisted form would need a
-                    // statement rather than an initializer to move.
-                    let values = local
-                        .exprs
-                        .expect("can_lift_assignment requires an initializer");
-                    let targets = Punctuated::from_items(
-                        local
-                            .names
-                            .items
-                            .into_iter()
-                            .map(|attributed| Var::Name(attributed.name))
-                            .collect(),
-                    );
-                    new_stmts.push(Statement::Assignment(Box::new(Assignment {
-                        span: local.span,
-                        targets,
-                        values,
-                    })));
-                } else {
-                    new_stmts.push(Statement::LocalAssignment(local));
-                }
-            }
-            Statement::LocalFunction(lf) => {
-                let name: CompactString = ident_name(&lf.name).into();
-                let is_lifted = !lf.is_const
-                    && !lf.is_exported
-                    && liftable.contains(&name)
-                    && !shadowed.iter().any(|frame| frame.contains(&name));
-                shadowed
-                    .last_mut()
-                    .expect("frame pushed above")
-                    .insert(name);
-                if is_lifted {
-                    // local function f(x)...end -> f=function(x)...end
-                    let func_expr = Expression::FunctionDef(Box::new(FunctionDef {
-                        span: lf.span,
-                        attributes: lf.attributes,
-                        body: lf.body,
-                    }));
+    fn rewrite_local_function(&mut self, local_function: Box<LocalFunction>) -> Statement {
+        let name = identifier_name(&local_function.name);
+        let is_lifted = !local_function.is_const
+            && !local_function.is_exported
+            && self.liftable_names.contains(name)
+            && !self.is_shadowed(name);
+        if let Some(frame) = self.scope_names.last_mut() {
+            frame.insert(name.into());
+        }
+        if !is_lifted {
+            return Statement::LocalFunction(local_function);
+        }
+        // local function f(x)...end -> f=function(x)...end
+        let function_expr = Expression::FunctionDef(Box::new(FunctionDef {
+            span: local_function.span,
+            attributes: local_function.attributes,
+            body: local_function.body,
+        }));
+        Statement::Assignment(Box::new(Assignment {
+            span: local_function.span,
+            targets: Punctuated::from_item(Var::Name(local_function.name)),
+            values: Punctuated::from_item(function_expr),
+        }))
+    }
 
-                    new_stmts.push(Statement::Assignment(Box::new(Assignment {
-                        span: lf.span,
-                        targets: Punctuated::from_item(Var::Name(lf.name)),
-                        values: Punctuated::from_item(func_expr),
-                    })));
-                } else {
-                    new_stmts.push(Statement::LocalFunction(lf));
-                }
-            }
+    fn rewrite_stmt(&mut self, stmt: Statement) -> Statement {
+        match stmt {
+            Statement::LocalAssignment(local) => self.rewrite_local(local),
+            Statement::LocalFunction(local_function) => self.rewrite_local_function(local_function),
             Statement::DoBlock(mut do_block) => {
-                do_block.block = rewrite_block(do_block.block, liftable, shadowed, version);
-                new_stmts.push(Statement::DoBlock(do_block));
+                do_block.block = self.rewrite_block(do_block.block);
+                Statement::DoBlock(do_block)
             }
-            Statement::WhileLoop(mut wl) => {
-                wl.block = rewrite_block(wl.block, liftable, shadowed, version);
-                new_stmts.push(Statement::WhileLoop(wl));
+            Statement::WhileLoop(mut while_loop) => {
+                while_loop.block = self.rewrite_block(while_loop.block);
+                Statement::WhileLoop(while_loop)
             }
-            Statement::RepeatLoop(mut rl) => {
-                rl.block = rewrite_block(rl.block, liftable, shadowed, version);
-                new_stmts.push(Statement::RepeatLoop(rl));
+            Statement::RepeatLoop(mut repeat_loop) => {
+                repeat_loop.block = self.rewrite_block(repeat_loop.block);
+                Statement::RepeatLoop(repeat_loop)
             }
             Statement::IfStatement(mut if_stmt) => {
-                if_stmt.block = rewrite_block(if_stmt.block, liftable, shadowed, version);
+                if_stmt.block = self.rewrite_block(if_stmt.block);
                 if_stmt.elseif_clauses = if_stmt
                     .elseif_clauses
                     .into_iter()
                     .map(|mut clause| {
-                        clause.block = rewrite_block(clause.block, liftable, shadowed, version);
+                        clause.block = self.rewrite_block(clause.block);
                         clause
                     })
                     .collect();
-                if_stmt.else_clause = if_stmt.else_clause.map(|mut ec| {
-                    ec.block = rewrite_block(ec.block, liftable, shadowed, version);
-                    ec
+                if_stmt.else_clause = if_stmt.else_clause.map(|mut else_clause| {
+                    else_clause.block = self.rewrite_block(else_clause.block);
+                    else_clause
                 });
-                new_stmts.push(Statement::IfStatement(if_stmt));
+                Statement::IfStatement(if_stmt)
             }
-            Statement::NumericFor(mut nf) => {
-                let mut frame = FxHashSet::default();
-                frame.insert(CompactString::from(ident_name(&nf.name)));
-                shadowed.push(frame);
-                nf.block = rewrite_block(nf.block, liftable, shadowed, version);
-                shadowed.pop();
-                new_stmts.push(Statement::NumericFor(nf));
+            Statement::NumericFor(mut numeric_for) => {
+                let frame = FxHashSet::from_iter([identifier_name(&numeric_for.name).into()]);
+                numeric_for.block = self.rewrite_block_in_frame(numeric_for.block, frame);
+                Statement::NumericFor(numeric_for)
             }
-            Statement::GenericFor(mut gf) => {
-                let mut frame = FxHashSet::default();
-                for binding in gf.names.iter() {
-                    frame.insert(CompactString::from(ident_name(&binding.name)));
-                }
-                shadowed.push(frame);
-                gf.block = rewrite_block(gf.block, liftable, shadowed, version);
-                shadowed.pop();
-                new_stmts.push(Statement::GenericFor(gf));
+            Statement::GenericFor(mut generic_for) => {
+                let frame = generic_for
+                    .names
+                    .iter()
+                    .map(|param| identifier_name(&param.name).into())
+                    .collect();
+                generic_for.block = self.rewrite_block_in_frame(generic_for.block, frame);
+                Statement::GenericFor(generic_for)
             }
-            // No lifted local to rewrite here. Function declarations (including
-            // Lua 5.5 `global function`) get their own lift pass, so their
-            // bodies pass through unchanged.
-            stmt @ (Statement::Assignment(_)
+            // Nothing to rewrite at this level. Function bodies get their own
+            // pass through `transform_function_body`.
+            other @ (Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::FunctionDecl(_)
             | Statement::GlobalFunction(_)
@@ -720,15 +575,8 @@ fn rewrite_block(
             | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
-            | Statement::Error(_)) => new_stmts.push(stmt),
+            | Statement::Error(_)) => other,
         }
-    }
-
-    shadowed.pop();
-    Block {
-        span: block.span,
-        stmts: new_stmts,
-        last_stmt: block.last_stmt,
     }
 }
 
@@ -736,21 +584,20 @@ fn prepend_declaration(block: &mut Block, names: &[CompactString]) {
     if names.is_empty() {
         return;
     }
-    let name_tokens: Vec<AttributedName> = names
+    let attributed_names: Vec<AttributedName> = names
         .iter()
-        .map(|n| AttributedName {
-            name: Token::new(TokenKind::Identifier(n.clone()), Span::default()),
+        .map(|name| AttributedName {
+            name: identifier_token(name.clone()),
             type_annotation: None,
-            attrib: None,
+            attribute: None,
         })
         .collect();
-    let names = Punctuated::from_items(name_tokens.into_iter().collect());
 
     block.stmts.insert(
         0,
         Statement::LocalAssignment(Box::new(LocalAssignment {
-            span: sp(),
-            names,
+            span: Span::default(),
+            names: Punctuated::from_items(attributed_names),
             exprs: None,
             is_const: false,
             is_exported: false,
@@ -761,24 +608,26 @@ fn prepend_declaration(block: &mut Block, names: &[CompactString]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use luck_core::types::LuaTarget;
+    use crate::fixtures::{assert_reparses, run_pass};
+    use crate::transforms::rename_locals::rename;
 
-    fn minify(source: &str) -> String {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
-        assert!(result.errors.is_empty(), "parse failed");
-        let block = crate::transforms::rename_locals::rename(result.block, LuaTarget::Lua54, true);
-        let block = lift(block, luck_token::LuaVersion::Lua54);
-        luck_codegen::compact(&block, source)
+    fn apply(source: &str) -> String {
+        let output = run_pass(source, LuaVersion::Lua54, |block| lift(block, LuaVersion::Lua54));
+        assert_reparses(&output, LuaVersion::Lua54);
+        output
     }
 
-    fn reparses(source: &str) -> bool {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
-        result.errors.is_empty()
+    fn rename_and_lift(source: &str) -> String {
+        let output = run_pass(source, LuaVersion::Lua54, |block| {
+            lift(rename(block, LuaVersion::Lua54, true), LuaVersion::Lua54)
+        });
+        assert_reparses(&output, LuaVersion::Lua54);
+        output
     }
 
     #[test]
     fn lifts_nested_locals() {
-        let result = apply_lift_only(concat!(
+        let result = apply(concat!(
             "local function f(x)\n",
             "  local a = 1\n",
             "  if x then\n",
@@ -789,7 +638,6 @@ mod tests {
             "end\n",
             "return f\n",
         ));
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
         assert!(
             result.contains("local a,b"),
             "both declarations should hoist to one function-head local: {result}"
@@ -804,18 +652,17 @@ mod tests {
     fn does_not_lift_parent_shadowed() {
         // When rename gives inner and outer the same name, the inner
         // declaration must keep its `local`.
-        let result = minify(concat!(
+        let result = rename_and_lift(concat!(
             "local function f()\n",
             "  local a = 1\n",
             "  do\n",
-            "    local b = 2\n", // may get the same name as a after rename
+            "    local b = 2\n", // rename gives this `a`'s name
             "    print(b)\n",
             "  end\n",
             "  return a\n",
             "end\n",
             "return f\n",
         ));
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
         assert!(
             result.contains("do local l=2"),
             "the shadowed inner declaration must keep its `local`: {result}"
@@ -824,9 +671,8 @@ mod tests {
 
     #[test]
     fn does_not_lift_closure_in_loop() {
-        // Lifting hoists to function scope, so the loop needs an enclosing
-        // function for there to be anywhere to hoist to.
-        let result = apply_lift_only(concat!(
+        // Only function bodies get lifted, so the loop needs a wrapper.
+        let result = apply(concat!(
             "local function f()\n",
             "  local t = {}\n",
             "  for i = 1, 10 do\n",
@@ -837,20 +683,16 @@ mod tests {
             "end\n",
             "return f\n",
         ));
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
         assert!(
             result.contains("local x=i"),
             "closure-captured loop local must keep its per-iteration binding: {result}"
         );
-        assert!(
-            result.contains("local t t="),
-            "the uncaptured local should still hoist: {result}"
-        );
+        assert!(result.contains("local t t="), "the uncaptured local should still hoist: {result}");
     }
 
     #[test]
     fn lifts_loop_local_without_closure() {
-        let result = apply_lift_only(concat!(
+        let result = apply(concat!(
             "local function f()\n",
             "  local s = 0\n",
             "  for i = 1, 10 do\n",
@@ -861,7 +703,6 @@ mod tests {
             "end\n",
             "return f\n",
         ));
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
         assert!(
             result.contains("local s,x"),
             "an uncaptured loop local should hoist to the function head: {result}"
@@ -872,20 +713,12 @@ mod tests {
         );
     }
 
-    fn apply_lift_only(source: &str) -> String {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
-        assert!(result.errors.is_empty(), "parse failed");
-        let block = lift(result.block, luck_token::LuaVersion::Lua54);
-        luck_codegen::compact(&block, source)
-    }
-
     #[test]
     fn does_not_lift_over_free_reference() {
-        // `u[k]` reads the module upvalue; the inner `local u` shadows it
-        // only from its declaration point on. Hoisting `local u` to the
-        // body top would capture the earlier read, which miscompiles
-        // roact's Config:set validation path.
-        let result = apply_lift_only(concat!(
+        // `u[k]` reads the outer `u`, and the inner `local u` shadows it only
+        // from its declaration on. Hoisting `local u` to the top of the body
+        // would capture that read, which miscompiled roact's `Config:set`.
+        let result = apply(concat!(
             "local u = {}\n",
             "local function f(k)\n",
             "  if u[k] == nil then\n",
@@ -895,7 +728,6 @@ mod tests {
             "end\n",
             "return f\n",
         ));
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
         assert!(
             result.contains("local u=1") || result.contains("local u = 1"),
             "decl sharing a free-referenced name must stay local: {result}"
@@ -904,7 +736,7 @@ mod tests {
 
     #[test]
     fn capture_outside_loop_still_blocks_lift() {
-        let result = apply_lift_only(concat!(
+        let result = apply(concat!(
             "local function f()\n",
             "  do\n",
             "    local x = 1\n",
@@ -917,7 +749,6 @@ mod tests {
             "end\n",
             "return f\n",
         ));
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
         // Hoisting would merge both x bindings into one, letting the two
         // closures observe each other's writes.
         assert!(
@@ -930,7 +761,7 @@ mod tests {
     fn closure_internal_names_do_not_block_lift() {
         // The closure binds its own `x`; that must not veto lifting the
         // unrelated do-block `x`.
-        let result = apply_lift_only(concat!(
+        let result = apply(concat!(
             "local function f()\n",
             "  local c = function() local x = 1 return x end\n",
             "  do\n",
@@ -941,7 +772,6 @@ mod tests {
             "end\n",
             "return f\n",
         ));
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
         assert!(
             !result.contains("local x=2") && !result.contains("local x = 2"),
             "closure-internal name must not block the lift: {result}"
@@ -959,10 +789,7 @@ mod tests {
             "end\n",
             "return f\n",
         );
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua55);
-        assert!(result.errors.is_empty(), "parse failed");
-        let block = lift(result.block, luck_token::LuaVersion::Lua54);
-        let output = luck_codegen::compact(&block, source);
+        let output = run_pass(source, LuaVersion::Lua55, |block| lift(block, LuaVersion::Lua54));
         assert!(
             output.contains("local args=1") || output.contains("local args = 1"),
             "decl sharing the vararg name must stay local: {output}"
@@ -971,10 +798,10 @@ mod tests {
 
     #[test]
     fn shadowed_declaration_is_never_rewritten_to_assignment() {
-        // The lift rewrite matches by NAME: a shadowing declaration that
-        // shares a lifted name must stay a `local`, or its rewrite would
-        // rebind to the shadowing binding (here, the for control var).
-        let result = minify(concat!(
+        // The rewrite matches by name, so a declaration under a same-named
+        // binding (here the `for` variable) must stay `local`, or its
+        // assignment would write to that binding.
+        let result = rename_and_lift(concat!(
             "function W.new(c)\n",
             "  for l = 1, 3 do\n",
             "    if c then\n",
@@ -988,12 +815,44 @@ mod tests {
             "  end\n",
             "end\n",
         ));
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
-        // The declaration under the for-var shadow must survive as a
-        // `local` (the while-loop one may be lifted).
+        // The declaration under the `for` variable must stay `local`. The
+        // one in the while loop may be lifted.
         assert!(
             result.contains("local l=f()") || result.contains("local l = f()"),
             "shadowed decl must stay local: {result}"
+        );
+    }
+
+    #[test]
+    fn hoisted_declaration_leaves_registers_for_a_wide_statement() {
+        let body = (0..190u32)
+            .map(|i| format!("do local v{i} = g() print(v{i}) end\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        let args = (0..100u32).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let result = apply(&format!("local function w()\n{body}f({args})\nend\nreturn w\n"));
+        let hoisted = result.split("local ").nth(2).expect("hoisted declaration");
+        let (names, _) = hoisted.split_once(' ').expect("names end at the next statement");
+        let name_count = names.split(',').count();
+        assert!(
+            name_count + 101 <= 249,
+            "{name_count} hoisted locals leave no room for the call's 101 registers"
+        );
+    }
+
+    #[test]
+    fn hoisted_declaration_stays_within_the_local_limit() {
+        let body = (0..205u32)
+            .map(|i| format!("do local v{i} = g() print(v{i}) end\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        let result = apply(&format!("local function w()\n{body}end\nreturn w\n"));
+        let hoisted = result.split("local ").nth(2).expect("hoisted declaration");
+        let (names, _) = hoisted.split_once(' ').expect("names end at the next statement");
+        let name_count = names.split(',').count();
+        assert!(
+            name_count <= 200,
+            "a function may hold 200 locals at once, but {name_count} were hoisted"
         );
     }
 }

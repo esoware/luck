@@ -1,72 +1,69 @@
 [workspace]
-members = ["crates/*"]
+members  = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.4.0"
-authors = ["Esoware"]
-categories = ["compilers", "command-line-utilities"]
-description = "Lua 5.1-5.5 & Luau parser, formatter, linter, LSP, bundler and minifier"
-edition = "2024"
-homepage = "https://github.com/esoware/luck"
-keywords = ["lua", "luau", "bundler", "minifier", "parser"]
-license = "MIT"
-repository = "https://github.com/esoware/luck"
-rust-version = "1.88.0"
+version      = "0.4.0"
+authors      = ["Esoware"]
+categories   = ["compilers", "command-line-utilities"]
+description  = "Lua 5.1-5.5 and Luau parser, formatter, linter, bundler, and minifier"
+edition      = "2024"
+homepage     = "https://github.com/esoware/luck"
+keywords     = ["lua", "luau", "bundler", "minifier", "parser"]
+license      = "MIT"
+repository   = "https://github.com/esoware/luck"
+rust-version = "1.99.1"
 
 [workspace.dependencies]
-ariadne = "0.6"
-clap = { version = "4", features = ["derive"] }
-compact_str = "0.10"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-schemars = "1"
-json5 = "1.3"
-globset = "0.4"
-toml = "1.1"
-petgraph = "0.8"
-notify = "8"
-notify-debouncer-mini = "0.7"
-ignore = "0.4"
-insta = { version = "1", features = ["glob"] }
-tempfile = "3"
-assert_cmd = "2"
-predicates = "3"
-luck = { version = "0.4.0", path = "crates/luck", package = "luck_lua" }
-luck_core = { version = "0.4.0", path = "crates/luck_core" }
-luck_resolver = { version = "0.4.0", path = "crates/luck_resolver" }
-luck_bundler = { version = "0.4.0", path = "crates/luck_bundler" }
-luck_minifier = { version = "0.4.0", path = "crates/luck_minifier" }
-luck_token = { version = "0.4.0", path = "crates/luck_token" }
-luck_lexer = { version = "0.4.0", path = "crates/luck_lexer" }
-luck_ast = { version = "0.4.0", path = "crates/luck_ast" }
-luck_parser = { version = "0.4.0", path = "crates/luck_parser" }
-luck_codegen = { version = "0.4.0", path = "crates/luck_codegen" }
+luck_ast       = { version = "0.4.0", path = "crates/luck_ast" }
+luck_bundler   = { version = "0.4.0", path = "crates/luck_bundler" }
+luck_codegen   = { version = "0.4.0", path = "crates/luck_codegen" }
+luck_core      = { version = "0.4.0", path = "crates/luck_core" }
 luck_formatter = { version = "0.4.0", path = "crates/luck_formatter" }
-luck_semantic = { version = "0.4.0", path = "crates/luck_semantic" }
-luck_linter = { version = "0.4.0", path = "crates/luck_linter" }
-luck_lsp = { version = "0.4.0", path = "crates/luck_lsp" }
-luck_testgen = { path = "crates/luck_testgen" }
-criterion2 = { version = "3", default-features = false }
-ureq = "3"
-flate2 = "1"
-tar = "0.4"
-tower-lsp = "0.20"
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "net", "macros", "sync", "time"] }
-similar = "3"
-unicode-width = "0.2"
-rayon = "1"
-ec4rs = "1.2"
-mimalloc-safe = "0.1.64"
-memchr = "2"
-rustc-hash = "2"
-itoa = "1"
-ryu = "1"
-simdutf8 = { version = "0.1.5", features = ["aarch64_neon"] }
+luck_lexer     = { version = "0.4.0", path = "crates/luck_lexer" }
+luck_linter    = { version = "0.4.0", path = "crates/luck_linter" }
+luck_lsp       = { version = "0.4.0", path = "crates/luck_lsp" }
+luck_minifier  = { version = "0.4.0", path = "crates/luck_minifier" }
+luck_parser    = { version = "0.4.0", path = "crates/luck_parser" }
+luck_resolver  = { version = "0.4.0", path = "crates/luck_resolver" }
+luck_semantic  = { version = "0.4.0", path = "crates/luck_semantic" }
+luck_testgen   = { path = "crates/luck_testgen" }
+luck_token     = { version = "0.4.0", path = "crates/luck_token" }
 
-# Full debuginfo makes MSVC linking of the ~36 test binaries the slowest
-# part of every rebuild; line tables keep usable backtraces at a fraction
-# of the link cost.
+ariadne               = "0.6"
+assert_cmd            = "2"
+clap                  = { version = "4", features = ["derive"] }
+compact_str           = "0.10"
+criterion2            = { version = "3", default-features = false }
+flate2                = "1"
+globset               = { version = "0.4", default-features = false }
+ignore                = "0.4"
+insta                 = "1"
+itoa                  = "1"
+json5                 = "1.3"
+memchr                = "2"
+mimalloc-safe         = "0.1.64"
+notify-debouncer-mini = "0.7"
+petgraph              = { version = "0.8", default-features = false, features = ["std"] }
+predicates            = { version = "3", default-features = false }
+rayon                 = "1"
+rustc-hash            = "2"
+ryu                   = "1"
+schemars              = "1"
+serde                 = { version = "1", features = ["derive"] }
+serde_json            = "1"
+simdutf8              = { version = "0.1.5", features = ["aarch64_neon"] }
+stacker               = "0.1"
+tar                   = "0.4"
+tempfile              = "3"
+tokio                 = "1"
+toml                  = { version = "1.1", default-features = false, features = ["parse", "serde", "std"] }
+tower-lsp             = "0.20"
+unicode-width         = { version = "0.2", default-features = false }
+ureq                  = "3"
+
+# Full debuginfo makes MSVC linking of the test binaries the slowest part of
+# a rebuild. Line tables keep backtraces usable at a fraction of the link cost.
 [profile.dev]
 debug = "line-tables-only"
 
@@ -83,9 +80,100 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
-# Release optimizations with debug info kept for profiling.
-# Build with `cargo build --profile=release-with-debug`.
+# For profiling: `cargo build --profile=release-with-debug`.
 [profile.release-with-debug]
 inherits = "release"
 strip = false
 debug = true
+
+[workspace.lints.rust]
+# Every warn-by-default rustc lint fails the build. Allow-by-default lints
+# have no group, so the ones we want are listed one by one.
+warnings = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+absolute_paths_not_starting_with_crate = "deny"
+ambiguous_negative_literals = "deny"
+closure_returning_async_block = "deny"
+deprecated_in_future = "deny"
+explicit_outlives_requirements = "deny"
+ffi_unwind_calls = "deny"
+impl_trait_redundant_captures = "deny"
+keyword_idents = "deny"
+let_underscore_drop = "deny"
+macro_use_extern_crate = "deny"
+meta_variable_misuse = "deny"
+missing_copy_implementations = "deny"
+missing_debug_implementations = "deny"
+non_ascii_idents = "deny"
+raw_borrows_via_references = "deny"
+redundant_imports = "deny"
+redundant_lifetimes = "deny"
+single_use_lifetimes = "deny"
+trivial_casts = "deny"
+trivial_numeric_casts = "deny"
+unit_bindings = "deny"
+unnameable_types = "deny"
+unreachable_pub = "deny"
+# Deny, not forbid, so the justified sites in luck_token, luck_core, and
+# luck_benchmark can #[expect] it.
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+unused_extern_crates = "deny"
+unused_import_braces = "deny"
+unused_lifetimes = "deny"
+unused_macro_rules = "deny"
+unused_qualifications = "deny"
+variant_size_differences = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+restriction = { level = "deny", priority = -1 }
+
+# Fires on enabling the restriction group, which is the point of this table.
+blanket_clippy_restriction_lints = "allow"
+
+# Each of these contradicts the lint named beside it, so one side of every
+# pair is off.
+implicit_return = "allow"                 # needless_return
+pattern_type_mismatch = "allow"           # ref_patterns
+pub_with_shorthand = "allow"              # pub_without_shorthand
+redundant_pub_crate = "allow"             # unreachable_pub
+rest_pattern_accessible_field = "allow"   # unneeded_field_pattern
+self_named_module_files = "allow"         # mod_module_files
+unseparated_literal_suffix = "allow"      # separated_literal_suffix
+
+# Third-party dependencies pull in more than one version of syn, hashbrown,
+# bitflags, windows-sys, and others.
+multiple_crate_versions = "allow"
+
+# #[non_exhaustive] would force `_ =>` arms in other crates, and AGENTS.md
+# forbids those.
+exhaustive_enums = "allow"
+exhaustive_structs = "allow"
+
+# AGENTS.md defaults to no comments.
+missing_docs_in_private_items = "allow"
+
+# AGENTS.md puts public-API tests in tests/, outside any test module.
+tests_outside_test_module = "allow"
+
+# Integration-test helpers live in tests/it/common/mod.rs. mod_module_files keeps every other
+# module in a self-named file.
+definition_in_module_root = "allow"
+
+# The luck facade is nothing but re-exports.
+pub_use = "allow"
+
+# Field order is observable: clap prints flags in declaration order, and the
+# config structs set the schema's order.
+arbitrary_source_item_ordering = "allow"
+
+# Not contradictions, just not worth their cost here.
+missing_inline_in_public_items = "allow"
+missing_trait_methods = "allow"
+question_mark_used = "allow"
+single_call_fn = "allow"

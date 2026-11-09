@@ -1,47 +1,49 @@
 [package]
-name = "luck_lua"
-version.workspace = true
-authors.workspace = true
-categories.workspace = true
-description.workspace = true
-edition.workspace = true
-homepage.workspace = true
-keywords.workspace = true
-license.workspace = true
-repository.workspace = true
+name                   = "luck_lua"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description.workspace  = true
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
 rust-version.workspace = true
 
-# The `luck` package name is taken on crates.io by an unrelated crate, so
-# the package publishes as `luck_lua` while the library stays `luck`.
+[lints]
+workspace = true
+
+# The `luck` package name is taken on crates.io by an unrelated crate, so the package publishes as `luck_lua` while the library stays `luck`.
 [lib]
 name = "luck"
-
-[dependencies]
-luck_token.workspace = true
-luck_lexer.workspace = true
-luck_ast.workspace = true
-luck_parser.workspace = true
-luck_core.workspace = true
-luck_codegen = { workspace = true, optional = true }
-luck_resolver = { workspace = true, optional = true }
-luck_bundler = { workspace = true, optional = true }
-luck_minifier = { workspace = true, optional = true }
-luck_formatter = { workspace = true, optional = true }
-luck_semantic = { workspace = true, optional = true }
-luck_linter = { workspace = true, optional = true }
 
 [features]
 default = []
 
 full = ["codegen", "bundler", "minifier", "formatter", "linter"]
 
-codegen = ["luck_codegen"]
-resolver = ["luck_resolver"]
-bundler = ["luck_bundler", "resolver"]
-minifier = ["luck_minifier"]
+codegen   = ["luck_codegen"]
+resolver  = ["luck_resolver"]
+bundler   = ["luck_bundler", "resolver"]
+minifier  = ["luck_minifier"]
 formatter = ["luck_formatter"]
-semantic = ["luck_semantic"]
-linter = ["luck_linter", "semantic"]
+semantic  = ["luck_semantic"]
+linter    = ["luck_linter", "semantic"]
+
+[dependencies]
+luck_ast       = { workspace = true }
+luck_bundler   = { workspace = true, optional = true }
+luck_codegen   = { workspace = true, optional = true }
+luck_core      = { workspace = true }
+luck_formatter = { workspace = true, optional = true }
+luck_lexer     = { workspace = true }
+luck_linter    = { workspace = true, optional = true }
+luck_minifier  = { workspace = true, optional = true }
+luck_parser    = { workspace = true }
+luck_resolver  = { workspace = true, optional = true }
+luck_semantic  = { workspace = true, optional = true }
+luck_token     = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true

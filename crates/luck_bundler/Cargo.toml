@@ -1,26 +1,31 @@
 [package]
-name = "luck_bundler"
-version.workspace = true
-authors.workspace = true
-categories.workspace = true
-description = "Dependency-graph bundler for multi-file Lua and Luau projects"
-edition.workspace = true
-homepage.workspace = true
-keywords.workspace = true
-license.workspace = true
-repository.workspace = true
+name                   = "luck_bundler"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "Dependency-graph bundler for multi-file Lua and Luau projects"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
-luck_core.workspace = true
-luck_ast.workspace = true
-luck_resolver.workspace = true
-luck_parser.workspace = true
-luck_semantic.workspace = true
-luck_token.workspace = true
-petgraph.workspace = true
-rustc-hash.workspace = true
+luck_ast      = { workspace = true }
+luck_core     = { workspace = true }
+luck_lexer    = { workspace = true }
+luck_parser   = { workspace = true }
+luck_resolver = { workspace = true }
+luck_semantic = { workspace = true }
+luck_token    = { workspace = true }
+
+petgraph   = { workspace = true }
+rustc-hash = { workspace = true }
 
 [dev-dependencies]
-insta.workspace = true
-tempfile.workspace = true
+insta    = { workspace = true }
+tempfile = { workspace = true }

@@ -1,1507 +1,75 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+mod analyzer;
+mod candidate_pool;
+mod globals;
+mod renamer;
+mod scope_set;
 
-use luck_ast::expr::*;
-use luck_ast::shared::*;
-use luck_ast::stmt::*;
-use luck_ast::transform::AstTransform;
-use luck_core::types::LuaTarget;
-use luck_token::{CompactString, LuaVersion};
+use luck_ast::{Block, Transform as _, Visitor as _};
+use luck_token::LuaVersion;
 
-use crate::expr::{ident_name, is_env_binding};
-use crate::name_gen::name_for_index;
-use crate::tokens::make_ident;
+use self::analyzer::Analyzer;
+use self::globals::renamable_globals;
+use self::renamer::Renamer;
 
-pub fn rename(block: Block, target: LuaTarget, rename_globals: bool) -> Block {
-    // Renaming file-defined globals pollutes `_G` under different keys, so it
-    // is strictly opt-in (TransformConfig::rename_globals).
-    let (func_globals, assign_globals) = if rename_globals {
-        let func_globals = collect_toplevel_function_globals(&block);
-        let assign_globals = collect_assignfirst_globals(&block, &func_globals);
-        (func_globals, assign_globals)
-    } else {
-        (FxHashSet::default(), FxHashSet::default())
-    };
+pub(crate) fn rename(block: Block, version: LuaVersion, rename_globals: bool) -> Block {
+    // Opt-in, since renamed globals end up under new `_G` keys.
+    let root_globals = if rename_globals { renamable_globals(&block, version) } else { Vec::new() };
 
-    // True globals come from real binding resolution: the analyzer walks
-    // the same positional scoping rules as the renamer (declaration
-    // order, shadowing, repeat-until conditions, function name scoping),
-    // so any reference that resolves to no binding is a global. A flat
-    // name-set would not do, because it cannot tell a global read apart
-    // from a same-named local somewhere else in the file.
-    let mut analyzer = Analyzer::new(&func_globals, &assign_globals, target.lua_version());
-    analyzer.analyze_block(&block);
-    analyzer.propagate_globals();
+    // The analyzer resolves names with the same scoping rules as the renamer,
+    // so a reference that resolves to no binding is a global. A flat name set
+    // can't tell a global read from a same-named local elsewhere in the file.
+    let mut analyzer = Analyzer::new(version);
+    analyzer.declare_root_globals(&root_globals);
+    analyzer.visit_block(&block);
+    let binding_names = analyzer.binding_names();
 
-    let (slot_count, slot_liveness) = analyzer.assign_slots();
-
-    let slot_names = analyzer.generate_names(slot_count, target.keywords(), &slot_liveness);
-
-    let binding_new_names: Vec<CompactString> = analyzer
-        .bindings
-        .iter()
-        .map(|binding| {
-            if binding.is_fixed || binding.slot == u32::MAX {
-                binding.original_name.clone()
-            } else {
-                slot_names[binding.slot as usize].clone()
-            }
-        })
-        .collect();
-
-    let mut renamer = AstRenamer::new(binding_new_names, &func_globals, &assign_globals);
-    renamer.pre_declare_root_block(&block);
+    let mut renamer = Renamer::new(binding_names, version);
+    renamer.declare_root_globals(&root_globals);
     renamer.transform_block(block)
-}
-
-/// Scope-id set as a bitset: scope ids are small and dense, and the hot
-/// operations are whole-set union and intersection.
-#[derive(Default)]
-struct ScopeSet(Vec<u64>);
-
-impl ScopeSet {
-    fn insert(&mut self, scope: usize) {
-        let word = scope / 64;
-        if word >= self.0.len() {
-            self.0.resize(word + 1, 0);
-        }
-        self.0[word] |= 1 << (scope % 64);
-    }
-
-    fn contains(&self, scope: usize) -> bool {
-        self.0
-            .get(scope / 64)
-            .is_some_and(|word| word & (1 << (scope % 64)) != 0)
-    }
-
-    fn union_with(&mut self, other: &ScopeSet) {
-        if other.0.len() > self.0.len() {
-            self.0.resize(other.0.len(), 0);
-        }
-        for (dst, src) in self.0.iter_mut().zip(&other.0) {
-            *dst |= src;
-        }
-    }
-
-    fn intersects(&self, other: &ScopeSet) -> bool {
-        self.0.iter().zip(&other.0).any(|(a, b)| a & b != 0)
-    }
-
-    fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        self.0.iter().enumerate().flat_map(|(word_idx, &word)| {
-            (0..64)
-                .filter(move |bit| word & (1 << bit) != 0)
-                .map(move |bit| word_idx * 64 + bit)
-        })
-    }
-}
-
-struct ScopeNode {
-    parent: Option<usize>,
-    children: Vec<usize>,
-    binding_ids: Vec<usize>,
-    // After propagate_globals this also holds globals from every descendant
-    // scope.
-    global_refs: FxHashSet<CompactString>,
-}
-
-struct BindingInfo {
-    original_name: CompactString,
-    scope_id: usize,
-    ref_count: usize,
-    slot: u32,
-    is_fixed: bool,
-    // The declaring scope, the reference scopes, and every scope on the path
-    // between them.
-    live_scopes: ScopeSet,
-}
-
-struct Analyzer<'globals> {
-    scopes: Vec<ScopeNode>,
-    bindings: Vec<BindingInfo>,
-    // NonEmptyStack layout: the top lives in `current_scope_id` so reading
-    // it is branchless; `outer_scope_ids` holds only the enclosing scopes.
-    current_scope_id: usize,
-    outer_scope_ids: Vec<usize>,
-    // Original name to its stack of binding IDs, innermost binding on top.
-    name_stack: FxHashMap<CompactString, Vec<usize>>,
-    func_globals: &'globals FxHashSet<CompactString>,
-    assign_globals: &'globals FxHashSet<CompactString>,
-    version: LuaVersion,
-}
-
-impl<'globals> Analyzer<'globals> {
-    fn new(
-        func_globals: &'globals FxHashSet<CompactString>,
-        assign_globals: &'globals FxHashSet<CompactString>,
-        version: LuaVersion,
-    ) -> Self {
-        let root_scope = ScopeNode {
-            parent: None,
-            children: Vec::new(),
-            binding_ids: Vec::new(),
-            global_refs: FxHashSet::default(),
-        };
-        Self {
-            scopes: vec![root_scope],
-            bindings: Vec::new(),
-            current_scope_id: 0,
-            outer_scope_ids: Vec::new(),
-            name_stack: FxHashMap::default(),
-            func_globals,
-            assign_globals,
-            version,
-        }
-    }
-
-    fn current_scope(&self) -> usize {
-        self.current_scope_id
-    }
-
-    fn enter_scope(&mut self) -> usize {
-        let parent = self.current_scope();
-        let new_id = self.scopes.len();
-        self.scopes.push(ScopeNode {
-            parent: Some(parent),
-            children: Vec::new(),
-            binding_ids: Vec::new(),
-            global_refs: FxHashSet::default(),
-        });
-        self.scopes[parent].children.push(new_id);
-        self.outer_scope_ids
-            .push(std::mem::replace(&mut self.current_scope_id, new_id));
-        new_id
-    }
-
-    fn exit_scope(&mut self) {
-        let scope_id = self.current_scope_id;
-        self.current_scope_id = self.outer_scope_ids.pop().expect("scope stack underflow");
-        let Self {
-            scopes,
-            bindings,
-            name_stack,
-            ..
-        } = self;
-        for &binding_id in scopes[scope_id].binding_ids.iter().rev() {
-            let name = &bindings[binding_id].original_name;
-            if let Some(stack) = name_stack.get_mut(name) {
-                stack.pop();
-                if stack.is_empty() {
-                    name_stack.remove(name);
-                }
-            }
-        }
-    }
-
-    fn declare_binding(&mut self, name: &str, is_fixed: bool) -> usize {
-        let scope_id = self.current_scope();
-        let binding_id = self.bindings.len();
-        let mut live_scopes = ScopeSet::default();
-        live_scopes.insert(scope_id);
-        let name = CompactString::from(name);
-        self.bindings.push(BindingInfo {
-            original_name: name.clone(),
-            scope_id,
-            ref_count: 0,
-            slot: u32::MAX,
-            is_fixed,
-            live_scopes,
-        });
-        self.scopes[scope_id].binding_ids.push(binding_id);
-        self.name_stack.entry(name).or_default().push(binding_id);
-        binding_id
-    }
-
-    fn reference_name(&mut self, name: &str) {
-        if let Some(&binding_id) = self.name_stack.get(name).and_then(|s| s.last()) {
-            self.bindings[binding_id].ref_count += 1;
-            // Mark every scope from here up to the declaration as live.
-            let declaring_scope = self.bindings[binding_id].scope_id;
-            let mut scope = self.current_scope();
-            loop {
-                self.bindings[binding_id].live_scopes.insert(scope);
-                if scope == declaring_scope {
-                    break;
-                }
-                match self.scopes[scope].parent {
-                    Some(parent) => scope = parent,
-                    None => break,
-                }
-            }
-            return;
-        }
-        // Unresolved means global: func/assign pseudo-globals are
-        // pre-declared as root bindings, so every reference to them
-        // resolves above and never lands here.
-        let scope_id = self.current_scope();
-        self.scopes[scope_id].global_refs.insert(name.into());
-    }
-
-    fn analyze_block(&mut self, block: &Block) {
-        if self.outer_scope_ids.is_empty() && self.bindings.is_empty() {
-            self.pre_declare_root_bindings(block);
-        }
-
-        for stmt in &block.stmts {
-            self.analyze_stmt(stmt);
-        }
-        if let Some(last) = &block.last_stmt {
-            self.analyze_last_stmt(last);
-        }
-    }
-
-    fn pre_declare_root_bindings(&mut self, block: &Block) {
-        for stmt in &block.stmts {
-            if let Statement::FunctionDecl(func_decl) = stmt
-                && func_decl.name.names.len() == 1
-                && func_decl.name.method.is_none()
-            {
-                let name = ident_name(&func_decl.name.names[0]);
-                if self.func_globals.contains(name) {
-                    self.declare_binding(name, false);
-                }
-            }
-        }
-        for stmt in &block.stmts {
-            if let Statement::Assignment(assign) = stmt {
-                for var in assign.targets.iter() {
-                    if let Var::Name(name_tok) = var {
-                        let name = ident_name(name_tok);
-                        if self.assign_globals.contains(name) && !self.name_stack.contains_key(name)
-                        {
-                            self.declare_binding(name, false);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn analyze_stmt(&mut self, stmt: &Statement) {
-        match stmt {
-            Statement::LocalAssignment(local) => {
-                // RHS before LHS: `local x = x` reads the outer x.
-                if let Some(exprs) = &local.exprs {
-                    for expr in exprs.iter() {
-                        self.analyze_expr(expr);
-                    }
-                }
-                for name_tok in local.names.iter() {
-                    let name = ident_name(&name_tok.name);
-                    let is_fixed =
-                        name == "self" || is_env_binding(name, self.version) || local.is_exported;
-                    self.declare_binding(name, is_fixed);
-                }
-            }
-            Statement::LocalFunction(local_func) => {
-                let name = ident_name(&local_func.name);
-                let is_fixed =
-                    name == "self" || is_env_binding(name, self.version) || local_func.is_exported;
-                self.declare_binding(name, is_fixed);
-                self.analyze_function_body(&local_func.body);
-            }
-            Statement::FunctionDecl(func_decl) => {
-                self.analyze_function_body(&func_decl.body);
-                if !func_decl.name.names.is_empty() {
-                    let name = ident_name(&func_decl.name.names[0]);
-                    self.reference_name(name);
-                }
-            }
-            Statement::Assignment(assign) => {
-                for expr in assign.values.iter() {
-                    self.analyze_expr(expr);
-                }
-                for var in assign.targets.iter() {
-                    self.analyze_var(var);
-                }
-            }
-            Statement::FunctionCall(call_stmt) => {
-                self.analyze_function_call(call_stmt);
-            }
-            Statement::DoBlock(do_block) => {
-                self.enter_scope();
-                self.analyze_block(&do_block.block);
-                self.exit_scope();
-            }
-            Statement::WhileLoop(while_loop) => {
-                self.analyze_expr(&while_loop.condition);
-                self.enter_scope();
-                self.analyze_block(&while_loop.block);
-                self.exit_scope();
-            }
-            Statement::RepeatLoop(repeat_loop) => {
-                self.enter_scope();
-                self.analyze_block(&repeat_loop.block);
-                self.analyze_expr(&repeat_loop.condition);
-                self.exit_scope();
-            }
-            Statement::IfStatement(if_stmt) => {
-                self.analyze_expr(&if_stmt.condition);
-                self.enter_scope();
-                self.analyze_block(&if_stmt.block);
-                self.exit_scope();
-                for clause in &if_stmt.elseif_clauses {
-                    self.analyze_expr(&clause.condition);
-                    self.enter_scope();
-                    self.analyze_block(&clause.block);
-                    self.exit_scope();
-                }
-                if let Some(else_clause) = &if_stmt.else_clause {
-                    self.enter_scope();
-                    self.analyze_block(&else_clause.block);
-                    self.exit_scope();
-                }
-            }
-            Statement::NumericFor(numeric_for) => {
-                self.analyze_expr(&numeric_for.start);
-                self.analyze_expr(&numeric_for.limit);
-                if let Some(step) = &numeric_for.step {
-                    self.analyze_expr(step);
-                }
-                self.enter_scope();
-                self.declare_binding(ident_name(&numeric_for.name), false);
-                self.analyze_block(&numeric_for.block);
-                self.exit_scope();
-            }
-            Statement::GenericFor(generic_for) => {
-                for expr in generic_for.exprs.iter() {
-                    self.analyze_expr(expr);
-                }
-                self.enter_scope();
-                for binding in generic_for.names.iter() {
-                    self.declare_binding(ident_name(&binding.name), false);
-                }
-                self.analyze_block(&generic_for.block);
-                self.exit_scope();
-            }
-            Statement::CompoundAssignment(ca) => {
-                self.analyze_var(&ca.var);
-                self.analyze_expr(&ca.expr);
-            }
-            // Lua 5.5: the global function name is itself a global, but its body
-            // declares params/locals that AstRenamer renames via walk_function_body,
-            // so the analyzer must match that walk to keep binding indices in sync.
-            Statement::GlobalFunction(global_func) => {
-                self.analyze_function_body(&global_func.body);
-            }
-            Statement::GlobalDeclaration(global_decl) => {
-                if let Some(exprs) = &global_decl.exprs {
-                    for expr in exprs.iter() {
-                        self.analyze_expr(expr);
-                    }
-                }
-            }
-            // Luau `type function` bodies are ordinary code that AstRenamer
-            // walks via walk_function_body; the analyzer must match or the
-            // binding indices desync (and the renamer panics).
-            Statement::TypeDeclaration(type_decl) => {
-                if let TypeDeclarationValue::TypeFunction(body) = &type_decl.type_value {
-                    self.analyze_function_body(body);
-                }
-            }
-            // Leaves with no bindings or references the renamer touches.
-            Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::Error(_) => {}
-        }
-    }
-
-    fn analyze_last_stmt(&mut self, last: &LastStatement) {
-        if let LastStatement::Return(ret) = last {
-            for expr in ret.exprs.iter() {
-                self.analyze_expr(expr);
-            }
-        }
-    }
-
-    fn analyze_expr(&mut self, expr: &Expression) {
-        match expr {
-            Expression::Var(var) => self.analyze_var(var),
-            Expression::FunctionCall(call) => self.analyze_function_call(call),
-            Expression::BinaryOp(binop) => {
-                self.analyze_expr(&binop.left);
-                self.analyze_expr(&binop.right);
-            }
-            Expression::UnaryOp(unop) => self.analyze_expr(&unop.operand),
-            Expression::Parenthesized(paren) => self.analyze_expr(&paren.expr),
-            Expression::FunctionDef(func) => self.analyze_function_body(&func.body),
-            Expression::TableConstructor(table) => {
-                for field in table.fields.iter() {
-                    match field {
-                        Field::Bracketed { key, value, .. } => {
-                            self.analyze_expr(key);
-                            self.analyze_expr(value);
-                        }
-                        Field::Named { value, .. } => self.analyze_expr(value),
-                        Field::Positional { value, .. } => self.analyze_expr(value),
-                    }
-                }
-            }
-            Expression::InterpolatedString(interp) => {
-                for seg in &interp.segments {
-                    if let Some(ref expr) = seg.expr {
-                        self.analyze_expr(expr);
-                    }
-                }
-            }
-            Expression::IfExpression(if_expr) => {
-                self.analyze_expr(&if_expr.condition);
-                self.analyze_expr(&if_expr.then_expr);
-                for clause in &if_expr.elseif_clauses {
-                    self.analyze_expr(&clause.condition);
-                    self.analyze_expr(&clause.expr);
-                }
-                self.analyze_expr(&if_expr.else_expr);
-            }
-            Expression::TypeCast(cast) => self.analyze_expr(&cast.expr),
-            Expression::TypeInstantiation(instantiation) => {
-                self.analyze_expr(&instantiation.expr);
-            }
-            // Literal leaves: no sub-expressions, no name references.
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_) // Luau
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::Error(_) => {}
-        }
-    }
-
-    fn analyze_var(&mut self, var: &Var) {
-        match var {
-            Var::Name(name) => self.reference_name(ident_name(name)),
-            Var::FieldAccess(fa) => self.analyze_expr(&fa.prefix),
-            Var::Index(ie) => {
-                self.analyze_expr(&ie.prefix);
-                self.analyze_expr(&ie.index);
-            }
-        }
-    }
-
-    fn analyze_function_call(&mut self, call: &FunctionCall) {
-        self.analyze_expr(&call.callee);
-        match &call.args {
-            FunctionArgs::Parenthesized { args, .. } => {
-                for arg in args.iter() {
-                    self.analyze_expr(arg);
-                }
-            }
-            FunctionArgs::TableConstructor(table) => {
-                for field in table.fields.iter() {
-                    match field {
-                        Field::Bracketed { key, value, .. } => {
-                            self.analyze_expr(key);
-                            self.analyze_expr(value);
-                        }
-                        Field::Named { value, .. } => self.analyze_expr(value),
-                        Field::Positional { value, .. } => self.analyze_expr(value),
-                    }
-                }
-            }
-            FunctionArgs::StringLiteral(_) => {}
-        }
-    }
-
-    fn analyze_function_body(&mut self, body: &FunctionBody) {
-        self.enter_scope();
-        // Explicit params are always renameable. The implicit `self` of `:`
-        // syntax never appears in the params list.
-        for param in body.params.iter() {
-            let name = ident_name(&param.name);
-            self.declare_binding(name, is_env_binding(name, self.version));
-        }
-        self.analyze_block(&body.block);
-        self.exit_scope();
-    }
-}
-
-impl Analyzer<'_> {
-    fn assign_slots(&mut self) -> (usize, Vec<ScopeSet>) {
-        let mut slot_liveness: Vec<ScopeSet> = Vec::new();
-        let mut total_slots: usize = 0;
-        self.assign_slots_dfs(0, &mut slot_liveness, &mut total_slots);
-        (total_slots, slot_liveness)
-    }
-
-    fn assign_slots_dfs(
-        &mut self,
-        scope_id: usize,
-        slot_liveness: &mut Vec<ScopeSet>,
-        total_slots: &mut usize,
-    ) {
-        for binding_idx in 0..self.scopes[scope_id].binding_ids.len() {
-            let binding_id = self.scopes[scope_id].binding_ids[binding_idx];
-            if self.bindings[binding_id].is_fixed {
-                continue;
-            }
-
-            // Find a reusable slot, one not live in this scope.
-            let mut found_slot = None;
-            for (slot_idx, liveness) in slot_liveness.iter().enumerate() {
-                if !liveness.contains(scope_id) {
-                    found_slot = Some(slot_idx as u32);
-                    break;
-                }
-            }
-
-            let slot = match found_slot {
-                Some(s) => s,
-                None => {
-                    let s = slot_liveness.len() as u32;
-                    slot_liveness.push(ScopeSet::default());
-                    s
-                }
-            };
-
-            self.bindings[binding_id].slot = slot;
-            *total_slots = (*total_slots).max((slot + 1) as usize);
-
-            slot_liveness[slot as usize].union_with(&self.bindings[binding_id].live_scopes);
-        }
-
-        for child_idx in 0..self.scopes[scope_id].children.len() {
-            let child_id = self.scopes[scope_id].children[child_idx];
-            self.assign_slots_dfs(child_id, slot_liveness, total_slots);
-        }
-    }
-}
-
-impl Analyzer<'_> {
-    fn propagate_globals(&mut self) {
-        // Reverse order, so children are processed before parents.
-        for scope_id in (0..self.scopes.len()).rev() {
-            for child_idx in 0..self.scopes[scope_id].children.len() {
-                let child_id = self.scopes[scope_id].children[child_idx];
-                // Scopes are created parent-first, so child_id > scope_id.
-                let (head, tail) = self.scopes.split_at_mut(child_id);
-                head[scope_id]
-                    .global_refs
-                    .extend(tail[0].global_refs.iter().cloned());
-            }
-        }
-    }
-
-    fn generate_names(
-        &self,
-        slot_count: usize,
-        keywords: &[&'static str],
-        slot_liveness: &[ScopeSet],
-    ) -> Vec<CompactString> {
-        if slot_count == 0 {
-            return Vec::new();
-        }
-
-        let mut slot_frequencies: Vec<(u32, usize)> =
-            (0..slot_count).map(|s| (s as u32, 0_usize)).collect();
-
-        for binding in &self.bindings {
-            if binding.is_fixed || binding.slot == u32::MAX {
-                continue;
-            }
-            slot_frequencies[binding.slot as usize].1 += binding.ref_count;
-        }
-
-        let mut slot_forbidden: Vec<FxHashSet<&str>> = Vec::with_capacity(slot_count);
-        for slot_idx in 0..slot_count {
-            let mut forbidden = FxHashSet::default();
-            if slot_idx < slot_liveness.len() {
-                for scope_id in slot_liveness[slot_idx].iter() {
-                    for global_name in &self.scopes[scope_id].global_refs {
-                        forbidden.insert(global_name.as_str());
-                    }
-                }
-            }
-            slot_forbidden.push(forbidden);
-        }
-
-        let mut active_slots: Vec<(u32, usize)> = slot_frequencies
-            .iter()
-            .copied()
-            .filter(|&(_, freq)| freq > 0)
-            .collect();
-
-        active_slots.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-
-        let mut pool = CandidatePool::new(keywords);
-        let mut slot_to_name = vec![CompactString::default(); slot_count];
-
-        for &(slot, _) in &active_slots {
-            slot_to_name[slot as usize] = pool.pick(
-                &slot_liveness[slot as usize],
-                &slot_forbidden[slot as usize],
-            );
-        }
-
-        // Zero-frequency slots (declared but never referenced) still wear a
-        // name in the output, so they run through the same liveness conflict
-        // check. Handing them the first short name regardless would capture a
-        // co-live slot, letting an unreferenced param take the name of an
-        // upvalue read inside the same function body.
-        for slot in 0..slot_count {
-            if slot_to_name[slot].is_empty() {
-                slot_to_name[slot] = pool.pick(&slot_liveness[slot], &slot_forbidden[slot]);
-            }
-        }
-
-        slot_to_name
-    }
-}
-
-/// Shared candidate-name state for [`Analyzer::generate_names`]. Every
-/// slot scans candidates from index 0, so the generated names (and their
-/// keyword-ness) are computed once and shared.
-struct CandidatePool {
-    keyword_set: FxHashSet<&'static str>,
-    candidates: Vec<CompactString>,
-    is_keyword: Vec<bool>,
-    // Per candidate: the scopes where the name is already worn by some
-    // slot. Non-overlapping slots can share the same name.
-    taken_scopes: Vec<ScopeSet>,
-}
-
-impl CandidatePool {
-    fn new(keywords: &[&'static str]) -> Self {
-        Self {
-            keyword_set: keywords.iter().copied().collect(),
-            candidates: Vec::new(),
-            is_keyword: Vec::new(),
-            taken_scopes: Vec::new(),
-        }
-    }
-
-    fn pick(&mut self, slot_live: &ScopeSet, forbidden: &FxHashSet<&str>) -> CompactString {
-        let mut idx = 0;
-        loop {
-            if idx == self.candidates.len() {
-                let name = name_for_index(idx);
-                self.is_keyword
-                    .push(self.keyword_set.contains(name.as_str()));
-                self.candidates.push(name);
-                self.taken_scopes.push(ScopeSet::default());
-            }
-            let candidate_idx = idx;
-            idx += 1;
-            if slot_live.intersects(&self.taken_scopes[candidate_idx])
-                || self.is_keyword[candidate_idx]
-            {
-                continue;
-            }
-            let candidate = &self.candidates[candidate_idx];
-            if forbidden.contains(candidate.as_str()) {
-                continue;
-            }
-            self.taken_scopes[candidate_idx].union_with(slot_live);
-            return self.candidates[candidate_idx].clone();
-        }
-    }
-}
-
-struct AstRenamer<'globals> {
-    binding_new_names: Vec<CompactString>,
-    next_binding_id: usize,
-    name_stack: FxHashMap<CompactString, Vec<CompactString>>,
-    scope_binding_names: Vec<Vec<CompactString>>,
-
-    func_globals: &'globals FxHashSet<CompactString>,
-    assign_globals: &'globals FxHashSet<CompactString>,
-}
-
-impl<'globals> AstRenamer<'globals> {
-    fn new(
-        binding_new_names: Vec<CompactString>,
-        func_globals: &'globals FxHashSet<CompactString>,
-        assign_globals: &'globals FxHashSet<CompactString>,
-    ) -> Self {
-        Self {
-            binding_new_names,
-            next_binding_id: 0,
-            name_stack: FxHashMap::default(),
-            scope_binding_names: vec![Vec::new()],
-            func_globals,
-            assign_globals,
-        }
-    }
-
-    fn declare_binding(&mut self, original: &str) -> CompactString {
-        let new_name = self.binding_new_names[self.next_binding_id].clone();
-        self.next_binding_id += 1;
-        let original = CompactString::from(original);
-        if let Some(scope_names) = self.scope_binding_names.last_mut() {
-            scope_names.push(original.clone());
-        }
-        self.name_stack
-            .entry(original)
-            .or_default()
-            .push(new_name.clone());
-        new_name
-    }
-
-    fn enter_scope(&mut self) {
-        self.scope_binding_names.push(Vec::new());
-    }
-
-    fn exit_scope(&mut self) {
-        if let Some(scope_names) = self.scope_binding_names.pop() {
-            for original in scope_names.iter().rev() {
-                if let Some(stack) = self.name_stack.get_mut(original) {
-                    stack.pop();
-                    if stack.is_empty() {
-                        self.name_stack.remove(original);
-                    }
-                }
-            }
-        }
-    }
-
-    fn resolve_name(&self, original: &str) -> CompactString {
-        if let Some(stack) = self.name_stack.get(original)
-            && let Some(new_name) = stack.last()
-        {
-            return new_name.clone();
-        }
-        original.into()
-    }
-
-    // Must match Analyzer::pre_declare_root_bindings exactly.
-    fn pre_declare_root_block(&mut self, block: &Block) {
-        for stmt in &block.stmts {
-            if let Statement::FunctionDecl(func_decl) = stmt
-                && func_decl.name.names.len() == 1
-                && func_decl.name.method.is_none()
-            {
-                let name = ident_name(&func_decl.name.names[0]);
-                if self.func_globals.contains(name) {
-                    self.declare_binding(name);
-                }
-            }
-        }
-        for stmt in &block.stmts {
-            if let Statement::Assignment(assign) = stmt {
-                for var in assign.targets.iter() {
-                    if let Var::Name(name_tok) = var {
-                        let name = ident_name(name_tok);
-                        if self.assign_globals.contains(name) && !self.name_stack.contains_key(name)
-                        {
-                            self.declare_binding(name);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl AstTransform for AstRenamer<'_> {
-    fn transform_block(&mut self, block: Block) -> Block {
-        let new_stmts: Vec<_> = block
-            .stmts
-            .into_iter()
-            .map(|stmt| self.transform_statement(stmt))
-            .collect();
-        let new_last = block.last_stmt.map(|mut last| {
-            *last = self.transform_last_statement(*last);
-            last
-        });
-        Block {
-            span: block.span,
-            stmts: new_stmts,
-            last_stmt: new_last,
-        }
-    }
-
-    fn transform_statement(&mut self, stmt: Statement) -> Statement {
-        match stmt {
-            Statement::LocalAssignment(mut local) => {
-                // Transform the expressions first, in the outer scope.
-                local.exprs = local.exprs.map(|exprs| self.walk_punctuated_exprs(exprs));
-                local.names =
-                    rename_attributed_names(&mut |orig| self.declare_binding(orig), local.names);
-                Statement::LocalAssignment(local)
-            }
-            Statement::LocalFunction(mut local_func) => {
-                let new_name = self.declare_binding(ident_name(&local_func.name));
-                local_func.name = make_ident(&new_name);
-                local_func.body = self.walk_function_body(local_func.body);
-                Statement::LocalFunction(local_func)
-            }
-            Statement::FunctionDecl(mut func_decl) => {
-                func_decl.body = self.walk_function_body(func_decl.body);
-                if !func_decl.name.names.is_empty() {
-                    let resolved = self.resolve_name(ident_name(&func_decl.name.names[0]));
-                    func_decl.name.names[0] = make_ident(&resolved);
-                }
-                Statement::FunctionDecl(func_decl)
-            }
-            Statement::DoBlock(mut do_block) => {
-                self.enter_scope();
-                do_block.block = self.transform_block(do_block.block);
-                self.exit_scope();
-                Statement::DoBlock(do_block)
-            }
-            Statement::WhileLoop(mut while_loop) => {
-                while_loop.condition = self.transform_expression(while_loop.condition);
-                self.enter_scope();
-                while_loop.block = self.transform_block(while_loop.block);
-                self.exit_scope();
-                Statement::WhileLoop(while_loop)
-            }
-            Statement::RepeatLoop(mut repeat_loop) => {
-                self.enter_scope();
-                repeat_loop.block = self.transform_block(repeat_loop.block);
-                repeat_loop.condition = self.transform_expression(repeat_loop.condition);
-                self.exit_scope();
-                Statement::RepeatLoop(repeat_loop)
-            }
-            Statement::IfStatement(mut if_stmt) => {
-                if_stmt.condition = self.transform_expression(if_stmt.condition);
-                self.enter_scope();
-                if_stmt.block = self.transform_block(if_stmt.block);
-                self.exit_scope();
-                if_stmt.elseif_clauses = if_stmt
-                    .elseif_clauses
-                    .into_iter()
-                    .map(|mut clause| {
-                        clause.condition = self.transform_expression(clause.condition);
-                        self.enter_scope();
-                        clause.block = self.transform_block(clause.block);
-                        self.exit_scope();
-                        clause
-                    })
-                    .collect();
-                if_stmt.else_clause = if_stmt.else_clause.map(|mut else_clause| {
-                    self.enter_scope();
-                    else_clause.block = self.transform_block(else_clause.block);
-                    self.exit_scope();
-                    else_clause
-                });
-                Statement::IfStatement(if_stmt)
-            }
-            Statement::NumericFor(mut numeric_for) => {
-                numeric_for.start = self.transform_expression(numeric_for.start);
-                numeric_for.limit = self.transform_expression(numeric_for.limit);
-                numeric_for.step = numeric_for.step.map(|step| self.transform_expression(step));
-                self.enter_scope();
-                let new_name = self.declare_binding(ident_name(&numeric_for.name));
-                numeric_for.name = make_ident(&new_name);
-                numeric_for.block = self.transform_block(numeric_for.block);
-                self.exit_scope();
-                Statement::NumericFor(numeric_for)
-            }
-            Statement::GenericFor(mut generic_for) => {
-                generic_for.exprs = self.walk_punctuated_exprs(generic_for.exprs);
-                self.enter_scope();
-                generic_for.names = rename_punctuated_names(
-                    &mut |orig| self.declare_binding(orig),
-                    generic_for.names,
-                );
-                generic_for.block = self.transform_block(generic_for.block);
-                self.exit_scope();
-                Statement::GenericFor(generic_for)
-            }
-            // These declare no new scope of their own here; walk_statement
-            // recurses through their expressions/bodies, resolving references
-            // in lockstep with Analyzer::analyze_stmt (which visits the same
-            // children, including GlobalFunction bodies).
-            stmt @ (Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::GlobalFunction(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_)) => self.walk_statement(stmt),
-        }
-    }
-
-    fn transform_var(&mut self, var: Var) -> Var {
-        match var {
-            Var::Name(name) => {
-                let resolved = self.resolve_name(ident_name(&name));
-                Var::Name(make_ident(&resolved))
-            }
-            other => self.walk_var(other),
-        }
-    }
-
-    fn walk_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
-        self.enter_scope();
-        body.params.items = body
-            .params
-            .items
-            .into_iter()
-            .map(|mut param| {
-                let new_name = self.declare_binding(ident_name(&param.name));
-                param.name = make_ident(&new_name);
-                param
-            })
-            .collect();
-        body.block = self.transform_block(body.block);
-        self.exit_scope();
-        body
-    }
-
-    fn walk_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
-        call.callee = match call.callee {
-            Expression::Var(var) => match var {
-                Var::Name(name) => {
-                    let resolved = self.resolve_name(ident_name(&name));
-                    Expression::Var(Var::Name(make_ident(&resolved)))
-                }
-                other => Expression::Var(self.transform_var(other)),
-            },
-            // Any non-Var callee (call chains, parens, etc.) resolves its names
-            // through the normal expression transform.
-            callee @ (Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::FunctionCall(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::BinaryOp(_)
-            | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
-            | Expression::Error(_)) => self.transform_expression(callee),
-        };
-        call.explicit_type_args = call.explicit_type_args.map(|mut type_args| {
-            *type_args = self.walk_type_args(*type_args);
-            type_args
-        });
-        call.args = self.walk_function_args(call.args);
-        call
-    }
-}
-
-/// Rename every declared local while keeping its `<attrib>` attached.
-fn rename_attributed_names(
-    declare: &mut dyn FnMut(&str) -> CompactString,
-    names: Punctuated<AttributedName>,
-) -> Punctuated<AttributedName> {
-    let rename = |attributed: AttributedName| {
-        let new_name = declare(ident_name(&attributed.name));
-        AttributedName {
-            name: make_ident(&new_name),
-            // Renaming a local never changes its declared type.
-            type_annotation: attributed.type_annotation,
-            attrib: attributed.attrib,
-        }
-    };
-    let mut names = names;
-    names.items = names.items.into_iter().map(rename).collect();
-    names
-}
-
-fn rename_punctuated_names(
-    declare: &mut dyn FnMut(&str) -> CompactString,
-    mut names: Punctuated<luck_ast::Parameter>,
-) -> Punctuated<luck_ast::Parameter> {
-    names.items = names
-        .items
-        .into_iter()
-        .map(|mut binding| {
-            let new_name = declare(ident_name(&binding.name));
-            // Renaming a loop binding never changes its declared type.
-            binding.name = make_ident(&new_name);
-            binding
-        })
-        .collect();
-    names
-}
-
-fn collect_toplevel_function_globals(block: &Block) -> FxHashSet<CompactString> {
-    let mut top_locals: FxHashSet<CompactString> = FxHashSet::default();
-    for stmt in &block.stmts {
-        match stmt {
-            Statement::LocalAssignment(local) => {
-                for attributed in local.names.iter() {
-                    top_locals.insert(ident_name(&attributed.name).into());
-                }
-            }
-            Statement::LocalFunction(local_func) => {
-                top_locals.insert(ident_name(&local_func.name).into());
-            }
-            // Only `local` declarations introduce local names at this level;
-            // everything else either declares globals or no name binding.
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-    }
-
-    let mut func_globals = FxHashSet::default();
-    for stmt in &block.stmts {
-        if let Statement::FunctionDecl(func_decl) = stmt
-            && func_decl.name.names.len() == 1
-            && func_decl.name.method.is_none()
-        {
-            let name = ident_name(&func_decl.name.names[0]);
-            if !top_locals.contains(name) {
-                func_globals.insert(name.into());
-            }
-        }
-    }
-
-    func_globals
-}
-
-fn collect_assignfirst_globals(
-    block: &Block,
-    func_globals: &FxHashSet<CompactString>,
-) -> FxHashSet<CompactString> {
-    let mut read_globals: FxHashSet<CompactString> = FxHashSet::default();
-    let mut assign_first: FxHashSet<CompactString> = FxHashSet::default();
-
-    let mut all_locals = FxHashSet::default();
-    collect_top_level_locals(block, &mut all_locals);
-
-    for stmt in &block.stmts {
-        match stmt {
-            Statement::Assignment(assign) => {
-                for expr in assign.values.iter() {
-                    collect_name_reads_from_expr(expr, &all_locals, &mut read_globals);
-                }
-                for var in assign.targets.iter() {
-                    if let Var::Name(name) = var {
-                        let var_name = ident_name(name);
-                        if !all_locals.contains(var_name)
-                            && !func_globals.contains(var_name)
-                            && !read_globals.contains(var_name)
-                            && !assign_first.contains(var_name)
-                        {
-                            assign_first.insert(var_name.into());
-                        }
-                    }
-                    if let Var::FieldAccess(fa) = var
-                        && let Expression::Var(Var::Name(name)) = &fa.prefix
-                    {
-                        let var_name = ident_name(name);
-                        if !all_locals.contains(var_name) {
-                            read_globals.insert(var_name.into());
-                        }
-                    }
-                }
-            }
-            // Every non-assignment statement contributes only reads here;
-            // assignment targets are special-cased above for assign-first.
-            Statement::FunctionCall(_)
-            | Statement::LocalAssignment(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::GlobalFunction(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {
-                collect_name_reads_from_stmt(stmt, &all_locals, &mut read_globals);
-            }
-        }
-    }
-
-    assign_first
-}
-
-fn collect_top_level_locals(block: &Block, locals: &mut FxHashSet<CompactString>) {
-    for stmt in &block.stmts {
-        match stmt {
-            Statement::LocalAssignment(local) => {
-                for attributed in local.names.iter() {
-                    locals.insert(ident_name(&attributed.name).into());
-                }
-            }
-            Statement::LocalFunction(local_func) => {
-                locals.insert(ident_name(&local_func.name).into());
-            }
-            Statement::DoBlock(d) => collect_top_level_locals(&d.block, locals),
-            Statement::WhileLoop(w) => collect_top_level_locals(&w.block, locals),
-            Statement::RepeatLoop(r) => collect_top_level_locals(&r.block, locals),
-            Statement::IfStatement(if_stmt) => {
-                collect_top_level_locals(&if_stmt.block, locals);
-                for clause in &if_stmt.elseif_clauses {
-                    collect_top_level_locals(&clause.block, locals);
-                }
-                if let Some(else_clause) = &if_stmt.else_clause {
-                    collect_top_level_locals(&else_clause.block, locals);
-                }
-            }
-            Statement::NumericFor(nf) => {
-                locals.insert(ident_name(&nf.name).into());
-                collect_top_level_locals(&nf.block, locals);
-            }
-            Statement::GenericFor(gf) => {
-                for binding in gf.names.iter() {
-                    locals.insert(ident_name(&binding.name).into());
-                }
-                collect_top_level_locals(&gf.block, locals);
-            }
-            // Function bodies are separate scopes (a `LocalFunction` name is
-            // captured above, but its body is not). Everything else either
-            // declares no local at this level or declares a global.
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::FunctionDecl(_)
-            | Statement::GlobalFunction(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-    }
-}
-
-fn collect_name_reads_from_expr(
-    expr: &Expression,
-    locals: &FxHashSet<CompactString>,
-    reads: &mut FxHashSet<CompactString>,
-) {
-    match expr {
-        Expression::Var(var) => match var {
-            Var::Name(name) => {
-                let var_name = ident_name(name);
-                if !locals.contains(var_name) {
-                    reads.insert(var_name.into());
-                }
-            }
-            Var::FieldAccess(fa) => {
-                collect_name_reads_from_expr(&fa.prefix, locals, reads);
-            }
-            Var::Index(ie) => {
-                collect_name_reads_from_expr(&ie.prefix, locals, reads);
-                collect_name_reads_from_expr(&ie.index, locals, reads);
-            }
-        },
-        Expression::FunctionCall(call) => {
-            collect_name_reads_from_expr(&call.callee, locals, reads);
-            collect_name_reads_from_func_args(&call.args, locals, reads);
-        }
-        Expression::BinaryOp(binop) => {
-            collect_name_reads_from_expr(&binop.left, locals, reads);
-            collect_name_reads_from_expr(&binop.right, locals, reads);
-        }
-        Expression::UnaryOp(unop) => {
-            collect_name_reads_from_expr(&unop.operand, locals, reads);
-        }
-        Expression::Parenthesized(paren) => {
-            collect_name_reads_from_expr(&paren.expr, locals, reads);
-        }
-        Expression::TableConstructor(table) => {
-            for field in table.fields.iter() {
-                match field {
-                    Field::Bracketed { key, value, .. } => {
-                        collect_name_reads_from_expr(key, locals, reads);
-                        collect_name_reads_from_expr(value, locals, reads);
-                    }
-                    Field::Named { value, .. } => {
-                        collect_name_reads_from_expr(value, locals, reads);
-                    }
-                    Field::Positional { value, .. } => {
-                        collect_name_reads_from_expr(value, locals, reads);
-                    }
-                }
-            }
-        }
-        Expression::InterpolatedString(interp) => {
-            for seg in &interp.segments {
-                if let Some(ref expr) = seg.expr {
-                    collect_name_reads_from_expr(expr, locals, reads);
-                }
-            }
-        }
-        Expression::IfExpression(if_expr) => {
-            collect_name_reads_from_expr(&if_expr.condition, locals, reads);
-            collect_name_reads_from_expr(&if_expr.then_expr, locals, reads);
-            for clause in &if_expr.elseif_clauses {
-                collect_name_reads_from_expr(&clause.condition, locals, reads);
-                collect_name_reads_from_expr(&clause.expr, locals, reads);
-            }
-            collect_name_reads_from_expr(&if_expr.else_expr, locals, reads);
-        }
-        // Type cast is transparent: the inner expression may read a global.
-        Expression::TypeCast(cast) => {
-            collect_name_reads_from_expr(&cast.expr, locals, reads);
-        }
-        Expression::TypeInstantiation(instantiation) => {
-            collect_name_reads_from_expr(&instantiation.expr, locals, reads);
-        }
-        // A function body's reads belong to its own scope, not this one.
-        Expression::FunctionDef(_) => {}
-        // Literal leaves: no sub-expressions, no name reads.
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_) // Luau
-        | Expression::StringLiteral(_)
-        | Expression::VarArg(_)
-        | Expression::Error(_) => {}
-    }
-}
-
-fn collect_name_reads_from_func_args(
-    args: &FunctionArgs,
-    locals: &FxHashSet<CompactString>,
-    reads: &mut FxHashSet<CompactString>,
-) {
-    match args {
-        FunctionArgs::Parenthesized { args, .. } => {
-            for arg in args.iter() {
-                collect_name_reads_from_expr(arg, locals, reads);
-            }
-        }
-        FunctionArgs::TableConstructor(table) => {
-            for field in table.fields.iter() {
-                match field {
-                    Field::Bracketed { key, value, .. } => {
-                        collect_name_reads_from_expr(key, locals, reads);
-                        collect_name_reads_from_expr(value, locals, reads);
-                    }
-                    Field::Named { value, .. } => {
-                        collect_name_reads_from_expr(value, locals, reads);
-                    }
-                    Field::Positional { value, .. } => {
-                        collect_name_reads_from_expr(value, locals, reads);
-                    }
-                }
-            }
-        }
-        // A string-literal argument reads no names.
-        FunctionArgs::StringLiteral(_) => {}
-    }
-}
-
-fn collect_name_reads_from_stmt(
-    stmt: &Statement,
-    locals: &FxHashSet<CompactString>,
-    reads: &mut FxHashSet<CompactString>,
-) {
-    match stmt {
-        Statement::FunctionCall(call_stmt) => {
-            collect_name_reads_from_expr(&call_stmt.callee, locals, reads);
-            collect_name_reads_from_func_args(&call_stmt.args, locals, reads);
-        }
-        Statement::LocalAssignment(local) => {
-            if let Some(exprs) = &local.exprs {
-                for expr in exprs.iter() {
-                    collect_name_reads_from_expr(expr, locals, reads);
-                }
-            }
-        }
-        Statement::Assignment(assign) => {
-            for expr in assign.values.iter() {
-                collect_name_reads_from_expr(expr, locals, reads);
-            }
-            for var in assign.targets.iter() {
-                match var {
-                    Var::Name(name) => {
-                        let var_name = ident_name(name);
-                        if !locals.contains(var_name) {
-                            reads.insert(var_name.into());
-                        }
-                    }
-                    Var::FieldAccess(fa) => {
-                        collect_name_reads_from_expr(&fa.prefix, locals, reads);
-                    }
-                    Var::Index(ie) => {
-                        collect_name_reads_from_expr(&ie.prefix, locals, reads);
-                        collect_name_reads_from_expr(&ie.index, locals, reads);
-                    }
-                }
-            }
-        }
-        Statement::DoBlock(d) => {
-            for s in &d.block.stmts {
-                collect_name_reads_from_stmt(s, locals, reads);
-            }
-        }
-        Statement::WhileLoop(w) => {
-            collect_name_reads_from_expr(&w.condition, locals, reads);
-            for s in &w.block.stmts {
-                collect_name_reads_from_stmt(s, locals, reads);
-            }
-        }
-        Statement::RepeatLoop(r) => {
-            for s in &r.block.stmts {
-                collect_name_reads_from_stmt(s, locals, reads);
-            }
-            collect_name_reads_from_expr(&r.condition, locals, reads);
-        }
-        Statement::IfStatement(if_stmt) => {
-            collect_name_reads_from_expr(&if_stmt.condition, locals, reads);
-            for s in &if_stmt.block.stmts {
-                collect_name_reads_from_stmt(s, locals, reads);
-            }
-            for clause in &if_stmt.elseif_clauses {
-                collect_name_reads_from_expr(&clause.condition, locals, reads);
-                for s in &clause.block.stmts {
-                    collect_name_reads_from_stmt(s, locals, reads);
-                }
-            }
-            if let Some(else_clause) = &if_stmt.else_clause {
-                for s in &else_clause.block.stmts {
-                    collect_name_reads_from_stmt(s, locals, reads);
-                }
-            }
-        }
-        Statement::NumericFor(nf) => {
-            collect_name_reads_from_expr(&nf.start, locals, reads);
-            collect_name_reads_from_expr(&nf.limit, locals, reads);
-            if let Some(step) = &nf.step {
-                collect_name_reads_from_expr(step, locals, reads);
-            }
-            for s in &nf.block.stmts {
-                collect_name_reads_from_stmt(s, locals, reads);
-            }
-        }
-        Statement::GenericFor(gf) => {
-            for expr in gf.exprs.iter() {
-                collect_name_reads_from_expr(expr, locals, reads);
-            }
-            for s in &gf.block.stmts {
-                collect_name_reads_from_stmt(s, locals, reads);
-            }
-        }
-        Statement::CompoundAssignment(ca) => {
-            match &ca.var {
-                Var::Name(name) => {
-                    let var_name = ident_name(name);
-                    if !locals.contains(var_name) {
-                        reads.insert(var_name.into());
-                    }
-                }
-                Var::FieldAccess(fa) => {
-                    collect_name_reads_from_expr(&fa.prefix, locals, reads);
-                }
-                Var::Index(ie) => {
-                    collect_name_reads_from_expr(&ie.prefix, locals, reads);
-                }
-            }
-            collect_name_reads_from_expr(&ca.expr, locals, reads);
-        }
-        // Function bodies are separate scopes; their reads don't count here.
-        Statement::FunctionDecl(_) | Statement::LocalFunction(_) | Statement::GlobalFunction(_) => {
-        }
-        Statement::GlobalDeclaration(global_decl) => {
-            if let Some(exprs) = &global_decl.exprs {
-                for expr in exprs.iter() {
-                    collect_name_reads_from_expr(expr, locals, reads);
-                }
-            }
-        }
-        // Leaves and declarations that read no names at this scope.
-        Statement::EmptyStatement(_)
-        | Statement::Goto(_)
-        | Statement::Label(_)
-        | Statement::GlobalStar(_)
-        | Statement::Break(_)
-        | Statement::TypeDeclaration(_)
-        | Statement::Error(_) => {}
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::{assert_reparses, run_pass};
 
     fn apply(source: &str) -> String {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
-        assert!(result.errors.is_empty(), "parse failed");
-        let block = rename(result.block, LuaTarget::Lua54, true);
-        luck_codegen::compact(&block, source)
+        apply_version(source, LuaVersion::Lua54)
     }
 
-    fn reparses(source: &str) -> bool {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua54);
-        result.errors.is_empty()
+    fn apply_version(source: &str, version: LuaVersion) -> String {
+        let output = run_pass(source, version, |block| rename(block, version, true));
+        assert_reparses(&output, version);
+        output
     }
 
     #[test]
     fn renames_locals_to_short_names() {
         let result = apply("local longname = 1\nreturn longname\n");
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
-        assert!(
-            !result.contains("longname"),
-            "Local should be renamed: {result}"
-        );
+        assert!(!result.contains("longname"), "Local should be renamed: {result}");
     }
 
     #[test]
     fn preserves_globals() {
         let result = apply("print(42)\n");
-        assert!(
-            result.contains("print"),
-            "Global should not be renamed: {result}"
-        );
+        assert!(result.contains("print"), "Global should not be renamed: {result}");
     }
 
     #[test]
     fn renames_function_params() {
         let result = apply("local function foo(longparam)\n  return longparam\nend\nreturn foo\n");
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
-        assert!(
-            !result.contains("longparam"),
-            "Param should be renamed: {result}"
-        );
+        assert!(!result.contains("longparam"), "Param should be renamed: {result}");
     }
 
     #[test]
     fn preserves_field_names() {
         let result = apply("local t = {}\nt.field = 1\nreturn t.field\n");
-        assert!(
-            result.contains("field"),
-            "Field name should not be renamed: {result}"
-        );
+        assert!(result.contains("field"), "Field name should not be renamed: {result}");
     }
 
     #[test]
-    fn scoped_renames_reparse() {
-        let result = apply("local x = 1\ndo\n  local y = 2\n  print(y)\nend\nreturn x\n");
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
+    fn renames_a_nested_scope_to_valid_lua() {
+        apply("local x = 1\ndo\n  local y = 2\n  print(y)\nend\nreturn x\n");
     }
 
     #[test]
@@ -1509,24 +77,14 @@ mod tests {
         let result = apply(
             "local rare = 1\nlocal frequent = 2\nprint(frequent)\nprint(frequent)\nprint(frequent)\nprint(rare)\nreturn frequent, rare\n",
         );
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
-        assert!(
-            !result.contains("frequent"),
-            "'frequent' should be renamed: {result}"
-        );
-        assert!(
-            !result.contains("rare"),
-            "'rare' should be renamed: {result}"
-        );
+        assert!(!result.contains("frequent"), "'frequent' should be renamed: {result}");
+        assert!(!result.contains("rare"), "'rare' should be renamed: {result}");
     }
 
     #[test]
     fn preserves_self_parameter() {
         let result = apply("local t = {}\nfunction t:method()\n  return self\nend\nreturn t\n");
-        assert!(
-            result.contains("self"),
-            "'self' should not be renamed: {result}"
-        );
+        assert!(result.contains("self"), "'self' should not be renamed: {result}");
     }
 
     #[test]
@@ -1534,7 +92,6 @@ mod tests {
         let result = apply(
             "do\n  local longvar = 1\n  print(longvar)\nend\ndo\n  local another = 2\n  print(another)\nend\n",
         );
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
         assert!(
             !result.contains("longvar") && !result.contains("another"),
             "Both should be renamed: {result}"
@@ -1542,11 +99,10 @@ mod tests {
     }
 
     #[test]
-    fn nested_function_frequency_beats_outer() {
-        let result = apply(
+    fn renames_nested_function_locals_to_valid_lua() {
+        apply(
             "local outer = 1\nlocal function f()\n  local inner = 2\n  print(inner, inner, inner, inner, inner)\nend\nreturn outer, f\n",
         );
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
     }
 
     #[test]
@@ -1559,11 +115,7 @@ mod tests {
             "  return longvar1 + longvar2\nend\n",
             "return f\n",
         ));
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
-        assert!(
-            !result.contains("longvar"),
-            "locals should be renamed: {result}"
-        );
+        assert!(!result.contains("longvar"), "locals should be renamed: {result}");
     }
 
     #[test]
@@ -1574,77 +126,569 @@ mod tests {
             "  local longvar = 1\n  l(longvar)\n  return longvar\n",
             "end\nreturn f\n",
         ));
-        assert!(reparses(&result), "Parse errors\nOutput: {result}");
-        assert!(
-            result.contains("l("),
-            "global 'l' must be preserved: {result}"
-        );
-        assert!(
-            !result.contains("longvar"),
-            "longvar should be renamed: {result}"
-        );
-    }
-
-    fn apply_lua55(source: &str) -> String {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Lua55);
-        assert!(
-            result.errors.is_empty(),
-            "parse failed: {:?}",
-            result.errors
-        );
-        let block = rename(result.block, LuaTarget::Lua55, true);
-        luck_codegen::compact(&block, source)
+        assert!(result.contains("l("), "global 'l' must be preserved: {result}");
+        assert!(!result.contains("longvar"), "longvar should be renamed: {result}");
     }
 
     #[test]
     fn renames_inside_global_function_body() {
-        // The analyzer and the renamer must both walk `global function` bodies.
-        // If only one does, the binding indices fall out of sync and the
-        // renamer panics on an out-of-bounds binding lookup.
-        let result = apply_lua55("global function f(longparam)\n  return longparam\nend\n");
-        let reparsed = luck_parser::parse(&result, luck_token::LuaVersion::Lua55);
-        assert!(reparsed.errors.is_empty(), "must reparse: {result}");
+        // The analyzer and the renamer must both walk `global function` bodies,
+        // or the binding ids fall out of step.
+        let result = apply_version(
+            "global function f(longparam)\n  return longparam\nend\n",
+            LuaVersion::Lua55,
+        );
         assert!(
             !result.contains("longparam"),
             "param inside global function should be renamed: {result}"
         );
-        assert!(
-            result.contains("function f("),
-            "global function name must be preserved: {result}"
-        );
+        assert!(result.contains("function f("), "global function name must be preserved: {result}");
     }
 
     fn apply_luau(source: &str) -> String {
-        let result = luck_parser::parse(source, luck_token::LuaVersion::Luau);
-        assert!(
-            result.errors.is_empty(),
-            "parse failed: {:?}",
-            result.errors
-        );
-        let block = rename(result.block, LuaTarget::Luau, true);
-        luck_codegen::compact(&block, source)
+        apply_version(source, LuaVersion::Luau)
     }
 
     #[test]
     fn global_read_via_typecast_is_not_assign_first() {
-        // `g` is read inside a type cast before being assigned, so it is a real
-        // global and must not be reclassified as an assign-first pseudo-local
-        // and renamed. A read collector that skips TypeCast miscompiles
-        // `h=(g::any)g=1 print(h,g)` into renamed locals.
+        // `g` is read inside a type cast before it's assigned, so it's a real
+        // global and must keep its name.
         let result = apply_luau("h = (g :: any)\ng = 1\nprint(h, g)\n");
-        let reparsed = luck_parser::parse(&result, luck_token::LuaVersion::Luau);
-        assert!(reparsed.errors.is_empty(), "must reparse: {result}");
-        assert!(
-            result.contains('g'),
-            "global 'g' read via typecast must be preserved: {result}"
-        );
+        assert!(result.contains('g'), "global 'g' read via typecast must be preserved: {result}");
+    }
+
+    #[test]
+    fn global_read_via_compound_index_is_not_assign_first() {
+        // `g` is read as the index of a compound target before it's assigned,
+        // so it's a real global and must keep its name, at any nesting depth.
+        for (source, expected) in [
+            ("t[g] += 1\ng = 1\nprint(t, g)\n", "t[g]+=1 g=1 print(t,g)"),
+            ("do t[g] += 1 end\ng = 1\nprint(t, g)\n", "do t[g]+=1 end g=1 print(t,g)"),
+        ] {
+            let result = apply_luau(source);
+            assert_eq!(result, expected);
+        }
+    }
+
+    fn assert_luau_renames(cases: &[(&str, &str)]) {
+        for &(source, expected) in cases {
+            let result = apply_luau(source);
+            assert_eq!(result, expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn global_read_via_assignment_target_is_not_assign_first() {
+        // A target's prefix and index are reads at any depth of the target
+        // chain, so `g` is a real global and must keep its name.
+        assert_luau_renames(&[
+            ("t[g] = 1\ng = 1\nprint(t, g)\n", "t[g]=1 g=1 print(t,g)"),
+            ("g[1] = 2\ng = 1\nprint(g)\n", "g[1]=2 g=1 print(g)"),
+            ("g.a.b = 1\ng = 1\nprint(g)\n", "g.a.b=1 g=1 print(g)"),
+            ("g[1].b = 1\ng = 1\nprint(g)\n", "g[1].b=1 g=1 print(g)"),
+            ("t[g].b = 1\ng = 1\nprint(t, g)\n", "t[g].b=1 g=1 print(t,g)"),
+            ("f(g).x = 1\ng = 1\nprint(g)\n", "f(g).x=1 g=1 print(g)"),
+            ("(g).x = 1\ng = 1\nprint(g)\n", "(g).x=1 g=1 print(g)"),
+            ("t[g], g = 1, 2\nprint(t, g)\n", "t[g],g=1,2 print(t,g)"),
+        ]);
+    }
+
+    #[test]
+    fn global_read_by_later_target_is_not_assign_first() {
+        // Every target's prefix and index is evaluated before any store, so `g`
+        // is read here even though its own target comes first.
+        assert_luau_renames(&[
+            ("g, t[g] = 1, 2\nprint(t, g)\n", "g,t[g]=1,2 print(t,g)"),
+            ("g, g[1] = 1, 2\nprint(g)\n", "g,g[1]=1,2 print(g)"),
+            ("g, g.x = 1, 2\nprint(g)\n", "g,g.x=1,2 print(g)"),
+        ]);
+    }
+
+    #[test]
+    fn global_read_via_nested_return_is_not_assign_first() {
+        // A return sits outside its block's statement list, and an early one
+        // reads `g` before the assignment that follows the block.
+        assert_luau_renames(&[
+            ("do return g end\ng = 1\nprint(g)\n", "do return g end g=1 print(g)"),
+            ("if c then return g end\ng = 1\nprint(g)\n", "if c then return g end g=1 print(g)"),
+            (
+                "if c then print(1) elseif d then return g end\ng = 1\nprint(g)\n",
+                "if c then print(1)elseif d then return g end g=1 print(g)",
+            ),
+            (
+                "if c then print(1) else return g end\ng = 1\nprint(g)\n",
+                "if c then print(1)else return g end g=1 print(g)",
+            ),
+            ("while c do return g end\ng = 1\nprint(g)\n", "while c do return g end g=1 print(g)"),
+            ("repeat return g until c\ng = 1\nprint(g)\n", "repeat return g until c g=1 print(g)"),
+            (
+                "for i = 1, 2 do return g end\ng = 1\nprint(g)\n",
+                "for l=1,2 do return g end g=1 print(g)",
+            ),
+            (
+                "for k in x do return g end\ng = 1\nprint(g)\n",
+                "for l in x do return g end g=1 print(g)",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn global_read_via_function_name_is_not_assign_first() {
+        // `function g.f()` and `function g:f()` read `g` to store into it.
+        assert_luau_renames(&[
+            ("function g.x() end\ng = 1\nprint(g)\n", "function g.x()end g=1 print(g)"),
+            ("function g:m() end\ng = 1\nprint(g)\n", "function g:m()end g=1 print(g)"),
+            ("function g.a.b() end\ng = 1\nprint(g)\n", "function g.a.b()end g=1 print(g)"),
+            (
+                "do function g.x() end end\ng = 1\nprint(g)\n",
+                "do function g.x()end end g=1 print(g)",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn global_assigned_before_any_read_stays_assign_first() {
+        // Later reads, a plain `function g()` (which only assigns), and a read
+        // deferred into a function body all leave `g` assign-first, so it's
+        // still renamed. In the last case, `h` stays assign-first even though
+        // a target beside it reads `g`.
+        assert_luau_renames(&[
+            ("g = 1\nt[g] = 2\nprint(t, g)\n", "l=1 t[l]=2 print(t,l)"),
+            ("g = 1\ng.a.b = 2\nprint(g)\n", "l=1 l.a.b=2 print(l)"),
+            ("g = 1\nfunction g.x() end\nprint(g)\n", "l=1 function l.x()end print(l)"),
+            ("do function g() end end\ng = 1\nprint(g)\n", "do function l()end end l=1 print(l)"),
+            (
+                "h = function() return g end\ng = 1\nprint(h, g)\n",
+                "u=function()return l end l=1 print(u,l)",
+            ),
+            ("h, t[g] = 1, 2\nprint(h, t)\n", "l,t[g]=1,2 print(l,t)"),
+        ]);
+    }
+
+    #[test]
+    fn global_read_before_function_definition_is_not_renamed() {
+        // Same reads as the assign-first check, at the same depths.
+        assert_luau_renames(&[
+            ("print(g)\nfunction g() end\n", "print(g)function g()end"),
+            ("x = g\nfunction g() end\n", "l=g function g()end"),
+            ("t[g] = 1\nfunction g() end\n", "t[g]=1 function g()end"),
+            ("g.x = 1\nfunction g() end\n", "g.x=1 function g()end"),
+            ("g[1] = 1\nfunction g() end\n", "g[1]=1 function g()end"),
+            ("g, t[g] = 1, 2\nfunction g() end\n", "g,t[g]=1,2 function g()end"),
+            ("g += 1\nfunction g() end\n", "g+=1 function g()end"),
+            ("function g.x() end\nfunction g() end\n", "function g.x()end function g()end"),
+            ("function g:m() end\nfunction g() end\n", "function g:m()end function g()end"),
+            (
+                "if c then return g end\nfunction g() end\n",
+                "if c then return g end function g()end",
+            ),
+            ("do print(g) end\nfunction g() end\n", "do print(g)end function g()end"),
+            (
+                "print(g)\nfunction g() end\nfunction g() end\n",
+                "print(g)function g()end function g()end",
+            ),
+            (
+                "print(g)\nfunction g() end\ng = 1\nprint(g)\n",
+                "print(g)function g()end g=1 print(g)",
+            ),
+            (
+                "print(g)\ndo local g = 1 end\nfunction g() end\n",
+                "print(g)do local l=1 end function g()end",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn nested_read_before_the_local_it_shares_a_name_with_is_a_global_read() {
+        assert_luau_renames(&[
+            (
+                "do print(g)\nlocal g = 1 end\nfunction g() end\n",
+                "do print(g)local l=1 end function g()end",
+            ),
+            ("do local g = g end\nfunction g() end\n", "do local l=g end function g()end"),
+            (
+                "do do local g = f() end\nprint(g) end\nfunction g() end\n",
+                "do do local l=f()end print(g)end function g()end",
+            ),
+            ("for g = g, 2 do end\nfunction g() end\n", "for l=g,2 do end function g()end"),
+            ("for g in g do end\nfunction g() end\n", "for l in g do end function g()end"),
+            (
+                "repeat print(g)\nlocal g = f() until g\nfunction g() end\n",
+                "repeat print(g)local l=f()until l function g()end",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn read_of_a_nested_local_is_not_a_read_of_the_global() {
+        assert_luau_renames(&[
+            (
+                "do local g = f()\nprint(g) end\nfunction g() end\n",
+                "do local l=f()print(l)end function l()end",
+            ),
+            (
+                "do local function g() end\ng() end\nfunction g() end\n",
+                "do local function l()end l()end function l()end",
+            ),
+            (
+                "for g = 1, 2 do print(g) end\nfunction g() end\n",
+                "for l=1,2 do print(l)end function l()end",
+            ),
+            (
+                "for g in x do print(g) end\nfunction g() end\n",
+                "for l in x do print(l)end function l()end",
+            ),
+            (
+                "repeat local g = f() until g\nfunction g() end\n",
+                "repeat local l=f()until l function l()end",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn assignment_before_any_read_keeps_a_function_global() {
+        // The tie between `a` and `g` goes to the earlier binding, so moving
+        // `g` out of the function globals would swap their names.
+        assert_luau_renames(&[
+            (
+                "g = 1\ndo local g = f() end\nprint(g)\nfunction g() end\n",
+                "l=1 do local l=f()end print(l)function l()end",
+            ),
+            (
+                "a = 1\nprint(a)\nprint(a)\ng = 1\nprint(g)\nfunction g() end\n",
+                "u=1 print(u)print(u)l=1 print(l)function l()end",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn function_defined_before_any_read_stays_renamed() {
+        // A read after the definition and a function body's deferred read both
+        // leave `g` renamed, and so does an assignment that got there first.
+        assert_luau_renames(&[
+            ("function g() end\nprint(g)\n", "function l()end print(l)"),
+            ("function g() return g end\n", "function l()return l end"),
+            (
+                "function g() end\nprint(g)\nfunction g() end\n",
+                "function l()end print(l)function l()end",
+            ),
+            (
+                "h = function() return g end\nfunction g() end\n",
+                "u=function()return l end function l()end",
+            ),
+            (
+                "function f() return g end\nf()\nfunction g() end\n",
+                "function l()return u end l()function u()end",
+            ),
+            ("g = 1\nfunction g() end\nprint(g)\n", "l=1 function l()end print(l)"),
+            ("g = 1\nprint(g)\nfunction g() end\n", "l=1 print(l)function l()end"),
+            ("do local g = 1 end\nfunction g() end\n", "do local l=1 end function l()end"),
+        ]);
+    }
+
+    #[test]
+    fn deferred_global_read_is_left_as_it_was() {
+        let result = apply("function f() return g end\nf()\ng = 1\n");
+        assert_eq!(result, "function l()return u end l()u=1");
+    }
+
+    const ENV_VERSIONS: [LuaVersion; 4] =
+        [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55];
+
+    #[test]
+    fn env_is_never_renamed_on_versions_with_an_env_upvalue() {
+        for version in ENV_VERSIONS {
+            for (source, expected) in [
+                ("_ENV = {}\nprint(1)\n", "_ENV={}print(1)"),
+                ("_ENV = {}\n_ENV = {}\n", "_ENV={}_ENV={}"),
+                ("_ENV, x = {}, 1\nprint(x)\n", "_ENV,l={},1 print(l)"),
+                ("function _ENV() end\n", "function _ENV()end"),
+                ("function _ENV.f() end\n", "function _ENV.f()end"),
+                ("local _ENV = {}\nprint(1)\n", "local _ENV={}print(1)"),
+                ("local _ENV = {}\n_ENV = {}\n", "local _ENV={}_ENV={}"),
+                (
+                    "do local _ENV = {}\n_ENV = {} end\n_ENV = {}\n",
+                    "do local _ENV={}_ENV={}end _ENV={}",
+                ),
+                ("local function _ENV() end\n", "local function _ENV()end"),
+                (
+                    "local function f(_ENV) return x end\nreturn f\n",
+                    "local function l(_ENV)return x end return l",
+                ),
+                ("for _ENV = 1, 2 do print(x) end\n", "for _ENV=1,2 do print(x)end"),
+                (
+                    "for k, _ENV in pairs(t) do print(k) end\n",
+                    "for l,_ENV in pairs(t)do print(l)end",
+                ),
+            ] {
+                let result = apply_version(source, version);
+                assert_eq!(result, expected, "{version:?} source: {source}");
+            }
+        }
+    }
+
+    #[test]
+    fn env_is_an_ordinary_name_where_there_is_no_env_upvalue() {
+        for version in [LuaVersion::Lua51, LuaVersion::Luau] {
+            for (source, expected) in [
+                ("_ENV = 1\nprint(_ENV)\n", "l=1 print(l)"),
+                ("function _ENV() end\nprint(_ENV)\n", "function l()end print(l)"),
+                ("local _ENV = 1\nprint(_ENV)\n", "local l=1 print(l)"),
+                ("for _ENV = 1, 2 do print(_ENV) end\n", "for l=1,2 do print(l)end"),
+                (
+                    "for k, _ENV in pairs(t) do print(_ENV) end\n",
+                    "for u,l in pairs(t)do print(l)end",
+                ),
+            ] {
+                let result = apply_version(source, version);
+                assert_eq!(result, expected, "{version:?} source: {source}");
+            }
+        }
+    }
+
+    fn assert_lua55_renames(cases: &[(&str, &str)]) {
+        for &(source, expected) in cases {
+            let result = apply_version(source, LuaVersion::Lua55);
+            assert_eq!(result, expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn globally_declared_name_is_not_renamed() {
+        assert_lua55_renames(&[
+            ("global g\ng = 1\n", "global g g=1"),
+            ("g = 1\nglobal g\n", "g=1 global g"),
+            ("g = 1\nglobal g\ng = 2\n", "g=1 global g g=2"),
+            ("global g = 1\ng = 2\n", "global g=1 g=2"),
+            ("global a, g\ng = 1\na = 2\n", "global a,g g=1 a=2"),
+            ("global <const> g = 1\n", "global g<const> =1"),
+            ("function g() end\nglobal g\n", "function g()end global g"),
+            ("global g\nfunction g() end\n", "global g function g()end"),
+        ]);
+    }
+
+    #[test]
+    fn name_of_global_function_is_not_renamed() {
+        assert_lua55_renames(&[
+            ("g = 1\nglobal function g() end\n", "g=1 global function g()end"),
+            (
+                "function g() end\nglobal function g() end\n",
+                "function g()end global function g()end",
+            ),
+            ("global function g() return g end\ng()\n", "global function g()return g end g()"),
+        ]);
+    }
+
+    #[test]
+    fn global_declaration_pins_its_name_from_any_depth() {
+        assert_lua55_renames(&[
+            ("g = 1\ndo global g\ng = 2 end\n", "g=1 do global g g=2 end"),
+            ("g = 1\nif c then global g end\n", "g=1 if c then global g end"),
+            ("g = 1\nfunction f() global g\ng = 2 end\n", "g=1 function l()global g g=2 end"),
+            (
+                "function g() end\nlocal function f() global function g() end end\nreturn f\n",
+                "function g()end local function l()global function g()end end return l",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn global_declaration_shadows_an_earlier_local() {
+        // After the declaration `g` is the global, and until then it's the
+        // local, so only the uses before it may take the local's new name.
+        assert_lua55_renames(&[
+            (
+                "local g = f()\nprint(g)\nglobal g, print\ng = 2\nprint(g)\n",
+                "local l=f()print(l)global g,print g=2 print(g)",
+            ),
+            (
+                "local g = f()\ndo global g\ng = 2 end\nprint(g)\n",
+                "local l=f()do global g g=2 end print(l)",
+            ),
+            (
+                "local g = f()\nglobal function g() return g end\n",
+                "local l=f()global function g()return g end",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn global_declaration_takes_effect_after_its_initializers() {
+        assert_lua55_renames(&[(
+            "local g = f()\nglobal g = g\ng = 2\n",
+            "local l=f()global g=l g=2",
+        )]);
+    }
+
+    #[test]
+    fn local_declared_after_a_global_declaration_is_still_renamed() {
+        assert_lua55_renames(&[(
+            "global g, print\ndo\nlocal g = f()\nprint(g)\nend\ng = 1\n",
+            "global g,print do local l=f()print(l)end g=1",
+        )]);
+    }
+
+    #[test]
+    fn renamed_local_never_wears_a_globally_declared_name() {
+        // Lookup finds the newest declaration, so a local wearing `l` here
+        // would read the global `l` as soon as the declaration is in scope,
+        // whether or not anything else reads that global.
+        assert_lua55_renames(&[
+            (
+                "local longname = f()\nglobal l, print\nprint(longname)\n",
+                "local u=f()global l,print print(u)",
+            ),
+            (
+                "local longname = f()\ndo global l, print\nprint(longname) end\n",
+                "local u=f()do global l,print print(u)end",
+            ),
+            (
+                "global l, print, f\ndo\nlocal longname = f()\nprint(longname, l)\nend\n",
+                "global l,print,f do local u=f()print(u,l)end",
+            ),
+            (
+                "local longname = f()\nglobal function l() end\nreturn longname\n",
+                "local u=f()global function l()end return u",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn collective_global_declaration_leaves_every_name_free() {
+        // `global *` declares no name of its own, so renamed globals stay
+        // legal.
+        assert_lua55_renames(&[
+            ("global *\ng = 1\nprint(g)\n", "global*l=1 print(l)"),
+            ("local g = f()\nglobal *\ng = 1\n", "local l=f()global*l=1"),
+        ]);
+    }
+
+    #[test]
+    fn renames_inside_a_function_embedded_in_a_type() {
+        assert_luau_renames(&[
+            (
+                "type T = typeof(function(x) return x end)\n",
+                "type T=typeof(function(l)return l end)",
+            ),
+            (
+                "type T<U = typeof(function(x) return x end)> = U\n",
+                "type T<U=typeof(function(l)return l end)> =U",
+            ),
+            (
+                "type function T() return typeof(function(x) return x end) end\n",
+                "type function T()return typeof(function(l)return l end)end",
+            ),
+            (
+                "type T = { f: typeof(function(x) return x end)? }\n",
+                "type T={f:typeof(function(l)return l end)?}",
+            ),
+            (
+                "type T = (typeof(function(x) return x end)) -> ()\n",
+                "type T=(typeof(function(l)return l end))->()",
+            ),
+            (
+                "type T = A<typeof(function(x) return x end)>\n",
+                "type T=A<typeof(function(l)return l end)>",
+            ),
+            (
+                "return 1 :: typeof(function(x) return x end)\n",
+                "return 1::typeof(function(l)return l end)",
+            ),
+            (
+                "return f<<typeof(function(x) return x end)>>\n",
+                "return f<<typeof(function(l)return l end)>>",
+            ),
+            (
+                "return f<<typeof(function(x) return x end)>>()\n",
+                "return f<<typeof(function(l)return l end)>>()",
+            ),
+            ("f<<typeof(function(x) return x end)>>()\n", "f<<typeof(function(l)return l end)>>()"),
+            (
+                "return t:m<<typeof(function(x) return x end)>>()\n",
+                "return t:m<<typeof(function(l)return l end)>>()",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn bindings_in_a_type_keep_their_place_in_walk_order() {
+        // Binding ids follow visit order, so visiting a type out of turn hands
+        // the renamer another binding's name.
+        assert_luau_renames(&[
+            (
+                "f<<typeof(function(a, b) return a, b end)>>(function(c) return c end)\n",
+                "f<<typeof(function(l,u)return l,u end)>>(function(l)return l end)",
+            ),
+            (
+                "t:m<<typeof(function(a, b) return a, b end)>>(function(c) return c end)\n",
+                "t:m<<typeof(function(l,u)return l,u end)>>(function(l)return l end)",
+            ),
+            (
+                "return (function(a, b) return a, b end) :: typeof(function(c) return c end)\n",
+                "return(function(l,u)return l,u end)::typeof(function(l)return l end)",
+            ),
+            (
+                "type T<U = typeof(function(a, b) return a, b end)> = typeof(function(c) return c end)\n",
+                "type T<U=typeof(function(l,u)return l,u end)> =typeof(function(l)return l end)",
+            ),
+            (
+                "type T = typeof(function(longparam) return longparam end)\nlocal after = f()\nreturn after\n",
+                "type T=typeof(function(l)return l end)local l=f()return l",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn bindings_in_an_assignment_keep_their_place_in_walk_order() {
+        // Binding ids follow visit order, and the renamer visits an
+        // assignment's targets before its values. Visiting them out of turn
+        // hands a parameter another binding's name, which can capture `x`.
+        assert_luau_renames(&[
+            (
+                "local x = f()\nt[function(a) return x, a end] = function(b) return b end\nreturn x\n",
+                "local l=f()t[function(u)return l,u end]=function(l)return l end return l",
+            ),
+            (
+                "local x = f()\ng(function(a) return a end).k = function(b) return b + x end\nreturn x\n",
+                "local l=f()g(function(l)return l end).k=function(u)return u+l end return l",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn typeof_read_keeps_a_local_live_in_its_scope() {
+        assert_luau_renames(&[(
+            "local outer = f()\ndo\nlocal inner = f()\ntype T = typeof(outer)\nprint(inner)\nend\nprint(outer)\n",
+            "local l=f()do local u=f()type T=typeof(l)print(u)end print(l)",
+        )]);
+    }
+
+    #[test]
+    fn typeof_read_of_a_global_is_not_captured() {
+        assert_luau_renames(&[(
+            "local function f()\nlocal longname = g()\ntype T = typeof(l)\nreturn longname\nend\nreturn f\n",
+            "local function u()local u=g()type T=typeof(l)return u end return u",
+        )]);
+    }
+
+    #[test]
+    fn named_vararg_binds_its_name_in_the_body() {
+        assert_lua55_renames(&[
+            (
+                "local args = f()\nlocal function g(...args) return args end\nreturn args, g\n",
+                "local l=f()local function u(...l)return l end return l,u",
+            ),
+            (
+                "local function g(a, ...rest) return rest, a end\nreturn g\n",
+                "local function l(l,...u)return u,l end return l",
+            ),
+        ]);
     }
 
     #[test]
     fn unreferenced_param_never_captures_live_upvalue() {
-        // The zero-frequency name fallback must not hand an unreferenced param
-        // the same short name as an upvalue read inside the body, which would
-        // capture it.
+        // An unreferenced param must not get the name of an upvalue read in
+        // the body, which would capture it.
         let result = apply(
             "local cache = string.rep
 function W.new(p)
@@ -1653,16 +697,93 @@ end
 cache = f()
 ",
         );
-        let reparsed = luck_parser::parse(&result, luck_token::LuaVersion::Lua54);
-        assert!(reparsed.errors.is_empty(), "must reparse: {result}");
-        // The upvalue read inside the body and the outer local must share a
-        // name, and the param must get a different one.
-        let body_start = result.find("function W.new(").expect("decl kept") + 15;
-        let param = &result[body_start..body_start + 1];
-        let outer = &result[6..7];
-        assert_ne!(
-            param, outer,
-            "param must not shadow the captured upvalue: {result}"
+        // The upvalue is the outer local, so the param must not wear its name.
+        let (_, after_declaration) = result.split_once("function W.new(").expect("decl kept");
+        let param = after_declaration.chars().next();
+        let outer = result.chars().nth(6);
+        assert_ne!(param, outer, "param must not shadow the captured upvalue: {result}");
+    }
+
+    #[test]
+    fn nested_method_self_is_not_the_enclosing_self_parameter() {
+        let result =
+            apply("function M.f(self)\n  function t:g() return self end\n  return self\nend\n");
+        assert!(
+            result.contains(":g()return self"),
+            "`self` in a `:` method is its own receiver, not the renamed parameter: {result}"
+        );
+    }
+
+    #[test]
+    fn lua51_vararg_function_keeps_its_implicit_arg() {
+        let result = apply_version(
+            "local arg = g()\nlocal function f(...) return arg end\nreturn f, arg\n",
+            LuaVersion::Lua51,
+        );
+        assert!(
+            result.contains("return arg"),
+            "`arg` in a 5.1 vararg function is its implicit table, not the outer local: {result}"
+        );
+    }
+
+    #[test]
+    fn renamed_local_never_wears_an_exported_name() {
+        let result = apply_luau("export local l = 1\nlocal longname = f()\nprint(l, longname)\n");
+        assert!(
+            !result.contains("local l=f()"),
+            "a renamed local must not shadow the exported `l`: {result}"
+        );
+    }
+
+    #[test]
+    fn lua51_implicit_arg_wins_over_a_parameter_named_arg() {
+        let result = apply_version(
+            "local function f(arg, ...) return arg end\nreturn f\n",
+            LuaVersion::Lua51,
+        );
+        assert!(result.contains("return arg"), "{result}");
+    }
+
+    #[test]
+    fn local_named_self_is_an_ordinary_local() {
+        assert_luau_renames(&[("local self = f()\nprint(self, self)\n", "local l=f()print(l,l)")]);
+    }
+
+    #[test]
+    fn typeof_in_every_annotation_follows_the_rename() {
+        for source in [
+            "local outer = f()\nlocal function g(a: typeof(outer)) return a end\nreturn g, outer\n",
+            "local outer = f()\nlocal function g(...: typeof(outer)) return ... end\nreturn g, outer\n",
+            "local outer = f()\nlocal function g(): typeof(outer) return outer end\nreturn g\n",
+            "local outer = f()\nfor i: typeof(outer) = 1, 2 do print(i) end\nreturn outer\n",
+            "local outer = f()\nfor k: typeof(outer) in g() do print(k) end\nreturn outer\n",
+        ] {
+            let result = apply_luau(source);
+            assert!(!result.contains("typeof(outer)"), "{source}: {result}");
+        }
+    }
+
+    #[test]
+    fn typeof_in_a_signature_reads_the_scope_around_the_function() {
+        for source in [
+            "local a = f()\nlocal function g(a: number, b: typeof(a)) return b end\nreturn g, a\n",
+            "local a = f()\nlocal function g(a: number): typeof(a) return a end\nreturn g, a\n",
+            "local g = f()\nlocal function g(z: typeof(g)) return z end\nreturn g\n",
+            "local k = f()\nfor k, v: typeof(k) in g() do print(k, v) end\nreturn k\n",
+        ] {
+            let result = apply_luau(source);
+            assert!(result.contains("typeof(l)"), "{source}: {result}");
+        }
+    }
+
+    #[test]
+    fn typeof_in_a_local_annotation_follows_the_rename() {
+        let result = apply_luau(
+            "local outer = f()\nlocal copy: typeof(outer) = outer\nreturn copy, outer\n",
+        );
+        assert!(
+            !result.contains("typeof(outer)"),
+            "`typeof` must name the local's new name, or the output fails type checking: {result}"
         );
     }
 }

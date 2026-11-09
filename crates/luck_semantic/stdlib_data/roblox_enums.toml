@@ -3,7 +3,7 @@
 # Source: Roblox API dump, MaximumADHD/Roblox-Client-Tracker (roblox branch).
 # Spliced into the luau_roblox library: each [enums.<Type>] becomes an
 # Enum-shaped member namespace of the Enum global, each item an
-# EnumItem-shaped read-only constant (see stdlib_model.rs splice_enums).
+# EnumItem-shaped read-only constant (see stdlib_load.rs splice_enums).
 
 [enums.AccessModifierType]
 items = [

@@ -1,367 +1,321 @@
-//! Cursor-resolution helpers. Locate the identifier or expression at a
-//! given byte offset by walking the AST. Used by hover, signature help,
-//! document highlight, and the code-action provider.
+use core::slice;
 
-use luck_ast::expr::{Expression, FieldAccess, FunctionCall, Var};
-use luck_ast::shared::Block;
-use luck_ast::visitor::Visitor;
-use luck_token::{Span, Token, TokenKind};
+use luck_ast::{Block, Expression, FieldAccess, FunctionArgs, FunctionCall, Literal, Var, Visitor};
+use luck_semantic::{ScopeTree, SymbolId, SymbolKind};
+use luck_token::{CommentKind, Span, Token, TokenKind, offset_to_index};
 
-fn token_name(token: &Token) -> Option<&str> {
-    match &token.kind {
-        TokenKind::Identifier(name) => Some(name.as_str()),
-        _ => None,
+use crate::document::DocumentState;
+
+/// Whether `offset` falls inside `span`, either end included, so a cursor
+/// just past a name still counts as on it.
+pub(crate) const fn touches(span: Span, offset: u32) -> bool {
+    span.start <= offset && offset <= span.end
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TextKind {
+    Code,
+    Comment,
+    String,
+}
+
+pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
+    let comments = &document.parsed.comments;
+    let at_offset = comments.get(comments.partition_point(|comment| comment.span.end < offset));
+    let is_in_comment = at_offset.is_some_and(|comment| {
+        // A line comment runs through the end of its line, so typing there
+        // stays inside it. A block comment closes at its `]]`.
+        let has_room = match comment.kind {
+            CommentKind::Line | CommentKind::Shebang => offset <= comment.span.end,
+            CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => offset < comment.span.end,
+        };
+        comment.span.start < offset && has_room
+    });
+    if is_in_comment {
+        return TextKind::Comment;
+    }
+    let tokens = document.tokens();
+    let enclosing = tokens.get(tokens.partition_point(|token| token.span.end <= offset));
+    let is_in_string = enclosing.is_some_and(|token| {
+        token.span.start < offset
+            && matches!(
+                token.kind,
+                TokenKind::StringLiteral(_)
+                    | TokenKind::InterpolatedStringBegin(_)
+                    | TokenKind::InterpolatedStringMiddle(_)
+                    | TokenKind::InterpolatedStringEnd(_)
+            )
+    });
+    if is_in_string {
+        return TextKind::String;
+    }
+    // An unterminated string or block comment is a lex error over its text
+    // rather than a token, so its opener is what tells the two apart.
+    document
+        .parsed
+        .errors
+        .iter()
+        .find_map(|e| {
+            (e.span.start < offset && offset <= e.span.end)
+                .then(|| unterminated_text_kind(e.span.text(document.text())))
+        })
+        .unwrap_or(TextKind::Code)
+}
+
+fn unterminated_text_kind(text: &str) -> TextKind {
+    if text.starts_with("--") {
+        TextKind::Comment
+    } else if text.starts_with(['"', '\'', '`']) || text.starts_with("[[") || text.starts_with("[=")
+    {
+        TextKind::String
+    } else {
+        TextKind::Code
     }
 }
 
-/// The dotted name chain a callee/prefix resolves to, outermost segment
-/// first, with each segment's name span. A chain broken by an index
-/// expression, a call, or a non-name prefix yields only the trailing
-/// segments that are plain names.
-struct DottedChain {
-    segments: Vec<String>,
-    spans: Vec<Span>,
+/// The plain-name chain ending at `access` (`a.b.c`), root first, and the
+/// root's span.
+///
+/// A chain broken by an index expression, a call, or a non-name prefix
+/// yields only the trailing segments that are plain names. `None` when
+/// `access` itself isn't named by an identifier.
+fn field_access_chain(access: &FieldAccess) -> Option<(Vec<&str>, Span)> {
+    let mut path = vec![access.name.identifier()?];
+    let mut root_span = access.name.span;
+    let mut prefix: &Expression = &access.prefix;
+    while let Expression::Var(Var::FieldAccess(inner)) = prefix {
+        let Some(name) = inner.name.identifier() else {
+            break;
+        };
+        path.push(name);
+        root_span = inner.name.span;
+        prefix = &inner.prefix;
+    }
+    if let Expression::Var(Var::Name(token)) = prefix
+        && let Some(name) = token.identifier()
+    {
+        path.push(name);
+        root_span = token.span;
+    }
+    path.reverse();
+    Some((path, root_span))
 }
 
-impl DottedChain {
-    /// Unwind a `Var::FieldAccess` (`a.b.c`) into its name chain.
-    fn from_field_access(access: &FieldAccess) -> Self {
-        let mut segments = Vec::new();
-        let mut spans = Vec::new();
-        if let Some(name) = token_name(&access.name) {
-            segments.push(name.to_string());
-            spans.push(access.name.span);
+/// The name chain of a call's callee expression, not counting any `:method`
+/// name, and the root's span.
+fn callee_chain(callee: &Expression) -> Option<(Vec<&str>, Span)> {
+    let Expression::Var(var) = callee else {
+        return None;
+    };
+    match var {
+        Var::Name(token) => Some((vec![token.identifier()?], token.span)),
+        Var::FieldAccess(access) => field_access_chain(access),
+        Var::Index(_) => None,
+    }
+}
+
+/// The `Name(.Name)*` chain `tokens` ends with, root first, and the root's
+/// span. `None` when anything else, such as a call, breaks the chain.
+pub(crate) fn dotted_chain_ending_tokens(tokens: &[Token]) -> Option<(Vec<&str>, Span)> {
+    let mut segments: Vec<&str> = Vec::new();
+    let mut remaining_tokens = tokens;
+    loop {
+        let (base, before_base) = remaining_tokens.split_last()?;
+        let TokenKind::Identifier(base_name) = &base.kind else {
+            return None;
+        };
+        segments.push(base_name.as_str());
+        if let Some((Token { kind: TokenKind::Dot, .. }, before_dot)) = before_base.split_last() {
+            remaining_tokens = before_dot;
         } else {
-            return Self { segments, spans };
+            segments.reverse();
+            return Some((segments, base.span));
         }
-        let mut prefix: &Expression = &access.prefix;
-        loop {
-            match prefix {
-                Expression::Var(Var::Name(token)) => {
-                    if let Some(name) = token_name(token) {
-                        segments.push(name.to_string());
-                        spans.push(token.span);
-                    }
-                    break;
-                }
-                Expression::Var(Var::FieldAccess(inner)) => {
-                    let Some(name) = token_name(&inner.name) else {
-                        break;
-                    };
-                    segments.push(name.to_string());
-                    spans.push(inner.name.span);
-                    prefix = &inner.prefix;
-                }
-                _ => break,
-            }
-        }
-        segments.reverse();
-        spans.reverse();
-        Self { segments, spans }
-    }
-
-    /// The name chain a call's non-method callee resolves to, plus the span
-    /// of its root name (for shape/shadow resolution).
-    fn from_callee(callee: &Expression) -> Self {
-        match callee {
-            Expression::Var(Var::Name(token)) => {
-                let mut chain = Self {
-                    segments: Vec::new(),
-                    spans: Vec::new(),
-                };
-                if let Some(name) = token_name(token) {
-                    chain.segments.push(name.to_string());
-                    chain.spans.push(token.span);
-                }
-                chain
-            }
-            Expression::Var(Var::FieldAccess(access)) => Self::from_field_access(access),
-            _ => Self {
-                segments: Vec::new(),
-                spans: Vec::new(),
-            },
-        }
-    }
-
-    fn root_span(&self) -> Option<Span> {
-        self.spans.first().copied()
     }
 }
 
-/// What we found at the cursor.
-#[derive(Debug, Clone)]
-pub enum CursorTarget {
-    /// A bare identifier (variable read/write or unresolved name).
-    Identifier { name: String, span: Span },
-    /// A dotted path like `string.format`. `segments` are name-only tokens.
+#[derive(Debug)]
+pub(crate) enum CursorNode<'ast> {
+    Identifier {
+        name: &'ast str,
+        span: Span,
+    },
+    /// A dotted path like `string.format`, of name-only segments.
     DottedPath {
-        segments: Vec<String>,
-        spans: Vec<Span>,
+        path: Vec<&'ast str>,
+        root_span: Span,
         full_span: Span,
     },
-    /// A function call expression. Path is empty for indirect callees.
+    /// Path is empty for indirect callees.
     Call {
-        path: Vec<String>,
+        path: Vec<&'ast str>,
         /// Span of the root `Name` token, when the callee is a plain
         /// dotted chain. Lets consumers resolve shaped/shadowed roots.
-        base_span: Option<Span>,
+        root_span: Option<Span>,
         full_span: Span,
     },
 }
 
-impl CursorTarget {
-    /// The textual path segments; a single entry for a plain identifier.
-    #[must_use]
-    pub fn path(&self) -> Vec<&str> {
+impl<'ast> CursorNode<'ast> {
+    /// The path segments; a single entry for a plain identifier.
+    pub(crate) fn path(&self) -> &[&'ast str] {
         match self {
-            CursorTarget::Identifier { name, .. } => vec![name.as_str()],
-            CursorTarget::DottedPath { segments, .. } => {
-                segments.iter().map(String::as_str).collect()
-            }
-            CursorTarget::Call { path, .. } => path.iter().map(String::as_str).collect(),
+            Self::Identifier { name, .. } => slice::from_ref(name),
+            Self::DottedPath { path, .. } | Self::Call { path, .. } => path,
         }
     }
 
-    #[must_use]
-    pub fn span(&self) -> Span {
+    pub(crate) const fn span(&self) -> Span {
         match self {
-            CursorTarget::Identifier { span, .. } => *span,
-            CursorTarget::DottedPath { full_span, .. } => *full_span,
-            CursorTarget::Call { full_span, .. } => *full_span,
+            Self::Identifier { span, .. } => *span,
+            Self::DottedPath { full_span, .. } | Self::Call { full_span, .. } => *full_span,
         }
     }
 }
 
-/// Find the smallest identifier-like AST construct whose span contains
-/// `offset`. Returns `None` if the cursor lands on whitespace, an
-/// operator, or a literal that is not name-like.
-#[must_use]
-pub fn find_target_at(block: &Block, offset: u32) -> Option<CursorTarget> {
-    let mut finder = TargetFinder {
-        offset,
-        result: None,
-    };
+/// Find the smallest name, field access, or call expression whose span
+/// contains `offset`.
+pub(crate) fn find_node_at(block: &Block, offset: u32) -> Option<CursorNode<'_>> {
+    let mut finder = NodeFinder { offset, result: None };
     finder.visit_block(block);
     finder.result
 }
 
-struct TargetFinder {
+struct NodeFinder<'ast> {
     offset: u32,
-    result: Option<CursorTarget>,
+    result: Option<CursorNode<'ast>>,
 }
 
-impl TargetFinder {
-    fn span_contains(&self, span: Span) -> bool {
-        self.offset >= span.start && self.offset <= span.end
-    }
-
-    fn try_set(&mut self, target: CursorTarget) {
-        let span = target.span();
-        if !self.span_contains(span) {
+impl<'ast> NodeFinder<'ast> {
+    fn try_set(&mut self, node: CursorNode<'ast>) {
+        let span = node.span();
+        if !touches(span, self.offset) {
             return;
         }
-        let inner_size = span.end - span.start;
-        match &self.result {
-            Some(existing) => {
-                let existing_span = existing.span();
-                let existing_size = existing_span.end - existing_span.start;
-                if inner_size <= existing_size {
-                    self.result = Some(target);
-                }
+        if self.result.as_ref().is_none_or(|existing| span.len() <= existing.span().len()) {
+            self.result = Some(node);
+        }
+    }
+
+    fn record_call(&mut self, call: &'ast FunctionCall) {
+        let (mut path, mut root_span) = callee_chain(&call.callee)
+            .map_or_else(|| (Vec::new(), None), |(path, span)| (path, Some(span)));
+        // The method name is a path segment too: `game:GetService(...)`
+        // resolves as `["game", "GetService"]` through shaped lookup.
+        if let Some(method_token) = &call.method {
+            if let Some(name) = method_token.identifier()
+                && !path.is_empty()
+            {
+                path.push(name);
+            } else {
+                path.clear();
+                root_span = None;
             }
-            None => self.result = Some(target),
         }
-    }
-
-    fn record_field_access(&mut self, access: &FieldAccess) {
-        let chain = DottedChain::from_field_access(access);
-        if chain.segments.is_empty() {
-            return;
-        }
-        self.try_set(CursorTarget::DottedPath {
-            segments: chain.segments,
-            spans: chain.spans,
-            full_span: access.span,
-        });
+        self.try_set(CursorNode::Call { path, root_span, full_span: call.span });
     }
 }
 
-impl<'ast> Visitor<'ast> for TargetFinder {
+impl<'ast> Visitor<'ast> for NodeFinder<'ast> {
     fn visit_var(&mut self, var: &'ast Var) {
         match var {
             Var::Name(token) => {
-                if let TokenKind::Identifier(name) = &token.kind {
-                    self.try_set(CursorTarget::Identifier {
-                        name: name.to_string(),
-                        span: token.span,
-                    });
+                if let Some(name) = token.identifier() {
+                    self.try_set(CursorNode::Identifier { name, span: token.span });
                 }
             }
-            Var::FieldAccess(fa) => {
-                self.record_field_access(fa);
+            Var::FieldAccess(access) => {
+                if let Some((path, root_span)) = field_access_chain(access) {
+                    self.try_set(CursorNode::DottedPath {
+                        path,
+                        root_span,
+                        full_span: access.span,
+                    });
+                }
                 self.walk_var(var);
             }
             Var::Index(_) => self.walk_var(var),
         }
     }
 
-    fn visit_expression(&mut self, expr: &'ast Expression) {
-        if let Expression::FunctionCall(call) = expr {
-            self.record_call(call);
-        }
-        self.walk_expression(expr);
+    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+        self.record_call(call);
+        self.walk_function_call(call);
     }
 }
 
-impl TargetFinder {
-    fn record_call(&mut self, call: &FunctionCall) {
-        let chain = DottedChain::from_callee(&call.callee);
-        let mut base_span = chain.root_span();
-        let mut path = chain.segments;
-        // The method name is a path segment too: `game:GetService(...)`
-        // resolves as ["game", "GetService"] through shaped lookup.
-        if let Some(method_token) = &call.method {
-            match token_name(method_token) {
-                Some(name) if !path.is_empty() => path.push(name.to_string()),
-                _ => {
-                    path.clear();
-                    base_span = None;
-                }
-            }
-        }
-
-        self.try_set(CursorTarget::Call {
-            path,
-            base_span,
-            full_span: call.span,
-        });
-    }
-}
-
-/// Find an enclosing call expression for `offset` plus the index of the
-/// argument the cursor is inside (counting commas). Used by signature help.
-#[derive(Debug, Clone)]
-pub struct CallSite<'ast> {
-    /// The call node itself, so consumers can resolve the callee
-    /// semantically (shaped locals, shadow checks) instead of by text.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CallSite<'ast> {
+    /// The call node, so consumers can resolve the callee semantically
+    /// (shaped locals, shadow checks).
     pub call: &'ast FunctionCall,
-    pub path: Vec<String>,
-    pub active_param: u32,
-    pub paren_span: Span,
+    pub active_param: usize,
 }
 
-#[must_use]
-pub fn find_call_site_at<'ast>(
-    block: &'ast Block,
-    source: &str,
-    offset: u32,
-) -> Option<CallSite<'ast>> {
-    let mut finder = CallSiteFinder {
-        offset,
-        source,
-        result: None,
-    };
-    finder.visit_block(block);
+pub(crate) fn find_call_site_at(document: &DocumentState, offset: u32) -> Option<CallSite<'_>> {
+    let mut finder =
+        CallSiteFinder { offset, source: document.text(), tokens: document.tokens(), result: None };
+    finder.visit_block(&document.parsed.block);
     finder.result
 }
 
-struct CallSiteFinder<'src, 'ast> {
+struct CallSiteFinder<'document> {
     offset: u32,
-    source: &'src str,
-    result: Option<CallSite<'ast>>,
+    source: &'document str,
+    tokens: &'document [Token],
+    result: Option<CallSite<'document>>,
 }
 
-impl<'ast> Visitor<'ast> for CallSiteFinder<'_, 'ast> {
-    fn visit_expression(&mut self, expr: &'ast Expression) {
-        if let Expression::FunctionCall(call) = expr {
-            self.try_record(call);
-        }
-        self.walk_expression(expr);
-    }
-
-    // Statement-position calls dispatch to walk_function_call without
-    // an expression visit, so hook them here too.
-    fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
-        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
-            self.try_record(call_stmt);
-        }
-        self.walk_statement(stmt);
+impl<'document> Visitor<'document> for CallSiteFinder<'document> {
+    fn visit_function_call(&mut self, call: &'document FunctionCall) {
+        self.try_record(call);
+        self.walk_function_call(call);
     }
 }
 
-impl<'ast> CallSiteFinder<'_, 'ast> {
-    fn try_record(&mut self, call: &'ast FunctionCall) {
-        let span = call.span;
-        if self.offset < span.start || self.offset > span.end {
-            return;
-        }
-        // Heuristic: treat the first '(' after the callee as the open paren.
-        let bytes = self.source.as_bytes();
-        let scan_start = call.callee.span().end as usize;
-        let scan_end = (span.end as usize).min(bytes.len());
-        let Some(paren_offset) = bytes[scan_start..scan_end]
-            .iter()
-            .position(|&byte| byte == b'(')
-        else {
+impl<'document> CallSiteFinder<'document> {
+    fn try_record(&mut self, call: &'document FunctionCall) {
+        // `f"..."` and `f{...}` have no parens for the cursor to be inside.
+        let FunctionArgs::Parenthesized { span: parens, args } = &call.args else {
             return;
         };
-        let paren_open = (scan_start + paren_offset) as u32;
-        if self.offset <= paren_open {
+        // An unclosed list ends where the parser stopped, so the end still
+        // counts as inside it. Past a real `)` the cursor has left the call.
+        let is_closed = self.source.as_bytes().get(offset_to_index(parens.end.saturating_sub(1)))
+            == Some(&b')');
+        if self.offset <= parens.start
+            || self.offset > parens.end
+            || (is_closed && self.offset == parens.end)
+        {
             return;
         }
-        // Active parameter = number of argument expressions that END
-        // before the cursor. Spans come from the parser, so commas inside
-        // strings, long brackets, and comments can never miscount.
-        let commas = match &call.args {
-            luck_ast::expr::FunctionArgs::Parenthesized { args, .. } => {
-                args.iter()
-                    .filter(|arg| arg.span().end < self.offset)
-                    .count() as u32
-            }
-            luck_ast::expr::FunctionArgs::StringLiteral(_)
-            | luck_ast::expr::FunctionArgs::TableConstructor(_) => 0,
-        };
-        let path = call_path(call);
-        self.result = Some(CallSite {
-            call,
-            path,
-            active_param: commas,
-            paren_span: Span::new(paren_open, span.end),
-        });
+        let active_param =
+            args.iter().filter(|arg| self.is_followed_by_comma_before_cursor(arg)).count();
+        self.result = Some(CallSite { call, active_param });
+    }
+
+    /// Whether the token after `arg` is a comma the cursor is past. Reading
+    /// the next token, rather than counting commas, can't mistake one inside
+    /// a nested argument for a separator of this list.
+    fn is_followed_by_comma_before_cursor(&self, arg: &Expression) -> bool {
+        let next_token = self.tokens.partition_point(|token| token.span.start < arg.span().end);
+        self.tokens.get(next_token).is_some_and(|token| {
+            matches!(token.kind, TokenKind::Comma) && token.span.end <= self.offset
+        })
     }
 }
 
-fn call_path(call: &FunctionCall) -> Vec<String> {
-    let mut path = DottedChain::from_callee(&call.callee).segments;
-    // The method name is a path segment too, so signature help resolves
-    // `game:GetService(` through shaped lookup.
-    if let Some(method_token) = &call.method {
-        match token_name(method_token) {
-            Some(name) if !path.is_empty() => path.push(name.to_string()),
-            _ => path.clear(),
-        }
-    }
-    path
-}
-
-/// A string-literal argument enclosing the cursor: the call it belongs
-/// to, its positional index, and the literal's token span. Used by
-/// completion to offer constant-set values inside the quotes.
 #[derive(Debug, Clone, Copy)]
-pub struct StringArgSite<'ast> {
+pub(crate) struct StringArgSite<'ast> {
     pub call: &'ast FunctionCall,
     pub arg_index: usize,
-    pub literal_span: Span,
+    pub literal: &'ast Literal,
 }
 
 /// Find the innermost call whose argument list contains a string
 /// literal enclosing `offset` (cursor strictly inside the quotes).
-#[must_use]
-pub fn find_string_arg_at(block: &Block, offset: u32) -> Option<StringArgSite<'_>> {
-    let mut finder = StringArgFinder {
-        offset,
-        result: None,
-    };
+pub(crate) fn find_string_arg_at(block: &Block, offset: u32) -> Option<StringArgSite<'_>> {
+    let mut finder = StringArgFinder { offset, result: None };
     finder.visit_block(block);
     finder.result
 }
@@ -372,96 +326,66 @@ struct StringArgFinder<'ast> {
 }
 
 impl<'ast> Visitor<'ast> for StringArgFinder<'ast> {
-    fn visit_expression(&mut self, expr: &'ast Expression) {
-        if let Expression::FunctionCall(call) = expr {
-            self.try_record(call);
-        }
-        self.walk_expression(expr);
-    }
-
-    // Statement-position calls dispatch to walk_function_call without
-    // an expression visit, so hook them here too.
-    fn visit_statement(&mut self, stmt: &'ast luck_ast::Statement) {
-        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
-            self.try_record(call_stmt);
-        }
-        self.walk_statement(stmt);
+    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+        self.try_record(call);
+        self.walk_function_call(call);
     }
 }
 
 impl<'ast> StringArgFinder<'ast> {
-    /// Strictly inside the quotes so a cursor next to the literal does
-    /// not trigger value completion.
-    fn contains(&self, span: Span) -> bool {
+    /// Strictly inside the quotes, so a cursor next to the literal doesn't
+    /// trigger value completion.
+    const fn contains(&self, span: Span) -> bool {
         self.offset > span.start && self.offset < span.end
     }
 
     fn try_record(&mut self, call: &'ast FunctionCall) {
-        let literal = match &call.args {
-            luck_ast::expr::FunctionArgs::Parenthesized { args, .. } => {
-                args.iter().enumerate().find_map(|(idx, arg)| match arg {
-                    Expression::StringLiteral(token) if self.contains(token.span) => {
-                        Some((idx, token.span))
+        let site = match &call.args {
+            FunctionArgs::Parenthesized { args, .. } => {
+                args.iter().enumerate().find_map(|(index, arg)| {
+                    if let Expression::StringLiteral(literal) = arg
+                        && self.contains(literal.span)
+                    {
+                        Some((index, literal))
+                    } else {
+                        None
                     }
-                    _ => None,
                 })
             }
-            luck_ast::expr::FunctionArgs::StringLiteral(token) if self.contains(token.span) => {
-                Some((0, token.span))
+            FunctionArgs::StringLiteral(literal) if self.contains(literal.span) => {
+                Some((0, literal))
             }
-            _ => None,
+            FunctionArgs::StringLiteral(_) | FunctionArgs::TableConstructor(_) => None,
         };
-        let Some((arg_index, span)) = literal else {
+        let Some((arg_index, literal)) = site else {
             return;
         };
         // Nested calls visit outer-first; the innermost match wins.
-        self.result = Some(StringArgSite {
-            call,
-            arg_index,
-            literal_span: span,
-        });
+        self.result = Some(StringArgSite { call, arg_index, literal });
     }
 }
 
-/// Resolve the local symbol at a byte offset: a reference to it or its
-/// declaration site. `None` for globals, keywords, and non-names.
-/// Resolution is span-exact through the scope tree, so shadowed names map
-/// to the right declaration, which name matching cannot do.
-#[must_use]
-pub fn symbol_at(
-    tree: &luck_semantic::scope::ScopeTree,
-    offset: u32,
-) -> Option<luck_semantic::scope::SymbolId> {
+/// The local symbol at a byte offset and the name span the offset sits in:
+/// a reference to the local, or its declaration.
+///
+/// `None` for globals, keywords, and non-names. Matching is by span through
+/// the scope tree, so shadowed names map to the right declaration. A name
+/// parse recovery made up is nothing to find, and neither is the implicit
+/// `self`'s declaration, which no token spells.
+pub(crate) fn local_at(tree: &ScopeTree, offset: u32) -> Option<(SymbolId, Span)> {
     if let Some(reference) = tree
         .references
         .iter()
-        .find(|reference| reference.span.start <= offset && offset <= reference.span.end)
+        .find(|reference| !reference.name.is_empty() && touches(reference.span, offset))
     {
-        return reference.resolved;
+        return Some((reference.resolved?, reference.span));
     }
     tree.symbols
         .iter()
         .find(|symbol| {
-            symbol.definition_span.start <= offset && offset <= symbol.definition_span.end
+            symbol.kind != SymbolKind::ImplicitSelf
+                && !symbol.name.is_empty()
+                && touches(symbol.definition_span, offset)
         })
-        .map(|symbol| symbol.id)
-}
-
-/// The exact identifier span at a byte offset: a reference span or a
-/// declaration span. Used by rename to know what text to replace.
-#[must_use]
-pub fn name_span_at(tree: &luck_semantic::scope::ScopeTree, offset: u32) -> Option<Span> {
-    if let Some(reference) = tree
-        .references
-        .iter()
-        .find(|reference| reference.span.start <= offset && offset <= reference.span.end)
-    {
-        return Some(reference.span);
-    }
-    tree.symbols
-        .iter()
-        .find(|symbol| {
-            symbol.definition_span.start <= offset && offset <= symbol.definition_span.end
-        })
-        .map(|symbol| symbol.definition_span)
+        .map(|symbol| (symbol.id, symbol.definition_span))
 }

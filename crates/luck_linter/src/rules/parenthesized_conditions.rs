@@ -1,101 +1,183 @@
-use luck_ast::Expression;
+use luck_ast::{Expression, Statement};
+use luck_token::{Span, offset_to_index};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
+use crate::diagnostic::Finding;
+use crate::fix::{Fix, TextEdit};
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
-pub struct ParenthesizedConditions;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ParenthesizedConditions;
 
-impl Rule for ParenthesizedConditions {
-    fn name(&self) -> &'static str {
-        "parenthesized_conditions"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "unnecessary parentheses around condition"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
-
-fn paren_fix(source: &str, expr: &Expression) -> Option<Fix> {
-    if let Expression::Parenthesized(paren) = expr {
-        let inner_span = paren.expr.span();
-        let inner_text = &source[inner_span.start as usize..inner_span.end as usize];
-        Some(Fix {
-            description: "remove unnecessary parentheses".to_string(),
-            edits: vec![TextEdit {
-                span: paren.span,
-                replacement: inner_text.to_string(),
-            }],
-        })
-    } else {
-        None
-    }
-}
-
-fn is_parenthesized(expr: &Expression) -> bool {
-    matches!(expr, Expression::Parenthesized(_))
-}
+impl_rule!(
+    ParenthesizedConditions,
+    "parenthesized_conditions",
+    Style,
+    Warning,
+    "unnecessary parentheses around condition"
+);
 
 impl NodeRule for ParenthesizedConditions {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset =
-            AstTypesBitset::from_types(&[NodeType::IfStatement, NodeType::WhileLoop]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::IfStatement, NodeType::WhileLoop])
     }
-    fn on_statement(
-        &self,
-        stmt: &luck_ast::stmt::Statement,
-        ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let source = context.source;
         match stmt {
-            luck_ast::Statement::IfStatement(if_stmt) => {
-                if is_parenthesized(&if_stmt.condition) {
-                    out.push(
-                        LintDiagnostic::new(
-                            "parenthesized_conditions",
-                            "unnecessary parentheses around if condition".to_string(),
-                            if_stmt.span,
-                        )
-                        .with_help("Lua does not require parentheses around conditions".to_string())
-                        .with_fix_opt(paren_fix(ctx.source, &if_stmt.condition)),
-                    );
-                }
-                for clause in &if_stmt.elseif_clauses {
-                    if is_parenthesized(&clause.condition) {
-                        out.push(
-                            LintDiagnostic::new(
-                                "parenthesized_conditions",
-                                "unnecessary parentheses around elseif condition".to_string(),
-                                clause.span,
-                            )
-                            .with_fix_opt(paren_fix(ctx.source, &clause.condition)),
-                        );
-                    }
-                }
-            }
-            luck_ast::Statement::WhileLoop(while_loop)
-                if is_parenthesized(&while_loop.condition) =>
-            {
-                out.push(
-                    LintDiagnostic::new(
-                        "parenthesized_conditions",
-                        "unnecessary parentheses around while condition".to_string(),
-                        while_loop.span,
+            Statement::IfStatement(if_stmt) => {
+                findings.extend(
+                    check_condition(
+                        &if_stmt.condition,
+                        "unnecessary parentheses around `if` condition",
+                        if_stmt.span,
+                        source,
                     )
-                    .with_fix_opt(paren_fix(ctx.source, &while_loop.condition)),
+                    .map(|finding| {
+                        finding.with_help("Lua doesn't need parentheses around conditions")
+                    }),
                 );
+                for clause in &if_stmt.elseif_clauses {
+                    findings.extend(check_condition(
+                        &clause.condition,
+                        "unnecessary parentheses around `elseif` condition",
+                        clause.span,
+                        source,
+                    ));
+                }
             }
-            _ => {}
+            Statement::WhileLoop(while_loop) => {
+                findings.extend(check_condition(
+                    &while_loop.condition,
+                    "unnecessary parentheses around `while` condition",
+                    while_loop.span,
+                    source,
+                ));
+            }
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::RepeatLoop(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::FunctionDecl(_)
+            | Statement::LocalFunction(_)
+            | Statement::LocalAssignment(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => {}
         }
+    }
+}
+
+/// The fix deletes just those two tokens, so anything between them stays.
+fn check_condition(
+    condition: &Expression,
+    message: &str,
+    span: Span,
+    source: &str,
+) -> Option<Finding> {
+    let Expression::Parenthesized(parenthesized) = condition else {
+        return None;
+    };
+    let Span { start, end } = parenthesized.span;
+    let bytes = source.as_bytes();
+    let before = offset_to_index(start).checked_sub(1).and_then(|i| bytes.get(i));
+    let after = bytes.get(offset_to_index(end));
+    Some(Finding::new(message, span).with_fix(Fix {
+        description: "remove unnecessary parentheses".to_owned(),
+        edits: vec![
+            TextEdit {
+                span: Span::new(start, start.saturating_add(1)),
+                replacement: replacement_beside(before),
+            },
+            TextEdit {
+                span: Span::new(end.saturating_sub(1), end),
+                replacement: replacement_beside(after),
+            },
+        ],
+    }))
+}
+
+/// What a deleted parenthesis leaves: a space if the byte beside it would
+/// otherwise run into the condition.
+fn replacement_beside(neighbor: Option<&u8>) -> String {
+    let is_word_byte = neighbor.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
+    if is_word_byte { " ".to_owned() } else { String::new() }
+}
+
+#[cfg(test)]
+mod tests {
+    use luck_token::LuaVersion;
+
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::{fix_and_reparse, run_rule};
+
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        run_rule(&ParenthesizedConditions, source, LuaVersion::Lua54)
+    }
+
+    #[test]
+    fn flags_each_parenthesized_condition() {
+        let diags = run("local c = 1\nif (c) then elseif (c) then end\nwhile (c) do break end");
+        let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "unnecessary parentheses around `if` condition",
+                "unnecessary parentheses around `elseif` condition",
+                "unnecessary parentheses around `while` condition",
+            ],
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_bare_and_partly_parenthesized_conditions() {
+        let diags = run("local a, b = 1, 2\nif a then end\nwhile (a) == b do break end");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_and_fixes_parenthesized_comparison() {
+        let source = "local c = 1\nif (c == 1) then end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "local c = 1\nif c == 1 then end");
+    }
+
+    #[test]
+    fn flags_and_fixes_keeping_keywords_separated() {
+        let source = "if(x)then y() end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "if x then y() end", "the fix should keep the tokens apart");
+    }
+
+    #[test]
+    fn flags_and_fixes_keeping_comment() {
+        let source = "if (--[[why]] x) then end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert!(fixed.contains("--[[why]]"), "the fix shouldn't delete the comment: {fixed}");
+    }
+
+    #[test]
+    fn flags_and_fixes_elseif_and_while_keywords_glued_to_parens() {
+        let source = "local c = 1\nif c then elseif(c)then end\nwhile(c)do break end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "local c = 1\nif c then elseif c then end\nwhile c do break end");
     }
 }

@@ -1,64 +1,58 @@
-use luck_ast::shared::Block;
-use luck_ast::visitor::Visitor;
+use luck_ast::{Block, Statement};
+use luck_semantic::SemanticAnalysis;
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::cfg::FlowGraph;
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
-pub struct UnreachableCode;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UnreachableCode;
 
-impl Rule for UnreachableCode {
-    fn name(&self) -> &'static str {
-        "unreachable_code"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "code after return/break/continue is unreachable"
-    }
+impl_rule!(
+    UnreachableCode,
+    "unreachable_code",
+    Suspicious,
+    Warning,
+    "code after a mid-block `break` is unreachable"
+);
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let mut checker = UnreachableChecker {
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(ctx.block);
-        checker.diagnostics
+impl WholeRule for UnreachableCode {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        context
+            .blocks
+            .iter()
+            .filter_map(|block| first_unreachable_stmt(block, context.semantic))
+            .map(|stmt| Finding::new("unreachable code", stmt.span()))
+            .collect()
     }
 }
 
-struct UnreachableChecker {
-    diagnostics: Vec<LintDiagnostic>,
-}
-
-impl<'ast> Visitor<'ast> for UnreachableChecker {
-    fn visit_block(&mut self, block: &'ast Block) {
-        // Break is ordinarily a LastStatement, but Lua 5.2+ also allows it as
-        // a regular Statement mid-block, leaving whatever follows it in the
-        // same block unreachable. This reports only the first such statement.
-        for pair in block.stmts.windows(2) {
-            if matches!(pair[0], luck_ast::Statement::Break(_)) {
-                self.diagnostics.push(LintDiagnostic::new(
-                    "unreachable_code",
-                    "unreachable code".to_string(),
-                    pair[1].span(),
-                ));
-                break;
-            }
-        }
-        self.walk_block(block);
-    }
+/// A `goto` can still reach the code after a label.
+fn first_unreachable_stmt<'ast>(
+    block: &'ast Block,
+    semantic: &SemanticAnalysis,
+) -> Option<&'ast Statement> {
+    let mut code_after_break = block
+        .stmts
+        .iter()
+        .skip_while(|stmt| !matches!(stmt, Statement::Break(_)))
+        .skip(1)
+        .filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_) | Statement::Label(_)));
+    code_after_break.clone().next()?;
+    let graph = FlowGraph::of_block(block, semantic);
+    code_after_break.find(|stmt| !graph.can_run(stmt.span().start))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&UnreachableCode, source, LuaVersion::Lua54)
+        run_rule(&UnreachableCode, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -69,13 +63,13 @@ mod tests {
     }
 
     #[test]
-    fn flags_only_first_unreachable_statement() {
+    fn flags_only_first_unreachable_stmt() {
         let diags = run("for i = 1, 3 do break print(1) print(2) end");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
-    fn ignores_break_as_last_statement() {
+    fn ignores_break_as_last_stmt() {
         let diags = run("while true do print(1) break end");
         assert!(diags.is_empty(), "{diags:?}");
     }
@@ -84,5 +78,23 @@ mod tests {
     fn ignores_straight_line_code() {
         let diags = run("local x = 1\nprint(x)");
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_semicolon_after_break() {
+        let diags = run("while true do break; end");
+        assert!(diags.is_empty(), "a `;` separator isn't code: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_label_after_break() {
+        let diags = run("while c do if x then goto a end break ::a:: print(1) end");
+        assert!(diags.is_empty(), "the `goto` reaches the label after `break`: {diags:?}");
+    }
+
+    #[test]
+    fn flags_code_after_a_label_no_goto_reaches() {
+        let diags = run("while c do break ::a:: print(1) end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }

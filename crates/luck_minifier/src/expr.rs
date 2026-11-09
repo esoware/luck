@@ -1,250 +1,454 @@
-use luck_ast::expr::{Expression, Var};
-use luck_ast::shared::Field;
-use luck_ast::stmt::LocalAssignment;
-use luck_token::token::TokenKind;
-use luck_token::{BinOp, LuaVersion, NumberSubtypes, UnOp};
+use luck_ast::{
+    BinaryOp, Expression, Field, Literal, ParenthesizedExpression, Var, ensure_sufficient_stack,
+    unwrap_parentheses,
+};
+use luck_token::{BinOp, LuaNumber, NumberSubtypes, OperandSide, Span, UnOp, parse_lua_number};
 
-pub fn extract_boolean(expr: &Expression) -> Option<bool> {
-    match expr {
+pub(crate) fn extract_boolean(expr: &Expression) -> Option<bool> {
+    match unwrap_parentheses(expr) {
         Expression::True(_) => Some(true),
         Expression::False(_) => Some(false),
-        Expression::Parenthesized(paren) => extract_boolean(&paren.expr),
-        _ => None,
-    }
-}
-
-pub fn is_nil(expr: &Expression) -> bool {
-    match expr {
-        Expression::Nil(_) => true,
-        Expression::Parenthesized(paren) => is_nil(&paren.expr),
-        _ => false,
-    }
-}
-
-/// Whether the expression is built only from literal values, with no variable
-/// reads. Nested arithmetic on literals is still literal, because metamethods
-/// cannot fire on primitives.
-fn is_literal_expression(expr: &Expression) -> bool {
-    match expr {
-        Expression::Number(_)
-        | Expression::StringLiteral(_)
+        Expression::Parenthesized(_)
         | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_) => true,
-        Expression::Parenthesized(paren) => is_literal_expression(&paren.expr),
-        Expression::UnaryOp(unop) => is_literal_expression(&unop.operand),
-        Expression::BinaryOp(binop) => {
-            is_literal_expression(&binop.left) && is_literal_expression(&binop.right)
-        }
-        _ => false,
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Var(_)
+        | Expression::FunctionCall(_)
+        | Expression::TableConstructor(_)
+        | Expression::BinaryOp(_)
+        | Expression::UnaryOp(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => None,
     }
 }
 
-/// Pure = no side effects. `allow_var_reads`: when false, variable reads are impure (value may change).
-pub fn is_pure_expression(expr: &Expression, allow_var_reads: bool) -> bool {
+pub(crate) fn is_nil(expr: &Expression) -> bool {
+    match unwrap_parentheses(expr) {
+        Expression::Nil(_) => true,
+        Expression::Parenthesized(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Var(_)
+        | Expression::FunctionCall(_)
+        | Expression::TableConstructor(_)
+        | Expression::BinaryOp(_)
+        | Expression::UnaryOp(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => false,
+    }
+}
+
+/// What the operators that can raise care about in a literal operand.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LiteralKind {
+    /// A number with no known exact integer representation.
+    Float,
+    /// A number the bitwise operators accept.
+    Integer,
+    String,
+    /// `nil`, a boolean, a Luau integer literal, or the result of `not`, an
+    /// equality, or a comparison: no operator but `not`, `==`, `~=`, `and`, or
+    /// `or` accepts one.
+    Other,
+}
+
+impl LiteralKind {
+    const fn is_number(self) -> bool {
+        matches!(self, Self::Float | Self::Integer)
+    }
+
+    const fn is_concatenable(self) -> bool {
+        matches!(self, Self::Float | Self::Integer | Self::String)
+    }
+}
+
+/// The kind of a literal expression whose evaluation can't raise, or `None`
+/// for anything else. Operators are checked against the operand kinds, since
+/// `nil + 1` and `1 < "a"` raise with no variable in sight.
+fn literal_kind(expr: &Expression) -> Option<LiteralKind> {
+    match expr {
+        Expression::Number(literal) => Some(number_literal_kind(literal)),
+        Expression::StringLiteral(_) => Some(LiteralKind::String),
+        Expression::Nil(_)
+        | Expression::True(_)
+        | Expression::False(_)
+        | Expression::Integer(_) => Some(LiteralKind::Other),
+        Expression::Parenthesized(paren) => literal_kind(unwrap_parentheses(&paren.expr)),
+        Expression::UnaryOp(unop) => ensure_sufficient_stack(|| {
+            let operand = literal_kind(&unop.operand)?;
+            unary_literal_kind(unop.op, operand)
+        }),
+        Expression::BinaryOp(binary_op) => {
+            ensure_sufficient_stack(|| binary_literal_kind(binary_op))
+        }
+        // Luau: casts and type arguments are erased before evaluation.
+        Expression::TypeCast(cast) => ensure_sufficient_stack(|| literal_kind(&cast.expr)),
+        // Luau
+        Expression::TypeInstantiation(instantiation) => {
+            ensure_sufficient_stack(|| literal_kind(&instantiation.expr))
+        }
+        Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Var(_)
+        | Expression::FunctionCall(_)
+        | Expression::TableConstructor(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::Error(_) => None,
+    }
+}
+
+fn number_literal_kind(literal: &Literal) -> LiteralKind {
+    if matches!(parse_lua_number(&literal.text, NumberSubtypes::IntFloat), Some(LuaNumber::Int(_)))
+    {
+        LiteralKind::Integer
+    } else {
+        LiteralKind::Float
+    }
+}
+
+const fn unary_literal_kind(op: UnOp, operand: LiteralKind) -> Option<LiteralKind> {
+    match op {
+        UnOp::Not => Some(LiteralKind::Other),
+        UnOp::Neg => {
+            if operand.is_number() {
+                Some(operand)
+            } else {
+                None
+            }
+        }
+        UnOp::Len => {
+            if matches!(operand, LiteralKind::String) {
+                Some(LiteralKind::Integer)
+            } else {
+                None
+            }
+        }
+        UnOp::BitNot => {
+            if matches!(operand, LiteralKind::Integer) {
+                Some(LiteralKind::Integer)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn binary_literal_kind(binary_op: &BinaryOp) -> Option<LiteralKind> {
+    let left = literal_kind(&binary_op.lhs)?;
+    let right = literal_kind(&binary_op.rhs)?;
+    let are_numbers = left.is_number() && right.is_number();
+    let are_integers = left == LiteralKind::Integer && right == LiteralKind::Integer;
+    let arithmetic_kind = if are_integers { LiteralKind::Integer } else { LiteralKind::Float };
+    match binary_op.op {
+        BinOp::And | BinOp::Or => Some(if left == right { left } else { LiteralKind::Other }),
+        BinOp::Eq | BinOp::Ne => Some(LiteralKind::Other),
+        BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+            let are_strings = left == LiteralKind::String && right == LiteralKind::String;
+            (are_numbers || are_strings).then_some(LiteralKind::Other)
+        }
+        BinOp::Concat => {
+            (left.is_concatenable() && right.is_concatenable()).then_some(LiteralKind::String)
+        }
+        BinOp::Add | BinOp::Sub | BinOp::Mul => are_numbers.then_some(arithmetic_kind),
+        BinOp::Div | BinOp::Pow => are_numbers.then_some(LiteralKind::Float),
+        // `%` and `//` raise on a zero integer divisor in 5.3+.
+        BinOp::Mod | BinOp::FloorDiv => {
+            (are_numbers && is_nonzero_number_literal(&binary_op.rhs)).then_some(arithmetic_kind)
+        }
+        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+            are_integers.then_some(LiteralKind::Integer)
+        }
+    }
+}
+
+fn is_nonzero_number_literal(expr: &Expression) -> bool {
+    let Expression::Number(literal) = unwrap_parentheses(expr) else {
+        return false;
+    };
+    match parse_lua_number(&literal.text, NumberSubtypes::IntFloat) {
+        Some(LuaNumber::Int(value)) => value != 0,
+        Some(LuaNumber::Float(value)) => value != 0.0f64,
+        None => false,
+    }
+}
+
+/// A name read may be a global's, which fires `__index` on a metatabled
+/// environment, so only literals, closures, `...`, and tables built from them
+/// qualify.
+pub(crate) fn is_pure_expr(expr: &Expression) -> bool {
+    is_effect_free(expr, false)
+}
+
+/// [`is_pure_expr`], except that a name read counts: for a caller that keeps
+/// every read in its original order, so `__index` can't observe a change.
+pub(crate) fn is_pure_modulo_name_reads(expr: &Expression) -> bool {
+    is_effect_free(expr, true)
+}
+
+fn is_effect_free(expr: &Expression, can_read_names: bool) -> bool {
     match expr {
         Expression::Number(_)
         | Expression::Integer(_) // Luau integers are exact literal values.
         | Expression::StringLiteral(_)
         | Expression::Nil(_)
         | Expression::True(_)
-        | Expression::False(_) => true,
-        Expression::FunctionDef(_) => true,
-        Expression::Parenthesized(paren) => is_pure_expression(&paren.expr, allow_var_reads),
-        Expression::UnaryOp(unop) => {
-            if allow_var_reads {
-                is_literal_expression(expr)
-            } else {
-                is_pure_expression(&unop.operand, false)
-            }
+        | Expression::False(_)
+        | Expression::FunctionDef(_)
+        // `...` can't be reassigned, so its value is fixed for the whole
+        // function body.
+        | Expression::VarArg(_) => true,
+        Expression::Parenthesized(paren) => {
+            is_effect_free(unwrap_parentheses(&paren.expr), can_read_names)
         }
-        Expression::BinaryOp(binop) => {
-            let is_logic_op = matches!(binop.op, BinOp::And | BinOp::Or);
-            if is_logic_op {
+        Expression::UnaryOp(_) => literal_kind(expr).is_some(),
+        Expression::BinaryOp(binary_op) => {
+            if matches!(binary_op.op, BinOp::And | BinOp::Or) {
                 // and/or never invoke metamethods, so they are pure whenever
                 // both operands are.
-                is_pure_expression(&binop.left, allow_var_reads)
-                    && is_pure_expression(&binop.right, allow_var_reads)
-            } else if allow_var_reads {
-                is_literal_expression(expr)
+                ensure_sufficient_stack(|| {
+                    is_effect_free(&binary_op.lhs, can_read_names)
+                        && is_effect_free(&binary_op.rhs, can_read_names)
+                })
             } else {
-                is_pure_expression(&binop.left, false) && is_pure_expression(&binop.right, false)
+                literal_kind(expr).is_some()
             }
         }
         Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
             Field::Bracketed { key, value, .. } => {
-                is_pure_expression(key, allow_var_reads)
-                    && is_pure_expression(value, allow_var_reads)
+                is_valid_table_key(key) && is_effect_free(value, can_read_names)
             }
-            Field::Named { value, .. } => is_pure_expression(value, allow_var_reads),
-            Field::Positional { value, .. } => is_pure_expression(value, allow_var_reads),
+            Field::Named { value, .. } | Field::Positional { value, .. } => {
+                is_effect_free(value, can_read_names)
+            }
         }),
-        Expression::Var(var) => {
-            allow_var_reads
-                && match var {
-                    Var::Name(_) => true,
-                    // Field access can raise on a nil prefix or fire __index,
-                    // exactly as impure as Var::Index (hard invariant 6).
-                    Var::FieldAccess(_) | Var::Index(_) => false,
-                }
-        }
-        // `...` is pure: its value is fixed within a function body, and unlike
-        // a variable read it cannot be reassigned after function entry.
-        Expression::VarArg(_) => true,
+        Expression::Var(var) => match var {
+            Var::Name(_) => can_read_names,
+            // Field access can raise on a nil prefix or fire __index, just
+            // like `Var::Index`.
+            Var::FieldAccess(_) | Var::Index(_) => false,
+        },
         // Luau type casts are transparent wrappers, so purity is the inner
         // expression's.
-        Expression::TypeCast(cast) => is_pure_expression(&cast.expr, allow_var_reads),
-        // Explicit type arguments have no runtime evaluation of their own.
-        Expression::TypeInstantiation(instantiation) => {
-            is_pure_expression(&instantiation.expr, allow_var_reads)
+        Expression::TypeCast(cast) => {
+            ensure_sufficient_stack(|| is_effect_free(&cast.expr, can_read_names))
         }
-        _ => false,
+        // Luau: explicit type arguments aren't evaluated at runtime.
+        Expression::TypeInstantiation(instantiation) => {
+            ensure_sufficient_stack(|| is_effect_free(&instantiation.expr, can_read_names))
+        }
+        Expression::FunctionCall(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::Error(_) => false,
+    }
+}
+
+/// Whether `key` is a table constructor `[key]` that can't raise: `nil` and
+/// NaN raise, and only a key spelled out as a literal is known to be neither.
+fn is_valid_table_key(key: &Expression) -> bool {
+    match unwrap_parentheses(key) {
+        Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::True(_)
+        | Expression::False(_) => true,
+        Expression::UnaryOp(unop) => {
+            unop.op == UnOp::Neg
+                && matches!(unwrap_parentheses(&unop.operand), Expression::Number(_))
+        }
+        Expression::Parenthesized(_)
+        | Expression::Nil(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Var(_)
+        | Expression::FunctionCall(_)
+        | Expression::TableConstructor(_)
+        | Expression::BinaryOp(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => false,
+    }
+}
+
+/// Whether `expr` is a literal, or operators over literals, that can't raise:
+/// neither its value nor its evaluation depends on where it runs, so a pass
+/// can move it.
+pub(crate) fn is_closed_literal_expr(expr: &Expression) -> bool {
+    literal_kind(expr).is_some()
+}
+
+/// Whether `expr` evaluates into exactly one register with no temporaries.
+pub(crate) const fn is_single_register_value(expr: &Expression) -> bool {
+    match expr {
+        Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::Nil(_)
+        | Expression::True(_)
+        | Expression::False(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_) => true,
+        Expression::Var(_)
+        | Expression::FunctionCall(_)
+        | Expression::Parenthesized(_)
+        | Expression::BinaryOp(_)
+        | Expression::UnaryOp(_)
+        | Expression::TableConstructor(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => false,
     }
 }
 
 /// Whether the expression is guaranteed truthy at runtime. Only `nil` and
 /// `false` are falsy in Lua, so numbers, strings, tables, and functions pass.
-pub fn is_always_truthy(expr: &Expression) -> bool {
+pub(crate) fn is_always_truthy(expr: &Expression) -> bool {
     match expr {
         Expression::Number(_)
         | Expression::Integer(_)
         | Expression::StringLiteral(_)
+        | Expression::FunctionDef(_)
+        | Expression::TableConstructor(_)
+        | Expression::True(_) => true,
+        Expression::Parenthesized(paren) => is_always_truthy(unwrap_parentheses(&paren.expr)),
+        Expression::UnaryOp(_) | Expression::BinaryOp(_) => {
+            literal_kind(expr).is_some_and(|kind| kind.is_number() || kind == LiteralKind::String)
+        }
+        Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::VarArg(_)
+        | Expression::Var(_)
+        | Expression::FunctionCall(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => false,
+    }
+}
+
+/// Lua's integer-to-float conversion: C's `(double)` cast, which rounds to
+/// the nearest representable value.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
+    reason = "the C cast Lua itself uses, and i64 has no From into f64"
+)]
+pub(crate) const fn int_to_float(value: i64) -> f64 {
+    value as f64
+}
+
+pub(crate) fn parenthesize(expr: Expression) -> Expression {
+    Expression::Parenthesized(Box::new(ParenthesizedExpression { span: Span::default(), expr }))
+}
+
+/// Whether a binary expression on `op`, printed bare under a unary operator,
+/// regroups. Every binary operator but `^` binds looser than a unary one.
+pub(crate) const fn binds_looser_than_unary(op: BinOp) -> bool {
+    op.precedence().0 < UnOp::PRECEDENCE
+}
+
+/// Whether `expr` prints a Luau if-expression last, whose `else` branch would
+/// take in an operator printed after it.
+pub(crate) fn ends_in_if_expr(expr: &Expression) -> bool {
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::IfExpression(_) => return true,
+            Expression::BinaryOp(binary_op) => &binary_op.rhs,
+            Expression::UnaryOp(unop) => &unop.operand,
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Var(_)
+            | Expression::FunctionCall(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::TypeInstantiation(_)
+            | Expression::Error(_) => return false,
+        };
+    }
+}
+
+/// Whether `inner` printed bare as the left operand of `outer` reparses as
+/// that same operand.
+pub(crate) fn can_unwrap_in_binop_lhs(inner: &Expression, outer: BinOp) -> bool {
+    match inner {
+        Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::Nil(_)
+        | Expression::True(_)
+        | Expression::False(_)
+        | Expression::Var(_)
+        | Expression::TableConstructor(_)
         | Expression::FunctionDef(_) => true,
-        Expression::TableConstructor(_) => true,
-        Expression::True(_) => true,
-        Expression::Parenthesized(paren) => is_always_truthy(&paren.expr),
-        Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
-            is_literal_expression(&unop.operand) && is_always_truthy(&unop.operand)
+        // Unary ops bind looser than ^, so (-a)^b needs its parens.
+        Expression::UnaryOp(_) => outer != BinOp::Pow && !ends_in_if_expr(inner),
+        Expression::BinaryOp(binary_op) => {
+            binary_op.op.can_nest_bare(outer, OperandSide::Left) && !ends_in_if_expr(inner)
         }
-        Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Len) => {
-            is_literal_expression(&unop.operand)
+        Expression::FunctionCall(_)
+        | Expression::VarArg(_)
+        | Expression::Parenthesized(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => false,
+    }
+}
+
+/// Whether `inner` printed bare as the right operand of `outer` reparses as
+/// that same operand.
+pub(crate) fn can_unwrap_in_binop_rhs(inner: &Expression, outer: BinOp) -> bool {
+    match inner {
+        Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::Nil(_)
+        | Expression::True(_)
+        | Expression::False(_)
+        | Expression::Var(_)
+        | Expression::TableConstructor(_)
+        | Expression::FunctionDef(_) => true,
+        Expression::UnaryOp(_) => !ends_in_if_expr(inner),
+        Expression::BinaryOp(binary_op) => {
+            binary_op.op.can_nest_bare(outer, OperandSide::Right) && !ends_in_if_expr(inner)
         }
-        Expression::BinaryOp(binop) => {
-            let is_arithmetic = matches!(
-                binop.op,
-                BinOp::Add
-                    | BinOp::Sub
-                    | BinOp::Mul
-                    | BinOp::Div
-                    | BinOp::FloorDiv
-                    | BinOp::Mod
-                    | BinOp::Pow
-                    | BinOp::Concat
-                    | BinOp::BitAnd
-                    | BinOp::BitOr
-                    | BinOp::BitXor
-                    | BinOp::Shl
-                    | BinOp::Shr
-            );
-            is_arithmetic
-                && is_literal_expression(&binop.left)
-                && is_literal_expression(&binop.right)
-        }
-        _ => false,
-    }
-}
-
-pub const LUA_KEYWORDS: &[&str] = &[
-    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in",
-    "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
-    "continue", // Luau
-];
-
-pub fn is_valid_identifier(s: &str) -> bool {
-    if s.is_empty() {
-        return false;
-    }
-    let mut chars = s.chars();
-    let first = chars.next().expect("checked non-empty above");
-    if !first.is_ascii_alphabetic() && first != '_' {
-        return false;
-    }
-    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return false;
-    }
-    !LUA_KEYWORDS.contains(&s)
-}
-
-/// Whether a `local` declaration binds a name no transform may reshape,
-/// merge away, or move: an export, a `const`, an attributed name
-/// (`<close>` runs `__close` at scope exit and `<const>` affects validity),
-/// or `_ENV`, which redirects global lookup for everything after it.
-pub fn has_fixed_binding(local: &LocalAssignment, version: LuaVersion) -> bool {
-    local.is_const
-        || local.is_exported
-        || local
-            .names
-            .iter()
-            .any(|name| name.attrib.is_some() || is_env_binding(ident_name(&name.name), version))
-}
-
-/// Whether this name is the `_ENV` upvalue every global read and write
-/// goes through. Outside 5.2+ the name binds an ordinary local, so
-/// pinning it would cost bytes for nothing.
-pub fn is_env_binding(name: &str, version: LuaVersion) -> bool {
-    version.has_env_upvalue() && name == "_ENV"
-}
-
-pub fn ident_name(token: &luck_token::Token) -> &str {
-    if let TokenKind::Identifier(ref name) = token.kind {
-        name
-    } else {
-        ""
-    }
-}
-
-// Literal value semantics live in luck_token::literal. Every crate that folds
-// or re-emits literals must share ONE decode/encode.
-pub use luck_token::literal::{LuaNumber, decode_string_literal, encode_string_literal};
-
-/// The number model a target dialect uses when folding or shortening
-/// literals: 5.3+ tracks integer/float subtypes, everything else is f64.
-pub fn number_subtypes(version: LuaVersion) -> NumberSubtypes {
-    if version.has_integer_subtype() {
-        NumberSubtypes::IntFloat
-    } else {
-        NumberSubtypes::Unified
-    }
-}
-
-/// Extracts a number with subtype fidelity. Under [`NumberSubtypes::Unified`]
-/// (5.1/5.2/Luau) every number is a Float, mirroring the single f64 type.
-pub fn extract_lua_number(expr: &Expression, subtypes: NumberSubtypes) -> Option<LuaNumber> {
-    match expr {
-        Expression::Number(literal) => {
-            luck_token::literal::parse_lua_number(&literal.text, subtypes)
-        }
-        Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
-            match extract_lua_number(&unop.operand, subtypes)? {
-                LuaNumber::Int(value) => Some(LuaNumber::Int(value.wrapping_neg())),
-                LuaNumber::Float(value) => Some(LuaNumber::Float(-value)),
-            }
-        }
-        Expression::Parenthesized(paren) => extract_lua_number(&paren.expr, subtypes),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validates_identifiers() {
-        assert!(is_valid_identifier("foo"));
-        assert!(is_valid_identifier("_bar"));
-        assert!(is_valid_identifier("x1"));
-        assert!(is_valid_identifier("_"));
-        assert!(is_valid_identifier("camelCase"));
-
-        assert!(!is_valid_identifier("if"));
-        assert!(!is_valid_identifier("end"));
-        assert!(!is_valid_identifier("and"));
-        assert!(!is_valid_identifier("or"));
-
-        assert!(!is_valid_identifier("a-b"));
-        assert!(!is_valid_identifier("123abc"));
-        assert!(!is_valid_identifier(""));
-        assert!(!is_valid_identifier("foo bar"));
+        Expression::FunctionCall(_)
+        | Expression::VarArg(_)
+        | Expression::Parenthesized(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => false,
     }
 }

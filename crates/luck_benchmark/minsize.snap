@@ -1,12 +1,12 @@
 Minified-size tracking over the bench corpus. Sizes are exact bytes;
 gzip is the minified output at the default flate2 level. Regenerate:
-cargo test -p luck_benchmark --test metrics regenerate_minsize -- --ignored
+cargo test -p luck_benchmark --test it regenerate_minsize -- --ignored
 
   Original |   Minified |       Gzip |   Ratio | File
-    390442 |     243890 |      60259 |  62.47% | gen_full_lua54.lua
-    441060 |     292221 |      72527 |  66.25% | gen_full_luau.luau
+    376750 |     237823 |      58383 |  63.12% | gen_full_lua54.lua
+    441060 |     292076 |      72757 |  66.22% | gen_full_luau.luau
       2124 |        959 |        477 |  45.15% | idiomatic.lua
-    482971 |     379212 |      76048 |  78.52% | infinite_yield.luau
-   2290215 |    2284894 |    1763306 |  99.77% | obfuscated_vm.luau
-    254127 |     130475 |      40516 |  51.34% | roact (79 files)
-    424691 |     131095 |      50731 |  30.87% | penlight (39 files)
+    482971 |     379252 |      76027 |  78.52% | infinite_yield.luau
+   2290215 |    2284895 |    1763306 |  99.77% | obfuscated_vm.luau
+    254127 |     130361 |      40498 |  51.30% | roact (79 files)
+    424691 |     131078 |      50724 |  30.86% | penlight (39 files)

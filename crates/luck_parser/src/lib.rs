@@ -1,9 +1,10 @@
-//! # luck_parser
+//! # `luck_parser`
 //!
-//! Pratt expression parser with recursive descent statement parsing for Lua 5.1-5.5 and Luau.
+//! Pratt expression parser with recursive descent statement parsing for Lua
+//! 5.1-5.5 and Luau.
 //!
-//! Depth-limited to prevent stack overflow on pathological input. Supports error recovery
-//! to report multiple parse errors in a single pass.
+//! Nesting is depth-limited so pathological input can't overflow the stack,
+//! and error recovery reports multiple parse errors in a single pass.
 //!
 //! # Usage
 //!
@@ -16,115 +17,15 @@
 //! assert!(result.errors.is_empty());
 //! ```
 
-mod attributes;
-mod expr;
-mod luau;
+#![cfg_attr(
+    test,
+    expect(clippy::missing_panics_doc, reason = "a Panics section says nothing about a test")
+)]
+
+mod parse_result;
 mod parser;
-mod stmt;
 mod validate;
 
-use luck_ast::Block;
-use luck_token::{Comment, LuaVersion};
-
-/// Result of parsing source code: the AST, extracted comments, and any errors.
-#[derive(Debug)]
-pub struct ParseResult {
-    pub block: Block,
-    pub comments: Vec<Comment>,
-    pub errors: Vec<ParseError>,
-    pub source: String,
-}
-
-pub type ParseError = luck_token::SourceError;
-
-/// Callers that own their source `String` should pass it by value, since
-/// `ParseResult.source` then holds the text without a copy. Borrowed `&str`
-/// input is copied once.
-#[must_use]
-pub fn parse(source: impl Into<String>, version: LuaVersion) -> ParseResult {
-    parse_owned(source.into(), version)
-}
-
-/// Scope-context checks real Lua performs at compile time but that need
-/// extra AST walks: writes to const bindings, goto/label resolution, and
-/// Luau's continue/until rule. NOT part of [`parse`], so transform
-/// pipelines don't pay for it; diagnostic front ends (`luck check`) opt in
-/// explicitly. Only meaningful on a clean parse, because recovery ASTs
-/// cascade misleading secondary errors.
-#[must_use]
-pub fn validate(block: &Block, version: LuaVersion) -> Vec<ParseError> {
-    let mut errors = Vec::new();
-    validate::validate(block, version, &mut errors);
-    errors
-}
-
-fn parse_owned(source: String, version: LuaVersion) -> ParseResult {
-    // Spans are u32 (hard invariant 2); a larger input would silently
-    // wrap every span past 4 GB, so refuse it up front.
-    if source.len() > u32::MAX as usize {
-        return ParseResult {
-            block: Block {
-                span: luck_token::Span::new(0, 0),
-                stmts: Vec::new(),
-                last_stmt: None,
-            },
-            comments: Vec::new(),
-            errors: vec![ParseError {
-                span: luck_token::Span::new(0, 0),
-                message: format!(
-                    "input is {} bytes; the maximum supported file size is 4 GiB",
-                    source.len()
-                ),
-            }],
-            source,
-        };
-    }
-    let mut parser = parser::Parser::new(&source, version);
-    let block = parser.parse_block();
-    // A chunk must consume its whole input. `parse_block` returns at any
-    // block boundary (a `return`, a stray `end`), and silently accepting
-    // trailing statements would drop them from the AST, so every downstream
-    // consumer (minifier, formatter, bundler) would then silently discard
-    // user code. Suppressed after an earlier error, because recovery may
-    // already have abandoned the tail and the first error is the real one.
-    if !parser.at_eof() && !parser.has_errors() {
-        let span = parser.current_span();
-        let message = format!("expected end of file, found {}", parser.peek());
-        parser.error(span, message);
-    }
-    let (comments, errors) = parser.finish();
-    ParseResult {
-        block,
-        comments,
-        errors,
-        source,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn owned_source_storage_survives_repeated_parsing() {
-        for text in ["return 1", "local = 5"] {
-            let mut source = String::with_capacity(256);
-            source.push_str(text);
-            let pointer = source.as_ptr();
-            let capacity = source.capacity();
-            for _ in 0..3 {
-                let parsed = parse(source, LuaVersion::Lua54);
-                assert_eq!(parsed.source.as_ptr(), pointer);
-                assert_eq!(parsed.source.capacity(), capacity);
-                assert_eq!(parsed.source, text);
-                assert_eq!(
-                    parsed.errors.is_empty(),
-                    text == "return 1",
-                    "{:?}",
-                    parsed.errors
-                );
-                source = parsed.source;
-            }
-        }
-    }
-}
+pub use parse_result::{ParseError, ParseResult};
+pub use parser::parse;
+pub use validate::validate;

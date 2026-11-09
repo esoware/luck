@@ -1,70 +1,51 @@
-use luck_ast::shared::{Block, FunctionBody};
-use luck_ast::stmt::LastStatement;
-use luck_ast::visitor::Visitor;
+use luck_ast::{Block, FunctionBody, LastStatement, Visitor};
 
-use crate::diagnostic::{Category, Fix, LintDiagnostic, Severity, TextEdit};
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::Finding;
+use crate::fix::{Fix, TextEdit};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
-pub struct RedundantReturn;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RedundantReturn;
 
-impl Rule for RedundantReturn {
-    fn name(&self) -> &'static str {
-        "redundant_return"
-    }
+impl_rule!(
+    RedundantReturn,
+    "redundant_return",
+    Style,
+    Warning,
+    "trailing bare `return` has no effect"
+);
 
-    fn category(&self) -> Category {
-        Category::Style
-    }
-
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-
-    fn description(&self) -> &'static str {
-        "trailing bare return has no effect"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let mut checker = ReturnChecker {
-            diagnostics: Vec::new(),
-        };
-        checker.check_tail(ctx.block);
-        checker.visit_block(ctx.block);
-        checker.diagnostics
+impl WholeRule for RedundantReturn {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let mut checker = ReturnChecker { findings: Vec::new() };
+        checker.check_tail(context.block);
+        checker.visit_block(context.block);
+        checker.findings
     }
 }
 
 struct ReturnChecker {
-    diagnostics: Vec<LintDiagnostic>,
+    findings: Vec<Finding>,
 }
 
 impl ReturnChecker {
-    /// Flag a bare `return` closing `block` when `block` is a function
-    /// body or the chunk, since falling off the end returns nothing
-    /// anyway. In a nested block the same `return` is an early return,
-    /// which is control flow rather than redundancy.
+    /// Flags a bare `return` that ends `block`. Callers pass only function
+    /// bodies and the chunk, since in a nested block it's an early exit.
     fn check_tail(&mut self, block: &Block) {
-        let Some(last) = block.last_stmt.as_deref() else {
+        let Some(LastStatement::Return(return_stmt)) = block.last_stmt.as_deref() else {
             return;
         };
-        let LastStatement::Return(ret) = last else {
-            return;
-        };
-        if !ret.exprs.is_empty() {
+        if !return_stmt.exprs.is_empty() {
             return;
         }
-        self.diagnostics.push(
-            LintDiagnostic::new(
-                "redundant_return",
-                "bare return at the end of the function has no effect",
-                ret.span,
+        self.findings.push(
+            Finding::new(
+                "bare `return` at the end of the function has no effect",
+                return_stmt.span,
             )
             .with_fix(Fix {
-                description: "remove the redundant return".into(),
-                edits: vec![TextEdit {
-                    span: ret.span,
-                    replacement: String::new(),
-                }],
+                description: "remove the redundant `return`".to_owned(),
+                edits: vec![TextEdit { span: return_stmt.span, replacement: String::new() }],
             }),
         );
     }
@@ -81,23 +62,12 @@ impl<'ast> Visitor<'ast> for ReturnChecker {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::RedundantReturn;
+    use super::*;
     use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&RedundantReturn, source, LuaVersion::Lua54)
-    }
-
-    fn apply_fix(source: &str, diag: &LintDiagnostic) -> String {
-        let fix = diag.fix.as_ref().expect("fix");
-        let edit = &fix.edits[0];
-        let mut out = String::with_capacity(source.len());
-        out.push_str(&source[..edit.span.start as usize]);
-        out.push_str(&edit.replacement);
-        out.push_str(&source[edit.span.end as usize..]);
-        let parse = luck_parser::parse(&out, LuaVersion::Lua54);
-        assert!(parse.errors.is_empty(), "reparse: {:?}", parse.errors);
-        out
+        run_rule(&RedundantReturn, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -119,20 +89,20 @@ mod tests {
     }
 
     #[test]
-    fn fix_removes_return() {
+    fn flags_and_fixes_trailing_return() {
         let source = "local function f()\n    print(1)\n    return\nend\nf()";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = apply_fix(source, &diags[0]);
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
         assert!(!fixed.contains("return"), "{fixed}");
     }
 
     #[test]
-    fn fix_handles_semicolon() {
+    fn flags_and_fixes_trailing_return_with_semicolon() {
         let source = "local function f()\n    print(1)\n    return;\nend\nf()";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = apply_fix(source, &diags[0]);
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
         assert!(!fixed.contains("return"), "{fixed}");
     }
 

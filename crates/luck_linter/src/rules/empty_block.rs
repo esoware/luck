@@ -1,116 +1,126 @@
-use luck_ast::shared::Block;
+use luck_ast::{Block, Statement};
+use luck_token::Span;
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
+use crate::diagnostic::Finding;
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
-pub struct EmptyBlock;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EmptyBlock;
 
-impl Rule for EmptyBlock {
-    fn name(&self) -> &'static str {
-        "empty_block"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "block body is empty"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
-
-fn is_empty_block(block: &Block) -> bool {
-    block.stmts.is_empty() && block.last_stmt.is_none()
-}
+impl_rule!(EmptyBlock, "empty_block", Suspicious, Warning, "block body is empty");
 
 impl NodeRule for EmptyBlock {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[
             NodeType::IfStatement,
             NodeType::WhileLoop,
             NodeType::DoBlock,
             NodeType::NumericFor,
             NodeType::GenericFor,
             NodeType::RepeatLoop,
-        ]);
-        Some(&TYPES)
+        ])
     }
-    fn on_statement(
-        &self,
-        stmt: &luck_ast::stmt::Statement,
-        _ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
-    ) {
-        match stmt {
-            luck_ast::Statement::IfStatement(if_stmt) => {
-                if is_empty_block(&if_stmt.block) {
-                    out.push(LintDiagnostic::new(
-                        "empty_block",
-                        "empty if block".to_string(),
-                        if_stmt.span,
-                    ));
-                }
+    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let (block, message, span) = match stmt {
+            Statement::IfStatement(if_stmt) => {
+                findings.extend(check_body(&if_stmt.block, "empty `if` block", if_stmt.span));
                 for clause in &if_stmt.elseif_clauses {
-                    if is_empty_block(&clause.block) {
-                        out.push(LintDiagnostic::new(
-                            "empty_block",
-                            "empty elseif block".to_string(),
-                            clause.span,
-                        ));
-                    }
+                    findings.extend(check_body(&clause.block, "empty `elseif` block", clause.span));
                 }
-                if let Some(else_clause) = &if_stmt.else_clause
-                    && is_empty_block(&else_clause.block)
-                {
-                    out.push(LintDiagnostic::new(
-                        "empty_block",
-                        "empty else block".to_string(),
+                if let Some(else_clause) = &if_stmt.else_clause {
+                    findings.extend(check_body(
+                        &else_clause.block,
+                        "empty `else` block",
                         else_clause.span,
                     ));
                 }
+                return;
             }
-            luck_ast::Statement::WhileLoop(while_loop) if is_empty_block(&while_loop.block) => {
-                out.push(LintDiagnostic::new(
-                    "empty_block",
-                    "empty while loop body".to_string(),
-                    while_loop.span,
-                ));
+            Statement::WhileLoop(node) => (&node.block, "empty `while` loop body", node.span),
+            Statement::DoBlock(node) => (&node.block, "empty `do` block", node.span),
+            Statement::NumericFor(node) => {
+                (&node.block, "empty numeric `for` loop body", node.span)
             }
-            luck_ast::Statement::DoBlock(do_block) if is_empty_block(&do_block.block) => {
-                out.push(LintDiagnostic::new(
-                    "empty_block",
-                    "empty do block".to_string(),
-                    do_block.span,
-                ));
+            Statement::GenericFor(node) => {
+                (&node.block, "empty generic `for` loop body", node.span)
             }
-            luck_ast::Statement::NumericFor(for_loop) if is_empty_block(&for_loop.block) => {
-                out.push(LintDiagnostic::new(
-                    "empty_block",
-                    "empty numeric for loop body".to_string(),
-                    for_loop.span,
-                ));
-            }
-            luck_ast::Statement::GenericFor(for_loop) if is_empty_block(&for_loop.block) => {
-                out.push(LintDiagnostic::new(
-                    "empty_block",
-                    "empty generic for loop body".to_string(),
-                    for_loop.span,
-                ));
-            }
-            luck_ast::Statement::RepeatLoop(repeat_loop) if is_empty_block(&repeat_loop.block) => {
-                out.push(LintDiagnostic::new(
-                    "empty_block",
-                    "empty repeat loop body".to_string(),
-                    repeat_loop.span,
-                ));
-            }
-            _ => {}
-        }
+            Statement::RepeatLoop(node) => (&node.block, "empty `repeat` loop body", node.span),
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::FunctionDecl(_)
+            | Statement::LocalFunction(_)
+            | Statement::LocalAssignment(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => return,
+        };
+        findings.extend(check_body(block, message, span));
+    }
+}
+
+fn check_body(block: &Block, message: &str, span: Span) -> Option<Finding> {
+    (block.stmts.is_empty() && block.last_stmt.is_none()).then(|| Finding::new(message, span))
+}
+
+#[cfg(test)]
+mod tests {
+    use luck_token::LuaVersion;
+
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
+
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        run_rule(&EmptyBlock, source, LuaVersion::Lua54)
+    }
+
+    #[test]
+    fn flags_each_empty_if_branch() {
+        let diags = run("local c = 1\nif c then elseif c then else end");
+        let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            ["empty `if` block", "empty `elseif` block", "empty `else` block"],
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_empty_loop_and_do_bodies() {
+        let diags = run(
+            "local c = 1\nwhile c do end\ndo end\nfor i = 1, 2 do end\nfor k in pairs({}) do end\nrepeat until c",
+        );
+        let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "empty `while` loop body",
+                "empty `do` block",
+                "empty numeric `for` loop body",
+                "empty generic `for` loop body",
+                "empty `repeat` loop body",
+            ],
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_block_with_only_a_return() {
+        let diags = run("do return end");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_non_empty_blocks() {
+        let diags = run("local c = 1\nif c then print(1) else print(2) end\nwhile c do break end");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

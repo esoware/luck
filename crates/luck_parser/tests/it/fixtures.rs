@@ -1,101 +1,61 @@
-use luck_parser::parse;
-use luck_token::LuaVersion;
+use core::fmt::Write as _;
+use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 
-fn detect_version(path: &Path) -> LuaVersion {
-    let path_str = path.to_string_lossy();
-    if path_str.contains("luau") {
-        return LuaVersion::Luau;
-    }
-    if path_str.contains("lua51") {
-        return LuaVersion::Lua51;
-    }
-    if path_str.contains("lua52") {
-        return LuaVersion::Lua52;
-    }
-    if path_str.contains("lua53") {
-        return LuaVersion::Lua53;
-    }
-    if path_str.contains("lua55") {
-        return LuaVersion::Lua55;
-    }
-    LuaVersion::Lua54
-}
+use luck_parser::parse;
+use luck_testgen::{collect_fixture_files, detect_version, is_error_fixture};
 
-fn is_error_fixture(path: &Path) -> bool {
-    path.components().any(|c| c.as_os_str() == "errors")
-}
-
-fn collect_fixture_files() -> Vec<PathBuf> {
-    let fixtures_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+fn fixtures_directory() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("crate dir has parent")
         .parent()
         .expect("crates dir has parent")
         .join("tests")
-        .join("fixtures");
-
-    let mut files = Vec::new();
-    walk_dir(&fixtures_dir, &mut files);
-    files
-}
-
-fn walk_dir(dir: &Path, files: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            walk_dir(&path, files);
-        } else {
-            let ext = path.extension().and_then(|e| e.to_str());
-            if matches!(ext, Some("lua" | "luau")) {
-                files.push(path);
-            }
-        }
-    }
+        .join("fixtures")
 }
 
 #[test]
-fn parse_all_fixtures() {
-    let files = collect_fixture_files();
+fn fixtures_outside_errors_parse_cleanly() {
+    let root = fixtures_directory();
+    let files: Vec<PathBuf> = collect_fixture_files(&root)
+        .expect("fixture tree is readable")
+        .into_iter()
+        .filter(|path| matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau")))
+        .collect();
     assert!(!files.is_empty(), "no fixture files found");
 
     let mut failures = Vec::new();
-    let mut success_count = 0;
+    let mut success_count = 0usize;
 
     for path in &files {
-        let source = std::fs::read_to_string(path).expect("failed to read fixture file");
-        let version = detect_version(path);
-        let result = parse(&source, version);
+        let relative = path.strip_prefix(&root).expect("fixture is under the root");
+        let source = fs::read_to_string(path).expect("failed to read fixture file");
+        let result = parse(&source, detect_version(relative));
 
-        if is_error_fixture(path) {
-            // Error fixtures may or may not parse; skip validation
+        if is_error_fixture(relative) {
+            // Fixtures under `errors/` may or may not parse.
             continue;
         }
 
-        if !result.errors.is_empty() {
-            failures.push((path.clone(), result.errors));
+        if result.errors.is_empty() {
+            success_count = success_count.saturating_add(1);
         } else {
-            success_count += 1;
+            failures.push((path.clone(), result.errors));
         }
     }
 
     if !failures.is_empty() {
-        let mut msg = format!("{} fixture(s) failed to parse:\n", failures.len());
+        let mut report = format!("{} fixture(s) failed to parse:\n", failures.len());
         for (path, errors) in &failures {
-            msg.push_str(&format!("  {}:\n", path.display()));
-            for error in errors {
-                msg.push_str(&format!("    - {}\n", error.message));
+            writeln!(report, "  {}:", path.display()).unwrap();
+            for e in errors {
+                writeln!(report, "    - {}", e.message).unwrap();
             }
         }
-        msg.push_str(&format!("{success_count} fixture(s) parsed successfully"));
-        panic!("{msg}");
+        panic!("{report}{success_count} fixture(s) parsed successfully");
     }
 
-    assert!(
-        success_count > 0,
-        "parsed {success_count} fixtures successfully"
-    );
+    assert!(success_count > 0, "parsed {success_count} fixtures successfully");
 }

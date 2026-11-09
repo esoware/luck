@@ -1,18 +1,11 @@
-//! Token-boundary ambiguity rules for compact output.
-//!
-//! The printer tracks the previously emitted piece as a one-byte
-//! [`PrevClass`] instead of a cloned `TokenKind`, and inserts a space only
-//! when the previous class and the next piece's first byte would otherwise
-//! merge into a different token.
+//! The printer remembers the last emitted piece as a one-byte [`PieceClass`]
+//! and inserts a space only when that class and the next piece's first byte
+//! would otherwise merge into a different token.
 
-/// Class of the last emitted piece. Carries only the distinctions the merge
-/// rules need; everything else is `Other`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrevClass {
-    None,
-    /// Identifier or keyword.
+pub(crate) enum PieceClass {
     Word,
-    /// Number literal (word-like, and `1.` + `.` would extend it).
+    /// Number literal: word-like, and a following `.` would extend it.
     Number,
     Minus,
     Slash,
@@ -21,57 +14,74 @@ pub enum PrevClass {
     DotDot,
     Less,
     Greater,
-    /// `;` - tracked so the statement-boundary guard can tell a fresh
-    /// semicolon apart without storing a token.
+    /// `;`, tracked so the statement-boundary guard doesn't add a second one.
     Semicolon,
+    /// Any other piece, and the start of output, which nothing merges with.
     Other,
 }
 
-/// Classify a fixed-spelling piece (keyword, operator, punctuation). A
-/// piece is word-like exactly when this returns [`PrevClass::Word`], so the
-/// caller derives word-likeness from the class rather than rescanning.
-#[inline]
-pub fn classify_str(text: &str) -> PrevClass {
-    match text {
-        "-" => PrevClass::Minus,
-        "/" => PrevClass::Slash,
-        "[" => PrevClass::LeftBracket,
-        "." => PrevClass::Dot,
-        ".." => PrevClass::DotDot,
-        "<" => PrevClass::Less,
-        ">" => PrevClass::Greater,
-        ";" => PrevClass::Semicolon,
-        _ => match text.as_bytes().first() {
-            Some(first) if first.is_ascii_alphanumeric() || *first == b'_' => PrevClass::Word,
-            _ => PrevClass::Other,
-        },
+impl PieceClass {
+    #[inline]
+    pub(crate) fn of_fixed(text: &str) -> Self {
+        match text {
+            "-" => Self::Minus,
+            "/" => Self::Slash,
+            "[" => Self::LeftBracket,
+            "." => Self::Dot,
+            ".." => Self::DotDot,
+            "<" => Self::Less,
+            // Luau's `>>` type-instantiation close, and the 5.3+ right shift
+            // that spells it the same way.
+            ">" | ">>" => Self::Greater,
+            ";" => Self::Semicolon,
+            _ => match text.as_bytes().first() {
+                Some(first) if first.is_ascii_alphanumeric() || *first == b'_' => Self::Word,
+                _ => Self::Other,
+            },
+        }
+    }
+
+    const fn is_wordlike(self) -> bool {
+        match self {
+            Self::Word | Self::Number => true,
+            Self::Minus
+            | Self::Slash
+            | Self::LeftBracket
+            | Self::Dot
+            | Self::DotDot
+            | Self::Less
+            | Self::Greater
+            | Self::Semicolon
+            | Self::Other => false,
+        }
     }
 }
 
-/// Whether a space must separate the previous piece from the next one.
-/// `next_first` is the next piece's first byte; `next_is_wordlike` is true
-/// for identifiers, keywords, and numbers.
-pub fn needs_space(prev: PrevClass, next_first: u8, next_is_wordlike: bool) -> bool {
-    match prev {
+pub(crate) const fn needs_space(
+    previous: PieceClass,
+    next_first_byte: u8,
+    next: PieceClass,
+) -> bool {
+    match previous {
         // Two adjacent words, whether identifier, keyword, or number, merge.
-        PrevClass::Word => next_is_wordlike,
+        PieceClass::Word => next.is_wordlike(),
         // Number before a word merges; number before `.` extends the literal.
-        PrevClass::Number => next_is_wordlike || next_first == b'.',
+        PieceClass::Number => next.is_wordlike() || next_first_byte == b'.',
         // `-` before `-` - prevents `--` comment.
-        PrevClass::Minus => next_first == b'-',
+        PieceClass::Minus => next_first_byte == b'-',
         // `/` before `/` - prevents `//` floor division.
-        PrevClass::Slash => next_first == b'/',
+        PieceClass::Slash => next_first_byte == b'/',
         // `[` before `[` (token or long-string literal) - prevents `[[`.
-        PrevClass::LeftBracket => next_first == b'[',
-        // `.` before `.` - prevents `..`.
-        PrevClass::Dot => next_first == b'.',
-        // `..` before `.`, `..`, `...`, or `.5` - prevents `...` / vararg merges.
-        PrevClass::DotDot => next_first == b'.',
+        PieceClass::LeftBracket => next_first_byte == b'[',
+        // `.` before `.` - prevents `..`. `..` before `.`, `..`, `...`, or
+        // `.5` - prevents `...` / vararg merges.
+        PieceClass::Dot | PieceClass::DotDot => next_first_byte == b'.',
         // `<` before `<` - prevents `<<` shift.
-        PrevClass::Less => next_first == b'<',
-        // `>` before `>` or `=` - prevents `>>` and `>=`.
-        PrevClass::Greater => next_first == b'>' || next_first == b'=',
-        PrevClass::None | PrevClass::Semicolon | PrevClass::Other => false,
+        PieceClass::Less => next_first_byte == b'<',
+        // `>` before `>` or `=` - prevents `>>` and `>=`, and a `>>` close
+        // before `=` lexing as `>` `>=`.
+        PieceClass::Greater => next_first_byte == b'>' || next_first_byte == b'=',
+        PieceClass::Semicolon | PieceClass::Other => false,
     }
 }
 
@@ -79,84 +89,81 @@ pub fn needs_space(prev: PrevClass, next_first: u8, next_is_wordlike: bool) -> b
 mod tests {
     use super::*;
 
-    fn sep_str(prev: &str, next: &str) -> bool {
-        let next_is_wordlike = matches!(classify_str(next), PrevClass::Word);
-        needs_space(classify_str(prev), next.as_bytes()[0], next_is_wordlike)
-    }
-
-    fn sep_after_word(next_first: u8, next_is_wordlike: bool) -> bool {
-        needs_space(PrevClass::Word, next_first, next_is_wordlike)
+    fn needs_space_between(previous: &str, next: &str) -> bool {
+        needs_space(PieceClass::of_fixed(previous), next.as_bytes()[0], PieceClass::of_fixed(next))
     }
 
     #[test]
-    fn word_word_needs_space() {
-        assert!(sep_after_word(b'x', true));
-        assert!(sep_str("if", "true"));
-        assert!(sep_str("return", "nil"));
-        assert!(sep_str("local", "x"));
+    fn needs_space_between_words() {
+        assert!(needs_space(PieceClass::Word, b'x', PieceClass::Word));
+        assert!(needs_space_between("if", "true"));
+        assert!(needs_space_between("return", "nil"));
+        assert!(needs_space_between("local", "x"));
     }
 
     #[test]
-    fn number_dot_needs_space() {
-        assert!(needs_space(PrevClass::Number, b'.', false));
-        assert!(needs_space(PrevClass::Number, b'1', true));
-        // A number starting with a dot, `.5`, is the DotDot hazard.
-        assert!(needs_space(PrevClass::DotDot, b'.', true));
-        assert!(!needs_space(PrevClass::DotDot, b'5', true));
+    fn needs_space_after_a_number_before_a_dot_or_number() {
+        assert!(needs_space(PieceClass::Number, b'.', PieceClass::Other));
+        assert!(needs_space(PieceClass::Number, b'1', PieceClass::Number));
     }
 
     #[test]
-    fn minus_minus_needs_space() {
-        assert!(sep_str("-", "-"));
-        assert!(!sep_str("-", "x"));
+    fn needs_space_between_minuses() {
+        assert!(needs_space_between("-", "-"));
+        assert!(!needs_space_between("-", "x"));
     }
 
     #[test]
-    fn slash_slash_needs_space() {
-        assert!(sep_str("/", "/"));
-        assert!(sep_str("/", "//"));
+    fn needs_space_between_slashes() {
+        assert!(needs_space_between("/", "/"));
+        assert!(needs_space_between("/", "//"));
     }
 
     #[test]
-    fn bracket_bracket_needs_space() {
-        assert!(sep_str("[", "["));
+    fn needs_space_between_left_brackets() {
+        assert!(needs_space_between("[", "["));
         // A long-string literal also starts with `[`, so it is the same hazard.
-        assert!(needs_space(PrevClass::LeftBracket, b'[', false));
-        assert!(!needs_space(PrevClass::LeftBracket, b'"', false));
+        let string_literal = PieceClass::Other;
+        assert!(needs_space(PieceClass::LeftBracket, b'[', string_literal));
+        assert!(!needs_space(PieceClass::LeftBracket, b'"', string_literal));
     }
 
     #[test]
-    fn dot_dot_needs_space() {
-        assert!(sep_str(".", "."));
-        assert!(sep_str(".", ".."));
-        assert!(sep_str("..", "."));
-        assert!(sep_str("..", "..."));
+    fn needs_space_between_dots() {
+        assert!(needs_space_between(".", "."));
+        assert!(needs_space_between(".", ".."));
+        assert!(needs_space_between("..", "."));
+        assert!(needs_space_between("..", "..."));
+        // A number starting with a dot, `.5`, is the same hazard.
+        assert!(needs_space(PieceClass::DotDot, b'.', PieceClass::Number));
+        assert!(!needs_space(PieceClass::DotDot, b'5', PieceClass::Number));
     }
 
     #[test]
-    fn shift_prevention() {
-        assert!(sep_str("<", "<"));
-        assert!(sep_str(">", ">"));
-        assert!(sep_str(">", "="));
-        assert!(!sep_str("<", "x"));
+    fn needs_space_between_angle_brackets_that_would_form_one_token() {
+        assert!(needs_space_between("<", "<"));
+        assert!(needs_space_between(">", ">"));
+        assert!(needs_space_between(">", "="));
+        assert!(!needs_space_between("<", "x"));
     }
 
     #[test]
-    fn symbol_no_space() {
-        assert!(!sep_after_word(b'(', false));
-        assert!(!sep_str(")", "("));
-        assert!(!sep_str(",", "x"));
-        assert!(!sep_str(";", "x"));
+    fn needs_no_space_between_pieces_that_cannot_merge() {
+        assert!(!needs_space(PieceClass::Word, b'(', PieceClass::Other));
+        assert!(!needs_space_between(")", "("));
+        assert!(!needs_space_between(",", "x"));
+        assert!(!needs_space_between(";", "x"));
     }
 
     #[test]
-    fn classification() {
-        assert_eq!(classify_str("and"), PrevClass::Word);
-        assert_eq!(classify_str("end"), PrevClass::Word);
-        assert_eq!(classify_str("-"), PrevClass::Minus);
-        assert_eq!(classify_str(".."), PrevClass::DotDot);
-        assert_eq!(classify_str("..."), PrevClass::Other);
-        assert_eq!(classify_str(";"), PrevClass::Semicolon);
-        assert_eq!(classify_str("=="), PrevClass::Other);
+    fn of_fixed_singles_out_only_the_pieces_the_rules_need() {
+        assert_eq!(PieceClass::of_fixed("and"), PieceClass::Word);
+        assert_eq!(PieceClass::of_fixed("end"), PieceClass::Word);
+        assert_eq!(PieceClass::of_fixed("-"), PieceClass::Minus);
+        assert_eq!(PieceClass::of_fixed(".."), PieceClass::DotDot);
+        assert_eq!(PieceClass::of_fixed(">>"), PieceClass::Greater);
+        assert_eq!(PieceClass::of_fixed("..."), PieceClass::Other);
+        assert_eq!(PieceClass::of_fixed(";"), PieceClass::Semicolon);
+        assert_eq!(PieceClass::of_fixed("=="), PieceClass::Other);
     }
 }

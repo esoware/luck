@@ -1,573 +1,749 @@
-//! Control-flow analysis over a `Block`'s statement slice.
-//!
-//! Downstream lint rules use this to answer questions like "does this
-//! function always return", "does this branch fall through", and
-//! "what is the cyclomatic complexity of this body". The walker is a
-//! pure function over `&[Statement]`. It builds no persistent graph and
-//! allocates nothing beyond stack frames.
-//!
-//! The walker descends into function literals (`Expression::FunctionDef`,
-//! `Statement::FunctionDecl`, `Statement::LocalFunction`), but their exits
-//! do NOT propagate into the enclosing block. A function value defined
-//! inline does not change the surrounding control flow.
+//! Each graph covers one block and stops at nested function bodies, whose
+//! flow is their own.
 
-use luck_ast::expr::{Expression, FunctionArgs, FunctionCall, Var};
-use luck_ast::shared::Block;
-use luck_ast::stmt::{LastStatement, Statement};
-use luck_token::BinOp;
-use luck_token::TokenKind;
+use core::mem;
+use core::num::Saturating;
 
-/// How a statement sequence terminates.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Exit {
-    #[default]
-    Normal,
-    Return,
+use luck_ast::{
+    Block, Expression, FunctionBody, IfStatement, LastStatement, RepeatLoop, Statement, Type,
+    Visitor, WhileLoop, unwrap_parentheses,
+};
+use luck_semantic::SemanticAnalysis;
+use luck_token::{BinOp, Span, Token};
+
+use crate::call::is_global_call;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Exit {
+    /// Off the block's end, which in a loop body starts the next iteration,
+    /// as `continue` does.
+    End,
+    /// `break`, or a `goto` to a label outside the block.
     Break,
-    Continue,
-    /// Unconditional `error(...)` call or provably infinite loop.
-    /// Treated as non-returning for unreachable analysis.
+    ReturnValue,
+    ReturnEmpty,
+    /// A call to the host's `error`.
     Error,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct BranchSummary {
-    pub exit: Exit,
-    pub always_returns: bool,
-    pub may_return: bool,
-    pub statement_count: usize,
-    pub decision_points: u32,
-}
-
-/// Walk a full `Block` (statements plus optional `last_stmt`).
-pub fn analyze_full_block(block: &Block) -> BranchSummary {
-    analyze_sequence(&block.stmts, block.last_stmt.as_deref())
-}
-
-fn analyze_sequence(stmts: &[Statement], last: Option<&LastStatement>) -> BranchSummary {
-    let mut summary = BranchSummary::default();
-    let mut terminated = false;
-
-    for stmt in stmts {
-        summary.statement_count += 1;
-        let stmt_summary = analyze_statement(stmt);
-
-        summary.decision_points += stmt_summary.decision_points;
-        if stmt_summary.may_return {
-            summary.may_return = true;
-        }
-
-        if terminated {
-            // Already non-Normal; later statements are unreachable and
-            // must not change the enclosing exit, but their decision
-            // points still count (a rule may want McCabe over the whole
-            // body, dead code or not).
-            continue;
-        }
-
-        if !matches!(stmt_summary.exit, Exit::Normal) {
-            summary.exit = stmt_summary.exit;
-            terminated = true;
+impl Exit {
+    const fn node(self) -> usize {
+        match self {
+            Self::End => 0,
+            Self::Break => 1,
+            Self::ReturnValue => 2,
+            Self::ReturnEmpty => 3,
+            Self::Error => 4,
         }
     }
+}
 
-    if !terminated && let Some(last_stmt) = last {
-        summary.statement_count += 1;
-        let exit = match last_stmt {
-            LastStatement::Return(_) => Exit::Return,
-            LastStatement::Break(_) => Exit::Break,
-            LastStatement::Continue(_) => Exit::Continue,
-            LastStatement::Error(_) => Exit::Normal,
+/// How many nodes the [`Exit`]s take, at the start of every graph.
+const EXIT_NODE_COUNT: usize = 5;
+
+/// A node is one piece of code that runs as a unit: a simple statement, a
+/// condition, or a loop header. No node has more than two successors.
+#[derive(Debug)]
+pub(crate) struct FlowGraph {
+    successors: Vec<[Option<usize>; 2]>,
+    /// Where each node's code starts, or 0 for a node without code.
+    code_starts: Vec<u32>,
+    /// The span and node of each piece of code, in source order and disjoint.
+    code: Vec<(Span, usize)>,
+    locals: Vec<LocalDeclaration>,
+    is_reachable: Vec<bool>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LocalDeclaration {
+    pub name_span: Span,
+    pub node: usize,
+    /// Where the name's scope ends. Code past this can't reference it, and
+    /// Lua can only re-enter a scope through the `local` statement itself.
+    pub scope_end: u32,
+}
+
+impl FlowGraph {
+    pub(crate) fn of_block(block: &Block, semantic: &SemanticAnalysis) -> Self {
+        let mut builder = GraphBuilder {
+            graph: Self {
+                successors: vec![[None; 2]; EXIT_NODE_COUNT],
+                code_starts: vec![0; EXIT_NODE_COUNT],
+                code: Vec::new(),
+                locals: Vec::new(),
+                is_reachable: Vec::new(),
+            },
+            semantic,
+            cursor: None,
+            scope_end: 0,
+            break_target: Exit::Break.node(),
+            continue_target: Exit::End.node(),
+            labels: Vec::new(),
         };
-        if matches!(exit, Exit::Return) {
-            summary.may_return = true;
+        let entry = builder.new_node();
+        builder.cursor = Some(entry);
+        builder.block(block);
+        builder.close_into(Exit::End.node());
+
+        let mut graph = builder.graph;
+        let mut is_reachable = vec![false; graph.node_count()];
+        let mut stack = vec![entry];
+        while let Some(node) = stack.pop() {
+            if let Some(mark) = is_reachable.get_mut(node)
+                && !mem::replace(mark, true)
+            {
+                stack.extend(graph.successors(node));
+            }
         }
-        summary.exit = exit;
+        graph.is_reachable = is_reachable;
+        graph
     }
 
-    summary.always_returns = matches!(summary.exit, Exit::Return | Exit::Error);
-    summary
-}
-
-fn analyze_statement(stmt: &Statement) -> BranchSummary {
-    let mut summary = BranchSummary {
-        statement_count: 1,
-        ..BranchSummary::default()
-    };
-
-    match stmt {
-        Statement::Assignment(node) => {
-            summary.decision_points += count_decision_points_punctuated_exprs(&node.values);
-        }
-        Statement::FunctionCall(node) => {
-            let is_unconditional_error = call_is_error(node);
-            summary.decision_points += count_decision_points_call(node);
-            if is_unconditional_error {
-                summary.exit = Exit::Error;
-            }
-        }
-        Statement::DoBlock(node) => {
-            let inner = analyze_full_block(&node.block);
-            summary.exit = inner.exit;
-            summary.may_return |= inner.may_return;
-            summary.decision_points += inner.decision_points;
-        }
-        Statement::WhileLoop(node) => {
-            summary.decision_points += 1;
-            summary.decision_points += count_decision_points_expression(&node.condition);
-            let body = analyze_full_block(&node.block);
-            summary.may_return |= body.may_return;
-            summary.decision_points += body.decision_points;
-            // `while true do ... end` never falls through unless an inner
-            // `break` is reachable. The walker can't see through the body
-            // statically beyond the per-branch summary, but if the body
-            // always returns/errors then so does the loop.
-            if is_literal_true(&node.condition) {
-                summary.exit = match body.exit {
-                    Exit::Return => Exit::Return,
-                    Exit::Break => Exit::Normal,
-                    Exit::Error => Exit::Error,
-                    // A body that "continues" or runs normally yields an
-                    // infinite loop, unreachable from the outside.
-                    Exit::Continue | Exit::Normal => Exit::Error,
-                };
-            }
-        }
-        Statement::RepeatLoop(node) => {
-            summary.decision_points += 1;
-            summary.decision_points += count_decision_points_expression(&node.condition);
-            let body = analyze_full_block(&node.block);
-            summary.may_return |= body.may_return;
-            summary.decision_points += body.decision_points;
-            if is_literal_false(&node.condition) {
-                // `repeat ... until false` is equivalent to `while true do ... end`.
-                summary.exit = match body.exit {
-                    Exit::Return => Exit::Return,
-                    Exit::Break => Exit::Normal,
-                    Exit::Error => Exit::Error,
-                    Exit::Continue | Exit::Normal => Exit::Error,
-                };
-            } else if is_literal_true(&node.condition) {
-                // `repeat ... until true` runs the body exactly once.
-                summary.exit = match body.exit {
-                    Exit::Break => Exit::Normal,
-                    other => other,
-                };
-            } else {
-                // Body executes at least once; a return/error in the body
-                // still terminates the loop. A break is consumed.
-                summary.exit = match body.exit {
-                    Exit::Return => Exit::Return,
-                    Exit::Error => Exit::Error,
-                    Exit::Break | Exit::Continue | Exit::Normal => Exit::Normal,
-                };
-            }
-        }
-        Statement::IfStatement(node) => {
-            // +1 for the if itself, +1 per elseif. The `else` is the
-            // fallthrough, not a decision point in McCabe's definition.
-            summary.decision_points += 1;
-            summary.decision_points += count_decision_points_expression(&node.condition);
-            for clause in &node.elseif_clauses {
-                summary.decision_points += 1;
-                summary.decision_points += count_decision_points_expression(&clause.condition);
-            }
-
-            let then_summary = analyze_full_block(&node.block);
-            summary.may_return |= then_summary.may_return;
-            summary.decision_points += then_summary.decision_points;
-
-            let mut branch_exits: Vec<Exit> = vec![then_summary.exit];
-            for clause in &node.elseif_clauses {
-                let clause_summary = analyze_full_block(&clause.block);
-                summary.may_return |= clause_summary.may_return;
-                summary.decision_points += clause_summary.decision_points;
-                branch_exits.push(clause_summary.exit);
-            }
-
-            if let Some(else_clause) = &node.else_clause {
-                let else_summary = analyze_full_block(&else_clause.block);
-                summary.may_return |= else_summary.may_return;
-                summary.decision_points += else_summary.decision_points;
-                branch_exits.push(else_summary.exit);
-                summary.exit = combine_branches(&branch_exits);
-            } else {
-                // Implicit fallthrough is Normal, so the if-without-else
-                // can never terminate the enclosing sequence.
-                summary.exit = Exit::Normal;
-            }
-        }
-        Statement::NumericFor(node) => {
-            summary.decision_points += 1;
-            summary.decision_points += count_decision_points_expression(&node.start);
-            summary.decision_points += count_decision_points_expression(&node.limit);
-            if let Some(step) = &node.step {
-                summary.decision_points += count_decision_points_expression(step);
-            }
-            let body = analyze_full_block(&node.block);
-            summary.may_return |= body.may_return;
-            summary.decision_points += body.decision_points;
-            // The body may execute zero times; the loop itself falls
-            // through normally.
-            summary.exit = Exit::Normal;
-        }
-        Statement::GenericFor(node) => {
-            summary.decision_points += 1;
-            summary.decision_points += count_decision_points_punctuated_exprs(&node.exprs);
-            let body = analyze_full_block(&node.block);
-            summary.may_return |= body.may_return;
-            summary.decision_points += body.decision_points;
-            summary.exit = Exit::Normal;
-        }
-        // Function declarations are isolated control-flow units. Their
-        // exits and decision points belong to the function, not the
-        // enclosing block. Callers that need per-function complexity
-        // run `analyze_full_block` on the body directly.
-        Statement::FunctionDecl(_) => {}
-        Statement::LocalFunction(_) => {}
-        Statement::LocalAssignment(node) => {
-            if let Some(exprs) = &node.exprs {
-                summary.decision_points += count_decision_points_punctuated_exprs(exprs);
-            }
-        }
-        Statement::EmptyStatement(_) => {}
-        Statement::Goto(_) => {}
-        Statement::Label(_) => {}
-        Statement::GlobalDeclaration(node) => {
-            if let Some(exprs) = &node.exprs {
-                summary.decision_points += count_decision_points_punctuated_exprs(exprs);
-            }
-        }
-        Statement::GlobalFunction(_) => {}
-        Statement::GlobalStar(_) => {}
-        // Lua 5.2+: bare `break` statement.
-        Statement::Break(_) => {
-            summary.exit = Exit::Break;
-        }
-        Statement::CompoundAssignment(node) => {
-            summary.decision_points += count_decision_points_expression(&node.expr);
-        }
-        Statement::TypeDeclaration(_) => {}
-        Statement::Error(_) => {}
+    pub(crate) fn reaches(&self, exit: Exit) -> bool {
+        self.is_reachable.get(exit.node()).copied().unwrap_or_default()
     }
 
-    summary
-}
-
-/// Combine branch exits using the "weakest matching exit" rule.
-///
-/// Returns the common exit kind iff every branch shares it; otherwise
-/// `Exit::Normal` (the path that takes the disagreeing branch falls
-/// through). Error is treated as a stronger non-return than Return only
-/// when paired with itself; mixed Return/Error collapses to Return
-/// because both prevent fallthrough.
-fn combine_branches(exits: &[Exit]) -> Exit {
-    if exits.is_empty() {
-        return Exit::Normal;
+    /// Whether the code at `offset`, or else the first code after it, can
+    /// run. True past the last code.
+    pub(crate) fn can_run(&self, offset: u32) -> bool {
+        self.node_at(offset)
+            .is_none_or(|node| self.is_reachable.get(node).copied().unwrap_or_default())
     }
-    let first = exits[0];
-    let all_non_normal = exits.iter().all(|exit| !matches!(exit, Exit::Normal));
-    if !all_non_normal {
-        return Exit::Normal;
+
+    /// The node of the code at `offset`, or else of the first code after it.
+    pub(crate) fn node_at(&self, offset: u32) -> Option<usize> {
+        let index = self.code.partition_point(|&(span, _)| span.end <= offset);
+        self.code.get(index).map(|&(_, node)| node)
     }
-    let all_returnish = exits
-        .iter()
-        .all(|exit| matches!(exit, Exit::Return | Exit::Error));
-    if all_returnish {
-        // Return is the dominant label. Error is rare, and merging it
-        // into Return still preserves "always_returns".
-        return if exits.iter().all(|exit| matches!(exit, Exit::Error)) {
-            Exit::Error
-        } else {
-            Exit::Return
-        };
+
+    pub(crate) const fn node_count(&self) -> usize {
+        self.successors.len()
     }
-    if exits.iter().all(|exit| *exit == first) {
-        return first;
+
+    pub(crate) fn successors(&self, node: usize) -> impl Iterator<Item = usize> + '_ {
+        self.successors.get(node).into_iter().flatten().copied().flatten()
     }
-    // Mixed non-Normal exits (e.g. one branch breaks, another returns)
-    // have no single label, so report the weakest observable property.
-    // Normal, since the enclosing sequence may continue along the break
-    // path once a loop consumes it.
-    Exit::Normal
-}
 
-fn is_literal_true(expr: &Expression) -> bool {
-    matches!(expr, Expression::True(_))
-}
-
-fn is_literal_false(expr: &Expression) -> bool {
-    matches!(expr, Expression::False(_))
-}
-
-/// Direct call to the `error` global with no receiver method.
-fn call_is_error(call: &FunctionCall) -> bool {
-    if call.method.is_some() {
-        return false;
+    pub(crate) fn locals(&self) -> &[LocalDeclaration] {
+        &self.locals
     }
-    let Expression::Var(var) = &call.callee else {
-        return false;
-    };
-    let Var::Name(token) = var else {
-        return false;
-    };
-    matches!(&token.kind, TokenKind::Identifier(name) if name.as_str() == "error")
+
+    pub(crate) fn starts_at_or_after(&self, node: usize, offset: u32) -> bool {
+        self.code_starts.get(node).is_some_and(|start| *start >= offset)
+    }
 }
 
-fn count_decision_points_punctuated_exprs(exprs: &luck_ast::shared::Punctuated<Expression>) -> u32 {
-    exprs.iter().map(count_decision_points_expression).sum()
+struct GraphBuilder<'ast, 'analysis> {
+    graph: FlowGraph,
+    semantic: &'analysis SemanticAnalysis,
+    /// The node the next code runs after, or `None` right after a jump.
+    cursor: Option<usize>,
+    scope_end: u32,
+    break_target: usize,
+    continue_target: usize,
+    /// Each label visible here, innermost last.
+    labels: Vec<(&'ast str, usize)>,
 }
 
-fn count_decision_points_call(call: &FunctionCall) -> u32 {
-    let mut total = count_decision_points_expression(&call.callee);
-    match &call.args {
-        FunctionArgs::Parenthesized { args, .. } => {
-            total += count_decision_points_punctuated_exprs(args);
+impl<'ast> GraphBuilder<'ast, '_> {
+    fn new_node(&mut self) -> usize {
+        self.graph.successors.push([None; 2]);
+        self.graph.code_starts.push(0);
+        self.graph.node_count().saturating_sub(1)
+    }
+
+    fn connect(&mut self, from: usize, to: usize) {
+        if let Some(successors) = self.graph.successors.get_mut(from)
+            && let Some(free_edge) = successors.iter_mut().find(|edge| edge.is_none())
+        {
+            *free_edge = Some(to);
         }
-        FunctionArgs::TableConstructor(_) => {}
-        FunctionArgs::StringLiteral(_) => {}
     }
-    total
-}
 
-/// McCabe-style decision-point count for an expression. Every short-circuit
-/// `and`/`or` adds 1 (each adds an independent path); a Luau `if/elseif/else`
-/// expression adds 1 per `if`/`elseif`.
-fn count_decision_points_expression(expr: &Expression) -> u32 {
-    match expr {
-        Expression::Nil(_) => 0,
-        Expression::False(_) => 0,
-        Expression::True(_) => 0,
-        Expression::Number(_) => 0,
-        Expression::Integer(_) => 0, // Luau
-        Expression::StringLiteral(_) => 0,
-        Expression::VarArg(_) => 0,
-        Expression::FunctionDef(_) => 0,
-        Expression::Var(var) => count_decision_points_var(var),
-        Expression::FunctionCall(call) => count_decision_points_call(call),
-        Expression::Parenthesized(node) => count_decision_points_expression(&node.expr),
-        Expression::TableConstructor(node) => {
-            let mut total = 0;
-            for field in node.fields.iter() {
-                match field {
-                    luck_ast::shared::Field::Bracketed { key, value, .. } => {
-                        total += count_decision_points_expression(key);
-                        total += count_decision_points_expression(value);
-                    }
-                    luck_ast::shared::Field::Named { value, .. } => {
-                        total += count_decision_points_expression(value);
-                    }
-                    luck_ast::shared::Field::Positional { value, .. } => {
-                        total += count_decision_points_expression(value);
-                    }
+    fn advance_to(&mut self, node: usize) {
+        if let Some(cursor) = self.cursor {
+            self.connect(cursor, node);
+        }
+        self.cursor = Some(node);
+    }
+
+    fn code(&mut self, span: Span) -> usize {
+        let node = self.new_node();
+        if let Some(code_start) = self.graph.code_starts.get_mut(node) {
+            *code_start = span.start;
+        }
+        self.graph.code.push((span, node));
+        self.advance_to(node);
+        node
+    }
+
+    fn jump(&mut self, span: Span, target: usize) {
+        let node = self.code(span);
+        self.connect(node, target);
+        self.cursor = None;
+    }
+
+    fn close_into(&mut self, target: usize) {
+        if let Some(cursor) = self.cursor.take() {
+            self.connect(cursor, target);
+        }
+    }
+
+    fn block(&mut self, block: &'ast Block) {
+        self.scoped_block(block, block.span.end);
+    }
+
+    fn scoped_block(&mut self, block: &'ast Block, scope_end: u32) {
+        let outer_scope_end = mem::replace(&mut self.scope_end, scope_end);
+        let outer_label_count = self.labels.len();
+        // A label is visible in its whole block, `goto`s before it included.
+        for stmt in &block.stmts {
+            if let Statement::Label(label) = stmt
+                && let Some(name) = label.name.identifier()
+            {
+                let node = self.new_node();
+                self.labels.push((name, node));
+            }
+        }
+        for stmt in &block.stmts {
+            self.stmt(stmt);
+        }
+        if let Some(last) = &block.last_stmt {
+            self.last_stmt(last);
+        }
+        self.labels.truncate(outer_label_count);
+        self.scope_end = outer_scope_end;
+    }
+
+    fn label_node(&self, token: &Token) -> Option<usize> {
+        let name = token.identifier()?;
+        self.labels.iter().rfind(|(label, _)| *label == name).map(|&(_, node)| node)
+    }
+
+    fn stmt(&mut self, stmt: &'ast Statement) {
+        match stmt {
+            Statement::FunctionCall(call) => {
+                let node = self.code(call.span);
+                if is_global_call(call, "error", self.semantic) {
+                    self.connect(node, Exit::Error.node());
+                    self.cursor = None;
                 }
             }
-            total
-        }
-        Expression::BinaryOp(node) => {
-            let self_points = match node.op {
-                BinOp::And | BinOp::Or => 1,
-                _ => 0,
-            };
-            self_points
-                + count_decision_points_expression(&node.left)
-                + count_decision_points_expression(&node.right)
-        }
-        Expression::UnaryOp(node) => count_decision_points_expression(&node.operand),
-        // Luau: each `if`/`elseif` in an if-expression is a branch point.
-        Expression::IfExpression(node) => {
-            let mut total = 1;
-            total += count_decision_points_expression(&node.condition);
-            total += count_decision_points_expression(&node.then_expr);
-            for clause in &node.elseif_clauses {
-                total += 1;
-                total += count_decision_points_expression(&clause.condition);
-                total += count_decision_points_expression(&clause.expr);
+            Statement::LocalAssignment(local) => {
+                let node = self.code(local.span);
+                let scope_end = self.scope_end;
+                self.graph.locals.extend(local.names.iter().map(|attributed| LocalDeclaration {
+                    name_span: attributed.name.span,
+                    node,
+                    scope_end,
+                }));
             }
-            total += count_decision_points_expression(&node.else_expr);
-            total
-        }
-        Expression::InterpolatedString(node) => {
-            let mut total = 0;
-            for segment in &node.segments {
-                if let Some(expr) = &segment.expr {
-                    total += count_decision_points_expression(expr);
+            Statement::DoBlock(node) => self.block(&node.block),
+            Statement::WhileLoop(node) => self.while_loop(node),
+            Statement::RepeatLoop(node) => self.repeat_loop(node),
+            Statement::IfStatement(node) => self.if_stmt(node),
+            Statement::NumericFor(node) => {
+                self.for_loop(Span::new(node.span.start, node.block.span.start), &node.block);
+            }
+            Statement::GenericFor(node) => {
+                self.for_loop(Span::new(node.span.start, node.block.span.start), &node.block);
+            }
+            // Lua 5.2+
+            Statement::Goto(node) => {
+                let target = self.label_node(&node.name);
+                self.jump(node.span, target.unwrap_or_else(|| Exit::Break.node()));
+            }
+            // Lua 5.2+
+            Statement::Label(node) => {
+                if let Some(target) = self.label_node(&node.name) {
+                    self.graph.code.push((node.span, target));
+                    self.advance_to(target);
                 }
             }
-            total
+            // Lua 5.2+: `break` as an ordinary statement.
+            Statement::Break(span) => self.jump(*span, self.break_target),
+            Statement::EmptyStatement(_) => {}
+            Statement::Assignment(_)
+            | Statement::FunctionDecl(_)
+            | Statement::LocalFunction(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => {
+                self.code(stmt.span());
+            }
         }
-        Expression::TypeCast(node) => count_decision_points_expression(&node.expr),
-        Expression::TypeInstantiation(node) => count_decision_points_expression(&node.expr),
-        Expression::Error(_) => 0,
+    }
+
+    fn last_stmt(&mut self, last: &'ast LastStatement) {
+        match last {
+            LastStatement::Return(node) => {
+                let exit =
+                    if node.exprs.is_empty() { Exit::ReturnEmpty } else { Exit::ReturnValue };
+                self.jump(node.span, exit.node());
+            }
+            LastStatement::Break(span) => self.jump(*span, self.break_target),
+            // Luau
+            LastStatement::Continue(span) => self.jump(*span, self.continue_target),
+            LastStatement::Error(span) => {
+                self.code(*span);
+            }
+        }
+    }
+
+    fn loop_body(
+        &mut self,
+        block: &'ast Block,
+        scope_end: u32,
+        break_target: usize,
+        continue_target: usize,
+    ) {
+        let outer_break_target = mem::replace(&mut self.break_target, break_target);
+        let outer_continue_target = mem::replace(&mut self.continue_target, continue_target);
+        self.scoped_block(block, scope_end);
+        self.close_into(continue_target);
+        self.break_target = outer_break_target;
+        self.continue_target = outer_continue_target;
+    }
+
+    fn while_loop(&mut self, node: &'ast WhileLoop) {
+        let head = self.code(Span::new(node.span.start, node.block.span.start));
+        let after = self.new_node();
+        let truth = literal_truth(&node.condition);
+        if truth == Some(false) {
+            self.cursor = None;
+        }
+        self.loop_body(&node.block, node.block.span.end, after, head);
+        if truth != Some(true) {
+            self.connect(head, after);
+        }
+        self.cursor = Some(after);
+    }
+
+    fn repeat_loop(&mut self, node: &'ast RepeatLoop) {
+        let body = self.new_node();
+        self.advance_to(body);
+        let condition = self.new_node();
+        let after = self.new_node();
+        // A repeat's condition still sees its body's locals.
+        self.loop_body(&node.block, node.condition.span().end, after, condition);
+        self.graph.code.push((node.condition.span(), condition));
+        let truth = literal_truth(&node.condition);
+        if truth != Some(true) {
+            self.connect(condition, body);
+        }
+        if truth != Some(false) {
+            self.connect(condition, after);
+        }
+        self.cursor = Some(after);
+    }
+
+    fn for_loop(&mut self, header: Span, body: &'ast Block) {
+        self.code(header);
+        let head = self.new_node();
+        self.advance_to(head);
+        let after = self.new_node();
+        self.loop_body(body, body.span.end, after, head);
+        // The iterator can run out before the first iteration.
+        self.connect(head, after);
+        self.cursor = Some(after);
+    }
+
+    fn if_stmt(&mut self, node: &'ast IfStatement) {
+        let mut test = self.code(Span::new(node.span.start, node.block.span.start));
+        let join = self.new_node();
+        self.block(&node.block);
+        self.close_into(join);
+        for clause in &node.elseif_clauses {
+            self.cursor = Some(test);
+            test = self.code(Span::new(clause.span.start, clause.block.span.start));
+            self.block(&clause.block);
+            self.close_into(join);
+        }
+        self.cursor = Some(test);
+        if let Some(else_clause) = &node.else_clause {
+            self.block(&else_clause.block);
+        }
+        self.close_into(join);
+        self.cursor = Some(join);
     }
 }
 
-fn count_decision_points_var(var: &Var) -> u32 {
-    match var {
-        Var::Name(_) => 0,
-        Var::Index(node) => {
-            count_decision_points_expression(&node.prefix)
-                + count_decision_points_expression(&node.index)
-        }
-        Var::FieldAccess(node) => count_decision_points_expression(&node.prefix),
+fn literal_truth(condition: &Expression) -> Option<bool> {
+    match unwrap_parentheses(condition) {
+        Expression::Nil(_) | Expression::False(_) => Some(false),
+        Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TableConstructor(_)
+        | Expression::FunctionDef(_) => Some(true),
+        Expression::VarArg(_)
+        | Expression::Var(_)
+        | Expression::FunctionCall(_)
+        | Expression::Parenthesized(_)
+        | Expression::BinaryOp(_)
+        | Expression::UnaryOp(_)
+        | Expression::IfExpression(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => None,
     }
+}
+
+pub(crate) fn decision_points(block: &Block) -> u32 {
+    let mut points = DecisionPoints::default();
+    points.visit_block(block);
+    points.count.0
+}
+
+/// One per `if`, `elseif`, and loop, one per `and` or `or`, and one per `if`
+/// or `elseif` of a Luau if-expression.
+#[derive(Default)]
+struct DecisionPoints {
+    count: Saturating<u32>,
+}
+
+impl DecisionPoints {
+    fn count_clauses(&mut self, clause_count: usize) {
+        self.count += u32::try_from(clause_count.saturating_add(1)).unwrap_or(u32::MAX);
+    }
+}
+
+impl<'ast> Visitor<'ast> for DecisionPoints {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+        match stmt {
+            Statement::IfStatement(node) => self.count_clauses(node.elseif_clauses.len()),
+            Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_) => self.count += 1,
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::FunctionDecl(_)
+            | Statement::LocalFunction(_)
+            | Statement::LocalAssignment(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => {}
+        }
+        self.walk_stmt(stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        match expr {
+            Expression::BinaryOp(node) => {
+                if matches!(node.op, BinOp::And | BinOp::Or) {
+                    self.count += 1;
+                }
+            }
+            // Luau
+            Expression::IfExpression(node) => self.count_clauses(node.elseif_clauses.len()),
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Var(_)
+            | Expression::FunctionCall(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::UnaryOp(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::TypeInstantiation(_)
+            | Expression::Error(_) => {}
+        }
+        self.walk_expr(expr);
+    }
+
+    fn visit_function_body(&mut self, _body: &'ast FunctionBody) {}
+
+    fn visit_type(&mut self, _type_value: &'ast Type) {}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
-    fn parse_block(source: &str) -> Block {
-        let result = luck_parser::parse(source, LuaVersion::Lua54);
-        assert!(
-            result.errors.is_empty(),
-            "parser errors for {source:?}: {:?}",
-            result.errors
-        );
-        result.block
+    use super::*;
+
+    fn parse_block(source: &str, version: LuaVersion) -> Block {
+        let parse = luck_parser::parse(source, version);
+        assert!(parse.errors.is_empty(), "parser errors for {source:?}: {:?}", parse.errors);
+        parse.block
     }
 
-    fn summarize(source: &str) -> BranchSummary {
-        let block = parse_block(source);
-        analyze_full_block(&block)
+    fn flow_of(source: &str, version: LuaVersion) -> FlowGraph {
+        let block = parse_block(source, version);
+        FlowGraph::of_block(&block, &luck_semantic::analyze(&block, version))
     }
 
-    #[test]
-    fn empty_block_is_normal() {
-        let summary = summarize("");
-        assert_eq!(summary.exit, Exit::Normal);
-        assert_eq!(summary.statement_count, 0);
-        assert!(!summary.always_returns);
-        assert!(!summary.may_return);
+    fn flow(source: &str) -> FlowGraph {
+        flow_of(source, LuaVersion::Lua54)
+    }
+
+    fn points(source: &str) -> u32 {
+        decision_points(&parse_block(source, LuaVersion::Lua54))
     }
 
     #[test]
-    fn bare_return_terminates() {
-        let summary = summarize("return 1");
-        assert_eq!(summary.exit, Exit::Return);
-        assert!(summary.always_returns);
-        assert!(summary.may_return);
+    fn empty_block_falls_through() {
+        let graph = flow("");
+        assert!(graph.reaches(Exit::End));
+        assert!(!graph.reaches(Exit::ReturnValue));
     }
 
     #[test]
-    fn if_without_else_does_not_always_return() {
-        let summary = summarize("local c = 1\nif c then return 1 end");
-        assert_eq!(summary.exit, Exit::Normal);
-        assert!(!summary.always_returns);
-        assert!(summary.may_return);
+    fn return_ends_the_block() {
+        let graph = flow("return 1");
+        assert!(graph.reaches(Exit::ReturnValue));
+        assert!(!graph.reaches(Exit::End));
     }
 
     #[test]
-    fn if_else_both_return() {
-        let summary = summarize("local c = 1\nif c then return 1 else return 2 end");
-        assert_eq!(summary.exit, Exit::Return);
-        assert!(summary.always_returns);
-        assert!(summary.may_return);
+    fn bare_return_has_no_value() {
+        let graph = flow("return");
+        assert!(graph.reaches(Exit::ReturnEmpty));
+        assert!(!graph.reaches(Exit::ReturnValue));
     }
 
     #[test]
-    fn if_elseif_else_all_return() {
-        let summary = summarize(
+    fn if_without_else_falls_through() {
+        let graph = flow("local c = 1\nif c then return 1 end");
+        assert!(graph.reaches(Exit::End));
+        assert!(graph.reaches(Exit::ReturnValue));
+    }
+
+    #[test]
+    fn if_else_both_returning_never_fall_through() {
+        let graph = flow("local c = 1\nif c then return 1 else return 2 end");
+        assert!(graph.reaches(Exit::ReturnValue));
+        assert!(!graph.reaches(Exit::End));
+    }
+
+    #[test]
+    fn if_elseif_else_all_returning_never_fall_through() {
+        let graph = flow(
             "local c = 1\nlocal d = 1\nif c then return 1 elseif d then return 2 else return 3 end",
         );
-        assert_eq!(summary.exit, Exit::Return);
-        assert!(summary.always_returns);
+        assert!(!graph.reaches(Exit::End));
     }
 
     #[test]
-    fn while_true_no_break_is_error_exit() {
-        let summary = summarize("while true do print(1) end");
-        // Infinite loop: never falls through, treated like Error for
-        // unreachable analysis. `always_returns` is true since Error
-        // counts as non-falling-through.
-        assert_eq!(summary.exit, Exit::Error);
-        assert!(summary.always_returns);
-        assert!(!summary.may_return);
+    fn while_true_without_break_never_falls_through() {
+        let graph = flow("while true do print(1) end");
+        assert!(!graph.reaches(Exit::End));
+        assert!(!graph.reaches(Exit::ReturnValue));
     }
 
     #[test]
-    fn while_true_with_return_returns() {
-        let summary = summarize("while true do return 1 end");
-        assert_eq!(summary.exit, Exit::Return);
-        assert!(summary.always_returns);
-        assert!(summary.may_return);
+    fn while_true_with_return_only_returns() {
+        let graph = flow("while true do return 1 end");
+        assert!(graph.reaches(Exit::ReturnValue));
+        assert!(!graph.reaches(Exit::End));
     }
 
     #[test]
-    fn repeat_until_true_executes_once() {
-        let summary = summarize("repeat return 1 until true");
-        assert_eq!(summary.exit, Exit::Return);
-        assert!(summary.may_return);
+    fn while_true_with_conditional_break_falls_through() {
+        let graph = flow("local c = 1\nwhile true do if c then break end end");
+        assert!(graph.reaches(Exit::End));
+        assert!(!graph.reaches(Exit::Break), "the `break` belongs to the loop");
     }
 
     #[test]
-    fn numeric_for_may_not_execute() {
-        let summary = summarize("for i = 1, 10 do return 1 end");
-        // Loop body may not execute (start > limit at runtime), so the
-        // loop itself falls through normally, even though it MAY return.
-        assert_eq!(summary.exit, Exit::Normal);
-        assert!(!summary.always_returns);
-        assert!(summary.may_return);
+    fn while_with_truthy_literal_condition_never_falls_through() {
+        for condition in ["1", "'s'", "{}", "(true)"] {
+            let graph = flow(&format!("while {condition} do print(1) end"));
+            assert!(!graph.reaches(Exit::End), "{condition}");
+        }
+    }
+
+    #[test]
+    fn while_with_falsy_literal_condition_skips_its_body() {
+        let graph = flow("while nil do return 1 end");
+        assert!(graph.reaches(Exit::End));
+        assert!(!graph.reaches(Exit::ReturnValue));
+    }
+
+    #[test]
+    fn repeat_until_true_runs_once() {
+        let graph = flow("repeat return 1 until true");
+        assert!(graph.reaches(Exit::ReturnValue));
+        assert!(!graph.reaches(Exit::End));
+    }
+
+    #[test]
+    fn repeat_until_false_is_infinite() {
+        assert!(!flow("repeat print(1) until false").reaches(Exit::End));
+    }
+
+    #[test]
+    fn numeric_for_may_not_run() {
+        let graph = flow("for i = 1, 10 do return 1 end");
+        assert!(graph.reaches(Exit::End));
+        assert!(graph.reaches(Exit::ReturnValue));
     }
 
     #[test]
     fn do_block_return_propagates() {
-        let summary = summarize("do return end");
-        assert_eq!(summary.exit, Exit::Return);
-        assert!(summary.always_returns);
+        let graph = flow("do return end");
+        assert!(graph.reaches(Exit::ReturnEmpty));
+        assert!(!graph.reaches(Exit::End));
     }
 
     #[test]
-    fn unconditional_error_is_error_exit() {
-        let summary = summarize("error(\"x\")");
-        assert_eq!(summary.exit, Exit::Error);
-        assert!(summary.always_returns);
+    fn error_call_ends_the_block() {
+        let graph = flow("error(\"x\")");
+        assert!(graph.reaches(Exit::Error));
+        assert!(!graph.reaches(Exit::End));
+    }
+
+    #[test]
+    fn shadowed_error_is_an_ordinary_call() {
+        let graph = flow("local function error() end\nerror(\"x\")");
+        assert!(!graph.reaches(Exit::Error));
+        assert!(graph.reaches(Exit::End));
     }
 
     #[test]
     fn break_in_inner_loop_is_consumed() {
-        let summary = summarize("local c = 1\nwhile c do if c then break end end");
-        // The break belongs to the while; the enclosing block falls
-        // through normally.
-        assert_eq!(summary.exit, Exit::Normal);
-        assert!(!summary.always_returns);
+        let graph = flow("local c = 1\nwhile c do if c then break end end");
+        assert!(graph.reaches(Exit::End));
+        assert!(!graph.reaches(Exit::Break));
+    }
+
+    #[test]
+    fn continue_runs_the_until_condition() {
+        let graph = flow_of("repeat continue until true\nreturn 2", LuaVersion::Luau);
+        assert!(graph.reaches(Exit::ReturnValue));
+        assert!(!graph.reaches(Exit::End));
+    }
+
+    #[test]
+    fn continue_of_the_analyzed_block_ends_it() {
+        let block = parse_block("for _ = 1, 3 do continue end", LuaVersion::Luau);
+        let Some(Statement::NumericFor(numeric_for)) = block.stmts.first() else {
+            panic!("the statement must be a numeric for");
+        };
+        let semantic = luck_semantic::analyze(&block, LuaVersion::Luau);
+        assert!(FlowGraph::of_block(&numeric_for.block, &semantic).reaches(Exit::End));
+    }
+
+    #[test]
+    fn goto_jumps_over_the_code_before_its_label() {
+        let graph = flow("goto skip\ndo return end\n::skip::\nprint(1)");
+        assert!(!graph.reaches(Exit::ReturnEmpty));
+        assert!(graph.reaches(Exit::End));
+    }
+
+    #[test]
+    fn backward_goto_loops() {
+        let graph = flow("::top::\nprint(1)\ngoto top");
+        assert!(!graph.reaches(Exit::End));
+    }
+
+    #[test]
+    fn goto_to_a_label_outside_the_block_leaves_it() {
+        let block = parse_block("while true do goto done end\n::done::", LuaVersion::Lua54);
+        let Some(Statement::WhileLoop(while_loop)) = block.stmts.first() else {
+            panic!("the statement must be a while loop");
+        };
+        let semantic = luck_semantic::analyze(&block, LuaVersion::Lua54);
+        let graph = FlowGraph::of_block(&while_loop.block, &semantic);
+        assert!(graph.reaches(Exit::Break));
+        assert!(!graph.reaches(Exit::End));
+    }
+
+    #[test]
+    fn can_run_is_false_after_a_jump_until_a_reached_label() {
+        let source = "goto a\nprint(1)\n::a::\nprint(2)";
+        let graph = flow(source);
+        let offset_of = |text: &str| u32::try_from(source.find(text).expect("in source")).unwrap();
+        assert!(!graph.can_run(offset_of("print(1)")));
+        assert!(graph.can_run(offset_of("print(2)")));
     }
 
     #[test]
     fn decision_points_empty_block() {
-        let summary = summarize("");
-        // McCabe baseline of 1 is added by the caller (the rule); the
-        // walker reports 0 decision points for an empty body.
-        assert_eq!(summary.decision_points, 0);
+        // The rule adds McCabe's baseline of 1; the count here is 0.
+        assert_eq!(points(""), 0);
     }
 
     #[test]
     fn decision_points_single_if() {
-        let summary = summarize("local c = 1\nif c then end");
-        assert_eq!(summary.decision_points, 1);
+        assert_eq!(points("local c = 1\nif c then end"), 1);
     }
 
     #[test]
     fn decision_points_if_with_and() {
-        let summary = summarize("local a = 1\nlocal b = 1\nif a and b then end");
         // +1 for the if, +1 for the `and`.
-        assert_eq!(summary.decision_points, 2);
+        assert_eq!(points("local a = 1\nlocal b = 1\nif a and b then end"), 2);
     }
 
     #[test]
     fn decision_points_if_elseif() {
-        let summary = summarize("local a = 1\nlocal b = 1\nif a then elseif b then end");
         // +1 for the if, +1 for the elseif.
-        assert_eq!(summary.decision_points, 2);
+        assert_eq!(points("local a = 1\nlocal b = 1\nif a then elseif b then end"), 2);
+    }
+
+    #[test]
+    fn decision_points_each_loop_kind() {
+        assert_eq!(points("while a do end"), 1);
+        assert_eq!(points("repeat until a"), 1);
+        assert_eq!(points("for i = 1, 2 do end"), 1);
+        assert_eq!(points("for _ in f do end"), 1);
+    }
+
+    #[test]
+    fn decision_points_in_table_call_argument() {
+        assert_eq!(points("f{a and b}"), 1);
+        assert_eq!(points("f({a and b})"), 1);
+    }
+
+    #[test]
+    fn decision_points_in_assignment_target() {
+        assert_eq!(points("t[a or b] = 1"), 1);
+    }
+
+    #[test]
+    fn decision_points_in_return() {
+        assert_eq!(points("return a and b"), 1);
+    }
+
+    #[test]
+    fn decision_points_in_return_after_a_terminating_stmt() {
+        assert_eq!(points("do return end return a and b"), 1);
+    }
+
+    #[test]
+    fn decision_points_skip_nested_functions() {
+        assert_eq!(points("local f = function() if a then end end"), 0);
+        assert_eq!(points("local function f() if a then end end"), 0);
     }
 
     #[test]
     fn decision_points_nested_elseif_chain() {
-        let summary = summarize(
-            "local a = 1\nlocal b = 1\nlocal c = 1\nif a then elseif b then elseif c then end",
-        );
         // +1 for the if, +1 per elseif (two of them) = 3.
-        assert_eq!(summary.decision_points, 3);
+        assert_eq!(
+            points(
+                "local a = 1\nlocal b = 1\nlocal c = 1\nif a then elseif b then elseif c then end"
+            ),
+            3
+        );
     }
 }

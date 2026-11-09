@@ -1,61 +1,56 @@
-//! Numeric-literal normalization.
+//! The base prefix (`0x`/`0b`) and exponent marker (`e`/`p`) are always
+//! lowercased, and a bare leading dot gains a zero (`.5` -> `0.5`).
 //!
-//! The base prefix (`0x`/`0b`) and exponent markers (`e`/`p`) are always
-//! lowered - canonical spelling, not a style choice. Hex digit case follows
-//! [`HexCase`]. Digit separators (`_`, Luau) and the numeric value are never
-//! touched, so the result re-parses to the same number.
+//! Neither is a style option. Hex digit case follows [`HexCase`]. Digit separators (`_`, Luau)
+//! stay, and the value never changes.
+
+use alloc::borrow::Cow;
 
 use crate::HexCase;
 
-/// Return the normalized spelling of a numeric literal, or the input
-/// unchanged when nothing applies (plain decimal in `Preserve` mode).
-pub(crate) fn normalize_number(text: &str, hex_case: HexCase) -> String {
-    let bytes = text.as_bytes();
-    let is_hex = bytes.len() >= 2 && bytes[0] == b'0' && matches!(bytes[1], b'x' | b'X');
-    let is_binary = bytes.len() >= 2 && bytes[0] == b'0' && matches!(bytes[1], b'b' | b'B');
+pub(crate) fn normalize_number(text: &str, hex_case: HexCase) -> Cow<'_, str> {
+    let (is_hex, digits) = match text.as_bytes() {
+        [b'0', b'x' | b'X', digits @ ..] => (true, digits),
+        [b'0', b'b' | b'B', digits @ ..] => (false, digits),
+        _ => return normalize_decimal(text),
+    };
 
-    if !is_hex && !is_binary {
-        return normalize_decimal(text);
-    }
+    let mut normalized = String::with_capacity(text.len());
+    normalized.push_str(if is_hex { "0x" } else { "0b" });
 
-    let mut result = String::with_capacity(text.len());
-    result.push('0');
-    result.push(bytes[1].to_ascii_lowercase() as char);
-
-    for &byte in &bytes[2..] {
-        let ch = byte as char;
-        match byte {
-            // Hex-float binary exponent - marker lowercased, its sign/digits
-            // (decimal) fall through unchanged.
-            b'p' | b'P' if is_hex => result.push('p'),
-            b'a'..=b'f' | b'A'..=b'F' if is_hex => result.push(apply_hex_case(ch, hex_case)),
-            _ => result.push(ch),
+    for &b in digits {
+        let c = char::from(b);
+        match b {
+            // Hex-float exponent. Its sign and decimal digits fall through
+            // unchanged.
+            b'p' | b'P' if is_hex => normalized.push('p'),
+            b'a'..=b'f' | b'A'..=b'F' if is_hex => {
+                normalized.push(apply_hex_case(c, hex_case));
+            }
+            _ => normalized.push(c),
         }
     }
-    result
+    Cow::Owned(normalized)
 }
 
-/// Decimal literals: the exponent marker `E`/`e` is always lowered, and a
-/// bare leading dot gains a zero (`.5` -> `0.5`). Hex floats never reach
-/// here - they always start with `0x`.
-fn normalize_decimal(text: &str) -> String {
-    let needs_leading_zero = text.starts_with('.');
-    if !needs_leading_zero && !text.bytes().any(|byte| byte == b'E') {
-        return text.to_string();
+fn normalize_decimal(text: &str) -> Cow<'_, str> {
+    let should_add_leading_zero = text.starts_with('.');
+    if !should_add_leading_zero && !text.bytes().any(|b| b == b'E') {
+        return Cow::Borrowed(text);
     }
-    let mut result = String::with_capacity(text.len() + 1);
-    if needs_leading_zero {
-        result.push('0');
+    let mut normalized = String::with_capacity(text.len().saturating_add(1));
+    if should_add_leading_zero {
+        normalized.push('0');
     }
-    result.extend(text.chars().map(|ch| if ch == 'E' { 'e' } else { ch }));
-    result
+    normalized.extend(text.chars().map(|c| if c == 'E' { 'e' } else { c }));
+    Cow::Owned(normalized)
 }
 
-fn apply_hex_case(ch: char, hex_case: HexCase) -> char {
+const fn apply_hex_case(character: char, hex_case: HexCase) -> char {
     match hex_case {
-        HexCase::Preserve => ch,
-        HexCase::Lower => ch.to_ascii_lowercase(),
-        HexCase::Upper => ch.to_ascii_uppercase(),
+        HexCase::Preserve => character,
+        HexCase::Lower => character.to_ascii_lowercase(),
+        HexCase::Upper => character.to_ascii_uppercase(),
     }
 }
 
@@ -108,7 +103,7 @@ mod tests {
     }
 
     #[test]
-    fn idempotent() {
+    fn normalization_is_idempotent() {
         for input in ["0XB0", "0xDEad", "1E10", "0xAP-2", "0B10", ".5", ".5E2"] {
             for case in [HexCase::Preserve, HexCase::Lower, HexCase::Upper] {
                 let once = normalize_number(input, case);

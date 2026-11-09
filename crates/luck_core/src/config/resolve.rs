@@ -1,18 +1,15 @@
-//! Turning a loaded [`LuckConfig`](super::LuckConfig) into executable
-//! [`BuildConfig`]s: applying
-//! the selected profile, resolving entry/output paths, and expanding the
-//! single-entry or multi-entry (`entries`) form.
-
-use super::CONFIG_FILE_NAME;
-use super::load::{discover_config, load_with_extends};
-use crate::transform_config::TransformConfig;
-use crate::types::{DynamicRequire, LuaTarget};
 use std::path::{Path, PathBuf};
 
-/// Default Lua 5.x search path templates when none are configured.
-pub const DEFAULT_SEARCH_PATHS: &[&str] = &["?.lua", "?/init.lua"];
+use rustc_hash::FxHashSet;
 
-/// Fully resolved configuration for a single build target, ready for execution.
+use super::CONFIG_FILE_NAME;
+use super::dynamic_require::DynamicRequire;
+use super::load::ProjectConfig;
+use super::luck_config::{LuckConfig, ProfileOverrides};
+use super::transform_config::TransformConfig;
+use crate::lua_target::LuaTarget;
+use crate::path::canonicalize_existing;
+
 #[derive(Debug, Clone)]
 pub struct BuildConfig {
     pub target: LuaTarget,
@@ -21,140 +18,179 @@ pub struct BuildConfig {
     pub minify: bool,
     pub dynamic_require: DynamicRequire,
     pub search_paths: Vec<String>,
-    pub rc_dir: PathBuf,
+    pub project_root: PathBuf,
     pub transforms: TransformConfig,
     pub preamble: Option<String>,
     pub luck_preamble: bool,
 }
 
-/// Loads or discovers the config, applies profile overrides, and returns resolved build configs.
+/// # Errors
+///
+/// Returns a message when `profile` isn't defined, when the entry, output, or
+/// dialect settings are missing or invalid, or when an output collides with an
+/// entry or another output.
 pub fn resolve_build_config(
-    config_path: Option<&Path>,
+    project: &ProjectConfig,
     profile: Option<&str>,
 ) -> Result<Vec<BuildConfig>, String> {
-    let cwd =
-        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {e}"))?;
+    let ProjectConfig { root: project_root, config } = project;
 
-    let (rc_path, file_config) = if let Some(path) = config_path {
-        let config = load_with_extends(path)?;
-        (path.to_path_buf(), config)
-    } else {
-        match discover_config(&cwd)? {
-            Some((path, config)) => (path, config),
-            None => {
+    let profile_overrides = select_profile(config, profile)?;
+    let minify =
+        profile_overrides.and_then(|overrides| overrides.minify).or(config.minify).unwrap_or(false);
+    let transforms = profile_overrides
+        .and_then(|overrides| overrides.transforms)
+        .or(config.transforms)
+        .unwrap_or_default();
+    let dynamic_require = config.dynamic_require.unwrap_or_default();
+    let search_paths = config.search_paths_or_default();
+    let luck_preamble = config.luck_preamble.unwrap_or(false);
+
+    let build_config = |target, entry, output| BuildConfig {
+        target,
+        entry,
+        output,
+        minify,
+        dynamic_require,
+        search_paths: search_paths.clone(),
+        project_root: project_root.clone(),
+        transforms,
+        preamble: config.preamble.clone(),
+        luck_preamble,
+    };
+    let resolve_entry = |relative_entry: &str| -> Result<(LuaTarget, PathBuf), String> {
+        let entry = project_root.join(relative_entry);
+        let target = config.target_for_path(&entry)?;
+        if !entry.is_file() {
+            return Err(format!("entry file not found: `{}`", entry.display()));
+        }
+        Ok((target, entry))
+    };
+
+    let builds: Vec<BuildConfig> = match (&config.entries, &config.entry) {
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "cannot specify both `entry` and `entries` in `{CONFIG_FILE_NAME}`"
+            ));
+        }
+        (Some(entries), None) => {
+            if entries.is_empty() {
                 return Err(format!(
-                    "No {CONFIG_FILE_NAME} found. Run from a project directory or use --config."
+                    "`entries` in `{CONFIG_FILE_NAME}` is empty, so list at least one entry to build"
                 ));
             }
+            entries
+                .iter()
+                .map(|entry_config| {
+                    let (target, entry) = resolve_entry(&entry_config.entry)?;
+                    Ok(build_config(target, entry, project_root.join(&entry_config.output)))
+                })
+                .collect::<Result<_, String>>()?
+        }
+        (None, None) => return Err(format!("missing `entry` in `{CONFIG_FILE_NAME}`")),
+        (None, Some(relative_entry)) => {
+            let (target, entry) = resolve_entry(relative_entry)?;
+            let output = if let Some(output_path) = &config.output {
+                project_root.join(output_path)
+            } else {
+                let relative_output_directory = config.output_dir.as_deref().ok_or_else(|| {
+                    format!("missing `output_dir` or `output` in `{CONFIG_FILE_NAME}`")
+                })?;
+                let entry_filename =
+                    entry.file_name().ok_or_else(|| "entry path has no filename".to_owned())?;
+                project_root.join(relative_output_directory).join(entry_filename)
+            };
+            vec![build_config(target, entry, output)]
         }
     };
+    check_output_paths(
+        builds.iter().map(|build| &build.entry),
+        builds.iter().map(|build| &build.output),
+    )?;
+    Ok(builds)
+}
 
-    let rc_dir = rc_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| cwd.clone());
-
-    let profile_overrides = if let Some(name) = profile {
-        match &file_config.profiles {
-            Some(profiles) => match profiles.get(name) {
-                Some(p) => Some(p.clone()),
-                None => {
-                    return Err(format!(
-                        "Profile \"{name}\" not found in {CONFIG_FILE_NAME}"
-                    ));
-                }
-            },
-            None => return Err(format!("No profiles defined in {CONFIG_FILE_NAME}")),
+/// Rejects `outputs` that would replace one of `inputs` or each other. Paths
+/// compare by where they really lead, so two spellings of one path collide
+/// and an output not on disk yet is still checked.
+///
+/// # Errors
+///
+/// Returns a message naming the first output that collides.
+pub fn check_output_paths<Inputs, Outputs>(inputs: Inputs, outputs: Outputs) -> Result<(), String>
+where
+    Inputs: IntoIterator,
+    Inputs::Item: AsRef<Path>,
+    Outputs: IntoIterator,
+    Outputs::Item: AsRef<Path>,
+{
+    let read_paths: FxHashSet<PathBuf> =
+        inputs.into_iter().map(|input| canonicalize_existing(input.as_ref())).collect();
+    let mut written_paths = FxHashSet::default();
+    for output in outputs {
+        let output_path = output.as_ref();
+        let canonical = canonicalize_existing(output_path);
+        if read_paths.contains(&canonical) {
+            return Err(format!(
+                "output `{}` would overwrite a source file of the build",
+                output_path.display()
+            ));
         }
-    } else {
-        None
+        if !written_paths.insert(canonical) {
+            return Err(format!(
+                "output `{}` is written more than once, so one result would replace another",
+                output_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// # Errors
+///
+/// Returns a message when the config doesn't define `profile`.
+fn select_profile(
+    config: &LuckConfig,
+    profile: Option<&str>,
+) -> Result<Option<ProfileOverrides>, String> {
+    let Some(name) = profile else {
+        return Ok(None);
     };
-
-    let minify = profile_overrides
+    let profiles = config
+        .profiles
         .as_ref()
-        .and_then(|p| p.minify)
-        .or(file_config.minify)
-        .unwrap_or(false);
-    let transforms = profile_overrides
-        .as_ref()
-        .and_then(|p| p.transforms.clone())
-        .or(file_config.transforms.clone())
-        .unwrap_or_default();
+        .ok_or_else(|| format!("no profiles defined in `{CONFIG_FILE_NAME}`"))?;
+    let overrides = profiles
+        .get(name)
+        .ok_or_else(|| format!("profile `{name}` not found in `{CONFIG_FILE_NAME}`"))?;
+    Ok(Some(*overrides))
+}
 
-    let dynamic_require = file_config.dynamic_require.unwrap_or_default();
+#[cfg(test)]
+mod tests {
+    use std::fs;
 
-    let search_paths = file_config
-        .search_paths
-        .clone()
-        .unwrap_or_else(|| DEFAULT_SEARCH_PATHS.iter().map(|s| s.to_string()).collect());
+    use super::*;
+    use crate::config::parse_luck_config;
 
-    let preamble = file_config.preamble.clone();
-    let luck_preamble = file_config.luck_preamble.unwrap_or(false);
+    #[test]
+    fn rejects_empty_entries() {
+        let config = parse_luck_config(r#"{"entries": []}"#).expect("config parses");
+        let project = ProjectConfig { root: PathBuf::from("."), config };
 
-    if file_config.entries.is_some() && file_config.entry.is_some() {
-        return Err(format!(
-            "Cannot specify both \"entry\" and \"entries\" in {CONFIG_FILE_NAME}"
-        ));
+        let error = resolve_build_config(&project, None).expect_err("empty entries resolved");
+        assert!(error.contains("`entries`"), "{error}");
     }
 
-    if let Some(entries) = &file_config.entries {
-        let mut configs = Vec::new();
-        for ec in entries {
-            let entry = rc_dir.join(&ec.entry);
-            let target = file_config.target_for_path(&entry)?;
-            if !entry.is_file() {
-                return Err(format!("Entry file not found: {}", entry.display()));
-            }
-            let output = rc_dir.join(&ec.output);
-            configs.push(BuildConfig {
-                target,
-                entry,
-                output,
-                minify,
-                dynamic_require,
-                search_paths: search_paths.clone(),
-                rc_dir: rc_dir.clone(),
-                transforms: transforms.clone(),
-                preamble: preamble.clone(),
-                luck_preamble,
-            });
-        }
-        Ok(configs)
-    } else {
-        let entry_str = file_config
-            .entry
-            .as_deref()
-            .ok_or_else(|| format!("Missing \"entry\" in {CONFIG_FILE_NAME}"))?;
-        let entry = rc_dir.join(entry_str);
-        let target = file_config.target_for_path(&entry)?;
-        if !entry.is_file() {
-            return Err(format!("Entry file not found: {}", entry.display()));
-        }
-
-        let output = if let Some(out) = &file_config.output {
-            rc_dir.join(out)
-        } else {
-            let output_dir_str = file_config.output_dir.as_deref().ok_or_else(|| {
-                format!("Missing \"output_dir\" or \"output\" in {CONFIG_FILE_NAME}")
-            })?;
-            let output_dir = rc_dir.join(output_dir_str);
-            let entry_filename = entry
-                .file_name()
-                .ok_or_else(|| "Entry path has no filename".to_string())?;
-            output_dir.join(entry_filename)
-        };
-
-        Ok(vec![BuildConfig {
-            target,
-            entry,
-            output,
-            minify,
-            dynamic_require,
-            search_paths,
-            rc_dir,
-            transforms,
-            preamble,
-            luck_preamble,
-        }])
+    #[test]
+    fn output_paths_collide_through_a_directory_not_on_disk() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let entry = directory.path().join("main.lua");
+        fs::write(&entry, "return 1").expect("write entry");
+        let same_as_entry = directory.path().join("gone/../main.lua");
+        assert!(check_output_paths([&entry], [&same_as_entry]).is_err());
+        let spare = directory.path().join("out/bundle.lua");
+        check_output_paths([&entry], [&spare]).expect("a spare output doesn't collide");
+        assert!(check_output_paths([&entry], [&spare, &spare]).is_err());
     }
 }

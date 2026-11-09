@@ -1,356 +1,112 @@
-use luck_ast::Expression;
-use luck_ast::expr::Var;
-use luck_ast::shared::{Block, Field, FunctionBody};
-use luck_ast::stmt::{LastStatement, Statement};
-use luck_token::{Span, TokenKind};
+use luck_ast::{Block, FunctionBody, Statement, Visitor};
+use luck_token::Span;
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
-/// Labels (`::name::`) that are never targeted by a `goto` in the same
-/// function. `goto` cannot cross a function boundary in Lua, so a label
-/// in one function and a goto in another are unrelated. The check scans
-/// label/goto pairs per function scope, treating the chunk's top-level
-/// block as the implicit "main" function.
-pub struct UnusedLabel;
+/// A `goto` can't leave its function, so each function body, and the chunk
+/// itself, is checked on its own.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UnusedLabel;
 
-impl Rule for UnusedLabel {
-    fn name(&self) -> &'static str {
-        "unused_label"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "label declared but never targeted by a goto in the same function"
-    }
+impl_rule!(
+    UnusedLabel,
+    "unused_label",
+    Style,
+    Warning,
+    "label declared but never targeted by a `goto` in the same function"
+);
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let mut diagnostics = Vec::new();
-        check_scope(ctx.block, &mut diagnostics);
-        diagnostics
+impl WholeRule for UnusedLabel {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        check_scope(context.block, &mut findings);
+        findings
     }
 }
 
-/// Process one function scope: collect every label and every goto name
-/// reachable without crossing a nested function boundary, then emit a
-/// diagnostic for every label whose name has no matching goto.
-fn check_scope<'ast>(block: &'ast Block, diagnostics: &mut Vec<LintDiagnostic>) {
-    let mut labels: Vec<(&'ast str, Span)> = Vec::new();
-    let mut goto_names: Vec<&'ast str> = Vec::new();
-    let mut nested: Vec<&'ast FunctionBody> = Vec::new();
+fn check_scope(block: &Block, findings: &mut Vec<Finding>) {
+    let mut scope = LabelScope::default();
+    scope.visit_block(block);
 
-    walk_block(block, &mut labels, &mut goto_names, &mut nested);
-
-    for (name, span) in &labels {
-        // A label is reachable if any goto in the same function uses it.
-        // The parser already validates Lua's own label scoping rules, so
-        // presence anywhere in the same function mutes this lint and
-        // avoids false positives on cross-block jumps.
-        if !goto_names.iter().any(|goto| goto == name) {
-            diagnostics.push(
-                LintDiagnostic::new(
-                    "unused_label",
-                    format!("label `{name}` is never targeted by a goto"),
-                    *span,
-                )
-                .with_help("remove the label or add a `goto` that targets it".to_string()),
+    for (name, span) in &scope.labels {
+        // Any `goto` with this name in the same function counts. The parser
+        // already enforces label visibility, so matching by name alone
+        // avoids false positives on jumps between blocks.
+        if !scope.goto_names.iter().any(|goto_name| goto_name == name) {
+            findings.push(
+                Finding::new(format!("label `{name}` is never targeted by a `goto`"), *span)
+                    .with_help("remove the label or add a `goto` that targets it"),
             );
         }
     }
 
-    for body in nested {
-        check_scope(&body.block, diagnostics);
+    for body in scope.nested_bodies {
+        check_scope(&body.block, findings);
     }
 }
 
-fn token_identifier(kind: &TokenKind) -> Option<&str> {
-    if let TokenKind::Identifier(name) = kind {
-        return Some(name.as_str());
-    }
-    None
+#[derive(Default)]
+struct LabelScope<'ast> {
+    labels: Vec<(&'ast str, Span)>,
+    goto_names: Vec<&'ast str>,
+    nested_bodies: Vec<&'ast FunctionBody>,
 }
 
-fn walk_block<'ast>(
-    block: &'ast Block,
-    labels: &mut Vec<(&'ast str, Span)>,
-    goto_names: &mut Vec<&'ast str>,
-    nested: &mut Vec<&'ast FunctionBody>,
-) {
-    for stmt in &block.stmts {
-        walk_statement(stmt, labels, goto_names, nested);
-    }
-    if let Some(last) = &block.last_stmt {
-        walk_last_statement(last, labels, goto_names, nested);
-    }
-}
-
-fn walk_statement<'ast>(
-    stmt: &'ast Statement,
-    labels: &mut Vec<(&'ast str, Span)>,
-    goto_names: &mut Vec<&'ast str>,
-    nested: &mut Vec<&'ast FunctionBody>,
-) {
-    // Exhaustive match, no catch-alls, so a new Statement variant
-    // surfaces here as a compile error.
-    match stmt {
-        Statement::Label(label) => {
-            if let Some(name) = token_identifier(&label.name.kind) {
-                labels.push((name, label.span));
-            }
-        }
-        Statement::Goto(goto) => {
-            if let Some(name) = token_identifier(&goto.name.kind) {
-                goto_names.push(name);
-            }
-        }
-        Statement::FunctionDecl(decl) => {
-            nested.push(&decl.body);
-        }
-        Statement::LocalFunction(local) => {
-            nested.push(&local.body);
-        }
-        Statement::GlobalFunction(global) => {
-            nested.push(&global.body);
-        }
-        Statement::Assignment(assignment) => {
-            for var in assignment.targets.iter() {
-                walk_var(var, labels, goto_names, nested);
-            }
-            for expr in assignment.values.iter() {
-                walk_expression(expr, labels, goto_names, nested);
-            }
-        }
-        Statement::FunctionCall(call_stmt) => {
-            walk_function_call(call_stmt, labels, goto_names, nested);
-        }
-        Statement::DoBlock(do_block) => {
-            walk_block(&do_block.block, labels, goto_names, nested);
-        }
-        Statement::WhileLoop(while_loop) => {
-            walk_expression(&while_loop.condition, labels, goto_names, nested);
-            walk_block(&while_loop.block, labels, goto_names, nested);
-        }
-        Statement::RepeatLoop(repeat_loop) => {
-            walk_block(&repeat_loop.block, labels, goto_names, nested);
-            walk_expression(&repeat_loop.condition, labels, goto_names, nested);
-        }
-        Statement::IfStatement(if_stmt) => {
-            walk_expression(&if_stmt.condition, labels, goto_names, nested);
-            walk_block(&if_stmt.block, labels, goto_names, nested);
-            for clause in &if_stmt.elseif_clauses {
-                walk_expression(&clause.condition, labels, goto_names, nested);
-                walk_block(&clause.block, labels, goto_names, nested);
-            }
-            if let Some(else_clause) = &if_stmt.else_clause {
-                walk_block(&else_clause.block, labels, goto_names, nested);
-            }
-        }
-        Statement::NumericFor(num_for) => {
-            walk_expression(&num_for.start, labels, goto_names, nested);
-            walk_expression(&num_for.limit, labels, goto_names, nested);
-            if let Some(step) = &num_for.step {
-                walk_expression(step, labels, goto_names, nested);
-            }
-            walk_block(&num_for.block, labels, goto_names, nested);
-        }
-        Statement::GenericFor(generic_for) => {
-            for expr in generic_for.exprs.iter() {
-                walk_expression(expr, labels, goto_names, nested);
-            }
-            walk_block(&generic_for.block, labels, goto_names, nested);
-        }
-        Statement::LocalAssignment(local) => {
-            if let Some(exprs) = &local.exprs {
-                for expr in exprs.iter() {
-                    walk_expression(expr, labels, goto_names, nested);
+impl<'ast> Visitor<'ast> for LabelScope<'ast> {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+        match stmt {
+            // Lua 5.2+
+            Statement::Label(label) => {
+                if let Some(name) = label.name.identifier() {
+                    self.labels.push((name, label.span));
                 }
             }
-        }
-        Statement::CompoundAssignment(compound) => {
-            walk_var(&compound.var, labels, goto_names, nested);
-            walk_expression(&compound.expr, labels, goto_names, nested);
-        }
-        Statement::GlobalDeclaration(global) => {
-            if let Some(exprs) = &global.exprs {
-                for expr in exprs.iter() {
-                    walk_expression(expr, labels, goto_names, nested);
+            // Lua 5.2+
+            Statement::Goto(goto) => {
+                if let Some(name) = goto.name.identifier() {
+                    self.goto_names.push(name);
                 }
             }
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::FunctionDecl(_)
+            | Statement::LocalFunction(_)
+            | Statement::LocalAssignment(_)
+            | Statement::EmptyStatement(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => {}
         }
-        Statement::EmptyStatement(_)
-        | Statement::GlobalStar(_)
-        | Statement::Break(_)
-        | Statement::TypeDeclaration(_)
-        | Statement::Error(_) => {}
+        self.walk_stmt(stmt);
     }
-}
 
-fn walk_last_statement<'ast>(
-    last: &'ast LastStatement,
-    labels: &mut Vec<(&'ast str, Span)>,
-    goto_names: &mut Vec<&'ast str>,
-    nested: &mut Vec<&'ast FunctionBody>,
-) {
-    match last {
-        LastStatement::Return(ret) => {
-            for expr in ret.exprs.iter() {
-                walk_expression(expr, labels, goto_names, nested);
-            }
-        }
-        LastStatement::Break(_) | LastStatement::Continue(_) | LastStatement::Error(_) => {}
-    }
-}
-
-fn walk_var<'ast>(
-    var: &'ast Var,
-    labels: &mut Vec<(&'ast str, Span)>,
-    goto_names: &mut Vec<&'ast str>,
-    nested: &mut Vec<&'ast FunctionBody>,
-) {
-    match var {
-        Var::Name(_) => {}
-        Var::Index(idx) => {
-            walk_expression(&idx.prefix, labels, goto_names, nested);
-            walk_expression(&idx.index, labels, goto_names, nested);
-        }
-        Var::FieldAccess(fld) => {
-            walk_expression(&fld.prefix, labels, goto_names, nested);
-        }
-    }
-}
-
-fn walk_expression<'ast>(
-    expr: &'ast Expression,
-    labels: &mut Vec<(&'ast str, Span)>,
-    goto_names: &mut Vec<&'ast str>,
-    nested: &mut Vec<&'ast FunctionBody>,
-) {
-    match expr {
-        // Function definitions open a new scope. They are collected
-        // here and processed separately by `check_scope` to honor the
-        // "goto cannot cross function boundaries" rule.
-        Expression::FunctionDef(func_def) => {
-            nested.push(&func_def.body);
-        }
-        Expression::Var(var) => {
-            walk_var(var, labels, goto_names, nested);
-        }
-        Expression::FunctionCall(call) => {
-            walk_function_call(call, labels, goto_names, nested);
-        }
-        Expression::Parenthesized(paren) => {
-            walk_expression(&paren.expr, labels, goto_names, nested);
-        }
-        Expression::TableConstructor(table) => {
-            for field in table.fields.iter() {
-                match field {
-                    Field::Positional { value, .. } => {
-                        walk_expression(value, labels, goto_names, nested);
-                    }
-                    Field::Named { value, .. } => {
-                        walk_expression(value, labels, goto_names, nested);
-                    }
-                    Field::Bracketed { key, value, .. } => {
-                        walk_expression(key, labels, goto_names, nested);
-                        walk_expression(value, labels, goto_names, nested);
-                    }
-                }
-            }
-        }
-        Expression::BinaryOp(binop) => {
-            walk_expression(&binop.left, labels, goto_names, nested);
-            walk_expression(&binop.right, labels, goto_names, nested);
-        }
-        Expression::UnaryOp(unop) => {
-            walk_expression(&unop.operand, labels, goto_names, nested);
-        }
-        Expression::IfExpression(if_expr) => {
-            walk_expression(&if_expr.condition, labels, goto_names, nested);
-            walk_expression(&if_expr.then_expr, labels, goto_names, nested);
-            for clause in &if_expr.elseif_clauses {
-                walk_expression(&clause.condition, labels, goto_names, nested);
-                walk_expression(&clause.expr, labels, goto_names, nested);
-            }
-            walk_expression(&if_expr.else_expr, labels, goto_names, nested);
-        }
-        Expression::InterpolatedString(interp) => {
-            for segment in &interp.segments {
-                if let Some(expr) = &segment.expr {
-                    walk_expression(expr, labels, goto_names, nested);
-                }
-            }
-        }
-        Expression::TypeCast(cast) => {
-            walk_expression(&cast.expr, labels, goto_names, nested);
-        }
-        Expression::TypeInstantiation(instantiation) => {
-            walk_expression(&instantiation.expr, labels, goto_names, nested);
-        }
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_) // Luau
-        | Expression::StringLiteral(_)
-        | Expression::VarArg(_)
-        | Expression::Error(_) => {}
-    }
-}
-
-fn walk_function_call<'ast>(
-    call: &'ast luck_ast::expr::FunctionCall,
-    labels: &mut Vec<(&'ast str, Span)>,
-    goto_names: &mut Vec<&'ast str>,
-    nested: &mut Vec<&'ast FunctionBody>,
-) {
-    walk_expression(&call.callee, labels, goto_names, nested);
-    walk_function_args(&call.args, labels, goto_names, nested);
-}
-
-fn walk_function_args<'ast>(
-    args: &'ast luck_ast::expr::FunctionArgs,
-    labels: &mut Vec<(&'ast str, Span)>,
-    goto_names: &mut Vec<&'ast str>,
-    nested: &mut Vec<&'ast FunctionBody>,
-) {
-    use luck_ast::expr::FunctionArgs;
-    match args {
-        FunctionArgs::Parenthesized { args, .. } => {
-            for expr in args.iter() {
-                walk_expression(expr, labels, goto_names, nested);
-            }
-        }
-        FunctionArgs::StringLiteral(_) => {}
-        FunctionArgs::TableConstructor(table) => {
-            for field in table.fields.iter() {
-                match field {
-                    Field::Positional { value, .. } => {
-                        walk_expression(value, labels, goto_names, nested);
-                    }
-                    Field::Named { value, .. } => {
-                        walk_expression(value, labels, goto_names, nested);
-                    }
-                    Field::Bracketed { key, value, .. } => {
-                        walk_expression(key, labels, goto_names, nested);
-                        walk_expression(value, labels, goto_names, nested);
-                    }
-                }
-            }
-        }
+    // A nested function gets its own `check_scope` pass.
+    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
+        self.nested_bodies.push(body);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&UnusedLabel, source, LuaVersion::Lua54)
+        run_rule(&UnusedLabel, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -398,10 +154,6 @@ mod tests {
         // outer label stays unused (labels are not visible across
         // function boundaries).
         let diags = run("::a:: local f = function() ::a:: goto a end");
-        assert_eq!(
-            diags.len(),
-            1,
-            "outer label is unreachable from inner function: {diags:?}"
-        );
+        assert_eq!(diags.len(), 1, "outer label is unreachable from inner function: {diags:?}");
     }
 }

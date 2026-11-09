@@ -1,20 +1,18 @@
-//! `tower_lsp::LanguageServer` implementation backed by `luck_formatter`
-//! and `luck_linter`.
-//!
-//! The backend keeps each open document fully in-memory because both the
-//! formatter and the linter operate on a whole-source string. Incremental
-//! syncs are folded into the document on every change so we never re-fetch
-//! from disk after `did_open`.
+//! Open documents live in memory and take incremental changes, so the server
+//! never reads an open file from disk.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 
 use luck_core::LuaTarget;
-use tokio::sync::RwLock;
-use tower_lsp::jsonrpc::Result as JsonRpcResult;
+use luck_linter::LintDiagnostic;
+use rustc_hash::FxHashSet;
+use tokio::sync::{Mutex, RwLock};
+use tokio::task::{spawn_blocking, yield_now};
+use tower_lsp::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
 use tower_lsp::lsp_types::{
-    CodeActionOptions, CodeActionParams, CodeActionProviderCapability, CodeActionResponse,
-    CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
+    CodeActionKind, CodeActionOptions, CodeActionParams, CodeActionProviderCapability,
+    CodeActionResponse, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
     DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
     DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentFormattingParams,
@@ -23,10 +21,10 @@ use tower_lsp::lsp_types::{
     DocumentSymbolResponse, FileSystemWatcher, FoldingRange, FoldingRangeParams,
     FoldingRangeProviderCapability, GlobPattern, GotoDefinitionParams, GotoDefinitionResponse,
     Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, Location, MessageType, OneOf, Position, PrepareRenameResponse,
-    ReferenceParams, Registration, RenameOptions, RenameParams, SaveOptions, SelectionRange,
-    SelectionRangeParams, SelectionRangeProviderCapability, SemanticTokensFullOptions,
-    SemanticTokensOptions, SemanticTokensRangeParams, SemanticTokensRangeResult,
+    InitializedParams, Location, MessageType, OneOf, PrepareRenameResponse, Range, ReferenceParams,
+    Registration, RenameOptions, RenameParams, SaveOptions, SelectionRange, SelectionRangeParams,
+    SelectionRangeProviderCapability, SemanticTokensFullOptions, SemanticTokensOptions,
+    SemanticTokensParams, SemanticTokensRangeParams, SemanticTokensRangeResult,
     SemanticTokensRegistrationOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
     ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
     StaticRegistrationOptions, SymbolInformation, TextDocumentPositionParams,
@@ -36,239 +34,277 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer};
 
-use crate::config::{ConfigCache, ProjectSettings, resolved_format_options, target_from_settings};
-use crate::diagnostics::to_lsp_diagnostics;
-use crate::line_index::LineIndex;
+use crate::document::DocumentState;
 use crate::providers::{
-    code_action, completion, definition, document_link, document_symbol, folding, highlights,
-    hover, references, rename, selection_range, semantic_tokens, signature_help, syntax_tree,
-    workspace_symbol,
+    code_action, completion, definition, diagnostics, document_highlight, document_link,
+    document_symbol, folding_range, hover, references, rename, selection_range, semantic_tokens,
+    signature_help, syntax_tree, workspace_symbol,
 };
+use crate::settings::{ProjectSettings, SettingsCache};
 
-/// In-memory snapshot of a single open document.
-///
-/// The parsed AST is computed eagerly on construction / update and shared
-/// across providers via `Arc`. Every did_change already triggers a lint
-/// (which also parses) so the cost is paid exactly once per change rather
-/// than once per LSP request.
-#[derive(Debug, Clone)]
-pub struct DocumentState {
-    pub text: String,
-    pub version: i32,
-    pub target: LuaTarget,
-    /// Cached line index, rebuilt on every change. Computing it is cheap
-    /// (single pass), but every request needs one so we keep it around.
-    pub line_index: LineIndex,
-    /// Eagerly-parsed AST + comments + parse errors for the current text.
-    pub parsed: Arc<luck_parser::ParseResult>,
-    /// Semantic analysis over `parsed`, shared by every provider.
-    /// Recomputing it per request would make document_highlight and
-    /// friends re-walk the whole file on cursor idle.
-    pub semantic: Arc<luck_semantic::SemanticAnalysis>,
-}
-
-impl DocumentState {
-    pub(crate) fn new(text: String, version: i32, target: LuaTarget) -> Self {
-        let line_index = LineIndex::new(&text);
-        let parsed = Arc::new(luck_parser::parse(&text, target.lua_version()));
-        let semantic = Arc::new(luck_semantic::analyze_with_environment(
-            &parsed.block,
-            target.lua_version(),
-            target.stdlib_environment(),
-        ));
-        Self {
-            text,
-            version,
-            target,
-            line_index,
-            parsed,
-            semantic,
-        }
-    }
-
-    fn update(&mut self, text: String, version: i32) {
-        self.text = text;
-        self.version = version;
-        self.line_index = LineIndex::new(&self.text);
-        self.parsed = Arc::new(luck_parser::parse(&self.text, self.target.lua_version()));
-        self.semantic = Arc::new(luck_semantic::analyze_with_environment(
-            &self.parsed.block,
-            self.target.lua_version(),
-            self.target.stdlib_environment(),
-        ));
-    }
-}
-
-/// Trait abstracting the bits of `tower_lsp::Client` that the backend uses.
-/// Lets the integration tests drop in a no-op client while keeping the real
-/// server wired to `tower_lsp::Client`.
-#[async_trait::async_trait]
+/// The parts of `tower_lsp::Client` the backend uses, so tests can record
+/// what the server sends instead.
 pub trait Notifier: Send + Sync + 'static {
-    async fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i32>);
-    async fn show_message(&self, ty: MessageType, message: String);
-    async fn log_message(&self, ty: MessageType, message: String);
-    /// Dynamic capability registration; the test notifier no-ops.
-    async fn register_capability(&self, registrations: Vec<Registration>) {
-        let _ = registrations;
-    }
+    fn publish_diagnostics(
+        &self,
+        uri: Url,
+        diags: Vec<Diagnostic>,
+        version: Option<i32>,
+    ) -> impl Future<Output = ()> + Send;
+    fn show_message(
+        &self,
+        message_type: MessageType,
+        message: String,
+    ) -> impl Future<Output = ()> + Send;
+    fn log_message(
+        &self,
+        message_type: MessageType,
+        message: String,
+    ) -> impl Future<Output = ()> + Send;
+    fn register_capability(
+        &self,
+        registrations: Vec<Registration>,
+    ) -> impl Future<Output = ()> + Send;
 }
 
-#[async_trait::async_trait]
 impl Notifier for Client {
     async fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i32>) {
-        Client::publish_diagnostics(self, uri, diags, version).await;
+        Self::publish_diagnostics(self, uri, diags, version).await;
     }
 
-    async fn show_message(&self, ty: MessageType, message: String) {
-        Client::show_message(self, ty, message).await;
+    async fn show_message(&self, message_type: MessageType, message: String) {
+        Self::show_message(self, message_type, message).await;
     }
 
-    async fn log_message(&self, ty: MessageType, message: String) {
-        Client::log_message(self, ty, message).await;
+    async fn log_message(&self, message_type: MessageType, message: String) {
+        Self::log_message(self, message_type, message).await;
     }
 
     async fn register_capability(&self, registrations: Vec<Registration>) {
-        let _ = Client::register_capability(self, registrations).await;
+        let _unused = Self::register_capability(self, registrations).await;
     }
 }
 
-/// The LSP server state shared across requests.
-pub struct Backend<N: Notifier = Client> {
-    notifier: Arc<N>,
-    documents: Arc<RwLock<HashMap<Url, DocumentState>>>,
-    config_cache: Arc<ConfigCache>,
-    /// Last lint result per document, keyed by version. VS Code fires
-    /// codeAction on nearly every cursor move; without this each request
-    /// would re-run the full rule set.
-    lint_cache: Arc<RwLock<HashMap<Url, VersionedLints>>>,
+#[derive(Debug)]
+struct OpenDocument {
+    state: Arc<DocumentState>,
+    /// The lints last published for `state`. VS Code asks for code actions
+    /// on nearly every cursor move, and without this each request would
+    /// rerun every rule.
+    published_lints: Option<Arc<[LintDiagnostic]>>,
 }
 
-/// Lint results tagged with the document version they were computed for.
-type VersionedLints = (i32, Arc<Vec<luck_linter::diagnostic::LintDiagnostic>>);
+#[derive(Debug)]
+pub struct Backend<N: Notifier = Client> {
+    notifier: N,
+    documents: RwLock<BTreeMap<Url, OpenDocument>>,
+    /// Orders what changes the open documents and what tells the client about
+    /// them. tower-lsp polls notifications concurrently, but this lock
+    /// queues them in arrival order: an edit can't overtake the open it
+    /// follows, and a publish can't land after what replaced or closed its
+    /// document.
+    sync: Mutex<()>,
+    settings_cache: SettingsCache,
+}
 
 impl<N: Notifier> Backend<N> {
     pub fn new(notifier: N) -> Self {
         Self {
-            notifier: Arc::new(notifier),
-            documents: Arc::new(RwLock::new(HashMap::new())),
-            config_cache: Arc::new(ConfigCache::new()),
-            lint_cache: Arc::new(RwLock::new(HashMap::new())),
+            notifier,
+            documents: RwLock::new(BTreeMap::new()),
+            sync: Mutex::new(()),
+            settings_cache: SettingsCache::default(),
         }
     }
 
-    /// Snapshot the current text for a URI, if open. Used by integration tests.
-    pub async fn document_text(&self, uri: &Url) -> Option<String> {
+    /// Makes `state` what's open at `uri`, which leaves any lint still
+    /// running on what it replaces with nothing to publish.
+    async fn store(&self, uri: &Url, state: DocumentState) -> Arc<DocumentState> {
+        let shared = Arc::new(state);
+        let open = OpenDocument { state: Arc::clone(&shared), published_lints: None };
+        self.documents.write().await.insert(uri.clone(), open);
+        shared
+    }
+
+    async fn snapshot(&self, uri: &Url) -> Option<Arc<DocumentState>> {
         let documents = self.documents.read().await;
-        documents.get(uri).map(|doc| doc.text.clone())
+        documents.get(uri).map(|open| Arc::clone(&open.state))
     }
 
-    fn project_settings_for(&self, uri: &Url) -> ProjectSettings {
-        match uri.to_file_path() {
-            Ok(path) => self.config_cache.settings_for(&path),
-            Err(_) => ProjectSettings::default(),
-        }
+    async fn open_documents(&self) -> Vec<(Url, Arc<DocumentState>)> {
+        let documents = self.documents.read().await;
+        documents.iter().map(|(uri, open)| (uri.clone(), Arc::clone(&open.state))).collect()
     }
 
-    fn target_for(&self, uri: &Url, settings: &ProjectSettings) -> LuaTarget {
-        match uri.to_file_path() {
-            Ok(path) => target_from_settings(&path, settings),
-            Err(_) => settings.lua_target,
-        }
+    async fn document_settings(&self, uri: &Url) -> (LuaTarget, FxHashSet<String>) {
+        let file_path = uri.to_file_path().ok();
+        let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
+        (
+            settings.target_for(file_path.as_deref()),
+            settings.lint_config.extra_globals.iter().cloned().collect(),
+        )
     }
 
-    async fn lint_and_publish(&self, uri: Url) {
-        let snapshot = {
-            let documents = self.documents.read().await;
-            documents.get(&uri).cloned()
+    /// The settings of the document at `uri`, or `None` when the project's
+    /// include/exclude set leaves it out, so it gets no diagnostics and no
+    /// fixes.
+    async fn settings_if_included(&self, uri: &Url) -> Option<Arc<ProjectSettings>> {
+        let file_path = uri.to_file_path().ok();
+        let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
+        let Some(path) = file_path else {
+            return Some(settings);
         };
-        let Some(doc) = snapshot else {
+        let filter_settings = Arc::clone(&settings);
+        // `is_included` canonicalizes the path, which touches the disk. A
+        // check that dies counts as excluded, so no fix lands on a guess.
+        spawn_blocking(move || filter_settings.filter.is_included(&path))
+            .await
+            .unwrap_or(false)
+            .then_some(settings)
+    }
+
+    /// Lints `document` and publishes the result, unless `document` has been
+    /// replaced or closed by the time the result is ready.
+    async fn lint_and_publish(&self, uri: Url, document: Arc<DocumentState>) {
+        // A change already queued behind this one replaces `document`, which
+        // saves linting it, so a burst of keystrokes lints once.
+        yield_now().await;
+        if !self.is_open(&uri, &document).await {
             return;
+        }
+        let lints: Arc<[LintDiagnostic]> = match self.settings_if_included(&uri).await {
+            Some(settings) => lint_off_the_serve_loop(&document, settings).await,
+            None => Vec::new().into(),
         };
-        let settings = self.project_settings_for(&uri);
-        // Skip files outside the project's include/exclude set entirely.
-        if let Ok(path) = uri.to_file_path()
-            && !settings.filter.is_included(&path)
-        {
+        let diags = diagnostics::to_lsp(&document, &lints);
+        // Through the send, so nothing newer can reach the client before it.
+        let _ordered = self.sync.lock().await;
+        if !self.is_open(&uri, &document).await {
+            return;
+        }
+        if let Some(open) = self.documents.write().await.get_mut(&uri) {
+            open.published_lints = Some(lints);
+        }
+        self.notifier.publish_diagnostics(uri, diags, Some(document.version)).await;
+    }
+
+    async fn is_open(&self, uri: &Url, document: &Arc<DocumentState>) -> bool {
+        self.documents.read().await.get(uri).is_some_and(|open| Arc::ptr_eq(&open.state, document))
+    }
+
+    /// Formats the document at `uri`, or only `range` of it, as one
+    /// whole-document edit. `None` when it isn't open, `range` doesn't fit
+    /// it, or it doesn't parse, which also shows a warning.
+    async fn format_edits(&self, uri: &Url, range: Option<Range>) -> Option<Vec<TextEdit>> {
+        let document = self.snapshot(uri).await?;
+        let byte_range = match range {
+            Some(requested) => Some(document.byte_range(requested)?),
+            None => None,
+        };
+        let file_path = uri.to_file_path().ok();
+        let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
+        // Reading the `.editorconfig` chain touches the disk.
+        let options =
+            spawn_blocking(move || settings.format_options(file_path.as_deref())).await.ok()?;
+        let lua_version = document.lua_version;
+        let (result, action) = byte_range.map_or_else(
+            || (luck_formatter::format(document.text(), lua_version, &options), "format"),
+            // `format_range` returns the whole file with text outside the
+            // range kept byte-for-byte, so a whole-file edit only changes the
+            // range.
+            |bytes| {
+                (
+                    luck_formatter::format_range(document.text(), lua_version, &options, bytes),
+                    "range-format",
+                )
+            },
+        );
+        if let Some(first) = result.errors.first() {
             self.notifier
-                .publish_diagnostics(uri, Vec::new(), Some(doc.version))
+                .show_message(
+                    MessageType::WARNING,
+                    format!("luck: can't {action} file (parse error): {}", first.message),
+                )
                 .await;
-            return;
+            return None;
         }
-        // Opt-in: with no `lint` section, lint with all rules off so only
-        // parse errors surface (luck_linter returns parse errors first).
-        let lint_config = settings.effective_lint_config();
-        // The document's parse is already cached, so lint it directly
-        // instead of handing the linter raw text to re-parse.
-        let lint_diags = Arc::new(luck_linter::lint_parsed(
-            &doc.parsed,
-            doc.target.lua_version(),
-            doc.target.stdlib_environment(),
-            &lint_config,
-        ));
-        {
-            let mut lint_cache = self.lint_cache.write().await;
-            lint_cache.insert(uri.clone(), (doc.version, Arc::clone(&lint_diags)));
+        if result.output == document.text() {
+            return Some(Vec::new());
         }
-        let lsp_diags = to_lsp_diagnostics(&doc.text, &doc.line_index, &lint_diags);
-        self.notifier
-            .publish_diagnostics(uri, lsp_diags, Some(doc.version))
-            .await;
+        Some(vec![TextEdit { range: document.full_range(), new_text: result.output }])
     }
 
-    async fn apply_incremental_change(
+    /// # Errors
+    ///
+    /// Returns an invalid-params error when `params` carries no parseable
+    /// `textDocument.uri`.
+    pub async fn syntax_tree_request(
         &self,
-        uri: &Url,
-        params: DidChangeTextDocumentParams,
-    ) -> bool {
-        let mut documents = self.documents.write().await;
-        let Some(doc) = documents.get_mut(uri) else {
-            return false;
+        params: serde_json::Value,
+    ) -> JsonRpcResult<serde_json::Value> {
+        let uri: Url = params
+            .get("textDocument")
+            .and_then(|text_document| text_document.get("uri"))
+            .and_then(|uri| uri.as_str())
+            .and_then(|uri| uri.parse().ok())
+            .ok_or_else(|| JsonRpcError::invalid_params("missing `textDocument.uri`"))?;
+        let Some(document) = self.snapshot(&uri).await else {
+            return Ok(serde_json::Value::String(String::new()));
         };
-        // tower-lsp dispatches notifications concurrently: two rapid
-        // didChange batches can arrive out of order. Applying version
-        // N+2's ranges against version N's text silently corrupts the
-        // document FOREVER, so reject stale/duplicate versions outright.
-        if params.text_document.version <= doc.version {
-            return false;
-        }
-        let mut text = doc.text.clone();
-        let mut line_index = doc.line_index.clone();
-        let mut dirty = false;
-        let mut changes = params.content_changes.into_iter().peekable();
-        while let Some(change) = changes.next() {
-            match change.range {
-                Some(range) => {
-                    let start_byte = line_index.offset(&text, range.start) as usize;
-                    let end_byte = line_index.offset(&text, range.end) as usize;
-                    if start_byte > end_byte || end_byte > text.len() {
-                        // An invalid range means our state has already
-                        // desynced from the client's. Silently skipping
-                        // masks the corruption; drop our copy and let the
-                        // next full-sync or reopen restore consistency.
-                        documents.remove(uri);
-                        return false;
-                    }
-                    text.replace_range(start_byte..end_byte, &change.text);
-                    dirty = true;
-                }
-                None => {
-                    text = change.text;
-                    dirty = true;
-                }
-            }
-            // Each subsequent change's range is relative to the text this one
-            // produced, so refresh the index for the next iteration only. The
-            // final index the store keeps is rebuilt by `doc.update` below, so
-            // rebuilding it here too would be redundant.
-            if changes.peek().is_some() {
-                line_index = LineIndex::new(&text);
-            }
-        }
-        if dirty {
-            doc.update(text, params.text_document.version);
-        }
-        true
+        Ok(serde_json::Value::String(syntax_tree::syntax_tree(&document)))
     }
+
+    /// # Errors
+    ///
+    /// Never fails; `custom_method` requires a `Result`.
+    pub async fn fix_all_workspace_request(
+        &self,
+        _params: serde_json::Value,
+    ) -> JsonRpcResult<WorkspaceEdit> {
+        let mut documents = Vec::new();
+        for (uri, document) in self.open_documents().await {
+            if let Some(settings) = self.settings_if_included(&uri).await {
+                documents.push((uri, document, settings));
+            }
+        }
+        Ok(code_action::fix_all_open(&documents))
+    }
+
+    /// Folds a `didChange` batch into the store. Returns the new state when
+    /// the document is still open and the batch was current, so diagnostics
+    /// should be republished.
+    async fn apply_change(
+        &self,
+        params: DidChangeTextDocumentParams,
+    ) -> Option<Arc<DocumentState>> {
+        let uri = &params.text_document.uri;
+        let current = self.snapshot(uri).await?;
+        // A repeated or older batch's ranges don't fit the current text, and
+        // applying them would corrupt it.
+        let version = params.text_document.version;
+        if version <= current.version {
+            return None;
+        }
+        let Some(text) = current.changed_text(params.content_changes) else {
+            // A range that doesn't fit means we've already desynced from the
+            // client. Drop the document so nothing is served from corrupt
+            // text until the client reopens it.
+            self.documents.write().await.remove(uri);
+            return None;
+        };
+        Some(self.store(uri, current.with_text(text, version)).await)
+    }
+}
+
+/// `document`'s lints, computed on the blocking pool: tower-lsp polls every
+/// handler on one task, so a lint run inline would stall the whole server. A
+/// lint that dies yields nothing.
+async fn lint_off_the_serve_loop(
+    document: &Arc<DocumentState>,
+    settings: Arc<ProjectSettings>,
+) -> Arc<[LintDiagnostic]> {
+    let linted = Arc::clone(document);
+    spawn_blocking(move || linted.lint(&settings.lint_config)).await.unwrap_or_default().into()
 }
 
 #[tower_lsp::async_trait]
@@ -291,20 +327,20 @@ impl<N: Notifier> LanguageServer for Backend<N> {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
-                    trigger_characters: Some(vec![".".to_string(), ":".to_string()]),
+                    trigger_characters: Some(vec![".".to_owned(), ":".to_owned()]),
                     ..Default::default()
                 }),
                 signature_help_provider: Some(SignatureHelpOptions {
-                    trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
-                    retrigger_characters: Some(vec![",".to_string()]),
+                    trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
+                    retrigger_characters: Some(vec![",".to_owned()]),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 }),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Options(
                     CodeActionOptions {
                         code_action_kinds: Some(vec![
-                            tower_lsp::lsp_types::CodeActionKind::QUICKFIX,
-                            tower_lsp::lsp_types::CodeActionKind::SOURCE_FIX_ALL,
+                            CodeActionKind::QUICKFIX,
+                            code_action::FIX_ALL_KIND,
                         ]),
                         resolve_provider: Some(false),
                         work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -343,33 +379,32 @@ impl<N: Notifier> LanguageServer for Backend<N> {
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
-                name: "luck".to_string(),
-                version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                name: "luck".to_owned(),
+                version: Some(env!("CARGO_PKG_VERSION").to_owned()),
             }),
         })
     }
 
     async fn initialized(&self, _params: InitializedParams) {
-        // Watch config files. Without this, ConfigCache entries (including
-        // cached "no config here" negatives) would live until server restart,
-        // so editing or CREATING luck.json would change nothing for open
-        // editors.
+        // Without these watchers, cached settings (cached misses included)
+        // would live until a restart, so creating or editing a config file
+        // would do nothing for open documents.
         let watcher = Registration {
-            id: "luck-config-watch".to_string(),
-            method: "workspace/didChangeWatchedFiles".to_string(),
+            id: "luck-config-watch".to_owned(),
+            method: "workspace/didChangeWatchedFiles".to_owned(),
             register_options: Some(
                 serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
                     watchers: vec![
                         FileSystemWatcher {
-                            glob_pattern: GlobPattern::String("**/luck.json".to_string()),
+                            glob_pattern: GlobPattern::String("**/luck.json".to_owned()),
                             kind: None,
                         },
                         FileSystemWatcher {
-                            glob_pattern: GlobPattern::String("**/.editorconfig".to_string()),
+                            glob_pattern: GlobPattern::String("**/.editorconfig".to_owned()),
                             kind: None,
                         },
                         FileSystemWatcher {
-                            glob_pattern: GlobPattern::String("**/.luaurc".to_string()),
+                            glob_pattern: GlobPattern::String("**/.luaurc".to_owned()),
                             kind: None,
                         },
                     ],
@@ -377,35 +412,34 @@ impl<N: Notifier> LanguageServer for Backend<N> {
                 .unwrap_or_default(),
             ),
         };
-        let _ = self.notifier.register_capability(vec![watcher]).await;
-        self.notifier
-            .log_message(MessageType::INFO, "luck_lsp initialized".to_string())
-            .await;
+        let () = self.notifier.register_capability(vec![watcher]).await;
+        self.notifier.log_message(MessageType::INFO, "luck_lsp initialized".to_owned()).await;
     }
 
     async fn did_change_watched_files(&self, _params: DidChangeWatchedFilesParams) {
-        self.config_cache.clear();
-        // Retarget every open document (the config may have changed its
-        // dialect) and republish diagnostics under the new settings.
-        let uris: Vec<Url> = {
-            let mut documents = self.documents.write().await;
-            let uris: Vec<Url> = documents.keys().cloned().collect();
-            for uri in &uris {
-                let settings = self.project_settings_for(uri);
-                let target = self.target_for(uri, &settings);
-                if let Some(doc) = documents.get_mut(uri)
-                    && doc.target != target
-                {
-                    let text = doc.text.clone();
-                    let version = doc.version;
-                    doc.target = target;
-                    doc.update(text, version);
-                }
-            }
-            uris
-        };
+        self.settings_cache.clear().await;
+        // Rebuild every open document under the new settings, whether or not
+        // its dialect or extra globals changed, so a lint running under the
+        // old settings has nothing to publish. Each document's settings are
+        // found before taking the sync lock, so config discovery doesn't
+        // stall edits.
+        let uris: Vec<Url> = self.documents.read().await.keys().cloned().collect();
         for uri in uris {
-            self.lint_and_publish(uri).await;
+            let (target, extra_globals) = self.document_settings(&uri).await;
+            let document = {
+                let _ordered = self.sync.lock().await;
+                let Some(current) = self.snapshot(&uri).await else {
+                    continue;
+                };
+                let state = DocumentState::new(
+                    current.text().to_owned(),
+                    current.version,
+                    target,
+                    extra_globals,
+                );
+                self.store(&uri, state).await
+            };
+            self.lint_and_publish(uri, document).await;
         }
     }
 
@@ -414,488 +448,262 @@ impl<N: Notifier> LanguageServer for Backend<N> {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let uri = params.text_document.uri.clone();
-        let settings = self.project_settings_for(&uri);
-        let target = self.target_for(&uri, &settings);
-        let document = DocumentState::new(
-            params.text_document.text,
-            params.text_document.version,
-            target,
-        );
-        {
-            let mut documents = self.documents.write().await;
-            documents.insert(uri.clone(), document);
-        }
-        self.lint_and_publish(uri).await;
+        let uri = params.text_document.uri;
+        let document = {
+            // Held across settings discovery, so a change arriving during the
+            // open waits for the document it edits.
+            let _ordered = self.sync.lock().await;
+            let (target, extra_globals) = self.document_settings(&uri).await;
+            let state = DocumentState::new(
+                params.text_document.text,
+                params.text_document.version,
+                target,
+                extra_globals,
+            );
+            self.store(&uri, state).await
+        };
+        self.lint_and_publish(uri, document).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.clone();
-        let known = self.apply_incremental_change(&uri, params).await;
-        if known {
-            self.lint_and_publish(uri).await;
+        let updated = {
+            let _ordered = self.sync.lock().await;
+            self.apply_change(params).await
+        };
+        if let Some(document) = updated {
+            self.lint_and_publish(uri, document).await;
         }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        let uri = params.text_document.uri.clone();
-        // `text` is optional; refresh from it if the client sent it.
-        if let Some(text) = params.text {
-            let mut documents = self.documents.write().await;
-            if let Some(doc) = documents.get_mut(&uri) {
-                // didSave is unversioned (the params carry no document version),
-                // so the saved on-disk text belongs to the document's CURRENT
-                // version. Reusing `doc.version` is correct, not stale. Only
-                // re-sync when the text differs from our in-memory copy.
-                if doc.text != text {
-                    let version = doc.version;
-                    doc.update(text, version);
-                }
+        let uri = params.text_document.uri;
+        let document = {
+            let _ordered = self.sync.lock().await;
+            let Some(current) = self.snapshot(&uri).await else {
+                return;
+            };
+            // We register with `include_text: false`, but a client may send
+            // the text anyway. didSave carries no version, and the saved
+            // text belongs to the current one.
+            if let Some(text) = params.text
+                && current.text() != text
+            {
+                self.store(&uri, current.with_text(text, current.version)).await
+            } else {
+                current
             }
-        }
-        self.lint_and_publish(uri).await;
+        };
+        self.lint_and_publish(uri, document).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let uri = params.text_document.uri.clone();
-        {
-            let mut documents = self.documents.write().await;
-            documents.remove(&uri);
-        }
+        let uri = params.text_document.uri;
+        let _ordered = self.sync.lock().await;
+        self.documents.write().await.remove(&uri);
         // Per LSP spec, clear diagnostics for closed files.
-        self.notifier
-            .publish_diagnostics(uri, Vec::new(), None)
-            .await;
+        self.notifier.publish_diagnostics(uri, Vec::new(), None).await;
     }
 
     async fn formatting(
         &self,
         params: DocumentFormattingParams,
     ) -> JsonRpcResult<Option<Vec<TextEdit>>> {
-        let uri = params.text_document.uri;
-        let doc = {
-            let documents = self.documents.read().await;
-            documents.get(&uri).cloned()
-        };
-        let Some(doc) = doc else {
-            return Ok(None);
-        };
-        let settings = self.project_settings_for(&uri);
-        let format_options = resolved_format_options(&settings, uri.to_file_path().ok().as_deref());
-        let result = luck_formatter::format(&doc.text, doc.target.lua_version(), &format_options);
-        if !result.errors.is_empty() {
-            let first = &result.errors[0];
-            self.notifier
-                .show_message(
-                    MessageType::WARNING,
-                    format!("luck: cannot format file (parse error): {}", first.message),
-                )
-                .await;
-            return Ok(None);
-        }
-        if result.output == doc.text {
-            return Ok(Some(Vec::new()));
-        }
-        let edit = TextEdit {
-            range: doc.line_index.full_document_range(&doc.text),
-            new_text: result.output,
-        };
-        Ok(Some(vec![edit]))
+        Ok(self.format_edits(&params.text_document.uri, None).await)
     }
 
     async fn range_formatting(
         &self,
         params: DocumentRangeFormattingParams,
     ) -> JsonRpcResult<Option<Vec<TextEdit>>> {
-        let uri = params.text_document.uri;
-        let doc = {
-            let documents = self.documents.read().await;
-            documents.get(&uri).cloned()
-        };
-        let Some(doc) = doc else {
-            return Ok(None);
-        };
-        let start_byte = doc.line_index.offset(&doc.text, params.range.start) as usize;
-        let end_byte = doc.line_index.offset(&doc.text, params.range.end) as usize;
-        if start_byte > end_byte || end_byte > doc.text.len() {
-            return Ok(None);
-        }
-        let settings = self.project_settings_for(&uri);
-        let format_options = resolved_format_options(&settings, uri.to_file_path().ok().as_deref());
-        let result = luck_formatter::format_range(
-            &doc.text,
-            doc.target.lua_version(),
-            &format_options,
-            start_byte..end_byte,
-        );
-        if !result.errors.is_empty() {
-            let first = &result.errors[0];
-            self.notifier
-                .show_message(
-                    MessageType::WARNING,
-                    format!(
-                        "luck: cannot range-format file (parse error): {}",
-                        first.message
-                    ),
-                )
-                .await;
-            return Ok(None);
-        }
-        if result.output == doc.text {
-            return Ok(Some(Vec::new()));
-        }
-        // `format_range` returns the full reformatted file (statements outside
-        // the range are emitted verbatim), so we still emit a whole-file edit.
-        // The "limit to range" guarantee comes from the formatter itself,
-        // which preserves text outside the range byte-for-byte.
-        let edit = TextEdit {
-            range: doc.line_index.full_document_range(&doc.text),
-            new_text: result.output,
-        };
-        Ok(Some(vec![edit]))
+        Ok(self.format_edits(&params.text_document.uri, Some(params.range)).await)
     }
 
     async fn hover(&self, params: HoverParams) -> JsonRpcResult<Option<Hover>> {
-        let uri = params
-            .text_document_position_params
-            .text_document
-            .uri
-            .clone();
-        let doc = self.snapshot(&uri).await;
-        let Some(doc) = doc else {
+        let text_document_position = &params.text_document_position_params;
+        let Some(document) = self.snapshot(&text_document_position.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(hover::hover(&doc, &params))
+        Ok(hover::hover(&document, text_document_position.position))
     }
 
     async fn completion(
         &self,
         params: CompletionParams,
     ) -> JsonRpcResult<Option<CompletionResponse>> {
-        let uri = params.text_document_position.text_document.uri.clone();
-        let doc = self.snapshot(&uri).await;
-        let Some(doc) = doc else {
+        let text_document_position = &params.text_document_position;
+        let Some(document) = self.snapshot(&text_document_position.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(completion::completion(&doc, &params))
+        Ok(Some(completion::completion(&document, text_document_position.position)))
     }
 
     async fn signature_help(
         &self,
         params: SignatureHelpParams,
     ) -> JsonRpcResult<Option<SignatureHelp>> {
-        let uri = params
-            .text_document_position_params
-            .text_document
-            .uri
-            .clone();
-        let doc = self.snapshot(&uri).await;
-        let Some(doc) = doc else {
+        let text_document_position = &params.text_document_position_params;
+        let Some(document) = self.snapshot(&text_document_position.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(signature_help::signature_help(&doc, &params))
+        Ok(signature_help::signature_help(&document, text_document_position.position))
     }
 
     async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
     ) -> JsonRpcResult<Option<DocumentSymbolResponse>> {
-        let doc = self.snapshot(&params.text_document.uri).await;
-        let Some(doc) = doc else {
+        let Some(document) = self.snapshot(&params.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(Some(document_symbol::document_symbols(&doc)))
+        Ok(Some(DocumentSymbolResponse::Nested(document_symbol::document_symbols(&document))))
     }
 
     async fn code_action(
         &self,
         params: CodeActionParams,
     ) -> JsonRpcResult<Option<CodeActionResponse>> {
-        let uri = params.text_document.uri.clone();
-        let doc = self.snapshot(&uri).await;
-        let Some(doc) = doc else {
+        let uri = &params.text_document.uri;
+        let Some((document, published_lints)) = self
+            .documents
+            .read()
+            .await
+            .get(uri)
+            .map(|open| (Arc::clone(&open.state), open.published_lints.clone()))
+        else {
             return Ok(None);
         };
-        let settings = self.project_settings_for(&uri);
-        // Serve the lint results computed by the last publish when they
-        // match the document version; the provider recomputes otherwise.
-        let cached_lints = {
-            let lint_cache = self.lint_cache.read().await;
-            lint_cache
-                .get(&uri)
-                .filter(|(version, _)| *version == doc.version)
-                .map(|(_, diags)| Arc::clone(diags))
+        // Without published lints, they're recomputed through the same
+        // include/exclude filter and opt-in gate as publishing, so no action
+        // fixes a diagnostic the user wasn't shown.
+        let lints = if let Some(lints) = published_lints {
+            lints
+        } else if let Some(settings) = self.settings_if_included(uri).await {
+            lint_off_the_serve_loop(&document, settings).await
+        } else {
+            Vec::new().into()
         };
-        Ok(Some(code_action::code_action(
-            &doc,
-            &settings,
-            &uri,
-            &params,
-            cached_lints,
-        )))
+        Ok(Some(code_action::code_action(&document, &params, &lints)))
     }
 
     async fn semantic_tokens_full(
         &self,
-        params: tower_lsp::lsp_types::SemanticTokensParams,
+        params: SemanticTokensParams,
     ) -> JsonRpcResult<Option<SemanticTokensResult>> {
-        let doc = self.snapshot(&params.text_document.uri).await;
-        let Some(doc) = doc else {
+        let Some(document) = self.snapshot(&params.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(Some(semantic_tokens::semantic_tokens(&doc)))
+        Ok(Some(semantic_tokens::semantic_tokens(&document)))
     }
 
     async fn document_highlight(
         &self,
         params: DocumentHighlightParams,
     ) -> JsonRpcResult<Option<Vec<DocumentHighlight>>> {
-        let uri = params
-            .text_document_position_params
-            .text_document
-            .uri
-            .clone();
-        let doc = self.snapshot(&uri).await;
-        let Some(doc) = doc else {
+        let text_document_position = &params.text_document_position_params;
+        let Some(document) = self.snapshot(&text_document_position.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(Some(highlights::document_highlight(&doc, &params)))
+        Ok(Some(document_highlight::document_highlights(
+            &document,
+            text_document_position.position,
+        )))
     }
 
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> JsonRpcResult<Option<GotoDefinitionResponse>> {
-        let uri = params
-            .text_document_position_params
-            .text_document
-            .uri
-            .clone();
-        let Some(doc) = self.snapshot(&uri).await else {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let Some(document) = self.snapshot(uri).await else {
             return Ok(None);
         };
-        let settings = self.project_settings_for(&uri);
-        Ok(definition::goto_definition(&doc, &uri, &settings, &params))
+        let settings = self.settings_cache.settings_for(uri.to_file_path().ok().as_deref()).await;
+        // A `require` under the cursor resolves through the disk.
+        Ok(spawn_blocking(move || definition::goto(&document, &settings, &params))
+            .await
+            .ok()
+            .flatten())
     }
 
     async fn references(&self, params: ReferenceParams) -> JsonRpcResult<Option<Vec<Location>>> {
-        let uri = params.text_document_position.text_document.uri.clone();
-        let Some(doc) = self.snapshot(&uri).await else {
+        let Some(document) = self.snapshot(&params.text_document_position.text_document.uri).await
+        else {
             return Ok(None);
         };
-        Ok(Some(references::references(&doc, &uri, &params)))
+        Ok(Some(references::references(&document, &params)))
     }
 
     async fn prepare_rename(
         &self,
         params: TextDocumentPositionParams,
     ) -> JsonRpcResult<Option<PrepareRenameResponse>> {
-        let uri = params.text_document.uri.clone();
-        let Some(doc) = self.snapshot(&uri).await else {
+        let Some(document) = self.snapshot(&params.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(rename::prepare_rename(&doc, &params))
+        Ok(rename::prepare(&document, params.position))
     }
 
     async fn rename(&self, params: RenameParams) -> JsonRpcResult<Option<WorkspaceEdit>> {
-        let uri = params.text_document_position.text_document.uri.clone();
-        let Some(doc) = self.snapshot(&uri).await else {
+        let Some(document) = self.snapshot(&params.text_document_position.text_document.uri).await
+        else {
             return Ok(None);
         };
-        match rename::rename(&doc, &uri, &params) {
-            Ok(edit) => Ok(edit),
-            Err(message) => Err(tower_lsp::jsonrpc::Error::invalid_params(message)),
-        }
+        rename::rename(&document, &params)
     }
 
     async fn symbol(
         &self,
         params: WorkspaceSymbolParams,
     ) -> JsonRpcResult<Option<Vec<SymbolInformation>>> {
-        let documents: Vec<(Url, DocumentState)> = {
-            let documents = self.documents.read().await;
-            documents
-                .iter()
-                .map(|(uri, doc)| (uri.clone(), doc.clone()))
-                .collect()
-        };
-        Ok(Some(workspace_symbol::workspace_symbols(
-            &documents,
-            &params.query,
-        )))
+        let documents = self.open_documents().await;
+        Ok(Some(workspace_symbol::workspace_symbols(&documents, &params.query)))
     }
 
     async fn semantic_tokens_range(
         &self,
         params: SemanticTokensRangeParams,
     ) -> JsonRpcResult<Option<SemanticTokensRangeResult>> {
-        let Some(doc) = self.snapshot(&params.text_document.uri).await else {
+        let Some(document) = self.snapshot(&params.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(Some(semantic_tokens::semantic_tokens_range(
-            &doc,
-            &params.range,
-        )))
+        Ok(Some(semantic_tokens::in_range(&document, params.range)))
     }
 
     async fn folding_range(
         &self,
         params: FoldingRangeParams,
     ) -> JsonRpcResult<Option<Vec<FoldingRange>>> {
-        let doc = self.snapshot(&params.text_document.uri).await;
-        let Some(doc) = doc else {
+        let Some(document) = self.snapshot(&params.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(Some(folding::folding_ranges(&doc)))
+        Ok(Some(folding_range::folding_ranges(&document)))
     }
 
     async fn selection_range(
         &self,
         params: SelectionRangeParams,
     ) -> JsonRpcResult<Option<Vec<SelectionRange>>> {
-        let doc = self.snapshot(&params.text_document.uri).await;
-        let Some(doc) = doc else {
+        let Some(document) = self.snapshot(&params.text_document.uri).await else {
             return Ok(None);
         };
-        Ok(Some(selection_range::selection_ranges(&doc, &params)))
+        Ok(Some(selection_range::selection_ranges(&document, &params.positions)))
     }
 
     async fn document_link(
         &self,
         params: DocumentLinkParams,
     ) -> JsonRpcResult<Option<Vec<DocumentLink>>> {
-        let uri = params.text_document.uri.clone();
-        let doc = self.snapshot(&uri).await;
-        let Some(doc) = doc else {
+        let uri = params.text_document.uri;
+        let Some(document) = self.snapshot(&uri).await else {
             return Ok(None);
         };
-        let settings = self.project_settings_for(&uri);
-        Ok(Some(document_link::document_links(&doc, &uri, &settings)))
+        let settings = self.settings_cache.settings_for(uri.to_file_path().ok().as_deref()).await;
+        // Each `require` resolves through the disk.
+        let links =
+            spawn_blocking(move || document_link::document_links(&document, &uri, &settings))
+                .await
+                .unwrap_or_default();
+        Ok(Some(links))
     }
-}
-
-impl<N: Notifier> Backend<N> {
-    async fn snapshot(&self, uri: &Url) -> Option<DocumentState> {
-        let documents = self.documents.read().await;
-        documents.get(uri).cloned()
-    }
-
-    /// Serves the `luck/syntaxTree` custom request with a pretty-printed
-    /// AST dump of the requested document.
-    pub async fn syntax_tree_request(
-        &self,
-        params: serde_json::Value,
-    ) -> JsonRpcResult<serde_json::Value> {
-        let uri: Url = params
-            .get("textDocument")
-            .and_then(|td| td.get("uri"))
-            .and_then(|u| u.as_str())
-            .and_then(|s| s.parse().ok())
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("missing textDocument.uri"))?;
-        let doc = self.snapshot(&uri).await;
-        let Some(doc) = doc else {
-            return Ok(serde_json::Value::String(String::new()));
-        };
-        Ok(serde_json::Value::String(syntax_tree::syntax_tree(&doc)))
-    }
-
-    /// Serves `luck/fixAllWorkspace` by applying every available fix across
-    /// every open document and returning a single WorkspaceEdit.
-    pub async fn fix_all_workspace_request(
-        &self,
-        _params: serde_json::Value,
-    ) -> JsonRpcResult<WorkspaceEdit> {
-        let documents = self.documents.read().await;
-        let edit = code_action::fix_all_open(
-            &documents,
-            |uri| self.project_settings_for(uri),
-            &luck_core::config::LuckConfig::default(),
-        );
-        Ok(edit)
-    }
-}
-
-/// A single captured `publishDiagnostics` notification.
-pub type PublishedRecord = (Url, Vec<Diagnostic>, Option<i32>);
-
-/// A single captured `showMessage` / `logMessage` notification.
-pub type MessageRecord = (MessageType, String);
-
-/// Helper for tests that don't want to wire up an actual `tower_lsp::Client`.
-#[derive(Default, Clone)]
-pub struct CapturedNotifier {
-    pub published: Arc<RwLock<Vec<PublishedRecord>>>,
-    pub messages: Arc<RwLock<Vec<MessageRecord>>>,
-}
-
-#[async_trait::async_trait]
-impl Notifier for CapturedNotifier {
-    async fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i32>) {
-        let mut published = self.published.write().await;
-        published.push((uri, diags, version));
-    }
-
-    async fn show_message(&self, ty: MessageType, message: String) {
-        let mut messages = self.messages.write().await;
-        messages.push((ty, message));
-    }
-
-    async fn log_message(&self, ty: MessageType, message: String) {
-        let mut messages = self.messages.write().await;
-        messages.push((ty, message));
-    }
-}
-
-impl CapturedNotifier {
-    pub async fn diagnostics_for(&self, uri: &Url) -> Vec<Diagnostic> {
-        let published = self.published.read().await;
-        published
-            .iter()
-            .rev()
-            .find(|(other, _, _)| other == uri)
-            .map(|(_, diags, _)| diags.clone())
-            .unwrap_or_default()
-    }
-}
-
-/// The span a set of text edits covers, earliest start to latest end. Tests
-/// use it to verify that a range edit did not touch the whole document.
-#[must_use]
-pub fn edit_replacement_span_lines(edits: &[TextEdit]) -> (Position, Position) {
-    let start = edits
-        .iter()
-        .map(|edit| edit.range.start)
-        .min_by(|a, b| (a.line, a.character).cmp(&(b.line, b.character)))
-        .unwrap_or(Position {
-            line: 0,
-            character: 0,
-        });
-    let end = edits
-        .iter()
-        .map(|edit| edit.range.end)
-        .max_by(|a, b| (a.line, a.character).cmp(&(b.line, b.character)))
-        .unwrap_or(Position {
-            line: 0,
-            character: 0,
-        });
-    (start, end)
-}
-
-/// Build the LSP `LspService` over the real `tower_lsp::Client` notifier.
-/// Registers two custom requests:
-///   - `luck/syntaxTree` -> AST debug dump for the requested document
-///   - `luck/fixAllWorkspace` -> server-computed WorkspaceEdit applying
-///     every available fix across all open documents
-#[must_use]
-pub fn build_service() -> (
-    tower_lsp::LspService<Backend<Client>>,
-    tower_lsp::ClientSocket,
-) {
-    tower_lsp::LspService::build(Backend::new)
-        .custom_method("luck/syntaxTree", Backend::<Client>::syntax_tree_request)
-        .custom_method(
-            "luck/fixAllWorkspace",
-            Backend::<Client>::fix_all_workspace_request,
-        )
-        .finish()
 }

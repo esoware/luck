@@ -1,156 +1,93 @@
 import * as vscode from "vscode";
 import path from "node:path";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import { logExtension } from "./output";
+import { setting } from "./settings";
 
-const BIN_BASENAME = process.platform === "win32" ? "luck.exe" : "luck";
+const BINARY_NAME = process.platform === "win32" ? "luck.exe" : "luck";
 
-/**
- * A null result means no binary was found anywhere; callers respond by
- * offering the "Download Server" command.
- */
-export async function discoverServer(extensionPath: string): Promise<string | null> {
-	const config = vscode.workspace.getConfiguration("luck");
-	const explicit = config.get<string>("server.path", "").trim();
-	if (explicit) {
-		if (await isExecutable(explicit)) {
-			logExtension(`server: using explicit path ${explicit}`);
-			return explicit;
+const VSIX_OPERATING_SYSTEMS: ReadonlySet<NodeJS.Platform> = new Set(["win32", "darwin", "linux"]);
+
+const VSIX_PLATFORM = VSIX_OPERATING_SYSTEMS.has(process.platform)
+	? `${process.platform}-${process.arch === "arm64" ? "arm64" : "x64"}`
+	: null;
+
+const WINDOWS_EXECUTABLE_EXTENSIONS = new Set(
+	(process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD")
+		.split(";")
+		.map((extension) => extension.trim().toLowerCase())
+		.filter((extension) => extension.length > 0),
+);
+
+export async function discoverServer(context: vscode.ExtensionContext): Promise<string | null> {
+	const explicitPath = setting("server.path").trim();
+	if (explicitPath) {
+		if (await isExecutable(explicitPath)) {
+			logExtension(`server: using explicit path ${explicitPath}`);
+			return explicitPath;
 		}
-		vscode.window.showWarningMessage(
-			`luck.server.path points at ${explicit} but no executable was found there.`,
+		void vscode.window.showWarningMessage(
+			`luck.server.path points at ${explicitPath} but no executable was found there.`,
 		);
 	}
 
-	const bundled = bundledServerPath(extensionPath);
-	if (bundled && (await isExecutable(bundled))) {
-		logExtension(`server: using bundled binary ${bundled}`);
-		return maybeCopyToTemp(bundled);
+	const bundledPath =
+		VSIX_PLATFORM && path.join(context.extensionPath, "server", VSIX_PLATFORM, BINARY_NAME);
+	if (bundledPath && (await isExecutable(bundledPath))) {
+		logExtension(`server: using bundled binary ${bundledPath}`);
+		if (!setting("runFromTemporaryLocation")) {
+			return bundledPath;
+		}
+		const storagePath = context.globalStorageUri.fsPath;
+		const copyPath = path.join(storagePath, BINARY_NAME);
+		try {
+			const bundled = await fs.promises.stat(bundledPath);
+			const existing = await fs.promises.stat(copyPath).catch(() => null);
+			if (existing?.size === bundled.size && existing.mtime.getTime() === bundled.mtime.getTime()) {
+				logExtension(`server: reusing copy ${copyPath}`);
+				return copyPath;
+			}
+			await fs.promises.mkdir(storagePath, { recursive: true });
+			await fs.promises.copyFile(bundledPath, copyPath);
+			if (process.platform !== "win32") {
+				await fs.promises.chmod(copyPath, 0o755);
+			}
+			await fs.promises.utimes(copyPath, bundled.atime, bundled.mtime);
+			logExtension(`server: copied to ${copyPath}`);
+			return copyPath;
+		} catch (error) {
+			logExtension(`server: copy failed: ${error}`);
+			return bundledPath;
+		}
 	}
 
-	const onPath = await findOnPath(BIN_BASENAME);
-	if (onPath) {
-		logExtension(`server: using PATH binary ${onPath}`);
-		return onPath;
+	for (const directory of (process.env["PATH"] ?? "").split(path.delimiter)) {
+		if (!directory) {
+			continue;
+		}
+		const candidate = path.join(directory, BINARY_NAME);
+		// oxlint-disable-next-line no-await-in-loop -- PATH order is a preference order; probe sequentially.
+		if (await isExecutable(candidate)) {
+			logExtension(`server: using PATH binary ${candidate}`);
+			return candidate;
+		}
 	}
 
 	logExtension("server: no binary found");
 	return null;
 }
 
-/**
- * On Windows the user often hits "file in use" errors when an extension
- * upgrade overwrites the bundled binary while it's still running. When the
- * `runFromTemporaryLocation` setting is on we copy the binary to a temp
- * directory before launching so the original is free to be replaced.
- */
-async function maybeCopyToTemp(source: string): Promise<string> {
-	const config = vscode.workspace.getConfiguration("luck");
-	if (!config.get<boolean>("runFromTemporaryLocation", false)) {
-		return source;
-	}
-	try {
-		const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "luck-"));
-		const dest = path.join(dir, BIN_BASENAME);
-		await fs.promises.copyFile(source, dest);
-		if (process.platform !== "win32") {
-			await fs.promises.chmod(dest, 0o755);
-		}
-		logExtension(`server: copied to temp ${dest}`);
-		return dest;
-	} catch (error) {
-		logExtension(`server: temp-copy failed: ${error}`);
-		return source;
-	}
-}
-
-function bundledServerPath(extensionPath: string): string | null {
-	const platform = vsixPlatform();
-	if (!platform) {
-		return null;
-	}
-	return path.join(extensionPath, "server", platform, BIN_BASENAME);
-}
-
-function vsixPlatform(): string | null {
-	const { arch } = process;
-	switch (process.platform) {
-		case "win32": {
-			return arch === "arm64" ? "win32-arm64" : "win32-x64";
-		}
-		case "darwin": {
-			return arch === "arm64" ? "darwin-arm64" : "darwin-x64";
-		}
-		case "linux": {
-			return arch === "arm64" ? "linux-arm64" : "linux-x64";
-		}
-		default: {
-			return null;
-		}
-	}
-}
-
-const WINDOWS_EXECUTABLE_EXTENSIONS = new Set(
-	(process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD")
-		.split(";")
-		.map((ext) => ext.trim().toLowerCase())
-		.filter((ext) => ext.length > 0),
-);
-
-async function isExecutable(p: string): Promise<boolean> {
+async function isExecutable(filePath: string): Promise<boolean> {
 	try {
 		if (process.platform === "win32") {
-			// Windows has no execute bit; a regular file with an executable
-			// extension (per PATHEXT) is the portable proxy.
-			const st = await fs.promises.stat(p);
-			if (!st.isFile()) {
-				return false;
-			}
-			const ext = path.extname(p).toLowerCase();
-			return WINDOWS_EXECUTABLE_EXTENSIONS.has(ext);
+			const stats = await fs.promises.stat(filePath);
+			return (
+				stats.isFile() && WINDOWS_EXECUTABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase())
+			);
 		}
-		await fs.promises.access(p, fs.constants.X_OK);
+		await fs.promises.access(filePath, fs.constants.X_OK);
 		return true;
 	} catch {
 		return false;
 	}
-}
-
-async function findOnPath(name: string): Promise<string | null> {
-	const pathEnv = process.env["PATH"] ?? "";
-	const sep = process.platform === "win32" ? ";" : ":";
-	for (const dir of pathEnv.split(sep)) {
-		if (!dir) {
-			continue;
-		}
-		const candidate = path.join(dir, name);
-		// oxlint-disable-next-line no-await-in-loop -- PATH order is a preference order; probe sequentially.
-		if (await isExecutable(candidate)) {
-			return candidate;
-		}
-	}
-	return null;
-}
-
-/**
- * Points the user at manual installation rather than downloading anything.
- * Registered because the walkthrough and the missing-binary prompt both
- * target this command.
- */
-// oxlint-disable-next-line require-await -- async keeps the Promise shape callers await.
-export async function downloadServer(context: vscode.ExtensionContext): Promise<string | null> {
-	const platform = vsixPlatform();
-	if (!platform) {
-		vscode.window.showErrorMessage(
-			`Luck: no prebuilt binary for ${process.platform}/${process.arch}. Install via cargo and set luck.server.path.`,
-		);
-		return null;
-	}
-	const version = (context.extension.packageJSON?.version as string | undefined) ?? "latest";
-	const url = `https://github.com/esoware/luck/releases/download/v${version}/luck-${platform}.zip`;
-	vscode.window.showInformationMessage(
-		`Luck: download from ${url} not yet implemented. Set luck.server.path or install luck via cargo.`,
-	);
-	return null;
 }

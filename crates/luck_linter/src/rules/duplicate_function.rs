@@ -1,113 +1,85 @@
-use luck_ast::Statement;
-use luck_ast::shared::Block;
-use luck_ast::stmt::FuncName;
-use luck_ast::visitor::Visitor;
-use luck_token::{Span, TokenKind};
+use luck_ast::{FunctionName, Statement};
+use luck_token::Span;
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Finding, line_column};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
-pub struct DuplicateFunction;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DuplicateFunction;
 
-impl Rule for DuplicateFunction {
-    fn name(&self) -> &'static str {
-        "duplicate_function"
-    }
+impl_rule!(
+    DuplicateFunction,
+    "duplicate_function",
+    Suspicious,
+    Warning,
+    "function with the same name is defined twice in the same block"
+);
 
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-
-    fn description(&self) -> &'static str {
-        "function with the same name is defined twice in the same block"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let mut checker = DuplicateChecker {
-            source: ctx.source,
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(ctx.block);
-        checker.diagnostics
+impl WholeRule for DuplicateFunction {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        let mut definitions: Vec<(String, Span)> = Vec::new();
+        for block in context.blocks {
+            definitions.clear();
+            for stmt in &block.stmts {
+                // `redefining_local` covers local functions.
+                let (declared_name, name_span) = if let Statement::FunctionDecl(decl) = stmt {
+                    (full_name(&decl.name), decl.name.span)
+                } else if let Statement::GlobalFunction(function) = stmt {
+                    // Lua 5.5
+                    (function.name.identifier().map(str::to_owned), function.name.span)
+                } else {
+                    continue;
+                };
+                let Some(name) = declared_name else {
+                    continue;
+                };
+                if let Some((_, first_span)) =
+                    definitions.iter().find(|(defined_name, _)| *defined_name == name)
+                {
+                    let (line, _) =
+                        line_column(context.source, first_span.start, context.semantic.version);
+                    findings.push(Finding::new(
+                        format!(
+                            "duplicate function definition `{name}`, also defined on line {line}"
+                        ),
+                        name_span,
+                    ));
+                } else {
+                    definitions.push((name, name_span));
+                }
+            }
+        }
+        findings
     }
 }
 
-fn full_name(func_name: &FuncName) -> Option<String> {
-    let mut parts = Vec::new();
-    for token in &func_name.names {
-        let TokenKind::Identifier(name) = &token.kind else {
-            return None;
-        };
-        parts.push(name.as_str());
+/// The declared name as written, such as `a.b:c`, or `None` if any part
+/// isn't an identifier.
+fn full_name(function_name: &FunctionName) -> Option<String> {
+    let mut names = function_name.names.iter();
+    let mut joined = names.next()?.identifier()?.to_owned();
+    for token in names {
+        joined.push('.');
+        joined.push_str(token.identifier()?);
     }
-    if parts.is_empty() {
-        return None;
-    }
-    let mut joined = parts.join(".");
-    if let Some(method_token) = &func_name.method {
-        let TokenKind::Identifier(method) = &method_token.kind else {
-            return None;
-        };
+    if let Some(method_token) = &function_name.method {
         joined.push(':');
-        joined.push_str(method);
+        joined.push_str(method_token.identifier()?);
     }
     Some(joined)
 }
 
-fn line_of(source: &str, offset: Span) -> usize {
-    let end = (offset.start as usize).min(source.len());
-    source[..end].bytes().filter(|&byte| byte == b'\n').count() + 1
-}
-
-struct DuplicateChecker<'a> {
-    source: &'a str,
-    diagnostics: Vec<LintDiagnostic>,
-}
-
-impl DuplicateChecker<'_> {
-    fn check_block(&mut self, block: &Block) {
-        let mut defined: Vec<(String, Span)> = Vec::new();
-
-        for stmt in &block.stmts {
-            // Local functions are redefining_local's territory.
-            let Statement::FunctionDecl(decl) = stmt else {
-                continue;
-            };
-            let Some(name) = full_name(&decl.name) else {
-                continue;
-            };
-            if let Some((_, first_span)) = defined.iter().find(|(n, _)| *n == name) {
-                let line = line_of(self.source, *first_span);
-                self.diagnostics.push(LintDiagnostic::new(
-                    "duplicate_function",
-                    format!("duplicate function definition `{name}`; also defined on line {line}"),
-                    decl.name.span,
-                ));
-            } else {
-                defined.push((name, decl.name.span));
-            }
-        }
-    }
-}
-
-impl<'ast> Visitor<'ast> for DuplicateChecker<'_> {
-    fn visit_block(&mut self, block: &'ast Block) {
-        self.check_block(block);
-        self.walk_block(block);
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&DuplicateFunction, source, LuaVersion::Lua54)
+        run_rule(&DuplicateFunction, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -147,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_dot_vs_colon() {
+    fn ignores_same_name_with_dot_and_colon() {
         let diags = run("local t = {}\nfunction t.m() end\nfunction t:m() end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -168,5 +140,12 @@ mod tests {
     fn ignores_sibling_blocks() {
         let diags = run("do function f() end end\ndo function f() end end");
         assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_duplicate_global_function() {
+        let source = "global function f() end\nglobal function f() end";
+        let diags = run_rule(&DuplicateFunction, source, LuaVersion::Lua55);
+        assert_eq!(diags.len(), 1, "both statements define `f` in one block: {diags:?}");
     }
 }

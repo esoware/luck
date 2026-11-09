@@ -1,122 +1,58 @@
-use luck_ast::Statement;
-use luck_ast::visitor::Visitor;
-use luck_semantic::scope::{ReferenceKind, SymbolKind};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
-
-/// Luacheck 321: a local is declared without an initializer, then read
-/// before any value is assigned to it. Lua semantics make the read
-/// produce `nil`, which is almost always a bug.
+/// Luacheck 321: a local declared without a value is read where no assignment
+/// can have reached it.
 ///
-/// Why this is distinct from `unused_variable`: the local *is* used,
-/// just too early. The declaration must have no RHS (`local x` rather
-/// than `local x = nil` or `local x = ...`) so that `redundant_nil_init`
-/// and this rule stay orthogonal.
-pub struct AccessingUninitialized;
+/// A name counts when its `local` gives it no value, as in `local x` or the
+/// `b` of `local a, b = 1`. `local x = nil` is initialized, and
+/// `redundant_nil_init` covers it instead. A field or index write through the
+/// local is `mutating_uninitialized`'s (Luacheck 341).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AccessingUninitialized;
 
-impl Rule for AccessingUninitialized {
-    fn name(&self) -> &'static str {
-        "accessing_uninitialized"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "local is read before any value is assigned to it"
-    }
+impl_rule!(
+    AccessingUninitialized,
+    "accessing_uninitialized",
+    Correctness,
+    Warning,
+    "local is read before any value is assigned to it"
+);
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let semantic = ctx.semantic;
-        let mut uninit = UninitCollector::default();
-        uninit.visit_block(block);
-
-        let mut diagnostics = Vec::new();
-
-        for symbol in &semantic.scope_tree.symbols {
-            if symbol.kind != SymbolKind::Local {
-                continue;
-            }
-            if !uninit.is_uninit(symbol.definition_span.start, symbol.definition_span.end) {
-                continue;
-            }
-            if symbol.name == "_" || symbol.name.starts_with('_') {
-                continue;
-            }
-
-            // First reference ANYWHERE, by source order. Filtering to the
-            // declaration scope would hide writes inside `if` and loop
-            // bodies and flag the common branch-initialization idiom
-            // (`local x if c then x = 1 end print(x)`).
-            let mut refs: Vec<_> = symbol
-                .reference_ids
-                .iter()
-                .map(|&ref_id| semantic.scope_tree.reference(ref_id))
-                .collect();
-            refs.sort_by_key(|r| r.span.start);
-
-            let Some(first) = refs.first() else {
-                continue;
-            };
-            if !matches!(first.kind, ReferenceKind::Read | ReferenceKind::ReadWrite) {
-                continue;
-            }
-
-            diagnostics.push(
-                LintDiagnostic::new(
-                    "accessing_uninitialized",
-                    format!(
-                        "`{}` is read before any value is assigned; result is nil",
-                        symbol.name
-                    ),
-                    first.span,
-                )
-                .with_help("initialize at declaration or assign before reading".to_string()),
-            );
-        }
-
-        diagnostics
-    }
-}
-
-/// AST pass that records the definition spans of locals declared
-/// without an initializer.
-#[derive(Default)]
-struct UninitCollector {
-    spans: Vec<(u32, u32)>,
-}
-
-impl UninitCollector {
-    fn is_uninit(&self, start: u32, end: u32) -> bool {
-        self.spans.iter().any(|(s, e)| *s == start && *e == end)
-    }
-}
-
-impl<'ast> Visitor<'ast> for UninitCollector {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
-        if let Statement::LocalAssignment(local) = stmt
-            && local.exprs.is_none()
-        {
-            for attributed in local.names.iter() {
-                self.spans
-                    .push((attributed.name.span.start, attributed.name.span.end));
-            }
-        }
-        self.walk_statement(stmt);
+impl WholeRule for AccessingUninitialized {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let tree = &context.semantic.scope_tree;
+        context
+            .local_flow()
+            .first_unassigned_uses
+            .iter()
+            .filter_map(|&(symbol_id, reference_id)| {
+                let first = tree.reference(reference_id);
+                (!context.uninitialized_locals.is_field_write_prefix(first)).then(|| {
+                    Finding::new(
+                        format!(
+                            "`{}` is read before any value is assigned, so it is `nil`",
+                            tree.symbol(symbol_id).name
+                        ),
+                        first.span,
+                    )
+                    .with_help("initialize at declaration or assign before reading")
+                })
+            })
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&AccessingUninitialized, source, LuaVersion::Lua54)
+        run_rule(&AccessingUninitialized, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -128,8 +64,7 @@ mod tests {
 
     #[test]
     fn ignores_explicit_nil_init() {
-        // `local x = nil` is explicit; `redundant_nil_init` may comment
-        // on the style choice, but this rule treats it as initialized.
+        // `redundant_nil_init` may flag this, but it counts as initialized.
         let diags = run("local x = nil\nprint(x)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -141,8 +76,106 @@ mod tests {
     }
 
     #[test]
+    fn ignores_write_in_branch_before_read() {
+        let diags = run("local x\nif c then x = 1 end\nprint(x)");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_field_write_as_the_first_reference() {
+        let diags = run("local x\nx.foo = 1");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_index_write_as_the_first_reference() {
+        let diags = run("local y\ny[1] = 2");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_field_read_through_a_nested_write_target() {
+        // `x.y.z = 1` reads `x.y` first, which isn't a write through `x`.
+        let diags = run("local x\nx.y.z = 1");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    #[test]
     fn ignores_underscore_prefixed() {
         let diags = run("local _x\nprint(_x)");
         assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_forward_declaration_read_in_closure() {
+        let diags = run(
+            "local helper\nlocal function main() return helper() end\nhelper = function() return 1 end\nreturn main()",
+        );
+        assert!(diags.is_empty(), "the closure runs after the assignment: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_read_of_value_written_in_previous_iteration() {
+        let diags =
+            run("local last\nfor _, v in ipairs({1}) do if last then print(last) end last = v end");
+        assert!(diags.is_empty(), "later iterations read the written value: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_read_after_backward_goto() {
+        let diags =
+            run("local x\ngoto set\n::use::\nprint(x)\ndo return end\n::set::\nx = 1\ngoto use");
+        assert!(diags.is_empty(), "the assignment runs before the read: {diags:?}");
+    }
+
+    #[test]
+    fn flags_read_in_own_first_assignment() {
+        let diags = run("local x\nx = x + 1\nreturn x");
+        assert_eq!(diags.len(), 1, "the right-hand side reads `nil`: {diags:?}");
+    }
+
+    #[test]
+    fn flags_read_in_the_branch_that_skips_the_write() {
+        let diags = run("local x\nif c then x = 1 else print(x) end");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_read_before_the_closure_that_writes_it() {
+        let diags = run("local x\nprint(x)\nlocal function set() x = 1 end\nset()");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_read_after_a_closure_that_writes_it() {
+        let diags = run("local x\nlocal function set() x = 1 end\nset()\nprint(x)");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_read_of_a_name_the_initializer_list_leaves_without_a_value() {
+        let diags = run("local a, b = 1
+print(a, b)");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+        assert!(diags[0].message.contains("`b`"), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_name_a_trailing_call_can_fill() {
+        let diags = run("local a, b = f()
+print(a, b)");
+        assert!(diags.is_empty(), "the call can fill `b`: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_read_in_until_after_a_write_in_the_body() {
+        let diags = run("repeat local x\nif c then x = 1 end until x");
+        assert!(diags.is_empty(), "the `until` sees the body's locals: {diags:?}");
+    }
+
+    #[test]
+    fn flags_read_after_the_loop_redeclares_the_local() {
+        let diags = run("for _ = 1, 3 do local x\nprint(x)\nx = 1 end");
+        assert_eq!(diags.len(), 1, "a fresh `x` starts each iteration: {diags:?}");
     }
 }

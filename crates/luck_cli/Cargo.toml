@@ -1,34 +1,43 @@
 [package]
-name = "luck_cli"
-version.workspace = true
-authors.workspace = true
-categories.workspace = true
-description = "Command-line interface for the luck Lua and Luau toolchain"
-edition.workspace = true
-homepage.workspace = true
-keywords.workspace = true
-license.workspace = true
-repository.workspace = true
+name                   = "luck_cli"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "Command-line interface for the luck Lua and Luau toolchain"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
+[[bin]]
+name = "luck"
+path = "src/main.rs"
+# The facade library is also named luck, and two docs of that name would overwrite each other.
+doc = false
+
 [dependencies]
-ariadne.workspace = true
-luck.workspace = true
-luck_core.workspace = true
-luck_bundler.workspace = true
-rayon.workspace = true
-luck_formatter.workspace = true
-luck_parser.workspace = true
-luck_minifier.workspace = true
-luck_linter.workspace = true
-luck_token.workspace = true
-luck_lsp.workspace = true
-tokio.workspace = true
-clap.workspace = true
-ignore.workspace = true
-serde_json.workspace = true
-notify.workspace = true
-notify-debouncer-mini.workspace = true
+luck_bundler   = { workspace = true }
+luck_core      = { workspace = true }
+luck_formatter = { workspace = true }
+luck_linter    = { workspace = true }
+luck_lsp       = { workspace = true }
+luck_minifier  = { workspace = true }
+luck_parser    = { workspace = true }
+luck_token     = { workspace = true }
+
+ariadne               = { workspace = true }
+clap                  = { workspace = true }
+ignore                = { workspace = true }
+notify-debouncer-mini = { workspace = true }
+rayon                 = { workspace = true }
+rustc-hash            = { workspace = true }
+serde_json            = { workspace = true }
+tokio                 = { workspace = true, features = ["rt-multi-thread"] }
 
 [target.'cfg(not(any(target_os = "linux", target_arch = "arm", target_arch = "riscv64", target_family = "wasm")))'.dependencies]
 mimalloc-safe = { workspace = true, features = ["skip_collect_on_exit"] }
@@ -40,10 +49,6 @@ mimalloc-safe = { workspace = true, features = ["skip_collect_on_exit", "local_d
 mimalloc-safe = { workspace = true, features = ["skip_collect_on_exit", "local_dynamic_tls", "no_opt_arch"] }
 
 [dev-dependencies]
-tempfile.workspace = true
-assert_cmd.workspace = true
-predicates.workspace = true
-
-[[bin]]
-name = "luck"
-path = "src/main.rs"
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+tempfile   = { workspace = true }

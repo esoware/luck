@@ -1,65 +1,96 @@
-/// Zero-copy forward-only cursor over source bytes. Tracks byte position.
-pub struct Cursor<'src> {
-    source: &'src [u8],
+use luck_token::{LuaVersion, Span, strip_line_break};
+
+#[derive(Debug)]
+pub(crate) struct Cursor<'source> {
+    source: &'source str,
     position: usize,
 }
 
-impl<'src> Cursor<'src> {
-    pub fn new(source: &'src [u8]) -> Self {
-        Self {
-            source,
-            position: 0,
-        }
+impl<'source> Cursor<'source> {
+    pub(crate) const fn new(source: &'source str) -> Self {
+        Self { source, position: 0 }
     }
 
     #[inline]
-    pub fn position(&self) -> usize {
+    pub(crate) const fn position(&self) -> usize {
         self.position
     }
 
     #[inline]
-    pub fn peek(&self) -> Option<u8> {
-        self.source.get(self.position).copied()
+    pub(crate) fn peek(&self) -> Option<u8> {
+        self.source.as_bytes().get(self.position).copied()
     }
 
     #[inline]
-    pub fn peek_at(&self, offset: usize) -> Option<u8> {
-        self.source.get(self.position + offset).copied()
+    pub(crate) fn peek_next(&self) -> Option<u8> {
+        self.source.as_bytes().get(self.position.saturating_add(1)).copied()
     }
 
     #[inline]
-    pub fn advance(&mut self) -> Option<u8> {
-        let byte = self.source.get(self.position).copied()?;
-        self.position += 1;
-        Some(byte)
+    pub(crate) fn advance(&mut self) -> Option<u8> {
+        let b = self.peek()?;
+        self.advance_by(1);
+        Some(b)
     }
 
     #[inline]
-    pub fn rest(&self) -> &'src [u8] {
-        &self.source[self.position..]
-    }
-
-    #[inline]
-    pub fn advance_by(&mut self, count: usize) {
-        debug_assert!(self.position + count <= self.source.len());
-        self.position += count;
-    }
-
-    /// Advance to the first byte matching `table`, or EOF.
-    #[inline]
-    pub fn advance_until_match(&mut self, table: &crate::search::ByteMatchTable) {
-        self.position += crate::search::find_match(self.rest(), table);
-    }
-
-    pub fn eat_while(&mut self, predicate: impl Fn(u8) -> bool) -> &'src [u8] {
-        let start = self.position;
-        while let Some(byte) = self.peek() {
-            if predicate(byte) {
-                self.position += 1;
-            } else {
-                break;
-            }
+    pub(crate) fn eat(&mut self, byte: u8) -> bool {
+        let is_next = self.peek() == Some(byte);
+        if is_next {
+            self.advance_by(1);
         }
-        &self.source[start..self.position]
+        is_next
+    }
+
+    #[inline]
+    pub(crate) fn rest(&self) -> &'source [u8] {
+        self.source.as_bytes().get(self.position..).unwrap_or_default()
+    }
+
+    #[inline]
+    pub(crate) fn text_since(&self, start: usize) -> &'source str {
+        self.source.get(start..self.position).unwrap_or_default()
+    }
+
+    #[inline]
+    pub(crate) fn span_since(&self, start: usize) -> Span {
+        Span::from_indices(start, self.position)
+    }
+
+    /// The only place the position moves. It never passes the source length,
+    /// so the add can't wrap, and this per-byte path can skip saturation.
+    #[inline]
+    pub(crate) fn advance_by(&mut self, count: usize) {
+        debug_assert!(count <= self.rest().len(), "cursor advanced past the end of the source");
+        self.position = self.position.wrapping_add(count);
+    }
+
+    pub(crate) fn advance_to_line_break(&mut self) {
+        let rest = self.rest();
+        self.advance_by(memchr::memchr2(b'\n', b'\r', rest).unwrap_or(rest.len()));
+    }
+
+    pub(crate) fn eat_while(&mut self, predicate: impl Fn(u8) -> bool) {
+        while self.peek().is_some_and(&predicate) {
+            self.advance_by(1);
+        }
+    }
+
+    /// Consume the rest of the UTF-8 sequence that begins at `start` and
+    /// return its char, so a multi-byte char yields one error that names it
+    /// and lexing resumes on a char boundary.
+    pub(crate) fn eat_rest_of_char(&mut self, start: usize) -> Option<char> {
+        // Continuation bytes are 0b10xxxxxx.
+        self.eat_while(|b| (b & 0xC0) == 0x80);
+        self.text_since(start).chars().next()
+    }
+
+    /// Whether only spaces and tabs stand between the cursor and a line break
+    /// or EOF.
+    pub(crate) fn is_at_line_end(&self, version: LuaVersion) -> bool {
+        let rest = self.rest();
+        let blank_length = rest.iter().take_while(|b| matches!(b, b' ' | b'\t')).count();
+        let after_blanks = rest.get(blank_length..).unwrap_or_default();
+        after_blanks.is_empty() || strip_line_break(after_blanks, version).is_some()
     }
 }

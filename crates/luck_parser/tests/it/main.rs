@@ -1,3 +1,8 @@
+// Lets clippy.toml's allow-*-in-tests settings cover the shared helpers, not
+// just the `#[test]` functions.
+#![cfg(test)]
+#![expect(clippy::missing_panics_doc, reason = "a Panics section says nothing about a test")]
+
 mod common;
 
 mod depth;
@@ -10,5 +15,6 @@ mod lua54;
 mod lua55;
 mod luau;
 mod luau_types;
+mod parse_result;
 mod validate;
 mod version;

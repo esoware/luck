@@ -1,10 +1,22 @@
 use luck_token::{CompoundOp, Span, Token};
 
 use crate::expr::{Expression, FunctionCall, Var};
-use crate::shared::{Block, FunctionBody, Parameter, Punctuated};
+use crate::function::{FunctionAttribute, FunctionBody, Parameter};
+use crate::punctuated::Punctuated;
 use crate::types::{GenericTypeList, Type};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Block {
+    pub span: Span,
+    pub stmts: Vec<Statement>,
+    pub last_stmt: Option<Box<LastStatement>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "each variant is named for its payload, and the syntax tree view prints these names"
+)]
 pub enum Statement {
     Assignment(Box<Assignment>),
     FunctionCall(Box<FunctionCall>),
@@ -30,7 +42,6 @@ pub enum Statement {
     Error(Span),
 }
 
-/// A block-terminating statement: `return`, `break`, or `continue` (Luau).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LastStatement {
     Return(Box<ReturnStatement>),
@@ -92,7 +103,6 @@ pub struct ElseClause {
 pub struct NumericFor {
     pub span: Span,
     pub name: Token,
-    /// Luau: `: T` on the loop variable.
     pub type_annotation: Option<Type>,
     pub start: Expression,
     pub limit: Expression,
@@ -108,38 +118,22 @@ pub struct GenericFor {
     pub block: Block,
 }
 
-/// Dotted function name with optional method: `a.b.c:method`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FuncName {
+pub struct FunctionName {
     pub span: Span,
     pub names: Vec<Token>,
-    /// `:method` name.
     pub method: Option<Token>,
 }
 
-/// Luau function attribute: `@native`, `@checked`, `@deprecated`, etc.
-/// Attributes change runtime behavior (`@native` forces native codegen),
-/// so dropping them from output is a semantics-altering bug.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionAttribute {
-    pub span: Span,
-    pub name: Token,
-    /// Literal arguments of the bracketed `@[name(...)]` form; None for
-    /// the plain `@name` form (and `@[name]` without arguments).
-    pub args: Option<Punctuated<Expression>>,
-}
-
-/// Named function declaration: `function a.b.c:m(...) ... end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionDecl {
     pub span: Span,
     /// Luau: `@attr` list preceding `function`. Empty outside Luau.
     pub attributes: Vec<FunctionAttribute>,
-    pub name: FuncName,
+    pub name: FunctionName,
     pub body: FunctionBody,
 }
 
-/// Local function declaration: `local function name(...) ... end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalFunction {
     pub span: Span,
@@ -150,30 +144,24 @@ pub struct LocalFunction {
     /// Luau `const function NAME funcbody`. The emitter prints `const`
     /// in place of `local`.
     pub is_const: bool,
-    /// Luau: `export function NAME funcbody`.
     pub is_exported: bool,
 }
 
-/// Lua 5.4 local variable attribute: `<const>` or `<close>`. The name
-/// stays a token because the parser accepts any identifier there and
-/// diagnoses unknown attribute names downstream with the original spelling.
+/// The name stays a token because the parser keeps whatever identifier it
+/// finds there, after reporting any name other than `const` or `close`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attribute {
     pub span: Span,
     pub name: Token,
 }
 
-/// One declared name with its optional attribute: `x <const>`.
-///
-/// The pairing is structural so a name and its attribute can never
-/// drift apart the way parallel `names`/`attribs` vectors could.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttributedName {
     pub name: Token,
-    /// Luau: `: T` annotation. Mutually exclusive with `attrib` in
-    /// practice, since attributes are Lua 5.4+ and annotations Luau.
+    /// Luau: `: T` annotation. The parser never sets both this and
+    /// `attribute`, since attributes are Lua 5.4+ only.
     pub type_annotation: Option<Type>,
-    pub attrib: Option<Box<Attribute>>,
+    pub attribute: Option<Box<Attribute>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,18 +172,15 @@ pub struct LocalAssignment {
     /// Luau `const bindinglist = explist`. The emitter prints `const` in
     /// place of `local`, and every name in the list is read-only.
     pub is_const: bool,
-    /// Luau: `export local` or `export const`.
     pub is_exported: bool,
 }
 
-/// `goto name` statement (Lua 5.2+).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GotoStatement {
     pub span: Span,
     pub name: Token,
 }
 
-/// `::name::` label statement (Lua 5.2+).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelStatement {
     pub span: Span,
@@ -208,7 +193,6 @@ pub struct ReturnStatement {
     pub exprs: Punctuated<Expression>,
 }
 
-/// Luau compound assignment, for example `x += 1`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompoundAssignment {
     pub span: Span,
@@ -217,10 +201,6 @@ pub struct CompoundAssignment {
     pub expr: Expression,
 }
 
-/// Luau type declaration.
-/// Two forms: `type Name = TYPE` (alias) and `type function Name funcbody`
-/// (compile-time type function; no `=`). The form is carried by
-/// [`TypeDeclarationValue`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDeclaration {
     pub span: Span,
@@ -238,7 +218,6 @@ pub enum TypeDeclarationValue {
     TypeFunction(Box<FunctionBody>),
 }
 
-/// Lua 5.5 `global` variable declaration: `global names [= exprs]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalDeclaration {
     pub span: Span,
@@ -246,7 +225,6 @@ pub struct GlobalDeclaration {
     pub exprs: Option<Punctuated<Expression>>,
 }
 
-/// Lua 5.5 `global function`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalFunction {
     pub span: Span,
@@ -254,9 +232,8 @@ pub struct GlobalFunction {
     pub body: FunctionBody,
 }
 
-/// Lua 5.5 `global *`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalStar {
     pub span: Span,
-    pub attrib: Option<Attribute>,
+    pub attribute: Option<Attribute>,
 }

@@ -1,67 +1,114 @@
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
-pub struct UndefinedVariable;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UndefinedVariable;
 
-impl Rule for UndefinedVariable {
-    fn name(&self) -> &'static str {
-        "undefined_variable"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "use of undefined variable"
-    }
+impl_rule!(
+    UndefinedVariable,
+    "undefined_variable",
+    Correctness,
+    Error,
+    "use of undefined variable"
+);
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let semantic = ctx.semantic;
-        let mut diagnostics = Vec::new();
-
-        // Globals defined in this file (`function f() end`, `counter = 0`)
-        // are known names for the rest of the file. Without this, plain
-        // Lua script style errors on the definition and on every use.
-        let defined_in_file: std::collections::HashSet<&str> = semantic
+impl WholeRule for UndefinedVariable {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let semantic = context.semantic;
+        semantic
             .scope_tree
             .unresolved_references()
             .filter(|reference| {
-                matches!(
-                    reference.kind,
-                    luck_semantic::scope::ReferenceKind::Write
-                        | luck_semantic::scope::ReferenceKind::ReadWrite
-                )
+                // `setting_global` owns writes, and a global this file writes
+                // (`function f() end`, `counter = 0`) counts as defined
+                // everywhere in it, or script-style Lua would error on every
+                // use.
+                !reference.kind.is_write()
+                    && !semantic.is_defined_global(reference)
+                    && reference.name != "_"
+                    && !semantic.scope_tree.assigned_globals.contains(&reference.name)
             })
-            .map(|reference| reference.name.as_str())
-            .collect();
+            .map(|reference| {
+                Finding::new(format!("undefined variable `{}`", reference.name), reference.span)
+                    .with_help("declare it with `local`, or add it to `extra_globals`")
+            })
+            .collect()
+    }
+}
 
-        for reference in semantic.scope_tree.unresolved_references() {
-            if semantic.is_known_global(&reference.name) {
-                continue;
-            }
-            if reference.name == "_" {
-                continue;
-            }
-            // `setting_global` owns writes to undeclared names.
-            if matches!(reference.kind, luck_semantic::scope::ReferenceKind::Write) {
-                continue;
-            }
-            if defined_in_file.contains(reference.name.as_str()) {
-                continue;
-            }
+#[cfg(test)]
+mod tests {
+    use luck_token::LuaVersion;
 
-            diagnostics.push(
-                LintDiagnostic::new(
-                    "undefined_variable",
-                    format!("undefined variable `{}`", reference.name),
-                    reference.span,
-                )
-                .with_help("declare it with `local` or add to globals list".to_string()),
-            );
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
+
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        run_rule(&UndefinedVariable, source, LuaVersion::Lua54)
+    }
+
+    #[test]
+    fn flags_read_of_undeclared_name() {
+        let diags = run("print(missing)");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("`missing`"), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_names_declared_with_global() {
+        for source in [
+            "global x = 1\nprint(x)",
+            "global function f() end\nf()",
+            "global y\nprint(y)",
+            "global z <const> = 2\nprint(z)",
+        ] {
+            let diags = run_rule(&UndefinedVariable, source, LuaVersion::Lua55);
+            assert!(diags.is_empty(), "{source}: {diags:?}");
         }
+    }
 
-        diagnostics
+    #[test]
+    fn ignores_global_the_file_assigns() {
+        let diags = run("print(counter)\ncounter = 0\nfunction helper() end\nhelper()");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_plain_write_and_discard() {
+        let diags = run("fresh = 1\nprint(_)");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_compound_assignment_to_undeclared_name() {
+        let diags = run_rule(&UndefinedVariable, "counter += 1", LuaVersion::Luau);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_read_through_local_env() {
+        let diags = run("local _ENV = { y = 1 }\nreturn y");
+        assert!(diags.is_empty(), "`y` is a field of the local `_ENV`: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_read_after_global_star() {
+        let diags = run_rule(&UndefinedVariable, "global *\nreturn y", LuaVersion::Lua55);
+        assert!(diags.is_empty(), "`global *` declares every free name: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_types_library_in_type_function() {
+        let source = "type function t1(a)\n return types.string\nend";
+        let diags = run_rule(&UndefinedVariable, source, LuaVersion::Luau);
+        assert!(diags.is_empty(), "type functions have the `types` library: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_implicit_arg_table_of_a_lua51_vararg_function() {
+        let diags =
+            run_rule(&UndefinedVariable, "local function f(...) return arg end", LuaVersion::Lua51);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

@@ -8,45 +8,30 @@ Text-document features:
 - text document sync (open / change / save / close), incremental
 - push diagnostics on open / change / save (`luck_linter`)
 - formatting + range formatting (`luck_formatter`)
-- hover with stdlib signature, deprecation, must-use / pure / Roblox markers
-- completion (stdlib globals + namespace members + scope-visible locals + keywords)
+- hover with stdlib signatures (every overload), deprecation, and must-use / pure / rebindable markers
+- completion (stdlib globals + namespace and shape members + locals declared before the cursor + keywords, and constant values such as Roblox service names inside string arguments)
 - signature help (active-parameter tracking, typed parameter labels)
-- document symbols (outline view for functions, methods, locals) and
-  workspace symbols (substring search over open documents' outlines)
-- go-to-definition (local symbols via the scope tree; `require("path")`
-  strings jump to the resolved module file)
-- find references and rename (local symbols only; rename refuses globals,
-  stdlib names, and any new name that would change meaning)
-- code actions: per-diagnostic auto-fix, `source.fixAll.luck`,
-  "disable rule for this line"
+- document symbols (outline view for functions, methods, locals) and workspace symbols (substring search over open documents' outlines)
+- go-to-definition (local symbols through the scope tree, and `require("path")` strings jump to the resolved module file)
+- find references and rename (local symbols only, and rename refuses globals, stdlib names, a method's implicit `self`, a local `_ENV`, exported bindings, and any new name that would change meaning)
+- code actions: per-diagnostic auto-fix, `source.fixAll.luck`, "disable rule for this statement"
 - semantic tokens (full document and range)
-- document highlights (occurrences of the symbol under cursor)
-- folding ranges (block constructs)
+- document highlights (reads and writes of the name under the cursor)
+- folding ranges (blocks, functions, and table constructors)
 - selection ranges (smart-expand selection)
-- document links (clickable `require()` paths, resolved through
-  `luck_resolver` so Lua search paths, Luau relative / `@alias` imports, and
-  the `init` parent-parent rule all match the bundler)
+- document links (clickable `require()` paths, resolved through `luck_resolver` so Lua search paths, Luau relative / `@alias` imports, and the `init` parent-parent rule all match the bundler)
 
 Custom requests:
 - `luck/syntaxTree` returns a debug AST dump for the requested document
-- `luck/fixAllWorkspace` returns a server-computed WorkspaceEdit applying
-  every available fix across every open document
+- `luck/fixAllWorkspace` returns one `WorkspaceEdit` holding every available fix across every open document the project's `include` and `exclude` cover
 
 ## Config
 
-The server reads `luck.json` from any parent directory of an
-opened file to pick up `target`, `format`, `lint`, and `search_paths`
-settings. With no config it falls back to Lua 5.4 (or Luau if the file
-extension is `.luau`), the formatter defaults, linting off, and the default Lua
-search paths. Document-link resolution uses the config root as the Lua template
-base, or the requiring file's own directory when no config is found.
+The server reads the nearest `luck.json` in or above an open file's directory for its `lua`, `luau`, `format`, `lint`, `include` / `exclude`, and `search_paths` settings, and rereads it when a config file changes. Formatting also honors `.editorconfig`, with `luck.json`'s `format` taking precedence. With no config it falls back to Lua 5.4 (or Luau if the file extension is `.luau`), the formatter defaults, linting off, and the default Lua search paths. Document-link resolution uses the config root as the Lua template base, or the requiring file's own directory when no config is found.
 
 ## Build
 
-`luck_lsp` is a library crate with no binary of its own (`[lib]` only, no
-`[[bin]]` in its `Cargo.toml`). The server is served by the `luck_cli`
-binary's `lsp` subcommand, which calls `luck_lsp::serve_stdio` or
-`luck_lsp::serve_socket`.
+`luck_lsp` is a library crate with no binary of its own. The `luck` binary from `luck_cli` runs it through its `lsp` subcommand, which calls `luck_lsp::serve_stdio` or `luck_lsp::serve_socket`.
 
 ```sh
 cargo build -p luck_cli --release
@@ -63,9 +48,7 @@ luck lsp --socket 9257      # TCP on 127.0.0.1:9257, useful for debugging
 
 ### VS Code
 
-Use the bundled `luck.luck` extension under `editors/vscode/`. It ships the
-server binary, wires every capability above, and registers commands for
-restart, show output, view syntax tree, and apply-all-fixes.
+Use the bundled `luck.luck` extension under `editors/vscode/`. It ships the server binary, wires every capability above, and registers commands for restart, show output, view syntax tree, and apply-all-fixes.
 
 ### Neovim (nvim-lspconfig)
 
@@ -81,5 +64,4 @@ require("lspconfig.configs").luck_lsp = {
 require("lspconfig").luck_lsp.setup({})
 ```
 
-Format-on-save is then a one-liner with `vim.lsp.buf.format` in a
-`BufWritePre` autocommand.
+Format-on-save is then a one-liner with `vim.lsp.buf.format` in a `BufWritePre` autocommand.

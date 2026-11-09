@@ -1,110 +1,84 @@
-use luck_ast::Expression;
-use luck_ast::expr::Var;
-use luck_ast::shared::Block;
-use luck_ast::visitor::Visitor;
-use luck_token::TokenKind;
+use luck_ast::{Expression, Statement, Var};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::Finding;
+use crate::nodes::adjacent_stmts;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
-pub struct AlmostSwapped;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AlmostSwapped;
 
-impl Rule for AlmostSwapped {
-    fn name(&self) -> &'static str {
-        "almost_swapped"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "looks like a failed variable swap (use a, b = b, a)"
-    }
+impl_rule!(
+    AlmostSwapped,
+    "almost_swapped",
+    Correctness,
+    Error,
+    "looks like a failed variable swap; use `a, b = b, a`"
+);
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let mut checker = SwapChecker {
-            diagnostics: Vec::new(),
-        };
-        checker.visit_block(ctx.block);
-        checker.diagnostics
+impl WholeRule for AlmostSwapped {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        context
+            .blocks
+            .iter()
+            .flat_map(|block| adjacent_stmts(block))
+            .filter_map(|(first, second)| failed_swap(first, second))
+            .collect()
     }
 }
 
-struct SwapChecker {
-    diagnostics: Vec<LintDiagnostic>,
+fn failed_swap(first_stmt: &Statement, second_stmt: &Statement) -> Option<Finding> {
+    let (Statement::Assignment(first), Statement::Assignment(second)) = (first_stmt, second_stmt)
+    else {
+        return None;
+    };
+    let ([first_target], [first_value], [second_target], [second_value]) = (
+        first.targets.items.as_slice(),
+        first.values.items.as_slice(),
+        second.targets.items.as_slice(),
+        second.values.items.as_slice(),
+    ) else {
+        return None;
+    };
+    let target_a = var_name(first_target)?;
+    let value_a = expr_var_name(first_value)?;
+    let target_b = var_name(second_target)?;
+    let value_b = expr_var_name(second_value)?;
+    // After `a = b`, `b = a` copies `b` back and the old `a` is lost.
+    (target_a == value_b && target_b == value_a).then(|| {
+        Finding::new(
+            format!("`{target_a} = {value_a}; {target_b} = {value_b}` doesn't swap"),
+            first.span.merge(second.span),
+        )
+        .with_help(format!(
+            "use `{target_a}, {target_b} = {target_b}, {target_a}` to swap both at once"
+        ))
+    })
 }
 
 fn var_name(var: &Var) -> Option<&str> {
-    match var {
-        Var::Name(token) => match &token.kind {
-            TokenKind::Identifier(name) => Some(name.as_str()),
-            _ => None,
-        },
-        _ => None,
-    }
+    let Var::Name(token) = var else {
+        return None;
+    };
+    token.identifier()
 }
 
 fn expr_var_name(expr: &Expression) -> Option<&str> {
-    match expr {
-        Expression::Var(var) => var_name(var),
-        _ => None,
-    }
-}
-
-impl<'ast> Visitor<'ast> for SwapChecker {
-    fn visit_block(&mut self, block: &'ast Block) {
-        for pair in block.stmts.windows(2) {
-            let (luck_ast::Statement::Assignment(first), luck_ast::Statement::Assignment(second)) =
-                (&pair[0], &pair[1])
-            else {
-                continue;
-            };
-            if first.targets.len() != 1
-                || second.targets.len() != 1
-                || first.values.len() != 1
-                || second.values.len() != 1
-            {
-                continue;
-            }
-            let (Some(target_a), Some(value_a), Some(target_b), Some(value_b)) = (
-                first.targets.first().and_then(var_name),
-                first.values.first().and_then(expr_var_name),
-                second.targets.first().and_then(var_name),
-                second.values.first().and_then(expr_var_name),
-            ) else {
-                continue;
-            };
-            // In `a = b; b = a` the second assignment reads back the
-            // value the first overwrote, so neither variable ends up
-            // swapped.
-            if target_a == value_b && target_b == value_a {
-                self.diagnostics.push(
-                    LintDiagnostic::new(
-                        "almost_swapped",
-                        format!(
-                            "`{target_a} = {value_a}; {target_b} = {value_b}` does not swap; use `{target_a}, {target_b} = {target_b}, {target_a}`"
-                        ),
-                        first.span.merge(second.span),
-                    )
-                    .with_help(format!(
-                        "use `{target_a}, {target_b} = {target_b}, {target_a}` for simultaneous swap"
-                    )),
-                );
-            }
-        }
-        self.walk_block(block);
-    }
+    let Expression::Var(var) = expr else {
+        return None;
+    };
+    var_name(var)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&AlmostSwapped, source, LuaVersion::Lua54)
+        run_rule(&AlmostSwapped, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -129,5 +103,11 @@ mod tests {
     fn ignores_unrelated_assignments() {
         let diags = run("local a, b = 1, 2\na = b\nb = 3");
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_failed_swap_separated_by_semicolon() {
+        let diags = run("local a, b = 1, 2\na = b; b = a");
+        assert_eq!(diags.len(), 1, "a `;` doesn't change the failed swap: {diags:?}");
     }
 }

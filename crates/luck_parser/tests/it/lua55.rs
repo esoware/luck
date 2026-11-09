@@ -1,11 +1,62 @@
 use luck_ast::Statement;
+use luck_parser::ParseResult;
 use luck_token::LuaVersion;
 
 use crate::common::assert_no_errors;
-use luck_parser::ParseResult;
 
 fn parse_lua55(source: &str) -> ParseResult {
     luck_parser::parse(source, LuaVersion::Lua55)
+}
+
+#[test]
+fn global_stays_a_name_outside_a_declaration() {
+    for source in [
+        "local global = 1",
+        "global = 1",
+        "global.x = 1",
+        "global()",
+        "global \"x\"",
+        "global {}",
+        "function global() end",
+        "return global",
+    ] {
+        let result = parse_lua55(source);
+        assert_no_errors(&result);
+        assert!(
+            !matches!(
+                result.block.stmts.first(),
+                Some(
+                    Statement::GlobalDeclaration(_)
+                        | Statement::GlobalFunction(_)
+                        | Statement::GlobalStar(_)
+                )
+            ),
+            "{source}: {:?}",
+            result.block.stmts
+        );
+    }
+}
+
+#[test]
+fn global_declares_before_a_name_attribute_star_or_function() {
+    for source in
+        ["global x", "global global", "global <const> x", "global *", "global function f() end"]
+    {
+        let result = parse_lua55(source);
+        assert_no_errors(&result);
+        assert!(
+            matches!(
+                result.block.stmts.first(),
+                Some(
+                    Statement::GlobalDeclaration(_)
+                        | Statement::GlobalFunction(_)
+                        | Statement::GlobalStar(_)
+                )
+            ),
+            "{source}: {:?}",
+            result.block.stmts
+        );
+    }
 }
 
 #[test]
@@ -24,9 +75,9 @@ fn global_simple() {
 fn global_multiple_names() {
     let result = parse_lua55("global x, y");
     assert_no_errors(&result);
-    if let Statement::GlobalDeclaration(gd) = &result.block.stmts[0] {
-        let count = gd.names.len();
-        assert_eq!(count, 2);
+    if let Statement::GlobalDeclaration(global) = &result.block.stmts[0] {
+        let n = global.names.len();
+        assert_eq!(n, 2);
     } else {
         panic!("expected GlobalDeclaration");
     }
@@ -49,8 +100,8 @@ fn global_star() {
     let result = parse_lua55("global *");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::GlobalStar(gs) = &result.block.stmts[0] {
-        assert!(gs.attrib.is_none());
+    if let Statement::GlobalStar(global_star) = &result.block.stmts[0] {
+        assert!(global_star.attribute.is_none());
     } else {
         panic!("expected GlobalStar, got {:?}", result.block.stmts[0]);
     }
@@ -61,10 +112,10 @@ fn global_star_with_attribute() {
     let result = parse_lua55("global <const> *");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::GlobalStar(gs) = &result.block.stmts[0] {
-        let attrib = gs.attrib.as_ref().expect("expected attribute");
+    if let Statement::GlobalStar(global_star) = &result.block.stmts[0] {
+        let attribute = global_star.attribute.as_ref().expect("expected attribute");
         assert!(matches!(
-            &attrib.name.kind,
+            &attribute.name.kind,
             luck_token::TokenKind::Identifier(name) if name == "const"
         ));
     } else {
@@ -76,17 +127,17 @@ fn global_star_with_attribute() {
 fn local_attribute_before_first_name() {
     let result = parse_lua55("local <close> f = io.open(\"file\")");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(la) = &result.block.stmts[0] {
-        assert_eq!(la.names.len(), 1);
-        let attrib = la
+    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+        assert_eq!(local.names.len(), 1);
+        let attribute = local
             .names
             .get(0)
             .expect("declared name")
-            .attrib
+            .attribute
             .as_ref()
             .expect("expected attribute on f");
         assert!(matches!(
-            &attrib.name.kind,
+            &attribute.name.kind,
             luck_token::TokenKind::Identifier(name) if name == "close"
         ));
     } else {
@@ -98,8 +149,8 @@ fn local_attribute_before_first_name() {
 fn named_vararg() {
     let result = parse_lua55("function f(...args) return args end");
     assert_no_errors(&result);
-    if let Statement::FunctionDecl(f) = &result.block.stmts[0] {
-        let vararg = f.body.vararg.as_ref().expect("expected vararg");
+    if let Statement::FunctionDecl(function_decl) = &result.block.stmts[0] {
+        let vararg = function_decl.body.vararg.as_ref().expect("expected vararg");
         let vararg_name = vararg.name.as_ref().expect("expected named vararg");
         assert!(matches!(
             &vararg_name.kind,
@@ -114,10 +165,10 @@ fn named_vararg() {
 fn named_vararg_after_params() {
     let result = parse_lua55("function f(a, b, ...rest) end");
     assert_no_errors(&result);
-    if let Statement::FunctionDecl(f) = &result.block.stmts[0] {
-        let param_count = f.body.params.len();
+    if let Statement::FunctionDecl(function_decl) = &result.block.stmts[0] {
+        let param_count = function_decl.body.params.len();
         assert_eq!(param_count, 2);
-        let vararg = f.body.vararg.as_ref().expect("expected vararg");
+        let vararg = function_decl.body.vararg.as_ref().expect("expected vararg");
         let vararg_name = vararg.name.as_ref().expect("expected named vararg");
         assert!(matches!(
             &vararg_name.kind,
@@ -130,30 +181,24 @@ fn named_vararg_after_params() {
 
 #[test]
 fn global_with_initializer() {
-    // 5.5 §3.3.7: stat ::= global attnamelist ['=' explist]
-    let result = parse_lua55("global x = 1");
-    assert_no_errors(&result);
-    if let Statement::GlobalDeclaration(gd) = &result.block.stmts[0] {
-        let exprs = gd.exprs.as_ref().expect("initializer parsed");
+    // 5.5 manual section 3.3.7: stat ::= global attnamelist ['=' explist]
+    let single = parse_lua55("global x = 1");
+    assert_no_errors(&single);
+    if let Statement::GlobalDeclaration(global) = &single.block.stmts[0] {
+        let exprs = global.exprs.as_ref().expect("initializer parsed");
         assert_eq!(exprs.len(), 1);
     } else {
-        panic!(
-            "expected GlobalDeclaration, got {:?}",
-            result.block.stmts[0]
-        );
+        panic!("expected GlobalDeclaration, got {:?}", single.block.stmts[0]);
     }
 
-    let result = parse_lua55("global a, b = 1, 2");
-    assert_no_errors(&result);
-    if let Statement::GlobalDeclaration(gd) = &result.block.stmts[0] {
-        assert_eq!(gd.names.len(), 2);
-        let exprs = gd.exprs.as_ref().expect("initializer parsed");
+    let multiple = parse_lua55("global a, b = 1, 2");
+    assert_no_errors(&multiple);
+    if let Statement::GlobalDeclaration(global) = &multiple.block.stmts[0] {
+        assert_eq!(global.names.len(), 2);
+        let exprs = global.exprs.as_ref().expect("initializer parsed");
         assert_eq!(exprs.len(), 2);
     } else {
-        panic!(
-            "expected GlobalDeclaration, got {:?}",
-            result.block.stmts[0]
-        );
+        panic!("expected GlobalDeclaration, got {:?}", multiple.block.stmts[0]);
     }
 }
 
@@ -161,31 +206,31 @@ fn global_with_initializer() {
 fn global_attributed_with_initializer() {
     let result = parse_lua55("global x <const> = 1");
     assert_no_errors(&result);
-    if let Statement::GlobalDeclaration(gd) = &result.block.stmts[0] {
-        assert!(gd.exprs.is_some());
+    if let Statement::GlobalDeclaration(global) = &result.block.stmts[0] {
+        assert!(global.exprs.is_some());
     } else {
-        panic!(
-            "expected GlobalDeclaration, got {:?}",
-            result.block.stmts[0]
-        );
+        panic!("expected GlobalDeclaration, got {:?}", result.block.stmts[0]);
     }
 }
 
 #[test]
 fn leading_attribute_distributes_to_all_names() {
-    // 5.5 §3.3.7: "A prefixed attribute applies to all names in the list."
+    // 5.5 manual section 3.3.7: "A prefixed attribute applies to all names in
+    // the list."
     let result = parse_lua55("local <const> x, y = 1, 2");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
-        let attribs: Vec<_> = local
+        let attribute_names: Vec<_> = local
             .names
             .iter()
-            .map(|n| n.attrib.as_ref().map(|a| a.name.kind.clone()))
+            .map(|attributed| {
+                attributed.attribute.as_ref().map(|attribute| attribute.name.kind.clone())
+            })
             .collect();
-        assert_eq!(attribs.len(), 2);
+        assert_eq!(attribute_names.len(), 2);
         assert!(
-            attribs.iter().all(|a| a.is_some()),
-            "leading attrib must apply to every name: {attribs:?}"
+            attribute_names.iter().all(Option::is_some),
+            "leading attrib must apply to every name: {attribute_names:?}"
         );
     } else {
         panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
@@ -193,10 +238,26 @@ fn leading_attribute_distributes_to_all_names() {
 }
 
 #[test]
-fn leading_attribute_conflicts_with_trailing_on_any_name() {
+fn trailing_attribute_replaces_the_leading_one_on_its_name() {
+    // 5.5 `localstat`: `kind = getvarattribute(ls, defkind)`.
     let result = parse_lua55("local <const> x, y <close> = 1, 2");
-    assert!(
-        !result.errors.is_empty(),
-        "leading + trailing attrib on the list must error"
-    );
+    assert_no_errors(&result);
+    let Statement::LocalAssignment(local) = &result.block.stmts[0] else {
+        panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
+    };
+    let attribute_names: Vec<_> = local
+        .names
+        .iter()
+        .map(|attributed| attributed.attribute.as_ref()?.name.identifier())
+        .collect();
+    assert_eq!(attribute_names, [Some("const"), Some("close")]);
+}
+
+#[test]
+fn postfixed_attribute_overrides_prefixed_attribute() {
+    // 5.5 `localstat`: `kind = getvarattribute(ls, defkind)`.
+    for source in ["local <const> a <close> = nil", "global <const> x <const>"] {
+        let result = parse_lua55(source);
+        assert!(result.errors.is_empty(), "{source} is valid in Lua 5.5: {:?}", result.errors);
+    }
 }

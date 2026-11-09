@@ -1,232 +1,184 @@
-use luck_ast::Statement;
-use luck_ast::expr::{Expression, Var};
-use luck_ast::stmt::FuncName;
-use luck_ast::visitor::Visitor;
-use luck_semantic::SemanticAnalysis;
-use luck_semantic::scope::ReferenceKind;
-use luck_token::{Span, TokenKind};
+use luck_ast::{DottedPath, Expression, FunctionName, Statement, Var, Visitor, dotted_path};
+use luck_semantic::{SemanticAnalysis, StdlibEntry};
+use luck_token::{Span, Token};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
-pub struct BuiltinGlobalWrite;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BuiltinGlobalWrite;
 
-impl Rule for BuiltinGlobalWrite {
-    fn name(&self) -> &'static str {
-        "builtin_global_write"
-    }
+impl_rule!(
+    BuiltinGlobalWrite,
+    "builtin_global_write",
+    Correctness,
+    Warning,
+    "overwriting a standard-library global or one of its fields"
+);
 
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-
-    fn description(&self) -> &'static str {
-        "overwriting a standard-library global or one of its fields"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let semantic = ctx.semantic;
-        let mut diagnostics = Vec::new();
+impl WholeRule for BuiltinGlobalWrite {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let semantic = context.semantic;
+        let mut findings = Vec::new();
 
         for reference in semantic.scope_tree.unresolved_references() {
-            if !matches!(
-                reference.kind,
-                ReferenceKind::Write | ReferenceKind::ReadWrite
-            ) {
+            if !reference.kind.is_write() {
                 continue;
             }
             if !is_overwritable_builtin(semantic, &reference.name) {
                 continue;
             }
-            diagnostics.push(diagnostic(&reference.name, reference.span));
+            findings.push(overwrite_finding(&reference.name, reference.span));
         }
 
-        let mut checker = FieldWriteChecker {
-            semantic,
-            diagnostics,
-        };
-        checker.visit_block(ctx.block);
-        checker.diagnostics
+        let mut checker = FieldWriteChecker { semantic, findings };
+        checker.visit_block(context.block);
+        checker.findings
     }
 }
 
-/// Extra-globals from config are user-declared names, so overwriting them
-/// is intentional even when they collide with a stdlib name. Globals the
-/// model marks writable (`_G`, `shared` on Roblox, `_PROMPT`) are the
-/// documented set-me idiom, not an overwrite.
+/// Names in the config's extra globals belong to the user, even when they
+/// collide with a stdlib name. Globals the stdlib model marks writable
+/// (`_G`, Roblox's `shared`, `_PROMPT`) exist to be set.
 fn is_overwritable_builtin(semantic: &SemanticAnalysis, name: &str) -> bool {
     semantic.is_known_global(name)
         && semantic.is_read_only_global(name)
         && !semantic.extra_globals.contains(name)
 }
 
-fn diagnostic(name: &str, span: Span) -> LintDiagnostic {
-    LintDiagnostic::new(
-        "builtin_global_write",
+fn overwrite_finding(name: &str, span: Span) -> Finding {
+    Finding::new(
         format!(
-            "built-in global `{name}` is overwritten here; consider a local or a different name"
+            "built-in global `{name}` is overwritten here, consider a local or a different name"
         ),
         span,
     )
 }
 
-fn expr_base_ident(expr: &Expression) -> Option<(&str, Span)> {
-    match expr {
-        Expression::Var(var) => match var {
-            Var::Name(token) => match &token.kind {
-                TokenKind::Identifier(name) => Some((name.as_str(), token.span)),
-                _ => None,
-            },
-            Var::FieldAccess(field_access) => expr_base_ident(&field_access.prefix),
-            Var::Index(index) => expr_base_ident(&index.prefix),
-        },
-        _ => None,
-    }
-}
-
-fn var_dotted_segments(var: &Var) -> Option<Vec<String>> {
-    match var {
-        Var::Name(token) => match &token.kind {
-            TokenKind::Identifier(name) => Some(vec![name.to_string()]),
-            _ => None,
-        },
-        Var::FieldAccess(field_access) => {
-            let Expression::Var(inner) = &field_access.prefix else {
-                return None;
-            };
-            let mut segments = var_dotted_segments(inner)?;
-            match &field_access.name.kind {
-                TokenKind::Identifier(name) => {
-                    segments.push(name.to_string());
-                    Some(segments)
-                }
-                _ => None,
-            }
-        }
-        Var::Index(_) => None,
-    }
-}
-
-fn var_dotted_path(var: &Var) -> Option<String> {
-    match var {
-        Var::Name(token) => match &token.kind {
-            TokenKind::Identifier(name) => Some(name.to_string()),
-            _ => None,
-        },
-        Var::FieldAccess(field_access) => {
-            let Expression::Var(inner) = &field_access.prefix else {
-                return None;
-            };
-            let prefix = var_dotted_path(inner)?;
-            match &field_access.name.kind {
-                TokenKind::Identifier(name) => Some(format!("{prefix}.{name}")),
-                _ => None,
-            }
-        }
-        Var::Index(_) => None,
-    }
-}
-
-struct FieldWriteChecker<'a> {
-    semantic: &'a SemanticAnalysis,
-    diagnostics: Vec<LintDiagnostic>,
+struct FieldWriteChecker<'semantic> {
+    semantic: &'semantic SemanticAnalysis,
+    findings: Vec<Finding>,
 }
 
 impl FieldWriteChecker<'_> {
-    fn check_var_target(&mut self, var: &Var) {
-        let (base, span) = match var {
-            // Whole-name writes surface as unresolved Write references.
-            Var::Name(_) => return,
-            Var::Index(index) => (expr_base_ident(&index.prefix), index.span),
-            Var::FieldAccess(field_access) => {
-                (expr_base_ident(&field_access.prefix), field_access.span)
-            }
+    /// A field of a stdlib value, such as `package.loaded` or a Roblox
+    /// instance's property, isn't the library. Neither is a `path` that no
+    /// longer reaches the host's global.
+    fn writes_namespace_member(&self, path: &[&str], root_span: Span, leaf: Option<&str>) -> bool {
+        let Some(&root) = path.first() else {
+            return false;
         };
-        let Some((name, name_span)) = base else {
-            return;
-        };
-        if self.semantic.resolves_to_local(name, name_span) {
-            return;
-        }
-        // A writable base (`_G.x = 1`, `shared.score = 1` on Roblox) is
-        // the deliberate global-set idiom, and so is assigning a leaf
-        // the model marks writable (`package.path = ...`).
-        if !is_overwritable_builtin(self.semantic, name) {
-            return;
-        }
-        if let Some(segments) = var_dotted_segments(var)
-            && let Some(entry) = self
-                .semantic
-                .lookup_stdlib_str(&segments.iter().map(String::as_str).collect::<Vec<_>>())
-            && !entry.is_read_only()
+        // Writing through a writable base (`_G.x = 1`, Roblox's
+        // `shared.score = 1`) is intended.
+        if !is_overwritable_builtin(self.semantic, root)
+            || !self.semantic.reaches_host_global(root, root_span)
         {
-            return;
+            return false;
         }
-        let display = var_dotted_path(var).unwrap_or_else(|| name.to_string());
-        self.diagnostics.push(diagnostic(&display, span));
+        let Some(StdlibEntry::Namespace(namespace)) = self.semantic.stdlib().lookup(path) else {
+            return false;
+        };
+        // So is a leaf the model marks writable (`package.path = ...`).
+        leaf.and_then(|name| namespace.members.get(name)).is_none_or(StdlibEntry::is_read_only)
     }
 
-    fn check_func_name(&mut self, func_name: &FuncName) {
-        // Bare `function print()` surfaces as an unresolved Write reference.
-        if func_name.names.len() < 2 && func_name.method.is_none() {
-            return;
-        }
-        let Some(first) = func_name.names.first() else {
-            return;
-        };
-        let TokenKind::Identifier(name) = &first.kind else {
-            return;
-        };
-        if self.semantic.resolves_to_local(name, first.span) {
-            return;
-        }
-        if !is_overwritable_builtin(self.semantic, name) {
-            return;
-        }
-        let mut display = name.to_string();
-        for token in &func_name.names[1..] {
-            if let TokenKind::Identifier(part) = &token.kind {
-                display.push('.');
-                display.push_str(part);
+    fn check_var_target(&mut self, var: &Var) {
+        let (prefix, leaf, span) = match var {
+            // Whole-name writes surface as unresolved Write references.
+            Var::Name(_) => return,
+            Var::Index(index) => (&index.prefix, None, index.span),
+            Var::FieldAccess(field_access) => {
+                (&field_access.prefix, field_access.name.identifier(), field_access.span)
             }
+        };
+        let Expression::Var(container) = prefix else {
+            return;
+        };
+        let Some(DottedPath { segments, root_span, .. }) = dotted_path(container) else {
+            return;
+        };
+        if !self.writes_namespace_member(&segments, root_span, leaf) {
+            return;
         }
-        if let Some(method) = &func_name.method
-            && let TokenKind::Identifier(part) = &method.kind
-        {
-            display.push(':');
-            display.push_str(part);
+        let mut display = segments.join(".");
+        if let Some(name) = leaf {
+            display.push('.');
+            display.push_str(name);
         }
-        self.diagnostics.push(diagnostic(&display, func_name.span));
+        self.findings.push(overwrite_finding(&display, span));
+    }
+
+    fn check_function_name(&mut self, function_name: &FunctionName) {
+        let (container, leaf, separator) = if let Some(method) = &function_name.method {
+            (function_name.names.as_slice(), method, ':')
+        } else {
+            // Bare `function print()` surfaces as an unresolved Write
+            // reference, and has no container here.
+            let Some((leaf, container)) = function_name.names.split_last() else {
+                return;
+            };
+            (container, leaf, '.')
+        };
+        let Some(segments) = container.iter().map(Token::identifier).collect::<Option<Vec<_>>>()
+        else {
+            return;
+        };
+        let (Some(root), Some(leaf_name)) = (container.first(), leaf.identifier()) else {
+            return;
+        };
+        if !self.writes_namespace_member(&segments, root.span, Some(leaf_name)) {
+            return;
+        }
+        let display = format!("{}{separator}{leaf_name}", segments.join("."));
+        self.findings.push(overwrite_finding(&display, function_name.span));
     }
 }
 
 impl<'ast> Visitor<'ast> for FieldWriteChecker<'_> {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
-            Statement::Assignment(assign) => {
-                for var in assign.targets.iter() {
+            Statement::Assignment(assignment) => {
+                for var in assignment.targets.iter() {
                     self.check_var_target(var);
                 }
             }
+            // Luau
             Statement::CompoundAssignment(compound) => self.check_var_target(&compound.var),
-            Statement::FunctionDecl(decl) => self.check_func_name(&decl.name),
-            _ => {}
+            Statement::FunctionDecl(decl) => self.check_function_name(&decl.name),
+            Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::LocalFunction(_)
+            | Statement::LocalAssignment(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => {}
         }
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use luck_core::LintConfig;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::{run_rule, run_rule_roblox, run_rule_with_config};
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&BuiltinGlobalWrite, source, LuaVersion::Lua54)
+        run_rule(&BuiltinGlobalWrite, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -304,30 +256,28 @@ mod tests {
 
     #[test]
     fn ignores_writable_leaf_property() {
-        // The model marks package.path read-write; assigning it is the
-        // documented configuration idiom, not an overwrite.
+        // The model marks `package.path` writable.
         let diags = run("package.path = package.path .. ';./?.lua'");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_writable_global_assignment() {
-        // _PROMPT is a read-write interpreter property; setting it is
-        // its entire purpose.
+        // `_PROMPT` exists to be set.
         let diags = run("_PROMPT = '> '");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_shared_field_write_on_roblox() {
-        let diags = crate::test_support::run_rule_roblox(&BuiltinGlobalWrite, "shared.score = 1");
+        let diags = run_rule_roblox(&BuiltinGlobalWrite, "shared.score = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn flags_readonly_leaf_beside_writable_sibling() {
-        // package.path is writable but math.huge is not; only
-        // model-writable targets are exempt.
+        // Only leaves the model marks writable, like `package.path`, are
+        // exempt.
         let diags = run("math.huge = 1");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
@@ -340,21 +290,72 @@ mod tests {
 
     #[test]
     fn ignores_plain_global_write() {
-        // setting_global owns non-builtin implicit globals.
+        // `setting_global` covers globals that aren't builtins.
         let diags = run("my_module_state = 5");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_extra_global_write() {
-        let mut config = crate::LintConfig::default();
-        config.extra_globals.push("vim".to_string());
-        let diags = crate::test_support::run_rule_with_config(
+        let config = LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() };
+        let diags = run_rule_with_config(
             &BuiltinGlobalWrite,
             "vim = 5\nvim.api = 1",
             LuaVersion::Lua54,
             &config,
         );
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_builtin_listed_in_extra_globals() {
+        // `table` is a stdlib name, so only the `extra_globals` entry keeps
+        // these writes quiet.
+        let config =
+            LintConfig { extra_globals: vec!["table".to_owned()], ..LintConfig::default() };
+        let diags = run_rule_with_config(
+            &BuiltinGlobalWrite,
+            "table = 5\ntable.insert = 1\nfunction table.foo() end",
+            LuaVersion::Lua54,
+            &config,
+        );
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_package_preload_entry_write() {
+        let diags = run("package.preload.foo = function() end");
+        assert!(diags.is_empty(), "`package.preload` exists to be filled: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_package_loaded_entry_write() {
+        let diags = run("package.loaded[name] = nil");
+        assert!(diags.is_empty(), "clearing a loaded module is documented: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_roblox_instance_property_write() {
+        let diags = run_rule_roblox(&BuiltinGlobalWrite, "script.Parent.Visible = false");
+        assert!(diags.is_empty(), "this sets a property, not a builtin: {diags:?}");
+    }
+
+    #[test]
+    fn flags_only_the_whole_name_write_of_a_rebound_builtin() {
+        let diags = run("table = {}\ntable.insert = 1");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+        assert!(diags[0].message.contains("`table`"), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_field_write_under_a_local_env() {
+        let diags = run("local _ENV = {}\ntable.insert = 1");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_function_decl_on_builtin_value() {
+        let diags = run("function package.preload.foo() end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 }

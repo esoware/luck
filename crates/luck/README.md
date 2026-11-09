@@ -4,13 +4,9 @@ Umbrella crate re-exporting the luck toolchain as a single dependency.
 
 ## Overview
 
-`luck` is the facade. Add it once instead of tracking each `luck_*` crate
-individually. The crate carries no logic of its own. Everything is a
-re-export of the underlying `luck_*` crates.
+Add `luck` once instead of tracking each `luck_*` crate. It has no logic of its own. Every module is a re-export of the matching `luck_*` crate.
 
-The parse core, `token`, `lexer`, `ast`, `parser`, and `core`, is always
-present. Every downstream stage sits behind its own Cargo feature, off by
-default; the `full` feature turns all of them on.
+The parse core (`token`, `lexer`, `ast`, `parser`, and `core`) is always present. Every other stage sits behind its own Cargo feature, off by default, and the `full` feature turns all of them on.
 
 ## Re-exports
 
@@ -32,22 +28,25 @@ default; the `full` feature turns all of them on.
 
 ## Usage
 
-The package publishes as `luck_lua` (the `luck` name on crates.io
-belongs to an unrelated project), but the library it ships is named
-`luck`, so imports are unaffected. Enable the features for the stages
-you need, or `full` for all of them:
+The package publishes as `luck_lua` (the `luck` name on crates.io belongs to an unrelated project), but the library it ships is named `luck`, so code still imports `luck::...`. Enable the features for the stages you need, or `full` for all of them:
 
 ```toml
 [dependencies]
-luck = { package = "luck_lua", version = "0.3", features = ["bundler", "minifier"] }
+luck = { package = "luck_lua", version = "0.4", features = ["bundler", "minifier"] }
 ```
 
 ```rust
 use luck::bundler;
 use luck::minifier;
 
-let bundled = bundler::bundle(&entry_path, target, &search_paths, &project_root)?;
-let minified = minifier::minify(&bundled.output, target, &Default::default(), "bundle.lua")?;
+let options = bundler::BundleOptions {
+    version: target.lua_version(),
+    search_paths: &search_paths,
+    project_root: &project_root,
+    dynamic_require,
+};
+let bundled = bundler::bundle(&entry_path, &options)?;
+let minified = minifier::minify(&bundled.output, target.lua_version(), &Default::default())?;
 ```
 
-The underlying crates stay published, so you can depend on a single one if that is all you need.
+The underlying crates stay published, so you can depend on a single one if that's all you need.

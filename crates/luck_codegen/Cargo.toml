@@ -1,20 +1,23 @@
 [package]
-name = "luck_codegen"
-version.workspace = true
-authors.workspace = true
-categories.workspace = true
-description = "Compact code printer for Lua and Luau ASTs"
-edition.workspace = true
-homepage.workspace = true
-keywords.workspace = true
-license.workspace = true
-repository.workspace = true
+name                   = "luck_codegen"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "Compact code printer for Lua and Luau ASTs"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
-luck_token.workspace = true
-luck_ast.workspace = true
+luck_ast   = { workspace = true }
+luck_token = { workspace = true }
 
 [dev-dependencies]
-luck_parser.workspace = true
-luck_lexer.workspace = true
+luck_parser  = { workspace = true }
+luck_testgen = { workspace = true }

@@ -1,228 +1,183 @@
-use luck_ast::Expression;
-use luck_ast::expr::{FunctionArgs, FunctionCall, Var};
-use luck_ast::stmt::Statement;
-use luck_token::TokenKind;
-use luck_token::{BinOp, UnOp};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Var};
+use luck_token::{BinOp, LuaVersion, Token, UnOp};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
-use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
+use crate::call::dotted_callee;
+use crate::diagnostic::Finding;
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::number::is_number_literal;
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
-pub struct TableOperations;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TableOperations;
 
-impl Rule for TableOperations {
-    fn name(&self) -> &'static str {
-        "table_operations"
-    }
-
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-
-    fn description(&self) -> &'static str {
-        "misuse of table.insert, table.remove, table.move, or table.create"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
+impl_rule!(
+    TableOperations,
+    "table_operations",
+    Suspicious,
+    Warning,
+    "misuse of `table.insert`, `table.remove`, `table.move`, or `table.create`"
+);
 
 impl NodeRule for TableOperations {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset =
-            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_statement(&self, stmt: &Statement, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if let Statement::FunctionCall(call_stmt) = stmt {
-            check_call(call_stmt, ctx, out);
-        }
-    }
-
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if let Expression::FunctionCall(call) = expr {
-            check_call(call, ctx, out);
-        }
+    fn on_call(
+        &self,
+        call: &FunctionCall,
+        _position: CallPosition,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
+        check_call(call, context, findings);
     }
 }
 
-fn check_call(call: &FunctionCall, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-    let Some(func) = table_stdlib_function(call, ctx) else {
+fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    let Some(function_name) = table_stdlib_function(call, context) else {
         return;
     };
     let FunctionArgs::Parenthesized { args, .. } = &call.args else {
         return;
     };
-    let args: Vec<&Expression> = args.iter().collect();
-    let diag = |message: &str| LintDiagnostic::new("table_operations", message, call.span);
-    match func {
-        "insert" if args.len() == 3 => {
-            if is_number_literal(args[1], 0.0) {
-                out.push(
-                    diag("table.insert with index 0; Lua arrays are 1-based")
-                        .with_help("did you mean index 1?".to_string()),
+    let version = context.semantic.version;
+    let finding = |message: &str| Finding::new(message, call.span);
+    match (function_name, args.items.as_slice()) {
+        ("insert", [table, index, _]) => {
+            if is_number_literal(index, 0.0, version) {
+                findings.push(
+                    finding("`table.insert` with index 0, but Lua arrays are 1-based")
+                        .with_help("did you mean index 1?"),
                 );
-            } else if length_operand(args[1]).is_some_and(|target| same_target(target, args[0])) {
-                out.push(
-                    diag("table.insert(t, #t, v) inserts the value before the last element")
-                        .with_help("to append, use table.insert(t, v) or index #t + 1".to_string()),
+                return;
+            }
+            if length_operand(index).is_some_and(|target| same_target(target, table)) {
+                findings.push(
+                    finding("`table.insert(t, #t, v)` inserts the value before the last element")
+                        .with_help("to append, use `table.insert(t, v)`"),
                 );
-            } else if length_plus_one_operand(args[1])
-                .is_some_and(|target| same_target(target, args[0]))
+                return;
+            }
+            if length_offset_operand(index, BinOp::Add, version)
+                .is_some_and(|target| same_target(target, table))
             {
-                out.push(
-                    diag("table.insert(t, #t + 1, v) appends; the index argument is redundant")
-                        .with_help("use table.insert(t, v) instead".to_string()),
+                findings.push(
+                    finding(
+                        "`table.insert(t, #t + 1, v)` appends, so the index argument is redundant",
+                    )
+                    .with_help("use `table.insert(t, v)` instead"),
                 );
             }
         }
-        "remove" if args.len() == 2 => {
-            if is_number_literal(args[1], 0.0) {
-                out.push(
-                    diag("table.remove with index 0; Lua arrays are 1-based")
-                        .with_help("did you mean index 1?".to_string()),
+        ("remove", [table, index]) => {
+            if is_number_literal(index, 0.0, version) {
+                findings.push(
+                    finding("`table.remove` with index 0, but Lua arrays are 1-based")
+                        .with_help("did you mean index 1?"),
                 );
-            } else if length_minus_one_operand(args[1])
-                .is_some_and(|target| same_target(target, args[0]))
+                return;
+            }
+            if length_offset_operand(index, BinOp::Sub, version)
+                .is_some_and(|target| same_target(target, table))
             {
-                out.push(
-                    diag("table.remove(t, #t - 1) removes the value before the last element")
-                        .with_help("table.remove(t) removes the last element".to_string()),
+                findings.push(
+                    finding("`table.remove(t, #t - 1)` removes the value before the last element")
+                        .with_help("`table.remove(t)` removes the last element"),
                 );
             }
         }
-        "move" => {
-            if args.len() >= 2 && is_number_literal(args[1], 0.0) {
-                out.push(diag(
-                    "table.move with start index 0; Lua arrays are 1-based",
+        ("move", move_args) => {
+            if move_args.get(1).is_some_and(|start| is_number_literal(start, 0.0, version)) {
+                findings
+                    .push(finding("`table.move` with start index 0, but Lua arrays are 1-based"));
+            }
+            if move_args
+                .get(3)
+                .is_some_and(|destination| is_number_literal(destination, 0.0, version))
+            {
+                findings.push(finding(
+                    "`table.move` with destination index 0, but Lua arrays are 1-based",
                 ));
             }
-            if args.len() >= 4 && is_number_literal(args[3], 0.0) {
-                out.push(diag(
-                    "table.move with destination index 0; Lua arrays are 1-based",
-                ));
-            }
         }
-        "create" if args.len() == 2 => {
-            if matches!(args[1], Expression::TableConstructor(_)) {
-                out.push(
-                    diag("table.create(n, {...}) fills every slot with the same table object")
-                        .with_help(
-                            "use a for loop to create a distinct table per element".to_string(),
-                        ),
-                );
-            }
+        ("create", [_, Expression::TableConstructor(_)]) => {
+            findings.push(
+                finding("`table.create(n, {...})` fills every slot with the same table object")
+                    .with_help("use a `for` loop to give each element its own table"),
+            );
         }
         _ => {}
     }
 }
 
-/// If `call` is `table.<field>(...)` where `table` is the real stdlib
-/// global (not a shadowing local) and `<field>` exists in the current
-/// version's stdlib, return the field name.
-fn table_stdlib_function<'a>(call: &'a FunctionCall, ctx: &LintContext) -> Option<&'a str> {
-    if call.method.is_some() {
-        return None;
-    }
-    let Expression::Var(var) = &call.callee else {
-        return None;
-    };
-    let Var::FieldAccess(fa) = var else {
-        return None;
-    };
-    let Expression::Var(prefix_var) = &fa.prefix else {
-        return None;
-    };
-    let Var::Name(prefix_token) = prefix_var else {
-        return None;
-    };
-    let TokenKind::Identifier(prefix_name) = &prefix_token.kind else {
-        return None;
-    };
-    if prefix_name.as_str() != "table"
-        || ctx
-            .semantic
-            .resolves_to_local(prefix_name.as_str(), prefix_token.span)
+/// The `field` of a `table.field(...)` call, if `table` is the stdlib global
+/// and this version's stdlib has that function.
+fn table_stdlib_function<'call>(
+    call: &'call FunctionCall,
+    context: &LintContext<'_>,
+) -> Option<&'call str> {
+    let (root, field) = dotted_callee(call)?;
+    if root.identifier() != Some("table") || context.semantic.resolves_to_local("table", root.span)
     {
         return None;
     }
-    let TokenKind::Identifier(field) = &fa.name.kind else {
-        return None;
-    };
-    ctx.semantic.lookup_stdlib_str(&["table", field.as_str()])?;
-    Some(field.as_str())
-}
-
-fn is_number_literal(expr: &Expression, want: f64) -> bool {
-    let Expression::Number(literal) = expr else {
-        return false;
-    };
-    literal.text.parse::<f64>() == Ok(want)
+    context.semantic.stdlib().lookup(&["table", field])?;
+    Some(field)
 }
 
 fn length_operand(expr: &Expression) -> Option<&Expression> {
-    let Expression::UnaryOp(unop) = expr else {
+    let Expression::UnaryOp(unary) = expr else {
         return None;
     };
-    (unop.op == UnOp::Len).then_some(&unop.operand)
+    (unary.op == UnOp::Len).then_some(&unary.operand)
 }
 
-fn length_plus_one_operand(expr: &Expression) -> Option<&Expression> {
-    let Expression::BinaryOp(binop) = expr else {
+fn length_offset_operand(expr: &Expression, op: BinOp, version: LuaVersion) -> Option<&Expression> {
+    let Expression::BinaryOp(binary_op) = expr else {
         return None;
     };
-    if !matches!(binop.op, BinOp::Add) || !is_number_literal(&binop.right, 1.0) {
+    if binary_op.op != op || !is_number_literal(&binary_op.rhs, 1.0, version) {
         return None;
     }
-    length_operand(&binop.left)
+    length_operand(&binary_op.lhs)
 }
 
-fn length_minus_one_operand(expr: &Expression) -> Option<&Expression> {
-    let Expression::BinaryOp(binop) = expr else {
-        return None;
-    };
-    if !matches!(binop.op, BinOp::Sub) || !is_number_literal(&binop.right, 1.0) {
-        return None;
-    }
-    length_operand(&binop.left)
-}
-
-/// Structural identity for the length-operand checks, meaning the same
-/// bare identifier or the same dotted path. Anything dynamic (indexing,
-/// calls) is not comparable, so it never matches.
-fn same_target(a: &Expression, b: &Expression) -> bool {
-    let (Expression::Var(a), Expression::Var(b)) = (a, b) else {
-        return false;
-    };
-    match (a, b) {
-        (Var::Name(a), Var::Name(b)) => match (&a.kind, &b.kind) {
-            (TokenKind::Identifier(a_name), TokenKind::Identifier(b_name)) => a_name == b_name,
-            _ => false,
-        },
-        (Var::FieldAccess(a), Var::FieldAccess(b)) => match (&a.name.kind, &b.name.kind) {
-            (TokenKind::Identifier(a_name), TokenKind::Identifier(b_name)) => {
-                a_name == b_name && same_target(&a.prefix, &b.prefix)
+/// Anything else, such as an index or a call, never matches.
+fn same_target(left: &Expression, right: &Expression) -> bool {
+    let (mut left_expr, mut right_expr) = (left, right);
+    loop {
+        let (Expression::Var(left_var), Expression::Var(right_var)) = (left_expr, right_expr)
+        else {
+            return false;
+        };
+        match (left_var, right_var) {
+            (Var::Name(left_token), Var::Name(right_token)) => {
+                return same_identifier(left_token, right_token);
             }
-            _ => false,
-        },
-        _ => false,
+            (Var::FieldAccess(left_field), Var::FieldAccess(right_field)) => {
+                if !same_identifier(&left_field.name, &right_field.name) {
+                    return false;
+                }
+                left_expr = &left_field.prefix;
+                right_expr = &right_field.prefix;
+            }
+            _ => return false,
+        }
     }
+}
+
+fn same_identifier(left: &Token, right: &Token) -> bool {
+    left.identifier().is_some_and(|name| right.identifier() == Some(name))
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use super::TableOperations;
+    use super::*;
     use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
 
     fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&TableOperations, source, version)
+        run_rule(&TableOperations, source, version)
     }
 
     #[test]
@@ -230,6 +185,27 @@ mod tests {
         let diags = run("table.insert(t, 0, v)", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("1-based"), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_hex_index_zero() {
+        for source in [
+            "table.insert(t, 0x0, v)",
+            "table.remove(t, 0x0)",
+            "table.move(t, 0x0, #t, 1)",
+            "table.move(t, 1, #t, 0x0, u)",
+        ] {
+            let diags = run(source, LuaVersion::Lua54);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn flags_hex_length_offset() {
+        for source in ["table.insert(t, #t + 0x1, v)", "table.remove(t, #t - 0x1)"] {
+            let diags = run(source, LuaVersion::Lua54);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+        }
     }
 
     #[test]
@@ -284,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_call_in_expression_position() {
+    fn flags_call_in_expr_position() {
         let diags = run("local last = table.remove(t, 0)", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
     }

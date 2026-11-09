@@ -38,8 +38,6 @@
   },
   "main": "./out/extension.js",
   "activationEvents": [
-    "onLanguage:lua",
-    "onLanguage:luau",
     "workspaceContains:luck.json",
     "workspaceContains:.luaurc",
     "workspaceContains:**/*.lua",
@@ -91,6 +89,108 @@
         "language": "luau",
         "scopeName": "source.luau",
         "path": "./syntaxes/luau.tmLanguage.json"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "lua",
+        "scopes": {
+          "namespace": [
+            "variable.other.object.lua"
+          ],
+          "namespace.defaultLibrary": [
+            "variable.other.object.lua"
+          ],
+          "variable": [
+            "variable.other.readwrite.lua"
+          ],
+          "variable.readonly": [
+            "variable.other.constant.lua"
+          ],
+          "variable.defaultLibrary": [
+            "variable.other.readwrite.lua"
+          ],
+          "property": [
+            "variable.other.property.lua"
+          ],
+          "property.readonly": [
+            "variable.other.constant.property.lua"
+          ],
+          "property.defaultLibrary": [
+            "variable.other.property.lua"
+          ],
+          "property.readonly.defaultLibrary": [
+            "variable.other.constant.property.lua"
+          ],
+          "parameter": [
+            "variable.parameter.lua"
+          ],
+          "function": [
+            "entity.name.function.lua"
+          ],
+          "function.defaultLibrary": [
+            "support.function.lua"
+          ],
+          "method": [
+            "entity.name.function.lua"
+          ],
+          "method.defaultLibrary": [
+            "support.function.lua"
+          ],
+          "type": [
+            "entity.name.type.lua"
+          ]
+        }
+      },
+      {
+        "language": "luau",
+        "scopes": {
+          "namespace": [
+            "variable.other.object.luau"
+          ],
+          "namespace.defaultLibrary": [
+            "variable.other.object.luau"
+          ],
+          "variable": [
+            "variable.other.readwrite.luau"
+          ],
+          "variable.readonly": [
+            "variable.other.constant.luau"
+          ],
+          "variable.defaultLibrary": [
+            "variable.other.readwrite.luau"
+          ],
+          "property": [
+            "variable.other.property.luau"
+          ],
+          "property.readonly": [
+            "variable.other.constant.property.luau"
+          ],
+          "property.defaultLibrary": [
+            "variable.other.property.luau"
+          ],
+          "property.readonly.defaultLibrary": [
+            "variable.other.constant.property.luau"
+          ],
+          "parameter": [
+            "variable.parameter.luau"
+          ],
+          "function": [
+            "entity.name.function.luau"
+          ],
+          "function.defaultLibrary": [
+            "support.function.luau"
+          ],
+          "method": [
+            "entity.name.function.luau"
+          ],
+          "method.defaultLibrary": [
+            "support.function.luau"
+          ],
+          "type": [
+            "entity.name.type.luau"
+          ]
+        }
       }
     ],
     "snippets": [
@@ -146,7 +246,7 @@
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
-          "markdownDescription": "Absolute path to the `luck` binary. If empty, the extension uses (in order): bundled binary → `PATH` → prompt to download."
+          "markdownDescription": "Absolute path to the `luck` binary. If empty, the extension tries the bundled binary, then `PATH`, then shows a download prompt."
         },
         "luck.server.extraEnv": {
           "type": "object",
@@ -167,7 +267,7 @@
         "luck.runFromTemporaryLocation": {
           "type": "boolean",
           "default": false,
-          "description": "Copy the luck binary to a temporary directory before running. Use this if Windows file locking prevents updates."
+          "description": "Run a copy of the bundled luck binary from the extension's storage directory. Use this if Windows file locking prevents updates."
         },
         "luck.statusBar.enable": {
           "type": "boolean",
@@ -353,49 +453,6 @@
         "label": "Luck"
       }
     ],
-    "taskDefinitions": [
-      {
-        "type": "luck",
-        "required": [
-          "command"
-        ],
-        "properties": {
-          "command": {
-            "type": "string",
-            "enum": [
-              "lint",
-              "format",
-              "check",
-              "bundle"
-            ],
-            "description": "The luck CLI subcommand to run."
-          },
-          "args": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Extra CLI arguments."
-          },
-          "cwd": {
-            "type": "string",
-            "description": "Working directory."
-          },
-          "target": {
-            "type": "string",
-            "enum": [
-              "lua51",
-              "lua52",
-              "lua53",
-              "lua54",
-              "lua55",
-              "luau",
-              "roblox"
-            ]
-          }
-        }
-      }
-    ],
     "problemMatchers": [
       {
         "name": "luck",
@@ -473,14 +530,9 @@
   "scripts": {
     "vscode:prepublish": "npm run check && npm run lint && npm run fmt:check && npm run bundle",
     "check": "tsc -p ./",
-    "compile": "npm run check && npm run bundle-dev",
-    "watch": "tsc -watch -p ./",
     "bundle": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node22 --minify",
-    "bundle-dev": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node22 --sourcemap",
     "package": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && vsce package --out dist/",
-    "publish": "vsce publish",
     "lint": "oxlint src",
-    "lint:fix": "oxlint src --fix",
     "fmt": "oxfmt src",
     "fmt:check": "oxfmt src --check"
   },

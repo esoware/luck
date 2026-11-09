@@ -1,155 +1,101 @@
-//! `luck check` - parse every target file and report syntax errors.
-
-use crate::output::parallel_chunk_size;
-use crate::project::{
-    collect_target_files, project_filter, resolve_file_targets, resolve_project_config,
-};
-use crate::render::{FileCache, render_diagnostics_to_buffer};
-use crate::{EXIT_FAILURE, EXIT_SUCCESS, Verbosity};
-use clap::Args;
-use luck_core::diagnostics::Diagnostic;
-use luck_core::types::LuaTarget;
+use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+
+use clap::Args;
+use luck_core::{LuaTarget, read_source_file};
+
+use crate::exit::Exit;
+use crate::project::{outcomes_in_order, project_files, resolve_project};
+use crate::render::render_source_errors;
+use crate::verbosity::Verbosity;
 
 #[derive(Args)]
 pub(crate) struct CheckArgs {
-    /// Files or directories to check [default: current directory]
+    /// Files or directories to check [default: current directory].
     paths: Vec<String>,
 
-    /// Path to config file [default: discover luck.json upward from cwd]
+    /// Path to config file [default: discover luck.json upward from cwd].
     #[arg(short, long, value_name = "PATH")]
     config: Option<PathBuf>,
 }
 
 impl CheckArgs {
-    /// Parse every target file and report parse errors. No output is written;
-    /// the exit code is 1 if any file has parse errors, else 0.
-    pub(crate) fn run(self, verbosity: Verbosity) -> ExitCode {
-        let (luck_config, config_dir) = resolve_project_config(self.config.as_deref());
+    /// # Errors
+    ///
+    /// Returns [`Exit::Failure`] if any file can't be read or has errors, and
+    /// [`Exit::Usage`] on a bad config or path.
+    pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
+        let project = resolve_project(self.config.as_deref())?;
+        let files = project_files(&project, &self.paths)?;
 
-        let filter = project_filter(&config_dir, &luck_config);
-        let files = collect_target_files(&self.paths, &filter);
-        let files = resolve_file_targets(files, &luck_config);
-
-        // Files parse in parallel; rendered errors flush in input order so
-        // output matches the sequential loop byte-for-byte.
-        use rayon::prelude::*;
-        let mut files_with_errors = 0u32;
+        let mut has_errors = false;
         {
-            // One lock and one flush for the whole run; bounded sorted groups
-            // keep peak outcome memory flat on huge projects.
-            use std::io::Write;
-            let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
-            for chunk in files.chunks(parallel_chunk_size()) {
-                let outcomes: Vec<Option<Vec<u8>>> = chunk
-                    .par_iter()
-                    .map(|(file_path, target)| check_file(file_path, *target))
-                    .collect();
-
-                for rendered in outcomes.into_iter().flatten() {
-                    files_with_errors += 1;
-                    let _ = stderr.write_all(&rendered);
-                }
+            // One lock and one flush for the whole run.
+            let mut stderr = BufWriter::new(io::stderr().lock());
+            for rendered in outcomes_in_order(&files, check_file).flatten() {
+                has_errors = true;
+                let _unused = stderr.write_all(&rendered);
             }
         }
 
-        if files_with_errors > 0 {
-            return ExitCode::from(EXIT_FAILURE);
+        if has_errors {
+            return Err(Exit::Failure);
         }
 
         if verbosity != Verbosity::Quiet {
             eprintln!("ok: {} file(s) checked", files.len());
         }
 
-        ExitCode::from(EXIT_SUCCESS)
+        Ok(())
     }
 }
 
-/// Parse and validate one file, returning rendered diagnostics when it fails
-/// to parse (or cannot be read), or `None` when it is clean.
 fn check_file(file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
-    let source = match luck_core::source_io::read_source_file(file_path) {
+    let source = match read_source_file(file_path) {
         Ok(text) => text,
         Err(error) => {
             return Some(
-                format!("Error: cannot read {}: {error}\n", file_path.display()).into_bytes(),
+                format!("error: cannot read `{}`: {error}\n", file_path.display()).into_bytes(),
             );
         }
     };
 
-    let file_label = file_path.to_string_lossy().to_string();
-    let mut result = luck_parser::parse(source, target.lua_version());
+    let version = target.lua_version();
+    let mut result = luck_parser::parse(source, version);
     if result.errors.is_empty() {
-        // Compile-time checks real Lua performs beyond the grammar (const
-        // writes, goto resolution). Opt-in here only; transform pipelines
-        // skip the cost.
-        result.errors = luck_parser::validate(&result.block, target.lua_version());
+        // The compile-time errors real Lua reports beyond the grammar, such as
+        // const writes and unresolved gotos. Only `check` pays for this pass.
+        result.errors = luck_parser::validate(&result.block, version);
     }
     if result.errors.is_empty() {
         return None;
     }
 
-    let diagnostics: Vec<Diagnostic> = result
-        .errors
-        .iter()
-        .map(|err| luck_core::diagnostics::errors::e008(&file_label, err.span.into(), &err.message))
-        .collect();
-    let mut cache = FileCache::new();
-    cache.add_file(file_label, result.source);
-    Some(render_diagnostics_to_buffer(&diagnostics, &mut cache))
+    Some(render_source_errors(
+        file_path.to_string_lossy().into_owned(),
+        &result.source,
+        &result.errors,
+        version,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use clap::Parser as _;
+
     use super::CheckArgs;
-    use crate::args::{Cli, Command};
-    use crate::project::resolve_project_config;
-    use clap::Parser;
-    use luck_core::types::LuaTarget;
+    use crate::cli::{Cli, Command};
 
     #[test]
     fn check_is_top_level_command_with_paths_and_config() {
         let cli = Cli::try_parse_from(["luck", "check", "src", "main.lua", "-c", "luck.json"])
             .expect("check parses");
-        match cli.command {
-            Command::Check(CheckArgs { paths, config }) => {
-                assert_eq!(paths, vec!["src".to_string(), "main.lua".to_string()]);
-                assert_eq!(config, Some(std::path::PathBuf::from("luck.json")));
-            }
-            _ => panic!("expected Command::Check"),
-        }
-    }
-
-    #[test]
-    fn check_resolves_target_per_file_from_config() {
-        // A `.luau` file under a roblox config must resolve to the roblox
-        // target, mirroring how `run` selects the parse dialect.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config_path = dir.path().join("luck.json");
-        std::fs::write(&config_path, r#"{"luau":"roblox"}"#).expect("write luck.json");
-
-        let (luck_config, _) = resolve_project_config(Some(config_path.as_path()));
-        let target = luck_config
-            .target_for_path(&dir.path().join("main.luau"))
-            .expect("luau target resolves");
-        assert_eq!(target, LuaTarget::LuauRoblox);
-    }
-
-    #[test]
-    fn check_reports_parse_errors_via_formatter_path() {
-        let broken = luck_formatter::format(
-            "local x =",
-            LuaTarget::Lua54.lua_version(),
-            &luck_formatter::FormatOptions::default(),
-        );
-        assert!(!broken.errors.is_empty(), "syntax error should be reported");
-
-        let clean = luck_formatter::format(
-            "local x = 1\n",
-            LuaTarget::Lua54.lua_version(),
-            &luck_formatter::FormatOptions::default(),
-        );
-        assert!(clean.errors.is_empty(), "valid source has no parse errors");
+        let Command::Check(CheckArgs { paths, config }) = cli.command else {
+            panic!("expected Command::Check");
+        };
+        assert_eq!(paths, vec!["src".to_owned(), "main.lua".to_owned()]);
+        assert_eq!(config, Some(PathBuf::from("luck.json")));
     }
 }

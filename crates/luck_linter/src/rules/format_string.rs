@@ -1,582 +1,251 @@
-use luck_ast::Expression;
-use luck_ast::expr::{FunctionArgs, FunctionCall, Var};
-use luck_ast::shared::Punctuated;
-use luck_semantic::SemanticAnalysis;
-use luck_token::{Span, TokenKind};
-
-use crate::diagnostic::*;
-use crate::format_pattern::{
-    PatternError, validate_format, validate_lua_pattern, validate_pack_format,
+use luck_ast::{
+    Expression, FunctionArgs, FunctionCall, Literal, is_multi_value, unwrap_parentheses,
 };
-use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
+use luck_token::{LuaVersion, Span, short_string_body};
 
-/// Inspects calls to the `string.*` family that take a literal pattern
-/// or format string and validates the literal up front. Both the dotted
-/// form (`string.format("...", ...)`) and the method form
-/// (`("literal"):format(...)`) are recognized. Literal `string.gsub`
-/// replacement strings and `os.date` format strings are validated too.
-pub struct FormatString;
+use crate::call::dotted_callee;
+use crate::diagnostic::Finding;
+use crate::format_pattern::{
+    PatternError, validate_format, validate_gsub_replacement, validate_lua_pattern,
+    validate_os_date, validate_pack_format,
+};
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
-impl Rule for FormatString {
-    fn name(&self) -> &'static str {
-        "format_string"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "string.format/match/pack/os.date literal is malformed or has wrong arg count"
-    }
+/// Both `string.format("...", ...)` and `("..."):format(...)` are checked.
+/// So are literal `string.gsub` replacements and `os.date` formats.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FormatString;
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
+impl_rule!(
+    FormatString,
+    "format_string",
+    Correctness,
+    Warning,
+    "malformed format, pattern, pack, or date literal, or wrong argument count"
+);
+
+impl NodeRule for FormatString {
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
+    }
+    fn on_call(
+        &self,
+        call: &FunctionCall,
+        _position: CallPosition,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
+        let semantic = context.semantic;
+        // A name filter first, since `resolve_callee` runs a lookup.
+        let Some(dsl) = DslKind::of_call(call) else {
+            return;
+        };
+        if semantic.resolve_callee(call).is_none() {
+            return;
+        }
+        findings.extend(check_dsl_literal(call, dsl, semantic.version));
+        if dsl == DslKind::Gsub {
+            findings.extend(check_gsub_replacement(call, semantic.version));
+        }
     }
 }
 
-/// Which validator applies to a stdlib call.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DslKind {
-    /// `string.format`, with `%`-style printf specifiers.
     Format,
-    /// `string.match`, `gmatch`, `find`, `gsub`, in the Lua pattern grammar.
-    LuaPattern,
-    /// `string.pack`/`packsize`/`unpack`, a fixed-width binary spec.
+    Match,
+    /// `string.find`, which may search its pattern as plain text.
+    Find,
+    /// `string.gsub`, which also takes a replacement.
+    Gsub,
+    /// `string.pack`, whose values the format counts.
     Pack,
+    /// `string.packsize`, whose format can't hold a variable-length option.
+    PackSize,
+    Unpack,
     /// `os.date`, with strftime-style specifiers.
     OsDate,
 }
 
-/// The position of the literal argument and the expected non-vararg
-/// extra-argument count behavior for arg-count checks.
-#[derive(Debug, Clone, Copy)]
-enum ArgCount {
-    /// Format's spec-count equals the number of trailing args after the
-    /// format string.
-    ExactFormat,
-    /// Every pack value option consumes one trailing arg. Same shape as
-    /// `ExactFormat`, reading a different validator's output.
-    ExactPack,
-    /// Pattern-based functions take auxiliary args (the haystack, plus
-    /// possibly an init and a replacement), so the arg-count check is
-    /// skipped.
-    None,
-}
-
-struct FormatChecker<'src, 'out> {
-    source: &'src str,
-    semantic: &'src SemanticAnalysis,
-    out: &'out mut Vec<LintDiagnostic>,
-}
-
-impl<'src> FormatChecker<'src, '_> {
-    fn check_call(&mut self, call: &FunctionCall) {
-        let Some((dsl, arg_kind, literal_expr_idx)) = self.classify_callee(call) else {
-            return;
-        };
-
-        // Long-bracket strings and non-literals bail.
-        let (literal_token_span, args_punct) = match &call.args {
-            FunctionArgs::Parenthesized { args, .. } => {
-                let Some(expr) = nth_expr(args, literal_expr_idx) else {
-                    return;
-                };
-                let Expression::StringLiteral(tok) = expr else {
-                    return;
-                };
-                (tok.span, Some(args))
-            }
-            FunctionArgs::StringLiteral(tok) => {
-                if literal_expr_idx != 0 {
-                    return;
-                }
-                (tok.span, None)
-            }
-            FunctionArgs::TableConstructor(_) => return,
-        };
-
-        // Extract the raw pattern body, the substring between the
-        // surrounding quotes or brackets, plus its offset in source.
-        // Long-bracket strings are skipped because escape handling makes
-        // raw-content mapping unreliable there.
-        let Some((body, body_offset)) = pattern_body(self.source, literal_token_span) else {
-            return;
-        };
-
-        match dsl {
-            DslKind::Format => match validate_format(body) {
-                Ok(specifier_count) => {
-                    self.check_arg_count(arg_kind, args_punct, literal_token_span, specifier_count);
-                }
-                Err(err) => self.report_pattern_error(err, body_offset, "format"),
-            },
-            DslKind::LuaPattern => {
-                if let Err(err) = validate_lua_pattern(body) {
-                    self.report_pattern_error(err, body_offset, "pattern");
-                }
-            }
-            DslKind::Pack => match validate_pack_format(body) {
-                Ok(value_count) => {
-                    self.check_arg_count(arg_kind, args_punct, literal_token_span, value_count);
-                }
-                Err(err) => self.report_pattern_error(err, body_offset, "pack format"),
-            },
-            DslKind::OsDate => {
-                if let Err((message, offset)) = validate_os_date(body) {
-                    self.report_literal_error(message, body_offset + offset as u32, "date format");
-                }
-            }
+impl DslKind {
+    fn of_call(call: &FunctionCall) -> Option<Self> {
+        if let Some(method) = &call.method {
+            return Self::of_string_function(method.identifier()?);
         }
-    }
-
-    /// Identify the callee shape and return (DSL kind, arg-count
-    /// policy, index of the literal pattern within `args`).
-    fn classify_callee(&self, call: &FunctionCall) -> Option<(DslKind, ArgCount, usize)> {
-        // In the method form `receiver:method(...)` the pattern is the
-        // receiver rather than an entry in `call.args`, and only a
-        // literal receiver (`"hello":format(x)`) is resolvable. A
-        // variable receiver could hold any value, so the method could be
-        // `string.*` or a user method. `check_method_literal_receiver`
-        // owns that shape, so this dotted-callee resolver bows out.
-        if call.method.is_some() {
-            return None;
-        }
-
-        let (root, field) = self.global_field_callee(call)?;
-        match root {
-            "string" => classify_string_function(field),
-            "os" if field == "date" => Some((DslKind::OsDate, ArgCount::None, 0)),
+        let (root, field) = dotted_callee(call)?;
+        match (root.identifier()?, field) {
+            ("string", _) => Self::of_string_function(field),
+            ("os", "date") => Some(Self::OsDate),
             _ => None,
         }
     }
 
-    /// Resolve a dotted callee `root.field(...)` where `root` is a
-    /// genuine global (not a shadowing local). Returns the two names.
-    fn global_field_callee<'call>(
-        &self,
-        call: &'call FunctionCall,
-    ) -> Option<(&'call str, &'call str)> {
-        let Expression::Var(var) = &call.callee else {
-            return None;
-        };
-        let Var::FieldAccess(field) = var else {
-            return None;
-        };
-        let Expression::Var(prefix_var) = &field.prefix else {
-            return None;
-        };
-        let Var::Name(prefix_token) = prefix_var else {
-            return None;
-        };
-        let TokenKind::Identifier(prefix_name) = &prefix_token.kind else {
-            return None;
-        };
-        // A shadowed root (`local string = ...`) is a user value.
-        if self
-            .semantic
-            .resolves_to_local(prefix_name.as_str(), prefix_token.span)
-        {
-            return None;
-        }
-        let TokenKind::Identifier(field_name) = &field.name.kind else {
-            return None;
-        };
-        Some((prefix_name.as_str(), field_name.as_str()))
-    }
-
-    /// Handle the method form `receiver:fn(args)` where the receiver is
-    /// a string literal. The receiver IS the pattern in this case.
-    fn check_method_literal_receiver(&mut self, call: &FunctionCall) {
-        let Some(method_token) = &call.method else {
-            return;
-        };
-        let TokenKind::Identifier(method_name) = &method_token.kind else {
-            return;
-        };
-        let Some((dsl, arg_kind, _)) = classify_string_function(method_name.as_str()) else {
-            return;
-        };
-
-        let receiver = unwrap_parens(&call.callee);
-        let Expression::StringLiteral(receiver_token) = receiver else {
-            return;
-        };
-        let lit_span = receiver_token.span;
-        let Some((body, body_offset)) = pattern_body(self.source, lit_span) else {
-            return;
-        };
-
-        let args_ref = match &call.args {
-            FunctionArgs::Parenthesized { args, .. } => Some(args),
-            FunctionArgs::StringLiteral(_) | FunctionArgs::TableConstructor(_) => None,
-        };
-
-        // In the method form the literal is the RECEIVER and does NOT
-        // count as a positional arg, so substitution-count expectations
-        // apply to the raw `args` punctuation as-is.
-        match dsl {
-            DslKind::Format => match validate_format(body) {
-                Ok(specifier_count) => {
-                    self.check_arg_count(arg_kind, args_ref, lit_span, specifier_count);
-                }
-                Err(err) => self.report_pattern_error(err, body_offset, "format"),
-            },
-            DslKind::LuaPattern => {
-                if let Err(err) = validate_lua_pattern(body) {
-                    self.report_pattern_error(err, body_offset, "pattern");
-                }
-            }
-            DslKind::Pack => match validate_pack_format(body) {
-                Ok(value_count) => {
-                    self.check_arg_count(arg_kind, args_ref, lit_span, value_count);
-                }
-                Err(err) => self.report_pattern_error(err, body_offset, "pack format"),
-            },
-            // `classify_string_function` never yields `OsDate`, since
-            // `os.date` has no method form.
-            DslKind::OsDate => {}
-        }
-    }
-
-    /// Optional arg-count check. Skips silently if the call uses
-    /// varargs anywhere in its tail.
-    fn check_arg_count(
-        &mut self,
-        arg_kind: ArgCount,
-        args: Option<&Punctuated<Expression>>,
-        literal_span: Span,
-        expected_extra: usize,
-    ) {
-        match arg_kind {
-            ArgCount::ExactFormat | ArgCount::ExactPack => {}
-            ArgCount::None => return,
-        }
-        let Some(args) = args else {
-            // The method form passes `args_ref = None` to signal that
-            // the receiver was the pattern. Counting those method args
-            // is the caller's job.
-            return;
-        };
-        // The literal itself sits at args index 0 in the dotted form, so
-        // skip it for the count. In the method form the receiver is the
-        // pattern, so EVERY positional arg counts.
-        let arg_list: Vec<&Expression> = args.iter().collect();
-        let literal_idx = arg_list.iter().position(|expr| expr.span() == literal_span);
-
-        // Bail if any trailing arg is a vararg (`...`) or a function
-        // call, since those expand to an unknown count at runtime.
-        let trailing_iter = match literal_idx {
-            Some(idx) => &arg_list[idx + 1..],
-            None => &arg_list[..],
-        };
-        if trailing_iter
-            .iter()
-            .any(|expr| matches!(expr, Expression::VarArg(_) | Expression::FunctionCall(_)))
-        {
-            return;
-        }
-
-        let given = trailing_iter.len();
-        if given == expected_extra {
-            return;
-        }
-        self.out.push(LintDiagnostic::new(
-            "format_string",
-            format!("format expects {expected_extra} substitutions, given {given}"),
-            literal_span,
-        ));
-    }
-
-    /// Validate a literal `gsub` replacement string (third arg in the
-    /// dotted form, second arg in the method form). The pattern arg
-    /// contributes a capture count only when it is itself a literal.
-    fn check_gsub_replacement(&mut self, call: &FunctionCall) {
-        let (pattern_idx, repl_idx) = if let Some(method_token) = &call.method {
-            let TokenKind::Identifier(method_name) = &method_token.kind else {
-                return;
-            };
-            if method_name.as_str() != "gsub" {
-                return;
-            }
-            (0, 1)
-        } else {
-            match self.global_field_callee(call) {
-                Some(("string", "gsub")) => (1, 2),
-                _ => return,
-            }
-        };
-        let FunctionArgs::Parenthesized { args, .. } = &call.args else {
-            return;
-        };
-        let Some(Expression::StringLiteral(repl_token)) = nth_expr(args, repl_idx) else {
-            return;
-        };
-        let Some((repl_body, repl_offset)) = pattern_body(self.source, repl_token.span) else {
-            return;
-        };
-        let capture_count = nth_expr(args, pattern_idx).and_then(|expr| match expr {
-            Expression::StringLiteral(pattern_token) => {
-                pattern_body(self.source, pattern_token.span)
-                    .map(|(pattern_arg_body, _)| count_pattern_captures(pattern_arg_body))
-            }
+    /// `os.date` has no method form, so it never comes from here.
+    fn of_string_function(name: &str) -> Option<Self> {
+        match name {
+            "format" => Some(Self::Format),
+            "match" | "gmatch" => Some(Self::Match),
+            "find" => Some(Self::Find),
+            "gsub" => Some(Self::Gsub),
+            "pack" => Some(Self::Pack),
+            "packsize" => Some(Self::PackSize),
+            "unpack" => Some(Self::Unpack),
             _ => None,
-        });
-        if let Err((message, offset)) = validate_gsub_replacement(repl_body, capture_count) {
-            self.report_literal_error(message, repl_offset + offset as u32, "replacement");
         }
     }
 
-    fn report_literal_error(&mut self, message: &str, span_start: u32, kind: &str) {
-        let span = Span::new(span_start, span_start + 1);
-        self.out.push(LintDiagnostic::new(
-            "format_string",
-            format!("invalid {kind}: {message}"),
-            span,
-        ));
-    }
-
-    fn report_pattern_error(&mut self, err: PatternError, body_offset: u32, kind: &str) {
-        let offset = pattern_error_offset(&err);
-        let span_start = body_offset + offset;
-        let span = Span::new(span_start, span_start + 1);
-        self.out.push(LintDiagnostic::new(
-            "format_string",
-            format!("invalid {kind}: {err}"),
-            span,
-        ));
+    /// Whether the literal is a Lua pattern, which follows the string it
+    /// searches. Every other DSL's literal is the call's first operand.
+    const fn is_pattern(self) -> bool {
+        match self {
+            Self::Match | Self::Find | Self::Gsub => true,
+            Self::Format | Self::Pack | Self::PackSize | Self::Unpack | Self::OsDate => false,
+        }
     }
 }
 
-impl NodeRule for FormatString {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset =
-            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
-        Some(&TYPES)
+/// The literal `dsl` reads from `call` and the arguments after it, which are
+/// `None` when string or table call syntax leaves no list to count.
+///
+/// In a method call the receiver is the format, but the subject of a pattern.
+fn dsl_literal(call: &FunctionCall, dsl: DslKind) -> Option<(&Literal, Option<&[Expression]>)> {
+    let is_method = call.method.is_some();
+    if is_method && !dsl.is_pattern() {
+        let Expression::StringLiteral(receiver) = unwrap_parentheses(&call.callee) else {
+            return None;
+        };
+        let all_args = match &call.args {
+            FunctionArgs::Parenthesized { args, .. } => Some(args.items.as_slice()),
+            FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => None,
+        };
+        return Some((receiver, all_args));
     }
-    fn on_statement(
-        &self,
-        stmt: &luck_ast::Statement,
-        ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
-    ) {
-        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
-            let mut checker = FormatChecker {
-                source: ctx.source,
-                semantic: ctx.semantic,
-                out,
+    let literal_index = usize::from(dsl.is_pattern() && !is_method);
+    match &call.args {
+        FunctionArgs::Parenthesized { args, .. } => {
+            let Some(Expression::StringLiteral(literal)) = args.get(literal_index) else {
+                return None;
             };
-            checker.check_call(call_stmt);
-            checker.check_method_literal_receiver(call_stmt);
-            checker.check_gsub_replacement(call_stmt);
+            Some((literal, args.items.get(literal_index.saturating_add(1)..)))
         }
-    }
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if let Expression::FunctionCall(call) = expr {
-            let mut checker = FormatChecker {
-                source: ctx.source,
-                semantic: ctx.semantic,
-                out,
-            };
-            checker.check_call(call);
-            checker.check_method_literal_receiver(call);
-            checker.check_gsub_replacement(call);
-        }
+        FunctionArgs::StringLiteral(literal) if literal_index == 0 => Some((literal, None)),
+        FunctionArgs::StringLiteral(_) | FunctionArgs::TableConstructor(_) => None,
     }
 }
 
-fn classify_string_function(name: &str) -> Option<(DslKind, ArgCount, usize)> {
-    match name {
-        "format" => Some((DslKind::Format, ArgCount::ExactFormat, 0)),
-        // Pattern-based arg counts vary (extra `init`, replacement, and
-        // so on), so this rule does not enforce one.
-        "match" | "gmatch" | "find" | "gsub" => Some((DslKind::LuaPattern, ArgCount::None, 1)),
-        "pack" | "packsize" | "unpack" => Some((DslKind::Pack, ArgCount::ExactPack, 0)),
-        _ => None,
-    }
-}
-
-/// Walk past any parens wrapping an expression, as in `("x"):format(...)`.
-fn unwrap_parens(expr: &Expression) -> &Expression {
-    let mut current = expr;
-    while let Expression::Parenthesized(node) = current {
-        current = &node.expr;
-    }
-    current
-}
-
-/// Extract the raw body of a string literal token. Returns the body
-/// slice and the byte offset (into source) where that body starts.
-/// Returns `None` for long-bracket strings, whose escape rules make the
-/// raw-body mapping unreliable.
-fn pattern_body(source: &str, span: Span) -> Option<(&str, u32)> {
-    let start = span.start as usize;
-    let end = span.end as usize;
-    if start >= end || end > source.len() {
+fn check_dsl_literal(call: &FunctionCall, dsl: DslKind, version: LuaVersion) -> Option<Finding> {
+    let (literal, trailing_args) = dsl_literal(call, dsl)?;
+    let body = checkable_body(literal)?;
+    if dsl == DslKind::Find && is_plain_find(body, trailing_args.unwrap_or_default()) {
         return None;
     }
-    let slice = &source[start..end];
-    let bytes = slice.as_bytes();
-    let first = *bytes.first()?;
-    if first == b'"' || first == b'\'' {
-        if bytes.len() < 2 || *bytes.last()? != first {
+    // The argument count each specifier or value option asks for. Pattern
+    // functions, `os.date`, and the other pack functions take arguments the
+    // literal doesn't determine.
+    let (noun, expected_arg_count) = match dsl {
+        DslKind::Format => ("format", validate_format(body, version).map(Some)),
+        DslKind::Match | DslKind::Find | DslKind::Gsub => {
+            ("pattern", validate_lua_pattern(body).map(|_| None))
+        }
+        DslKind::Pack => ("pack format", validate_pack_format(body, false).map(Some)),
+        DslKind::PackSize => ("pack format", validate_pack_format(body, true).map(|_| None)),
+        DslKind::Unpack => ("pack format", validate_pack_format(body, false).map(|_| None)),
+        DslKind::OsDate => ("date format", validate_os_date(body, version).map(|()| None)),
+    };
+    match expected_arg_count {
+        Ok(Some(expected)) => check_arg_count(trailing_args?, literal.span, expected),
+        Ok(None) => None,
+        Err(error) => Some(literal_error(error, literal, body, noun)),
+    }
+}
+
+/// The body of `literal`, or `None` for one that can't be checked here: a
+/// long-bracket string, or a body with a numeric escape, which could spell a
+/// character the DSL reads, since escapes stay undecoded.
+fn checkable_body(literal: &Literal) -> Option<&str> {
+    let body = short_string_body(&literal.text)?;
+    let mut bytes = body.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'\\'
+            && bytes.next().is_some_and(|escaped| matches!(escaped, b'0'..=b'9' | b'x' | b'u'))
+        {
             return None;
         }
-        let body = &slice[1..slice.len() - 1];
-        Some((body, span.start + 1))
+    }
+    Some(body)
+}
+
+/// Whether `string.find` searches for `pattern` as plain text instead of
+/// parsing it, going by `after_pattern`, the arguments after it.
+///
+/// `str_find_aux` also searches plainly when the pattern has no character
+/// from `SPECIALS`, which is what lets a lone `)` through.
+fn is_plain_find(pattern: &str, after_pattern: &[Expression]) -> bool {
+    let is_maybe_plain = match after_pattern {
+        [] => false,
+        // A call or `...` here can expand over `init` and `plain`.
+        [init] => is_multi_value(init),
+        [_, plain, ..] => !matches!(plain, Expression::Nil(_) | Expression::False(_)),
+    };
+    is_maybe_plain || !pattern.contains(['^', '$', '*', '+', '?', '.', '(', '[', '%', '-'])
+}
+
+fn check_arg_count(args: &[Expression], literal_span: Span, expected: usize) -> Option<Finding> {
+    // A `...` or call could expand to any number of values.
+    if args.iter().any(is_multi_value) {
+        return None;
+    }
+    let given = args.len();
+    (given != expected).then(|| {
+        Finding::new(
+            format!("wrong argument count, format takes {expected}, got {given}"),
+            literal_span,
+        )
+    })
+}
+
+/// Capture indices are only checked when the pattern is a valid literal too.
+fn check_gsub_replacement(call: &FunctionCall, version: LuaVersion) -> Option<Finding> {
+    let pattern_index = usize::from(call.method.is_none());
+    let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+        return None;
+    };
+    let Some(Expression::StringLiteral(replacement)) = args.get(pattern_index.saturating_add(1))
+    else {
+        return None;
+    };
+    let replacement_body = checkable_body(replacement)?;
+    let capture_count = if let Some(Expression::StringLiteral(pattern)) = args.get(pattern_index) {
+        checkable_body(pattern).and_then(|body| validate_lua_pattern(body).ok())
     } else {
         None
-    }
-}
-
-/// Count capture groups in a Lua pattern, meaning unescaped `(`
-/// including position captures `()`. Character sets are skipped so `[(]`
-/// does not count. `%b()` parens count even though they are not
-/// captures, because overcounting only suppresses diagnostics and never
-/// invents them.
-fn count_pattern_captures(pattern: &str) -> usize {
-    let bytes = pattern.as_bytes();
-    let mut count = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' => i += 2,
-            b'[' => {
-                i += 1;
-                if bytes.get(i) == Some(&b'^') {
-                    i += 1;
-                }
-                // A `]` right after the opener (or `^`) is a literal.
-                if bytes.get(i) == Some(&b']') {
-                    i += 1;
-                }
-                while i < bytes.len() && bytes[i] != b']' {
-                    if bytes[i] == b'%' {
-                        i += 1;
-                    }
-                    i += 1;
-                }
-                i += 1;
-            }
-            b'(' => {
-                count += 1;
-                i += 1;
-            }
-            _ => i += 1,
-        }
-    }
-    count
-}
-
-/// Validate a `gsub` replacement string. `capture_count` is `None` when
-/// the pattern arg is not a literal, which disables the index check.
-/// `%0` is the whole match, and with zero captures `%1` also refers to
-/// the whole match, so only indices above `max(captures, 1)` are flagged.
-fn validate_gsub_replacement(
-    body: &str,
-    capture_count: Option<usize>,
-) -> Result<(), (&'static str, usize)> {
-    let bytes = body.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'%' {
-            i += 1;
-            continue;
-        }
-        let Some(&next) = bytes.get(i + 1) else {
-            return Err(("unfinished replacement", i));
-        };
-        if next == b'%' {
-            i += 2;
-            continue;
-        }
-        if !next.is_ascii_digit() {
-            return Err((
-                "unexpected replacement character; must be a digit or %",
-                i + 1,
-            ));
-        }
-        if let Some(captures) = capture_count {
-            let index = (next - b'0') as usize;
-            if index > captures.max(1) {
-                return Err((
-                    "invalid capture index, must refer to a pattern capture",
-                    i + 1,
-                ));
-            }
-        }
-        i += 2;
-    }
-    Ok(())
-}
-
-/// Validate an `os.date` format string: optional leading `!` (UTC),
-/// then either exactly `*t` (table request) or text with `%`-specifiers
-/// drawn from the C89 strftime set.
-fn validate_os_date(body: &str) -> Result<(), (&'static str, usize)> {
-    if let Some(pos) = body.find('\0') {
-        return Err(("can not contain null characters", pos));
-    }
-    let bytes = body.as_bytes();
-    let mut i = 0;
-    if bytes.first() == Some(&b'!') {
-        i = 1;
-    }
-    if &body[i..] == "*t" {
-        return Ok(());
-    }
-    while i < bytes.len() {
-        if bytes[i] != b'%' {
-            i += 1;
-            continue;
-        }
-        let Some(&next) = bytes.get(i + 1) else {
-            return Err(("unfinished replacement", i));
-        };
-        if next != b'%' && !b"aAbBcdHIjmMpSUwWxXyYzZ".contains(&next) {
-            return Err((
-                "unexpected replacement character; must be a date format specifier or %",
-                i + 1,
-            ));
-        }
-        i += 2;
-    }
-    Ok(())
-}
-
-/// Walk a punctuated list and pick the nth expression (0-indexed).
-fn nth_expr(args: &Punctuated<Expression>, idx: usize) -> Option<&Expression> {
-    args.iter().nth(idx)
-}
-
-/// Pull the byte offset out of any `PatternError` variant.
-fn pattern_error_offset(err: &PatternError) -> u32 {
-    let offset = match err {
-        PatternError::TruncatedSpecifier { offset }
-        | PatternError::UnterminatedSet { offset }
-        | PatternError::EmptySet { offset }
-        | PatternError::InvalidQuantifierTarget { offset }
-        | PatternError::UnmatchedCapture { offset }
-        | PatternError::TruncatedPackSize { offset }
-        | PatternError::BadWidth { offset }
-        | PatternError::BadPrecision { offset } => *offset,
-        PatternError::UnknownSpecifier { offset, .. }
-        | PatternError::BadFlag { offset, .. }
-        | PatternError::BadEscape { offset, .. }
-        | PatternError::InvalidPackOption { offset, .. } => *offset,
     };
-    offset as u32
+    validate_gsub_replacement(replacement_body, capture_count, version)
+        .err()
+        .map(|e| literal_error(e, replacement, replacement_body, "replacement"))
+}
+
+/// Reports `error` at its offset in the quoted `literal`, whose `body` the
+/// offset counts into, over the whole character there.
+fn literal_error(error: PatternError, literal: &Literal, body: &str, noun: &str) -> Finding {
+    let offset = error.offset();
+    let width = body.get(offset..).and_then(|rest| rest.chars().next()).map_or(1, char::len_utf8);
+    Finding::new(
+        format!("invalid {noun}: {error}"),
+        Span::from_indices(offset, offset.saturating_add(width))
+            .shifted(literal.span.start.saturating_add(1)),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use luck_token::LuaVersion;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&FormatString, source, LuaVersion::Lua54)
+        run_rule(&FormatString, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -589,33 +258,21 @@ mod tests {
     fn flags_too_few_args() {
         let diags = run("string.format(\"%q\")");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(
-            diags[0].message.contains("expects 1 substitutions"),
-            "msg: {}",
-            diags[0].message
-        );
+        assert!(diags[0].message.contains("format takes 1, got 0"), "msg: {}", diags[0].message);
     }
 
     #[test]
     fn flags_unknown_specifier() {
         let diags = run("string.format(\"%z\", 1)");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(
-            diags[0].message.contains("unknown specifier"),
-            "msg: {}",
-            diags[0].message
-        );
+        assert!(diags[0].message.contains("unknown specifier"), "msg: {}", diags[0].message);
     }
 
     #[test]
     fn flags_pattern_unterminated_set() {
         let diags = run("string.match(\"abc\", \"[abc\")");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(
-            diags[0].message.contains("unterminated set"),
-            "msg: {}",
-            diags[0].message
-        );
+        assert!(diags[0].message.contains("unterminated set"), "msg: {}", diags[0].message);
     }
 
     #[test]
@@ -628,17 +285,13 @@ mod tests {
     fn flags_invalid_pack_option() {
         let diags = run("string.pack(\"Q\", 1)");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(
-            diags[0].message.contains("invalid pack option"),
-            "msg: {}",
-            diags[0].message
-        );
+        assert!(diags[0].message.contains("invalid pack option"), "msg: {}", diags[0].message);
     }
 
     #[test]
     fn ignores_method_form_correct_format() {
-        // The receiver IS the format string, so the arg count must match
-        // the spec count: one `%d`, one trailing arg.
+        // The receiver is the format string, so `1` is the one argument
+        // that `%d` needs.
         let diags = run("(\"%d\"):format(1)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -651,7 +304,6 @@ mod tests {
 
     #[test]
     fn ignores_nonliteral_format() {
-        // A variable's content is not statically known.
         let diags = run("local fmt = \"%d\"\nstring.format(fmt, 1)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -664,15 +316,13 @@ mod tests {
 
     #[test]
     fn ignores_function_call_args() {
-        // `f()` expands to an unknown count at runtime.
+        // `f()` can return any number of values.
         let diags = run("local function f() end\nstring.format(\"%d %d\", f())");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_long_bracket_strings() {
-        // Long brackets go unvalidated, since escape mapping into them
-        // is unreliable.
         let diags = run("string.format([[%z]], 1)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -705,12 +355,14 @@ mod tests {
 
     #[test]
     fn ignores_gsub_valid_replacement() {
-        // %% escapes, %0 is the whole match, %1 refers to the first
-        // capture (or the whole match when the pattern has none).
-        let diags = run("string.gsub(\"x\", \"(a)\", \"%%%0%1\")");
-        assert!(diags.is_empty(), "got: {diags:?}");
-        let diags = run("string.gsub(\"x\", \"a\", \"%1\")");
-        assert!(diags.is_empty(), "got: {diags:?}");
+        // `%%` escapes, `%0` is the whole match, and `%1` is the first
+        // capture, or the whole match when the pattern has none.
+        for source in
+            ["string.gsub(\"x\", \"(a)\", \"%%%0%1\")", "string.gsub(\"x\", \"a\", \"%1\")"]
+        {
+            let diags = run(source);
+            assert!(diags.is_empty(), "got: {diags:?}");
+        }
     }
 
     #[test]
@@ -745,5 +397,175 @@ mod tests {
     fn ignores_shadowed_os() {
         let diags = run("local os = {}\nos.date(\"%Q\")");
         assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_luau_star_format_specifier() {
+        let diags = run_rule(&FormatString, "local s = string.format(\"%*\", 1)", LuaVersion::Luau);
+        assert!(diags.is_empty(), "Luau accepts the `%*` conversion: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_percent_p_format_on_lua54() {
+        let diags = run("local s = string.format(\"%p\", {})");
+        assert!(diags.is_empty(), "Lua 5.4 accepts the `%p` conversion: {diags:?}");
+    }
+
+    #[test]
+    fn flags_percent_a_format_on_lua51() {
+        let diags =
+            run_rule(&FormatString, "local s = string.format(\"%a\", 1)", LuaVersion::Lua51);
+        assert_eq!(diags.len(), 1, "Lua 5.1 rejects the `%a` conversion: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_repeated_format_flags() {
+        let diags = run("local s = string.format(\"%--d\", 1)");
+        assert!(diags.is_empty(), "every dialect accepts a repeated format flag: {diags:?}");
+    }
+
+    #[test]
+    fn flags_modifier_on_percent_q_on_lua54() {
+        let diags = run("local s = string.format(\"%5q\", \"a\")");
+        assert_eq!(diags.len(), 1, "Lua 5.4 rejects a modifier on `%q`: {diags:?}");
+    }
+
+    #[test]
+    fn flags_alternate_flag_on_percent_d_on_lua54() {
+        let diags = run("local s = string.format(\"%#d\", 1)");
+        assert_eq!(diags.len(), 1, "Lua 5.4 rejects the `#` flag on `%d`: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_plain_find_special_characters() {
+        let diags = run("local i = string.find(s, \"[\", 1, true)");
+        assert!(diags.is_empty(), "a plain find doesn't read a pattern: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_method_match_subject_literal() {
+        let diags = run("local m = (\"[abc\"):match(\"b\")");
+        assert!(diags.is_empty(), "the receiver of `:match` is the subject: {diags:?}");
+    }
+
+    #[test]
+    fn flags_method_match_bad_pattern() {
+        let diags = run("local m = (\"abc\"):match(\"[\")");
+        assert_eq!(diags.len(), 1, "the argument of `:match` is the pattern: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_quantifier_with_nothing_to_repeat() {
+        for source in [
+            "local s = string.gsub(x, \"-\", \"_\")",
+            "local s = string.find(x, \"+\")",
+            "local s = string.match(x, \"^-?%d+$\")",
+        ] {
+            let diags = run(source);
+            assert!(diags.is_empty(), "{source}: `lstrlib.c` reads these as literals: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn ignores_set_with_leading_close_bracket() {
+        let diags = run("local i = string.find(s, \"[]]\")");
+        assert!(diags.is_empty(), "a `]` first in a set is a member: {diags:?}");
+    }
+
+    #[test]
+    fn flags_back_reference_without_capture() {
+        let diags = run("local i = string.find(s, \"%1\")");
+        assert_eq!(diags.len(), 1, "`%1` with no capture raises an error: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_packsize_value_options() {
+        let diags = run("local n = string.packsize(\"i4\")");
+        assert!(diags.is_empty(), "`string.packsize` takes only the format: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_unpack_of_multiple_values() {
+        let diags = run("local a, b = string.unpack(\"i4 i4\", s)");
+        assert!(diags.is_empty(), "`string.unpack` takes the data, not one value each: {diags:?}");
+    }
+
+    #[test]
+    fn flags_pack_integer_size_out_of_limits() {
+        let diags = run("local p = string.pack(\"i17\", 1)");
+        assert_eq!(diags.len(), 1, "integer sizes above 16 raise an error: {diags:?}");
+    }
+
+    #[test]
+    fn flags_error_over_the_whole_character() {
+        let source = "local s = string.format(\"%\u{e9}\", 1)";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(
+            diags[0].span.text(source),
+            "\u{e9}",
+            "the span should cover the whole character: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_error_without_garbling_the_character() {
+        let diags = run("local s = string.format(\"%\u{e9}\", 1)");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(
+            !diags[0].message.contains('\u{c3}'),
+            "the lead byte shouldn't print as a Latin-1 character: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_find_without_special_characters() {
+        let diags = run("local i = string.find(s, \"a)\")");
+        assert!(diags.is_empty(), "a pattern with no special characters is plain: {diags:?}");
+    }
+
+    #[test]
+    fn flags_find_pattern_when_plain_is_false() {
+        let diags = run("local i = string.find(s, \"[\", 1, false)");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_find_with_unknown_plain_argument() {
+        let diags = run("local i = string.find(s, \"[\", 1, plain)");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_pattern_method_on_unknown_receiver() {
+        let diags = run("local i = obj:match(\"[\")");
+        assert!(diags.is_empty(), "`obj` isn't known to be a string: {diags:?}");
+    }
+
+    #[test]
+    fn flags_pattern_method_on_string_local() {
+        let diags = run("local s = \"abc\"\nlocal i = s:match(\"[\")");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_literal_with_numeric_escape() {
+        let diags = run("local s = string.format(\"\\37d\", 1)");
+        assert!(diags.is_empty(), "`\\37` spells a `%` the raw body can't show: {diags:?}");
+    }
+
+    #[test]
+    fn flags_pack_on_lua53_but_not_lua51() {
+        let source = "local p = string.pack(\"i17\", 1)";
+        let on_53 = run_rule(&FormatString, source, LuaVersion::Lua53);
+        assert_eq!(on_53.len(), 1, "{on_53:?}");
+        let on_51 = run_rule(&FormatString, source, LuaVersion::Lua51);
+        assert!(on_51.is_empty(), "Lua 5.1 has no `string.pack`: {on_51:?}");
+    }
+
+    #[test]
+    fn ignores_rebound_string_global() {
+        let diags = run("string = {}\nlocal i = string.match(\"x\", \"[\")");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

@@ -1,84 +1,65 @@
-use luck_ast::Expression;
-use luck_ast::expr::Var;
-use luck_ast::node::{AstTypesBitset, NodeType};
+use luck_ast::{DottedPath, Expression, Var, dotted_path};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::diagnostic::Finding;
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
-/// Flags dotted accesses under the `Enum` global that name a
-/// nonexistent enum type, item, or item member. Indexing `Enum` with an
-/// unknown name throws at runtime on Roblox, so a typo here is always a
-/// bug. Each access reports at the first segment that fails to resolve;
-/// nested accesses stay silent when their prefix is already broken.
-pub struct RobloxUnknownEnumMember;
+/// Indexing `Enum` with an unknown name throws at runtime on Roblox, so a
+/// typo here is always a bug. Only the first segment that fails to resolve is
+/// reported; accesses built on a broken prefix stay silent.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RobloxUnknownEnumMember;
 
-impl Rule for RobloxUnknownEnumMember {
-    fn name(&self) -> &'static str {
-        "roblox_unknown_enum_member"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "unknown Roblox enum type, item, or item member"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
+impl_rule!(
+    RobloxUnknownEnumMember,
+    "roblox_unknown_enum_member",
+    Correctness,
+    Error,
+    "unknown Roblox enum type, item, or item member"
+);
 
 impl NodeRule for RobloxUnknownEnumMember {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[NodeType::Var]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::Var])
     }
-
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        let Expression::Var(Var::FieldAccess(_)) = expr else {
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let Expression::Var(var @ Var::FieldAccess(_)) = expr else {
             return;
         };
-        let Some((segments, spans)) = crate::path::dotted_path(expr) else {
+        let stdlib = context.semantic.stdlib();
+        // Only the Roblox stdlib has an `Enum` global.
+        if !stdlib.globals.contains_key("Enum") {
+            return;
+        }
+        let Some(DottedPath { segments, root_span, leaf_span }) = dotted_path(var) else {
             return;
         };
-        if segments[0] != "Enum" {
-            return;
-        }
-        let lib = ctx.semantic.stdlib();
-        // Standalone Luau and numbered Lua have no Enum global, so the
-        // rule only speaks for environments that ship one.
-        if !lib.globals.contains_key("Enum") {
-            return;
-        }
-        if ctx.semantic.resolves_to_local("Enum", spans[0]) {
-            return;
-        }
-        let (last, prefix) = segments.split_last().expect("path has >= 2 segments");
-        // The inner access node reports a broken prefix. This node owns
-        // only its final segment.
-        let Some(prefix_entry) = lib.lookup_str(prefix) else {
+        let Some((last_segment, prefix)) = segments.split_last() else {
             return;
         };
-        if lib.child(prefix_entry, last).is_some() {
+        if prefix.first() != Some(&"Enum") {
+            return;
+        }
+        // A broken prefix is reported by the inner access, so this node only
+        // checks its last segment.
+        let Some(prefix_entry) = stdlib.lookup(prefix) else {
+            return;
+        };
+        if stdlib.child(prefix_entry, last_segment).is_some() {
+            return;
+        }
+        if context.semantic.resolves_to_local("Enum", root_span) {
             return;
         }
         let prefix_path = prefix.join(".");
         let message = match segments.len() {
-            2 => format!("unknown enum type `Enum.{last}`"),
-            3 => format!("`{last}` is not an item of `{prefix_path}`"),
-            _ => format!("`{last}` is not a member of `{prefix_path}`"),
+            2 => format!("unknown enum type `Enum.{last_segment}`"),
+            3 => format!("`{last_segment}` is not an item of `{prefix_path}`"),
+            _ => format!("`{last_segment}` is not a member of `{prefix_path}`"),
         };
-        out.push(
-            LintDiagnostic::new(
-                self.name(),
-                message,
-                *spans.last().expect("span per segment"),
-            )
-            .with_help(
-                "enum data is generated from the Roblox API dump; check the spelling".to_string(),
+        findings.push(
+            Finding::new(message, leaf_span).with_help(
+                "enum data is generated from the Roblox API dump, so check the spelling",
             ),
         );
     }
@@ -86,22 +67,21 @@ impl NodeRule for RobloxUnknownEnumMember {
 
 #[cfg(test)]
 mod tests {
-    use super::RobloxUnknownEnumMember;
     use luck_token::LuaVersion;
 
-    fn run_roblox(source: &str) -> Vec<crate::diagnostic::LintDiagnostic> {
-        crate::test_support::run_rule_roblox(&RobloxUnknownEnumMember, source)
+    use super::RobloxUnknownEnumMember;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::{run_rule, run_rule_roblox};
+
+    fn run_roblox(source: &str) -> Vec<LintDiagnostic> {
+        run_rule_roblox(&RobloxUnknownEnumMember, source)
     }
 
     #[test]
     fn flags_unknown_enum_type() {
         let diags = run_roblox("local m = Enum.Materialz");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            diags[0]
-                .message
-                .contains("unknown enum type `Enum.Materialz`")
-        );
+        assert!(diags[0].message.contains("unknown enum type `Enum.Materialz`"));
     }
 
     #[test]
@@ -109,9 +89,7 @@ mod tests {
         let diags = run_roblox("local m = Enum.Material.Grassz");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(
-            diags[0]
-                .message
-                .contains("`Grassz` is not an item of `Enum.Material`"),
+            diags[0].message.contains("`Grassz` is not an item of `Enum.Material`"),
             "{diags:?}"
         );
     }
@@ -121,9 +99,7 @@ mod tests {
         let diags = run_roblox("local n = Enum.Material.Grass.Nome");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(
-            diags[0]
-                .message
-                .contains("`Nome` is not a member of `Enum.Material.Grass`"),
+            diags[0].message.contains("`Nome` is not a member of `Enum.Material.Grass`"),
             "{diags:?}"
         );
     }
@@ -135,7 +111,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_broken_prefix_beyond_first_failure() {
+    fn flags_only_first_unknown_segment() {
         // Only the innermost failing access reports; the outer one
         // stays silent instead of cascading.
         let diags = run_roblox("local m = Enum.Materialz.Grass");
@@ -150,12 +126,9 @@ mod tests {
     }
 
     #[test]
-    fn ignores_on_standalone_luau() {
-        let diags = crate::test_support::run_rule(
-            &RobloxUnknownEnumMember,
-            "local m = Enum.Materialz",
-            LuaVersion::Luau,
-        );
+    fn ignores_standalone_environment() {
+        let diags =
+            run_rule(&RobloxUnknownEnumMember, "local m = Enum.Materialz", LuaVersion::Luau);
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

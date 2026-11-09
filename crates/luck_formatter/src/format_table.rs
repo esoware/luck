@@ -1,20 +1,20 @@
-//! Table constructor layout: `impl Format` for `TableConstructor` and `Field`.
+//! A table of simple positional values packs with `fill`, as many per line as
+//! fit.
 //!
-//! Simple all-positional tables pack with `fill` (as many entries per line as
-//! fit); tables with keyed fields group + indent and break one field per line.
-//! A table whose comments all sit between fields claims them itself and
-//! breaks one field per line; anything else leaves them to the block level.
+//! Any other table stays flat if it fits and otherwise breaks one field
+//! per line. A table whose comments all sit between fields claims them and
+//! breaks one field per line; any other comments are left to the block level.
 
-use luck_ast::expr::{Expression, TableConstructor};
-use luck_ast::shared::Field;
+use luck_ast::{Expression, Field, TableConstructor};
 
-use crate::comments::ListSeparator;
-use crate::ir::*;
-use crate::tokens::write_token;
+use crate::comments::{ListSeparator, write_commented_list};
+use crate::format_expr::BracketedKey;
+use crate::ir::{
+    Format, Formatter, expand_parent, fill, format_with, group_with_id, if_group_breaks, indent,
+    line_suffix_boundary, separated, soft_line_or_space, space, token,
+};
 
-/// Fill packing is only for tables whose fields are all positional simple
-/// values; a keyed or nested/compound value wants one-per-line breaking.
-fn use_fill_mode(table: &TableConstructor) -> bool {
+fn is_fillable(table: &TableConstructor) -> bool {
     table.fields.iter().all(|field| match field {
         Field::Positional { value, .. } => matches!(
             value,
@@ -22,7 +22,7 @@ fn use_fill_mode(table: &TableConstructor) -> bool {
                 | Expression::False(_)
                 | Expression::True(_)
                 | Expression::Number(_)
-                | Expression::Integer(_) // Luau
+                | Expression::Integer(_)
                 | Expression::StringLiteral(_)
                 | Expression::VarArg(_)
                 | Expression::Var(_)
@@ -33,11 +33,10 @@ fn use_fill_mode(table: &TableConstructor) -> bool {
 
 impl Format for TableConstructor {
     fn fmt(&self, f: &mut Formatter) {
-        if f.comments.has_claimable_comments(
-            self.span,
-            self.fields.items.iter().map(|field| field.span()),
-        ) {
-            f.write_commented_list(
+        if f.comments().has_claimable_comments(self.span, self.fields.items.iter().map(Field::span))
+        {
+            write_commented_list(
+                f,
                 ("{", "}"),
                 self.span,
                 &self.fields.items,
@@ -48,65 +47,53 @@ impl Format for TableConstructor {
         }
 
         if self.fields.is_empty() {
-            // Any dangling comments were drained at the block level.
             token("{}").fmt(f);
             return;
         }
 
-        let use_fill = use_fill_mode(self);
-        // A trailing comma/semicolon after the last field is the user asking
-        // for multi-line layout (Black/Prettier magic trailing comma).
-        let force_expand = f.options.magic_trailing_comma && self.fields.has_trailing_separator;
-        let field_count = self.fields.len();
+        let is_magic = f.options().magic_trailing_comma;
+        // A trailing `,` or `;` after the last field asks for the expanded
+        // layout.
+        let should_force_expand = is_magic && self.fields.has_trailing_separator;
+        let should_fill = is_fillable(self) && !should_force_expand;
+        let last_index = self.fields.len().saturating_sub(1);
 
         let group_id = f.group_id();
         group_with_id(
             group_id,
-            format_with(|f| {
-                token("{").fmt(f);
-                indent(format_with(|f| {
-                    soft_line_or_space().fmt(f);
+            (
+                token("{"),
+                indent(format_with(|indented| {
+                    soft_line_or_space().fmt(indented);
 
-                    if use_fill && !force_expand {
-                        // Each entry carries its own trailing comma (all but the
-                        // last) so the fill measures comma-inclusive widths.
+                    if should_fill {
+                        // Every entry but the last carries its own comma, so
+                        // the fill measures widths with the comma included.
                         let entries: Vec<_> = self
                             .fields
                             .iter()
                             .enumerate()
-                            .map(|(index, field)| {
-                                format_with(move |f| {
-                                    field.fmt(f);
-                                    if index + 1 < field_count {
-                                        token(",").fmt(f);
-                                    }
-                                })
-                            })
+                            .map(|(i, field)| (field, (i < last_index).then_some(token(","))))
                             .collect();
-                        let refs: Vec<&dyn Format> =
-                            entries.iter().map(|entry| entry as &dyn Format).collect();
-                        fill(LineMode::SoftOrSpace, &refs).fmt(f);
+                        fill(&entries).fmt(indented);
                     } else {
-                        for (index, field) in self.fields.iter().enumerate() {
-                            field.fmt(f);
-                            if index + 1 < field_count {
-                                token(",").fmt(f);
-                                soft_line_or_space().fmt(f);
-                            }
-                        }
+                        separated(&self.fields.items, (token(","), soft_line_or_space()))
+                            .fmt(indented);
                     }
 
-                    if force_expand {
-                        expand_parent().fmt(f);
+                    if should_force_expand {
+                        expand_parent().fmt(indented);
                     }
-                    // Trailing comma only when the table breaks across lines.
-                    if_group_breaks(group_id, token(",")).fmt(f);
-                }))
-                .fmt(f);
-                soft_line_or_space().fmt(f);
-                line_suffix_boundary().fmt(f);
-                token("}").fmt(f);
-            }),
+                    // A trailing comma means one field per line under the
+                    // magic comma option, so a packed fill can't carry one.
+                    if !(should_fill && is_magic) {
+                        if_group_breaks(group_id, token(",")).fmt(indented);
+                    }
+                })),
+                soft_line_or_space(),
+                line_suffix_boundary(),
+                token("}"),
+            ),
         )
         .fmt(f);
     }
@@ -115,63 +102,30 @@ impl Format for TableConstructor {
 impl Format for Field {
     fn fmt(&self, f: &mut Formatter) {
         match self {
-            Field::Named { name, value, .. } => {
-                write_token(f, name);
-                crate::write!(f, [space(), token("="), space()]);
-                value.fmt(f);
+            Self::Named { name, value, .. } => {
+                (name, space(), token("="), space(), value).fmt(f);
             }
-            Field::Bracketed { key, value, .. } => {
-                token("[").fmt(f);
-                if crate::format_expr::starts_with_bracket(key) {
-                    crate::write!(f, [space()]);
-                    key.fmt(f);
-                    crate::write!(f, [space()]);
-                } else {
-                    key.fmt(f);
-                }
-                crate::write!(f, [token("]"), space(), token("="), space()]);
-                value.fmt(f);
+            Self::Bracketed { key, value, .. } => {
+                (BracketedKey(key), space(), token("="), space(), value).fmt(f);
             }
-            Field::Positional { value, .. } => value.fmt(f),
+            Self::Positional { value, .. } => value.fmt(f),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::comments::Comments;
-    use crate::printer::{PrinterOptions, print};
-    use luck_ast::stmt::LastStatement;
-    use luck_token::LuaVersion;
+    use crate::fixtures::{parse_expr, render};
+    use crate::{FormatOptions, IndentStyle};
 
     fn print_expr(source: &str, line_width: u16, magic_trailing_comma: bool) -> String {
-        let wrapped = format!("return {source}\n");
-        let parsed = luck_parser::parse(&wrapped, LuaVersion::Luau);
-        let last = parsed.block.last_stmt.expect("wrapped return statement");
-        let LastStatement::Return(ret) = last.as_ref() else {
-            panic!("expected a return statement");
-        };
-        let expr = &ret.exprs.items[0];
-
-        let options = crate::FormatOptions {
+        let options = FormatOptions {
             line_width,
+            indent_style: IndentStyle::Spaces,
             magic_trailing_comma,
-            ..crate::FormatOptions::default()
+            ..FormatOptions::default()
         };
-        let mut formatter = Formatter::with_context(options, Comments::none());
-        expr.fmt(&mut formatter);
-        let group_count = formatter.group_count();
-        let elements = formatter.into_elements();
-        print(
-            &elements,
-            group_count,
-            &PrinterOptions {
-                line_width,
-                use_tabs: false,
-                indent_width: 4,
-            },
-        )
+        render(&parse_expr(source), options)
     }
 
     #[test]

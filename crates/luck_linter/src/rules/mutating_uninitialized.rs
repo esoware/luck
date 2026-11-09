@@ -1,174 +1,58 @@
-use luck_ast::expr::Var;
-use luck_ast::visitor::Visitor;
-use luck_ast::{Expression, Statement};
-use luck_semantic::scope::{ReferenceKind, SymbolKind};
-use luck_token::TokenKind;
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
-
-/// Luacheck 341: a local is declared without an initializer, then code
-/// assigns to a field or index on it before assigning the variable
-/// itself. `local x; x.foo = 1` is a runtime error, because `x` is
-/// `nil`.
+/// Flags a field or index write on a local declared without a value, before
+/// any assignment can have reached it (Luacheck 341). `local x; x.foo = 1`
+/// indexes `nil`.
 ///
-/// Why a custom AST pass: the scope builder records `x.foo = ...` as a
-/// *read* of `x`, since it has to evaluate the prefix to do the field
-/// assignment. Only that read is a field/index write target, so it has
-/// to be told apart from `print(x)`.
-pub struct MutatingUninitialized;
+/// The scope tree records the `x` in `x.foo = ...` as a plain read, so
+/// `UninitializedLocals` records the write prefixes to tell them apart from
+/// `print(x)`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MutatingUninitialized;
 
-impl Rule for MutatingUninitialized {
-    fn name(&self) -> &'static str {
-        "mutating_uninitialized"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "field or index assignment on an uninitialized local"
-    }
+impl_rule!(
+    MutatingUninitialized,
+    "mutating_uninitialized",
+    Correctness,
+    Warning,
+    "field or index assignment on an uninitialized local"
+);
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
-        let semantic = ctx.semantic;
-        let mut collector = MutationCollector::default();
-        collector.visit_block(block);
-
-        let mut diagnostics = Vec::new();
-
-        for symbol in &semantic.scope_tree.symbols {
-            if symbol.kind != SymbolKind::Local {
-                continue;
-            }
-            if !collector.is_uninit(symbol.definition_span.start, symbol.definition_span.end) {
-                continue;
-            }
-            if symbol.name == "_" || symbol.name.starts_with('_') {
-                continue;
-            }
-
-            // First reference ANYWHERE, by source order, because writes
-            // inside nested branch and loop scopes initialize too (see
-            // accessing_uninitialized for the idiom this protects).
-            let mut refs: Vec<_> = symbol
-                .reference_ids
-                .iter()
-                .map(|&ref_id| semantic.scope_tree.reference(ref_id))
-                .collect();
-            refs.sort_by_key(|r| r.span.start);
-
-            let Some(first) = refs.first() else {
-                continue;
-            };
-            // Only field/index writes on this name qualify. The first
-            // reference must be the prefix of such a write.
-            if !collector.is_field_write_prefix(first.span.start) {
-                continue;
-            }
-            // A bare-name write shows up as Write kind. Reads from
-            // `x.foo` as an rvalue also count as Read, but they live in
-            // an Expression position rather than an Assignment target,
-            // so `field_write_prefix_positions` never records them.
-            if !matches!(first.kind, ReferenceKind::Read) {
-                continue;
-            }
-
-            diagnostics.push(
-                LintDiagnostic::new(
-                    "mutating_uninitialized",
-                    format!(
-                        "field/index assignment on uninitialized `{}` (value is nil)",
-                        symbol.name
-                    ),
-                    first.span,
-                )
-                .with_help("initialize the local before mutating its fields".to_string()),
-            );
-        }
-
-        diagnostics
-    }
-}
-
-/// AST pass that records:
-/// (1) definition spans of locals declared without an initializer, and
-/// (2) source positions of bare names used as the prefix of a field or
-///     index write target (`<name>.foo = ...` or `<name>[k] = ...`).
-#[derive(Default)]
-struct MutationCollector {
-    uninit_spans: Vec<(u32, u32)>,
-    field_write_prefix_positions: Vec<u32>,
-}
-
-impl MutationCollector {
-    fn is_uninit(&self, start: u32, end: u32) -> bool {
-        self.uninit_spans
+impl WholeRule for MutatingUninitialized {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let tree = &context.semantic.scope_tree;
+        context
+            .local_flow()
+            .first_unassigned_uses
             .iter()
-            .any(|(s, e)| *s == start && *e == end)
-    }
-
-    fn is_field_write_prefix(&self, position: u32) -> bool {
-        self.field_write_prefix_positions.contains(&position)
-    }
-
-    fn record_target(&mut self, var: &Var) {
-        match var {
-            Var::Name(_) => {}
-            Var::FieldAccess(fa) => {
-                if let Expression::Var(prefix_var) = &fa.prefix
-                    && let Var::Name(token) = prefix_var
-                    && let TokenKind::Identifier(_) = &token.kind
-                {
-                    self.field_write_prefix_positions.push(token.span.start);
-                }
-            }
-            Var::Index(idx) => {
-                if let Expression::Var(prefix_var) = &idx.prefix
-                    && let Var::Name(token) = prefix_var
-                    && let TokenKind::Identifier(_) = &token.kind
-                {
-                    self.field_write_prefix_positions.push(token.span.start);
-                }
-            }
-        }
-    }
-}
-
-impl<'ast> Visitor<'ast> for MutationCollector {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
-        match stmt {
-            Statement::LocalAssignment(local) if local.exprs.is_none() => {
-                for attributed in local.names.iter() {
-                    self.uninit_spans
-                        .push((attributed.name.span.start, attributed.name.span.end));
-                }
-            }
-            Statement::Assignment(assign) => {
-                for var in assign.targets.iter() {
-                    self.record_target(var);
-                }
-            }
-            Statement::CompoundAssignment(compound) => {
-                // Luau `x.foo += 1` also mutates a field.
-                self.record_target(&compound.var);
-            }
-            _ => {}
-        }
-        self.walk_statement(stmt);
+            .filter_map(|&(symbol_id, reference_id)| {
+                let first = tree.reference(reference_id);
+                context.uninitialized_locals.is_field_write_prefix(first).then(|| {
+                    Finding::new(
+                        format!(
+                            "field/index assignment on uninitialized `{}` (value is `nil`)",
+                            tree.symbol(symbol_id).name
+                        ),
+                        first.span,
+                    )
+                    .with_help("initialize the local before mutating its fields")
+                })
+            })
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
+
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&MutatingUninitialized, source, LuaVersion::Lua54)
+        run_rule(&MutatingUninitialized, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -198,8 +82,20 @@ mod tests {
     }
 
     #[test]
+    fn ignores_read_before_field_write() {
+        let diags = run("local x\nprint(x)\nx.foo = 1");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
     fn ignores_underscore_prefixed() {
         let diags = run("local _x\n_x.foo = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_forward_declaration_field_write_in_closure() {
+        let diags = run("local M\nlocal function init() M.x = 1 end\nM = {}\ninit()");
+        assert!(diags.is_empty(), "the closure runs after the assignment: {diags:?}");
     }
 }

@@ -1,67 +1,117 @@
-//! Deciding which files belong to a project from `include`/`exclude` globs.
-
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::path::{Path, PathBuf};
 
-/// Decides whether a file is part of the project, from include/exclude
-/// globs relative to the config directory. Exclude wins over include.
-#[derive(Debug, Clone)]
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+
+use crate::path::canonicalize_existing;
+
+/// How deeply a glob's `{` groups may nest. `globset` recurses once per level
+/// while it builds, and no real pattern comes close.
+const MAX_BRACE_DEPTH: usize = 64;
+
+/// Decides whether a file belongs to the project from `include` and `exclude`
+/// globs, matched relative to the config directory. `*` stops at `/` and `**/`
+/// crosses directories. Exclude wins.
+///
+/// The `Default` filter includes nothing, while [`ProjectFilter::new`] with no
+/// `include` takes every `.lua` and `.luau` file.
+#[derive(Debug, Clone, Default)]
 pub struct ProjectFilter {
-    base: PathBuf,
+    root: PathBuf,
     include: GlobSet,
     exclude: GlobSet,
+    /// The directory part of each exclude ending in `/**` or `/**/*`, every
+    /// descendant of which that exclude covers.
+    excluded_trees: GlobSet,
 }
 
 impl ProjectFilter {
+    /// # Errors
+    ///
+    /// Returns a message naming the first invalid glob pattern.
     pub fn new(
-        base: &Path,
-        include: &Option<Vec<String>>,
-        exclude: &Option<Vec<String>>,
+        root: &Path,
+        include: Option<&[String]>,
+        exclude: Option<&[String]>,
     ) -> Result<Self, String> {
-        // `{**/,}` matches files at the project root and in any subdirectory,
-        // since `**/` alone does not match zero path segments.
-        let default_include = vec!["{**/,}*.lua".to_string(), "{**/,}*.luau".to_string()];
-        let inc = include.clone().unwrap_or(default_include);
-        // Canonicalize once: callers canonicalize candidate files (on
-        // Windows that yields `\\?\C:\...`), and strip_prefix against a
-        // non-canonical base silently fails, so every include would match
-        // nothing and every exclude would exclude nothing.
-        let base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+        let default_include = ["{**/,}*.lua".to_owned(), "{**/,}*.luau".to_owned()];
+        let exclude_patterns = exclude.unwrap_or_default();
+        let excluded_trees: Vec<String> = exclude_patterns
+            .iter()
+            .filter_map(|pattern| {
+                pattern.strip_suffix("/**").or_else(|| pattern.strip_suffix("/**/*"))
+            })
+            .filter(|directory| !directory.is_empty())
+            .map(str::to_owned)
+            .collect();
         Ok(Self {
-            base,
-            include: build_set(&inc)?,
-            exclude: build_set(exclude.as_deref().unwrap_or(&[]))?,
+            // `is_included` canonicalizes candidates (`\\?\C:\...` on Windows),
+            // so a non-canonical root would make `strip_prefix` fail and every
+            // glob would see the absolute path.
+            root: canonicalize_existing(root),
+            include: build_set(include.unwrap_or(&default_include))?,
+            exclude: build_set(exclude_patterns)?,
+            // A directory part that doesn't compile alone only costs the pruning.
+            excluded_trees: build_set(&excluded_trees).unwrap_or_default(),
         })
     }
 
-    /// True if `path` is inside the project and matches include but not exclude.
+    /// Whether an exclude covers everything under `directory`, so a walk
+    /// needn't enter it.
+    #[must_use]
+    pub fn excludes_tree(&self, directory: &Path) -> bool {
+        if self.excluded_trees.is_empty() {
+            return false;
+        }
+        let candidate = canonicalize_existing(directory);
+        let relative = candidate.strip_prefix(&self.root).unwrap_or(&candidate);
+        self.excluded_trees.is_match(relative)
+    }
+
+    #[must_use]
     pub fn is_included(&self, path: &Path) -> bool {
-        let canonical;
-        let candidate = match path.canonicalize() {
-            Ok(resolved) => {
-                canonical = resolved;
-                canonical.as_path()
-            }
-            Err(_) => path,
-        };
-        let rel = candidate.strip_prefix(&self.base).unwrap_or(candidate);
-        self.include.is_match(rel) && !self.exclude.is_match(rel)
+        let candidate = canonicalize_existing(path);
+        let relative = candidate.strip_prefix(&self.root).unwrap_or(&candidate);
+        self.include.is_match(relative) && !self.exclude.is_match(relative)
     }
 }
 
+/// # Errors
+///
+/// Returns a message naming the first invalid glob pattern.
 fn build_set(patterns: &[String]) -> Result<GlobSet, String> {
-    // Invalid patterns are hard errors, matching the config contract
-    // everywhere else. A typo'd exclude silently processing generated
-    // code is exactly the failure deny_unknown_fields exists to prevent.
+    // Invalid patterns are hard errors, like unknown config keys, so a typo'd
+    // exclude can't quietly let generated code through.
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
-        let glob =
-            Glob::new(pattern).map_err(|e| format!("invalid glob pattern \"{pattern}\": {e}"))?;
+        if brace_depth(pattern) > MAX_BRACE_DEPTH {
+            return Err(format!(
+                "invalid glob pattern `{pattern}`: `{{` groups nest more than {MAX_BRACE_DEPTH} \
+                 levels deep"
+            ));
+        }
+        let glob = GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .build()
+            .map_err(|e| format!("invalid glob pattern `{pattern}`: {e}"))?;
         builder.add(glob);
     }
-    builder
-        .build()
-        .map_err(|e| format!("invalid glob set: {e}"))
+    builder.build().map_err(|e| format!("invalid glob set: {e}"))
+}
+
+fn brace_depth(pattern: &str) -> usize {
+    let mut depth: usize = 0;
+    let mut deepest = 0;
+    for b in pattern.bytes() {
+        match b {
+            b'{' => {
+                depth = depth.saturating_add(1);
+                deepest = deepest.max(depth);
+            }
+            b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    deepest
 }
 
 #[cfg(test)]
@@ -69,12 +119,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn project_filter_includes_and_excludes() {
-        let base = Path::new("/proj");
+    fn takes_included_files_unless_excluded() {
+        let root = Path::new("/proj");
         let filter = ProjectFilter::new(
-            base,
-            &Some(vec!["src/**/*.lua".into(), "src/**/*.luau".into()]),
-            &Some(vec!["**/gen/**".into()]),
+            root,
+            Some(&["src/**/*.lua".into(), "src/**/*.luau".into()]),
+            Some(&["**/gen/**".into()]),
         )
         .expect("valid globs");
         assert!(filter.is_included(Path::new("/proj/src/a.lua")));
@@ -83,8 +133,23 @@ mod tests {
     }
 
     #[test]
-    fn project_filter_default_includes_lua_luau() {
-        let filter = ProjectFilter::new(Path::new("/proj"), &None, &None).expect("valid globs");
+    fn excludes_tree_only_when_a_glob_covers_every_descendant() {
+        let filter = ProjectFilter::new(
+            Path::new("/proj"),
+            None,
+            Some(&["gen/**".into(), "**/vendor/**".into(), "dist/**/*".into(), "shallow/*".into()]),
+        )
+        .expect("valid globs");
+        assert!(filter.excludes_tree(Path::new("/proj/gen")));
+        assert!(filter.excludes_tree(Path::new("/proj/sub/vendor")));
+        assert!(filter.excludes_tree(Path::new("/proj/dist")));
+        assert!(!filter.excludes_tree(Path::new("/proj/shallow")));
+        assert!(!filter.excludes_tree(Path::new("/proj/other")));
+    }
+
+    #[test]
+    fn default_include_takes_lua_and_luau_files_at_any_depth() {
+        let filter = ProjectFilter::new(Path::new("/proj"), None, None).expect("valid globs");
         assert!(filter.is_included(Path::new("/proj/x.lua")));
         assert!(filter.is_included(Path::new("/proj/sub/y.luau")));
         assert!(!filter.is_included(Path::new("/proj/x.txt")));

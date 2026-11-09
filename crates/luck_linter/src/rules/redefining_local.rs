@@ -1,114 +1,114 @@
-use luck_ast::Statement;
-use luck_ast::shared::Block;
-use luck_ast::visitor::Visitor;
-use luck_token::{Span, TokenKind};
+use luck_ast::{Block, Statement};
+use luck_token::{LuaVersion, Span, Token};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::{Finding, line_column};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
-/// Luacheck 411-413: a local is declared with the same name as another
-/// local *in the same block*. The second declaration makes the first
-/// effectively unreachable.
+/// Flags a local declared again in the same block (Luacheck 411), which
+/// hides the first one from all the code after it.
 ///
-/// Why this is distinct from `shadowing`: `shadowing` covers outer-scope
-/// shadowing (`local x = 1; do local x = 2 end`). Redefining within the
-/// same block is a different pattern, most often a copy-paste bug, and
-/// gets its own toggle.
-pub struct RedefiningLocal;
+/// `shadowing` reports any redeclaration of a visible name, including ones
+/// from enclosing blocks. Doing it in the same block is most often a
+/// copy-paste bug, so it gets its own toggle.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RedefiningLocal;
 
-impl Rule for RedefiningLocal {
-    fn name(&self) -> &'static str {
-        "redefining_local"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "local redeclared with the same name in the same block"
-    }
+impl_rule!(
+    RedefiningLocal,
+    "redefining_local",
+    Style,
+    Warning,
+    "local redeclared with the same name in the same block"
+);
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let block = ctx.block;
+impl WholeRule for RedefiningLocal {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let mut checker = RedefineChecker {
-            source: ctx.source,
-            diagnostics: Vec::new(),
+            source: context.source,
+            version: context.semantic.version,
+            declarations: Vec::new(),
+            findings: Vec::new(),
         };
-        checker.visit_block(block);
-        checker.diagnostics
+        for block in context.blocks {
+            checker.check_block(block);
+        }
+        checker.findings
     }
 }
 
-struct RedefineChecker<'a> {
-    source: &'a str,
-    diagnostics: Vec<LintDiagnostic>,
+struct RedefineChecker<'ast> {
+    source: &'ast str,
+    version: LuaVersion,
+    declarations: Vec<(&'ast str, Span)>,
+    findings: Vec<Finding>,
 }
 
-impl RedefineChecker<'_> {
-    fn check_block(&mut self, block: &Block) {
-        // (name, definition_span) for every local already declared in
-        // this block. Order matters, since the later declaration is the
-        // one reported.
-        let mut declared: Vec<(String, Span)> = Vec::new();
-
+impl<'ast> RedefineChecker<'ast> {
+    fn check_block(&mut self, block: &'ast Block) {
+        self.declarations.clear();
         for stmt in &block.stmts {
             match stmt {
                 Statement::LocalAssignment(local) => {
                     for attributed in local.names.iter() {
-                        self.note_local(&mut declared, &attributed.name);
+                        self.declare(&attributed.name);
                     }
                 }
-                Statement::LocalFunction(func) => {
-                    self.note_local(&mut declared, &func.name);
-                }
-                _ => {}
+                Statement::LocalFunction(local_function) => self.declare(&local_function.name),
+                Statement::Assignment(_)
+                | Statement::FunctionCall(_)
+                | Statement::DoBlock(_)
+                | Statement::WhileLoop(_)
+                | Statement::RepeatLoop(_)
+                | Statement::IfStatement(_)
+                | Statement::NumericFor(_)
+                | Statement::GenericFor(_)
+                | Statement::FunctionDecl(_)
+                | Statement::EmptyStatement(_)
+                | Statement::Goto(_)
+                | Statement::Label(_)
+                | Statement::GlobalDeclaration(_)
+                | Statement::GlobalFunction(_)
+                | Statement::GlobalStar(_)
+                | Statement::Break(_)
+                | Statement::CompoundAssignment(_)
+                | Statement::TypeDeclaration(_)
+                | Statement::Error(_) => {}
             }
         }
     }
 
-    fn note_local(&mut self, declared: &mut Vec<(String, Span)>, name_token: &luck_token::Token) {
-        let TokenKind::Identifier(name) = &name_token.kind else {
+    fn declare(&mut self, name_token: &'ast Token) {
+        let Some(name) = name_token.identifier() else {
             return;
         };
-        // The underscore convention marks intentional throwaway names.
-        if name == "_" || name.starts_with('_') {
-            declared.push((name.to_string(), name_token.span));
+        // A leading `_` marks a name as deliberately unused.
+        if name.starts_with('_') {
             return;
         }
-        if let Some((_, first_span)) = declared.iter().find(|(n, _)| n == name.as_str()) {
-            let (line, column) = luck_token::line_col(self.source, first_span.start);
-            self.diagnostics.push(
-                LintDiagnostic::new(
-                    "redefining_local",
+        if let Some((_, first_span)) =
+            self.declarations.iter().find(|(declared_name, _)| *declared_name == name)
+        {
+            let (line, column) = line_column(self.source, first_span.start, self.version);
+            self.findings.push(
+                Finding::new(
                     format!("local `{name}` is redeclared in the same block"),
                     name_token.span,
                 )
-                .with_help(format!("previous declaration at {line}:{column}")),
+                .with_help(format!("first declared at {line}:{column}")),
             );
         }
-        declared.push((name.to_string(), name_token.span));
-    }
-}
-
-impl<'ast> Visitor<'ast> for RedefineChecker<'_> {
-    fn visit_block(&mut self, block: &'ast Block) {
-        self.check_block(block);
-        // Recurse into every nested block via the default walk so that
-        // inner blocks (if/while/for/do/function bodies) get their own
-        // independent same-block check.
-        self.walk_block(block);
+        self.declarations.push((name, name_token.span));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use luck_token::LuaVersion;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&RedefiningLocal, source, LuaVersion::Lua54)
+        run_rule(&RedefiningLocal, source, LuaVersion::Lua54)
     }
 
     #[test]

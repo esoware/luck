@@ -1,173 +1,294 @@
-//! `luck build` - drive the full bundle (and optional minify) pipeline from
-//! `luck.json`, with `--watch`, `--dry-run`, and profile selection.
-
-use crate::output::{build_file_cache, format_size};
-use crate::render::render_diagnostics;
-use crate::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE, Verbosity};
-use clap::Args;
-use luck_bundler::bundle;
-use luck_core::config::{BuildConfig, resolve_build_config};
-use notify_debouncer_mini::new_debouncer;
-use std::collections::HashSet;
+use core::time::Duration;
+use std::env;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::sync::mpsc::{self, Receiver};
+use std::time::Instant;
+
+use clap::Args;
+use luck_bundler::{BundleOptions, bundle};
+use luck_core::{
+    BuildConfig, check_output_paths, config_directory, discover_config, load_or_discover_config,
+    native_path, normalize_path, resolve_build_config,
+};
+use luck_token::{LuaVersion, chunk_start, has_shebang};
+use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
+
+use crate::exit::{Exit, operation_error, usage_error};
+use crate::output::{format_size, write_output_file};
+use crate::project::current_directory;
+use crate::render::{print_diags, print_source_errors};
+use crate::verbosity::Verbosity;
 
 #[derive(Args)]
+#[expect(clippy::struct_excessive_bools, reason = "clap derive needs one bool field per flag")]
 pub(crate) struct BuildArgs {
-    /// Path to config file
+    /// Path to config file [default: discover luck.json upward from cwd].
     #[arg(short, long, value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// Print what would be written without writing
+    /// Print what would be written without writing.
     #[arg(long, conflicts_with = "watch")]
     dry_run: bool,
 
-    /// Build profile to use (e.g. release, dev)
+    /// Build profile to use (e.g. release, dev).
     #[arg(short = 'P', long, value_name = "NAME")]
     profile: Option<String>,
 
-    /// Shorthand for --profile release
-    #[arg(long, conflicts_with = "profile")]
+    /// Shorthand for --profile release.
+    #[arg(long, conflicts_with_all = ["profile", "dev"])]
     release: bool,
 
-    /// Shorthand for --profile dev
+    /// Shorthand for --profile dev.
     #[arg(long, conflicts_with = "profile")]
     dev: bool,
 
-    /// Watch source files and rebuild on changes
+    /// Watch source files and rebuild on changes.
     #[arg(short, long)]
     watch: bool,
 }
 
+enum BuildFailure {
+    /// Bundling or minifying failed and the diagnostics are already rendered.
+    /// Watch mode keeps going and watches `source_files`, since an edit to one
+    /// of them may fix the build.
+    Failed { message: &'static str, source_files: Vec<String> },
+    /// The output can't be written. The run ends with this exit code, even in
+    /// watch mode.
+    Fatal(Exit),
+}
+
 impl BuildArgs {
-    pub(crate) fn run(self, verbosity: Verbosity) -> ExitCode {
-        let profile = self.resolved_profile();
-        if self.watch {
-            run_build_watch(self.config.as_deref(), profile, verbosity)
-        } else {
-            run_build(self.config.as_deref(), self.dry_run, profile, verbosity)
-        }
+    /// # Errors
+    ///
+    /// Returns [`Exit::Usage`] on a bad config, and [`Exit::Failure`] when a
+    /// build fails, its output can't be written, or the file watcher can't
+    /// start.
+    pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
+        if self.watch { self.rebuild_on_change(verbosity) } else { self.build_once(verbosity) }
     }
 
-    /// Fold `--release`/`--dev` shorthands into the explicit `--profile` name.
     fn resolved_profile(&self) -> Option<&str> {
-        if let Some(name) = self.profile.as_deref() {
-            Some(name)
-        } else if self.release {
-            Some("release")
-        } else if self.dev {
-            Some("dev")
-        } else {
-            None
+        self.profile
+            .as_deref()
+            .or_else(|| self.release.then_some("release"))
+            .or_else(|| self.dev.then_some("dev"))
+    }
+
+    /// # Errors
+    ///
+    /// Reports the failure and returns [`Exit::Usage`] when the working
+    /// directory is unavailable, no `luck.json` is found or it fails to load,
+    /// or the build settings are invalid.
+    fn resolved_configs(&self) -> Result<Vec<BuildConfig>, Exit> {
+        let working_directory = current_directory()?;
+        let project = load_or_discover_config(self.config.as_deref(), &working_directory)
+            .map_err(usage_error)?
+            .ok_or_else(|| {
+                usage_error(
+                    "no `luck.json` found, so run from a project directory or use `--config`",
+                )
+            })?;
+        resolve_build_config(&project, self.resolved_profile()).map_err(usage_error)
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`Exit::Usage`] on a bad config or an output that would replace
+    /// a bundled file, and [`Exit::Failure`] when a build fails or its output
+    /// can't be written.
+    fn build_once(&self, verbosity: Verbosity) -> Result<(), Exit> {
+        let total_start = Instant::now();
+        let configs = self.resolved_configs()?;
+
+        if verbosity != Verbosity::Quiet
+            && let Some(first_config) = configs.first()
+        {
+            print_build_header(first_config);
         }
-    }
-}
 
-fn run_build(
-    config_path: Option<&Path>,
-    dry_run: bool,
-    profile: Option<&str>,
-    verbosity: Verbosity,
-) -> ExitCode {
-    let total_start = Instant::now();
-    let configs = match resolve_build_config(config_path, profile) {
-        Ok(configs) => configs,
-        Err(error) => {
-            eprintln!("Error: {error}");
-            return ExitCode::from(EXIT_USAGE);
-        }
-    };
-
-    if verbosity != Verbosity::Quiet {
-        print_build_header(&configs[0]);
-    }
-
-    for config in &configs {
-        if let Err(message) = build_one(config, dry_run, verbosity) {
-            eprintln!("\n  \x1b[31m✗\x1b[0m {message}");
-            return ExitCode::from(EXIT_FAILURE);
-        }
-    }
-
-    if verbosity != Verbosity::Quiet {
-        print_build_footer(total_start.elapsed());
-    }
-    ExitCode::from(EXIT_SUCCESS)
-}
-
-/// Bundle, minify, and write one build config. Returns its source file paths
-/// on success (used by watch mode to decide what to watch).
-fn build_one(
-    config: &BuildConfig,
-    dry_run: bool,
-    verbosity: Verbosity,
-) -> Result<Vec<String>, String> {
-    let start = Instant::now();
-
-    match bundle(
-        &config.entry,
-        config.target,
-        &config.search_paths,
-        &config.rc_dir,
-        config.dynamic_require,
-    ) {
-        Ok(result) => {
-            if !result.warnings.is_empty() && verbosity != Verbosity::Quiet {
-                let mut cache = build_file_cache(&result.warnings);
-                render_diagnostics(&result.warnings, &mut cache);
+        for config in &configs {
+            match self.build_one(config, verbosity) {
+                Ok(_) => {}
+                Err(BuildFailure::Failed { message, .. }) => {
+                    eprintln!("\n  \x1b[31merror:\x1b[0m {message}");
+                    return Err(Exit::Failure);
+                }
+                Err(BuildFailure::Fatal(exit)) => return Err(exit),
             }
+        }
 
-            let source_files = result.source_files;
-            let mut output = result.output;
-            let pre_minify_size = output.len();
+        if verbosity != Verbosity::Quiet {
+            print_build_footer(total_start.elapsed());
+        }
+        Ok(())
+    }
 
-            if config.minify {
-                let file_path = config.entry.display().to_string();
-                match luck_minifier::minify(&output, config.target, &config.transforms, &file_path)
+    /// # Errors
+    ///
+    /// Returns [`Exit::Failure`] when the file watcher can't start, and the
+    /// exit code when a build's output can't be written.
+    fn rebuild_on_change(&self, verbosity: Verbosity) -> Result<(), Exit> {
+        let mut source_files = self.build_for_watch(verbosity)?;
+
+        loop {
+            let directories = self.watched_directories(&source_files);
+
+            let (sender, receiver) = mpsc::channel();
+            let mut debouncer = new_debouncer(Duration::from_millis(200), sender)
+                .map_err(|e| operation_error(format!("failed to create file watcher: {e}")))?;
+
+            for directory in &directories {
+                if directory.exists()
+                    && let Err(error) =
+                        debouncer.watcher().watch(directory, RecursiveMode::Recursive)
                 {
-                    Ok(minified) => output = minified,
-                    Err(errors) => {
-                        let mut cache = build_file_cache(&errors);
-                        cache.add_file(file_path, output);
-                        render_diagnostics(&errors, &mut cache);
-                        return Err("minification failed".to_string());
-                    }
+                    eprintln!("warning: failed to watch `{}`: {error}", directory.display());
                 }
             }
 
-            let preamble = build_preamble(config);
-            if !preamble.is_empty() {
-                output = format!("{preamble}\n{output}");
+            eprintln!("\n[watching for changes...]");
+
+            if !wait_for_change(&receiver) {
+                return Ok(());
             }
 
-            if dry_run {
-                eprintln!("[dry-run] Would write: {}", config.output.display());
-            } else {
-                crate::output::write_output_file(&config.output, &output);
-            }
+            eprintln!();
 
-            let duration = start.elapsed();
-            if verbosity != Verbosity::Quiet {
-                let original = if config.minify {
-                    Some(pre_minify_size)
-                } else {
-                    None
-                };
-                print_build_stat(&config.output, output.len(), original, duration);
-            }
-
-            Ok(source_files)
+            source_files = self.build_for_watch(verbosity)?;
         }
-        Err(errors) => {
-            let mut cache = build_file_cache(&errors);
-            render_diagnostics(&errors, &mut cache);
-            Err("build failed".to_string())
+    }
+
+    fn watched_directories(&self, source_files: &[String]) -> Vec<PathBuf> {
+        let config_path = self.config.as_deref();
+        let mut directories: Vec<PathBuf> = source_files
+            .iter()
+            .filter_map(|file| native_path(file).parent().map(Path::to_path_buf))
+            .collect();
+        directories.extend(config_path.map(config_directory));
+        // Watch the discovered config too, or editing it never triggers a
+        // rebuild.
+        if config_path.is_none()
+            && let Ok(working_directory) = env::current_dir()
+            && let Ok(Some(discovered)) = discover_config(&working_directory)
+        {
+            directories.push(discovered.root);
         }
+        // With no sources and no config to watch, such as before a luck.json
+        // exists, watch the working directory so a fix still triggers a
+        // rebuild.
+        if directories.is_empty()
+            && let Ok(working_directory) = env::current_dir()
+        {
+            directories.push(working_directory);
+        }
+        directories.sort_unstable();
+        directories.dedup();
+        directories
+    }
+
+    /// # Errors
+    ///
+    /// Returns the exit code when a build's output can't be written. A failed
+    /// build or a bad config isn't an error here: watch mode reports it and
+    /// keeps watching.
+    fn build_for_watch(&self, verbosity: Verbosity) -> Result<Vec<String>, Exit> {
+        let Ok(configs) = self.resolved_configs() else {
+            return Ok(Vec::new());
+        };
+
+        let mut all_source_files = Vec::new();
+        for config in &configs {
+            match self.build_one(config, verbosity) {
+                Ok(source_files) | Err(BuildFailure::Failed { source_files, .. }) => {
+                    all_source_files.extend(source_files);
+                }
+                Err(BuildFailure::Fatal(exit)) => return Err(exit),
+            }
+        }
+
+        Ok(all_source_files)
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`BuildFailure::Failed`] after rendering bundle or minify
+    /// diagnostics, and [`BuildFailure::Fatal`] when the output can't be
+    /// written or would replace a bundled file.
+    fn build_one(
+        &self,
+        config: &BuildConfig,
+        verbosity: Verbosity,
+    ) -> Result<Vec<String>, BuildFailure> {
+        let start = Instant::now();
+        let version = config.target.lua_version();
+
+        let result = bundle(
+            &config.entry,
+            &BundleOptions {
+                version,
+                search_paths: &config.search_paths,
+                project_root: &config.project_root,
+                dynamic_require: config.dynamic_require,
+            },
+        )
+        .map_err(|errors| {
+            print_diags(&errors, version);
+            let source_files = errors
+                .iter()
+                .map(|diag| diag.file_path.clone())
+                .chain([normalize_path(&config.entry)])
+                .collect();
+            BuildFailure::Failed { message: "build failed", source_files }
+        })?;
+
+        check_output_paths(&result.source_files, [&config.output])
+            .map_err(|message| BuildFailure::Fatal(usage_error(message)))?;
+
+        if verbosity != Verbosity::Quiet {
+            print_diags(&result.warnings, version);
+        }
+
+        let source_files = result.source_files;
+        let mut output = result.output;
+        let pre_minify_size = output.len();
+
+        if config.minify {
+            output =
+                luck_minifier::minify(&output, version, &config.transforms).map_err(|errors| {
+                    print_source_errors(
+                        config.entry.display().to_string(),
+                        &output,
+                        &errors,
+                        version,
+                    );
+                    BuildFailure::Failed {
+                        message: "minification failed",
+                        source_files: source_files.clone(),
+                    }
+                })?;
+        }
+
+        output = with_preamble(config, output, version);
+
+        if self.dry_run {
+            eprintln!("[dry-run] Would write: {}", config.output.display());
+        } else {
+            write_output_file(&config.output, &output).map_err(BuildFailure::Fatal)?;
+        }
+
+        let duration = start.elapsed();
+        if verbosity != Verbosity::Quiet {
+            let original = config.minify.then_some(pre_minify_size);
+            print_build_stat(&config.output, output.len(), original, duration);
+        }
+
+        Ok(source_files)
     }
 }
 
-fn build_preamble(config: &BuildConfig) -> String {
+/// `output` with `config`'s preamble on top, after the BOM and shebang line a
+/// loader only skips at the very start of a chunk.
+fn with_preamble(config: &BuildConfig, output: String, version: LuaVersion) -> String {
     let mut lines = Vec::new();
 
     if let Some(text) = &config.preamble {
@@ -177,156 +298,67 @@ fn build_preamble(config: &BuildConfig) -> String {
     }
 
     if config.luck_preamble {
-        let action = if config.minify {
-            "Bundled & minified"
-        } else {
-            "Bundled"
-        };
-        let version = luck::VERSION;
+        let action = if config.minify { "Bundled & minified" } else { "Bundled" };
+        let luck_version = env!("CARGO_PKG_VERSION");
         lines.push(format!(
-            "-- {action} with luck v{version} // https://github.com/esoware/luck"
+            "-- {action} with luck v{luck_version} // https://github.com/esoware/luck"
         ));
     }
 
-    lines.join("\n")
+    if lines.is_empty() {
+        return output;
+    }
+    let preamble = lines.join("\n");
+
+    let (bom, chunk) = output.split_at(chunk_start(&output, version));
+    if !has_shebang(chunk.as_bytes(), version) {
+        return format!("{bom}{preamble}\n{chunk}");
+    }
+    let (shebang, body) = chunk.split_once('\n').unwrap_or((chunk, ""));
+    format!("{bom}{shebang}\n{preamble}\n{body}")
 }
 
-fn run_build_watch(
-    config_path: Option<&Path>,
-    profile: Option<&str>,
-    verbosity: Verbosity,
-) -> ExitCode {
-    let config_path_owned = config_path.map(Path::to_path_buf);
-
-    let mut watched_paths =
-        run_build_collect_paths(config_path_owned.as_deref(), profile, verbosity);
-
+/// Blocks until a relevant file changes, then drains what's queued behind it.
+/// Returns false once the watcher closes.
+fn wait_for_change(receiver: &Receiver<DebounceEventResult>) -> bool {
     loop {
-        let mut dirs: HashSet<PathBuf> = HashSet::new();
-        for file in &watched_paths {
-            let path = PathBuf::from(file.replace('/', std::path::MAIN_SEPARATOR_STR));
-            if let Some(parent) = path.parent() {
-                dirs.insert(parent.to_path_buf());
-            }
-        }
-        if let Some(config_path) = &config_path_owned
-            && let Some(parent) = config_path.parent()
-        {
-            dirs.insert(parent.to_path_buf());
-        }
-        // The DISCOVERED config (no -c) must be watched too, or config edits
-        // never retrigger a rebuild.
-        if config_path_owned.is_none()
-            && let Ok(cwd) = std::env::current_dir()
-            && let Ok(Some((discovered_path, _))) = luck_core::config::discover_config(&cwd)
-            && let Some(parent) = discovered_path.parent()
-        {
-            dirs.insert(parent.to_path_buf());
-        }
-        // A failed first build yields no source paths. Watching the working
-        // directory instead keeps the session recoverable, rather than
-        // sitting on `[watching for changes...]` forever.
-        if dirs.is_empty()
-            && let Ok(cwd) = std::env::current_dir()
-        {
-            dirs.insert(cwd);
-        }
-
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let mut debouncer = match new_debouncer(Duration::from_millis(200), sender) {
-            Ok(debouncer) => debouncer,
-            Err(error) => {
-                eprintln!("Error: failed to create file watcher: {error}");
-                return ExitCode::from(EXIT_FAILURE);
-            }
-        };
-
-        for dir in &dirs {
-            if dir.exists()
-                && let Err(error) = debouncer
-                    .watcher()
-                    .watch(dir, notify::RecursiveMode::Recursive)
-            {
-                eprintln!("Warning: failed to watch {}: {error}", dir.display());
-            }
-        }
-
-        eprintln!("\n[watching for changes...]");
-
-        loop {
-            match receiver.recv() {
-                Ok(Ok(events)) => {
-                    if events.iter().any(|event| is_relevant_change(&event.path)) {
-                        break;
-                    }
+        match receiver.recv() {
+            Ok(Ok(events)) => {
+                if events.iter().any(|event| is_relevant_change(&event.path)) {
+                    break;
                 }
-                Ok(Err(errors)) => {
-                    eprintln!("Watch error: {errors}");
-                }
-                Err(_) => return ExitCode::from(EXIT_SUCCESS), // channel closed
             }
+            Ok(Err(error)) => eprintln!("watch error: {error}"),
+            Err(_) => return false,
         }
-
-        while receiver.try_recv().is_ok() {}
-
-        eprintln!();
-
-        watched_paths = run_build_collect_paths(config_path_owned.as_deref(), profile, verbosity);
     }
+    while receiver.try_recv().is_ok() {}
+    true
 }
 
-/// Only source/config changes trigger a rebuild, so editor temp files and
-/// .git churn do not retrigger one.
+/// Only `.lua`, `.luau`, `.json`, and `.luaurc` changes trigger a rebuild, so
+/// editor temp files and `.git` churn don't.
 fn is_relevant_change(path: &Path) -> bool {
-    match path.extension().and_then(|ext| ext.to_str()) {
+    match path.extension().and_then(|extension| extension.to_str()) {
         Some("lua" | "luau" | "json") => true,
-        _ => path
-            .file_name()
-            .is_some_and(|name| name == ".luaurc" || name == "luck.json"),
+        _ => path.file_name().is_some_and(|name| name == ".luaurc" || name == "luck.json"),
     }
-}
-
-fn run_build_collect_paths(
-    config_path: Option<&Path>,
-    profile: Option<&str>,
-    verbosity: Verbosity,
-) -> Vec<String> {
-    let configs = match resolve_build_config(config_path, profile) {
-        Ok(configs) => configs,
-        Err(error) => {
-            eprintln!("Error: {error}");
-            return Vec::new();
-        }
-    };
-
-    let mut all_source_files = Vec::new();
-    for config in &configs {
-        if let Ok(files) = build_one(config, false, verbosity) {
-            all_source_files.extend(files);
-        }
-    }
-
-    if let Some(config_path) = config_path {
-        all_source_files.push(config_path.display().to_string());
-    }
-
-    all_source_files
 }
 
 fn format_duration(duration: Duration) -> String {
-    let ms = duration.as_millis();
-    if ms >= 1000 {
+    let milliseconds = duration.as_millis();
+    if milliseconds >= 1000 {
         format!("{:.2}s", duration.as_secs_f64())
     } else {
-        format!("{ms}ms")
+        format!("{milliseconds}ms")
     }
 }
 
 fn relative_display(path: &Path) -> String {
-    if let Ok(cwd) = std::env::current_dir()
-        && let Ok(rel) = path.strip_prefix(&cwd)
+    if let Ok(working_directory) = env::current_dir()
+        && let Ok(relative) = path.strip_prefix(&working_directory)
     {
-        return rel.display().to_string().replace('\\', "/");
+        return relative.display().to_string().replace('\\', "/");
     }
     path.display().to_string().replace('\\', "/")
 }
@@ -335,10 +367,7 @@ fn print_build_header(config: &BuildConfig) {
     let version = env!("CARGO_PKG_VERSION");
     eprintln!("\x1b[1;36mluck\x1b[0m \x1b[2mv{version}\x1b[0m\n");
     eprintln!("  \x1b[2mTarget:\x1b[0m  {}", config.target);
-    eprintln!(
-        "  \x1b[2mEntry:\x1b[0m   {}",
-        relative_display(&config.entry)
-    );
+    eprintln!("  \x1b[2mEntry:\x1b[0m   {}", relative_display(&config.entry));
     if config.minify {
         eprintln!("  \x1b[2mMinify:\x1b[0m  \x1b[32menabled\x1b[0m");
     } else {
@@ -348,31 +377,87 @@ fn print_build_header(config: &BuildConfig) {
 }
 
 fn print_build_stat(
-    path: &Path,
+    output_path: &Path,
     output_size: usize,
     original_size: Option<usize>,
     duration: Duration,
 ) {
-    let size_str = format_size(output_size);
-    let path_str = relative_display(path);
-    let time_str = format_duration(duration);
+    let size = format_size(output_size);
+    let path = relative_display(output_path);
+    let time = format_duration(duration);
 
-    if let Some(orig) = original_size
-        && orig > 0
+    if let Some(original) = original_size
+        && original > 0
     {
-        let pct = ((orig as f64 - output_size as f64) / orig as f64 * 100.0) as i64;
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_possible_truncation,
+            clippy::cast_precision_loss,
+            clippy::float_arithmetic,
+            reason = "display math, and its exact rounding is part of the output"
+        )]
+        let percent = ((output_size as f64 - original as f64) / original as f64 * 100.0f64) as i64;
         eprintln!(
-            "  \x1b[1m{path_str}\x1b[0m  \x1b[2m{}\x1b[0m \x1b[2m→\x1b[0m \x1b[32m{size_str}\x1b[0m  \x1b[2m(-{pct}%)\x1b[0m  \x1b[2m{time_str}\x1b[0m",
-            format_size(orig),
+            "  \x1b[1m{path}\x1b[0m  \x1b[2m{}\x1b[0m \x1b[2m->\x1b[0m \x1b[32m{size}\x1b[0m  \x1b[2m({percent:+}%)\x1b[0m  \x1b[2m{time}\x1b[0m",
+            format_size(original),
         );
         return;
     }
-    eprintln!("  \x1b[1m{path_str}\x1b[0m  \x1b[32m{size_str}\x1b[0m  \x1b[2m{time_str}\x1b[0m");
+    eprintln!("  \x1b[1m{path}\x1b[0m  \x1b[32m{size}\x1b[0m  \x1b[2m{time}\x1b[0m");
 }
 
 fn print_build_footer(total_duration: Duration) {
-    eprintln!(
-        "\n  \x1b[32m✓\x1b[0m Done in \x1b[1m{}\x1b[0m",
-        format_duration(total_duration)
-    );
+    eprintln!("\n  \x1b[32mdone in\x1b[0m \x1b[1m{}\x1b[0m", format_duration(total_duration));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn watches_the_current_directory_for_a_bare_config_path() {
+        let args = BuildArgs {
+            config: Some(PathBuf::from("luck.json")),
+            dry_run: false,
+            profile: None,
+            release: false,
+            dev: false,
+            watch: true,
+        };
+        assert_eq!(args.watched_directories(&[]), [PathBuf::from(".")]);
+    }
+
+    #[test]
+    fn watch_keeps_watching_a_failed_entry_outside_the_config_directory() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let project = directory.path().join("project");
+        let sources = directory.path().join("sources");
+        fs::create_dir_all(&project).expect("mkdir project");
+        fs::create_dir_all(&sources).expect("mkdir sources");
+        fs::write(sources.join("main.lua"), "local =\n").expect("write entry");
+        let config = project.join("luck.json");
+        fs::write(&config, r#"{"entry":"../sources/main.lua","output":"bundle.lua"}"#)
+            .expect("write luck.json");
+        let args = BuildArgs {
+            config: Some(config),
+            dry_run: false,
+            profile: None,
+            release: false,
+            dev: false,
+            watch: true,
+        };
+
+        let source_files = args.build_for_watch(Verbosity::Quiet).expect("watch keeps going");
+        let directories = args.watched_directories(&source_files);
+
+        let canonical_sources = sources.canonicalize().expect("canonicalize sources");
+        assert!(
+            directories
+                .iter()
+                .any(|watched| watched.canonicalize().is_ok_and(|path| path == canonical_sources)),
+            "fixing the broken entry must trigger a rebuild, but only {directories:?} are watched"
+        );
+    }
 }

@@ -1,5 +1,4 @@
 .vscode/**
-.vscode-test/**
 src/**
 tsconfig.json
 .gitignore
@@ -7,6 +6,7 @@ node_modules/**
 **/*.map
 **/*.ts
 !out/**/*.js
-.eslintrc.json
+.oxlintrc.json
+.oxfmtrc.json
 dist/**
 *.vsix

@@ -1,0 +1,249 @@
+//! Working on raw token text instead of decoded values miscompiles: UTF-8
+//! corruption, escape-state confusion, and `"\65"` comparing unequal to `"A"`.
+
+use alloc::borrow::Cow;
+use core::fmt::Write as _;
+
+use compact_str::CompactString;
+
+use crate::{LuaVersion, is_lua_whitespace, strip_line_break};
+
+/// The text between a quoted string literal's quotes, escapes left undecoded,
+/// so `"\65"` and `"A"` give different bodies.
+///
+/// Returns `None` for a long-bracket string and for any text that isn't a
+/// quoted literal.
+#[must_use]
+pub fn short_string_body(raw: &str) -> Option<&str> {
+    let strip_quote = |quote: char| raw.strip_prefix(quote)?.strip_suffix(quote);
+    strip_quote('"').or_else(|| strip_quote('\''))
+}
+
+/// Handles both quote forms with every Lua escape, and long-bracket strings
+/// (EOL normalization, leading-newline strip, no escapes).
+///
+/// Returns `None` for any form this doesn't model exactly, including text that isn't a whole
+/// string literal, and a caller that gets `None` must not fold. Lua 5.1 and
+/// Luau read an undefined escape as the literal character, and Luau's long
+/// strings keep a lone CR as content. The result borrows from `raw` when the body needs no
+/// rewriting: a quoted string without escapes, or a long-bracket string
+/// without a CR.
+#[must_use]
+pub fn decode_string(raw: &str, version: LuaVersion) -> Option<Cow<'_, [u8]>> {
+    if raw.starts_with('[') {
+        return decode_long_bracket(raw.as_bytes(), version);
+    }
+
+    let (&quote, after_quote) = raw.as_bytes().split_first()?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    let (&closing_quote, inner) = after_quote.split_last()?;
+    if closing_quote != quote {
+        return None;
+    }
+    if !inner.contains(&b'\\') {
+        return Some(Cow::Borrowed(inner));
+    }
+    let mut output = Vec::with_capacity(inner.len());
+    let mut remaining = inner;
+    while let Some((&byte, rest)) = remaining.split_first() {
+        remaining = if byte == b'\\' {
+            decode_escape(rest, version, &mut output)?
+        } else {
+            output.push(byte);
+            rest
+        };
+    }
+    Some(Cow::Owned(output))
+}
+
+fn decode_long_bracket(raw: &[u8], version: LuaVersion) -> Option<Cow<'_, [u8]>> {
+    let after_open = raw.strip_prefix(b"[")?;
+    let level = after_open.iter().take_while(|&&b| b == b'=').count();
+    let body_with_closer = after_open.get(level..)?.strip_prefix(b"[")?;
+    let closer_length = level.saturating_add(2);
+    let content_length = body_with_closer.len().checked_sub(closer_length)?;
+    let (content, closer) = body_with_closer.split_at(content_length);
+    let closer_equals = closer.strip_prefix(b"]")?.strip_suffix(b"]")?;
+    if closer_equals.iter().any(|&b| b != b'=') {
+        return None;
+    }
+    // Each line break becomes one newline, and one right after the opening
+    // bracket is dropped (5.4 manual section 3.1). Every break but a lone LF
+    // holds a CR, so a body without one is already the value.
+    let body = strip_line_break(content, version).unwrap_or(content);
+    if !body.contains(&b'\r') {
+        return Some(Cow::Borrowed(body));
+    }
+    let mut output = Vec::with_capacity(body.len());
+    let mut remaining = body;
+    while let Some((&byte, rest)) = remaining.split_first() {
+        let (decoded, after_decoded) = strip_line_break(remaining, version)
+            .map_or((byte, rest), |after_break| (b'\n', after_break));
+        output.push(decoded);
+        remaining = after_decoded;
+    }
+    Some(Cow::Owned(output))
+}
+
+/// Decode the escape in `escape`, which starts just past its `\`, and return
+/// the bytes after it.
+fn decode_escape<'text>(
+    escape: &'text [u8],
+    version: LuaVersion,
+    output: &mut Vec<u8>,
+) -> Option<&'text [u8]> {
+    let (&escaped, rest) = escape.split_first()?;
+    match escaped {
+        b'a' => output.push(0x07),
+        b'b' => output.push(0x08),
+        b'f' => output.push(0x0C),
+        b'n' => output.push(b'\n'),
+        b'r' => output.push(b'\r'),
+        b't' => output.push(b'\t'),
+        b'v' => output.push(0x0B),
+        b'\\' => output.push(b'\\'),
+        b'"' => output.push(b'"'),
+        b'\'' => output.push(b'\''),
+        b'\n' => {
+            output.push(b'\n');
+            if version.has_lfcr_line_break() {
+                return Some(rest.strip_prefix(b"\r").unwrap_or(rest));
+            }
+        }
+        b'\r' => {
+            output.push(b'\n');
+            return Some(rest.strip_prefix(b"\n").unwrap_or(rest));
+        }
+        b'x' if version.has_hex_escape() => return decode_hex_escape(rest, output),
+        b'z' if version.has_whitespace_escape() => {
+            let whitespace_length = rest.iter().take_while(|&&b| is_lua_whitespace(b)).count();
+            return rest.get(whitespace_length..);
+        }
+        b'0'..=b'9' => return decode_decimal_escape(escape, output),
+        b'u' if version.has_unicode_escape() => {
+            return decode_unicode_escape(rest, version, output);
+        }
+        // Lua 5.1 and Luau read any other escaped character as itself. Strict
+        // versions reject the token, so refuse to fold it.
+        _ if !version.has_strict_escapes() => output.push(escaped),
+        _ => return None,
+    }
+    Some(rest)
+}
+
+fn decode_hex_escape<'text>(rest: &'text [u8], output: &mut Vec<u8>) -> Option<&'text [u8]> {
+    let [high_digit, low_digit, after_digits @ ..] = rest else {
+        return None;
+    };
+    let high_nibble = char::from(*high_digit).to_digit(16)?;
+    let low_nibble = char::from(*low_digit).to_digit(16)?;
+    output.push(u8::try_from((high_nibble << 4u32) | low_nibble).ok()?);
+    Some(after_digits)
+}
+
+fn decode_decimal_escape<'text>(escape: &'text [u8], output: &mut Vec<u8>) -> Option<&'text [u8]> {
+    let digit_count = escape.iter().take(3).take_while(|b| b.is_ascii_digit()).count();
+    let (digits, rest) = escape.split_at(digit_count);
+    output.push(str::from_utf8(digits).ok()?.parse().ok()?);
+    Some(rest)
+}
+
+fn decode_unicode_escape<'text>(
+    rest: &'text [u8],
+    version: LuaVersion,
+    output: &mut Vec<u8>,
+) -> Option<&'text [u8]> {
+    let after_open = rest.strip_prefix(b"{")?;
+    let digit_count = after_open.iter().take_while(|b| b.is_ascii_hexdigit()).count();
+    let (hex_digits, after_digits) = after_open.split_at(digit_count);
+    let remaining = after_digits.strip_prefix(b"}")?;
+    let c = char::from_u32(unicode_escape_codepoint(hex_digits, version)?)?;
+    let mut encoded = [0u8; 4];
+    output.extend_from_slice(c.encode_utf8(&mut encoded).as_bytes());
+    Some(remaining)
+}
+
+/// The code point the hex digits of a `\u{...}` escape spell under `version`,
+/// or `None` when it's malformed there: no digits, too many, or too large a
+/// value.
+#[must_use]
+pub fn unicode_escape_codepoint(hex_digits: &[u8], version: LuaVersion) -> Option<u32> {
+    if hex_digits.is_empty() || (version.has_unicode_escape_digit_limit() && hex_digits.len() > 16)
+    {
+        return None;
+    }
+    let mut value: u32 = 0;
+    for &digit in hex_digits {
+        value = value.checked_mul(16)?.checked_add(char::from(digit).to_digit(16)?)?;
+    }
+    let limit = if version.has_extended_unicode_escape() { 0x7FFF_FFFF } else { 0x0010_FFFF };
+    (value <= limit).then_some(value)
+}
+
+/// Escapes double quotes, backslashes, and control bytes. Valid UTF-8 runs
+/// pass through intact, and bytes that aren't valid UTF-8 (such as those from
+/// `\xFF` escapes) become decimal escapes.
+#[must_use]
+pub fn encode_string(bytes: &[u8]) -> CompactString {
+    let mut output = CompactString::with_capacity(bytes.len().saturating_add(2));
+    output.push('"');
+    if let Ok(text) = str::from_utf8(bytes) {
+        push_escaped_text(&mut output, text);
+    } else {
+        let mut remaining = bytes;
+        for chunk in bytes.utf8_chunks() {
+            push_escaped_text(&mut output, chunk.valid());
+            remaining = remaining.get(chunk.valid().len()..).unwrap_or_default();
+            for &b in chunk.invalid() {
+                remaining = remaining.get(1..).unwrap_or_default();
+                let is_followed_by_digit = remaining.first().is_some_and(u8::is_ascii_digit);
+                push_decimal_escape(&mut output, b, is_followed_by_digit);
+            }
+        }
+    }
+    output.push('"');
+    output
+}
+
+/// The bytes that need escaping are all ASCII, so every split lands on a char boundary. `text`
+/// ends at an invalid byte or the end of input, never a digit, so an escape
+/// at its end needs no padding.
+fn push_escaped_text(output: &mut CompactString, mut text: &str) {
+    while let Some((index, byte)) =
+        text.bytes().enumerate().find(|&(_, b)| matches!(b, 0..=0x1F | 0x7F | b'"' | b'\\'))
+    {
+        let (run, escaped) = text.split_at(index);
+        output.push_str(run);
+        text = escaped.get(1..).unwrap_or_default();
+        match byte {
+            b'"' => output.push_str("\\\""),
+            b'\\' => output.push_str("\\\\"),
+            b'\n' => output.push_str("\\n"),
+            b'\r' => output.push_str("\\r"),
+            0x07 => output.push_str("\\a"),
+            0x08 => output.push_str("\\b"),
+            0x0C => output.push_str("\\f"),
+            b'\t' => output.push_str("\\t"),
+            0x0B => output.push_str("\\v"),
+            _ => {
+                let is_followed_by_digit = text.as_bytes().first().is_some_and(u8::is_ascii_digit);
+                push_decimal_escape(output, byte, is_followed_by_digit);
+            }
+        }
+    }
+    output.push_str(text);
+}
+
+fn push_decimal_escape(output: &mut CompactString, byte: u8, is_followed_by_digit: bool) {
+    // Pad to 3 digits when a digit follows so the escape can't
+    // absorb it (`\9` + `9` must not read as `\99`).
+    let written = if is_followed_by_digit {
+        write!(output, "\\{byte:03}")
+    } else {
+        write!(output, "\\{byte}")
+    };
+    // Writing to a `CompactString` can't fail.
+    written.unwrap_or_default();
+}

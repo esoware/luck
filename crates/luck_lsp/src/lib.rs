@@ -1,39 +1,45 @@
-//! # luck_lsp
+//! # `luck_lsp`
 //!
 //! Language Server Protocol implementation for the luck toolchain.
 //!
 //! Capabilities:
 //! - text document sync (open, change, save, close)
-//! - lint diagnostics on every change, backed by [`luck_linter`]
+//! - lint diagnostics on open, change, and save, backed by [`luck_linter`]
 //! - formatting + range formatting, backed by [`luck_formatter`]
-//! - hover, completion, signature help, document symbols,
-//!   code actions (per-fix + source.fixAll.luck + rule-disable
-//!   comments), semantic tokens, document highlights,
-//!   folding ranges, selection ranges, document links
+//! - hover, completion, signature help, go-to-definition, references,
+//!   rename, document and workspace symbols, code actions (per-diagnostic
+//!   fixes, `source.fixAll.luck`, and rule-disable comments), semantic
+//!   tokens, document highlights, folding ranges, selection ranges, and
+//!   document links
 //! - custom requests: `luck/syntaxTree`, `luck/fixAllWorkspace`
 //!
-//! The LSP is exposed via `luck lsp`, which talks LSP over either stdio
-//! (default) or TCP (`--socket <port>`, useful for editor integration during
-//! development).
+//! `luck lsp` serves it over stdio, or over TCP with `--socket <port>` for
+//! debugging.
 //!
 //! # Usage
 //!
-//! ```
-//! use luck_lsp::LineIndex;
-//! use tower_lsp::lsp_types::Position;
-//!
-//! let index = LineIndex::new("local x\nlocal y");
-//! assert_eq!(index.position("local x\nlocal y", 8), Position { line: 1, character: 0 });
+//! ```no_run
+//! let runtime = tokio::runtime::Runtime::new()?;
+//! runtime.block_on(luck_lsp::serve_stdio());
+//! # Ok::<(), std::io::Error>(())
 //! ```
 
-pub mod backend;
-pub mod config;
-pub mod diagnostics;
-pub mod line_index;
-pub mod providers;
-pub mod serve;
-mod stdlib_render;
+#![cfg_attr(
+    test,
+    expect(
+        clippy::missing_panics_doc,
+        reason = "a test panics to fail, so a Panics section says nothing"
+    )
+)]
 
-pub use backend::{Backend, CapturedNotifier, DocumentState, Notifier, build_service};
-pub use line_index::LineIndex;
-pub use serve::{serve_socket, serve_stdio};
+extern crate alloc;
+
+mod backend;
+mod document;
+mod line_index;
+mod providers;
+mod settings;
+mod transport;
+
+pub use backend::{Backend, Notifier};
+pub use transport::{serve_socket, serve_stdio};

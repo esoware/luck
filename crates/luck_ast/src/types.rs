@@ -1,17 +1,15 @@
-//! Luau type grammar nodes.
-//!
 //! Types appear in the annotation positions (parameters, varargs, return
-//! types, local/loop bindings, casts) and in `type` declarations. Outside
-//! Luau these nodes never occur; the parser gates on `LuaVersion::is_luau`.
+//! types, local/loop bindings, casts) and in `type` declarations.
+//!
+//! Outside Luau these nodes never occur; the parser gates on `LuaVersion::has_type_syntax`.
 
 use luck_token::{CompactString, Span, Token};
 
 use crate::expr::Expression;
-use crate::shared::Punctuated;
+use crate::punctuated::Punctuated;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    /// Unqualified name without generic arguments.
     Name {
         name: CompactString,
         span: Span,
@@ -23,34 +21,30 @@ pub enum Type {
     Optional(Box<OptionalType>),
     Union(Box<UnionType>),
     Intersection(Box<IntersectionType>),
-    Parenthesized(Box<ParenType>),
+    Parenthesized(Box<ParenthesizedType>),
     /// `(T, U)` or `()`, valid only where a type pack is expected
     /// (return positions, generic argument lists).
     Pack(Box<TypePack>),
-    /// Literal singleton type: string literal, `true`, `false`, or `nil`.
-    /// The parser also accepts number tokens so sources that once parsed
-    /// keep round-tripping, even though Luau proper rejects them.
+    /// Literal singleton type: a string literal, `true`, `false`, or `nil`.
+    /// The parser also accepts numbers, which Luau rejects, so sources
+    /// carrying them keep round-tripping.
     Singleton(Token),
-    /// `...T` variadic pack element.
     Variadic(Box<VariadicType>),
-    /// `T...` generic pack reference.
     GenericPack(Box<GenericPackType>),
     Error(Span),
 }
 
-/// Qualified or generic type reference: `module.Name`, `Name<args>`. A bare
-/// `Name` is [`Type::Name`], which keeps the most common type allocation-free;
-/// the parser and `Synth` never build this node without a prefix or generics.
+/// A bare `Name` is a [`Type::Name`] instead, which keeps the most common
+/// type allocation-free. The parser and `Synth` only build this node with a
+/// prefix or generics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamedType {
     pub span: Span,
-    /// `module.` qualification.
     pub prefix: Option<Token>,
     pub name: Token,
     pub generics: Option<TypeArgs>,
 }
 
-/// Generic argument list at a type use site: `<T, U...>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeArgs {
     pub span: Span,
@@ -63,7 +57,6 @@ pub struct TypeofType {
     pub expr: Expression,
 }
 
-/// Table type: `{ name: T }`, `{ [K]: V }`, `{ T }` (array shorthand).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableType {
     pub span: Span,
@@ -72,22 +65,9 @@ pub struct TableType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeField {
-    Named {
-        span: Span,
-        /// Luau `read`/`write` access modifier.
-        access: Option<Token>,
-        name: Token,
-        value: Type,
-    },
-    Indexer {
-        span: Span,
-        /// Luau `read`/`write` access modifier.
-        access: Option<Token>,
-        key: Type,
-        value: Type,
-    },
-    /// Array shorthand `{ T }`, a bare element type.
-    Array { span: Span, value: Type },
+    Named { span: Span, access: Option<Token>, name: Token, value: Type },
+    Indexer { span: Span, access: Option<Token>, key: Type, value: Type },
+    Array { span: Span, access: Option<Token>, value: Type },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,61 +85,50 @@ pub struct FunctionTypeParam {
     pub type_value: Type,
 }
 
-/// Postfix optional: `T?`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct OptionalType {
     pub span: Span,
     pub type_value: Type,
 }
 
-/// N-ary union `A | B | C`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnionType {
     pub span: Span,
-    /// Leading `|` (allowed in multiline definitions).
     pub has_leading_pipe: bool,
     pub types: Punctuated<Type>,
 }
 
-/// N-ary intersection `A & B & C`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntersectionType {
     pub span: Span,
-    /// Leading `&` (allowed in multiline definitions).
     pub has_leading_ampersand: bool,
     pub types: Punctuated<Type>,
 }
 
-/// Parenthesized type: `(T)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParenType {
+pub struct ParenthesizedType {
     pub span: Span,
     pub type_value: Type,
 }
 
-/// Explicit type pack: `(T, U)` or `()`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypePack {
     pub span: Span,
     pub types: Punctuated<Type>,
 }
 
-/// Variadic pack element: `...T`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VariadicType {
     pub span: Span,
     pub type_value: Type,
 }
 
-/// Generic pack reference: `T...`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericPackType {
     pub span: Span,
     pub name: Token,
 }
 
-/// Generic parameter list at a declaration site:
-/// `<T, U = string, V... = ...number>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericTypeList {
     pub span: Span,
@@ -170,8 +139,7 @@ pub struct GenericTypeList {
 pub struct GenericTypeParam {
     pub span: Span,
     pub name: Token,
-    /// `...` marking a pack parameter (`T...`).
     pub is_pack: bool,
-    /// `= T` default. Only legal in `type` declarations.
+    /// Only legal in type alias declarations.
     pub default: Option<Type>,
 }

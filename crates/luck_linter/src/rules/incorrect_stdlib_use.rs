@@ -1,224 +1,113 @@
-use luck_ast::Expression;
-use luck_ast::expr::{FunctionArgs, FunctionCall};
-use luck_semantic::SemanticAnalysis;
-use luck_semantic::stdlib_model::{StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction};
-use luck_token::Span;
+use luck_ast::{Expression, FunctionCall};
+use luck_semantic::{ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
+use crate::call::{has_multi_value_tail, positional_args, string_literal_value};
+use crate::diagnostic::Finding;
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
-pub struct IncorrectStdlibUse;
+/// How many allowed values a message lists. Generated sets (Roblox service
+/// and class names) run to hundreds of values.
+const LISTED_VALUE_LIMIT: usize = 8;
 
-impl Rule for IncorrectStdlibUse {
-    fn name(&self) -> &'static str {
-        "incorrect_stdlib_use"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "wrong argument count or invalid constant for known standard library function"
-    }
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IncorrectStdlibUse;
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
-
-struct StdlibChecker<'a, 'out> {
-    source: &'a str,
-    semantic: &'a SemanticAnalysis,
-    out: &'out mut Vec<LintDiagnostic>,
-}
-
-impl StdlibChecker<'_, '_> {
-    fn check_call(&mut self, call: &FunctionCall) {
-        let Some((name, resolved)) = self.semantic.resolve_callee(call) else {
-            return;
-        };
-        let StdlibEntry::Function(func) = resolved.entry else {
-            return;
-        };
-
-        let positional_args: Vec<&Expression> = match &call.args {
-            FunctionArgs::Parenthesized { args, .. } => args.iter().collect(),
-            FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => Vec::new(),
-        };
-
-        let arg_count = match &call.args {
-            FunctionArgs::Parenthesized { args, .. } => args.len(),
-            FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => 1,
-        };
-
-        // A call or `...` in tail position expands to any number of
-        // values, so the static count is only a lower bound and checks
-        // needing an exact count cannot fire.
-        let has_multi_value_tail = positional_args.last().is_some_and(|last| {
-            matches!(last, Expression::FunctionCall(_) | Expression::VarArg(_))
-        });
-
-        let min = func.min_args();
-        if arg_count < min && !has_multi_value_tail {
-            self.out.push(LintDiagnostic::new(
-                "incorrect_stdlib_use",
-                format!("`{name}` requires at least {min} argument(s), got {arg_count}"),
-                call.span,
-            ));
-            return;
-        }
-        if let Some(max) = func.max_args()
-            && arg_count > max
-        {
-            self.out.push(LintDiagnostic::new(
-                "incorrect_stdlib_use",
-                format!("`{name}` accepts at most {max} argument(s), got {arg_count}"),
-                call.span,
-            ));
-            return;
-        }
-        // Between the overall bounds but in a gap between overloads
-        // (e.g. an entry accepting exactly 0 or 2 arguments, called
-        // with 1).
-        if !func.accepts_arg_count(arg_count) && !has_multi_value_tail {
-            self.out.push(LintDiagnostic::new(
-                "incorrect_stdlib_use",
-                format!("no overload of `{name}` accepts {arg_count} argument(s)"),
-                call.span,
-            ));
-            return;
-        }
-
-        self.check_constant_params(&name, func, arg_count, &positional_args);
-    }
-
-    /// Constant-typed parameter check. Only applies to a literal string
-    /// argument at a fixed parameter position, since dynamic values do
-    /// not resolve statically. With overloads, a value passes if any
-    /// signature accepting this arg count allows it (or leaves the
-    /// position unconstrained).
-    fn check_constant_params(
-        &mut self,
-        name: &str,
-        func: &StdlibFunction,
-        arg_count: usize,
-        positional_args: &[&Expression],
-    ) {
-        for (idx, expr) in positional_args.iter().enumerate() {
-            let mut allowed: Vec<&StdlibConstant> = Vec::new();
-            let mut constrained = false;
-            let mut unconstrained = false;
-            for sig in func.matching_signatures(arg_count) {
-                match sig.params.get(idx).map(|param| &param.kind) {
-                    Some(StdlibArgKind::Constant(values)) => {
-                        constrained = true;
-                        allowed.extend(values.iter());
-                    }
-                    _ => unconstrained = true,
-                }
-            }
-            if !constrained || unconstrained {
-                continue;
-            }
-            let Some((value, span)) = string_literal_value(expr, self.source) else {
-                continue;
-            };
-            if !allowed.iter().any(|constant| constant.value == value) {
-                // Generated sets (Roblox service and class names) run to
-                // hundreds of values, so cap the rendered list.
-                const LIST_LIMIT: usize = 8;
-                let mut allowed_list = allowed
-                    .iter()
-                    .take(LIST_LIMIT)
-                    .map(|constant| format!("`{}`", constant.value))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                if allowed.len() > LIST_LIMIT {
-                    allowed_list.push_str(&format!(", ... ({} allowed values)", allowed.len()));
-                }
-                let position = idx + 1;
-                self.out.push(LintDiagnostic::new(
-                    "incorrect_stdlib_use",
-                    format!(
-                        "`{name}` argument {position} must be one of {allowed_list}, got `{value}`",
-                    ),
-                    span,
-                ));
-            }
-        }
-    }
-}
-
-/// If `expr` is a bare string literal, return its inner contents and
-/// the span (excluding the surrounding quote characters). Returns
-/// `None` for long-bracket strings (`[[...]]`) since their unescaping
-/// is non-trivial and the constant-set check is a hint, not a proof.
-/// Shared with the deprecated rule's constant-value check.
-pub(crate) fn string_literal_value<'src>(
-    expr: &Expression,
-    source: &'src str,
-) -> Option<(&'src str, Span)> {
-    let Expression::StringLiteral(token) = expr else {
-        return None;
-    };
-    let raw = &source[token.span.start as usize..token.span.end as usize];
-    let bytes = raw.as_bytes();
-    if bytes.is_empty() {
-        return None;
-    }
-    match bytes[0] {
-        b'"' | b'\'' => {
-            // Quoted literal. Strip the surrounding quotes and leave
-            // escapes alone, since `\n` would not match a constant-set
-            // value of `\n` either way.
-            if bytes.len() < 2 {
-                return None;
-            }
-            let inner_start = token.span.start + 1;
-            let inner_end = token.span.end - 1;
-            Some((
-                &source[inner_start as usize..inner_end as usize],
-                Span::new(inner_start, inner_end),
-            ))
-        }
-        _ => None,
-    }
-}
+impl_rule!(
+    IncorrectStdlibUse,
+    "incorrect_stdlib_use",
+    Correctness,
+    Error,
+    "wrong argument count or invalid constant in a standard library call"
+);
 
 impl NodeRule for IncorrectStdlibUse {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset =
-            AstTypesBitset::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_statement(
+    fn on_call(
         &self,
-        stmt: &luck_ast::Statement,
-        ctx: &LintContext,
-        out: &mut Vec<LintDiagnostic>,
+        call: &FunctionCall,
+        _position: CallPosition,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
     ) {
-        if let luck_ast::Statement::FunctionCall(call_stmt) = stmt {
-            StdlibChecker {
-                source: ctx.source,
-                semantic: ctx.semantic,
-                out,
-            }
-            .check_call(call_stmt);
-        }
+        check_call(call, context.semantic, findings);
     }
-    fn on_expression(&self, expr: &Expression, ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if let Expression::FunctionCall(call) = expr {
-            StdlibChecker {
-                source: ctx.source,
-                semantic: ctx.semantic,
-                out,
-            }
-            .check_call(call);
-        }
+}
+
+fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, findings: &mut Vec<Finding>) {
+    let Some(callee) = semantic.resolve_callee(call) else {
+        return;
+    };
+    let StdlibEntry::Function(function) = callee.entry() else {
+        return;
+    };
+    let (args, arg_count) = positional_args(&call.args);
+    // A trailing call or `...` can expand to any number of values, so the
+    // minimum and overload checks skip it.
+    let has_multi_value_tail = has_multi_value_tail(args);
+
+    let min_args = function.min_args();
+    let arity_message = if arg_count < min_args && !has_multi_value_tail {
+        Some(format!(
+            "`{}` requires at least {min_args} argument(s), got {arg_count}",
+            callee.name()
+        ))
+    } else if let Some(max_args) = function.max_args()
+        && arg_count > max_args
+    {
+        Some(format!("`{}` accepts at most {max_args} argument(s), got {arg_count}", callee.name()))
+    } else if !function.accepts_arg_count(arg_count) && !has_multi_value_tail {
+        // Within the overall bounds but between overloads, like 1 argument
+        // to a function that takes 0 or 2.
+        Some(format!("no overload of `{}` accepts {arg_count} argument(s)", callee.name()))
+    } else {
+        None
+    };
+    match arity_message {
+        Some(message) => findings.push(Finding::new(message, call.span)),
+        None => findings.extend(invalid_constant_args(&callee, function, args, arg_count)),
     }
+}
+
+/// With overloads, a value passes if any signature matching the arg count
+/// allows it, and a position some matching signature leaves unconstrained
+/// isn't checked.
+fn invalid_constant_args(
+    callee: &ResolvedCallee<'_>,
+    function: &StdlibFunction,
+    args: &[Expression],
+    arg_count: usize,
+) -> impl Iterator<Item = Finding> {
+    args.iter().enumerate().filter_map(move |(index, expr)| {
+        let (value, span) = string_literal_value(expr)?;
+        let allowed_sets = function.allowed_constants(index, arg_count)?;
+        let allowed = || allowed_sets.iter().flat_map(|values| values.iter());
+        if allowed().any(|constant| constant.value == value) {
+            return None;
+        }
+        let allowed_list = allowed()
+            .take(LISTED_VALUE_LIMIT)
+            .map(|constant| format!("`{}`", constant.value))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let allowed_count = allowed().count();
+        let truncation_note = if allowed_count > LISTED_VALUE_LIMIT {
+            format!(", ... ({allowed_count} allowed values)")
+        } else {
+            String::new()
+        };
+        let arg_number = index.saturating_add(1);
+        Some(Finding::new(
+            format!(
+                "`{}` argument {arg_number} must be one of \
+                 {allowed_list}{truncation_note}, got `{value}`",
+                callee.name(),
+            ),
+            span,
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -226,19 +115,24 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::IncorrectStdlibUse;
+    use crate::fixtures::{run_rule, run_rule_roblox};
 
     fn run(source: &str, version: LuaVersion) -> Vec<String> {
-        crate::test_support::run_rule(&IncorrectStdlibUse, source, version)
+        run_rule(&IncorrectStdlibUse, source, version)
             .into_iter()
-            .map(|d| d.message)
+            .map(|diag| diag.message)
             .collect()
+    }
+
+    fn run_roblox(source: &str) -> Vec<String> {
+        run_rule_roblox(&IncorrectStdlibUse, source).into_iter().map(|diag| diag.message).collect()
     }
 
     #[test]
     fn flags_too_few_args() {
         let messages = run("table.insert()", LuaVersion::Lua54);
         assert!(
-            messages.iter().any(|m| m.contains("requires at least 2")),
+            messages.iter().any(|message| message.contains("requires at least 2")),
             "{messages:?}"
         );
     }
@@ -246,10 +140,7 @@ mod tests {
     #[test]
     fn flags_too_many_args() {
         let messages = run("type(1, 2, 3)", LuaVersion::Lua54);
-        assert!(
-            messages.iter().any(|m| m.contains("at most 1")),
-            "{messages:?}"
-        );
+        assert!(messages.iter().any(|message| message.contains("at most 1")), "{messages:?}");
     }
 
     #[test]
@@ -263,7 +154,7 @@ mod tests {
         // `collectgarbage` first arg must be one of the option names.
         let messages = run("collectgarbage('frob')", LuaVersion::Lua54);
         assert!(
-            messages.iter().any(|m| m.contains("argument 1 must be")),
+            messages.iter().any(|message| message.contains("argument 1 must be")),
             "{messages:?}"
         );
     }
@@ -276,16 +167,15 @@ mod tests {
 
     #[test]
     fn ignores_method_call() {
-        // `obj:foo()` has no statically known receiver shape, so it
-        // never resolves against stdlib paths.
+        // `obj` has no known shape, so `foo` doesn't resolve to the stdlib.
         let messages = run("obj:foo()", LuaVersion::Lua54);
         assert!(messages.is_empty(), "{messages:?}");
     }
 
     #[test]
     fn ignores_every_valid_cframe_new_overload() {
-        // Overload arity sweep. The 0, 1 Vector3, 2 Vector3, 3, 7, and
-        // 12 number forms are all valid, so none may false-positive.
+        // Every `CFrame.new` overload: no arguments, one or two `Vector3`s,
+        // and 3, 7, or 12 numbers.
         let source = "local v = Vector3.new(1, 2, 3)\n\
                       local a = CFrame.new()\n\
                       local b = CFrame.new(v)\n\
@@ -293,17 +183,14 @@ mod tests {
                       local d = CFrame.new(1, 2, 3)\n\
                       local e = CFrame.new(1, 2, 3, 4, 5, 6, 7)\n\
                       local f = CFrame.new(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)";
-        let diags = crate::test_support::run_rule_roblox(&IncorrectStdlibUse, source);
-        assert!(diags.is_empty(), "{diags:?}");
+        let messages = run_roblox(source);
+        assert!(messages.is_empty(), "{messages:?}");
     }
 
     #[test]
     fn flags_cframe_new_between_overload_arities() {
-        let diags = crate::test_support::run_rule_roblox(
-            &IncorrectStdlibUse,
-            "local c = CFrame.new(1, 2, 3, 4, 5)",
-        );
-        assert!(!diags.is_empty(), "5 args matches no CFrame.new overload");
+        let messages = run_roblox("local c = CFrame.new(1, 2, 3, 4, 5)");
+        assert!(!messages.is_empty(), "5 args matches no CFrame.new overload: {messages:?}");
     }
 
     #[test]
@@ -311,8 +198,8 @@ mod tests {
         let source = "local u = UDim.new(0, 10)\n\
                       local a = UDim2.new(0, 0, 1, 0)\n\
                       local b = UDim2.new(u, u)";
-        let diags = crate::test_support::run_rule_roblox(&IncorrectStdlibUse, source);
-        assert!(diags.is_empty(), "{diags:?}");
+        let messages = run_roblox(source);
+        assert!(messages.is_empty(), "{messages:?}");
     }
 
     #[test]
@@ -325,10 +212,7 @@ mod tests {
 
     #[test]
     fn ignores_collectgarbage_incremental_tuning_in_54() {
-        let messages = run(
-            "collectgarbage('incremental', 100, 200, 13)",
-            LuaVersion::Lua54,
-        );
+        let messages = run("collectgarbage('incremental', 100, 200, 13)", LuaVersion::Lua54);
         assert!(messages.is_empty(), "{messages:?}");
     }
 
@@ -342,7 +226,7 @@ mod tests {
     fn flags_file_method_missing_args() {
         let messages = run("local f = io.open('x')\nf:setvbuf()", LuaVersion::Lua54);
         assert!(
-            messages.iter().any(|m| m.contains("requires at least 1")),
+            messages.iter().any(|message| message.contains("requires at least 1")),
             "{messages:?}"
         );
     }
@@ -351,7 +235,7 @@ mod tests {
     fn flags_file_method_bad_constant() {
         let messages = run("local f = io.open('x')\nf:seek('nope')", LuaVersion::Lua54);
         assert!(
-            messages.iter().any(|m| m.contains("argument 1 must be")),
+            messages.iter().any(|message| message.contains("argument 1 must be")),
             "{messages:?}"
         );
     }
@@ -360,7 +244,7 @@ mod tests {
     fn flags_string_literal_method_missing_args() {
         let messages = run("local s = ('x'):rep()", LuaVersion::Lua54);
         assert!(
-            messages.iter().any(|m| m.contains("requires at least 1")),
+            messages.iter().any(|message| message.contains("requires at least 1")),
             "{messages:?}"
         );
     }
@@ -371,20 +255,12 @@ mod tests {
         assert!(messages.is_empty(), "{messages:?}");
     }
 
-    fn run_roblox(source: &str) -> Vec<String> {
-        crate::test_support::run_rule_roblox(&IncorrectStdlibUse, source)
-            .into_iter()
-            .map(|d| d.message)
-            .collect()
-    }
-
     #[test]
     fn flags_get_service_typo() {
         let messages = run_roblox("game:GetService('Playerz')");
         assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("argument 1 must be") && m.contains("allowed values")),
+            messages.iter().any(|message| message.contains("argument 1 must be")
+                && message.contains("allowed values")),
             "{messages:?}"
         );
     }
@@ -399,21 +275,22 @@ mod tests {
     fn flags_instance_new_unknown_class() {
         let messages = run_roblox("Instance.new('Playerz')");
         assert!(
-            messages.iter().any(|m| m.contains("argument 1 must be")),
+            messages.iter().any(|message| message.contains("argument 1 must be")),
             "{messages:?}"
         );
     }
 
     #[test]
     fn flags_instance_new_abstract_class() {
-        // BasePart is real but NotCreatable; IsA accepts it, new does not.
-        let messages = run_roblox("Instance.new('BasePart')");
+        // `BasePart` exists but isn't creatable, so `IsA` accepts it and
+        // `Instance.new` doesn't.
+        let instance_new_messages = run_roblox("Instance.new('BasePart')");
         assert!(
-            messages.iter().any(|m| m.contains("argument 1 must be")),
-            "{messages:?}"
+            instance_new_messages.iter().any(|message| message.contains("argument 1 must be")),
+            "{instance_new_messages:?}"
         );
-        let messages = run_roblox("local x = script:IsA('BasePart')");
-        assert!(messages.is_empty(), "{messages:?}");
+        let is_a_messages = run_roblox("local x = script:IsA('BasePart')");
+        assert!(is_a_messages.is_empty(), "{is_a_messages:?}");
     }
 
     #[test]
@@ -426,22 +303,46 @@ mod tests {
     fn flags_get_service_arity() {
         let messages = run_roblox("game:GetService()");
         assert!(
-            messages.iter().any(|m| m.contains("requires at least 1")),
+            messages.iter().any(|message| message.contains("requires at least 1")),
             "{messages:?}"
         );
     }
 
     #[test]
     fn flags_brickcolor_unknown_name() {
-        let messages = run_roblox("BrickColor.new('Bright rad')");
+        let unknown_name_messages = run_roblox("BrickColor.new('Bright rad')");
         assert!(
-            messages.iter().any(|m| m.contains("argument 1 must be")),
-            "{messages:?}"
+            unknown_name_messages.iter().any(|message| message.contains("argument 1 must be")),
+            "{unknown_name_messages:?}"
         );
-        let messages = run_roblox("BrickColor.new('Bright red')");
-        assert!(messages.is_empty(), "{messages:?}");
+        let known_name_messages = run_roblox("BrickColor.new('Bright red')");
+        assert!(known_name_messages.is_empty(), "{known_name_messages:?}");
         // The 3-number form skips the constant check entirely.
-        let messages = run_roblox("BrickColor.new(1, 0, 0)");
-        assert!(messages.is_empty(), "{messages:?}");
+        let number_form_messages = run_roblox("BrickColor.new(1, 0, 0)");
+        assert!(number_form_messages.is_empty(), "{number_form_messages:?}");
+    }
+
+    #[test]
+    fn ignores_error_without_arguments() {
+        let messages = run("error()", LuaVersion::Lua54);
+        assert!(messages.is_empty(), "`error()` raises a nil error: {messages:?}");
+    }
+
+    #[test]
+    fn ignores_setlocale_without_arguments() {
+        let messages = run("local l = os.setlocale()", LuaVersion::Lua54);
+        assert!(messages.is_empty(), "`os.setlocale()` queries the locale: {messages:?}");
+    }
+
+    #[test]
+    fn ignores_collectgarbage_collect_on_luau() {
+        let messages = run("collectgarbage('collect')", LuaVersion::Luau);
+        assert!(messages.is_empty(), "standalone Luau accepts `collect`: {messages:?}");
+    }
+
+    #[test]
+    fn ignores_setmajorinc_on_lua52() {
+        let messages = run("local n = collectgarbage(\"setmajorinc\", 100)", LuaVersion::Lua52);
+        assert!(messages.is_empty(), "Lua 5.2 accepts `setmajorinc`: {messages:?}");
     }
 }

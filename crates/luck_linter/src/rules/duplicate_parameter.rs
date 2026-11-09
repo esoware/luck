@@ -1,97 +1,62 @@
-use luck_ast::Statement;
-use luck_ast::expr::Expression;
-use luck_ast::shared::FunctionBody;
-use luck_token::TokenKind;
+use luck_ast::{Expression, Statement};
 
-use crate::diagnostic::{Category, LintDiagnostic, Severity};
-use crate::rule::{LintContext, NodeRule, Rule};
-use luck_ast::node::{AstTypesBitset, NodeType};
+use crate::diagnostic::Finding;
+use crate::function_node::FunctionNode;
+use crate::node_type::NodeTypeSet;
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
-pub struct DuplicateParameter;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DuplicateParameter;
 
-impl Rule for DuplicateParameter {
-    fn name(&self) -> &'static str {
-        "duplicate_parameter"
-    }
-
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-
-    fn description(&self) -> &'static str {
-        "function declares two parameters with the same name"
-    }
-
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        crate::bus::run_single(self, ctx)
-    }
-}
-
-fn check_params(body: &FunctionBody, is_method: bool, out: &mut Vec<LintDiagnostic>) {
-    let mut seen: Vec<&str> = Vec::new();
-    // Colon methods declare an implicit `self`, so an explicit `self`
-    // parameter is already a duplicate.
-    if is_method {
-        seen.push("self");
-    }
-    for param in body.params.iter() {
-        let TokenKind::Identifier(name) = &param.name.kind else {
-            continue;
-        };
-        if name == "_" {
-            continue;
-        }
-        if seen.iter().any(|prev| *prev == name.as_str()) {
-            out.push(LintDiagnostic::new(
-                "duplicate_parameter",
-                format!("parameter `{name}` is already defined"),
-                param.name.span,
-            ));
-        } else {
-            seen.push(name.as_str());
-        }
-    }
-}
+impl_rule!(
+    DuplicateParameter,
+    "duplicate_parameter",
+    Correctness,
+    Error,
+    "function declares two parameters with the same name"
+);
 
 impl NodeRule for DuplicateParameter {
-    fn node_types(&self) -> Option<&'static AstTypesBitset> {
-        static TYPES: AstTypesBitset = AstTypesBitset::from_types(&[
-            NodeType::FunctionDecl,
-            NodeType::LocalFunction,
-            NodeType::GlobalFunction,
-            NodeType::FunctionDef,
-        ]);
-        Some(&TYPES)
+    fn node_types(&self) -> NodeTypeSet {
+        FunctionNode::NODE_TYPES
     }
-    fn on_statement(&self, stmt: &Statement, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        match stmt {
-            Statement::FunctionDecl(decl) => {
-                check_params(&decl.body, decl.name.method.is_some(), out);
-            }
-            Statement::LocalFunction(func) => check_params(&func.body, false, out),
-            Statement::GlobalFunction(func) => check_params(&func.body, false, out), // Lua 5.5
-            _ => {}
+    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        if let Some(function) = FunctionNode::of_stmt(stmt) {
+            findings.extend(duplicate_params(function));
         }
     }
+    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        if let Some(function) = FunctionNode::of_expr(expr) {
+            findings.extend(duplicate_params(function));
+        }
+    }
+}
 
-    fn on_expression(&self, expr: &Expression, _ctx: &LintContext, out: &mut Vec<LintDiagnostic>) {
-        if let Expression::FunctionDef(def) = expr {
-            check_params(&def.body, false, out);
-        }
-    }
+/// Flags each parameter named like an earlier one, or `self` in a colon
+/// method, which already has an implicit `self`. `_` may repeat, and a Lua
+/// 5.5 named vararg counts as the last parameter.
+fn duplicate_params(function: FunctionNode<'_>) -> impl Iterator<Item = Finding> {
+    let vararg_name = function.body.vararg.as_deref().and_then(|vararg| vararg.name.as_ref());
+    let names = function.body.params.items.iter().map(|param| &param.name).chain(vararg_name);
+    names.clone().enumerate().filter_map(move |(index, token)| {
+        let name = token.identifier().filter(|&name| name != "_")?;
+        let is_duplicate = (function.is_method && name == "self")
+            || names.clone().take(index).any(|earlier| earlier.identifier() == Some(name));
+        is_duplicate
+            .then(|| Finding::new(format!("parameter `{name}` is already defined"), token.span))
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use luck_token::{LuaVersion, offset_to_index};
+
     use super::*;
-    use luck_token::LuaVersion;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&DuplicateParameter, source, LuaVersion::Lua54)
+        run_rule(&DuplicateParameter, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -100,12 +65,12 @@ mod tests {
         let diags = run(source);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`a`"));
-        // The rule flags the SECOND occurrence.
-        assert_eq!(diags[0].span.start as usize, source.rfind('a').unwrap());
+        // The second occurrence is the one flagged.
+        assert_eq!(offset_to_index(diags[0].span.start), source.rfind('a').unwrap());
     }
 
     #[test]
-    fn flags_duplicate_in_function_expression() {
+    fn flags_duplicate_in_function_expr() {
         let diags = run("local f = function(x, x) end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`x`"));
@@ -132,11 +97,7 @@ mod tests {
 
     #[test]
     fn flags_duplicate_in_global_function() {
-        let diags = crate::test_support::run_rule(
-            &DuplicateParameter,
-            "global function f(a, a) end",
-            LuaVersion::Lua55,
-        );
+        let diags = run_rule(&DuplicateParameter, "global function f(a, a) end", LuaVersion::Lua55);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
@@ -156,5 +117,12 @@ mod tests {
     fn ignores_self_in_dot_function() {
         let diags = run("local t = {}\nfunction t.m(self) end");
         assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_named_vararg_matching_parameter() {
+        let source = "local function f(a, ...a) return a end";
+        let diags = run_rule(&DuplicateParameter, source, LuaVersion::Lua55);
+        assert_eq!(diags.len(), 1, "the named vararg repeats parameter `a`: {diags:?}");
     }
 }

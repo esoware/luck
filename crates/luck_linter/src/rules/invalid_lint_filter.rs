@@ -1,219 +1,130 @@
-use luck_token::Span;
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rules::{is_registered_rule_name, registered_rule_names};
+use crate::suggest::closest;
+use crate::suppression::{DirectiveRule, parse_directive};
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+/// Flags unknown rule names in lint directives. A typo like
+/// `-- luck: allow(unsued_variable)` would otherwise do nothing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InvalidLintFilter;
 
-/// Catch typos in lint suppression directives. Without this, a stray
-/// `-- luck: allow(unsued_variable)` silently does nothing, leaving the
-/// author convinced their suppression is in effect.
-pub struct InvalidLintFilter;
+impl_rule!(
+    InvalidLintFilter,
+    "invalid_lint_filter",
+    Correctness,
+    Warning,
+    "lint directive names a rule that doesn't exist"
+);
 
-impl Rule for InvalidLintFilter {
-    fn name(&self) -> &'static str {
-        "invalid_lint_filter"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "lint suppression names a rule that does not exist"
-    }
+impl WholeRule for InvalidLintFilter {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let mut findings = Vec::new();
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let source = ctx.source;
-        let comments = ctx.comments;
-        let known = crate::rules::registered_rule_names();
-        let mut diagnostics = Vec::new();
-
-        // This re-extracts directive sites instead of going through the
-        // `Suppression` struct, which is parametric on statement spans.
-        // The meta-rule only needs the rule-name tokens, and
-        // `directive_sites` covers those.
-        for comment in comments {
-            let text = &source[comment.span.start as usize..comment.span.end as usize];
-            for site in directive_sites(text, comment.span.start) {
-                if site.rule == "*" {
+        for comment in context.comments {
+            // A directive that a bad trailing word disables still has its
+            // names checked.
+            let Some(directive) =
+                parse_directive(comment.span.text(context.source), comment.span.start)
+            else {
+                continue;
+            };
+            for (rule, name_span) in directive.rules {
+                let DirectiveRule::Named(name) = rule else {
                     continue;
-                }
-                if known.contains(&site.rule.as_str()) {
+                };
+                if is_registered_rule_name(name) {
                     continue;
                 }
 
-                let mut message = format!("unknown lint rule `{}`", site.rule);
-                let mut help = "this rule is not registered with the linter".to_string();
-                if let Some(suggestion) = closest_match(&site.rule, &known) {
-                    message.push_str(&format!("; did you mean `{suggestion}`?"));
-                    help = format!("rename to `{suggestion}` to suppress that rule");
-                }
-
-                diagnostics.push(
-                    LintDiagnostic::new("invalid_lint_filter", message, site.name_span)
-                        .with_help(help),
+                let (message, help) = closest_match(name, registered_rule_names()).map_or_else(
+                    || {
+                        (
+                            format!("unknown lint rule `{name}`"),
+                            "no lint rule has this name".to_owned(),
+                        )
+                    },
+                    |suggestion| {
+                        (
+                            format!("unknown lint rule `{name}`, did you mean `{suggestion}`?"),
+                            format!("rename it to `{suggestion}`"),
+                        )
+                    },
                 );
+
+                findings.push(Finding::new(message, name_span).with_help(help));
             }
         }
 
-        diagnostics
+        findings
     }
 }
 
-/// Minimal directive-site parser. It mirrors the structure of
-/// `suppression::parse_directive` but stands alone, because only the
-/// rule names and their positions matter here, not the verb or modifier
-/// semantics.
-struct Site {
-    rule: String,
-    name_span: Span,
-}
-
-fn directive_sites(text: &str, base: u32) -> Vec<Site> {
-    let trimmed = text.trim_start_matches('-');
-    let trimmed = trimmed.trim_start_matches('[').trim_start_matches('[');
-    let body = trimmed.trim_start();
-    let leading_offset = (text.len() - body.len()) as u32;
-    let after_prefix = if let Some(rest) = body.strip_prefix("#luck:") {
-        rest
-    } else if let Some(rest) = body.strip_prefix("luck:") {
-        rest
-    } else {
-        return Vec::new();
-    };
-    let prefix_len = (body.len() - after_prefix.len()) as u32;
-    let after_prefix_trimmed = after_prefix.trim_start();
-    let verb_offset =
-        leading_offset + prefix_len + (after_prefix.len() - after_prefix_trimmed.len()) as u32;
-
-    let (verb_len, after_verb) = if let Some(rest) = after_prefix_trimmed.strip_prefix("allow") {
-        (5u32, rest)
-    } else if let Some(rest) = after_prefix_trimmed.strip_prefix("deny") {
-        (4u32, rest)
-    } else if let Some(rest) = after_prefix_trimmed.strip_prefix("warn") {
-        (4u32, rest)
-    } else {
-        return Vec::new();
-    };
-
-    let after_verb_trim = after_verb.trim_start();
-    let after_verb_offset =
-        verb_offset + verb_len + (after_verb.len() - after_verb_trim.len()) as u32;
-
-    let Some(inside) = after_verb_trim.strip_prefix('(') else {
-        return Vec::new();
-    };
-    let Some(close_paren) = inside.find(')') else {
-        return Vec::new();
-    };
-    let names_str = &inside[..close_paren];
-    let names_base = after_verb_offset + 1;
-
-    let mut sites = Vec::new();
-    let mut cursor = 0usize;
-    for raw in names_str.split(',') {
-        let raw_len = raw.len();
-        let trimmed_name = raw.trim();
-        if !trimmed_name.is_empty() {
-            let leading_ws = raw.find(|c: char| !c.is_whitespace()).unwrap_or(0);
-            let name_start = base + names_base + cursor as u32 + leading_ws as u32;
-            let name_end = name_start + trimmed_name.len() as u32;
-            sites.push(Site {
-                rule: trimmed_name.to_string(),
-                name_span: Span::new(name_start, name_end),
-            });
-        }
-        cursor += raw_len + 1; // Skip the comma consumed by split(',').
-    }
-    sites
-}
-
-/// Return the closest match (by Levenshtein distance) from `candidates`
-/// to `needle`, but only if the distance is below a small threshold.
-/// Without the threshold an unrelated typo would surface a nonsensical
-/// "did you mean", which is worse than no suggestion.
-fn closest_match(needle: &str, candidates: &[&str]) -> Option<String> {
-    let mut best: Option<(usize, &str)> = None;
-    for &candidate in candidates {
-        let distance = crate::suggest::levenshtein(needle, candidate);
-        let max_allowed = (needle.len().max(candidate.len()) / 3).max(2);
-        if distance <= max_allowed && best.map(|(b, _)| distance < b).unwrap_or(true) {
-            best = Some((distance, candidate));
-        }
-    }
-    best.map(|(_, s)| s.to_string())
+/// A far-off "did you mean" is worse than none.
+fn closest_match(
+    needle: &str,
+    candidates: impl IntoIterator<Item = &'static str>,
+) -> Option<&'static str> {
+    // Up to a third of the longer name, and never less than 2.
+    closest(needle, candidates, |distance, candidate| {
+        distance <= 2 || distance.saturating_mul(3) <= needle.len().max(candidate.len())
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
+    use crate::fixtures::run_rule;
 
     #[test]
     fn closest_match_picks_near_neighbor() {
-        let known = &["unused_variable", "shadowing"];
         assert_eq!(
-            closest_match("unsued_variable", known).as_deref(),
+            closest_match("unsued_variable", ["unused_variable", "shadowing"]),
             Some("unused_variable")
         );
     }
 
     #[test]
     fn closest_match_none_for_far_strings() {
-        let known = &["unused_variable"];
-        assert!(closest_match("xx", known).is_none());
-    }
-
-    #[test]
-    fn directive_sites_basic() {
-        let text = "-- luck: allow(foo, bar)";
-        let sites = directive_sites(text, 0);
-        assert_eq!(sites.len(), 2);
-        assert_eq!(sites[0].rule, "foo");
-        assert_eq!(sites[1].rule, "bar");
-        assert_eq!(sites[0].name_span.start, 15);
-        assert_eq!(sites[0].name_span.end, 18);
-    }
-
-    #[test]
-    fn directive_sites_file_level() {
-        let sites = directive_sites("-- #luck: deny(unused_variable)", 0);
-        assert_eq!(sites.len(), 1);
-        assert_eq!(sites[0].rule, "unused_variable");
-    }
-
-    #[test]
-    fn directive_sites_skips_non_luck() {
-        assert!(directive_sites("-- just a comment", 0).is_empty());
+        assert!(closest_match("xx", ["unused_variable"]).is_none());
     }
 
     #[test]
     fn flags_unknown_name() {
-        // Use the linter's full pipeline so registered names are real.
-        let diags = crate::test_support::run_rule(
+        let diags = run_rule(
             &InvalidLintFilter,
             "-- luck: allow(not_a_real_rule)\nlocal _x = 1",
-            luck_token::LuaVersion::Lua54,
+            LuaVersion::Lua54,
         );
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("not_a_real_rule"));
     }
 
     #[test]
-    fn ignores_wildcard() {
-        let diags = crate::test_support::run_rule(
+    fn flags_unknown_name_in_disabled_directive() {
+        let diags = run_rule(
             &InvalidLintFilter,
-            "-- luck: allow(*)\nlocal _x = 1",
-            luck_token::LuaVersion::Lua54,
+            "-- luck: allow(not_a_real_rule) strat\nlocal _x = 1",
+            LuaVersion::Lua54,
         );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_wildcard() {
+        let diags =
+            run_rule(&InvalidLintFilter, "-- luck: allow(*)\nlocal _x = 1", LuaVersion::Lua54);
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_known_name() {
-        let diags = crate::test_support::run_rule(
+        let diags = run_rule(
             &InvalidLintFilter,
             "-- luck: allow(unused_variable)\nlocal _x = 1",
-            luck_token::LuaVersion::Lua54,
+            LuaVersion::Lua54,
         );
         assert!(diags.is_empty(), "{diags:?}");
     }

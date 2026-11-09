@@ -83,6 +83,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ar_archive_writer"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73cd58deff2140a0a8eae87e417bd01db68a33e148aa93d1e8cd837e55e312b6"
+dependencies = [
+ "object",
+]
+
+[[package]]
 name = "ariadne"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -450,12 +459,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
-name = "ec4rs"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b31a881d38439026e3d5dd938ab20328d36e23caca8fd5981c42e4b677f5842"
-
-[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -519,15 +522,6 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
-]
-
-[[package]]
-name = "float-cmp"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b09cf3155332e944990140d967ff5eceb70df778b34f77d8075db46e4704e6d8"
-dependencies = [
- "num-traits",
 ]
 
 [[package]]
@@ -881,11 +875,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86f0f8fee8c926415c58d6ae43a08523a26faccb2323f5e6b644fe7dd4ef6b82"
 dependencies = [
  "console",
- "globset",
  "once_cell",
  "similar",
  "tempfile",
- "walkdir",
 ]
 
 [[package]]
@@ -998,6 +990,8 @@ name = "luck_ast"
 version = "0.4.0"
 dependencies = [
  "luck_token",
+ "rustc-hash",
+ "stacker",
 ]
 
 [[package]]
@@ -1020,6 +1014,7 @@ dependencies = [
  "luck_token",
  "mimalloc-safe",
  "tar",
+ "tempfile",
  "ureq",
 ]
 
@@ -1030,6 +1025,7 @@ dependencies = [
  "insta",
  "luck_ast",
  "luck_core",
+ "luck_lexer",
  "luck_parser",
  "luck_resolver",
  "luck_semantic",
@@ -1052,15 +1048,14 @@ dependencies = [
  "luck_formatter",
  "luck_linter",
  "luck_lsp",
- "luck_lua",
  "luck_minifier",
  "luck_parser",
  "luck_token",
  "mimalloc-safe",
- "notify",
  "notify-debouncer-mini",
  "predicates",
  "rayon",
+ "rustc-hash",
  "serde_json",
  "tempfile",
  "tokio",
@@ -1071,8 +1066,8 @@ name = "luck_codegen"
 version = "0.4.0"
 dependencies = [
  "luck_ast",
- "luck_lexer",
  "luck_parser",
+ "luck_testgen",
  "luck_token",
 ]
 
@@ -1080,10 +1075,10 @@ dependencies = [
 name = "luck_core"
 version = "0.4.0"
 dependencies = [
- "ec4rs",
  "globset",
  "json5",
  "luck_token",
+ "rustc-hash",
  "schemars",
  "serde",
  "serde_json",
@@ -1095,12 +1090,13 @@ dependencies = [
 name = "luck_formatter"
 version = "0.4.0"
 dependencies = [
- "compact_str",
  "luck_ast",
  "luck_core",
  "luck_lexer",
  "luck_parser",
+ "luck_testgen",
  "luck_token",
+ "rustc-hash",
  "unicode-width",
 ]
 
@@ -1108,6 +1104,7 @@ dependencies = [
 name = "luck_lexer"
 version = "0.4.0"
 dependencies = [
+ "luck_testgen",
  "luck_token",
  "memchr",
 ]
@@ -1122,14 +1119,13 @@ dependencies = [
  "luck_semantic",
  "luck_token",
  "rayon",
+ "rustc-hash",
 ]
 
 [[package]]
 name = "luck_lsp"
 version = "0.4.0"
 dependencies = [
- "async-trait",
- "compact_str",
  "luck_ast",
  "luck_core",
  "luck_formatter",
@@ -1139,7 +1135,7 @@ dependencies = [
  "luck_resolver",
  "luck_semantic",
  "luck_token",
- "serde",
+ "rustc-hash",
  "serde_json",
  "tempfile",
  "tokio",
@@ -1184,6 +1180,7 @@ version = "0.4.0"
 dependencies = [
  "luck_ast",
  "luck_lexer",
+ "luck_testgen",
  "luck_token",
  "rustc-hash",
 ]
@@ -1203,7 +1200,6 @@ dependencies = [
 name = "luck_semantic"
 version = "0.4.0"
 dependencies = [
- "compact_str",
  "luck_ast",
  "luck_parser",
  "luck_token",
@@ -1231,6 +1227,7 @@ name = "luck_token"
 version = "0.4.0"
 dependencies = [
  "compact_str",
+ "memchr",
 ]
 
 [[package]]
@@ -1283,12 +1280,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "normalize-line-endings"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
-
-[[package]]
 name = "notify"
 version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1337,6 +1328,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "object"
+version = "0.39.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1382,7 +1382,6 @@ dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",
  "indexmap",
- "serde",
 ]
 
 [[package]]
@@ -1428,10 +1427,7 @@ checksum = "ada8f2932f28a27ee7b70dd6c1c39ea0675c55a36879ab92f3a715eaa1e63cfe"
 dependencies = [
  "anstyle",
  "difflib",
- "float-cmp",
- "normalize-line-endings",
  "predicates-core",
- "regex",
 ]
 
 [[package]]
@@ -1457,6 +1453,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "psm"
+version = "0.1.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622"
+dependencies = [
+ "ar_archive_writer",
+ "cc",
 ]
 
 [[package]]
@@ -1521,18 +1527,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.2",
-]
-
-[[package]]
-name = "regex"
-version = "1.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
-dependencies = [
- "aho-corasick",
- "memchr",
- "regex-automata",
- "regex-syntax",
 ]
 
 [[package]]
@@ -1797,6 +1791,19 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "stacker"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "707f49d46706bacf8a2b00d51dace3f9de527c13eec3778f570c411f89e69967"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "psm",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "static_assertions"

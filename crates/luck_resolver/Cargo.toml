@@ -1,21 +1,25 @@
 [package]
-name = "luck_resolver"
-version.workspace = true
-authors.workspace = true
-categories.workspace = true
-description = "Module resolution for Lua search paths and Luau @aliases"
-edition.workspace = true
-homepage.workspace = true
-keywords.workspace = true
-license.workspace = true
-repository.workspace = true
+name                   = "luck_resolver"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "Module resolution for Lua search paths and Luau @aliases"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
-luck_core.workspace = true
-luck_token.workspace = true
-rustc-hash.workspace = true
+luck_core  = { workspace = true }
+luck_token = { workspace = true }
+
+rustc-hash = { workspace = true }
 
 [dev-dependencies]
-tempfile.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true }
+tempfile   = { workspace = true }

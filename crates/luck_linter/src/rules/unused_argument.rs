@@ -1,42 +1,36 @@
-use luck_semantic::scope::SymbolKind;
+use luck_semantic::SymbolKind;
 
-use crate::diagnostic::*;
-use crate::rule::{LintContext, Rule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::underscore_fix::UnderscoreFixes;
 
-/// Luacheck 212: a function parameter is declared but never referenced.
+/// Flags a function parameter that's never referenced (Luacheck 212).
 ///
-/// Why this is distinct from `unused_variable`: parameters get their own
-/// toggle, because methods often take parameters they ignore for
-/// protocol reasons and silencing the broader rule should not silence
-/// this one too. `unused_variable` skips `Parameter` symbols, so the two
-/// never double-fire.
-pub struct UnusedArgument;
+/// Callbacks and methods often ignore parameters their interface requires,
+/// so this has its own toggle, separate from `unused_variable`, which skips
+/// parameters.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UnusedArgument;
 
-impl Rule for UnusedArgument {
-    fn name(&self) -> &'static str {
-        "unused_argument"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "function parameter is declared but never referenced"
-    }
+impl_rule!(
+    UnusedArgument,
+    "unused_argument",
+    Style,
+    Warning,
+    "function parameter is declared but never referenced"
+);
 
-    fn check(&self, ctx: &LintContext) -> Vec<LintDiagnostic> {
-        let semantic = ctx.semantic;
-        let mut diagnostics = Vec::new();
+impl WholeRule for UnusedArgument {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let semantic = context.semantic;
+        let fixes = UnderscoreFixes::new(semantic);
+        let mut findings = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
             if symbol.kind != SymbolKind::Parameter {
                 continue;
             }
-            // The scope builder synthesizes the implicit `self`
-            // parameter on `obj:method()`. Lua offers no way to mark it
-            // unused, so it never fires.
+            // A parameter spelled `self` is a receiver the interface requires.
             if symbol.name == "self" {
                 continue;
             }
@@ -47,79 +41,57 @@ impl Rule for UnusedArgument {
                 continue;
             }
 
-            let fix = Some(Fix {
-                description: format!("prefix `{}` with `_`", symbol.name),
-                edits: vec![TextEdit {
-                    span: symbol.definition_span,
-                    replacement: format!("_{}", symbol.name),
-                }],
-            });
-
-            diagnostics.push(
-                LintDiagnostic::new(
-                    "unused_argument",
-                    format!("unused argument `{}`", symbol.name),
-                    symbol.definition_span,
-                )
-                .with_help("prefix with `_` to suppress this warning".to_string())
-                .with_fix_opt(fix),
+            findings.push(
+                Finding::new(format!("unused argument `{}`", symbol.name), symbol.definition_span)
+                    .with_help("prefix with `_` to suppress this warning")
+                    .with_optional_fix(fixes.fix_for(symbol)),
             );
         }
 
-        diagnostics
+        findings
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use luck_token::LuaVersion;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        crate::test_support::run_rule(&UnusedArgument, source, LuaVersion::Lua54)
-    }
+    use super::*;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fix::apply_one_pass;
+    use crate::fixtures::{fix_and_reparse, run_rule};
 
-    fn apply(source: &str, diag: &LintDiagnostic) -> String {
-        let fix = diag.fix.as_ref().expect("fix");
-        let edit = &fix.edits[0];
-        let mut out = String::with_capacity(source.len());
-        out.push_str(&source[..edit.span.start as usize]);
-        out.push_str(&edit.replacement);
-        out.push_str(&source[edit.span.end as usize..]);
-        out
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        run_rule(&UnusedArgument, source, LuaVersion::Lua54)
     }
 
     #[test]
     fn flags_unused_named_vararg() {
         // Lua 5.5 named vararg binds like a parameter.
         let source = "local function f(...args) end";
-        let diags = crate::test_support::run_rule(&UnusedArgument, source, LuaVersion::Lua55);
+        let diags = run_rule(&UnusedArgument, source, LuaVersion::Lua55);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = apply(source, &diags[0]);
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua55);
         assert_eq!(fixed, "local function f(..._args) end");
-        let parse = luck_parser::parse(&fixed, LuaVersion::Lua55);
-        assert!(parse.errors.is_empty(), "reparse: {:?}", parse.errors);
     }
 
     #[test]
     fn ignores_used_named_vararg() {
-        let diags = crate::test_support::run_rule(
+        let diags = run_rule(
             &UnusedArgument,
             "local function f(...args) return args end",
             LuaVersion::Lua55,
         );
-        assert_eq!(diags.len(), 0, "{diags:?}");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
-    fn fix_prefixes_underscore_and_reparses() {
+    fn flags_and_fixes_with_underscore_prefix() {
         let source = "local function f(x) end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = apply(source, &diags[0]);
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
         assert_eq!(fixed, "local function f(_x) end");
-        let parse = luck_parser::parse(&fixed, LuaVersion::Lua54);
-        assert!(parse.errors.is_empty(), "reparse: {:?}", parse.errors);
     }
 
     #[test]
@@ -156,5 +128,17 @@ mod tests {
         let diags = run("local function f(a, b, c) return a + c end");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("`b`"));
+    }
+
+    #[test]
+    fn flags_without_fix_that_duplicates_existing_underscore_parameter() {
+        let source = "local function f(_a, a) return _a end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_ne!(
+            apply_one_pass(source, &diags),
+            "local function f(_a, _a) return _a end",
+            "the rename shouldn't make `return _a` read the second parameter"
+        );
     }
 }
