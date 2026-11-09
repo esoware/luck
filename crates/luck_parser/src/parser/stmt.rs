@@ -286,7 +286,7 @@ impl Parser<'_> {
                         TokenKind::Identifier(_) | TokenKind::Function
                     ) =>
             {
-                self.parse_const_stmt()
+                self.parse_const_stmt(Vec::new())
             }
             // Lua 5.5: `global` is an ordinary name unless the next token
             // continues a declaration.

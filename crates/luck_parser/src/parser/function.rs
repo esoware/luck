@@ -39,7 +39,8 @@ impl Parser<'_> {
         self.expect(&TokenKind::RightParen);
 
         // Luau: optional return type annotation after `)`.
-        let return_type = self.try_parse_type_annotation();
+        let return_type = (self.version.has_type_syntax() && self.eat(&TokenKind::Colon))
+            .then(|| self.parse_return_type());
 
         // A loop around the function doesn't make `break` or `continue` valid
         // inside it, and `...` needs this function's own vararg parameter.
@@ -98,8 +99,9 @@ impl Parser<'_> {
         // Lua 5.5: named varargs `...name`.
         let vararg_name =
             (self.version.has_named_varargs() && self.is_at_identifier()).then(|| self.advance());
-        // Luau: vararg type annotation `...: type`.
-        let vararg_type = self.try_parse_type_annotation();
+        // Luau: vararg type annotation `...: type` or `...: T...`.
+        let vararg_type = (self.version.has_type_syntax() && self.eat(&TokenKind::Colon))
+            .then(|| self.parse_vararg_type());
         let end_span = vararg_type
             .as_ref()
             .map(Type::span)

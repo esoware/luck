@@ -89,7 +89,12 @@ pub enum TypeField {
         value: Type,
     },
     /// Array shorthand `{ T }`, a bare element type.
-    Array { span: Span, value: Type },
+    Array {
+        span: Span,
+        /// Luau `read`/`write` access modifier.
+        access: Option<Token>,
+        value: Type,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

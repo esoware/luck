@@ -98,28 +98,28 @@ fn has_depth_limit_error(result: &luck_parser::ParseResult) -> bool {
 }
 
 #[test]
-fn bug_nested_call_arguments_count_toward_the_depth_cap() {
+fn nested_call_arguments_count_toward_the_depth_cap() {
     let source = format!("return {}1{}", "f(".repeat(300), ")".repeat(300));
     let result = parse(&source, LuaVersion::Lua54);
     assert!(has_depth_limit_error(&result), "call nesting past the cap must report the limit");
 }
 
 #[test]
-fn bug_nested_index_expressions_count_toward_the_depth_cap() {
+fn nested_index_expressions_count_toward_the_depth_cap() {
     let source = format!("return {}1{}", "a[".repeat(300), "]".repeat(300));
     let result = parse(&source, LuaVersion::Lua54);
     assert!(has_depth_limit_error(&result), "index nesting past the cap must report the limit");
 }
 
 #[test]
-fn bug_nested_interpolated_strings_count_toward_the_depth_cap() {
+fn nested_interpolated_strings_count_toward_the_depth_cap() {
     let source = format!("return {}1{}", "`{".repeat(300), "}`".repeat(300));
     let result = parse(&source, LuaVersion::Luau);
     assert!(has_depth_limit_error(&result), "string nesting past the cap must report the limit");
 }
 
 #[test]
-fn bug_nested_attribute_arguments_count_toward_the_depth_cap() {
+fn nested_attribute_arguments_count_toward_the_depth_cap() {
     let source = format!("return {}1{}", "@[deprecated(".repeat(300), ")]".repeat(300));
     let result = parse(&source, LuaVersion::Luau);
     assert!(has_depth_limit_error(&result), "attribute nesting past the cap must report the limit");

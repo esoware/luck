@@ -1,182 +1,156 @@
 //! Goto/label resolution (5.2+), following the reference implementation.
 //!
-//! Each function body resolves its own labels. Duplicate visible labels and
+//! [`super::scope`] drives this as it walks the active-variable stack. Each
+//! function body resolves its own labels. Duplicate visible labels and
 //! unresolved gotos are errors, and a forward goto may not jump into the scope
-//! of a local unless its label ends the block: only labels and `;` follow it,
-//! and the block isn't a repeat body, whose `until` still sees the locals.
+//! of a variable unless its label ends the block: only labels and `;` follow
+//! it, and the block isn't a repeat body, whose `until` still sees the locals.
 
-use luck_ast::{Block, FunctionBody, Statement, Visitor};
-use luck_token::Span;
+use core::mem;
+
+use luck_ast::{GotoStatement, LabelStatement};
+use luck_token::{LuaVersion, Span};
 
 use crate::ParseError;
-
-pub(super) fn check(block: &Block) -> Vec<ParseError> {
-    let mut checker = GotoChecker { errors: Vec::new() };
-    // Every function body's gotos, in walk order, then the main chunk's.
-    checker.visit_block(block);
-    resolve_gotos(block, &mut checker.errors);
-    checker.errors
-}
 
 struct PendingGoto<'ast> {
     name: &'ast str,
     span: Span,
-    /// Locals declared in the current block before this goto. Rebased to the
-    /// enclosing block's count when the goto moves outward.
-    locals_below: usize,
+    /// Active variables at the goto, lowered to the enclosing block's count
+    /// each time the goto leaves a block.
+    active_vars: usize,
 }
 
-/// One block's goto bookkeeping while [`resolve_block_gotos`] walks it.
-struct GotoScope<'ast, 'state> {
-    /// Labels of the enclosing blocks and of this block so far.
-    visible_labels: &'state mut Vec<&'ast str>,
-    errors: &'state mut Vec<ParseError>,
-    pending_gotos: Vec<PendingGoto<'ast>>,
-    locals_count: usize,
+/// A block's entry state, which closing it restores.
+#[derive(Clone, Copy)]
+pub(super) struct BlockStart {
+    active_vars: usize,
+    enclosing_labels_start: usize,
+    enclosing_gotos_start: usize,
 }
 
-impl<'ast> GotoScope<'ast, '_> {
-    /// Resolve a nested block's gotos and fold the unresolved ones into this
-    /// block's pending list, rebasing their local count to this block's.
-    fn absorb(&mut self, nested: &'ast Block, is_repeat_block: bool) {
-        for mut goto in
-            resolve_block_gotos(nested, self.visible_labels, is_repeat_block, self.errors)
-        {
-            goto.locals_below = self.locals_count;
-            self.pending_gotos.push(goto);
-        }
+impl BlockStart {
+    /// Active variables outside the block.
+    pub(super) const fn active_vars(self) -> usize {
+        self.active_vars
     }
 }
 
-/// Finds every function body so each gets its own label scope. The caller
-/// resolves the main chunk's gotos itself.
-struct GotoChecker {
+/// One function body's labels and gotos, as `dyd->label` and `dyd->gt` hold
+/// them between `firstlabel` and `firstgoto`.
+#[derive(Default)]
+pub(super) struct FunctionGotos<'ast> {
+    /// Labels of the enclosing blocks and of the current block so far.
+    labels: Vec<&'ast str>,
+    /// Gotos no label has taken yet, in block order.
+    pending_gotos: Vec<PendingGoto<'ast>>,
+    block_labels_start: usize,
+    block_gotos_start: usize,
+}
+
+pub(super) struct GotoTracker<'ast> {
+    version: LuaVersion,
+    function: FunctionGotos<'ast>,
     errors: Vec<ParseError>,
 }
 
-impl<'ast> Visitor<'ast> for GotoChecker {
-    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
-        resolve_gotos(&body.block, &mut self.errors);
-        self.walk_function_body(body);
+impl<'ast> GotoTracker<'ast> {
+    pub(super) fn new(version: LuaVersion) -> Self {
+        Self { version, function: FunctionGotos::default(), errors: Vec::new() }
     }
-}
 
-/// Resolve the gotos of a function body or the main chunk, reporting each
-/// one that no label in it takes.
-fn resolve_gotos(block: &Block, errors: &mut Vec<ParseError>) {
-    for goto in resolve_block_gotos(block, &mut Vec::new(), false, errors) {
-        errors.push(ParseError {
-            span: goto.span,
-            message: format!("no visible label `{}` for `goto`", goto.name),
-        });
+    pub(super) const fn open_block(&mut self, active_vars: usize) -> BlockStart {
+        let function = &mut self.function;
+        let start = BlockStart {
+            active_vars,
+            enclosing_labels_start: function.block_labels_start,
+            enclosing_gotos_start: function.block_gotos_start,
+        };
+        function.block_labels_start = function.labels.len();
+        function.block_gotos_start = function.pending_gotos.len();
+        start
     }
-}
 
-/// Resolve one block's gotos, returning those that must resolve in an
-/// enclosing block.
-///
-/// `visible_labels` holds the enclosing blocks' labels, for backward jumps and
-/// duplicate detection, and is restored to its original length on return.
-fn resolve_block_gotos<'ast>(
-    block: &'ast Block,
-    visible_labels: &mut Vec<&'ast str>,
-    is_repeat_block: bool,
-    errors: &mut Vec<ParseError>,
-) -> Vec<PendingGoto<'ast>> {
-    let visible_labels_base = visible_labels.len();
-    let mut scope =
-        GotoScope { visible_labels, errors, pending_gotos: Vec::new(), locals_count: 0 };
-
-    // A repeat body's `until` still sees the body's locals, so its trailing
-    // labels don't count as the end of the block.
-    let trailing_void_start = if is_repeat_block {
-        block.stmts.len()
-    } else {
-        block
-            .stmts
-            .iter()
-            .rposition(|stmt| !matches!(stmt, Statement::Label(_) | Statement::EmptyStatement(_)))
-            .map_or(0, |index| index.saturating_add(1))
-    };
-
-    for (stmt_index, stmt) in block.stmts.iter().enumerate() {
-        match stmt {
-            // Lua 5.2+
-            Statement::Label(label) => {
-                if let Some(name) = label.name.identifier() {
-                    if scope.visible_labels.contains(&name) {
-                        scope.errors.push(ParseError {
-                            span: label.span,
-                            message: format!("label `{name}` already defined"),
-                        });
-                    }
-                    // Pending gotos with this name are forward jumps to this
-                    // label. Each one fails if a local was declared in
-                    // between, unless the label ends the block.
-                    let locals_count = scope.locals_count;
-                    scope.pending_gotos.retain(|goto| {
-                        if goto.name != name {
-                            return true;
-                        }
-                        if goto.locals_below < locals_count && stmt_index < trailing_void_start {
-                            scope.errors.push(ParseError {
-                                span: goto.span,
-                                message: format!("`goto {name}` jumps into the scope of a local"),
-                            });
-                        }
-                        false
-                    });
-                    scope.visible_labels.push(name);
-                }
+    /// Close the current block. A goto still pending leaves it: a label of the
+    /// enclosing block already seen takes it as a backward jump, and otherwise
+    /// it waits there with the enclosing block's variable count.
+    pub(super) fn close_block(&mut self, start: BlockStart) {
+        let function = &mut self.function;
+        function.labels.truncate(function.block_labels_start);
+        let leaving = function.pending_gotos.split_off(function.block_gotos_start);
+        function.block_labels_start = start.enclosing_labels_start;
+        function.block_gotos_start = start.enclosing_gotos_start;
+        for mut goto in leaving {
+            let is_backward_jump = function
+                .labels
+                .iter()
+                .skip(function.block_labels_start)
+                .any(|name| *name == goto.name);
+            if !is_backward_jump {
+                goto.active_vars = start.active_vars;
+                function.pending_gotos.push(goto);
             }
-            // Lua 5.2+
-            Statement::Goto(goto) => {
-                // A visible label makes this a backward jump, resolved now.
-                if let Some(name) = goto.name.identifier()
-                    && !scope.visible_labels.contains(&name)
-                {
-                    scope.pending_gotos.push(PendingGoto {
-                        name,
-                        span: goto.span,
-                        locals_below: scope.locals_count,
-                    });
-                }
-            }
-            Statement::LocalAssignment(local) => {
-                scope.locals_count = scope.locals_count.saturating_add(local.names.len());
-            }
-            Statement::LocalFunction(_) => {
-                scope.locals_count = scope.locals_count.saturating_add(1);
-            }
-            Statement::DoBlock(do_block) => scope.absorb(&do_block.block, false),
-            Statement::WhileLoop(while_loop) => scope.absorb(&while_loop.block, false),
-            Statement::RepeatLoop(repeat_loop) => scope.absorb(&repeat_loop.block, true),
-            Statement::IfStatement(if_stmt) => {
-                scope.absorb(&if_stmt.block, false);
-                for clause in &if_stmt.elseif_clauses {
-                    scope.absorb(&clause.block, false);
-                }
-                if let Some(else_clause) = &if_stmt.else_clause {
-                    scope.absorb(&else_clause.block, false);
-                }
-            }
-            Statement::NumericFor(numeric_for) => scope.absorb(&numeric_for.block, false),
-            Statement::GenericFor(generic_for) => scope.absorb(&generic_for.block, false),
-            // Function bodies get their own label scope via `GotoChecker`.
-            Statement::Assignment(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::FunctionDecl(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalStar(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Break(_)
-            | Statement::Error(_) => {}
         }
     }
 
-    scope.visible_labels.truncate(visible_labels_base);
-    scope.pending_gotos
+    /// Record a label whose scope starts at `active_vars`, solving the gotos
+    /// pending in this block with its name.
+    pub(super) fn add_label(&mut self, label: &'ast LabelStatement, active_vars: usize) {
+        let Some(name) = label.name.identifier() else {
+            return;
+        };
+        let function = &mut self.function;
+        let first_visible =
+            if self.version.has_label_shadowing() { function.block_labels_start } else { 0 };
+        if function.labels.iter().skip(first_visible).any(|existing| *existing == name) {
+            self.errors.push(ParseError {
+                span: label.span,
+                message: format!("label `{name}` already defined"),
+            });
+        }
+        for goto in function.pending_gotos.split_off(function.block_gotos_start) {
+            if goto.name != name {
+                function.pending_gotos.push(goto);
+                continue;
+            }
+            if goto.active_vars < active_vars {
+                self.errors.push(ParseError {
+                    span: goto.span,
+                    message: format!("`goto {name}` jumps into the scope of a local"),
+                });
+            }
+        }
+        function.labels.push(name);
+    }
+
+    /// Record a goto at `active_vars` active variables, a backward jump if
+    /// this block already has its label.
+    pub(super) fn add_goto(&mut self, goto: &'ast GotoStatement, active_vars: usize) {
+        let Some(name) = goto.name.identifier() else {
+            return;
+        };
+        let function = &mut self.function;
+        if !function.labels.iter().skip(function.block_labels_start).any(|label| *label == name) {
+            function.pending_gotos.push(PendingGoto { name, span: goto.span, active_vars });
+        }
+    }
+
+    pub(super) fn enter_function(&mut self) -> FunctionGotos<'ast> {
+        mem::take(&mut self.function)
+    }
+
+    pub(super) fn into_errors(self) -> Vec<ParseError> {
+        self.errors
+    }
+
+    /// Report the gotos no label in this function took, then return to the
+    /// enclosing function's state.
+    pub(super) fn leave_function(&mut self, enclosing: FunctionGotos<'ast>) {
+        for goto in mem::replace(&mut self.function, enclosing).pending_gotos {
+            self.errors.push(ParseError {
+                span: goto.span,
+                message: format!("no visible label `{}` for `goto`", goto.name),
+            });
+        }
+    }
 }

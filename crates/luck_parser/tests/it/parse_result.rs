@@ -20,7 +20,7 @@ fn owned_source_moves_into_the_result_without_a_copy() {
 }
 
 #[test]
-fn bug_declaration_without_values_spans_its_annotation_and_attribute() {
+fn declaration_without_values_spans_its_annotation_and_attribute() {
     for (source, version) in [
         ("local x <const>", LuaVersion::Lua54),
         ("local a, b <close>", LuaVersion::Lua54),

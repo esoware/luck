@@ -24,6 +24,16 @@ impl LuaVersion {
         }
     }
 
+    /// Whether a label may reuse the name of a label visible in an enclosing
+    /// block. 5.4 made labels unique among the visible labels of a function.
+    #[must_use]
+    pub const fn has_label_shadowing(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 => true,
+            Self::Lua51 | Self::Lua54 | Self::Lua55 | Self::Luau => false,
+        }
+    }
+
     /// Whether `//` floor division is supported.
     #[must_use]
     pub const fn has_floor_div(self) -> bool {

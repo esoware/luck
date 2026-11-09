@@ -374,8 +374,8 @@ pub trait Transform {
                         key: self.transform_type(key),
                         value: self.transform_type(value),
                     },
-                    TypeField::Array { span, value } => {
-                        TypeField::Array { span, value: self.transform_type(value) }
+                    TypeField::Array { span, access, value } => {
+                        TypeField::Array { span, access, value: self.transform_type(value) }
                     }
                 });
                 Type::Table(table)

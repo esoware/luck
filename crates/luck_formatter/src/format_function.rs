@@ -99,7 +99,7 @@ impl Format for VarArgParam {
     }
 }
 
-/// A Luau attribute such as `@native` or `@[deprecated("use y")]`. Arguments
+/// A Luau attribute such as `@native` or `@[deprecated({ use = "y" })]`. Arguments
 /// only exist on the bracketed form.
 impl Format for FunctionAttribute {
     fn fmt(&self, formatter: &mut Formatter) {

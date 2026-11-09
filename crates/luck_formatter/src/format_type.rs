@@ -145,7 +145,12 @@ impl Format for TypeField {
                 (token("["), key, token("]"), token(":"), space(), value).fmt(formatter);
             }
             // Array shorthand `{ T }` - a bare element type.
-            Self::Array { value, .. } => value.fmt(formatter),
+            Self::Array { access, value, .. } => {
+                if let Some(modifier) = access {
+                    (modifier, space()).fmt(formatter);
+                }
+                value.fmt(formatter);
+            }
         }
     }
 }

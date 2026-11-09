@@ -13,6 +13,7 @@ use luck_lexer::Lexer;
 use luck_token::{Comment, CompactString, LuaVersion, Span, Token, TokenKind, has_line_break};
 use rustc_hash::FxHashSet;
 
+use crate::validate::check_type_functions;
 use crate::{ParseError, ParseResult};
 
 const MAX_NESTING_DEPTH: u32 = 256;
@@ -59,6 +60,9 @@ struct Parser<'source> {
     has_module_return: bool,
     has_value_exports: bool,
     exported_names: FxHashSet<CompactString>,
+    /// Whether a `type function` appeared, so its body needs the scope check
+    /// the parser can't do without tracking locals.
+    has_type_function: bool,
     errors: Vec<ParseError>,
 }
 
@@ -97,6 +101,7 @@ impl<'source> Parser<'source> {
             has_module_return: false,
             has_value_exports: false,
             exported_names: FxHashSet::default(),
+            has_type_function: false,
             errors: Vec::new(),
         })
     }
@@ -118,6 +123,9 @@ impl<'source> Parser<'source> {
         while !matches!(self.lexer.next_token().kind, TokenKind::Eof) {}
         let (comments, mut errors) = self.lexer.finish();
         errors.append(&mut self.errors);
+        if self.has_type_function && errors.is_empty() {
+            errors = check_type_functions(&block, self.version);
+        }
         errors.sort_by_key(|error| error.span.start);
         (block, comments, errors)
     }

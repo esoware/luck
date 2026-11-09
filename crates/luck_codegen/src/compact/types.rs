@@ -86,7 +86,10 @@ impl CompactPrinter {
                 self.emit_fixed(":");
                 self.emit_type(value);
             }
-            TypeField::Array { value, .. } => {
+            TypeField::Array { access, value, .. } => {
+                if let Some(access_token) = access {
+                    self.emit_token(access_token);
+                }
                 self.emit_type(value);
             }
         }

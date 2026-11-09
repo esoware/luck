@@ -173,7 +173,7 @@ impl Synth {
                     value,
                 },
                 TypeFieldSpec::Array(value) if can_use_array_shorthand => {
-                    TypeField::Array { span: self.next_span(), value }
+                    TypeField::Array { span: self.next_span(), access: None, value }
                 }
                 TypeFieldSpec::Array(value) => TypeField::Indexer {
                     span: self.next_span(),

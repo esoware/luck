@@ -464,7 +464,7 @@ fn const_stays_contextual() {
 fn bracketed_and_parameterized_attributes() {
     // attribute ::= '@' NAME | '@[' parattr {',' parattr} ']'
     assert_no_errors(&parse_luau("@[deprecated] function f() end"));
-    assert_no_errors(&parse_luau("@[deprecated(\"use g\")] function f() end"));
+    assert_no_errors(&parse_luau("@[deprecated({use = \"g\"})] function f() end"));
     assert_no_errors(&parse_luau("@[checked, native] function f() end"));
     // Arguments must be literals, and only deprecated takes them.
     assert_ne!(
@@ -622,13 +622,13 @@ fn luau_only_features_are_errors_in_lua54() {
 }
 
 #[test]
-fn bug_attribute_is_accepted_on_const_function() {
+fn attribute_is_accepted_on_const_function() {
     let result = parse_luau("@native const function f() end");
     assert_no_errors(&result);
 }
 
 #[test]
-fn bug_deprecated_arguments_are_validated() {
+fn deprecated_arguments_are_validated() {
     for source in [
         "@[deprecated(\"x\")] function f() end",
         "@[deprecated(1, 2)] function f() end",
@@ -642,7 +642,7 @@ fn bug_deprecated_arguments_are_validated() {
 }
 
 #[test]
-fn bug_attribute_name_must_directly_follow_the_at_sign() {
+fn attribute_name_must_directly_follow_the_at_sign() {
     for source in
         ["@ native function f() end", "@ [native] function f() end", "@\nnative function f() end"]
     {
@@ -652,7 +652,7 @@ fn bug_attribute_name_must_directly_follow_the_at_sign() {
 }
 
 #[test]
-fn bug_const_needs_one_value_per_name_unless_the_last_is_multi_valued() {
+fn const_needs_one_value_per_name_unless_the_last_is_multi_valued() {
     for source in
         ["const x, y = 1", "const x, y = (f())", "const x = 1, 2", "export const x, y = 1"]
     {
@@ -662,7 +662,7 @@ fn bug_const_needs_one_value_per_name_unless_the_last_is_multi_valued() {
 }
 
 #[test]
-fn bug_type_function_cannot_reference_an_outer_local() {
+fn type_function_cannot_reference_an_outer_local() {
     for source in [
         "local x = 1\ntype function f() return x end",
         "local x = 1\ntype function f() local function g() return x end return g end",
@@ -674,7 +674,7 @@ fn bug_type_function_cannot_reference_an_outer_local() {
 }
 
 #[test]
-fn bug_simple_interpolated_string_is_an_attribute_literal() {
+fn simple_interpolated_string_is_an_attribute_literal() {
     // Luau lexes a backtick string with no holes as a constant string.
     let result = parse_luau("@[deprecated {use = `x`}] function f() end");
     assert_no_errors(&result);

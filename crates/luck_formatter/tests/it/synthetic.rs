@@ -424,7 +424,8 @@ fn function_attributes_roundtrip() {
 #[test]
 fn attribute_args_roundtrip() {
     let synth = Synth::new();
-    let attribute = synth.function_attribute("deprecated", Some(vec![synth.string("use y")]));
+    let args = synth.table(vec![FieldSpec::Named("use", synth.string("y"))]);
+    let attribute = synth.function_attribute("deprecated", Some(vec![args]));
     let stmt = synth.local_function_full(
         "old",
         vec![attribute],
@@ -433,7 +434,10 @@ fn attribute_args_roundtrip() {
     );
     let block = synth.block(vec![stmt], None);
     let output = assert_roundtrips(&block);
-    assert!(output.contains("@[deprecated(\"use y\")]"), "bracketed attribute lost: {output}");
+    assert!(
+        output.contains("@[deprecated({ use = \"y\" })]"),
+        "bracketed attribute lost: {output}"
+    );
 }
 
 #[test]

@@ -83,10 +83,14 @@ fn const_bindings_restore_after_nested_scopes() {
         let source = format!("local value = 0\ndo {declaration} end\nvalue = 2");
         assert_no_errors(&check(&source, version));
     }
-    assert_no_errors(&check(
-        "local value <const> = 1\nlocal function f(...value) value = 2 end",
-        LuaVersion::Lua55,
-    ));
+    // A named vararg shadows the const, but it is read-only itself.
+    assert_has_errors(
+        &check(
+            "local value <const> = 1\nlocal function f(...value) value = 2 end",
+            LuaVersion::Lua55,
+        ),
+        "write to a named vararg",
+    );
 }
 
 #[test]
@@ -123,8 +127,8 @@ fn lua55_for_variables_are_readonly() {
         "5.5 numeric for var write",
     );
     assert_has_errors(
-        &check("for k, v in pairs(t) do v = 1 end", LuaVersion::Lua55),
-        "5.5 generic for var write",
+        &check("for k, v in pairs(t) do k = 1 end", LuaVersion::Lua55),
+        "5.5 generic for control var write",
     );
     // Valid before 5.5.
     assert_no_errors(&check("for i = 1, 3 do i = 5 end", LuaVersion::Lua54));
@@ -181,6 +185,20 @@ fn goto_into_local_scope_rejected() {
         ),
         "jump over local visible to until",
     );
+}
+
+#[test]
+fn goto_resolves_against_enclosing_blocks_when_it_leaves_them() {
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        assert_no_errors(&check("::l:: do do goto l end end", version));
+        assert_no_errors(&check("::l:: local x do goto l end", version));
+    }
+    // The inner `::l::` takes the goto first, before 5.4 banned shadowing.
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
+        let errors = check("::l:: do goto l local x ::l:: print(x) end", version);
+        assert_eq!(errors.len(), 1, "{version:?}: {errors:?}");
+        assert_eq!(errors[0].message, "`goto l` jumps into the scope of a local");
+    }
 }
 
 #[test]
@@ -241,7 +259,7 @@ fn continue_until_reports_every_distinct_skipped_local() {
 }
 
 #[test]
-fn bug_goto_cannot_skip_a_local_to_reach_a_label_before_return() {
+fn goto_cannot_skip_a_local_to_reach_a_label_before_return() {
     // A label followed by `return` isn't at the end of its block.
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         let errors = check("goto l local x ::l:: return", version);
@@ -253,7 +271,7 @@ fn bug_goto_cannot_skip_a_local_to_reach_a_label_before_return() {
 }
 
 #[test]
-fn bug_lua52_and_lua53_allow_a_label_to_shadow_an_enclosing_label() {
+fn lua52_and_lua53_allow_a_label_to_shadow_an_enclosing_label() {
     // `checkrepeated` only looks at the current block before 5.4.
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
         let errors = check("::l:: do ::l:: end", version);
@@ -262,7 +280,7 @@ fn bug_lua52_and_lua53_allow_a_label_to_shadow_an_enclosing_label() {
 }
 
 #[test]
-fn bug_lua55_only_the_first_generic_for_variable_is_readonly() {
+fn lua55_only_the_first_generic_for_variable_is_readonly() {
     // 5.5 manual section 3.3.5: the first variable is the control variable.
     for source in ["for k, v in pairs(t) do v = 1 end", "for k, v, w in pairs(t) do w = 1 end"] {
         let errors = check(source, LuaVersion::Lua55);
@@ -271,14 +289,20 @@ fn bug_lua55_only_the_first_generic_for_variable_is_readonly() {
 }
 
 #[test]
-fn bug_lua55_flags_undeclared_name_after_global_declaration() {
+fn lua55_flags_undeclared_name_after_global_declaration() {
     // A global declaration voids the implicit `global *`.
     let errors = check("global x; y = 1", LuaVersion::Lua55);
     assert!(!errors.is_empty(), "`y` is not declared, so Lua 5.5 rejects the write");
 }
 
 #[test]
-fn bug_lua55_const_global_star_makes_undeclared_names_readonly() {
+fn lua55_env_stays_visible_under_a_global_declaration() {
+    let errors = check("global x; local e = _ENV", LuaVersion::Lua55);
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
+fn lua55_const_global_star_makes_undeclared_names_readonly() {
     for source in ["global <const> *; y = 1", "global <const> *; function y() end"] {
         let errors = check(source, LuaVersion::Lua55);
         assert!(
@@ -289,7 +313,7 @@ fn bug_lua55_const_global_star_makes_undeclared_names_readonly() {
 }
 
 #[test]
-fn bug_lua55_global_function_shadows_a_const_binding() {
+fn lua55_global_function_shadows_a_const_binding() {
     for source in [
         "local x <const> = 1; global function x() end; x = 2",
         "global <const> x; global function x() end; x = 2",
@@ -300,7 +324,7 @@ fn bug_lua55_global_function_shadows_a_const_binding() {
 }
 
 #[test]
-fn bug_lua55_goto_cannot_enter_the_scope_of_a_global_declaration() {
+fn lua55_goto_cannot_enter_the_scope_of_a_global_declaration() {
     // A global declaration occupies a slot in `nactvar`, like a local.
     for source in [
         "goto l; global x; ::l:: x = 1",
@@ -316,7 +340,7 @@ fn bug_lua55_goto_cannot_enter_the_scope_of_a_global_declaration() {
 }
 
 #[test]
-fn bug_lua55_named_vararg_is_readonly() {
+fn lua55_named_vararg_is_readonly() {
     // 5.5 manual: the name denotes a read-only local variable.
     let errors = check("function f(...t) t = 1 end", LuaVersion::Lua55);
     assert!(
@@ -326,7 +350,7 @@ fn bug_lua55_named_vararg_is_readonly() {
 }
 
 #[test]
-fn bug_until_condition_resolves_const_writes_in_the_repeat_body_scope() {
+fn until_condition_resolves_const_writes_in_the_repeat_body_scope() {
     // The condition sees the body's locals, for writes as for reads.
     let shadowing_local = "local x <const> = 1 repeat local x = 2 until (function() x = 3 end)()";
     let shadowing_errors = check(shadowing_local, LuaVersion::Lua54);
@@ -341,14 +365,14 @@ fn bug_until_condition_resolves_const_writes_in_the_repeat_body_scope() {
 }
 
 #[test]
-fn bug_method_self_shadows_a_const_local() {
+fn method_self_shadows_a_const_local() {
     // `function t:m()` declares an implicit `self` parameter.
     let errors = check("local self <const> = 1\nfunction t:m() self = 2 end", LuaVersion::Lua54);
     assert!(errors.is_empty(), "the write targets the implicit parameter: {errors:?}");
 }
 
 #[test]
-fn bug_continue_until_ignores_names_rebound_inside_a_function() {
+fn continue_until_ignores_names_rebound_inside_a_function() {
     for condition in ["(function(x) return x end)(1)", "(function() local x = 1 return x end)()"] {
         let source = format!("repeat if a then continue end local x = f() until {condition}");
         let errors = check(&source, LuaVersion::Luau);
@@ -357,7 +381,7 @@ fn bug_continue_until_ignores_names_rebound_inside_a_function() {
 }
 
 #[test]
-fn bug_continue_until_ignores_typeof_in_the_condition() {
+fn continue_until_ignores_typeof_in_the_condition() {
     // Types generate no code, so `typeof(x)` does not read the skipped local.
     let source = "repeat if a then continue end local x = f() until (y :: typeof(x)) == 1";
     let errors = check(source, LuaVersion::Luau);

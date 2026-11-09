@@ -206,8 +206,12 @@ impl Parser<'_> {
                     })));
                 }
                 TokenKind::LeftBracket => {
-                    self.advance_span();
+                    let open = self.advance_span();
+                    if !self.enter_depth() {
+                        return Expression::Error(open);
+                    }
                     let index = self.parse_expr(0);
+                    self.exit_depth();
                     let close = self.expect(&TokenKind::RightBracket);
                     let span = expr.span().merge(close);
                     expr = Expression::Var(Var::Index(Box::new(IndexExpression {
@@ -233,19 +237,6 @@ impl Parser<'_> {
                     }));
                 }
                 TokenKind::LeftParen | TokenKind::LeftBrace | TokenKind::StringLiteral(_) => {
-                    // 5.1 and Luau reject a call whose `(` starts on a new
-                    // line ("ambiguous syntax: function call x new
-                    // statement"); 5.2+ dropped the restriction.
-                    if matches!(self.peek(), TokenKind::LeftParen)
-                        && self.version.has_ambiguous_call_newline_error()
-                        && self.has_newline_before_current()
-                    {
-                        let span = self.current_span();
-                        self.error(
-                            span,
-                            "ambiguous syntax (function call x new statement): put `(` on the same line",
-                        );
-                    }
                     let args = self.parse_function_args();
                     let span = expr.span().merge(args.span());
                     expr = Expression::FunctionCall(Box::new(FunctionCall {
@@ -344,7 +335,7 @@ impl Parser<'_> {
 
         segments.push(InterpolatedStringSegment {
             literal: begin_token,
-            expr: Some(self.parse_expr(0)),
+            expr: Some(self.parse_interpolated_hole()),
         });
 
         loop {
@@ -353,7 +344,7 @@ impl Parser<'_> {
                     let middle_token = self.advance();
                     segments.push(InterpolatedStringSegment {
                         literal: middle_token,
-                        expr: Some(self.parse_expr(0)),
+                        expr: Some(self.parse_interpolated_hole()),
                     });
                 }
                 TokenKind::InterpolatedStringEnd(_) => {
@@ -380,17 +371,42 @@ impl Parser<'_> {
         }
     }
 
+    fn parse_interpolated_hole(&mut self) -> Expression {
+        if !self.enter_depth() {
+            return Expression::Error(self.current_span());
+        }
+        let expr = self.parse_expr(0);
+        self.exit_depth();
+        expr
+    }
+
     /// Parse function call arguments: `(explist)`, `{table}`, or `"string"`.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_function_args(&mut self) -> FunctionArgs {
         match self.peek() {
             TokenKind::LeftParen => {
+                // 5.1 and Luau reject a call whose `(` starts on a new line
+                // ("ambiguous syntax: function call x new statement"); 5.2+
+                // dropped the restriction.
+                if self.version.has_ambiguous_call_newline_error()
+                    && self.has_newline_before_current()
+                {
+                    let span = self.current_span();
+                    self.error(
+                        span,
+                        "ambiguous syntax (function call x new statement): put `(` on the same line",
+                    );
+                }
                 let open = self.advance_span();
+                if !self.enter_depth() {
+                    return FunctionArgs::Parenthesized { span: open, args: Punctuated::empty() };
+                }
                 let args = if matches!(self.peek(), TokenKind::RightParen) {
                     Punctuated::empty()
                 } else {
                     self.parse_expr_list()
                 };
+                self.exit_depth();
                 let close = self.expect(&TokenKind::RightParen);
                 FunctionArgs::Parenthesized { span: open.merge(close), args }
             }

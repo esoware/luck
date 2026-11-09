@@ -1,76 +1,43 @@
 //! Luau: a `continue` in a repeat body may not skip the declaration of a local
 //! that the `until` condition reads.
 
-use luck_ast::{Block, LastStatement, Statement, Var, Visitor};
+use luck_ast::{Block, LastStatement, Statement};
 
-use crate::ParseError;
-
-pub(super) fn check(block: &Block) -> Vec<ParseError> {
-    let mut checker = ContinueUntilChecker { errors: Vec::new() };
-    checker.visit_block(block);
-    checker.errors
-}
-
-struct ContinueUntilChecker {
-    errors: Vec<ParseError>,
-}
-
-impl<'ast> Visitor<'ast> for ContinueUntilChecker {
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
-        if let Statement::RepeatLoop(repeat_loop) = stmt
-            && let Some(continue_index) = earliest_continue_stmt(&repeat_loop.block)
-        {
-            let mut skipped_names: Vec<&str> = Vec::new();
-            let after_continue = continue_index.saturating_add(1);
-            for later in repeat_loop.block.stmts.iter().skip(after_continue) {
-                match later {
-                    Statement::LocalAssignment(local) => {
-                        for attributed in local.names.iter() {
-                            skipped_names.extend(attributed.name.identifier());
-                        }
-                    }
-                    Statement::LocalFunction(local_function) => {
-                        skipped_names.extend(local_function.name.identifier());
-                    }
-                    Statement::Assignment(_)
-                    | Statement::FunctionCall(_)
-                    | Statement::DoBlock(_)
-                    | Statement::WhileLoop(_)
-                    | Statement::RepeatLoop(_)
-                    | Statement::IfStatement(_)
-                    | Statement::NumericFor(_)
-                    | Statement::GenericFor(_)
-                    | Statement::FunctionDecl(_)
-                    | Statement::EmptyStatement(_)
-                    | Statement::Goto(_)
-                    | Statement::Label(_)
-                    | Statement::GlobalDeclaration(_)
-                    | Statement::GlobalFunction(_)
-                    | Statement::GlobalStar(_)
-                    | Statement::Break(_)
-                    | Statement::CompoundAssignment(_)
-                    | Statement::TypeDeclaration(_)
-                    | Statement::Error(_) => {}
-                }
-            }
-            if !skipped_names.is_empty() {
-                let mut reads = ReadCollector { names: Vec::new() };
-                reads.visit_expr(&repeat_loop.condition);
-                for name in reads.names {
-                    if skipped_names.contains(&name) {
-                        skipped_names.retain(|skipped| *skipped != name);
-                        self.errors.push(ParseError {
-                            span: repeat_loop.condition.span(),
-                            message: format!(
-                                "local `{name}` used in the `until` condition is declared after a `continue` statement"
-                            ),
-                        });
-                    }
-                }
-            }
-        }
-        self.walk_stmt(stmt);
-    }
+/// How many locals `repeat_body` declares after its first `continue`, which
+/// are the top-level locals the `until` condition may not read.
+pub(super) fn skipped_local_count(repeat_body: &Block) -> usize {
+    let Some(continue_index) = earliest_continue_stmt(repeat_body) else {
+        return 0;
+    };
+    let after_continue = continue_index.saturating_add(1);
+    repeat_body
+        .stmts
+        .iter()
+        .skip(after_continue)
+        .map(|later| match later {
+            Statement::LocalAssignment(local) => local.names.len(),
+            Statement::LocalFunction(_) => 1,
+            Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::FunctionDecl(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => 0,
+        })
+        .fold(0, usize::saturating_add)
 }
 
 /// Index of the first top-level statement of `block` that contains a
@@ -123,21 +90,5 @@ fn stmt_has_binding_continue(stmt: &Statement) -> bool {
         | Statement::Break(_)
         | Statement::TypeDeclaration(_)
         | Statement::Error(_) => false,
-    }
-}
-
-/// Every name the visited code reads, in walk order, repeats included.
-struct ReadCollector<'ast> {
-    names: Vec<&'ast str>,
-}
-
-impl<'ast> Visitor<'ast> for ReadCollector<'ast> {
-    fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(token) = var
-            && let Some(name) = token.identifier()
-        {
-            self.names.push(name);
-        }
-        self.walk_var(var);
     }
 }

@@ -238,13 +238,23 @@ fn leading_attribute_distributes_to_all_names() {
 }
 
 #[test]
-fn leading_attribute_conflicts_with_trailing_on_any_name() {
+fn trailing_attribute_replaces_the_leading_one_on_its_name() {
+    // 5.5 `localstat`: `kind = getvarattribute(ls, defkind)`.
     let result = parse_lua55("local <const> x, y <close> = 1, 2");
-    assert!(!result.errors.is_empty(), "leading + trailing attrib on the list must error");
+    assert_no_errors(&result);
+    let Statement::LocalAssignment(local) = &result.block.stmts[0] else {
+        panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
+    };
+    let attribute_names: Vec<_> = local
+        .names
+        .iter()
+        .map(|attributed| attributed.attribute.as_ref()?.name.identifier())
+        .collect();
+    assert_eq!(attribute_names, [Some("const"), Some("close")]);
 }
 
 #[test]
-fn bug_postfixed_attribute_overrides_prefixed_attribute() {
+fn postfixed_attribute_overrides_prefixed_attribute() {
     // 5.5 `localstat`: `kind = getvarattribute(ls, defkind)`.
     for source in ["local <const> a <close> = nil", "global <const> x <const>"] {
         let result = parse_lua55(source);

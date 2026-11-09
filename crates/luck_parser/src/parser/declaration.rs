@@ -42,7 +42,8 @@ impl LocalKind {
 }
 
 /// The span of a `local` or `global` declaration, from `start_span` through
-/// its last value, or through its last name when it has no values.
+/// its last value, or through its last name and that name's annotation and
+/// attribute when it has no values.
 fn declaration_span(
     start_span: Span,
     names: &Punctuated<AttributedName>,
@@ -51,7 +52,18 @@ fn declaration_span(
     let end_span = exprs
         .and_then(Punctuated::last)
         .map(Expression::span)
-        .or_else(|| names.last().map(|attributed| attributed.name.span))
+        .or_else(|| {
+            names.last().map(|attributed| {
+                let mut span = attributed.name.span;
+                if let Some(annotation) = &attributed.type_annotation {
+                    span = span.merge(annotation.span());
+                }
+                if let Some(attribute) = &attributed.attribute {
+                    span = span.merge(attribute.span);
+                }
+                span
+            })
+        })
         .unwrap_or(start_span);
     start_span.merge(end_span)
 }
@@ -70,9 +82,13 @@ impl Parser<'_> {
             TokenKind::Local => self.parse_local_stmt(attributes),
             TokenKind::Function => self.parse_function_decl(attributes),
             TokenKind::Identifier(name) if name == "export" => self.parse_export_stmt(attributes),
+            TokenKind::Identifier(name) if name == "const" => self.parse_const_stmt(attributes),
             _ => {
                 let span = self.current_span();
-                self.error(span, "expected `function`, `local`, or `export` after attribute");
+                self.error(
+                    span,
+                    "expected `function`, `local`, `const`, or `export` after attribute",
+                );
                 Statement::Error(span)
             }
         }
@@ -124,10 +140,13 @@ impl Parser<'_> {
 
     /// Parse a Luau `const` declaration: `const bindinglist '=' explist` or
     /// `const function NAME funcbody`.
-    pub(super) fn parse_const_stmt(&mut self) -> Statement {
+    pub(super) fn parse_const_stmt(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
         let const_span = self.advance_span(); // contextual `const`
         if matches!(self.peek(), TokenKind::Function) {
-            return self.parse_local_function(const_span, Vec::new(), LocalKind::Const);
+            return self.parse_local_function(const_span, attributes, LocalKind::Const);
+        }
+        if let Some(attribute) = attributes.first() {
+            self.error(attribute.span, "attributes are only allowed on function declarations");
         }
         self.parse_local_assignment(const_span, LocalKind::Const)
     }
@@ -169,19 +188,23 @@ impl Parser<'_> {
             }
         }
 
-        let exprs = if self.eat(&TokenKind::Equal) {
-            Some(self.parse_expr_list())
-        } else {
-            // Grammar: `const bindinglist '=' explist`, so the initializer
-            // isn't optional.
-            if kind.is_const() {
-                let span = self.current_span();
-                self.error(span, "missing initializer in `const` declaration");
-            }
-            None
-        };
+        let exprs = self.eat(&TokenKind::Equal).then(|| self.parse_expr_list());
 
         let span = declaration_span(local_span, &names, exprs.as_ref());
+
+        // Grammar: `const bindinglist '=' explist`, one value per name, except
+        // that a last call or `...` may supply the rest.
+        if kind.is_const()
+            && !exprs.as_ref().is_some_and(|values| {
+                values.len() == names.len()
+                    || matches!(
+                        values.last(),
+                        Some(Expression::FunctionCall(_) | Expression::VarArg(_))
+                    )
+            })
+        {
+            self.error(span, "missing initializer in `const` declaration");
+        }
 
         Statement::LocalAssignment(Box::new(LocalAssignment {
             span,
@@ -230,8 +253,7 @@ impl Parser<'_> {
     ///
     /// 5.5 manual section 3.3.7: a prefixed attribute applies to every name in
     /// the list, so each name gets a copy (emitting it after every name means
-    /// the same thing). A name with its own trailing attribute too is an
-    /// error, reported so that attribute isn't dropped silently.
+    /// the same thing). A name's own postfixed attribute replaces the copy.
     fn parse_attributed_name(
         &mut self,
         leading_attribute: Option<&Attribute>,
@@ -239,11 +261,7 @@ impl Parser<'_> {
         let name = self.expect_identifier()?;
         // Luau: type annotation after the name.
         let type_annotation = self.try_parse_type_annotation();
-        let trailing_attribute = self.try_parse_attribute();
-        if let (Some(_), Some(redundant)) = (leading_attribute, &trailing_attribute) {
-            self.error(redundant.span, "name already has a leading attribute");
-        }
-        let attribute = leading_attribute.cloned().or(trailing_attribute);
+        let attribute = self.try_parse_attribute().or_else(|| leading_attribute.cloned());
         Some(AttributedName { name, type_annotation, attribute: attribute.map(Box::new) })
     }
 
@@ -271,8 +289,8 @@ impl Parser<'_> {
         // the attribute leads an attnamelist and the shared parser takes it.
         if matches!(self.peek(), TokenKind::Less) {
             let attribute = self.parse_attribute();
+            self.reject_global_close(&attribute);
             if matches!(self.peek(), TokenKind::Star) {
-                self.reject_global_close(&attribute);
                 let star = self.advance_span();
                 let span = global_span.merge(star);
                 return Statement::GlobalStar(Box::new(GlobalStar {
@@ -281,22 +299,28 @@ impl Parser<'_> {
                 }));
             }
             let names = self.parse_attributed_names(Some(&attribute));
-            return self.finish_global_declaration(global_span, names);
+            return self.finish_global_declaration(global_span, names, Some(&attribute));
         }
 
         // `global name [attrib] {, name [attrib]} ['=' explist]`
         let names = self.parse_attname_list();
-        self.finish_global_declaration(global_span, names)
+        self.finish_global_declaration(global_span, names, None)
     }
 
     /// Parse the optional `= explist` tail of a `global` declaration
     /// (5.5 manual section 3.3.7: `stat ::= global attnamelist ['=' explist]`).
+    /// `leading_attribute` has already been checked, so its copies are not.
     fn finish_global_declaration(
         &mut self,
         global_span: Span,
         names: Punctuated<AttributedName>,
+        leading_attribute: Option<&Attribute>,
     ) -> Statement {
-        for attribute in names.iter().filter_map(|attributed| attributed.attribute.as_deref()) {
+        for attribute in
+            names.iter().filter_map(|attributed| attributed.attribute.as_deref()).filter(
+                |attribute| leading_attribute.is_none_or(|leading| leading.span != attribute.span),
+            )
+        {
             self.reject_global_close(attribute);
         }
 
@@ -324,6 +348,7 @@ impl Parser<'_> {
         // `type function Name funcbody` takes no `=`, and the body is
         // ordinary Luau.
         if self.eat(&TokenKind::Function) {
+            self.has_type_function = true;
             let name = self.expect_identifier_recover();
             let body = self.parse_function_body();
             let span = start_span.merge(body.span);

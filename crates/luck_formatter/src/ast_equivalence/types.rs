@@ -157,9 +157,12 @@ fn type_field_eq(left: &TypeField, right: &TypeField, version: LuaVersion) -> Co
             at("value", type_eq(left_value, right_value, version))
         }
         (
-            TypeField::Array { value: left_value, .. },
-            TypeField::Array { value: right_value, .. },
-        ) => type_eq(left_value, right_value, version),
+            TypeField::Array { access: left_access, value: left_value, .. },
+            TypeField::Array { access: right_access, value: right_value, .. },
+        ) => {
+            at("access", access_modifier_eq(left_access.as_ref(), right_access.as_ref()))?;
+            type_eq(left_value, right_value, version)
+        }
         (TypeField::Named { .. } | TypeField::Indexer { .. } | TypeField::Array { .. }, _) => {
             differ("table type field kind differs")
         }

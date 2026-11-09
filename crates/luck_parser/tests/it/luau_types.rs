@@ -239,23 +239,17 @@ fn parenthesized_type_is_not_a_pack() {
 
 #[test]
 fn parenthesized_types_preserve_pack_and_function_shapes() {
-    for (source, count, has_trailing_separator) in [
-        ("type X = ()", 0, false),
-        ("type X = (number,)", 1, true),
-        ("type X = (number, string)", 2, false),
-        ("type X = (number, string,)", 2, true),
-    ] {
-        let Type::Pack(pack) = alias_type(source) else {
-            panic!("expected pack for {source}");
+    // Packs stand alone only where one is expected, such as a return.
+    for (source, count) in [("type X = () -> ()", 0), ("type X = () -> (number, string)", 2)] {
+        let Type::Function(function) = alias_type(source) else {
+            panic!("expected function for {source}");
+        };
+        let Type::Pack(pack) = function.return_type else {
+            panic!("expected pack return for {source}");
         };
         assert_eq!(pack.types.len(), count);
-        assert_eq!(pack.types.has_trailing_separator, has_trailing_separator);
     }
-    for source in [
-        "type X = (number) -> string",
-        "type X = (value: number) -> string",
-        "type X = (number,) -> string",
-    ] {
+    for source in ["type X = (number) -> string", "type X = (value: number) -> string"] {
         let Type::Function(function) = alias_type(source) else {
             panic!("expected function for {source}");
         };
@@ -462,7 +456,7 @@ fn assert_accepted(sources: &[&str]) {
 }
 
 #[test]
-fn bug_bare_type_pack_is_rejected_in_single_type_position() {
+fn bare_type_pack_is_rejected_in_single_type_position() {
     assert_rejected(&[
         "type X = ()",
         "type X = (number, string)",
@@ -474,7 +468,7 @@ fn bug_bare_type_pack_is_rejected_in_single_type_position() {
 }
 
 #[test]
-fn bug_variadic_and_generic_packs_are_rejected_as_single_types() {
+fn variadic_and_generic_packs_are_rejected_as_single_types() {
     assert_rejected(&[
         "type X = ...number",
         "type X = T...",
@@ -488,7 +482,7 @@ fn bug_variadic_and_generic_packs_are_rejected_as_single_types() {
 }
 
 #[test]
-fn bug_type_pack_takes_no_union_suffix() {
+fn type_pack_takes_no_union_suffix() {
     assert_rejected(&[
         "function f(): (number, string)? end",
         "function f(): (number, string) | string end",
@@ -500,22 +494,32 @@ fn bug_type_pack_takes_no_union_suffix() {
 }
 
 #[test]
-fn bug_string_table_type_key_rejects_an_embedded_nul() {
+fn return_pack_folds_a_suffix_over_the_type_before_its_variadic() {
+    assert_accepted(&[
+        "function f(): (A, ...B)? end",
+        "function f(): (A, ...B) | C end",
+        "function f(): (A, T...)? end",
+    ]);
+    assert_rejected(&["local x: (A, ...B)? = y", "type X = Foo<(A, ...B)?>"]);
+}
+
+#[test]
+fn string_table_type_key_rejects_an_embedded_nul() {
     assert_rejected(&["type X = { [\"a\\0b\"]: number }"]);
 }
 
 #[test]
-fn bug_trailing_comma_is_rejected_in_function_type_params() {
+fn trailing_comma_is_rejected_in_function_type_params() {
     assert_rejected(&["type X = (number,) -> ()", "type X = (a: number,) -> ()"]);
 }
 
 #[test]
-fn bug_trailing_comma_is_rejected_in_type_arguments() {
+fn trailing_comma_is_rejected_in_type_arguments() {
     assert_rejected(&["type X = Foo<number,>", "x = f<<T,>>()"]);
 }
 
 #[test]
-fn bug_trailing_comma_is_rejected_in_generic_lists() {
+fn trailing_comma_is_rejected_in_generic_lists() {
     assert_rejected(&[
         "type X<T,> = T",
         "type X<T...,> = number",
@@ -525,7 +529,7 @@ fn bug_trailing_comma_is_rejected_in_generic_lists() {
 }
 
 #[test]
-fn bug_empty_generic_list_is_rejected() {
+fn empty_generic_list_is_rejected() {
     assert_rejected(&[
         "type X<> = number",
         "function f<>() end",
@@ -536,7 +540,7 @@ fn bug_empty_generic_list_is_rejected() {
 }
 
 #[test]
-fn bug_type_pack_must_be_the_last_function_type_parameter() {
+fn type_pack_must_be_the_last_function_type_parameter() {
     assert_rejected(&[
         "type X = (...number, string) -> ()",
         "type X = (T..., string) -> ()",
@@ -545,17 +549,17 @@ fn bug_type_pack_must_be_the_last_function_type_parameter() {
 }
 
 #[test]
-fn bug_typeof_requires_a_parenthesized_expression() {
+fn typeof_requires_a_parenthesized_expression() {
     assert_rejected(&["type X = typeof", "local x: typeof = 1", "type X = typeof<T>"]);
 }
 
 #[test]
-fn bug_array_table_type_takes_no_trailing_separator() {
+fn array_table_type_takes_no_trailing_separator() {
     assert_rejected(&["type X = { number, }", "type X = { number; }"]);
 }
 
 #[test]
-fn bug_access_modifier_applies_to_an_array_element_type() {
+fn access_modifier_applies_to_an_array_element_type() {
     assert_accepted(&[
         "type X = { read number }",
         "type X = { write number }",
@@ -565,7 +569,7 @@ fn bug_access_modifier_applies_to_an_array_element_type() {
 }
 
 #[test]
-fn bug_bare_read_or_write_is_a_modifier_missing_its_type() {
+fn bare_read_or_write_is_a_modifier_missing_its_type() {
     assert_rejected(&[
         "type X = { read }",
         "type X = { write }",
@@ -576,7 +580,7 @@ fn bug_bare_read_or_write_is_a_modifier_missing_its_type() {
 }
 
 #[test]
-fn bug_string_keyed_table_type_fields_are_not_indexers() {
+fn string_keyed_table_type_fields_are_not_indexers() {
     assert_accepted(&[
         "type X = { [\"a\"]: number, [\"b\"]: string }",
         "type X = { [string]: number, [\"a\"]: string }",
@@ -585,11 +589,11 @@ fn bug_string_keyed_table_type_fields_are_not_indexers() {
 }
 
 #[test]
-fn bug_type_pack_after_a_defaulted_parameter_needs_a_default() {
+fn type_pack_after_a_defaulted_parameter_needs_a_default() {
     assert_rejected(&["type X<T = number, U...> = T", "type X<T... = ...number, U...> = T"]);
 }
 
 #[test]
-fn bug_parenthesized_single_type_is_a_valid_pack_default() {
+fn parenthesized_single_type_is_a_valid_pack_default() {
     assert_accepted(&["type X<T... = (number)> = number"]);
 }

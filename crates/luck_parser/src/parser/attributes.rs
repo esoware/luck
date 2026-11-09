@@ -6,9 +6,20 @@
 //! errors.
 
 use luck_ast::{Attribute, Expression, Field, FunctionAttribute, Punctuated};
-use luck_token::{Token, TokenKind};
+use luck_token::{Span, Token, TokenKind};
 
 use super::Parser;
+
+/// Whether `expr` is a constant string, which a backtick string with no holes
+/// also is in Luau.
+fn is_constant_string(expr: &Expression) -> bool {
+    matches!(expr, Expression::StringLiteral(_))
+        || matches!(
+            expr,
+            Expression::InterpolatedString(interpolated)
+                if interpolated.segments.iter().all(|segment| segment.expr.is_none())
+        )
+}
 
 /// Whether `expr` fits the grammar's `literal` production for attribute
 /// arguments: nil, booleans, numbers, strings, and tables of literals with
@@ -21,6 +32,8 @@ fn is_attribute_literal(expr: &Expression) -> bool {
         | Expression::Number(_)
         | Expression::Integer(_)
         | Expression::StringLiteral(_) => true,
+        // Luau
+        Expression::InterpolatedString(_) => is_constant_string(expr),
         Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
             Field::Named { value, .. } | Field::Positional { value, .. } => {
                 is_attribute_literal(value)
@@ -35,7 +48,6 @@ fn is_attribute_literal(expr: &Expression) -> bool {
         | Expression::BinaryOp(_)
         | Expression::UnaryOp(_)
         | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
         | Expression::TypeCast(_)
         | Expression::TypeInstantiation(_)
         | Expression::Error(_) => false,
@@ -68,7 +80,7 @@ impl Parser<'_> {
     }
 
     /// Parse the Luau attributes before a function, as in `@native` or
-    /// `@[checked, deprecated("use g")]`.
+    /// `@[checked, deprecated { use = "g" }]`.
     ///
     /// Grammar: `attribute ::= '@' NAME | '@[' parattr {',' parattr} ']'`
     /// with `parattr ::= NAME [pars]` and literal-only arguments. The AST
@@ -78,6 +90,10 @@ impl Parser<'_> {
         let mut attributes = Vec::new();
         while matches!(self.peek(), TokenKind::At) {
             let at_span = self.advance_span(); // `@`
+            // Luau lexes `@name` and `@[` as single tokens.
+            if self.current_span().start != at_span.end {
+                self.error(at_span, "attribute name must directly follow `@`");
+            }
             if self.eat(&TokenKind::LeftBracket) {
                 loop {
                     let name = self.expect_identifier_recover();
@@ -120,11 +136,15 @@ impl Parser<'_> {
         match self.peek() {
             TokenKind::LeftParen => {
                 self.advance_span();
+                if !self.enter_depth() {
+                    return None;
+                }
                 let args = if matches!(self.peek(), TokenKind::RightParen) {
                     Punctuated::empty()
                 } else {
                     self.parse_expr_list()
                 };
+                self.exit_depth();
                 self.expect(&TokenKind::RightParen);
                 for expr in args.iter() {
                     if !is_attribute_literal(expr) {
@@ -177,6 +197,46 @@ impl Parser<'_> {
             )
         }) {
             self.error(name.span, format!("duplicate attribute `@{attribute_name}`"));
+        }
+        if attribute_name == "deprecated"
+            && let Some(deprecated_args) = args
+        {
+            self.validate_deprecated_args(name.span, deprecated_args);
+        }
+    }
+
+    /// Luau's `deprecatedArgsValidator`: at most one argument, a table whose
+    /// only keys are `use` and `reason`, each holding a constant string.
+    fn validate_deprecated_args(&mut self, name_span: Span, args: &Punctuated<Expression>) {
+        if args.len() > 1 {
+            self.error(name_span, "`@deprecated` takes at most one argument");
+            return;
+        }
+        let Some(arg) = args.first() else {
+            return;
+        };
+        let Expression::TableConstructor(table) = arg else {
+            self.error(arg.span(), "`@deprecated` takes a table with `use` and `reason` fields");
+            return;
+        };
+        for field in table.fields.iter() {
+            match field {
+                Field::Named { name, value, .. } => {
+                    if !matches!(name.identifier(), Some("use" | "reason")) {
+                        self.error(
+                            name.span,
+                            "unknown `@deprecated` argument, only `use` and `reason` are allowed",
+                        );
+                        continue;
+                    }
+                    if !is_constant_string(value) {
+                        self.error(value.span(), "`@deprecated` fields take constant strings");
+                    }
+                }
+                Field::Positional { span, .. } | Field::Bracketed { span, .. } => {
+                    self.error(*span, "`@deprecated` takes only `use` and `reason` fields");
+                }
+            }
         }
     }
 }

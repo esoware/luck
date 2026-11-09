@@ -138,6 +138,7 @@ fn close_attribute_on_globals_rejected() {
     assert_has_errors(&parse("global x <close>", LuaVersion::Lua55));
     assert_has_errors(&parse("global <close> x", LuaVersion::Lua55));
     assert_has_errors(&parse("global <close> *", LuaVersion::Lua55));
+    assert_has_errors(&parse("global <close> x <const>", LuaVersion::Lua55));
     assert_no_errors(&parse("global x <const>", LuaVersion::Lua55));
     assert_no_errors(&parse("global <const> *", LuaVersion::Lua55));
 }
@@ -180,7 +181,7 @@ fn luau_function_attributes_must_be_known_and_unique() {
 }
 
 #[test]
-fn bug_ambiguous_newline_check_covers_method_calls() {
+fn ambiguous_newline_check_covers_method_calls() {
     // `funcargs` and `parseFunctionArgs` apply the line check to `a:b(...)` too.
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
         let result = parse("a:b\n(c)", version);
