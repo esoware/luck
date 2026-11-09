@@ -6,6 +6,10 @@ use luck_token::{CompactString, LuaVersion, Span};
 use rustc_hash::FxHashSet;
 
 use crate::binding::{has_fixed_binding, identifier_name, identifier_token};
+use crate::limits::{
+    GENERIC_FOR_STATE_LOCALS, MAX_ACTIVE_LOCALS, MAX_REGISTERS, NUMERIC_FOR_STATE_LOCALS,
+    parameter_locals,
+};
 
 /// Lifts local declarations to function scope, dropping redundant `local`
 /// keywords.
@@ -31,13 +35,18 @@ struct Lifter {
 
 impl Transform for Lifter {
     fn transform_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
-        let ineligible_names = collect_ineligible_names(&body, self.version);
+        let scan = collect_ineligible_names(&body, self.version);
 
         let mut collector = LiftableCollector {
             scope_names: vec![param_names(&body)],
-            ineligible_names: &ineligible_names,
+            ineligible_names: &scan.ineligible_names,
             liftable_names: FxHashSet::default(),
             ordered_liftable_names: Vec::new(),
+            // Each hoisted name adds at most one local and one register
+            // anywhere in the body, so the body's own peaks bound what fits.
+            hoist_capacity: MAX_ACTIVE_LOCALS
+                .saturating_sub(scan.peak_active_locals)
+                .min(MAX_REGISTERS.saturating_sub(scan.peak_registers)),
             version: self.version,
         };
         collector.collect_block(&body.block);
@@ -74,10 +83,15 @@ struct LiftableCollector<'names> {
     ineligible_names: &'names FxHashSet<CompactString>,
     liftable_names: FxHashSet<CompactString>,
     ordered_liftable_names: Vec<CompactString>,
+    hoist_capacity: usize,
     version: LuaVersion,
 }
 
 impl LiftableCollector<'_> {
+    const fn has_hoist_room(&self, name_count: usize) -> bool {
+        self.ordered_liftable_names.len().saturating_add(name_count) <= self.hoist_capacity
+    }
+
     fn declare(&mut self, name: &str) {
         if let Some(frame) = self.scope_names.last_mut() {
             frame.insert(name.into());
@@ -114,6 +128,7 @@ impl LiftableCollector<'_> {
     fn collect_local(&mut self, local: &LocalAssignment) {
         let names = local.names.items.iter().map(|attributed| identifier_name(&attributed.name));
         if can_lift_assignment(local, self.version)
+            && self.has_hoist_room(local.names.len())
             && names.clone().all(|name| self.is_safe_to_lift(name))
         {
             for name in names.clone() {
@@ -132,6 +147,7 @@ impl LiftableCollector<'_> {
                 let name = identifier_name(&local_function.name);
                 if !local_function.is_const
                     && !local_function.is_exported
+                    && self.has_hoist_room(1)
                     && self.is_safe_to_lift(name)
                 {
                     self.mark_liftable(name);
@@ -221,7 +237,11 @@ fn param_names(body: &FunctionBody) -> FxHashSet<CompactString> {
 ///
 /// A name a closure binds itself resolves inside that closure, so merely
 /// mentioning a name in a closure doesn't block its lift.
-fn collect_ineligible_names(body: &FunctionBody, version: LuaVersion) -> FxHashSet<CompactString> {
+///
+/// The scan also records the body's peak locals and registers, which bound
+/// what the hoisted declaration can add.
+fn collect_ineligible_names(body: &FunctionBody, version: LuaVersion) -> IneligibleScanner {
+    let parameter_count = parameter_locals(body);
     let mut scanner = IneligibleScanner {
         frames: vec![param_names(body)],
         closure_floors: Vec::new(),
@@ -230,9 +250,13 @@ fn collect_ineligible_names(body: &FunctionBody, version: LuaVersion) -> FxHashS
         } else {
             FxHashSet::default()
         },
+        active_locals: parameter_count,
+        peak_active_locals: parameter_count,
+        statement_expr_nodes: 0,
+        peak_registers: parameter_count,
     };
     scanner.visit_block(&body.block);
-    scanner.ineligible_names
+    scanner
 }
 
 struct IneligibleScanner {
@@ -241,6 +265,13 @@ struct IneligibleScanner {
     /// Frame count at each enclosing nested-closure entry.
     closure_floors: Vec<usize>,
     ineligible_names: FxHashSet<CompactString>,
+    /// Locals the walk has active in the function being lifted.
+    active_locals: usize,
+    peak_active_locals: usize,
+    /// Expressions seen in the current statement, each at most one register
+    /// beyond the locals.
+    statement_expr_nodes: usize,
+    peak_registers: usize,
 }
 
 impl IneligibleScanner {
@@ -248,6 +279,24 @@ impl IneligibleScanner {
         if let Some(frame) = self.frames.last_mut() {
             frame.insert(name.into());
         }
+        self.add_active_locals(1);
+    }
+
+    /// A closure's locals don't count: it has its own 200.
+    fn add_active_locals(&mut self, count: usize) {
+        if self.closure_floors.is_empty() {
+            self.active_locals = self.active_locals.saturating_add(count);
+            self.peak_active_locals = self.peak_active_locals.max(self.active_locals);
+        }
+    }
+
+    /// Runs `scan` in a new frame, whose locals it drops afterward.
+    fn in_new_frame(&mut self, scan: impl FnOnce(&mut Self)) {
+        let outer_active_locals = self.active_locals;
+        self.frames.push(FxHashSet::default());
+        scan(self);
+        self.frames.pop();
+        self.active_locals = outer_active_locals;
     }
 
     fn reference(&mut self, name: &str) {
@@ -268,14 +317,15 @@ impl IneligibleScanner {
     }
 
     fn scan_scoped_block(&mut self, block: &Block) {
-        self.frames.push(FxHashSet::default());
-        self.visit_block(block);
-        self.frames.pop();
+        self.in_new_frame(|scanner| scanner.visit_block(block));
     }
 }
 
 impl<'ast> Visitor<'ast> for IneligibleScanner {
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
+        if self.closure_floors.is_empty() {
+            self.statement_expr_nodes = 0;
+        }
         match stmt {
             Statement::LocalAssignment(local) => {
                 // RHS before LHS: `local x = x` reads the outer x.
@@ -305,10 +355,10 @@ impl<'ast> Visitor<'ast> for IneligibleScanner {
             }
             Statement::RepeatLoop(repeat_loop) => {
                 // The condition sees the block's locals.
-                self.frames.push(FxHashSet::default());
-                self.visit_block(&repeat_loop.block);
-                self.visit_expr(&repeat_loop.condition);
-                self.frames.pop();
+                self.in_new_frame(|scanner| {
+                    scanner.visit_block(&repeat_loop.block);
+                    scanner.visit_expr(&repeat_loop.condition);
+                });
             }
             Statement::IfStatement(if_stmt) => {
                 self.visit_expr(&if_stmt.condition);
@@ -327,21 +377,23 @@ impl<'ast> Visitor<'ast> for IneligibleScanner {
                 if let Some(step) = &numeric_for.step {
                     self.visit_expr(step);
                 }
-                self.frames.push(FxHashSet::default());
-                self.declare(identifier_name(&numeric_for.name));
-                self.visit_block(&numeric_for.block);
-                self.frames.pop();
+                self.in_new_frame(|scanner| {
+                    scanner.add_active_locals(NUMERIC_FOR_STATE_LOCALS);
+                    scanner.declare(identifier_name(&numeric_for.name));
+                    scanner.visit_block(&numeric_for.block);
+                });
             }
             Statement::GenericFor(generic_for) => {
                 for expr in generic_for.exprs.iter() {
                     self.visit_expr(expr);
                 }
-                self.frames.push(FxHashSet::default());
-                for param in generic_for.names.iter() {
-                    self.declare(identifier_name(&param.name));
-                }
-                self.visit_block(&generic_for.block);
-                self.frames.pop();
+                self.in_new_frame(|scanner| {
+                    scanner.add_active_locals(GENERIC_FOR_STATE_LOCALS);
+                    for param in generic_for.names.iter() {
+                        scanner.declare(identifier_name(&param.name));
+                    }
+                    scanner.visit_block(&generic_for.block);
+                });
             }
             // These bind nothing in the body's scopes. A `global function`
             // or `type function` body is reached as a closure.
@@ -358,6 +410,15 @@ impl<'ast> Visitor<'ast> for IneligibleScanner {
             | Statement::Break(_)
             | Statement::Error(_) => self.walk_stmt(stmt),
         }
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if self.closure_floors.is_empty() {
+            self.statement_expr_nodes = self.statement_expr_nodes.saturating_add(1);
+            let registers = self.active_locals.saturating_add(self.statement_expr_nodes);
+            self.peak_registers = self.peak_registers.max(registers);
+        }
+        self.walk_expr(expr);
     }
 
     fn visit_var(&mut self, var: &'ast Var) {
@@ -773,7 +834,24 @@ mod tests {
     }
 
     #[test]
-    fn bug_hoisted_declaration_stays_within_the_local_limit() {
+    fn hoisted_declaration_leaves_registers_for_a_wide_statement() {
+        let body = (0..190u32)
+            .map(|i| format!("do local v{i} = g() print(v{i}) end\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        let args = (0..100u32).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let result = apply(&format!("local function w()\n{body}f({args})\nend\nreturn w\n"));
+        let hoisted = result.split("local ").nth(2).expect("hoisted declaration");
+        let (names, _) = hoisted.split_once(' ').expect("names end at the next statement");
+        let name_count = names.split(',').count();
+        assert!(
+            name_count + 101 <= 249,
+            "{name_count} hoisted locals leave no room for the call's 101 registers"
+        );
+    }
+
+    #[test]
+    fn hoisted_declaration_stays_within_the_local_limit() {
         let body = (0..205u32)
             .map(|i| format!("do local v{i} = g() print(v{i}) end\n"))
             .collect::<Vec<_>>()

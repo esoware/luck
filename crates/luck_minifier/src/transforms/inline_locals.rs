@@ -4,11 +4,17 @@ use luck_ast::{
     Block, Expression, FunctionBody, Statement, Transform, Var, Visitor, ensure_sufficient_stack,
     is_prefix_expr,
 };
-use luck_token::{BinOp, CompactString, LuaVersion, Span, UnOp};
+use luck_token::{BinOp, CompactString, LuaVersion, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::binding::{has_fixed_binding, identifier_name};
-use crate::expr::{can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, parenthesize};
+use crate::binding::{
+    IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, has_fixed_binding, has_implicit_arg,
+    identifier_name,
+};
+use crate::expr::{
+    binds_looser_than_unary, can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs,
+    is_closed_literal_expr, parenthesize,
+};
 
 /// Inlines single-use locals whose initializer is a closed literal
 /// expression, removing the declaration.
@@ -16,13 +22,15 @@ use crate::expr::{can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, parenthesize
 /// This pass works on names, not bindings, so every candidate must be
 /// position-insensitive:
 /// - the name must not be bound anywhere else in the file (by another local,
-///   a parameter, a loop variable, a `local function`, or a 5.5 `global`), or
-///   a use of that binding would get the candidate's value;
+///   a parameter, a loop variable, a `local function`, a 5.5 `global`, or a
+///   function's implicit `self` or 5.1 `arg`), or a use of that binding would
+///   get the candidate's value;
 /// - every reference must be a read in the declaration's scope, since a read
 ///   before or past it is a global's and a write would become one;
-/// - the value must carry no identity (a table or closure moved into a loop
-///   mints a fresh object per iteration), capture nothing, and not be `...`,
-///   whose meaning changes across function boundaries.
+/// - the value must be one no error or identity depends on: an operator over
+///   literals may raise (`1 + nil` keeps its error before later statements),
+///   a table or closure moved into a loop mints a fresh object per iteration,
+///   and `...` means something else across a function boundary.
 pub(crate) fn inline(mut block: Block, version: LuaVersion) -> Block {
     loop {
         let candidates = find_inline_candidates(&block, version);
@@ -33,44 +41,6 @@ pub(crate) fn inline(mut block: Block, version: LuaVersion) -> Block {
         block = inliner.transform_block(block);
     }
     block
-}
-
-/// Whether `expr` is a closed literal: literals and operators over literals,
-/// with nothing whose value or identity depends on where it's evaluated.
-fn is_closed_literal_expr(expr: &Expression) -> bool {
-    match expr {
-        Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_) => true,
-        Expression::Parenthesized(paren) => {
-            ensure_sufficient_stack(|| is_closed_literal_expr(&paren.expr))
-        }
-        Expression::UnaryOp(unop) => {
-            ensure_sufficient_stack(|| is_closed_literal_expr(&unop.operand))
-        }
-        Expression::BinaryOp(binop) => ensure_sufficient_stack(|| {
-            is_closed_literal_expr(&binop.left) && is_closed_literal_expr(&binop.right)
-        }),
-        // Luau
-        Expression::TypeCast(cast) => {
-            ensure_sufficient_stack(|| is_closed_literal_expr(&cast.expr))
-        }
-        // Luau
-        Expression::TypeInstantiation(instantiation) => {
-            ensure_sufficient_stack(|| is_closed_literal_expr(&instantiation.expr))
-        }
-        Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Var(_)
-        | Expression::FunctionCall(_)
-        | Expression::TableConstructor(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::Error(_) => false,
-    }
 }
 
 /// Each inlinable local's name, mapped to its initializer.
@@ -210,6 +180,9 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
                 if let Some(root) = function_decl.name.names.first() {
                     self.shadow(identifier_name(root));
                 }
+                if function_decl.name.method.is_some() {
+                    self.shadow(METHOD_RECEIVER_NAME);
+                }
             }
             // Lua 5.5
             Statement::GlobalFunction(global_function) => {
@@ -245,6 +218,9 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
         // Lua 5.5
         if let Some(vararg_name) = body.vararg.as_ref().and_then(|vararg| vararg.name.as_ref()) {
             self.shadow(identifier_name(vararg_name));
+        }
+        if has_implicit_arg(body, self.version) {
+            self.shadow(IMPLICIT_VARARG_TABLE_NAME);
         }
         self.walk_function_body(body);
     }
@@ -359,7 +335,7 @@ fn keeps_grouping(expr: &Expression, position: OperandPosition) -> bool {
             OperandPosition::Right(op) => can_unwrap_in_binop_rhs(expr, op),
             OperandPosition::Unary => !matches!(
                 expr,
-                Expression::BinaryOp(binop) if binop.op.precedence().0 < UnOp::PRECEDENCE
+                Expression::BinaryOp(binop) if binds_looser_than_unary(binop.op)
             ),
             OperandPosition::Cast => false,
         },
@@ -873,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_no_inline_into_a_method_that_binds_self() {
+    fn no_inline_into_a_method_that_binds_self() {
         let result = apply("local self = 5\nfunction M:get() return self end\n");
         assert!(
             result.contains("return self"),
@@ -882,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_no_inline_into_a_lua51_vararg_function_that_binds_arg() {
+    fn no_inline_into_a_lua51_vararg_function_that_binds_arg() {
         let result = apply_version(
             "local arg = 5\nlocal function f(...) return arg end\nreturn f\n",
             LuaVersion::Lua51,
@@ -894,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_no_inline_of_a_literal_operation_that_raises() {
+    fn no_inline_of_a_literal_operation_that_raises() {
         let result = apply("local x = 1 + nil\nprint(\"before\")\nreturn x\n");
         assert!(
             !result.starts_with("print"),

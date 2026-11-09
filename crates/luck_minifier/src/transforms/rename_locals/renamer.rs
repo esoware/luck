@@ -3,10 +3,13 @@
 use luck_ast::{
     AttributedName, FunctionBody, IfStatement, Parameter, Punctuated, Statement, Transform, Var,
 };
-use luck_token::CompactString;
+use luck_token::{CompactString, LuaVersion};
 use rustc_hash::FxHashMap;
 
-use crate::binding::{identifier_name, identifier_token};
+use crate::binding::{
+    IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, has_implicit_arg, identifier_name,
+    identifier_token,
+};
 
 /// Declares bindings in the order the analyzer did, so binding ids line up,
 /// and rewrites every declaration and reference to its binding's new name.
@@ -15,15 +18,17 @@ pub(super) struct Renamer {
     next_binding_id: usize,
     name_stacks: FxHashMap<CompactString, Vec<CompactString>>,
     scope_binding_names: Vec<Vec<CompactString>>,
+    version: LuaVersion,
 }
 
 impl Renamer {
-    pub(super) fn new(binding_new_names: Vec<CompactString>) -> Self {
+    pub(super) fn new(binding_new_names: Vec<CompactString>, version: LuaVersion) -> Self {
         Self {
             binding_new_names,
             next_binding_id: 0,
             name_stacks: FxHashMap::default(),
             scope_binding_names: vec![Vec::new()],
+            version,
         }
     }
 
@@ -101,12 +106,16 @@ impl Renamer {
         if_stmt
     }
 
-    /// Declares each name a `local` binds, keeping its type annotation and
-    /// `<attrib>`.
+    /// Declares each name a `local` binds, after renaming the type annotations
+    /// that read the outer scope.
     fn declare_attributed_names(
         &mut self,
-        names: Punctuated<AttributedName>,
+        mut names: Punctuated<AttributedName>,
     ) -> Punctuated<AttributedName> {
+        for attributed in &mut names.items {
+            attributed.type_annotation =
+                attributed.type_annotation.take().map(|ty| self.transform_type(ty));
+        }
         names.map_items(|mut attributed| {
             let new_name = self.declare_binding(identifier_name(&attributed.name));
             attributed.name = identifier_token(new_name);
@@ -116,10 +125,41 @@ impl Renamer {
 
     fn declare_params(&mut self, params: Punctuated<Parameter>) -> Punctuated<Parameter> {
         params.map_items(|mut param| {
+            param.type_annotation = param.type_annotation.take().map(|ty| self.transform_type(ty));
             let new_name = self.declare_binding(identifier_name(&param.name));
             param.name = identifier_token(new_name);
             param
         })
+    }
+
+    /// Scopes a function's parameters and implicit names, in the order the
+    /// analyzer declared them.
+    fn transform_function(&mut self, mut body: FunctionBody, is_method: bool) -> FunctionBody {
+        self.enter_scope();
+        if is_method {
+            self.declare_binding(METHOD_RECEIVER_NAME);
+        }
+        body.generics = body.generics.map(|mut generics| {
+            *generics = self.walk_generic_type_list(*generics);
+            generics
+        });
+        body.params = self.declare_params(body.params);
+        if has_implicit_arg(&body, self.version) {
+            self.declare_binding(IMPLICIT_VARARG_TABLE_NAME);
+        }
+        body.vararg = body.vararg.map(|mut vararg| {
+            vararg.type_annotation = vararg.type_annotation.map(|ty| self.transform_type(ty));
+            // Lua 5.5
+            if let Some(vararg_name) = vararg.name.as_mut() {
+                let new_name = self.declare_binding(identifier_name(vararg_name));
+                *vararg_name = identifier_token(new_name);
+            }
+            vararg
+        });
+        body.return_type = body.return_type.map(|return_type| self.transform_type(return_type));
+        body.block = self.transform_block(body.block);
+        self.exit_scope();
+        body
     }
 }
 
@@ -139,7 +179,10 @@ impl Transform for Renamer {
                 Statement::LocalFunction(local_function)
             }
             Statement::FunctionDecl(mut function_declaration) => {
-                function_declaration.body = self.transform_function_body(function_declaration.body);
+                function_declaration.body = self.transform_function(
+                    function_declaration.body,
+                    function_declaration.name.method.is_some(),
+                );
                 if let Some(root_name) = function_declaration.name.names.first_mut() {
                     let resolved = self.resolve_name(identifier_name(root_name));
                     *root_name = identifier_token(resolved);
@@ -173,6 +216,9 @@ impl Transform for Renamer {
                 numeric_for.start = self.transform_expr(numeric_for.start);
                 numeric_for.limit = self.transform_expr(numeric_for.limit);
                 numeric_for.step = numeric_for.step.map(|step| self.transform_expr(step));
+                // Luau
+                numeric_for.type_annotation =
+                    numeric_for.type_annotation.map(|ty| self.transform_type(ty));
                 self.enter_scope();
                 let new_name = self.declare_binding(identifier_name(&numeric_for.name));
                 numeric_for.name = identifier_token(new_name);
@@ -229,16 +275,7 @@ impl Transform for Renamer {
         }
     }
 
-    fn transform_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
-        self.enter_scope();
-        body.params = self.declare_params(body.params);
-        // Lua 5.5
-        if let Some(vararg_name) = body.vararg.as_mut().and_then(|vararg| vararg.name.as_mut()) {
-            let new_name = self.declare_binding(identifier_name(vararg_name));
-            *vararg_name = identifier_token(new_name);
-        }
-        body.block = self.transform_block(body.block);
-        self.exit_scope();
-        body
+    fn transform_function_body(&mut self, body: FunctionBody) -> FunctionBody {
+        self.transform_function(body, false)
     }
 }

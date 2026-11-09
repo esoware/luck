@@ -39,6 +39,7 @@ mod binding;
 mod expr;
 #[cfg(test)]
 mod fixtures;
+mod limits;
 mod pipeline;
 mod transforms;
 

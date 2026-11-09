@@ -161,12 +161,45 @@ fn fold_numeric(
             fold_float(int_to_float(left), op, right, version)
         }
         (Float(left), Int(right)) => {
-            if !int_fits_f64(right) {
+            // 5.4+ compiles `x - 0` as an immediate add, so -0.0 keeps or loses
+            // its sign depending on the target. Leaving it unfolded is right
+            // for every target.
+            let is_negative_zero_minus_zero =
+                op == BinOp::Sub && right == 0 && left == 0.0f64 && left.is_sign_negative();
+            if !int_fits_f64(right) || is_negative_zero_minus_zero {
                 return None;
             }
             fold_float(left, op, int_to_float(right), version)
         }
     }
+}
+
+/// `base ^ exponent` when both are integers and every partial product is
+/// exact. Anything else goes through the target's C `pow`, whose rounding
+/// isn't ours to reproduce.
+#[expect(
+    clippy::float_arithmetic,
+    clippy::while_float,
+    reason = "exact integer powers, computed at compile time"
+)]
+fn exact_power(base: f64, exponent: f64) -> Option<f64> {
+    if base.fract() != 0.0f64
+        || exponent.fract() != 0.0f64
+        || !(0.0f64..=53.0f64).contains(&exponent)
+    {
+        return None;
+    }
+    let exact_limit = int_to_float(1i64 << 53);
+    let mut power = 1.0f64;
+    let mut remaining = exponent;
+    while remaining >= 1.0f64 {
+        power *= base;
+        if power.abs() >= exact_limit {
+            return None;
+        }
+        remaining -= 1.0f64;
+    }
+    Some(power)
 }
 
 fn floored_mod(lhs: i64, rhs: i64) -> Option<i64> {
@@ -233,7 +266,7 @@ fn fold_float(lhs: f64, op: BinOp, rhs: f64, version: LuaVersion) -> Option<LuaN
                 lhs - (lhs / rhs).floor() * rhs
             }
         }
-        BinOp::Pow => lhs.powf(rhs),
+        BinOp::Pow => return exact_power(lhs, rhs).map(LuaNumber::Float),
         // Lua 5.3+, Luau
         BinOp::FloorDiv if rhs != 0.0f64 => (lhs / rhs).floor(),
         BinOp::Div
@@ -692,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_subtracting_integer_zero_matches_the_lua54_immediate_add() {
+    fn subtracting_integer_zero_matches_the_lua54_immediate_add() {
         // 5.4+ compiles `x - 0` to OP_ADDI with -0, and -0.0 + 0.0 is +0.0.
         for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
             let result = apply_version("return -0.0 - 0\n", version);
@@ -701,7 +734,19 @@ mod tests {
     }
 
     #[test]
-    fn bug_keeps_exponentiation_with_an_inexact_result() {
+    fn folds_integer_powers_with_an_exact_result() {
+        for (source, expected) in [
+            ("return 2 ^ 10\n", "return 1024.0"),
+            ("return (-2) ^ 3\n", "return-8.0"),
+            ("return 7 ^ 0\n", "return 1.0"),
+            ("return 2 ^ 53\n", "return 2^53"),
+        ] {
+            assert_eq!(apply(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn keeps_exponentiation_with_an_inexact_result() {
         let result = apply("return 0.3 ^ 3\n");
         assert!(
             result.contains('^'),

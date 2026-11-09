@@ -1,7 +1,18 @@
 //! Identifier tokens and the local declarations that bind them.
 
-use luck_ast::LocalAssignment;
+use luck_ast::{FunctionBody, LocalAssignment};
 use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
+
+/// The name a `:` method binds implicitly, ahead of its parameter list.
+pub(crate) const METHOD_RECEIVER_NAME: &str = "self";
+
+/// The name [`has_implicit_arg`] binds.
+pub(crate) const IMPLICIT_VARARG_TABLE_NAME: &str = "arg";
+
+/// Whether `body` binds the implicit `arg` table, after its named parameters.
+pub(crate) const fn has_implicit_arg(body: &FunctionBody, version: LuaVersion) -> bool {
+    body.vararg.is_some() && version.has_implicit_vararg_table()
+}
 
 /// The name an identifier token spells, or `""` for any other token.
 pub(crate) fn identifier_name(token: &Token) -> &str {

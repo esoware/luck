@@ -390,6 +390,16 @@ impl LuaVersion {
         }
     }
 
+    /// Whether a vararg function binds an implicit `arg` table even when
+    /// nothing reads it, as stock 5.1 builds do under `LUA_COMPAT_VARARG`.
+    #[must_use]
+    pub const fn has_implicit_vararg_table(self) -> bool {
+        match self {
+            Self::Lua51 => true,
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => false,
+        }
+    }
+
     /// Whether `continue` ends a loop iteration (Luau, as a contextual
     /// keyword).
     #[must_use]

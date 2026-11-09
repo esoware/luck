@@ -3,13 +3,16 @@
 
 use core::mem;
 
-use luck_ast::{Block, FunctionBody, Statement, Var, Visitor};
+use luck_ast::{Block, Expression, FunctionBody, Punctuated, Statement, Type, Var, Visitor};
 use luck_token::{CompactString, LuaVersion};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::candidate_pool::CandidatePool;
 use super::scope_set::ScopeSet;
-use crate::binding::{identifier_name, is_env_binding};
+use crate::binding::{
+    IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, has_implicit_arg, identifier_name,
+    is_env_binding,
+};
 
 struct ScopeNode {
     parent: Option<usize>,
@@ -22,7 +25,8 @@ struct ScopeNode {
 enum BindingKind {
     /// Gets a slot, and with it a short name.
     Renamable,
-    /// Keeps its name: a local named `self`, a 5.2+ `_ENV`, or a Luau export.
+    /// Keeps its name: a function's implicit `self` or 5.1 `arg`, a 5.2+
+    /// `_ENV`, or a Luau export.
     Fixed,
     /// Lua 5.5: a `global` declaration. It keeps its name and scopes and
     /// shadows like a local, but its references still reach the real global.
@@ -46,8 +50,8 @@ struct BindingInfo {
 ///
 /// The walk is `Visitor`'s, which reaches nodes in the same order as the
 /// renamer's `Transform` walk, so binding ids line up. Both sides walk
-/// function bodies and the statements that bind or open a scope by hand, and
-/// neither visits the types those declare.
+/// function bodies and the statements that bind or open a scope by hand, so
+/// annotations and the names they bind come in the same order on each.
 pub(super) struct Analyzer {
     scopes: Vec<ScopeNode>,
     bindings: Vec<BindingInfo>,
@@ -133,6 +137,9 @@ impl Analyzer {
         }
     }
 
+    /// Declares a binding. One that keeps its name counts as read in its own
+    /// scope, even if nothing reads it, since a local renamed to that name
+    /// would otherwise capture every use of it.
     fn declare_binding(&mut self, name: &str, kind: BindingKind) {
         let scope_id = self.current_scope_id;
         let binding_id = self.bindings.len();
@@ -151,31 +158,16 @@ impl Analyzer {
             scope.binding_ids.push(binding_id);
         }
         self.name_stacks.entry(original_name).or_default().push(binding_id);
+        if kind != BindingKind::Renamable {
+            self.reference_name(name);
+        }
     }
 
+    /// Declares a name a local statement, parameter list, or `for` loop binds.
     fn declare_local(&mut self, name: &str, is_exported: bool) {
-        let is_fixed = name == "self" || is_env_binding(name, self.version) || is_exported;
+        let is_fixed = is_env_binding(name, self.version) || is_exported;
         let kind = if is_fixed { BindingKind::Fixed } else { BindingKind::Renamable };
         self.declare_binding(name, kind);
-    }
-
-    /// Declares a name a parameter list or a `for` loop binds. Unlike a
-    /// local, one named `self` gets renamed. The implicit `self` of a `:`
-    /// method is never in the params list.
-    fn declare_parameter(&mut self, name: &str) {
-        let is_fixed = is_env_binding(name, self.version);
-        let kind = if is_fixed { BindingKind::Fixed } else { BindingKind::Renamable };
-        self.declare_binding(name, kind);
-    }
-
-    /// Lua 5.5: declares `name` as a global from here to the end of the scope.
-    ///
-    /// Lookup finds the newest declaration, so a local renamed to this name and
-    /// used after it would resolve to the global instead. Declaring therefore
-    /// counts as a global read, even if nothing reads the name.
-    fn declare_global(&mut self, name: &str) {
-        self.declare_binding(name, BindingKind::Global);
-        self.reference_name(name);
     }
 
     fn reference_name(&mut self, name: &str) {
@@ -195,16 +187,58 @@ impl Analyzer {
                 }
                 next_scope = scopes.get(scope_id).and_then(|scope| scope.parent);
             }
-            if binding.kind != BindingKind::Global {
+            if binding.kind == BindingKind::Renamable {
                 return;
             }
         }
-        // An unresolved name or a `global` binding reads the real global. The
-        // globals being renamed are pre-declared as root bindings, so their
-        // references resolve above and never get here.
+        // An unresolved name, or a binding that keeps its name, reads a name
+        // no slot live here may wear. The globals being renamed are
+        // pre-declared as root bindings, so their references resolve above
+        // and never get here.
         if let Some(scope) = scopes.get_mut(current_scope) {
             scope.referenced_globals.insert(name.into());
         }
+    }
+
+    fn visit_exprs(&mut self, exprs: &Punctuated<Expression>) {
+        for expr in exprs.iter() {
+            self.visit_expr(expr);
+        }
+    }
+
+    fn visit_annotation(&mut self, annotation: Option<&Type>) {
+        if let Some(ty) = annotation {
+            self.visit_type(ty);
+        }
+    }
+
+    /// Scopes a function's parameters and implicit names, in the order the
+    /// renamer declares them.
+    fn visit_function(&mut self, body: &FunctionBody, is_method: bool) {
+        self.enter_scope();
+        if is_method {
+            self.declare_binding(METHOD_RECEIVER_NAME, BindingKind::Fixed);
+        }
+        if let Some(generics) = &body.generics {
+            self.visit_generic_type_list(generics);
+        }
+        for param in body.params.iter() {
+            self.visit_annotation(param.type_annotation.as_ref());
+            self.declare_local(identifier_name(&param.name), false);
+        }
+        if has_implicit_arg(body, self.version) {
+            self.declare_binding(IMPLICIT_VARARG_TABLE_NAME, BindingKind::Fixed);
+        }
+        if let Some(vararg) = &body.vararg {
+            self.visit_annotation(vararg.type_annotation.as_ref());
+            // Lua 5.5
+            if let Some(vararg_name) = &vararg.name {
+                self.declare_local(identifier_name(vararg_name), false);
+            }
+        }
+        self.visit_annotation(body.return_type.as_ref());
+        self.visit_block(&body.block);
+        self.exit_scope();
     }
 
     fn visit_scoped_block(&mut self, block: &Block) {
@@ -309,11 +343,13 @@ impl<'ast> Visitor<'ast> for Analyzer {
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalAssignment(local) => {
-                // RHS before LHS: `local x = x` reads the outer x.
+                // RHS and annotations before LHS: in
+                // `local x: typeof(x) = x` both read the outer x.
                 if let Some(exprs) = &local.exprs {
-                    for expr in exprs.iter() {
-                        self.visit_expr(expr);
-                    }
+                    self.visit_exprs(exprs);
+                }
+                for attributed in local.names.iter() {
+                    self.visit_annotation(attributed.type_annotation.as_ref());
                 }
                 for attributed in local.names.iter() {
                     self.declare_local(identifier_name(&attributed.name), local.is_exported);
@@ -327,7 +363,10 @@ impl<'ast> Visitor<'ast> for Analyzer {
                 self.visit_function_body(&local_function.body);
             }
             Statement::FunctionDecl(function_declaration) => {
-                self.visit_function_body(&function_declaration.body);
+                self.visit_function(
+                    &function_declaration.body,
+                    function_declaration.name.method.is_some(),
+                );
                 if let Some(root_name) = function_declaration.name.names.first() {
                     self.reference_name(identifier_name(root_name));
                 }
@@ -361,36 +400,35 @@ impl<'ast> Visitor<'ast> for Analyzer {
                 if let Some(step) = &numeric_for.step {
                     self.visit_expr(step);
                 }
+                // Luau
+                self.visit_annotation(numeric_for.type_annotation.as_ref());
                 self.enter_scope();
-                self.declare_parameter(identifier_name(&numeric_for.name));
+                self.declare_local(identifier_name(&numeric_for.name), false);
                 self.visit_block(&numeric_for.block);
                 self.exit_scope();
             }
             Statement::GenericFor(generic_for) => {
-                for expr in generic_for.exprs.iter() {
-                    self.visit_expr(expr);
-                }
+                self.visit_exprs(&generic_for.exprs);
                 self.enter_scope();
                 for param in generic_for.names.iter() {
-                    self.declare_parameter(identifier_name(&param.name));
+                    self.visit_annotation(param.type_annotation.as_ref());
+                    self.declare_local(identifier_name(&param.name), false);
                 }
                 self.visit_block(&generic_for.block);
                 self.exit_scope();
             }
             // Lua 5.5: as with `local function`, the body sees the name.
             Statement::GlobalFunction(global_function) => {
-                self.declare_global(identifier_name(&global_function.name));
+                self.declare_binding(identifier_name(&global_function.name), BindingKind::Global);
                 self.visit_function_body(&global_function.body);
             }
             // Lua 5.5: as with `local`, the initializers see the outer scope.
             Statement::GlobalDeclaration(global_declaration) => {
                 if let Some(exprs) = &global_declaration.exprs {
-                    for expr in exprs.iter() {
-                        self.visit_expr(expr);
-                    }
+                    self.visit_exprs(exprs);
                 }
                 for attributed in global_declaration.names.iter() {
-                    self.declare_global(identifier_name(&attributed.name));
+                    self.declare_binding(identifier_name(&attributed.name), BindingKind::Global);
                 }
             }
             // These bind nothing themselves. The walk still reaches the
@@ -418,15 +456,6 @@ impl<'ast> Visitor<'ast> for Analyzer {
     }
 
     fn visit_function_body(&mut self, body: &'ast FunctionBody) {
-        self.enter_scope();
-        for param in body.params.iter() {
-            self.declare_parameter(identifier_name(&param.name));
-        }
-        // Lua 5.5
-        if let Some(vararg_name) = body.vararg.as_ref().and_then(|vararg| vararg.name.as_ref()) {
-            self.declare_parameter(identifier_name(vararg_name));
-        }
-        self.visit_block(&body.block);
-        self.exit_scope();
+        self.visit_function(body, false);
     }
 }

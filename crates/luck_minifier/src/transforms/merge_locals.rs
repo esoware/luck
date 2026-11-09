@@ -1,32 +1,34 @@
 use core::iter::Peekable;
+use core::mem;
 
 use luck_ast::{
-    Assignment, Block, Expression, LocalAssignment, Punctuated, Statement, Transform, Var, Visitor,
+    Assignment, Block, Expression, FunctionBody, LocalAssignment, Punctuated, Statement, Transform,
+    Var, Visitor,
 };
 use luck_token::{CompactString, LuaVersion, Span, Token};
 use rustc_hash::FxHashSet;
 
 use crate::binding::{has_fixed_binding, identifier_name, is_env_binding};
-use crate::expr::is_pure_expr;
-
-/// Statements a merged group may take on after its first.
-///
-/// Each RHS value of a multi-assignment takes its own register, and a
-/// function only has about 250 of them, hence the cap.
-const MAX_GROUP_FOLLOWERS: usize = 199;
+use crate::expr::{is_pure_modulo_name_reads, is_single_register_value};
+use crate::limits::{
+    GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, assignment_target_limit, parameter_locals,
+};
 
 /// Merges consecutive single-assignment locals (or globals) into
 /// multi-assignment statements.
 pub(crate) fn merge(block: Block, version: LuaVersion) -> Block {
-    LocalMerger { version }.transform_block(block)
+    LocalMerger { version, live_registers: 0 }.transform_block(block)
 }
 
 struct LocalMerger {
     version: LuaVersion,
+    /// Registers the locals in scope hold in the current function.
+    live_registers: usize,
 }
 
-/// The name and value of a lone pure `local name = value`, the only kind of
-/// `local` an initialized group merges.
+/// The name and value of a lone `local name = value` whose value a group may
+/// evaluate beside its neighbors, the only kind of `local` an initialized
+/// group merges.
 fn single_local(local: &LocalAssignment, version: LuaVersion) -> Option<(&Token, &Expression)> {
     // Fixed bindings stay unmerged. Merging a `const` with plain locals, for
     // one, would extend or drop its const-ness.
@@ -35,15 +37,17 @@ fn single_local(local: &LocalAssignment, version: LuaVersion) -> Option<(&Token,
     }
     let exprs = local.exprs.as_ref()?;
     if let ([attributed], [expr]) = (local.names.items.as_slice(), exprs.items.as_slice())
-        && is_pure_expr(expr)
+        && is_pure_modulo_name_reads(expr)
     {
         return Some((&attributed.name, expr));
     }
     None
 }
 
-/// The name and value of a lone pure `name = value`, the only kind of
-/// assignment a group merges.
+/// The name and value of a lone `name = value` a group can size in registers.
+///
+/// A group holds one register per value until the stores run, and only a leaf
+/// value needs exactly one.
 fn single_assignment(
     assignment: &Assignment,
     version: LuaVersion,
@@ -51,7 +55,7 @@ fn single_assignment(
     if let ([Var::Name(name)], [expr]) =
         (assignment.targets.items.as_slice(), assignment.values.items.as_slice())
         && !is_env_binding(identifier_name(name), version)
-        && is_pure_expr(expr)
+        && is_single_register_value(expr)
     {
         return Some((name, expr));
     }
@@ -59,20 +63,27 @@ fn single_assignment(
 }
 
 /// Whether the single assignment of `value` to `name` can join a group that
-/// has `follower_count` followers and assigns `group_names`. One that joins
-/// adds its name to `group_names` for the next one to check.
+/// assigns `group_names`. One that joins adds its name to `group_names` for
+/// the next one to check.
 fn can_join_group(
     name: &Token,
     value: &Expression,
-    follower_count: usize,
     group_names: &mut FxHashSet<CompactString>,
 ) -> bool {
-    let can_join =
-        follower_count < MAX_GROUP_FOLLOWERS && !references_any_in_expr(value, group_names);
+    let can_join = !references_any_in_expr(value, group_names);
     if can_join {
         group_names.insert(identifier_name(name).into());
     }
     can_join
+}
+
+/// How many locals a statement adds to its block.
+fn statement_locals(stmt: &Statement) -> usize {
+    if let Statement::LocalAssignment(local) = stmt {
+        local.names.len()
+    } else {
+        usize::from(matches!(stmt, Statement::LocalFunction(_)))
+    }
 }
 
 impl LocalMerger {
@@ -88,9 +99,8 @@ impl LocalMerger {
             let Statement::LocalAssignment(local) = stmt else {
                 return false;
             };
-            single_local(local, self.version).is_some_and(|(name, value)| {
-                can_join_group(name, value, followers.len(), &mut group_names)
-            })
+            single_local(local, self.version)
+                .is_some_and(|(name, value)| can_join_group(name, value, &mut group_names))
         }) {
             followers.push(next);
         }
@@ -120,18 +130,20 @@ impl LocalMerger {
         first_name: CompactString,
         stmts: &mut Peekable<impl Iterator<Item = Statement>>,
     ) -> Statement {
+        let follower_limit = assignment_target_limit(self.live_registers).saturating_sub(1);
         let mut group_names = FxHashSet::from_iter([first_name]);
         let mut followers = Vec::new();
         while let Some(Statement::Assignment(next)) = stmts.next_if(|stmt| {
             let Statement::Assignment(assignment) = stmt else {
                 return false;
             };
-            single_assignment(assignment, self.version).is_some_and(|(name, value)| {
-                // PUC Lua stores a multiple assignment right to left, so a
-                // repeated target would keep its first value.
-                !group_names.contains(identifier_name(name))
-                    && can_join_group(name, value, followers.len(), &mut group_names)
-            })
+            followers.len() < follower_limit
+                && single_assignment(assignment, self.version).is_some_and(|(name, value)| {
+                    // PUC Lua stores a multiple assignment right to left, so a
+                    // repeated target would keep its first value.
+                    !group_names.contains(identifier_name(name))
+                        && can_join_group(name, value, &mut group_names)
+                })
         }) {
             followers.push(next);
         }
@@ -184,11 +196,12 @@ impl LocalMerger {
 
 impl Transform for LocalMerger {
     fn transform_block(&mut self, block: Block) -> Block {
+        let outer_live_registers = self.live_registers;
         let mut merged_stmts: Vec<Statement> = Vec::new();
         let mut stmts = block.stmts.into_iter().peekable();
 
         while let Some(first_stmt) = stmts.next() {
-            merged_stmts.push(match first_stmt {
+            let merged_stmt = match first_stmt {
                 Statement::LocalAssignment(first) => {
                     if let Some((name, _)) = single_local(&first, self.version) {
                         let first_name = CompactString::from(identifier_name(name));
@@ -226,7 +239,10 @@ impl Transform for LocalMerger {
                 | Statement::CompoundAssignment(_)
                 | Statement::TypeDeclaration(_)
                 | Statement::Error(_)) => self.transform_stmt(other),
-            });
+            };
+            self.live_registers =
+                self.live_registers.saturating_add(statement_locals(&merged_stmt));
+            merged_stmts.push(merged_stmt);
         }
 
         // Fuse `local a,b` plus `a,b=X,Y` into `local a,b=X,Y`.
@@ -237,7 +253,30 @@ impl Transform for LocalMerger {
             last
         });
 
+        self.live_registers = outer_live_registers;
         Block { span: block.span, stmts: fused_stmts, last_stmt }
+    }
+
+    fn transform_stmt(&mut self, stmt: Statement) -> Statement {
+        let outer_live_registers = self.live_registers;
+        let loop_registers = if let Statement::NumericFor(_) = &stmt {
+            NUMERIC_FOR_STATE_LOCALS.saturating_add(1)
+        } else if let Statement::GenericFor(generic_for) = &stmt {
+            GENERIC_FOR_STATE_LOCALS.saturating_add(generic_for.names.len())
+        } else {
+            0
+        };
+        self.live_registers = self.live_registers.saturating_add(loop_registers);
+        let walked = self.walk_stmt(stmt);
+        self.live_registers = outer_live_registers;
+        walked
+    }
+
+    fn transform_function_body(&mut self, body: FunctionBody) -> FunctionBody {
+        let outer_live_registers = mem::replace(&mut self.live_registers, parameter_locals(&body));
+        let walked = self.walk_function_body(body);
+        self.live_registers = outer_live_registers;
+        walked
     }
 }
 
@@ -529,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_merged_assignment_stays_within_the_parser_assignment_limit() {
+    fn merged_assignment_stays_within_the_parser_assignment_limit() {
         let source = (0..250u32).map(|i| format!("g{i} = {i}\n")).collect::<Vec<_>>().concat();
         let target_count = largest_assignment_target_count(&apply(&source));
         assert!(
@@ -539,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_merged_assignment_leaves_registers_for_live_locals() {
+    fn merged_assignment_leaves_registers_for_live_locals() {
         let locals =
             (0..190u32).map(|i| format!("local v{i} = x{i}\n")).collect::<Vec<_>>().concat();
         let assignments = (0..70u32).map(|i| format!("h{i} = {i}\n")).collect::<Vec<_>>().concat();

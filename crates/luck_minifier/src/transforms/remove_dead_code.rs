@@ -8,7 +8,7 @@ use luck_token::{BinOp, CompactString, LuaVersion, Span, UnOp};
 use rustc_hash::FxHashSet;
 
 use crate::binding::{has_attributed_or_env_name, identifier_name, is_env_binding};
-use crate::expr::{extract_boolean, is_nil, is_pure_expr};
+use crate::expr::{binds_looser_than_unary, extract_boolean, is_nil, is_pure_expr, parenthesize};
 
 /// Removes unused locals, dead branches, and trivial statements, looping to a
 /// fixpoint.
@@ -406,7 +406,10 @@ impl Transform for DeadCodeRemover {
 fn negate_expr(expr: Expression) -> Expression {
     // Only wrap in `not`. Inverting a comparison operator would change which
     // metamethod is called, __lt instead of __le and so on.
-    Expression::UnaryOp(Box::new(UnaryOp { span: Span::default(), op: UnOp::Not, operand: expr }))
+    let needs_parens =
+        matches!(&expr, Expression::BinaryOp(binop) if binds_looser_than_unary(binop.op));
+    let operand = if needs_parens { parenthesize(expr) } else { expr };
+    Expression::UnaryOp(Box::new(UnaryOp { span: Span::default(), op: UnOp::Not, operand }))
 }
 
 enum DeadLocalAction {
@@ -632,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_negated_empty_then_condition_keeps_its_grouping() {
+    fn negated_empty_then_condition_keeps_its_grouping() {
         for condition in ["a == b", "a and b", "a or b"] {
             let result = apply(&format!("if {condition} then else print(1) end\n"));
             assert!(
@@ -643,13 +646,13 @@ mod tests {
     }
 
     #[test]
-    fn bug_keeps_unused_local_reading_a_global() {
+    fn keeps_unused_local_reading_a_global() {
         let result = apply("local unused = g\nreturn 1\n");
         assert!(result.contains('g'), "a global read can fire __index, so it must stay: {result}");
     }
 
     #[test]
-    fn bug_keeps_unused_local_whose_literal_operation_raises() {
+    fn keeps_unused_local_whose_literal_operation_raises() {
         for initializer in
             ["1 // 0", "1 % 0", "nil + 1", "#nil", "\"a\" .. nil", "1 < \"a\"", "-\"a\""]
         {
@@ -662,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_keeps_unused_table_whose_constructor_raises() {
+    fn keeps_unused_table_whose_constructor_raises() {
         for key in ["nil", "0/0"] {
             let result = apply(&format!("local unused = {{[{key}] = 1}}\nreturn 1\n"));
             assert!(

@@ -36,7 +36,9 @@ impl PieceClass {
             "." => Self::Dot,
             ".." => Self::DotDot,
             "<" => Self::Less,
-            ">" => Self::Greater,
+            // Luau's `>>` type-instantiation close, and the 5.3+ right shift
+            // that spells it the same way.
+            ">" | ">>" => Self::Greater,
             ";" => Self::Semicolon,
             _ => match text.as_bytes().first() {
                 Some(first) if first.is_ascii_alphanumeric() || *first == b'_' => Self::Word,
@@ -85,7 +87,8 @@ pub(crate) const fn needs_space(
         PieceClass::Dot | PieceClass::DotDot => next_first_byte == b'.',
         // `<` before `<` - prevents `<<` shift.
         PieceClass::Less => next_first_byte == b'<',
-        // `>` before `>` or `=` - prevents `>>` and `>=`.
+        // `>` before `>` or `=` - prevents `>>` and `>=`, and a `>>` close
+        // before `=` lexing as `>` `>=`.
         PieceClass::Greater => next_first_byte == b'>' || next_first_byte == b'=',
         PieceClass::Semicolon | PieceClass::Other => false,
     }
@@ -167,6 +170,7 @@ mod tests {
         assert_eq!(PieceClass::of_fixed("end"), PieceClass::Word);
         assert_eq!(PieceClass::of_fixed("-"), PieceClass::Minus);
         assert_eq!(PieceClass::of_fixed(".."), PieceClass::DotDot);
+        assert_eq!(PieceClass::of_fixed(">>"), PieceClass::Greater);
         assert_eq!(PieceClass::of_fixed("..."), PieceClass::Other);
         assert_eq!(PieceClass::of_fixed(";"), PieceClass::Semicolon);
         assert_eq!(PieceClass::of_fixed("=="), PieceClass::Other);

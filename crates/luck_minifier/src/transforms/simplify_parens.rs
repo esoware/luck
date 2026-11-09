@@ -3,7 +3,10 @@ use luck_ast::{
     is_prefix_expr,
 };
 
-use crate::expr::{can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, parenthesize};
+use crate::expr::{
+    binds_looser_than_unary, can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, ends_in_if_expr,
+    parenthesize,
+};
 
 /// Removes parentheses that operator precedence and the operand's expression
 /// kind already make redundant.
@@ -199,7 +202,7 @@ const fn can_remove_parens(inner: &Expression) -> bool {
     }
 }
 
-const fn can_unwrap_in_unary(inner: &Expression) -> bool {
+fn can_unwrap_in_unary(inner: &Expression) -> bool {
     match inner {
         Expression::Number(_)
         | Expression::Integer(_)
@@ -209,11 +212,13 @@ const fn can_unwrap_in_unary(inner: &Expression) -> bool {
         | Expression::False(_)
         | Expression::Var(_)
         | Expression::TableConstructor(_)
-        | Expression::FunctionDef(_)
-        | Expression::UnaryOp(_) => true,
+        | Expression::FunctionDef(_) => true,
+        Expression::UnaryOp(_) => !ends_in_if_expr(inner),
         // Not safe: `-(a+b)` isn't `-a+b`.
-        Expression::BinaryOp(_)
-        | Expression::FunctionCall(_)
+        Expression::BinaryOp(binop) => {
+            !binds_looser_than_unary(binop.op) && !ends_in_if_expr(inner)
+        }
+        Expression::FunctionCall(_)
         | Expression::VarArg(_)
         | Expression::Parenthesized(_)
         | Expression::IfExpression(_)

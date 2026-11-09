@@ -68,19 +68,13 @@ impl Transform for NumberShortener {
 /// need a unary minus, which is a different AST shape.
 fn shorten_integer(text: &str) -> Option<String> {
     let body = text.strip_suffix('i').unwrap_or(text);
-    let digits: String = body
-        .trim_start_matches("0x")
-        .trim_start_matches("0X")
-        .trim_start_matches("0b")
-        .trim_start_matches("0B")
-        .chars()
-        .filter(|character| *character != '_')
-        .collect();
-    let radix = match body.as_bytes().get(1) {
-        Some(b'x' | b'X') => 16,
-        Some(b'b' | b'B') => 2,
-        _ => 10,
+    let binary_digits = body.strip_prefix("0b").or_else(|| body.strip_prefix("0B"));
+    let (digit_text, radix) = match (hex_digits(body), binary_digits) {
+        (Some(hex), _) => (hex, 16),
+        (None, Some(binary)) => (binary, 2),
+        (None, None) => (body, 10),
     };
+    let digits: String = digit_text.chars().filter(|character| *character != '_').collect();
     let value = u64::from_str_radix(&digits, radix).ok()?;
 
     let mut best = format!("0x{value:x}i");
@@ -321,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_hex_integer_starting_with_0b_keeps_its_value() {
+    fn hex_integer_starting_with_0b_keeps_its_value() {
         assert_eq!(
             shorten_integer("0x0b12i").as_deref(),
             Some("2834i"),

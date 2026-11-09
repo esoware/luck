@@ -11,7 +11,7 @@ AST-level minification for Lua and Luau.
 - **Twelve transform passes.** The classic minifier optimizations plus a few specific to Lua's semantics. Eleven toggle individually through `TransformConfig` (`remove_dead_code`, `simplify_statements`, `fold_constants`, `inline_locals`, `merge_locals`, `simplify_indexes`, `shorten_strings`, `shorten_numbers`, `simplify_parens`, `rename_locals`, `lift_locals`), and `explicit_self` runs whenever `rename_locals` does. The opt-in, off-by-default `rename_globals` flag extends renaming to globals the file defines.
 - **Fixpoint pipeline.** `fold_constants` and `remove_dead_code` each run twice within a round, since inlining exposes new folds and folding exposes new dead branches. The whole chain then repeats until the emitted output stops changing.
 - **Scope-aware renaming.** `rename_locals` resolves every reference to its binding and lets bindings whose live scopes don't overlap share the same short name.
-- **Metamethod-safe.** Purity checks treat arithmetic, comparison, concatenation, and indexing involving variables as impure, because any of them can dispatch through a metamethod with side effects.
+- **Metamethod-safe.** Purity checks treat a variable read, and arithmetic, comparison, concatenation, or indexing involving one, as impure, because any of them can dispatch through a metamethod with side effects. A literal operation that can raise, such as `1 // 0`, counts as impure too.
 - **Idempotent output.** `minify(minify(x)) == minify(x)` is a hard invariant, enforced by tests.
 
 ## Architecture

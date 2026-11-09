@@ -40,6 +40,7 @@ fn binding_predicates_match_their_versions() {
     assert_eq!(versions_with(LuaVersion::has_attributes), [Lua54, Lua55]);
     assert_eq!(versions_with(LuaVersion::has_leading_attributes), [Lua55]);
     assert_eq!(versions_with(LuaVersion::has_named_varargs), [Lua55]);
+    assert_eq!(versions_with(LuaVersion::has_implicit_vararg_table), [Lua51]);
     assert_eq!(versions_with(LuaVersion::has_env_upvalue), [Lua52, Lua53, Lua54, Lua55]);
     assert_eq!(versions_with(LuaVersion::has_read_only_bindings), [Lua54, Lua55, Luau]);
     assert_eq!(versions_with(LuaVersion::has_explicit_type_instantiation), [Luau]);

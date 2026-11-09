@@ -25,7 +25,7 @@ pub(crate) fn rename(block: Block, version: LuaVersion, rename_globals: bool) ->
     analyzer.visit_block(&block);
     let binding_names = analyzer.binding_names();
 
-    let mut renamer = Renamer::new(binding_names);
+    let mut renamer = Renamer::new(binding_names, version);
     renamer.declare_root_globals(&root_globals);
     renamer.transform_block(block)
 }
@@ -708,7 +708,7 @@ cache = f()
     }
 
     #[test]
-    fn bug_nested_method_self_is_not_the_enclosing_self_parameter() {
+    fn nested_method_self_is_not_the_enclosing_self_parameter() {
         let result =
             apply("function M.f(self)\n  function t:g() return self end\n  return self\nend\n");
         assert!(
@@ -718,7 +718,7 @@ cache = f()
     }
 
     #[test]
-    fn bug_lua51_vararg_function_keeps_its_implicit_arg() {
+    fn lua51_vararg_function_keeps_its_implicit_arg() {
         let result = apply_version(
             "local arg = g()\nlocal function f(...) return arg end\nreturn f, arg\n",
             LuaVersion::Lua51,
@@ -730,7 +730,7 @@ cache = f()
     }
 
     #[test]
-    fn bug_renamed_local_never_wears_an_exported_name() {
+    fn renamed_local_never_wears_an_exported_name() {
         let result = apply_luau("export local l = 1\nlocal longname = f()\nprint(l, longname)\n");
         assert!(
             !result.contains("local l=f()"),
@@ -739,7 +739,35 @@ cache = f()
     }
 
     #[test]
-    fn bug_typeof_in_a_local_annotation_follows_the_rename() {
+    fn lua51_implicit_arg_wins_over_a_parameter_named_arg() {
+        let result = apply_version(
+            "local function f(arg, ...) return arg end\nreturn f\n",
+            LuaVersion::Lua51,
+        );
+        assert!(result.contains("return arg"), "{result}");
+    }
+
+    #[test]
+    fn local_named_self_is_an_ordinary_local() {
+        assert_luau_renames(&[("local self = f()\nprint(self, self)\n", "local l=f()print(l,l)")]);
+    }
+
+    #[test]
+    fn typeof_in_every_annotation_follows_the_rename() {
+        for source in [
+            "local outer = f()\nlocal function g(a: typeof(outer)) return a end\nreturn g, outer\n",
+            "local outer = f()\nlocal function g(...: typeof(outer)) return ... end\nreturn g, outer\n",
+            "local outer = f()\nlocal function g(): typeof(outer) return outer end\nreturn g\n",
+            "local outer = f()\nfor i: typeof(outer) = 1, 2 do print(i) end\nreturn outer\n",
+            "local outer = f()\nfor k: typeof(outer) in g() do print(k) end\nreturn outer\n",
+        ] {
+            let result = apply_luau(source);
+            assert!(!result.contains("typeof(outer)"), "{source}: {result}");
+        }
+    }
+
+    #[test]
+    fn typeof_in_a_local_annotation_follows_the_rename() {
         let result = apply_luau(
             "local outer = f()\nlocal copy: typeof(outer) = outer\nreturn copy, outer\n",
         );
