@@ -16,7 +16,7 @@ impl Parser<'_> {
     /// Left-associative chains grow in a loop; only right operands recurse.
     #[inline]
     pub(super) fn parse_expr(&mut self, min_precedence: u8) -> Expression {
-        let mut left = self.parse_prefix();
+        let mut lhs = self.parse_prefix();
 
         while let Some(op) = BinOp::from_token_kind(self.peek()) {
             // Luau's lexer emits `&` and `|` for the type grammar only; they
@@ -29,7 +29,7 @@ impl Parser<'_> {
                 break;
             }
             let op_span = self.advance_span();
-            let right_min_precedence = if associativity == Associativity::Right {
+            let rhs_min_precedence = if associativity == Associativity::Right {
                 precedence
             } else {
                 precedence.saturating_add(1)
@@ -37,21 +37,21 @@ impl Parser<'_> {
             // Right-associative chains (`..`, `^`) recurse once per operator,
             // so a long one would overflow the stack without this guard.
             if !self.enter_depth() {
-                let span = left.span().merge(op_span);
+                let span = lhs.span().merge(op_span);
                 return Expression::BinaryOp(Box::new(BinaryOp {
                     span,
-                    left,
+                    lhs,
                     op,
-                    right: Expression::Error(op_span),
+                    rhs: Expression::Error(op_span),
                 }));
             }
-            let right = self.parse_expr(right_min_precedence);
+            let rhs = self.parse_expr(rhs_min_precedence);
             self.exit_depth();
-            let span = left.span().merge(right.span());
-            left = Expression::BinaryOp(Box::new(BinaryOp { span, left, op, right }));
+            let span = lhs.span().merge(rhs.span());
+            lhs = Expression::BinaryOp(Box::new(BinaryOp { span, lhs, op, rhs }));
         }
 
-        left
+        lhs
     }
 
     pub(super) fn parse_expr_list(&mut self) -> Punctuated<Expression> {

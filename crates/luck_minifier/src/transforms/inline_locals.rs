@@ -356,7 +356,7 @@ fn keeps_grouping(expr: &Expression, position: OperandPosition) -> bool {
 fn last_operand(expr: &mut Expression) -> &mut Expression {
     match expr {
         Expression::BinaryOp(binary_op) => {
-            ensure_sufficient_stack(move || last_operand(&mut binary_op.right))
+            ensure_sufficient_stack(move || last_operand(&mut binary_op.rhs))
         }
         Expression::UnaryOp(unop) => {
             ensure_sufficient_stack(move || last_operand(&mut unop.operand))
@@ -398,10 +398,10 @@ impl Inliner {
         match expr {
             Expression::BinaryOp(binary_op) => {
                 if binary_op.op == BinOp::Lt {
-                    self.close_cast_before_less_than(&mut binary_op.left);
+                    self.close_cast_before_less_than(&mut binary_op.lhs);
                 }
-                self.inline_operand(&mut binary_op.left, OperandPosition::Left(binary_op.op));
-                self.inline_operand(&mut binary_op.right, OperandPosition::Right(binary_op.op));
+                self.inline_operand(&mut binary_op.lhs, OperandPosition::Left(binary_op.op));
+                self.inline_operand(&mut binary_op.rhs, OperandPosition::Right(binary_op.op));
             }
             Expression::UnaryOp(unop) => {
                 self.inline_operand(&mut unop.operand, OperandPosition::Unary);

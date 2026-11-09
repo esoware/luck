@@ -56,7 +56,7 @@ fn ends_with_type_cast(expr: &Expression) -> bool {
         current = match current {
             // Luau
             Expression::TypeCast(_) => return true,
-            Expression::BinaryOp(inner) => &inner.right,
+            Expression::BinaryOp(inner) => &inner.rhs,
             Expression::UnaryOp(inner) => &inner.operand,
             Expression::Nil(_)
             | Expression::False(_)
@@ -136,7 +136,12 @@ impl Synth {
     pub fn binary_op(&self, lhs: Expression, op: BinOp, rhs: Expression) -> Expression {
         let left = self.wrap_binary_operand(lhs, op, OperandSide::Left);
         let right = self.wrap_binary_operand(rhs, op, OperandSide::Right);
-        Expression::BinaryOp(Box::new(BinaryOp { span: self.next_span(), left, op, right }))
+        Expression::BinaryOp(Box::new(BinaryOp {
+            span: self.next_span(),
+            lhs: left,
+            op,
+            rhs: right,
+        }))
     }
 
     /// `op operand`, parenthesizing a binary or if-expression operand.
@@ -472,7 +477,7 @@ mod tests {
             panic!("expected binop");
         };
         assert!(
-            matches!(binary_op.left, Expression::Parenthesized(_)),
+            matches!(binary_op.lhs, Expression::Parenthesized(_)),
             "lower-precedence LHS not parenthesized"
         );
     }
@@ -487,7 +492,7 @@ mod tests {
         let Expression::BinaryOp(binary_op) = &sum else {
             panic!("expected binop");
         };
-        assert!(matches!(binary_op.left, Expression::BinaryOp(_)));
+        assert!(matches!(binary_op.lhs, Expression::BinaryOp(_)));
     }
 
     #[test]
@@ -500,7 +505,7 @@ mod tests {
         let Expression::BinaryOp(concat_node) = &concat else {
             panic!("expected binop");
         };
-        assert!(matches!(concat_node.left, Expression::Parenthesized(_)));
+        assert!(matches!(concat_node.lhs, Expression::Parenthesized(_)));
 
         // Right-nested subtraction needs parens: a - (b - c).
         let inner_difference =
@@ -509,7 +514,7 @@ mod tests {
         let Expression::BinaryOp(difference_node) = &difference else {
             panic!("expected binop");
         };
-        assert!(matches!(difference_node.right, Expression::Parenthesized(_)));
+        assert!(matches!(difference_node.rhs, Expression::Parenthesized(_)));
     }
 
     #[test]
@@ -521,7 +526,7 @@ mod tests {
         let Expression::BinaryOp(power_node) = &power else {
             panic!("expected binop");
         };
-        assert!(matches!(power_node.left, Expression::Parenthesized(_)));
+        assert!(matches!(power_node.lhs, Expression::Parenthesized(_)));
 
         // a * -b stays bare: unary is always accepted after a binary_op.
         let negated_factor = synth.unary_op(UnOp::Neg, synth.name_expr("b"));
@@ -529,7 +534,7 @@ mod tests {
         let Expression::BinaryOp(product_node) = &product else {
             panic!("expected binop");
         };
-        assert!(matches!(product_node.right, Expression::UnaryOp(_)));
+        assert!(matches!(product_node.rhs, Expression::UnaryOp(_)));
     }
 
     #[test]
@@ -542,7 +547,7 @@ mod tests {
             panic!("expected binop");
         };
         assert!(
-            matches!(binary_op.right, Expression::Parenthesized(_)),
+            matches!(binary_op.rhs, Expression::Parenthesized(_)),
             "greedy if-expression must be parenthesized as an operand"
         );
     }
@@ -558,7 +563,7 @@ mod tests {
                 panic!("expected binop");
             };
             assert!(
-                matches!(binary_op.left, Expression::Parenthesized(_)),
+                matches!(binary_op.lhs, Expression::Parenthesized(_)),
                 "cast before {op:?} must be parenthesized"
             );
         }
@@ -569,7 +574,7 @@ mod tests {
         let Expression::BinaryOp(bare_node) = &bare_sum else {
             panic!("expected binop");
         };
-        assert!(matches!(bare_node.right, Expression::TypeCast(_)));
+        assert!(matches!(bare_node.rhs, Expression::TypeCast(_)));
 
         // The cast may sit at the end of a larger left operand: the whole
         // operand gains parens, `(a + b :: T) < c`.
@@ -579,7 +584,7 @@ mod tests {
         let Expression::BinaryOp(sum_node) = &sum_compared else {
             panic!("expected binop");
         };
-        assert!(matches!(sum_node.left, Expression::Parenthesized(_)));
+        assert!(matches!(sum_node.lhs, Expression::Parenthesized(_)));
 
         // A cast on the right of `<` ends the expression; no parens needed.
         let rhs_cast = synth.type_cast(synth.name_expr("b"), synth.ty_named("T"));
@@ -587,7 +592,7 @@ mod tests {
         let Expression::BinaryOp(compared_node) = &cast_compared else {
             panic!("expected binop");
         };
-        assert!(matches!(compared_node.right, Expression::TypeCast(_)));
+        assert!(matches!(compared_node.rhs, Expression::TypeCast(_)));
     }
 
     #[test]

@@ -136,10 +136,10 @@ fn length_offset_operand(expr: &Expression, op: BinOp, version: LuaVersion) -> O
     let Expression::BinaryOp(binary_op) = expr else {
         return None;
     };
-    if binary_op.op != op || !is_number_literal(&binary_op.right, 1.0, version) {
+    if binary_op.op != op || !is_number_literal(&binary_op.rhs, 1.0, version) {
         return None;
     }
-    length_operand(&binary_op.left)
+    length_operand(&binary_op.lhs)
 }
 
 /// Anything else, such as an index or a call, never matches.

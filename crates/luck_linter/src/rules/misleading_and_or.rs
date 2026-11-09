@@ -26,10 +26,10 @@ impl NodeRule for MisleadingAndOr {
         if let Expression::BinaryOp(outer) = expr
             && outer.op == BinOp::Or
         {
-            let lhs = unparenthesize(&outer.left);
+            let lhs = unparenthesize(&outer.lhs);
             if let Expression::BinaryOp(inner) = lhs
                 && inner.op == BinOp::And
-                && is_falsy_literal(&inner.right)
+                && is_falsy_literal(&inner.rhs)
             {
                 findings.push(
                     Finding::new("`(x and FALSY) or y` always evaluates to `y`", outer.span)

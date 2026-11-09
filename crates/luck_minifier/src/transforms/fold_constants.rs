@@ -23,10 +23,10 @@ impl Transform for ConstantFolder {
     fn transform_expr(&mut self, expr: Expression) -> Expression {
         match self.walk_expr(expr) {
             Expression::BinaryOp(mut binary_op) => {
-                match fold_binary(&binary_op.left, binary_op.op, &binary_op.right, self.version) {
+                match fold_binary(&binary_op.lhs, binary_op.op, &binary_op.rhs, self.version) {
                     Some(BinaryFold::Literal(literal)) => literal,
-                    Some(BinaryFold::Left) => binary_op.left.take(),
-                    Some(BinaryFold::Right) => truncate_multi_value(binary_op.right.take()),
+                    Some(BinaryFold::Left) => binary_op.lhs.take(),
+                    Some(BinaryFold::Right) => truncate_multi_value(binary_op.rhs.take()),
                     None => Expression::BinaryOp(binary_op),
                 }
             }

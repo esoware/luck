@@ -25,7 +25,7 @@ impl NodeRule for CompareNan {
         let version = context.semantic.version;
         if let Expression::BinaryOp(binary_op) = expr
             && matches!(binary_op.op, BinOp::Eq | BinOp::Ne)
-            && (is_nan_expr(&binary_op.left, version) || is_nan_expr(&binary_op.right, version))
+            && (is_nan_expr(&binary_op.lhs, version) || is_nan_expr(&binary_op.rhs, version))
         {
             findings.push(
                 Finding::new(
@@ -45,8 +45,8 @@ fn is_nan_expr(expr: &Expression, version: LuaVersion) -> bool {
         return false;
     };
     binary_op.op == BinOp::Div
-        && is_number_literal(&binary_op.left, 0.0, version)
-        && is_number_literal(&binary_op.right, 0.0, version)
+        && is_number_literal(&binary_op.lhs, 0.0, version)
+        && is_number_literal(&binary_op.rhs, 0.0, version)
 }
 
 #[cfg(test)]

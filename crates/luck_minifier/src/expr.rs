@@ -149,8 +149,8 @@ const fn unary_literal_kind(op: UnOp, operand: LiteralKind) -> Option<LiteralKin
 }
 
 fn binary_literal_kind(binary_op: &BinaryOp) -> Option<LiteralKind> {
-    let left = literal_kind(&binary_op.left)?;
-    let right = literal_kind(&binary_op.right)?;
+    let left = literal_kind(&binary_op.lhs)?;
+    let right = literal_kind(&binary_op.rhs)?;
     let are_numbers = left.is_number() && right.is_number();
     let are_integers = left == LiteralKind::Integer && right == LiteralKind::Integer;
     let arithmetic_kind = if are_integers { LiteralKind::Integer } else { LiteralKind::Float };
@@ -168,7 +168,7 @@ fn binary_literal_kind(binary_op: &BinaryOp) -> Option<LiteralKind> {
         BinOp::Div | BinOp::Pow => are_numbers.then_some(LiteralKind::Float),
         // `%` and `//` raise on a zero integer divisor in 5.3+.
         BinOp::Mod | BinOp::FloorDiv => {
-            (are_numbers && is_nonzero_number_literal(&binary_op.right)).then_some(arithmetic_kind)
+            (are_numbers && is_nonzero_number_literal(&binary_op.rhs)).then_some(arithmetic_kind)
         }
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
             are_integers.then_some(LiteralKind::Integer)
@@ -221,8 +221,8 @@ fn is_effect_free(expr: &Expression, can_read_names: bool) -> bool {
                 // and/or never invoke metamethods, so they are pure whenever
                 // both operands are.
                 ensure_sufficient_stack(|| {
-                    is_effect_free(&binary_op.left, can_read_names)
-                        && is_effect_free(&binary_op.right, can_read_names)
+                    is_effect_free(&binary_op.lhs, can_read_names)
+                        && is_effect_free(&binary_op.rhs, can_read_names)
                 })
             } else {
                 literal_kind(expr).is_some()
@@ -374,7 +374,7 @@ pub(crate) fn ends_in_if_expr(expr: &Expression) -> bool {
     loop {
         current = match current {
             Expression::IfExpression(_) => return true,
-            Expression::BinaryOp(binary_op) => &binary_op.right,
+            Expression::BinaryOp(binary_op) => &binary_op.rhs,
             Expression::UnaryOp(unop) => &unop.operand,
             Expression::Nil(_)
             | Expression::False(_)

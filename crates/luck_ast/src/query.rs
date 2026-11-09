@@ -151,7 +151,7 @@ fn expr_starts_with_paren(expr: &Expression) -> bool {
             Expression::FunctionCall(call) => &call.callee,
             Expression::Var(Var::FieldAccess(field_access)) => &field_access.prefix,
             Expression::Var(Var::Index(index)) => &index.prefix,
-            Expression::BinaryOp(binary_op) => &binary_op.left,
+            Expression::BinaryOp(binary_op) => &binary_op.lhs,
             // Luau
             Expression::TypeCast(cast) => &cast.expr,
             // Luau
@@ -191,7 +191,7 @@ pub fn expr_starts_with_brace(expr: &Expression) -> bool {
         current = match current {
             Expression::TableConstructor(_) => return true,
             Expression::FunctionCall(call) => &call.callee,
-            Expression::BinaryOp(binary_op) => &binary_op.left,
+            Expression::BinaryOp(binary_op) => &binary_op.lhs,
             // Luau
             Expression::TypeCast(cast) => &cast.expr,
             Expression::Var(Var::FieldAccess(field_access)) => &field_access.prefix,

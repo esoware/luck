@@ -37,8 +37,8 @@ impl NodeRule for UnnecessaryNegation {
         let Some(opposite_op) = opposite_comparison(comparison.op) else {
             return;
         };
-        let lhs = comparison.left.span().text(context.source);
-        let rhs = comparison.right.span().text(context.source);
+        let lhs = comparison.lhs.span().text(context.source);
+        let rhs = comparison.rhs.span().text(context.source);
         let op_text = opposite_op.static_text();
         // Only `==` and `~=` get a fix, since `a ~= b` is defined as
         // `not (a == b)`. Flipping `<` or `<=` changes the result for NaN

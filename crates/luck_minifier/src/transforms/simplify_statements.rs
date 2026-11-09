@@ -156,8 +156,8 @@ const fn has_no_else(if_stmt: &IfStatement) -> bool {
 }
 
 /// A nested operand of the same operator stays bare on either side, because
-/// `and` and `or` are associative. An if-expression as `right` prints last, so
-/// only one in `left` can swallow an operator.
+/// `and` and `or` are associative. An if-expression as `rhs` prints last, so
+/// only one in `lhs` can swallow an operator.
 fn logical(left_operand: Expression, op: BinOp, right_operand: Expression) -> Expression {
     let left = if binds_looser(&left_operand, op) || ends_in_if_expr(&left_operand) {
         parenthesize(left_operand)
@@ -166,7 +166,7 @@ fn logical(left_operand: Expression, op: BinOp, right_operand: Expression) -> Ex
     };
     let right =
         if binds_looser(&right_operand, op) { parenthesize(right_operand) } else { right_operand };
-    Expression::BinaryOp(Box::new(BinaryOp { span: Span::default(), left, op, right }))
+    Expression::BinaryOp(Box::new(BinaryOp { span: Span::default(), lhs: left, op, rhs: right }))
 }
 
 fn binds_looser(operand: &Expression, op: BinOp) -> bool {

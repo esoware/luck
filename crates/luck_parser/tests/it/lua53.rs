@@ -17,7 +17,7 @@ fn bitwise_and_or_precedence() {
     if let Expression::BinaryOp(outer) = expr {
         assert!(matches!(outer.op, BinOp::BitOr), "expected Pipe at top, got {:?}", outer.op);
         assert!(
-            matches!(&outer.left, Expression::BinaryOp(inner) if matches!(inner.op, BinOp::BitAnd)),
+            matches!(&outer.lhs, Expression::BinaryOp(inner) if matches!(inner.op, BinOp::BitAnd)),
             "expected Ampersand on left"
         );
     } else {
@@ -70,7 +70,7 @@ fn shift_and_bitwise_precedence() {
     let expr = local_value(&result);
     if let Expression::BinaryOp(outer) = expr {
         assert!(matches!(outer.op, BinOp::BitAnd), "expected Ampersand at top, got {:?}", outer.op);
-        if let Expression::BinaryOp(inner) = &outer.left {
+        if let Expression::BinaryOp(inner) = &outer.lhs {
             assert!(
                 matches!(inner.op, BinOp::Shr),
                 "expected ShiftRight on left, got {:?}",

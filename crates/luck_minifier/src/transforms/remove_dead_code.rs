@@ -165,15 +165,15 @@ fn is_dead_branch(stmt: &Statement) -> bool {
 
 fn is_redundant_ternary(outer: &BinaryOp) -> bool {
     matches!(
-        &outer.left,
+        &outer.lhs,
         Expression::BinaryOp(inner)
             if matches!(outer.op, BinOp::Or)
                 && matches!(inner.op, BinOp::And)
-                && inner.right == outer.right
-                && is_pure_expr(&inner.left)
+                && inner.rhs == outer.rhs
+                && is_pure_expr(&inner.lhs)
                 // X must be pure too: a call that returns a falsy value runs
                 // twice in the original but once here.
-                && is_pure_expr(&outer.right)
+                && is_pure_expr(&outer.rhs)
     )
 }
 
@@ -372,7 +372,7 @@ impl Transform for DeadCodeRemover {
             // and the condition is pure.
             Expression::BinaryOp(mut outer) if is_redundant_ternary(&outer) => {
                 self.has_changed = true;
-                outer.right.take()
+                outer.rhs.take()
             }
             other @ (Expression::Nil(_)
             | Expression::False(_)

@@ -41,8 +41,8 @@ pub(super) fn expr_eq(
         (Expression::Var(lhs), Expression::Var(rhs)) => var_eq(lhs, rhs, version),
         (Expression::BinaryOp(lhs), Expression::BinaryOp(rhs)) => ensure_sufficient_stack(|| {
             require(lhs.op == rhs.op, "binary op differs")?;
-            at("left", expr_eq(&lhs.left, &rhs.left, version))?;
-            at("right", expr_eq(&lhs.right, &rhs.right, version))
+            at("left", expr_eq(&lhs.lhs, &rhs.lhs, version))?;
+            at("right", expr_eq(&lhs.rhs, &rhs.rhs, version))
         }),
         (Expression::UnaryOp(lhs), Expression::UnaryOp(rhs)) => ensure_sufficient_stack(|| {
             require(lhs.op == rhs.op, "unary op differs")?;

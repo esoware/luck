@@ -52,17 +52,17 @@ impl Transform for ParenSimplifier {
                 if can_remove_parens(&inner) { inner } else { parenthesize(inner) }
             }
             Expression::BinaryOp(mut binary_op) => {
-                if let Expression::Parenthesized(paren) = &mut binary_op.left {
+                if let Expression::Parenthesized(paren) = &mut binary_op.lhs {
                     let inner = paren.expr.take();
-                    binary_op.left = if can_unwrap_in_binop_lhs(&inner, binary_op.op) {
+                    binary_op.lhs = if can_unwrap_in_binop_lhs(&inner, binary_op.op) {
                         inner
                     } else {
                         parenthesize(inner)
                     };
                 }
-                if let Expression::Parenthesized(paren) = &mut binary_op.right {
+                if let Expression::Parenthesized(paren) = &mut binary_op.rhs {
                     let inner = paren.expr.take();
-                    binary_op.right = if can_unwrap_in_binop_rhs(&inner, binary_op.op) {
+                    binary_op.rhs = if can_unwrap_in_binop_rhs(&inner, binary_op.op) {
                         inner
                     } else {
                         parenthesize(inner)

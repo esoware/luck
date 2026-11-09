@@ -108,7 +108,7 @@ const fn is_chain_link(expr: &Expression) -> bool {
 fn drop_chain(mut link: Expression) {
     loop {
         link = match &mut link {
-            Expression::BinaryOp(binary_op) => binary_op.left.take(),
+            Expression::BinaryOp(binary_op) => binary_op.lhs.take(),
             Expression::UnaryOp(unary_op) => unary_op.operand.take(),
             Expression::Parenthesized(parenthesized) => parenthesized.expr.take(),
             Expression::FunctionCall(call) => call.callee.take(),
@@ -152,7 +152,7 @@ macro_rules! drop_expression_chain {
     };
 }
 
-drop_expression_chain!(BinaryOp: left, right);
+drop_expression_chain!(BinaryOp: lhs, rhs);
 drop_expression_chain!(UnaryOp: operand);
 drop_expression_chain!(ParenthesizedExpression: expr);
 drop_expression_chain!(FunctionCall: callee);
@@ -200,7 +200,7 @@ macro_rules! guarded_chain_traits {
 }
 
 guarded_chain_traits! {
-    BinaryOp { span, left, op, right }
+    BinaryOp { span, lhs, op, rhs }
     UnaryOp { span, op, operand }
     ParenthesizedExpression { span, expr }
     FunctionCall { span, callee, args, method, explicit_type_args }

@@ -221,8 +221,8 @@ pub trait Transform {
                 Expression::TableConstructor(table)
             }
             Expression::BinaryOp(mut binary_op) => ensure_sufficient_stack(|| {
-                binary_op.left = self.transform_expr(binary_op.left.take());
-                binary_op.right = self.transform_expr(binary_op.right.take());
+                binary_op.lhs = self.transform_expr(binary_op.lhs.take());
+                binary_op.rhs = self.transform_expr(binary_op.rhs.take());
                 Expression::BinaryOp(binary_op)
             }),
             Expression::UnaryOp(mut unary_op) => ensure_sufficient_stack(|| {

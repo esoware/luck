@@ -339,8 +339,8 @@ mod tests {
                 panic!("expected NaN expression");
             };
             assert_eq!(division.op, BinOp::Div);
-            assert!(matches!(&division.left, Expression::Number(literal) if literal.text == "0"));
-            assert!(matches!(&division.right, Expression::Number(literal) if literal.text == "0"));
+            assert!(matches!(&division.lhs, Expression::Number(literal) if literal.text == "0"));
+            assert!(matches!(&division.rhs, Expression::Number(literal) if literal.text == "0"));
         }
     }
 

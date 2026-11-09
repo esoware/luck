@@ -195,8 +195,8 @@ pub trait Visitor<'ast> {
                 self.visit_table_constructor(table);
             }
             Expression::BinaryOp(binary_op) => ensure_sufficient_stack(|| {
-                self.visit_expr(&binary_op.left);
-                self.visit_expr(&binary_op.right);
+                self.visit_expr(&binary_op.lhs);
+                self.visit_expr(&binary_op.rhs);
             }),
             Expression::UnaryOp(unary_op) => {
                 ensure_sufficient_stack(|| self.visit_expr(&unary_op.operand));

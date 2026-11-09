@@ -74,9 +74,9 @@ pub enum FunctionArgs {
 #[derive(Eq)]
 pub struct BinaryOp {
     pub span: Span,
-    pub left: Expression,
+    pub lhs: Expression,
     pub op: BinOp,
-    pub right: Expression,
+    pub rhs: Expression,
 }
 
 #[derive(Eq)]

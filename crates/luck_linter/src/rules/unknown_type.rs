@@ -68,7 +68,7 @@ fn classify_comparison<'ast>(
     binary_op: &'ast BinaryOp,
     semantic: &SemanticAnalysis,
 ) -> Option<(&'static str, &'ast Literal)> {
-    let sides = [(&binary_op.left, &binary_op.right), (&binary_op.right, &binary_op.left)];
+    let sides = [(&binary_op.lhs, &binary_op.rhs), (&binary_op.rhs, &binary_op.lhs)];
     for (call_side, literal_side) in sides {
         let Expression::FunctionCall(call) = call_side else {
             continue;

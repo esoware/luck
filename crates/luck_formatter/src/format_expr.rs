@@ -94,7 +94,7 @@ fn starts_with_bracket(expr: &Expression) -> bool {
     loop {
         current = match current {
             Expression::StringLiteral(literal) => return literal.text.starts_with('['),
-            Expression::BinaryOp(binary_op) => &binary_op.left,
+            Expression::BinaryOp(binary_op) => &binary_op.lhs,
             // Luau
             Expression::TypeCast(cast) => &cast.expr,
             // Luau
@@ -168,8 +168,8 @@ fn collect_binary_chain(binary_op: &BinaryOp) -> (&Expression, Vec<(BinOp, &Expr
     let mut parts = Vec::new();
     let mut current = binary_op;
     loop {
-        parts.push((current.op, &current.right));
-        let Expression::BinaryOp(left_binary_op) = &current.left else {
+        parts.push((current.op, &current.rhs));
+        let Expression::BinaryOp(left_binary_op) = &current.lhs else {
             break;
         };
         current = left_binary_op;
@@ -184,14 +184,14 @@ fn collect_binary_chain(binary_op: &BinaryOp) -> (&Expression, Vec<(BinOp, &Expr
             if !is_same_right_associative_op {
                 break;
             }
-            flattened.push((op, &inner.left));
+            flattened.push((op, &inner.lhs));
             op = inner.op;
-            right = &inner.right;
+            right = &inner.rhs;
         }
         flattened.push((op, right));
     }
 
-    (&current.left, flattened)
+    (&current.lhs, flattened)
 }
 
 impl Format for BinaryOp {

@@ -23,8 +23,8 @@ impl NodeRule for ConstantTableComparison {
     fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Expression::BinaryOp(binary_op) = expr
             && matches!(binary_op.op, BinOp::Eq | BinOp::Ne)
-            && (matches!(&binary_op.left, Expression::TableConstructor(_))
-                || matches!(&binary_op.right, Expression::TableConstructor(_)))
+            && (matches!(&binary_op.lhs, Expression::TableConstructor(_))
+                || matches!(&binary_op.rhs, Expression::TableConstructor(_)))
         {
             findings.push(
                 Finding::new(

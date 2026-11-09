@@ -197,7 +197,7 @@ fn type_cast_binds_tighter_than_binary_op() {
         panic!("expected top-level BinaryOp, got {expr:?}");
     };
     assert!(
-        matches!(binary_op.right, Expression::TypeCast(_)),
+        matches!(binary_op.rhs, Expression::TypeCast(_)),
         "cast must bind to the right operand: a + (b :: number)"
     );
 }

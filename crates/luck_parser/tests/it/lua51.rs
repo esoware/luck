@@ -330,7 +330,7 @@ fn precedence_add_mul() {
     if let Expression::BinaryOp(outer) = expr {
         assert!(matches!(outer.op, luck_token::BinOp::Add));
         assert!(
-            matches!(&outer.right, Expression::BinaryOp(inner) if matches!(inner.op, luck_token::BinOp::Mul))
+            matches!(&outer.rhs, Expression::BinaryOp(inner) if matches!(inner.op, luck_token::BinOp::Mul))
         );
     } else {
         panic!("expected BinaryOp, got {expr:?}");
@@ -345,8 +345,8 @@ fn right_assoc_power() {
     let expr = local_value(&result);
     if let Expression::BinaryOp(outer) = expr {
         assert!(matches!(outer.op, luck_token::BinOp::Pow));
-        assert!(matches!(&outer.left, Expression::Number(_)));
-        assert!(matches!(&outer.right, Expression::BinaryOp(_)));
+        assert!(matches!(&outer.lhs, Expression::Number(_)));
+        assert!(matches!(&outer.rhs, Expression::BinaryOp(_)));
     } else {
         panic!("expected BinaryOp");
     }
@@ -360,7 +360,7 @@ fn right_assoc_concat() {
     let expr = local_value(&result);
     if let Expression::BinaryOp(outer) = expr {
         assert!(matches!(outer.op, luck_token::BinOp::Concat));
-        assert!(matches!(&outer.right, Expression::BinaryOp(_)));
+        assert!(matches!(&outer.rhs, Expression::BinaryOp(_)));
     } else {
         panic!("expected BinaryOp");
     }
@@ -393,10 +393,10 @@ fn precedence_comparison_vs_logical() {
     if let Expression::BinaryOp(outer) = expr {
         assert!(matches!(outer.op, luck_token::BinOp::And));
         assert!(
-            matches!(&outer.left, Expression::BinaryOp(left) if matches!(left.op, luck_token::BinOp::Lt))
+            matches!(&outer.lhs, Expression::BinaryOp(left) if matches!(left.op, luck_token::BinOp::Lt))
         );
         assert!(
-            matches!(&outer.right, Expression::BinaryOp(right) if matches!(right.op, luck_token::BinOp::Gt))
+            matches!(&outer.rhs, Expression::BinaryOp(right) if matches!(right.op, luck_token::BinOp::Gt))
         );
     } else {
         panic!("expected BinaryOp, got {expr:?}");
@@ -416,10 +416,10 @@ fn precedence_concat_vs_comparison() {
             outer.op
         );
         assert!(
-            matches!(&outer.left, Expression::BinaryOp(left) if matches!(left.op, luck_token::BinOp::Concat))
+            matches!(&outer.lhs, Expression::BinaryOp(left) if matches!(left.op, luck_token::BinOp::Concat))
         );
         assert!(
-            matches!(&outer.right, Expression::BinaryOp(right) if matches!(right.op, luck_token::BinOp::Concat))
+            matches!(&outer.rhs, Expression::BinaryOp(right) if matches!(right.op, luck_token::BinOp::Concat))
         );
     } else {
         panic!("expected BinaryOp, got {expr:?}");
@@ -554,7 +554,7 @@ fn parenthesized() {
     let expr = local_value(&result);
     if let Expression::BinaryOp(binary_op) = expr {
         assert!(matches!(binary_op.op, luck_token::BinOp::Mul));
-        assert!(matches!(&binary_op.left, Expression::Parenthesized(_)));
+        assert!(matches!(&binary_op.lhs, Expression::Parenthesized(_)));
     } else {
         panic!("expected BinaryOp, got {expr:?}");
     }
@@ -658,7 +658,7 @@ fn logical_operators() {
     if let Expression::BinaryOp(outer) = expr {
         assert!(matches!(outer.op, luck_token::BinOp::Or));
         assert!(
-            matches!(&outer.left, Expression::BinaryOp(inner) if matches!(inner.op, luck_token::BinOp::And))
+            matches!(&outer.lhs, Expression::BinaryOp(inner) if matches!(inner.op, luck_token::BinOp::And))
         );
     } else {
         panic!("expected BinaryOp");

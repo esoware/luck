@@ -31,9 +31,9 @@ impl NodeRule for ComparisonPrecedence {
             return;
         }
 
-        let chained_side = if is_unparenthesized_comparison(&outer.left) {
+        let chained_side = if is_unparenthesized_comparison(&outer.lhs) {
             Some("left")
-        } else if is_unparenthesized_comparison(&outer.right) {
+        } else if is_unparenthesized_comparison(&outer.rhs) {
             Some("right")
         } else {
             None
@@ -52,7 +52,7 @@ impl NodeRule for ComparisonPrecedence {
             );
         }
 
-        if is_unparenthesized_not(&outer.left) && !is_unparenthesized_not(&outer.right) {
+        if is_unparenthesized_not(&outer.lhs) && !is_unparenthesized_not(&outer.rhs) {
             let help = match outer.op {
                 BinOp::Eq => "consider `x ~= y`, or add parentheses to make intent explicit",
                 BinOp::Ne => "consider `x == y`, or add parentheses to make intent explicit",

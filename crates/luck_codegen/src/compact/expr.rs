@@ -141,9 +141,9 @@ impl CompactPrinter {
 
     fn emit_binary_op(&mut self, binary_op: &BinaryOp) {
         ensure_sufficient_stack(|| {
-            self.emit_expr(&binary_op.left);
+            self.emit_expr(&binary_op.lhs);
             self.emit_fixed(binary_op.op.static_text());
-            self.emit_expr(&binary_op.right);
+            self.emit_expr(&binary_op.rhs);
         });
     }
 
