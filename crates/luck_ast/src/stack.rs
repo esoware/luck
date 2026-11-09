@@ -141,7 +141,9 @@ macro_rules! drop_expression_chain {
     ($node:ident: $chain:ident $(, $branch:ident)?) => {
         impl Drop for $node {
             fn drop(&mut self) {
-                drop_chain(self.$chain.take());
+                if is_chain_link(&self.$chain) {
+                    drop_chain(self.$chain.take());
+                }
                 $(
                     if is_chain_link(&self.$branch) {
                         ensure_sufficient_stack(|| drop(self.$branch.take()));
@@ -163,9 +165,11 @@ drop_expression_chain!(TypeInstantiation: expr);
 
 impl Drop for OptionalType {
     fn drop(&mut self) {
-        let mut next = self.type_value.take();
-        while let Type::Optional(mut link) = next {
-            next = link.type_value.take();
+        if matches!(self.type_value, Type::Optional(_)) {
+            let mut next = self.type_value.take();
+            while let Type::Optional(mut link) = next {
+                next = link.type_value.take();
+            }
         }
     }
 }
