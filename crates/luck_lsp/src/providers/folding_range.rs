@@ -88,3 +88,34 @@ impl<'ast> Visitor<'ast> for Folder<'_> {
         self.walk_expr(expr);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use luck_core::LuaTarget;
+    use rustc_hash::FxHashSet;
+
+    use super::*;
+
+    fn folded_lines(text: &str, target: LuaTarget) -> Vec<(u32, u32)> {
+        let document = DocumentState::new(text.to_owned(), 1, target, FxHashSet::default());
+        folding_ranges(&document).iter().map(|fold| (fold.start_line, fold.end_line)).collect()
+    }
+
+    #[test]
+    fn bug_a_table_call_argument_folds() {
+        let folds = folded_lines("setup {\n  a = 1,\n}\n", LuaTarget::Lua54);
+        assert_eq!(folds, vec![(0, 2)], "`f {{...}}` is a table constructor like any other");
+    }
+
+    #[test]
+    fn bug_a_luau_type_function_folds() {
+        let folds = folded_lines("type function f(t)\n  return t\nend\n", LuaTarget::Luau);
+        assert_eq!(folds, vec![(0, 2)], "a `type function` body folds like any other");
+    }
+
+    #[test]
+    fn bug_a_lua55_global_function_folds() {
+        let folds = folded_lines("global function f()\n  return 1\nend\n", LuaTarget::Lua55);
+        assert_eq!(folds, vec![(0, 2)], "a `global function` body folds like any other");
+    }
+}

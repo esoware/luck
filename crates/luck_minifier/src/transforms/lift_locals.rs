@@ -771,4 +771,20 @@ mod tests {
             "shadowed decl must stay local: {result}"
         );
     }
+
+    #[test]
+    fn bug_hoisted_declaration_stays_within_the_local_limit() {
+        let body = (0..205u32)
+            .map(|i| format!("do local v{i} = g() print(v{i}) end\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        let result = apply(&format!("local function w()\n{body}end\nreturn w\n"));
+        let hoisted = result.split("local ").nth(2).expect("hoisted declaration");
+        let (names, _) = hoisted.split_once(' ').expect("names end at the next statement");
+        let name_count = names.split(',').count();
+        assert!(
+            name_count <= 200,
+            "a function may hold 200 locals at once, but {name_count} were hoisted"
+        );
+    }
 }

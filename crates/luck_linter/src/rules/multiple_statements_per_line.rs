@@ -124,4 +124,10 @@ mod tests {
         let diags = run("local function f() local x = 1 return x end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_cr_only_line_breaks() {
+        let diags = run("local a = 1\rlocal b = 2");
+        assert!(diags.is_empty(), "Lua reads a lone CR as a line break: {diags:?}");
+    }
 }

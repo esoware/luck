@@ -319,3 +319,107 @@ fn integer_range_normalization_preserves_boundaries_and_spans() {
         }
     }
 }
+
+#[test]
+fn bug_decimal_exponent_directly_before_concat_lexes_on_lua51_and_luau() {
+    for version in [LuaVersion::Lua51, LuaVersion::Luau] {
+        let result = lex("return 1e5..2", version);
+        assert_eq!(
+            result.errors,
+            Vec::<SourceError>::new(),
+            "`1e5..2` should lex as a concat under {version:?}, whose scanners stop at `.` after an exponent"
+        );
+    }
+}
+
+#[test]
+fn bug_luau_hex_and_binary_numerals_directly_before_concat_lex() {
+    for source in ["return 0xFF..2", "return 0b1..2"] {
+        let result = lex(source, LuaVersion::Luau);
+        assert_eq!(
+            result.errors,
+            Vec::<SourceError>::new(),
+            "`{source}` should lex as a concat, because Luau's scanner stops at `.` after the radix prefix"
+        );
+    }
+}
+
+#[test]
+fn bug_hex_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
+        let result = lex("x=0x1g=2", version);
+        assert_eq!(
+            result.errors,
+            Vec::<SourceError>::new(),
+            "`0x1g` should split into `0x1` and `g` under {version:?}, as `x=0x1g=2` compiles there"
+        );
+        assert_eq!(result.tokens[2].kind, TokenKind::Number("0x1".into()));
+        assert_eq!(result.tokens[3].kind, TokenKind::Identifier("g".into()));
+    }
+}
+
+#[test]
+fn bug_dot_zero_x_is_malformed_on_lua52_and_lua53() {
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
+        let result = lex("x=.0x1=2", version);
+        assert!(
+            !result.errors.is_empty(),
+            "`.0x1` should be a malformed number under {version:?}, not `.0` and `x1`: {:?}",
+            result.tokens
+        );
+    }
+}
+
+#[test]
+fn bug_luau_binary_numeral_touching_a_letter_is_malformed() {
+    let result = lex("x=0b1y=2", LuaVersion::Luau);
+    assert!(
+        !result.errors.is_empty(),
+        "`0b1y` should be a malformed number in Luau, not `0b1` and `y`: {:?}",
+        result.tokens
+    );
+}
+
+#[test]
+fn bug_luau_binary_literal_of_only_underscores_is_error() {
+    let result = lex("return 0b_", LuaVersion::Luau);
+    assert!(
+        !result.errors.is_empty(),
+        "`0b_` has no digits, so it should be a malformed number: {:?}",
+        result.tokens
+    );
+}
+
+#[test]
+fn bug_luau_exponent_of_only_underscores_is_error() {
+    for source in ["return 1e_", "return 1e+_"] {
+        let result = lex(source, LuaVersion::Luau);
+        assert!(
+            !result.errors.is_empty(),
+            "`{source}` has no exponent digits, so it should be a malformed number: {:?}",
+            result.tokens
+        );
+    }
+}
+
+#[test]
+fn bug_luau_underscore_after_integer_suffix_lexes() {
+    let result = lex("return 1i_", LuaVersion::Luau);
+    assert_eq!(
+        result.errors,
+        Vec::<SourceError>::new(),
+        "Luau strips every `_` before conversion, so `1i_` should be the integer `1i`"
+    );
+}
+
+#[test]
+fn bug_luau_underscore_inside_radix_prefix_lexes() {
+    for source in ["return 0_x1", "return 0_b1"] {
+        let result = lex(source, LuaVersion::Luau);
+        assert_eq!(
+            result.errors,
+            Vec::<SourceError>::new(),
+            "Luau strips every `_` before conversion, so `{source}` should keep its radix prefix"
+        );
+    }
+}

@@ -51,3 +51,10 @@ fn index_to_offset_saturates_instead_of_wrapping() {
     assert_eq!(index_to_offset(7), 7);
     assert_eq!(index_to_offset(usize::MAX), u32::MAX);
 }
+
+#[test]
+fn bug_span_is_empty_agrees_with_len_on_an_inverted_span() {
+    let span = Span::new(7, 3);
+    assert_eq!(span.len(), 0);
+    assert!(span.is_empty(), "a span whose length is 0 must report that it is empty");
+}

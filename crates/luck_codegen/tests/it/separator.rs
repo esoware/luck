@@ -175,3 +175,18 @@ fn semicolon_separates_a_stmt_that_starts_with_a_paren() {
         assert_compacts_to(source, expected, version);
     }
 }
+
+#[test]
+fn bug_space_keeps_a_type_instantiation_close_from_forming_greater_equal() {
+    let source = "local x = f<<T>> == 1";
+    let parsed = luck_parser::parse(source, LuaVersion::Luau);
+    assert!(parsed.errors.is_empty(), "parse errors for {source:?}: {:?}", parsed.errors);
+    let output = luck_codegen::compact(&parsed.block);
+    let reparsed = luck_parser::parse(output.as_str(), LuaVersion::Luau);
+    assert!(
+        reparsed.errors.is_empty(),
+        "a space must separate the `>>` closing an instantiation from a following `==`, \
+         because `>>==` lexes as `>`, `>=`, `=`; output {output:?} doesn't re-parse: {:?}",
+        reparsed.errors
+    );
+}

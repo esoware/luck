@@ -202,7 +202,10 @@ impl SemanticAnalysis {
 
 #[cfg(test)]
 mod tests {
+    use luck_ast::Statement;
+
     use super::*;
+    use crate::scope::Symbol;
 
     fn analyze_lua54(source: &str) -> SemanticAnalysis {
         let parsed = luck_parser::parse(source, LuaVersion::Lua54);
@@ -240,5 +243,89 @@ mod tests {
         assert!(roblox.is_known_global("game"));
         assert!(standalone.is_known_global("bit32"));
         assert!(roblox.is_known_global("bit32"));
+    }
+
+    fn env_symbol(analysis: &SemanticAnalysis) -> &Symbol {
+        analysis
+            .scope_tree
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "_ENV")
+            .expect("_ENV must be declared")
+    }
+
+    /// The call of the chunk's last statement, resolved under `version`.
+    fn resolve_last_statement_call(source: &str, version: LuaVersion) -> Option<String> {
+        let parsed = luck_parser::parse(source, version);
+        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+        let analysis = analyze(&parsed.block, version);
+        let Some(Statement::FunctionCall(call)) = parsed.block.stmts.last() else {
+            panic!("the last statement must be a call");
+        };
+        analysis.resolve_callee(call).map(|callee| callee.name())
+    }
+
+    fn unknown_globals(source: &str) -> Vec<String> {
+        let parsed = luck_parser::parse(source, LuaVersion::Luau);
+        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+        let analysis = analyze(&parsed.block, LuaVersion::Luau);
+        analysis
+            .scope_tree
+            .unresolved_references()
+            .filter(|reference| !analysis.is_known_global(&reference.name))
+            .map(|reference| reference.name.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn bug_free_name_in_nested_function_captures_local_env() {
+        let analysis =
+            analyze_lua54("local _ENV = {}\nlocal function f() return missing end\nreturn f");
+        assert!(
+            env_symbol(&analysis).is_upvalue,
+            "a free name inside a nested function reads _ENV as an upvalue of that function"
+        );
+    }
+
+    #[test]
+    fn bug_resolve_callee_bails_under_a_local_env() {
+        let source = "local _ENV = { print = function() end }\nprint(1, 2)";
+        assert_eq!(
+            resolve_last_statement_call(source, LuaVersion::Lua54),
+            None,
+            "with a local _ENV, print is _ENV.print on the user's table, not the stdlib print"
+        );
+    }
+
+    #[test]
+    fn bug_resolve_callee_bails_on_a_global_the_file_rebinds() {
+        let source = "function tostring(a, b) return a end\ntostring(1, 2)";
+        assert_eq!(
+            resolve_last_statement_call(source, LuaVersion::Lua54),
+            None,
+            "the chunk replaced the global tostring, so the call must not match the stdlib entry"
+        );
+    }
+
+    #[test]
+    fn bug_type_function_body_knows_the_types_library() {
+        let unknown = unknown_globals("type function f(t)\n  return types.number\nend");
+        assert!(
+            unknown.is_empty(),
+            "type functions run with the `types` library, so the body has no unknown global: \
+             {unknown:?}"
+        );
+    }
+
+    #[test]
+    fn bug_type_function_body_knows_sibling_type_functions() {
+        let unknown = unknown_globals(
+            "type function f(t)\n  return t\nend\ntype function g(t)\n  return f(t)\nend",
+        );
+        assert!(
+            unknown.is_empty(),
+            "a type function can call a type function declared before it, as luau-analyze \
+             accepts, so the body has no unknown global: {unknown:?}"
+        );
     }
 }

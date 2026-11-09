@@ -157,3 +157,35 @@ fn wildcard_allow_covers_only_next_stmt() {
     );
     assert!(diags.iter().any(|diag| diag.rule == "setting_global"));
 }
+
+#[test]
+fn bug_allow_in_leveled_block_comment_covers_next_stmt() {
+    let diags = lint(
+        "--[=[ luck: allow(unused_variable) ]=]\nlocal unused = 1",
+        LuaVersion::Lua54,
+        &LintConfig::default(),
+    );
+    assert!(
+        diags.iter().all(|diag| diag.rule != "unused_variable"),
+        "a leveled block comment should work like `--[[`: {diags:?}"
+    );
+}
+
+#[test]
+fn bug_allow_after_cr_only_line_break_covers_next_stmt() {
+    let diags = lint(
+        "local first = 1\r-- luck: allow(unused_variable)\rlocal second = 2",
+        LuaVersion::Lua54,
+        &LintConfig::default(),
+    );
+    let messages: Vec<&str> = diags
+        .iter()
+        .filter(|diag| diag.rule == "unused_variable")
+        .map(|diag| diag.message.as_str())
+        .collect();
+    assert_eq!(
+        messages,
+        ["unused variable `first`"],
+        "the directive is on its own line, so it should cover `second`: {diags:?}"
+    );
+}

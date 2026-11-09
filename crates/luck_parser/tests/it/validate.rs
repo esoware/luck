@@ -239,3 +239,157 @@ fn continue_until_reports_every_distinct_skipped_local() {
     );
     assert_eq!(errors.len(), 2, "{errors:?}");
 }
+
+#[test]
+fn bug_goto_cannot_skip_a_local_to_reach_a_label_before_return() {
+    // A label followed by `return` isn't at the end of its block.
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        let errors = check("goto l local x ::l:: return", version);
+        assert!(
+            errors.iter().any(|error| error.message.contains("jumps into the scope")),
+            "{version:?} must reject the jump into the scope of `x`: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn bug_lua52_and_lua53_allow_a_label_to_shadow_an_enclosing_label() {
+    // `checkrepeated` only looks at the current block before 5.4.
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
+        let errors = check("::l:: do ::l:: end", version);
+        assert!(errors.is_empty(), "{version:?} accepts this program: {errors:?}");
+    }
+}
+
+#[test]
+fn bug_lua55_only_the_first_generic_for_variable_is_readonly() {
+    // 5.5 manual section 3.3.5: the first variable is the control variable.
+    for source in ["for k, v in pairs(t) do v = 1 end", "for k, v, w in pairs(t) do w = 1 end"] {
+        let errors = check(source, LuaVersion::Lua55);
+        assert!(errors.is_empty(), "{source} is valid in Lua 5.5: {errors:?}");
+    }
+}
+
+#[test]
+fn bug_lua55_flags_undeclared_name_after_global_declaration() {
+    // A global declaration voids the implicit `global *`.
+    let errors = check("global x; y = 1", LuaVersion::Lua55);
+    assert!(!errors.is_empty(), "`y` is not declared, so Lua 5.5 rejects the write");
+}
+
+#[test]
+fn bug_lua55_const_global_star_makes_undeclared_names_readonly() {
+    for source in ["global <const> *; y = 1", "global <const> *; function y() end"] {
+        let errors = check(source, LuaVersion::Lua55);
+        assert!(
+            errors.iter().any(|error| error.message.contains("const variable `y`")),
+            "{source}: `y` is read-only under `global <const> *`: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn bug_lua55_global_function_shadows_a_const_binding() {
+    for source in [
+        "local x <const> = 1; global function x() end; x = 2",
+        "global <const> x; global function x() end; x = 2",
+    ] {
+        let errors = check(source, LuaVersion::Lua55);
+        assert!(errors.is_empty(), "{source} is valid in Lua 5.5: {errors:?}");
+    }
+}
+
+#[test]
+fn bug_lua55_goto_cannot_enter_the_scope_of_a_global_declaration() {
+    // A global declaration occupies a slot in `nactvar`, like a local.
+    for source in [
+        "goto l; global x; ::l:: x = 1",
+        "goto l; global *; ::l:: print(1)",
+        "goto l; global function f() end; ::l:: f()",
+    ] {
+        let errors = check(source, LuaVersion::Lua55);
+        assert!(
+            errors.iter().any(|error| error.message.contains("jumps into the scope")),
+            "{source} must be rejected as a jump into a declaration's scope: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn bug_lua55_named_vararg_is_readonly() {
+    // 5.5 manual: the name denotes a read-only local variable.
+    let errors = check("function f(...t) t = 1 end", LuaVersion::Lua55);
+    assert!(
+        errors.iter().any(|error| error.message.contains("const variable `t`")),
+        "writing a named vararg must be rejected: {errors:?}"
+    );
+}
+
+#[test]
+fn bug_until_condition_resolves_const_writes_in_the_repeat_body_scope() {
+    // The condition sees the body's locals, for writes as for reads.
+    let shadowing_local = "local x <const> = 1 repeat local x = 2 until (function() x = 3 end)()";
+    let shadowing_errors = check(shadowing_local, LuaVersion::Lua54);
+    assert!(
+        shadowing_errors.is_empty(),
+        "the write targets the body's plain local: {shadowing_errors:?}"
+    );
+
+    let body_const = "repeat local x <const> = 2 until (function() x = 3 end)()";
+    let body_const_errors = check(body_const, LuaVersion::Lua54);
+    assert!(!body_const_errors.is_empty(), "the write targets the body's const local");
+}
+
+#[test]
+fn bug_method_self_shadows_a_const_local() {
+    // `function t:m()` declares an implicit `self` parameter.
+    let errors = check("local self <const> = 1\nfunction t:m() self = 2 end", LuaVersion::Lua54);
+    assert!(errors.is_empty(), "the write targets the implicit parameter: {errors:?}");
+}
+
+#[test]
+fn bug_continue_until_ignores_names_rebound_inside_a_function() {
+    for condition in ["(function(x) return x end)(1)", "(function() local x = 1 return x end)()"] {
+        let source = format!("repeat if a then continue end local x = f() until {condition}");
+        let errors = check(&source, LuaVersion::Luau);
+        assert!(errors.is_empty(), "{source} never reads the skipped local: {errors:?}");
+    }
+}
+
+#[test]
+fn bug_continue_until_ignores_typeof_in_the_condition() {
+    // Types generate no code, so `typeof(x)` does not read the skipped local.
+    let source = "repeat if a then continue end local x = f() until (y :: typeof(x)) == 1";
+    let errors = check(source, LuaVersion::Luau);
+    assert!(errors.is_empty(), "luau compiles this program: {errors:?}");
+}
+
+#[test]
+fn bug_continue_until_ignores_continue_in_a_constant_dead_branch() {
+    // The compiler folds these conditions and never compiles the `continue`.
+    for guard in ["if false then continue end", "if nil then continue end"] {
+        let source = format!("repeat {guard} local x = f() until x");
+        let errors = check(&source, LuaVersion::Luau);
+        assert!(errors.is_empty(), "{source} compiles in luau: {errors:?}");
+    }
+}
+
+#[test]
+fn bug_continue_until_ignores_closure_capture_of_a_constant_local() {
+    // The compiler folds an unassigned constant local, so the closure has no
+    // upvalue for it.
+    let source = "repeat if a then continue end local x = 1 until (function() return x end)()";
+    let errors = check(source, LuaVersion::Luau);
+    assert!(errors.is_empty(), "luau compiles this program: {errors:?}");
+}
+
+#[test]
+fn bug_luau_const_write_inside_typeof_is_rejected() {
+    // Luau reports this while parsing, so annotations are no exception.
+    let source = "const x = 1\ntype T = typeof((function() x = 2 end)())";
+    let errors = check(source, LuaVersion::Luau);
+    assert!(
+        errors.iter().any(|error| error.message.contains("const variable `x`")),
+        "the write inside `typeof` must be rejected: {errors:?}"
+    );
+}

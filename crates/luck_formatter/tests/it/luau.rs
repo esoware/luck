@@ -1,7 +1,7 @@
 use luck_formatter::FormatOptions;
 use luck_token::LuaVersion;
 
-use crate::common::assert_format_with;
+use crate::common::{assert_format_with, format_once};
 
 fn assert_luau(input: &str, expected: &str) {
     assert_format_with(input, expected, LuaVersion::Luau, &FormatOptions::default());
@@ -173,4 +173,41 @@ fn merged_rfc_syntax_roundtrips() {
          local value = convert<<integer>>(MAX)\n\
          local mapped = values:map<<integer, string>>(convert)\n",
     );
+}
+
+#[test]
+fn bug_broken_method_type_args_keep_the_call_paren_on_the_name_line() {
+    let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
+    let output = format_once(
+        "local x = a:b<<Aaaaaaaaaaaaaa, Bbbbbbbbbbbbbbb>>(c)\n",
+        LuaVersion::Luau,
+        &options,
+    );
+    let call_line = output.lines().find(|line| line.contains(">>(")).expect("a call line");
+    assert!(
+        call_line.contains("a:b<<"),
+        "official Luau rejects a method call whose `(` is on a later line than its name: {output:?}"
+    );
+}
+
+#[test]
+fn bug_string_singleton_type_follows_the_quote_style() {
+    assert_eq!(
+        format_once("type A = 'b'\n", LuaVersion::Luau, &FormatOptions::default()),
+        "type A = \"b\"\n",
+        "`quote_style` must apply to a string singleton type as it does to a string literal"
+    );
+}
+
+#[test]
+fn bug_verify_accepts_dropping_a_lone_leading_separator() {
+    for input in ["type A = | B\n", "type A = & B\n"] {
+        let result =
+            luck_formatter::format_and_verify(input, LuaVersion::Luau, &FormatOptions::default());
+        assert!(
+            result.is_ok(),
+            "{input:?} means the same as the `type A = B` it formats to: {:?}",
+            result.err().map(|(_, diff)| diff)
+        );
+    }
 }

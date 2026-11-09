@@ -80,6 +80,7 @@ mod tests {
 
     use super::*;
     use crate::diagnostic::LintDiagnostic;
+    use crate::fix::apply_one_pass;
     use crate::fixtures::run_rule;
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
@@ -119,5 +120,24 @@ mod tests {
     fn flags_variable_unused_despite_type_alias() {
         let diags = run("local n = 1\ntype T = number\nexport type U = T");
         assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn bug_fix_does_not_capture_existing_underscore_name() {
+        let source = "local _x = 1\nlocal x = 2\nprint(_x)";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_ne!(
+            apply_one_pass(source, &diags),
+            "local _x = 1\nlocal _x = 2\nprint(_x)",
+            "the rename shouldn't make `print(_x)` read the second local"
+        );
+    }
+
+    #[test]
+    fn bug_ignores_close_variable() {
+        let source = "local lock <close> = acquire()\nprint(1)";
+        let diags = run_rule(&UnusedVariable, source, LuaVersion::Lua54);
+        assert!(diags.is_empty(), "a `<close>` local is used by its scope exit: {diags:?}");
     }
 }

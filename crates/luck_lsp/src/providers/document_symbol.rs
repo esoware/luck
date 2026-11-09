@@ -165,3 +165,45 @@ fn format_params(body: &FunctionBody) -> String {
     }
     format!("({})", parts.join(", "))
 }
+
+#[cfg(test)]
+mod tests {
+    use luck_core::LuaTarget;
+    use rustc_hash::FxHashSet;
+
+    use super::*;
+
+    fn symbols_of(text: &str, target: LuaTarget) -> Vec<DocumentSymbol> {
+        let document = DocumentState::new(text.to_owned(), 1, target, FxHashSet::default());
+        document_symbols(&document)
+    }
+
+    #[test]
+    fn bug_assigned_function_symbol_range_covers_its_body() {
+        let symbols = symbols_of("M.foo = function()\n  local x = 1\nend\n", LuaTarget::Lua54);
+        let foo = symbols.first().expect("the assigned function is outlined");
+        assert_eq!(
+            foo.range.end.line, 2,
+            "the symbol's range must enclose the function, not just `M.foo`: {foo:?}"
+        );
+    }
+
+    #[test]
+    fn bug_a_recovered_function_name_yields_no_empty_symbol() {
+        // LSP: a symbol's name "must not be an empty string".
+        let symbols = symbols_of("local function (x) end\n", LuaTarget::Lua54);
+        assert!(
+            symbols.iter().all(|symbol| !symbol.name.trim().is_empty()),
+            "a nameless function being typed must not produce an empty symbol: {symbols:?}"
+        );
+    }
+
+    #[test]
+    fn bug_lua55_global_function_is_outlined() {
+        let symbols = symbols_of("global function setup()\nend\n", LuaTarget::Lua55);
+        assert!(
+            symbols.iter().any(|symbol| symbol.name == "setup"),
+            "a `global function` is a function in the outline: {symbols:?}"
+        );
+    }
+}

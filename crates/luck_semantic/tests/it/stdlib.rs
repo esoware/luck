@@ -4,11 +4,12 @@
 
 use core::ptr;
 
-use luck_ast::{Expression, Statement};
+use luck_ast::{Expression, LastStatement, Statement};
 use luck_semantic::{
-    StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, library_for,
+    StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary,
+    expand_replace_template, library_for,
 };
-use luck_token::{LuaVersion, StdlibEnvironment};
+use luck_token::{BinOp, LuaVersion, StdlibEnvironment};
 
 use crate::common::{NUMBERED_VERSIONS, all_libraries, luau, roblox, standalone_library};
 
@@ -1199,4 +1200,315 @@ fn item_properties_reachable_through_shape() {
 #[test]
 fn standalone_luau_has_no_enum() {
     assert!(luau().lookup(&["Enum"]).is_none());
+}
+
+#[test]
+fn bug_string_gmatch_accepts_init_from_54() {
+    for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
+        let library = standalone_library(version);
+        assert!(
+            function_at(library, &["string", "gmatch"]).accepts_arg_count(3),
+            "{version:?}: string.gmatch (s, pattern [, init]) takes an init position since 5.4"
+        );
+        assert!(
+            shape_function(library, "string", "gmatch").accepts_arg_count(2),
+            "{version:?}: s:gmatch(pattern, init) takes an init position since 5.4"
+        );
+    }
+}
+
+#[test]
+fn bug_coroutine_isyieldable_accepts_coroutine_from_54() {
+    for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
+        assert!(
+            function_at(standalone_library(version), &["coroutine", "isyieldable"])
+                .accepts_arg_count(1),
+            "{version:?}: coroutine.isyieldable ([co]) takes a coroutine since 5.4"
+        );
+    }
+}
+
+#[test]
+fn bug_lua55_coroutine_close_coroutine_is_optional() {
+    assert!(
+        function_at(standalone_library(LuaVersion::Lua55), &["coroutine", "close"])
+            .accepts_arg_count(0),
+        "the 5.5 manual documents coroutine.close ([co]), which closes the running coroutine"
+    );
+}
+
+#[test]
+fn bug_io_open_mode_rejects_b_before_plus_from_52() {
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        let modes = constant_set(standalone_library(version), &["io", "open"], 1)
+            .expect("io.open's mode is a constant set");
+        for mode in ["rb+", "wb+", "ab+"] {
+            assert!(
+                find(modes, mode).is_none(),
+                "{version:?}: io.open raises `invalid mode` for {mode}, since l_checkmode \
+                 requires [rwa]%+?b*"
+            );
+        }
+    }
+}
+
+#[test]
+fn bug_lua52_module_is_deprecated_not_removed() {
+    let module = standalone_library(LuaVersion::Lua52).lookup(&["module"]);
+    assert!(
+        module.is_some_and(|entry| entry.deprecation().is_some()),
+        "the 5.2 manual, section 8.2, deprecates module and the stock build still defines it, \
+         so the catalog must keep it marked deprecated"
+    );
+}
+
+#[test]
+fn bug_lua52_collectgarbage_accepts_setmajorinc() {
+    let options = constant_set(standalone_library(LuaVersion::Lua52), &["collectgarbage"], 0)
+        .expect("collectgarbage's option is a constant set");
+    assert!(
+        find(options, "setmajorinc").is_some(),
+        "Lua 5.2's collectgarbage accepts the setmajorinc option"
+    );
+}
+
+#[test]
+fn bug_luau_collectgarbage_accepts_collect() {
+    let options = constant_set(luau(), &["collectgarbage"], 0)
+        .expect("collectgarbage's option is a constant set");
+    assert!(
+        find(options, "collect").is_some(),
+        "the standalone Luau CLI's collectgarbage accepts collect, and it is the default"
+    );
+}
+
+#[test]
+fn bug_luau_collectgarbage_is_not_must_use() {
+    assert!(
+        !function_at(luau(), &["collectgarbage"]).is_must_use,
+        "collectgarbage() runs a collection and returns nothing in the standalone Luau CLI"
+    );
+}
+
+#[test]
+fn bug_luau_math_randomseed_requires_a_seed() {
+    for library in [luau(), roblox()] {
+        assert_eq!(
+            function_at(library, &["math", "randomseed"]).min_args(),
+            1,
+            "math.randomseed calls luaL_checkinteger on its seed, so it can't be omitted"
+        );
+    }
+}
+
+#[test]
+fn bug_luau_vector_create_accepts_two_components() {
+    assert!(
+        function_at(luau(), &["vector", "create"]).accepts_arg_count(2),
+        "the 2-component constructor RFC is implemented: vector.create(x, y) zeroes z"
+    );
+}
+
+#[test]
+fn bug_luau_vector_lerp_is_cataloged() {
+    for library in [luau(), roblox()] {
+        assert!(
+            matches!(library.lookup(&["vector", "lerp"]), Some(StdlibEntry::Function(_))),
+            "{:?}: vector.lerp is an implemented RFC and in the Roblox docs",
+            library.environment
+        );
+    }
+}
+
+#[test]
+fn bug_luau_coroutine_finally_is_cataloged() {
+    for library in [luau(), roblox()] {
+        assert!(
+            matches!(library.lookup(&["coroutine", "finally"]), Some(StdlibEntry::Function(_))),
+            "{:?}: coroutine.finally is in the Luau VM and the Roblox docs",
+            library.environment
+        );
+    }
+}
+
+#[test]
+fn bug_tostring_is_not_pure() {
+    for (file, library) in all_libraries() {
+        assert!(
+            !function_at(library, &["tostring"]).is_pure,
+            "{file}: tostring runs the __tostring metamethod, so it isn't pure"
+        );
+    }
+}
+
+#[test]
+fn bug_metamethod_iterators_are_not_pure_from_52() {
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        assert!(
+            !function_at(standalone_library(version), &["pairs"]).is_pure,
+            "{version:?}: pairs runs the __pairs metamethod, so it isn't pure"
+        );
+    }
+    assert!(
+        !function_at(standalone_library(LuaVersion::Lua52), &["ipairs"]).is_pure,
+        "Lua 5.2's ipairs runs the __ipairs metamethod, so it isn't pure"
+    );
+}
+
+#[test]
+fn bug_table_maxn_has_no_length_operator_fix() {
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        let function = function_at(standalone_library(version), &["table", "maxn"]);
+        let deprecation = function.deprecated.as_ref().expect("table.maxn is deprecated");
+        assert!(
+            deprecation.replace_template.is_none(),
+            "{version:?}: table.maxn({{[5] = 1}}) is 5 but #{{[5] = 1}} is 0, so `#` can't \
+             replace it automatically"
+        );
+    }
+}
+
+fn lua53_bit32_replacement(name: &str) -> Option<&'static str> {
+    let function = function_at(standalone_library(LuaVersion::Lua53), &["bit32", name]);
+    function.deprecated.as_ref()?.replace_template.as_deref()
+}
+
+#[test]
+fn bug_bit32_bnot_fix_keeps_the_32_bit_result() {
+    assert_ne!(
+        lua53_bit32_replacement("bnot"),
+        Some("(~%1)"),
+        "bit32.bnot(0) is 4294967295 but ~0 is -1 on 64-bit integers"
+    );
+}
+
+#[test]
+fn bug_bit32_arshift_fix_is_not_a_logical_shift() {
+    assert_ne!(
+        lua53_bit32_replacement("arshift"),
+        Some("(%1 >> %2)"),
+        "bit32.arshift(0x80000000, 1) is 3221225472 but 0x80000000 >> 1 is 1073741824, since \
+         `>>` is a logical shift"
+    );
+}
+
+#[test]
+fn bug_bit32_lshift_fix_keeps_the_32_bit_result() {
+    assert_ne!(
+        lua53_bit32_replacement("lshift"),
+        Some("(%1 << %2)"),
+        "bit32.lshift(0xFFFFFFFF, 4) is 4294967280 but 0xFFFFFFFF << 4 is 68719476720"
+    );
+}
+
+#[test]
+fn bug_bit32_rshift_fix_keeps_the_32_bit_result() {
+    assert_ne!(
+        lua53_bit32_replacement("rshift"),
+        Some("(%1 >> %2)"),
+        "bit32.rshift(-1, 1) is 2147483647 but -1 >> 1 is 9223372036854775807"
+    );
+}
+
+#[test]
+fn bug_luau_unpack_is_not_deprecated() {
+    for library in [luau(), roblox()] {
+        assert!(
+            function_at(library, &["unpack"]).deprecated.is_none(),
+            "{:?}: luau.org documents unpack as equivalent to table.unpack, and neither it nor \
+             the Roblox globals page marks it deprecated",
+            library.environment
+        );
+    }
+}
+
+fn fix_template<'library>(
+    library: &'library StdlibLibrary,
+    path: &[&str],
+) -> Option<&'library str> {
+    function_at(library, path).deprecated.as_ref()?.replace_template.as_deref()
+}
+
+/// The expression of `return <text>`, without its outer parentheses.
+fn returned_expr(text: &str, version: LuaVersion) -> Expression {
+    let parsed = luck_parser::parse(format!("return {text}"), version);
+    assert!(parsed.errors.is_empty(), "{text}: {:?}", parsed.errors);
+    let Some(LastStatement::Return(return_stmt)) = parsed.block.last_stmt.as_deref() else {
+        panic!("{text} must parse as a return");
+    };
+    let mut expr = return_stmt.exprs.first().expect("one returned value").clone();
+    while let Expression::Parenthesized(parenthesized) = expr {
+        expr = parenthesized.expr;
+    }
+    expr
+}
+
+#[test]
+fn bug_math_pow_fix_groups_a_compound_base() {
+    let version = LuaVersion::Lua53;
+    let Some(template) = fix_template(standalone_library(version), &["math", "pow"]) else {
+        return;
+    };
+    let replacement = expand_replace_template(template, &["a + 1", "2"]);
+    assert!(
+        matches!(
+            returned_expr(&replacement, version),
+            Expression::BinaryOp(binary_op) if binary_op.op == BinOp::Pow
+        ),
+        "with a = 2, math.pow(a + 1, 2) is 9.0, so the fix must raise the whole base, but \
+         `{replacement}` is 3.0"
+    );
+}
+
+#[test]
+fn bug_table_getn_fix_groups_a_compound_operand() {
+    let version = LuaVersion::Lua51;
+    let Some(template) = fix_template(standalone_library(version), &["table", "getn"]) else {
+        return;
+    };
+    let replacement = expand_replace_template(template, &["a or b"]);
+    assert!(
+        matches!(returned_expr(&replacement, version), Expression::UnaryOp(_)),
+        "table.getn(a or b) takes the length of `a or b`, but `{replacement}` takes the length \
+         of a alone"
+    );
+}
+
+#[test]
+fn bug_unpack_fix_keeps_the_range_arguments() {
+    let Some(template) = fix_template(standalone_library(LuaVersion::Lua52), &["unpack"]) else {
+        return;
+    };
+    let replacement = expand_replace_template(template, &["list", "first_index", "last_index"]);
+    assert!(
+        replacement.contains("first_index") && replacement.contains("last_index"),
+        "unpack({{1, 2, 3}}, 2, 3) yields 2 3 and table.unpack({{1, 2, 3}}) yields 1 2 3, so \
+         the fix can't drop the range: `{replacement}`"
+    );
+}
+
+#[test]
+fn bug_loadstring_fix_keeps_the_chunk_name() {
+    let Some(template) = fix_template(standalone_library(LuaVersion::Lua52), &["loadstring"])
+    else {
+        return;
+    };
+    let replacement = expand_replace_template(template, &["code", "chunk_name"]);
+    assert!(
+        replacement.contains("chunk_name"),
+        "loadstring(code, name) labels the chunk's errors with name, so the fix can't drop it: \
+         `{replacement}`"
+    );
+}
+
+#[test]
+fn bug_ypcall_fix_keeps_the_forwarded_arguments() {
+    let Some(template) = fix_template(roblox(), &["ypcall"]) else {
+        return;
+    };
+    let replacement = expand_replace_template(template, &["callback", "forwarded"]);
+    assert!(
+        replacement.contains("forwarded"),
+        "ypcall(f, x) calls f with x, so the fix can't drop x: `{replacement}`"
+    );
 }

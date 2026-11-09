@@ -140,4 +140,31 @@ mod tests {
             "{diags:?}"
         );
     }
+
+    #[test]
+    fn bug_ignores_loop_with_conditional_continue() {
+        let source = "for _, v in ipairs(t) do if v then continue end return v end";
+        let diags = run_rule(&LoopExecutesOnce, source, LuaVersion::Luau);
+        assert!(diags.is_empty(), "`continue` starts another iteration: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_loop_with_goto_continue() {
+        let diags = run(
+            "for _, v in ipairs(t) do if v then goto continue end do return v end ::continue:: end",
+        );
+        assert!(diags.is_empty(), "the `goto` starts another iteration: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_outer_loop_around_while_true_with_conditional_break() {
+        let diags = run("for i = 1, 3 do while true do if i then break end end end");
+        assert!(diags.is_empty(), "the inner `break` lets the outer loop go on: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_shadowed_error_call() {
+        let diags = run("local function error(text) print(text) end\nfor i = 1, 3 do error(i) end");
+        assert!(diags.is_empty(), "a local `error` doesn't raise: {diags:?}");
+    }
 }

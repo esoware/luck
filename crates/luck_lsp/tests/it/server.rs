@@ -8,19 +8,20 @@ use std::path::Path;
 
 use luck_lsp::{Backend, Notifier};
 use luck_token::index_to_offset;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use tower_lsp::LanguageServer as _;
 use tower_lsp::lsp_types::{
     CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, CompletionParams,
     CompletionResponse, Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
-    DidOpenTextDocumentParams, DocumentFormattingParams, DocumentHighlightKind,
-    DocumentHighlightParams, DocumentLinkParams, DocumentRangeFormattingParams,
-    DocumentSymbolParams, DocumentSymbolResponse, FoldingRangeParams, FormattingOptions,
-    GotoDefinitionParams, GotoDefinitionResponse, HoverContents, HoverParams, InitializeParams,
-    MessageType, PartialResultParams, Position, PrepareRenameResponse, Range, ReferenceContext,
-    ReferenceParams, Registration, RenameParams, SelectionRangeParams, SemanticTokensParams,
-    SemanticTokensRangeParams, SemanticTokensRangeResult, SemanticTokensResult,
-    SignatureHelpParams, TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
+    DocumentHighlightKind, DocumentHighlightParams, DocumentLinkParams,
+    DocumentRangeFormattingParams, DocumentSymbolParams, DocumentSymbolResponse,
+    FoldingRangeParams, FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse,
+    HoverContents, HoverParams, InitializeParams, MessageType, PartialResultParams, Position,
+    PrepareRenameResponse, Range, ReferenceContext, ReferenceParams, Registration, RenameParams,
+    SelectionRangeParams, SemanticTokensParams, SemanticTokensRangeParams,
+    SemanticTokensRangeResult, SemanticTokensResult, SignatureHelpParams,
+    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, Url, VersionedTextDocumentIdentifier, WorkDoneProgressParams,
     WorkspaceSymbolParams,
 };
@@ -1255,4 +1256,134 @@ async fn watched_config_change_reseeds_open_documents_with_extra_globals() {
     server.did_change_watched_files(DidChangeWatchedFilesParams { changes: Vec::new() }).await;
     let refusal = rename_refusal(&server, &uri, "vim").await;
     assert!(refusal.is_some(), "the config change took effect");
+}
+
+/// A document on disk under a `luck.json` of its own, so settings discovery
+/// has to leave the current task, as it does for a real client's file.
+fn file_in_project(directory: &Path, text: &str) -> Url {
+    fs::write(directory.join("luck.json"), "{}").expect("write luck.json");
+    let path = directory.join("main.lua");
+    fs::write(&path, text).expect("write main.lua");
+    Url::from_file_path(&path).expect("file path URI")
+}
+
+fn replace_all(uri: &Url, version: i32, text: &str) -> DidChangeTextDocumentParams {
+    DidChangeTextDocumentParams {
+        text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version },
+        content_changes: vec![TextDocumentContentChangeEvent {
+            range: None,
+            range_length: None,
+            text: text.to_owned(),
+        }],
+    }
+}
+
+#[tokio::test]
+async fn bug_a_change_arriving_during_open_is_not_lost() {
+    // tower-lsp polls notifications concurrently, and `did_open` awaits
+    // settings discovery before it stores the document.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let uri = file_in_project(directory.path(), "local before = 1\n");
+    let server = Backend::new(CapturedNotifier::default());
+
+    let opening = open(&server, &uri, "local before = 1\n");
+    let changing = server.did_change(replace_all(&uri, 2, "local after = 2\n"));
+    tokio::join!(opening, changing);
+
+    let response = server
+        .document_symbol(DocumentSymbolParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .await
+        .expect("document symbol errored")
+        .expect("the document is open");
+    let DocumentSymbolResponse::Nested(symbols) = response else {
+        panic!("document symbols should be nested");
+    };
+    let names: Vec<&str> = symbols.iter().map(|symbol| symbol.name.as_str()).collect();
+    assert_eq!(names, ["after"], "version 2 must not be dropped while version 1 is opening");
+}
+
+#[tokio::test]
+async fn bug_closing_during_a_lint_leaves_no_diagnostics() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let uri = file_in_project(directory.path(), "local x =\n");
+    let notifier = CapturedNotifier::default();
+    let server = Backend::new(notifier.clone());
+    open(&server, &uri, "local x =\n").await;
+
+    let changing = server.did_change(replace_all(&uri, 2, "local y =\n"));
+    let closing = server.did_close(DidCloseTextDocumentParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+    });
+    tokio::join!(changing, closing);
+
+    let diags = notifier.diagnostics_for(&uri).await;
+    assert!(diags.is_empty(), "a closed document must end with no diagnostics: {diags:?}");
+}
+
+/// Holds version 2's publish until version 3's has landed, the order an older
+/// lint that finishes last produces.
+#[derive(Clone, Debug)]
+struct ReorderingNotifier {
+    published_versions: Arc<RwLock<Vec<Option<i32>>>>,
+    newer_published: Arc<Semaphore>,
+}
+
+impl Notifier for ReorderingNotifier {
+    async fn publish_diagnostics(
+        &self,
+        _uri: Url,
+        _diagnostics: Vec<Diagnostic>,
+        version: Option<i32>,
+    ) {
+        if version == Some(2i32) {
+            let _permit = self.newer_published.acquire().await.expect("semaphore stays open");
+        }
+        self.published_versions.write().await.push(version);
+        if version == Some(3i32) {
+            self.newer_published.add_permits(1);
+        }
+    }
+
+    async fn show_message(&self, _message_type: MessageType, _message: String) {}
+
+    async fn log_message(&self, _message_type: MessageType, _message: String) {}
+
+    async fn register_capability(&self, _registrations: Vec<Registration>) {}
+}
+
+#[tokio::test]
+async fn bug_a_superseded_lint_does_not_publish_after_the_newer_one() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let uri = file_in_project(directory.path(), "local one = 1\n");
+    let notifier = ReorderingNotifier {
+        published_versions: Arc::new(RwLock::new(Vec::new())),
+        newer_published: Arc::new(Semaphore::new(0)),
+    };
+    let server = Backend::new(notifier.clone());
+    server
+        .did_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "lua".to_owned(),
+                version: 1,
+                text: "local one = 1\n".to_owned(),
+            },
+        })
+        .await;
+
+    tokio::join!(
+        server.did_change(replace_all(&uri, 2, "local two = 2\n")),
+        server.did_change(replace_all(&uri, 3, "local three = 3\n"))
+    );
+
+    let published_versions = notifier.published_versions.read().await.clone();
+    assert_eq!(
+        published_versions.last(),
+        Some(&Some(3i32)),
+        "the editor must end on the newest version's diagnostics: {published_versions:?}"
+    );
 }

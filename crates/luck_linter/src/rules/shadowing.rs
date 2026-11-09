@@ -78,4 +78,12 @@ mod tests {
         let diags = run("local _ = 1\ndo local _ = 2 end");
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_implicit_self_of_nested_method() {
+        let diags = run(
+            "local M = {}\nfunction M:a()\n local t = {}\n function t:b() return self end\n return t\nend\nreturn M",
+        );
+        assert!(diags.is_empty(), "an implicit `self` has no name to change: {diags:?}");
+    }
 }

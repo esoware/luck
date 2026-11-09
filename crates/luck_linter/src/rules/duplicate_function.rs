@@ -135,4 +135,11 @@ mod tests {
         let diags = run("do function f() end end\ndo function f() end end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
+
+    #[test]
+    fn bug_flags_duplicate_global_function() {
+        let source = "global function f() end\nglobal function f() end";
+        let diags = run_rule(&DuplicateFunction, source, LuaVersion::Lua55);
+        assert_eq!(diags.len(), 1, "both statements define `f` in one block: {diags:?}");
+    }
 }

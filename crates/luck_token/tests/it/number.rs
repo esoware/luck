@@ -116,3 +116,29 @@ fn parse_lua_number_refuses_malformed_text() {
     assert_eq!(parse_lua_number("", NumberSubtypes::IntFloat), None);
     assert_eq!(parse_lua_number("1.2.3", NumberSubtypes::IntFloat), None);
 }
+
+#[test]
+fn bug_parse_lua_number_refuses_float_word_spellings() {
+    for text in ["inf", "Infinity", "nan", "NaN"] {
+        for subtypes in [NumberSubtypes::IntFloat, NumberSubtypes::Unified] {
+            assert_eq!(
+                parse_lua_number(text, subtypes),
+                None,
+                "{text} is a name in Lua, not a numeral ({subtypes:?})"
+            );
+        }
+    }
+}
+
+#[test]
+fn bug_parse_lua_number_refuses_signed_text() {
+    for text in ["+1", "-1", "+1.5", "0x+1"] {
+        for subtypes in [NumberSubtypes::IntFloat, NumberSubtypes::Unified] {
+            assert_eq!(
+                parse_lua_number(text, subtypes),
+                None,
+                "{text} is not a numeral, because Lua literals carry no sign ({subtypes:?})"
+            );
+        }
+    }
+}

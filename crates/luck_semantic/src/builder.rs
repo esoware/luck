@@ -588,4 +588,141 @@ mod tests {
         assert_eq!(x_references.len(), 1);
         assert_eq!(x_references[0].resolved, Some(symbol(&tree, "x").id));
     }
+
+    #[test]
+    fn bug_implicit_self_span_does_not_cover_the_method_body() {
+        let tree = scope_tree("local t = {}\nfunction t:m()\n  local x = 1\n  return x\nend");
+        let self_span = symbol(&tree, "self").definition_span;
+        let x_span = symbol(&tree, "x").definition_span;
+        assert!(
+            self_span.end <= x_span.start || x_span.end <= self_span.start,
+            "implicit self must not claim the span of the declarations in its method body, \
+             or a cursor on any of them resolves to self: self {self_span:?}, x {x_span:?}"
+        );
+    }
+
+    #[test]
+    fn bug_global_declaration_shadows_enclosing_local() {
+        let tree = scope_tree_for("local x = 1\nglobal print, x\nprint(x)", LuaVersion::Lua55);
+        assert_eq!(
+            references(&tree, "x")[0].resolved,
+            None,
+            "after `global x`, the name x refers to the global and voids the enclosing local"
+        );
+    }
+
+    #[test]
+    fn bug_global_function_shadows_enclosing_local() {
+        let tree = scope_tree_for("local f = 1\nglobal function f() end\nf()", LuaVersion::Lua55);
+        let last_reference = *references(&tree, "f").last().expect("f() references f");
+        assert_eq!(
+            last_reference.resolved, None,
+            "after `global function f`, the name f refers to the global and voids the enclosing local"
+        );
+    }
+
+    #[test]
+    fn bug_global_function_body_refers_to_the_global() {
+        let tree =
+            scope_tree_for("local f = 1\nglobal function f() return f end", LuaVersion::Lua55);
+        assert!(
+            !symbol(&tree, "f").is_upvalue,
+            "the body of `global function f` sees the global f, so it captures no local f"
+        );
+    }
+
+    #[test]
+    fn bug_param_annotation_typeof_does_not_see_parameters() {
+        let tree = scope_tree_for(
+            "local a = 1\nlocal function f(a: number, b: typeof(a)) return b end",
+            LuaVersion::Luau,
+        );
+        assert_eq!(
+            references(&tree, "a")[0].resolved,
+            Some(symbol(&tree, "a").id),
+            "Luau parses parameter annotations before binding any parameter, so typeof(a) \
+             names the outer local"
+        );
+    }
+
+    #[test]
+    fn bug_return_annotation_typeof_does_not_see_parameters() {
+        let tree = scope_tree_for(
+            "local a = 1\nlocal function f(a: number): typeof(a) return a end",
+            LuaVersion::Luau,
+        );
+        assert_eq!(
+            references(&tree, "a")[0].resolved,
+            Some(symbol(&tree, "a").id),
+            "Luau parses the return annotation before binding the parameters, so typeof(a) \
+             names the outer local"
+        );
+    }
+
+    #[test]
+    fn bug_local_annotation_typeof_does_not_see_sibling_name() {
+        let tree = scope_tree_for(
+            "local a = 1\ndo\n  local a, b: typeof(a) = 2, 3\n  print(a, b)\nend",
+            LuaVersion::Luau,
+        );
+        assert_eq!(
+            references(&tree, "a")[0].resolved,
+            Some(symbol(&tree, "a").id),
+            "the names of a local statement bind after the statement, so typeof(a) in its \
+             annotation names the outer local"
+        );
+    }
+
+    #[test]
+    fn bug_numeric_for_annotation_typeof_does_not_see_loop_variable() {
+        let tree = scope_tree_for(
+            "local i = 1\nfor i: typeof(i) = 1, 2 do print(i) end",
+            LuaVersion::Luau,
+        );
+        assert_eq!(
+            references(&tree, "i")[0].resolved,
+            Some(symbol(&tree, "i").id),
+            "the loop variable binds after the loop header, so typeof(i) in its annotation \
+             names the outer local"
+        );
+    }
+
+    #[test]
+    fn bug_generic_for_annotation_typeof_does_not_see_loop_variables() {
+        let tree = scope_tree_for(
+            "local k = 1\nfor k, v: typeof(k) in pairs({}) do print(k, v) end",
+            LuaVersion::Luau,
+        );
+        assert_eq!(
+            references(&tree, "k")[0].resolved,
+            Some(symbol(&tree, "k").id),
+            "the loop variables bind after the loop header, so typeof(k) in an annotation \
+             names the outer local"
+        );
+    }
+
+    #[test]
+    fn bug_local_function_annotation_typeof_does_not_see_its_name() {
+        let tree = scope_tree_for(
+            "local g = 1\nlocal function g(z: typeof(g)) return z end",
+            LuaVersion::Luau,
+        );
+        assert_eq!(
+            references(&tree, "g")[0].resolved,
+            Some(symbol(&tree, "g").id),
+            "Luau binds a local function's name after parsing its signature, so typeof(g) \
+             in a parameter annotation names the outer local"
+        );
+    }
+
+    #[test]
+    fn bug_qualified_type_prefix_reads_the_module_local() {
+        let tree = scope_tree_for("local M = {}\ntype T = M.Foo", LuaVersion::Luau);
+        let module = symbol(&tree, "M");
+        assert!(
+            module.reference_ids.iter().any(|&id| tree.reference(id).kind.is_read()),
+            "M.Foo uses the local M, as luau-analyze's LocalUnused agrees, so M needs a read \
+             reference or it is reported unused and left out of rename"
+        );
+    }
 }

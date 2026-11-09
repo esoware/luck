@@ -54,3 +54,59 @@ impl<'ast> Visitor<'ast> for SpanStack {
         self.walk_expr(expr);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use luck_core::LuaTarget;
+    use rustc_hash::FxHashSet;
+    use tower_lsp::lsp_types::Range;
+
+    use super::*;
+
+    #[test]
+    fn bug_a_selection_chain_at_a_statement_boundary_is_nested() {
+        // Offset 3 ends `f()` and starts `g()`. Either direction of nesting
+        // passes, so this is independent of the chain's order.
+        let document =
+            DocumentState::new("f()g()\n".to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        assert!(document.parsed.errors.is_empty(), "{:?}", document.parsed.errors);
+        let selection = selection_for(&document, Position::new(0, 3));
+        let mut ranges = vec![selection.range];
+        let mut current = &selection;
+        while let Some(parent) = current.parent.as_deref() {
+            ranges.push(parent.range);
+            current = parent;
+        }
+        let contains =
+            |outer: Range, inner: Range| outer.start <= inner.start && inner.end <= outer.end;
+        for pair in ranges.windows(2) {
+            if let [first, second] = *pair {
+                assert!(
+                    contains(first, second) || contains(second, first),
+                    "sibling statements can't share one selection chain: {ranges:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bug_a_selection_range_parent_contains_its_child() {
+        let document = DocumentState::new(
+            "local value = alpha.beta + 1\n".to_owned(),
+            1,
+            LuaTarget::Lua54,
+            FxHashSet::default(),
+        );
+        let selection = selection_for(&document, Position::new(0, 20));
+        let mut current = &selection;
+        while let Some(parent) = current.parent.as_deref() {
+            assert!(
+                parent.range.start <= current.range.start && current.range.end <= parent.range.end,
+                "LSP: `parent.range` must contain `this.range`, got child {:?} with parent {:?}",
+                current.range,
+                parent.range
+            );
+            current = parent;
+        }
+    }
+}

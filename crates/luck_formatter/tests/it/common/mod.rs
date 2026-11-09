@@ -13,6 +13,14 @@ pub(crate) fn formatted_with(input: &str, version: LuaVersion, options: &FormatO
     result.output
 }
 
+/// `input` formatted once, after checking only that it parses, so a test can
+/// state its own expectation about the first pass.
+pub(crate) fn format_once(input: &str, version: LuaVersion, options: &FormatOptions) -> String {
+    let result = format(input, version, options);
+    assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
+    result.output
+}
+
 /// [`formatted_with`] as Lua 5.4 under the default options.
 pub(crate) fn formatted(input: &str) -> String {
     formatted_with(input, LuaVersion::Lua54, &FormatOptions::default())

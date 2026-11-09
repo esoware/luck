@@ -128,4 +128,15 @@ mod tests {
         );
         assert!(!result.contains("self"), "self should be renamed: {result}");
     }
+
+    #[test]
+    fn bug_nested_method_keeps_its_own_self_after_the_rewrite() {
+        let result = rewrite_and_rename(
+            "function M:outer()\n  print(self, self)\n  function t:inner() return self end\nend\n",
+        );
+        assert!(
+            result.contains(":inner()return self"),
+            "the nested method's `self` is its own receiver, not the rewritten parameter: {result}"
+        );
+    }
 }

@@ -18,3 +18,18 @@ fn owned_source_moves_into_the_result_without_a_copy() {
         }
     }
 }
+
+#[test]
+fn bug_declaration_without_values_spans_its_annotation_and_attribute() {
+    for (source, version) in [
+        ("local x <const>", LuaVersion::Lua54),
+        ("local a, b <close>", LuaVersion::Lua54),
+        ("global x <const>", LuaVersion::Lua55),
+        ("local x: number", LuaVersion::Luau),
+    ] {
+        let result = parse(source, version);
+        assert!(result.errors.is_empty(), "{source}: {:?}", result.errors);
+        let statement_span = result.block.stmts[0].span();
+        assert_eq!(statement_span.text(source), source, "the statement must span all of {source}");
+    }
+}

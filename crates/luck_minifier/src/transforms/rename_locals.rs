@@ -706,4 +706,46 @@ cache = f()
         let outer = result.chars().nth(6);
         assert_ne!(param, outer, "param must not shadow the captured upvalue: {result}");
     }
+
+    #[test]
+    fn bug_nested_method_self_is_not_the_enclosing_self_parameter() {
+        let result =
+            apply("function M.f(self)\n  function t:g() return self end\n  return self\nend\n");
+        assert!(
+            result.contains(":g()return self"),
+            "`self` in a `:` method is its own receiver, not the renamed parameter: {result}"
+        );
+    }
+
+    #[test]
+    fn bug_lua51_vararg_function_keeps_its_implicit_arg() {
+        let result = apply_version(
+            "local arg = g()\nlocal function f(...) return arg end\nreturn f, arg\n",
+            LuaVersion::Lua51,
+        );
+        assert!(
+            result.contains("return arg"),
+            "`arg` in a 5.1 vararg function is its implicit table, not the outer local: {result}"
+        );
+    }
+
+    #[test]
+    fn bug_renamed_local_never_wears_an_exported_name() {
+        let result = apply_luau("export local l = 1\nlocal longname = f()\nprint(l, longname)\n");
+        assert!(
+            !result.contains("local l=f()"),
+            "a renamed local must not shadow the exported `l`: {result}"
+        );
+    }
+
+    #[test]
+    fn bug_typeof_in_a_local_annotation_follows_the_rename() {
+        let result = apply_luau(
+            "local outer = f()\nlocal copy: typeof(outer) = outer\nreturn copy, outer\n",
+        );
+        assert!(
+            !result.contains("typeof(outer)"),
+            "`typeof` must name the local's new name, or the output fails type checking: {result}"
+        );
+    }
 }

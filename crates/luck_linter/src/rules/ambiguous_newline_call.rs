@@ -115,4 +115,10 @@ mod tests {
         let diags = run("local f = print\nf\n\"s\"\nf\n{}");
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn bug_flags_paren_after_cr_only_line_break() {
+        let diags = run("local f = print\nf\r(3)");
+        assert_eq!(diags.len(), 1, "Lua reads a lone CR as a line break: {diags:?}");
+    }
 }

@@ -272,6 +272,10 @@ impl Synth {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::catch_unwind;
+
+    use luck_token::LuaVersion;
+
     use super::*;
 
     #[test]
@@ -322,5 +326,37 @@ mod tests {
         assert!(function.generics.is_some());
         assert!(function.params.first().unwrap().name.is_some());
         assert!(matches!(function.return_type, Type::Pack(_)));
+    }
+
+    #[test]
+    fn bug_ty_named_refuses_the_name_typeof() {
+        // Luau always reads a type named `typeof` as `typeof(expr)`, so
+        // `local x: typeof = 1` is a parse error.
+        let built = catch_unwind(|| Synth::new().with_version(LuaVersion::Luau).ty_named("typeof"));
+        assert!(
+            built.is_err(),
+            "`ty_named(\"typeof\")` must fail loudly instead of building a type that won't \
+             re-parse, got {built:?}"
+        );
+    }
+
+    #[test]
+    fn bug_ty_table_keeps_no_array_element_beside_other_fields() {
+        // Luau: `TableType ::= '{' Type '}' | '{' [PropList] '}'`, so
+        // `{ T, a: U }` is a parse error.
+        let built = catch_unwind(|| {
+            let synth = Synth::new().with_version(LuaVersion::Luau);
+            synth.ty_table(vec![
+                TypeFieldSpec::Array(synth.ty_named("T")),
+                TypeFieldSpec::Named { access: None, name: "a", value: synth.ty_named("U") },
+            ])
+        });
+        // Refusing the mix and desugaring it to `[number]: T` are both correct.
+        if let Ok(Type::Table(table)) = built {
+            assert!(
+                !table.fields.iter().any(|field| matches!(field, TypeField::Array { .. })),
+                "an array element beside named fields prints `{{ T, a: U }}`, which Luau rejects"
+            );
+        }
     }
 }

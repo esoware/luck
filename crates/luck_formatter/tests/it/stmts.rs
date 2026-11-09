@@ -1,7 +1,7 @@
 use luck_formatter::{FormatOptions, IndentStyle};
 use luck_token::LuaVersion;
 
-use crate::common::{assert_format, assert_format_with, formatted};
+use crate::common::{assert_format, assert_format_with, format_once, formatted};
 
 #[test]
 fn if_stmt() {
@@ -183,5 +183,23 @@ fn leading_attribute_formats_as_distributed_trailing() {
         "local x <const>, y <const> = 1, 2\n",
         LuaVersion::Lua55,
         &FormatOptions::default(),
+    );
+}
+
+#[test]
+fn bug_function_body_of_only_semicolons_formats_like_an_empty_body() {
+    assert_eq!(
+        format_once("function f() ; end\n", LuaVersion::Lua54, &FormatOptions::default()),
+        "function f()\nend\n",
+        "a dropped `;` must leave the same output as an empty body"
+    );
+}
+
+#[test]
+fn bug_empty_do_block_has_no_blank_line() {
+    assert_eq!(
+        format_once("do end\n", LuaVersion::Lua54, &FormatOptions::default()),
+        "do\nend\n",
+        "`block_newline_gaps = never` strips blank lines at the start and end of every block body"
     );
 }

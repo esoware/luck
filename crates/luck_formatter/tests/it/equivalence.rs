@@ -100,3 +100,60 @@ fn detects_dropped_annotation() {
         .expect("dropped annotation should diverge");
     assert!(diff.reason.contains("presence differs"), "got: {}", diff.reason);
 }
+
+#[test]
+fn bug_detects_a_changed_interpolated_string() {
+    for (left, right) in
+        [("local x = `{a}`", "local x = `{b}`"), ("local x = `one`", "local x = `two`")]
+    {
+        assert!(
+            divergence(LuaVersion::Luau, left, right).is_some(),
+            "{left:?} and {right:?} are different programs"
+        );
+    }
+}
+
+#[test]
+fn bug_detects_a_changed_compound_operator() {
+    assert!(
+        divergence(LuaVersion::Luau, "x += 1", "x -= 1").is_some(),
+        "`+=` and `-=` are different programs"
+    );
+}
+
+#[test]
+fn bug_detects_a_dropped_type_export() {
+    assert!(
+        divergence(LuaVersion::Luau, "export type A = number", "type A = number").is_some(),
+        "dropping `export` changes the module's public types"
+    );
+}
+
+#[test]
+fn bug_detects_a_renamed_vararg() {
+    assert!(
+        divergence(
+            LuaVersion::Lua55,
+            "function f(...a) return a end",
+            "function f(...b) return a end"
+        )
+        .is_some(),
+        "renaming a named vararg changes what the body reads"
+    );
+}
+
+#[test]
+fn bug_detects_a_changed_global_star_attribute() {
+    assert!(
+        divergence(LuaVersion::Lua55, "global <const> *", "global *").is_some(),
+        "`global <const> *` and `global *` declare different access"
+    );
+}
+
+#[test]
+fn bug_detects_dropped_value_truncating_parens() {
+    assert!(
+        divergence(LuaVersion::Lua54, "return (f())", "return f()").is_some(),
+        "`(f())` truncates to one value, so these parens are not redundant"
+    );
+}

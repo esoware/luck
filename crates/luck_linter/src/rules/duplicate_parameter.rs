@@ -117,4 +117,11 @@ mod tests {
         let diags = run("local t = {}\nfunction t.m(self) end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
+
+    #[test]
+    fn bug_flags_named_vararg_matching_parameter() {
+        let source = "local function f(a, ...a) return a end";
+        let diags = run_rule(&DuplicateParameter, source, LuaVersion::Lua55);
+        assert_eq!(diags.len(), 1, "the named vararg repeats parameter `a`: {diags:?}");
+    }
 }

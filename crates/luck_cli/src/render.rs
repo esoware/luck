@@ -237,6 +237,18 @@ mod tests {
     }
 
     #[test]
+    fn bug_compact_rendering_covers_a_span_that_reaches_a_long_line() {
+        let source = format!("(\n{}\n", "1+".repeat(10_000));
+        let diag = Diagnostic::e008("big.lua", &boom_at(Span::from_indices(0, source.len())));
+        let rendered = render_document_diags("big.lua".to_owned(), source, &[diag]);
+        let rendered_bytes = rendered.len();
+        assert!(
+            rendered_bytes < 200,
+            "a span reaching a line over the limit must render compactly, got {rendered_bytes} bytes"
+        );
+    }
+
+    #[test]
     fn short_line_is_not_too_long() {
         let cache = FileCache::with_file("small.lua".to_owned(), "local x = 1\n".to_owned());
         let diag = Diagnostic::e008("small.lua", &boom_at(Span::new(6, 7)));

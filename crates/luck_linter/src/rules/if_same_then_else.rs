@@ -72,4 +72,13 @@ mod tests {
         let diags = run("if a then print(1) end");
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn bug_help_does_not_call_condition_dead_with_elseif() {
+        let diags = run("if a then f() elseif b then g() else f() end");
+        assert!(
+            diags.iter().all(|diag| !diag.help.as_deref().unwrap_or("").contains("no effect")),
+            "the condition decides whether `elseif` runs, so removing the `if` isn't safe: {diags:?}"
+        );
+    }
 }

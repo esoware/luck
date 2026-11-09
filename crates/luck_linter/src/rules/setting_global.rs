@@ -81,4 +81,16 @@ mod tests {
         let diags = run("local counter\ncounter = 1");
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_write_through_local_env() {
+        let diags = run("local _ENV = {}\nx = 1");
+        assert!(diags.is_empty(), "`x` is a field of the local `_ENV`: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_write_after_global_star() {
+        let diags = run_rule(&SettingGlobal, "global *\nx = 1", LuaVersion::Lua55);
+        assert!(diags.is_empty(), "`global *` declares every free name: {diags:?}");
+    }
 }

@@ -162,4 +162,22 @@ mod tests {
         let diags = run("local x = 99999999999999999999", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_underscore_separated_literal_on_luau() {
+        let diags = run("local x = 1_000", LuaVersion::Luau);
+        assert!(diags.is_empty(), "1000 is exact in a double: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_binary_literal_on_luau() {
+        let diags = run("local x = 0b101", LuaVersion::Luau);
+        assert!(diags.is_empty(), "5 is exact in a double: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_exactly_representable_integer_on_lua51() {
+        let diags = run("local x = 9007199254740994", LuaVersion::Lua51);
+        assert!(diags.is_empty(), "2^53 + 2 is exact in a double: {diags:?}");
+    }
 }

@@ -472,4 +472,15 @@ mod tests {
         };
         assert_eq!(integer.text.as_str(), "0xffffffffffffffffi");
     }
+
+    #[test]
+    fn bug_long_string_does_not_nest_level_zero_brackets_on_lua51() {
+        let synth = Synth::new().with_version(LuaVersion::Lua51);
+        let text = string_text(synth.long_string("a[[b"));
+        assert!(
+            !text.starts_with("[["),
+            "stock Lua 5.1 rejects `[[` inside a level-0 long string (\"nesting of [[...]] is \
+             deprecated\"), so {text} must use a higher `=` level or the quoted form"
+        );
+    }
 }

@@ -219,3 +219,47 @@ fn unterminated_long_string_is_error() {
     assert_ne!(result.errors, Vec::<SourceError>::new());
     assert!(result.errors[0].message.contains("unterminated"));
 }
+
+#[test]
+fn bug_luau_undefined_escape_lexes_as_the_literal_character() {
+    let result = lex(r#""\q""#, LuaVersion::Luau);
+    assert_eq!(
+        result.errors,
+        Vec::<SourceError>::new(),
+        "Luau reads an undefined escape as its literal character, so it should lex without errors"
+    );
+}
+
+#[test]
+fn bug_unicode_escape_above_10ffff_is_error_on_lua53_and_luau() {
+    for version in [LuaVersion::Lua53, LuaVersion::Luau] {
+        let result = lex(r#""\u{110000}""#, version);
+        assert!(
+            !result.errors.is_empty(),
+            "a codepoint above U+10FFFF should be too large under {version:?}: {:?}",
+            result.tokens
+        );
+    }
+}
+
+#[test]
+fn bug_lua51_level_zero_long_bracket_rejects_a_nested_opener() {
+    for source in ["return [[ a [[ b ]]", "--[[ a [[ b ]]\nreturn 1"] {
+        let result = lex(source, LuaVersion::Lua51);
+        assert!(
+            !result.errors.is_empty(),
+            "{source:?} should fail with Lua 5.1's `nesting of [[...]] is deprecated`: {:?}",
+            result.tokens
+        );
+    }
+}
+
+#[test]
+fn bug_luau_raw_nul_in_a_short_string_is_unterminated() {
+    let result = lex("return 'a\0b'", LuaVersion::Luau);
+    assert!(
+        !result.errors.is_empty(),
+        "a raw NUL ends the source in Luau, so the string should be unterminated: {:?}",
+        result.tokens
+    );
+}

@@ -446,3 +446,161 @@ fn generic_type_list_ordering() {
         assert!(result.errors.is_empty(), "must accept: {source}");
     }
 }
+
+fn assert_rejected(sources: &[&str]) {
+    for source in sources {
+        let result = parse_luau(source);
+        assert!(!result.errors.is_empty(), "luau rejects {source}");
+    }
+}
+
+fn assert_accepted(sources: &[&str]) {
+    for source in sources {
+        let result = parse_luau(source);
+        assert!(result.errors.is_empty(), "luau accepts {source}: {:?}", result.errors);
+    }
+}
+
+#[test]
+fn bug_bare_type_pack_is_rejected_in_single_type_position() {
+    assert_rejected(&[
+        "type X = ()",
+        "type X = (number, string)",
+        "local x: () = 1",
+        "function f(x: ()) end",
+        "x = a :: (number, string)",
+        "type X = {a: ()}",
+    ]);
+}
+
+#[test]
+fn bug_variadic_and_generic_packs_are_rejected_as_single_types() {
+    assert_rejected(&[
+        "type X = ...number",
+        "type X = T...",
+        "local x: T... = 1",
+        "function f(a: ...number) end",
+        "type X = number | T...",
+        "x = a :: T...",
+        "type X = (a: T...) -> ()",
+        "function f(...: ...number) end",
+    ]);
+}
+
+#[test]
+fn bug_type_pack_takes_no_union_suffix() {
+    assert_rejected(&[
+        "function f(): (number, string)? end",
+        "function f(): (number, string) | string end",
+        "type X = Foo<(A, B)?>",
+        "type X = Foo<T...?>",
+        "type X = (T...?) -> ()",
+        "function f(): T...? end",
+    ]);
+}
+
+#[test]
+fn bug_string_table_type_key_rejects_an_embedded_nul() {
+    assert_rejected(&["type X = { [\"a\\0b\"]: number }"]);
+}
+
+#[test]
+fn bug_trailing_comma_is_rejected_in_function_type_params() {
+    assert_rejected(&["type X = (number,) -> ()", "type X = (a: number,) -> ()"]);
+}
+
+#[test]
+fn bug_trailing_comma_is_rejected_in_type_arguments() {
+    assert_rejected(&["type X = Foo<number,>", "x = f<<T,>>()"]);
+}
+
+#[test]
+fn bug_trailing_comma_is_rejected_in_generic_lists() {
+    assert_rejected(&[
+        "type X<T,> = T",
+        "type X<T...,> = number",
+        "function f<T,>() end",
+        "type X = <T,>() -> ()",
+    ]);
+}
+
+#[test]
+fn bug_empty_generic_list_is_rejected() {
+    assert_rejected(&[
+        "type X<> = number",
+        "function f<>() end",
+        "local function f<>() end",
+        "return function<>() end",
+        "type X = <>() -> ()",
+    ]);
+}
+
+#[test]
+fn bug_type_pack_must_be_the_last_function_type_parameter() {
+    assert_rejected(&[
+        "type X = (...number, string) -> ()",
+        "type X = (T..., string) -> ()",
+        "type X = (number, ...string, number) -> ()",
+    ]);
+}
+
+#[test]
+fn bug_number_singleton_type_is_rejected() {
+    assert_rejected(&["type X = 1", "local x: 1 = 1"]);
+}
+
+#[test]
+fn bug_typeof_requires_a_parenthesized_expression() {
+    assert_rejected(&["type X = typeof", "local x: typeof = 1", "type X = typeof<T>"]);
+}
+
+#[test]
+fn bug_array_table_type_takes_no_trailing_separator() {
+    assert_rejected(&["type X = { number, }", "type X = { number; }"]);
+}
+
+#[test]
+fn bug_access_modifier_applies_to_an_array_element_type() {
+    assert_accepted(&[
+        "type X = { read number }",
+        "type X = { write number }",
+        "type X = { read {number} }",
+        "type X = { read (number) -> () }",
+    ]);
+}
+
+#[test]
+fn bug_bare_read_or_write_is_a_modifier_missing_its_type() {
+    assert_rejected(&[
+        "type X = { read }",
+        "type X = { write }",
+        "type X = { read, }",
+        "type X = { read? }",
+        "type X = { read.x }",
+    ]);
+}
+
+#[test]
+fn bug_string_keyed_table_type_fields_are_not_indexers() {
+    assert_accepted(&[
+        "type X = { [\"a\"]: number, [\"b\"]: string }",
+        "type X = { [string]: number, [\"a\"]: string }",
+        "type X = { [\"a\"]: number, [string]: string }",
+    ]);
+}
+
+#[test]
+fn bug_type_pack_after_a_defaulted_parameter_needs_a_default() {
+    assert_rejected(&["type X<T = number, U...> = T", "type X<T... = ...number, U...> = T"]);
+}
+
+#[test]
+fn bug_parenthesized_single_type_is_a_valid_pack_default() {
+    assert_accepted(&["type X<T... = (number)> = number"]);
+}
+
+#[test]
+fn bug_generic_close_does_not_split_greater_equal() {
+    // Luau lexes `>=` as one token and never splits it.
+    assert_rejected(&["type X<T>= number", "local x: Foo<T>= 1", "local x: Foo<Bar<T>>= 1"]);
+}

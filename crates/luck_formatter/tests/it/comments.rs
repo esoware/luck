@@ -1,7 +1,9 @@
+use core::ops::Range;
+
 use luck_formatter::{CollapseSimpleStatement, FormatOptions, LineEndings};
 use luck_token::LuaVersion;
 
-use crate::common::{assert_format, assert_format_with};
+use crate::common::{assert_format, assert_format_with, format_once};
 
 #[test]
 fn interior_comments_never_cross_stmt_boundaries() {
@@ -446,4 +448,216 @@ fn directives_may_be_followed_by_other_words() {
     ] {
         assert_format(input, expected);
     }
+}
+
+fn default_format(input: &str) -> String {
+    format_once(input, LuaVersion::Lua54, &FormatOptions::default())
+}
+
+fn range_of(input: &str, needle: &str) -> Range<usize> {
+    let start = input.find(needle).unwrap_or(input.len());
+    start..start.saturating_add(needle.len())
+}
+
+#[test]
+fn bug_comment_after_the_last_stmt_keeps_the_function_formatted() {
+    assert_eq!(
+        default_format("function f()\n  x   =   1\n  -- tail\nend\n"),
+        "function f()\n\tx = 1\n\t-- tail\nend\n",
+        "a comment after a block's last statement has a safe place in the block, so the function must still format"
+    );
+}
+
+#[test]
+fn bug_comment_only_do_block_formats_like_an_empty_function_body() {
+    assert_eq!(
+        default_format("do\n      -- only\nend\n"),
+        "do\n\t-- only\nend\n",
+        "a comment alone in a `do` block must be indented like one alone in a function body"
+    );
+}
+
+#[test]
+fn bug_comment_before_else_keeps_the_if_formatted() {
+    assert_eq!(
+        default_format("if a then\n  x   =   1\n  -- before else\nelse\n  y   =   2\nend\n"),
+        "if a then\n\tx = 1\n\t-- before else\nelse\n\ty = 2\nend\n",
+        "a comment closing a branch must not send the whole `if` to the verbatim fallback"
+    );
+}
+
+#[test]
+fn bug_blank_line_after_a_leading_comment_is_preserved() {
+    assert_eq!(
+        default_format("-- license header\n\nlocal x = 1\n"),
+        "-- license header\n\nlocal x = 1\n",
+        "the blank line detaching a comment from the next statement must survive"
+    );
+}
+
+#[test]
+fn bug_blank_line_before_a_final_comment_is_preserved() {
+    assert_eq!(
+        default_format("local x = 1\n\n-- end of file\n"),
+        "local x = 1\n\n-- end of file\n",
+        "the blank line before a comment at end of file must survive"
+    );
+}
+
+#[test]
+fn bug_second_trailing_comment_stays_on_its_stmt_line() {
+    assert_eq!(
+        default_format("x = 1 --[[a]] -- b\ny = 2\n"),
+        "x = 1 --[[a]] -- b\ny = 2\n",
+        "`-- b` trails `x = 1` and must not become a leading comment of `y = 2`"
+    );
+}
+
+#[test]
+fn bug_format_off_keeps_trailing_comment_alignment() {
+    let input = "-- luck: format off\nx   = 1    -- one\nyyy = 22   -- two\n-- luck: format on\n";
+    assert_eq!(default_format(input), input, "a format-off region must keep its comment columns");
+}
+
+#[test]
+fn bug_format_off_keeps_blank_line_runs() {
+    let input = "-- luck: format off\nlocal a = 1\n\n\nlocal b = 2\n-- luck: format on\n";
+    assert_eq!(default_format(input), input, "a format-off region must keep its blank lines");
+}
+
+#[test]
+fn bug_format_off_keeps_stmts_sharing_a_line() {
+    let input = "-- luck: format off\nlocal a = 1; local b = 2\n-- luck: format on\n";
+    assert_eq!(
+        default_format(input),
+        input,
+        "a format-off region must not drop `;` or split statements sharing a line"
+    );
+}
+
+#[test]
+fn bug_format_off_inside_a_table_keeps_the_region() {
+    let input = "local t = {\n\t-- luck: format off\n\t1, 0,\n\t0, 1,\n\t-- luck: format on\n}\n";
+    assert_eq!(default_format(input), input, "a format-off region inside a table must stay packed");
+}
+
+#[test]
+fn bug_ignore_directive_survives_the_semicolon_guard() {
+    let first_pass = default_format("f();\n-- luck: ignore\n(g   )()\n");
+    assert_eq!(
+        default_format(&first_pass),
+        first_pass,
+        "`luck: ignore` must keep `(g   )()` as written after the formatter adds its `;` guard"
+    );
+}
+
+#[test]
+fn bug_collapse_stays_idempotent_with_a_comment_in_a_list() {
+    let options = conditional_collapse_options();
+    let first_pass = format_once("if a then b(1, --[[c]] 2) end\n", LuaVersion::Lua54, &options);
+    assert_eq!(
+        format_once(&first_pass, LuaVersion::Lua54, &options),
+        first_pass,
+        "an argument list that claims a comment breaks across lines, so the `if` must not collapse around it"
+    );
+}
+
+#[test]
+fn bug_collapse_leaves_a_multi_line_body_expanded() {
+    assert_eq!(
+        format_once(
+            "if a then\n  do x() end\nend\n",
+            LuaVersion::Lua54,
+            &conditional_collapse_options()
+        ),
+        "if a then\n\tdo\n\t\tx()\n\tend\nend\n",
+        "collapsing means onto one line, so a body that spans lines must stay expanded"
+    );
+}
+
+#[test]
+fn bug_collapse_leaves_a_too_long_if_expanded() {
+    let options = FormatOptions { line_width: 30, ..conditional_collapse_options() };
+    assert_eq!(
+        format_once(
+            "if condition_name then call_function_name() end\n",
+            LuaVersion::Lua54,
+            &options
+        ),
+        "if condition_name then\n\tcall_function_name()\nend\n",
+        "a collapsed `if` wider than `line_width` must expand instead"
+    );
+}
+
+#[test]
+fn bug_format_range_keeps_blank_line_runs_outside_the_selection() {
+    let input = "local a = 1\n\n\nlocal   b   =   2\n";
+    let result = luck_formatter::format_range(
+        input,
+        LuaVersion::Lua54,
+        &FormatOptions::default(),
+        range_of(input, "local   b   =   2"),
+    );
+    assert_eq!(
+        result.output, "local a = 1\n\n\nlocal b = 2\n",
+        "text outside the selection, blank lines included, must be copied verbatim"
+    );
+}
+
+#[test]
+fn bug_format_range_keeps_indentation_outside_the_selection() {
+    let input = "function f()\n  local a=1\n  local   b=2\nend\n";
+    let result = luck_formatter::format_range(
+        input,
+        LuaVersion::Lua54,
+        &FormatOptions::default(),
+        range_of(input, "local   b=2"),
+    );
+    assert!(
+        result.output.contains("\n  local a=1\n"),
+        "an unselected sibling must keep its indentation: {:?}",
+        result.output
+    );
+}
+
+#[test]
+fn bug_format_range_keeps_crlf_outside_the_selection() {
+    let input = "local   a   =   1\r\nlocal   b   =   2\r\n";
+    let result = luck_formatter::format_range(
+        input,
+        LuaVersion::Lua54,
+        &FormatOptions::default(),
+        range_of(input, "local   a   =   1"),
+    );
+    assert!(
+        result.output.ends_with("\nlocal   b   =   2\r\n"),
+        "an unselected line must keep its CRLF: {:?}",
+        result.output
+    );
+}
+
+#[test]
+fn bug_ignored_multi_line_stmt_keeps_its_lines_aligned() {
+    let output = default_format("do\n    -- luck: ignore\n    local   t = {\n    }\nend\n");
+    let indent_of = |needle: &str| {
+        output
+            .lines()
+            .find(|line| line.contains(needle))
+            .map(|line| line.strip_suffix(line.trim_start()).unwrap_or_default().to_owned())
+            .expect("the line is in the output")
+    };
+    assert_eq!(
+        indent_of("local   t"),
+        indent_of("}"),
+        "an ignored statement's lines must keep their relative layout: {output:?}"
+    );
+}
+
+#[test]
+fn bug_unix_line_endings_normalize_a_block_comment() {
+    assert_eq!(
+        default_format("--[[a\r\nb]]\r\nlocal x\r\n"),
+        "--[[a\nb]]\nlocal x\n",
+        "`line_endings = unix` must not leave a CRLF inside a comment"
+    );
 }

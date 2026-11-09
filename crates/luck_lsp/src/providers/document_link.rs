@@ -209,4 +209,45 @@ mod tests {
         assert_eq!(target_at(&document, &uri, &settings, Position::new(0, 19)), None);
         assert_eq!(target_at(&document, &uri, &settings, Position::new(1, 6)), None);
     }
+
+    /// The links for `text`, opened as `main.lua` beside a `foo.lua` module.
+    fn links_beside_foo(text: &str) -> Vec<DocumentLink> {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
+        let main_path = directory.path().join("main.lua");
+        fs::write(&main_path, text).expect("write main.lua");
+        let uri = Url::from_file_path(&main_path).expect("file path URI");
+        let settings = ProjectSettings::default();
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        document_links(&document, &uri, &settings)
+    }
+
+    #[test]
+    fn bug_a_statement_level_require_links() {
+        let links = links_beside_foo("require(\"foo\")\n");
+        assert_eq!(links.len(), 1, "a side-effect `require` resolves like any other: {links:?}");
+    }
+
+    #[test]
+    fn bug_a_shadowed_require_does_not_link() {
+        // The bundler leaves a call through a local `require` alone (W005),
+        // so a build doesn't resolve it to the module.
+        let links = links_beside_foo("local require = print\nlocal m = require(\"foo\")\n");
+        assert!(links.is_empty(), "a local `require` isn't the module loader: {links:?}");
+    }
+
+    #[test]
+    fn bug_a_long_string_require_links() {
+        // The bundler decodes long-bracket require strings.
+        let links = links_beside_foo("local m = require[[foo]]\n");
+        assert_eq!(links.len(), 1, "`require[[foo]]` resolves in a build: {links:?}");
+    }
+
+    #[test]
+    fn bug_an_escaped_require_string_links() {
+        // The bundler decodes escapes, so this requires `foo`.
+        let links = links_beside_foo("local m = require(\"\\x66oo\")\n");
+        assert_eq!(links.len(), 1, "`\"\\x66oo\"` is the string `foo`: {links:?}");
+    }
 }

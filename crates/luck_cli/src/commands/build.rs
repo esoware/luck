@@ -405,6 +405,8 @@ fn print_build_footer(total_duration: Duration) {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -418,5 +420,37 @@ mod tests {
             watch: true,
         };
         assert_eq!(args.watched_directories(&[]), [PathBuf::from(".")]);
+    }
+
+    #[test]
+    fn bug_watch_keeps_watching_a_failed_entry_outside_the_config_directory() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let project = directory.path().join("project");
+        let sources = directory.path().join("sources");
+        fs::create_dir_all(&project).expect("mkdir project");
+        fs::create_dir_all(&sources).expect("mkdir sources");
+        fs::write(sources.join("main.lua"), "local =\n").expect("write entry");
+        let config = project.join("luck.json");
+        fs::write(&config, r#"{"entry":"../sources/main.lua","output":"bundle.lua"}"#)
+            .expect("write luck.json");
+        let args = BuildArgs {
+            config: Some(config),
+            dry_run: false,
+            profile: None,
+            release: false,
+            dev: false,
+            watch: true,
+        };
+
+        let source_files = args.build_for_watch(Verbosity::Quiet).expect("watch keeps going");
+        let directories = args.watched_directories(&source_files);
+
+        let canonical_sources = sources.canonicalize().expect("canonicalize sources");
+        assert!(
+            directories
+                .iter()
+                .any(|watched| watched.canonicalize().is_ok_and(|path| path == canonical_sources)),
+            "fixing the broken entry must trigger a rebuild, but only {directories:?} are watched"
+        );
     }
 }

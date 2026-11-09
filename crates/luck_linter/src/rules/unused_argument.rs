@@ -64,6 +64,7 @@ mod tests {
 
     use super::*;
     use crate::diagnostic::LintDiagnostic;
+    use crate::fix::apply_one_pass;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
@@ -133,5 +134,17 @@ mod tests {
         let diags = run("local function f(a, b, c) return a + c end");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("`b`"));
+    }
+
+    #[test]
+    fn bug_fix_does_not_duplicate_existing_underscore_parameter() {
+        let source = "local function f(_a, a) return _a end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_ne!(
+            apply_one_pass(source, &diags),
+            "local function f(_a, _a) return _a end",
+            "the rename shouldn't make `return _a` read the second parameter"
+        );
     }
 }

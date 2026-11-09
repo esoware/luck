@@ -91,4 +91,10 @@ mod tests {
         let diags = run("local is_nan = x ~= x");
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn bug_flags_parenthesized_nan() {
+        let diags = run("local same = x == (0/0)");
+        assert_eq!(diags.len(), 1, "parentheses don't change the NaN: {diags:?}");
+    }
 }

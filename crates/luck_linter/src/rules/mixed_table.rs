@@ -99,4 +99,10 @@ mod tests {
         let diags = run("local t = {foo = 1, 2, 3}");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
+
+    #[test]
+    fn bug_flags_mixed_table_in_table_call_argument() {
+        let diags = run("foo{ 1, x = 2 }");
+        assert_eq!(diags.len(), 1, "a `f{{...}}` table is a table constructor: {diags:?}");
+    }
 }

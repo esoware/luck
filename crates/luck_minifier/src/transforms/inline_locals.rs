@@ -858,4 +858,34 @@ mod tests {
             "Outer value must not leak into inner scope: {result}"
         );
     }
+
+    #[test]
+    fn bug_no_inline_into_a_method_that_binds_self() {
+        let result = apply("local self = 5\nfunction M:get() return self end\n");
+        assert!(
+            result.contains("return self"),
+            "`self` in a `:` method is the receiver, not the outer local: {result}"
+        );
+    }
+
+    #[test]
+    fn bug_no_inline_into_a_lua51_vararg_function_that_binds_arg() {
+        let result = apply_version(
+            "local arg = 5\nlocal function f(...) return arg end\nreturn f\n",
+            LuaVersion::Lua51,
+        );
+        assert!(
+            result.contains("return arg"),
+            "`arg` in a 5.1 vararg function is its implicit table, not the outer local: {result}"
+        );
+    }
+
+    #[test]
+    fn bug_no_inline_of_a_literal_operation_that_raises() {
+        let result = apply("local x = 1 + nil\nprint(\"before\")\nreturn x\n");
+        assert!(
+            !result.starts_with("print"),
+            "the error must still fire before the print runs: {result}"
+        );
+    }
 }

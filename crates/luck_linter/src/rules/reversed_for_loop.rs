@@ -91,4 +91,11 @@ mod tests {
         let diags = run("local n = 0\nfor i = 10, n do print(i) end");
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_hex_limit_above_i64_on_luau() {
+        let source = "for i = 1, 0xFFFFFFFFFFFFFFFF do print(i) end";
+        let diags = run_rule(&ReversedForLoop, source, LuaVersion::Luau);
+        assert!(diags.is_empty(), "Luau reads this limit as 1.8e19, not -1: {diags:?}");
+    }
 }

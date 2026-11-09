@@ -249,3 +249,48 @@ fn encode_string_round_trips_through_decode_string() {
         );
     }
 }
+
+#[test]
+fn bug_decode_string_refuses_an_empty_unicode_escape() {
+    for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55, LuaVersion::Luau] {
+        assert_eq!(
+            decode_in(r#""\u{}""#, version),
+            None,
+            "{version:?} rejects `\\u{{}}` with no digits, so it must not decode to a NUL byte"
+        );
+    }
+}
+
+#[test]
+fn bug_decode_string_refuses_an_unterminated_unicode_escape() {
+    for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55, LuaVersion::Luau] {
+        assert_eq!(
+            decode_in(r#""\u{41""#, version),
+            None,
+            "{version:?} requires the closing `}}` of a `\\u` escape, so `\\u{{41` must not decode"
+        );
+    }
+}
+
+#[test]
+fn bug_decode_string_refuses_luau_unicode_escapes_past_sixteen_digits() {
+    assert_eq!(
+        decode_in(r#""\u{00000000000000041}""#, LuaVersion::Luau),
+        None,
+        "Lexer::fixupQuotedString reads at most 16 digits, so Luau rejects a 17-digit `\\u` escape"
+    );
+}
+
+#[test]
+fn bug_decode_string_refuses_text_without_its_closing_quote() {
+    for raw in ["\"a'", "'a\"", "\"abc", "\"abc\\"] {
+        assert_eq!(decode(raw), None, "{raw:?} has no matching closing quote");
+    }
+}
+
+#[test]
+fn bug_decode_string_refuses_malformed_long_brackets() {
+    for raw in ["[abc]", "[[", "[[x]", "[=[x]]"] {
+        assert_eq!(decode(raw), None, "{raw:?} is not a complete long-bracket string");
+    }
+}

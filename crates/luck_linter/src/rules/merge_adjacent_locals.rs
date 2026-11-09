@@ -167,6 +167,7 @@ mod tests {
 
     use super::*;
     use crate::diagnostic::LintDiagnostic;
+    use crate::fix::apply_one_pass;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
@@ -268,5 +269,40 @@ mod tests {
         // Lua 5.4 attribute on only one of the two.
         let diags = run("local a <const> = 1\nlocal b = 2");
         assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn bug_fix_keeps_type_annotations() {
+        let source = "local a: number = 1\nlocal b: string = \"x\"";
+        let diags = run_rule(&MergeAdjacentLocals, source, LuaVersion::Luau);
+        let fixed = apply_one_pass(source, &diags);
+        assert!(
+            fixed.contains(": number") && fixed.contains(": string"),
+            "the merge shouldn't drop the annotations: {fixed}"
+        );
+    }
+
+    #[test]
+    fn bug_fix_keeps_export() {
+        let source = "export local a = 1\nexport local b = 2";
+        let diags = run_rule(&MergeAdjacentLocals, source, LuaVersion::Luau);
+        let fixed = apply_one_pass(source, &diags);
+        assert!(fixed.contains("export"), "the merge shouldn't drop `export`: {fixed}");
+    }
+
+    #[test]
+    fn bug_fix_keeps_const() {
+        let source = "const a = 1\nconst b = 2";
+        let diags = run_rule(&MergeAdjacentLocals, source, LuaVersion::Luau);
+        let fixed = apply_one_pass(source, &diags);
+        assert!(fixed.contains("const"), "the merge shouldn't make the bindings mutable: {fixed}");
+    }
+
+    #[test]
+    fn bug_fix_keeps_comment_inside_first_local() {
+        let source = "local a --[[why]] = 1\nlocal b = 2";
+        let diags = run(source);
+        let fixed = apply_one_pass(source, &diags);
+        assert!(fixed.contains("--[[why]]"), "the merge shouldn't delete the comment: {fixed}");
     }
 }

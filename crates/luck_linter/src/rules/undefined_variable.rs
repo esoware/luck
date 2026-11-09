@@ -103,4 +103,23 @@ mod tests {
         let diags = run_rule(&UndefinedVariable, "counter += 1", LuaVersion::Luau);
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_read_through_local_env() {
+        let diags = run("local _ENV = { y = 1 }\nreturn y");
+        assert!(diags.is_empty(), "`y` is a field of the local `_ENV`: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_read_after_global_star() {
+        let diags = run_rule(&UndefinedVariable, "global *\nreturn y", LuaVersion::Lua55);
+        assert!(diags.is_empty(), "`global *` declares every free name: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_types_library_in_type_function() {
+        let source = "type function t1(a)\n return types.string\nend";
+        let diags = run_rule(&UndefinedVariable, source, LuaVersion::Luau);
+        assert!(diags.is_empty(), "type functions have the `types` library: {diags:?}");
+    }
 }

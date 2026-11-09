@@ -102,4 +102,10 @@ mod tests {
         let diags = run("local a, b = 1, 2\na = b\nb = 3");
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn bug_flags_failed_swap_separated_by_semicolon() {
+        let diags = run("local a, b = 1, 2\na = b; b = a");
+        assert_eq!(diags.len(), 1, "a `;` doesn't change the failed swap: {diags:?}");
+    }
 }

@@ -194,4 +194,29 @@ mod tests {
         let markdown = markdown_at(&document, 0, utf16_column).expect("hover on GetService");
         assert!(markdown.contains("game:GetService("), "colon rendering expected: {markdown}");
     }
+
+    #[test]
+    fn bug_hover_ignores_a_field_of_a_call_result() {
+        let text = "local printer = make().print\n";
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let utf16_column = index_to_offset(text.find(".print").expect("field") + 3);
+        let markdown = markdown_at(&document, 0, utf16_column);
+        assert!(
+            markdown.is_none(),
+            "a field of a call result isn't the global `print`: {markdown:?}"
+        );
+    }
+
+    #[test]
+    fn bug_hover_on_a_statement_level_method_call_resolves() {
+        let text = "local f = io.open('x')\nf:seek('set')\n";
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let markdown = markdown_at(&document, 1, 3);
+        assert!(
+            markdown.as_deref().is_some_and(|rendered| rendered.contains("f:seek(")),
+            "a method call in statement position hovers like one in an expression: {markdown:?}"
+        );
+    }
 }

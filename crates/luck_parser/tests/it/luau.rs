@@ -620,3 +620,76 @@ fn luau_only_features_are_errors_in_lua54() {
         assert!(!result.errors.is_empty(), "{source} must be Luau-only");
     }
 }
+
+#[test]
+fn bug_attribute_is_accepted_on_const_function() {
+    let result = parse_luau("@native const function f() end");
+    assert_no_errors(&result);
+}
+
+#[test]
+fn bug_native_and_checked_accept_arguments_like_luau() {
+    // Only `deprecated` has an arguments validator; the others ignore them.
+    for source in [
+        "@[native(1)] function f() end",
+        "@[native()] function f() end",
+        "@[native \"x\"] function f() end",
+        "@[checked(1)] function f() end",
+    ] {
+        let result = parse_luau(source);
+        assert!(result.errors.is_empty(), "{source} is valid Luau: {:?}", result.errors);
+    }
+}
+
+#[test]
+fn bug_deprecated_arguments_are_validated() {
+    for source in [
+        "@[deprecated(\"x\")] function f() end",
+        "@[deprecated(1, 2)] function f() end",
+        "@[deprecated {foo = \"x\"}] function f() end",
+        "@[deprecated {use = 1}] function f() end",
+        "@[deprecated {\"x\"}] function f() end",
+    ] {
+        let result = parse_luau(source);
+        assert!(!result.errors.is_empty(), "luau rejects the arguments in {source}");
+    }
+}
+
+#[test]
+fn bug_attribute_name_must_directly_follow_the_at_sign() {
+    for source in
+        ["@ native function f() end", "@ [native] function f() end", "@\nnative function f() end"]
+    {
+        let result = parse_luau(source);
+        assert!(!result.errors.is_empty(), "luau reports a missing attribute name in {source:?}");
+    }
+}
+
+#[test]
+fn bug_const_needs_one_value_per_name_unless_the_last_is_multi_valued() {
+    for source in
+        ["const x, y = 1", "const x, y = (f())", "const x = 1, 2", "export const x, y = 1"]
+    {
+        let result = parse_luau(source);
+        assert!(!result.errors.is_empty(), "luau reports a missing initializer in {source}");
+    }
+}
+
+#[test]
+fn bug_type_function_cannot_reference_an_outer_local() {
+    for source in [
+        "local x = 1\ntype function f() return x end",
+        "local x = 1\ntype function f() local function g() return x end return g end",
+        "local function g() end\ntype function f() return g() end",
+    ] {
+        let result = parse_luau(source);
+        assert!(!result.errors.is_empty(), "luau rejects the outer local in {source}");
+    }
+}
+
+#[test]
+fn bug_simple_interpolated_string_is_an_attribute_literal() {
+    // Luau lexes a backtick string with no holes as a constant string.
+    let result = parse_luau("@[deprecated {use = `x`}] function f() end");
+    assert_no_errors(&result);
+}

@@ -75,3 +75,27 @@ fn stdlib_environment_defaults_to_standalone_and_flags_only_roblox() {
     assert!(!StdlibEnvironment::Standalone.is_roblox());
     assert!(StdlibEnvironment::Roblox.is_roblox());
 }
+
+#[test]
+fn bug_luau_reads_undefined_escapes_as_the_character() {
+    assert!(
+        !Luau.has_strict_escapes(),
+        "Luau accepts an undefined escape as that character (`print(\"\\q\")` prints `q`), so it is not strict"
+    );
+}
+
+#[test]
+fn bug_luau_hex_numerals_stop_before_a_dot() {
+    assert!(
+        !Luau.has_hex_scan_dots(),
+        "Luau reads `0xFF..2` as a number, a concat, and a number (`print(0xFF..2)` prints `2552`), so a dot is not part of its hex scan"
+    );
+}
+
+#[test]
+fn bug_luau_require_runs_a_failed_module_again() {
+    assert!(
+        Luau.has_require_error_retry(),
+        "a module that raised is not cached by Luau's `require`, so a later `require` runs it again"
+    );
+}

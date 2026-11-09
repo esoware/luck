@@ -323,4 +323,22 @@ mod tests {
         );
         assert!(diags.is_empty(), "got: {diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_package_preload_entry_write() {
+        let diags = run("package.preload.foo = function() end");
+        assert!(diags.is_empty(), "`package.preload` exists to be filled: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_package_loaded_entry_write() {
+        let diags = run("package.loaded[name] = nil");
+        assert!(diags.is_empty(), "clearing a loaded module is documented: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_roblox_instance_property_write() {
+        let diags = run_rule_roblox(&BuiltinGlobalWrite, "script.Parent.Visible = false");
+        assert!(diags.is_empty(), "this sets a property, not a builtin: {diags:?}");
+    }
 }

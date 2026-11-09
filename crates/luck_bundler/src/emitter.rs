@@ -907,6 +907,27 @@ print(field, lazy())
         );
     }
 
+    /// A file name may hold a line break on Unix, and the provenance comment
+    /// writes it raw, so the rest of the name runs as code at bundle load.
+    #[test]
+    fn bug_line_break_in_a_module_path_stays_inside_the_provenance_comment() {
+        let path = "src/a\nerror(1)--.lua";
+        let modules = vec![
+            module(path, "return 1\n", &[], LuaVersion::Lua54),
+            module(
+                "src/main.lua",
+                "local d = require(\"dep\")\nprint(d)\n",
+                &[("dep", path)],
+                LuaVersion::Lua54,
+            ),
+        ];
+        let output = bundle(modules, LuaVersion::Lua54);
+        assert!(
+            !output.lines().any(|line| line.starts_with("error(1)")),
+            "a module path must not escape its comment:\n{output}"
+        );
+    }
+
     #[test]
     fn long_bracket_require_is_rewritten() {
         let modules = vec![

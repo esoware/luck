@@ -34,3 +34,24 @@ pub(crate) fn document_highlights(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use luck_core::LuaTarget;
+    use rustc_hash::FxHashSet;
+
+    use super::*;
+
+    #[test]
+    fn bug_highlight_marks_compound_assignment_as_a_write() {
+        let text = "local n = 1\nn += 1\n";
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Luau, FxHashSet::default());
+        let highlights = document_highlights(&document, Position::new(1, 0));
+        assert_eq!(
+            highlights.first().and_then(|highlight| highlight.kind),
+            Some(DocumentHighlightKind::WRITE),
+            "`n += 1` writes `n`: {highlights:?}"
+        );
+    }
+}

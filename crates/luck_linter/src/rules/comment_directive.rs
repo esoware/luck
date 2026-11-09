@@ -243,4 +243,16 @@ mod tests {
         let diags = run_rule(&CommentDirective, "--!foobar\nlocal _x = 1", LuaVersion::Lua54);
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_reserved_space_comment() {
+        let diags = run("--! note\nlocal _x = 1");
+        assert!(diags.is_empty(), "Luau reserves `--! ` for plain comments: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_reserved_space_comment_after_code() {
+        let diags = run("local _x = 1\n--! note");
+        assert!(diags.is_empty(), "Luau reserves `--! ` for plain comments: {diags:?}");
+    }
 }

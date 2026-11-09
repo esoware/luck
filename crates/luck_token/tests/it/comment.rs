@@ -56,3 +56,25 @@ fn every_hot_comment_of_the_run_counts() {
     ];
     assert_eq!(hot_comment_texts(&comments, source), ["--!strict", "--!native"]);
 }
+
+#[test]
+fn bug_a_hot_comment_after_a_bom_is_leading() {
+    let source = "\u{FEFF}--!strict\nlocal x\n";
+    let comments = [comment_at(source, "--!strict", CommentKind::Line)];
+    assert_eq!(
+        hot_comment_texts(&comments, source),
+        ["--!strict"],
+        "the lexer skips a BOM, so a comment right after it still opens the chunk"
+    );
+}
+
+#[test]
+fn bug_a_hot_comment_after_non_ascii_whitespace_is_not_leading() {
+    let source = "\u{A0}--!strict\nlocal x\n";
+    let comments = [comment_at(source, "--!strict", CommentKind::Line)];
+    assert_eq!(
+        hot_comment_texts(&comments, source),
+        Vec::<&str>::new(),
+        "Luau lexes U+00A0 as a token, so a hot comment after it comes after the first token"
+    );
+}

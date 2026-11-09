@@ -93,4 +93,10 @@ mod tests {
         let diags = run("local _x\n_x.foo = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_forward_declaration_field_write_in_closure() {
+        let diags = run("local M\nlocal function init() M.x = 1 end\nM = {}\ninit()");
+        assert!(diags.is_empty(), "the closure runs after the assignment: {diags:?}");
+    }
 }

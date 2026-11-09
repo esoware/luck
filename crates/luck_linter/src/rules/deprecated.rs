@@ -350,4 +350,61 @@ mod tests {
             "{diags:?}"
         );
     }
+
+    #[test]
+    fn bug_fix_keeps_math_pow_argument_grouping() {
+        let after = run_fix("local r = math.pow(a + 1, b)", LuaVersion::Lua54).map(|fix| fix.1);
+        assert_ne!(
+            after.as_deref(),
+            Some("local r = (a + 1 ^ b)"),
+            "the fix shouldn't regroup the base as `1 ^ b`"
+        );
+    }
+
+    #[test]
+    fn bug_fix_keeps_getn_argument_grouping() {
+        let after = run_fix("local r = table.getn(a or b)", LuaVersion::Lua54).map(|fix| fix.1);
+        assert_ne!(
+            after.as_deref(),
+            Some("local r = #a or b"),
+            "the fix should take the length of the whole argument"
+        );
+    }
+
+    #[test]
+    fn bug_fix_keeps_getn_grouping_in_power() {
+        let after = run_fix("local r = table.getn(t) ^ 2", LuaVersion::Lua54).map(|fix| fix.1);
+        assert_ne!(
+            after.as_deref(),
+            Some("local r = #t ^ 2"),
+            "`#t ^ 2` takes the length of `t ^ 2`, not the square of the length"
+        );
+    }
+
+    #[test]
+    fn bug_fix_keeps_extra_unpack_arguments() {
+        let after = run_fix("local a, b = unpack(t, 2, 3)", LuaVersion::Lua54).map(|fix| fix.1);
+        assert_ne!(
+            after.as_deref(),
+            Some("local a, b = table.unpack(t)"),
+            "the fix shouldn't drop the range arguments"
+        );
+    }
+
+    #[test]
+    fn bug_no_fix_when_template_arguments_are_missing() {
+        let diags = run_rule(&Deprecated, "local r = math.pow(f())", LuaVersion::Lua54);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].fix.is_none(), "`(f() ^ )` doesn't parse, so no fix applies: {diags:?}");
+    }
+
+    #[test]
+    fn bug_no_fix_for_bit32_bnot_on_lua53() {
+        let after = run_fix("local x = bit32.bnot(0)", LuaVersion::Lua53).map(|fix| fix.1);
+        assert_ne!(
+            after.as_deref(),
+            Some("local x = (~0)"),
+            "`bit32.bnot(0)` is 4294967295 and `~0` is -1"
+        );
+    }
 }

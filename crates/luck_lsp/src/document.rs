@@ -107,6 +107,8 @@ impl DocumentState {
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
 
     fn replace(range: Range, text: &str) -> TextDocumentContentChangeEvent {
@@ -149,5 +151,22 @@ mod tests {
         let text = document
             .changed_text(vec![replace(Range::new(Position::new(0, 5), Position::new(0, 2)), "x")]);
         assert_eq!(text, None);
+    }
+
+    #[test]
+    fn bug_a_long_left_associative_chain_does_not_overflow_the_worker_stack() {
+        // `luck lsp` runs requests on 16 MiB workers. A stack overflow aborts
+        // the whole server process, so this fails by aborting the test.
+        const WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
+        let chain = vec!["1"; 200_000].join("+");
+        let text = format!("local x = {chain}\n");
+        let worker = thread::Builder::new()
+            .stack_size(WORKER_STACK_BYTES)
+            .spawn(move || {
+                let document = DocumentState::new(text, 1, LuaTarget::Lua54, FxHashSet::default());
+                drop(document);
+            })
+            .expect("spawn worker");
+        worker.join().expect("a long expression must not take the server down");
     }
 }

@@ -181,4 +181,25 @@ mod tests {
             "{help:?}"
         );
     }
+
+    #[test]
+    fn bug_signature_help_ends_at_the_closing_paren() {
+        let document =
+            DocumentState::new("print(1)".to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let help = signature_help(&document, Position::new(0, 8));
+        assert!(help.is_none(), "the cursor is past `)`, outside the call: {help:?}");
+    }
+
+    #[test]
+    fn bug_signature_help_counts_commas_before_the_cursor() {
+        let text = "string.rep(\"a\" , 3 )";
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let before_comma =
+            signature_help(&document, Position::new(0, 15)).expect("inside the call");
+        assert_eq!(before_comma.active_parameter, Some(0), "no comma before the cursor yet");
+        let before_paren =
+            signature_help(&document, Position::new(0, 19)).expect("inside the call");
+        assert_eq!(before_paren.active_parameter, Some(1), "one comma before the cursor");
+    }
 }

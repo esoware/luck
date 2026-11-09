@@ -196,4 +196,22 @@ mod tests {
             run_rule(&RedundantNativeAttribute, "--!native\nlocal _x = 1", LuaVersion::Lua54);
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn bug_fix_removes_bracketed_attribute() {
+        let source = "--!native\n@[native] function f() end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
+        assert_eq!(
+            fixed, "--!native\nfunction f() end",
+            "the fix should remove the whole attribute"
+        );
+    }
+
+    #[test]
+    fn bug_ignores_native_directive_with_trailing_text() {
+        let diags = run("--!native on\n@native function f() end");
+        assert!(diags.is_empty(), "the compiler ignores `--!native on`: {diags:?}");
+    }
 }

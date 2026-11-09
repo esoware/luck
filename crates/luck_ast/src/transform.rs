@@ -645,4 +645,28 @@ mod tests {
         counts.transform_block(block);
         assert_eq!(counts, HookCounts { calls: 2, args: 2, tables: 2, bodies: 1 });
     }
+
+    #[test]
+    fn bug_transform_reaches_function_attribute_args() {
+        use crate::synth::FunctionSignature;
+
+        // @[deprecated(nil)] local function f() end
+        let synth = Synth::new();
+        let attribute = synth.function_attribute("deprecated", Some(vec![synth.nil()]));
+        let local_function = synth.local_function_full(
+            "f",
+            vec![attribute],
+            FunctionSignature::default(),
+            synth.block(vec![], None),
+        );
+        let Statement::LocalFunction(rewritten) = NilToFalse.transform_stmt(local_function) else {
+            panic!("expected local function");
+        };
+        let args = rewritten.attributes[0].args.as_ref().expect("attribute arguments");
+        assert!(
+            matches!(args.items[0], Expression::False(_)),
+            "`transform_expr` must rewrite a function attribute's arguments, got {:?}",
+            args.items[0]
+        );
+    }
 }

@@ -478,3 +478,26 @@ fn luau_attribute_lexes_as_at_and_a_name() {
         vec![TokenKind::At, TokenKind::Identifier("native".into())]
     );
 }
+
+#[test]
+fn bug_luau_nul_byte_ends_the_source() {
+    let result = lex("return 1\0$", LuaVersion::Luau);
+    assert!(
+        result.errors.is_empty(),
+        "Luau reads a raw NUL as end of input, so the bytes after it should not be lexed: {:?}",
+        result.errors
+    );
+    assert_eq!(result.tokens.len(), 3, "{:?}", result.tokens);
+}
+
+#[test]
+fn bug_bom_is_an_error_on_lua51_and_luau() {
+    for version in [LuaVersion::Lua51, LuaVersion::Luau] {
+        let result = lex("\u{FEFF}return 1", version);
+        assert!(
+            !result.errors.is_empty(),
+            "a leading BOM fails to compile under {version:?}, so it should be reported: {:?}",
+            result.tokens
+        );
+    }
+}

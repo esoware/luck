@@ -134,4 +134,24 @@ mod tests {
         let diags = run("local _x = 1\n_x = 2\nreturn _x");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_assignment_reading_its_own_target() {
+        let diags = run("local x = 1\nx = x + 1\nreturn x");
+        assert!(diags.is_empty(), "the right-hand side reads the old value: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_write_skipped_by_goto() {
+        let diags = run("local x = 1\nif c then goto skip end\nx = 2\n::skip::\nprint(x)");
+        assert!(diags.is_empty(), "the `goto` path reads the initializer: {diags:?}");
+    }
+
+    #[test]
+    fn bug_points_at_the_overwritten_assignment() {
+        let source = "local x\nx = 1\nx = 2\nreturn x";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].span.text(source), "x", "the span should cover `x`: {diags:?}");
+    }
 }

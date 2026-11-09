@@ -630,4 +630,45 @@ mod tests {
         let bare = apply("repeat break until true\n");
         assert!(bare.contains("repeat"), "repeat with break must be kept: {bare}");
     }
+
+    #[test]
+    fn bug_negated_empty_then_condition_keeps_its_grouping() {
+        for condition in ["a == b", "a and b", "a or b"] {
+            let result = apply(&format!("if {condition} then else print(1) end\n"));
+            assert!(
+                !result.contains("if not a"),
+                "`not` must apply to all of `{condition}`, or it regroups as `(not a) ...`: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn bug_keeps_unused_local_reading_a_global() {
+        let result = apply("local unused = g\nreturn 1\n");
+        assert!(result.contains('g'), "a global read can fire __index, so it must stay: {result}");
+    }
+
+    #[test]
+    fn bug_keeps_unused_local_whose_literal_operation_raises() {
+        for initializer in
+            ["1 // 0", "1 % 0", "nil + 1", "#nil", "\"a\" .. nil", "1 < \"a\"", "-\"a\""]
+        {
+            let result = apply(&format!("local unused = {initializer}\nreturn 1\n"));
+            assert!(
+                result.contains("local unused"),
+                "`{initializer}` raises at runtime, so it must stay: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn bug_keeps_unused_table_whose_constructor_raises() {
+        for key in ["nil", "0/0"] {
+            let result = apply(&format!("local unused = {{[{key}] = 1}}\nreturn 1\n"));
+            assert!(
+                result.contains("local unused"),
+                "a table key of `{key}` raises at runtime, so it must stay: {result}"
+            );
+        }
+    }
 }

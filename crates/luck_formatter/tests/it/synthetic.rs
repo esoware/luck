@@ -653,3 +653,21 @@ fn synthetic_comment_on_a_collapsible_body_keeps_it_expanded() {
 
     assert_eq!(output, "if a then\n\tlocal x = 1 -- why\nend\n");
 }
+
+#[test]
+fn bug_multi_line_synthetic_comment_stays_a_comment() {
+    let synth = Synth::new();
+    let stmt = synth.local(&["x"], vec![synth.number("1")]);
+    let comment = SyntheticComment::leading(&stmt, "first line\ny = 2");
+    let block = synth.block(vec![stmt], None);
+
+    let output =
+        format_block(&block, Comments::synthetic(vec![comment]), &FormatOptions::default());
+
+    let reparsed = luck_parser::parse(&output, LuaVersion::Lua54);
+    assert_eq!(
+        reparsed.block.stmts.len(),
+        1,
+        "every line of a comment must stay commented out: {output:?}"
+    );
+}

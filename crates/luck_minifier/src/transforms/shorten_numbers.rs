@@ -319,4 +319,13 @@ mod tests {
         assert_eq!(shorten_integer("0xffffffffffffffffi"), None);
         assert_eq!(shorten_integer("1000000i"), None);
     }
+
+    #[test]
+    fn bug_hex_integer_starting_with_0b_keeps_its_value() {
+        assert_eq!(
+            shorten_integer("0x0b12i").as_deref(),
+            Some("2834i"),
+            "the digits after `0x` must not lose a leading `0b`"
+        );
+    }
 }

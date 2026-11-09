@@ -379,4 +379,135 @@ mod tests {
         let diags = run("local os = {}\nos.date(\"%Q\")");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_luau_star_format_specifier() {
+        let diags = run_rule(&FormatString, "local s = string.format(\"%*\", 1)", LuaVersion::Luau);
+        assert!(diags.is_empty(), "Luau accepts the `%*` conversion: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_percent_p_format_on_lua54() {
+        let diags = run("local s = string.format(\"%p\", {})");
+        assert!(diags.is_empty(), "Lua 5.4 accepts the `%p` conversion: {diags:?}");
+    }
+
+    #[test]
+    fn bug_flags_percent_a_format_on_lua51() {
+        let diags =
+            run_rule(&FormatString, "local s = string.format(\"%a\", 1)", LuaVersion::Lua51);
+        assert_eq!(diags.len(), 1, "Lua 5.1 rejects the `%a` conversion: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_repeated_format_flags() {
+        let diags = run("local s = string.format(\"%--d\", 1)");
+        assert!(diags.is_empty(), "every dialect accepts a repeated format flag: {diags:?}");
+    }
+
+    #[test]
+    fn bug_flags_modifier_on_percent_q_on_lua54() {
+        let diags = run("local s = string.format(\"%5q\", \"a\")");
+        assert_eq!(diags.len(), 1, "Lua 5.4 rejects a modifier on `%q`: {diags:?}");
+    }
+
+    #[test]
+    fn bug_flags_alternate_flag_on_percent_d_on_lua54() {
+        let diags = run("local s = string.format(\"%#d\", 1)");
+        assert_eq!(diags.len(), 1, "Lua 5.4 rejects the `#` flag on `%d`: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_plain_find_special_characters() {
+        let diags = run("local i = string.find(s, \"[\", 1, true)");
+        assert!(diags.is_empty(), "a plain find doesn't read a pattern: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_method_match_subject_literal() {
+        let diags = run("local m = (\"[abc\"):match(\"b\")");
+        assert!(diags.is_empty(), "the receiver of `:match` is the subject: {diags:?}");
+    }
+
+    #[test]
+    fn bug_flags_method_match_bad_pattern() {
+        let diags = run("local m = (\"abc\"):match(\"[\")");
+        assert_eq!(diags.len(), 1, "the argument of `:match` is the pattern: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_method_unpack_data_literal() {
+        let diags = run("local v = (\"abcd\"):unpack(\"i4\")");
+        assert!(diags.is_empty(), "the receiver of `:unpack` is the data: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_literal_dash_at_pattern_start() {
+        let diags = run("local i = string.find(s, \"-\")");
+        assert!(diags.is_empty(), "a `-` with nothing to repeat is a literal: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_dash_after_quantifier() {
+        let diags = run("local i = string.find(s, \"%s*-%s*\")");
+        assert!(diags.is_empty(), "a `-` right after a quantifier is a literal: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_set_with_leading_close_bracket() {
+        let diags = run("local i = string.find(s, \"[]]\")");
+        assert!(diags.is_empty(), "a `]` first in a set is a member: {diags:?}");
+    }
+
+    #[test]
+    fn bug_flags_back_reference_without_capture() {
+        let diags = run("local i = string.find(s, \"%1\")");
+        assert_eq!(diags.len(), 1, "`%1` with no capture raises an error: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_packsize_value_options() {
+        let diags = run("local n = string.packsize(\"i4\")");
+        assert!(diags.is_empty(), "`string.packsize` takes only the format: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_unpack_of_multiple_values() {
+        let diags = run("local a, b = string.unpack(\"i4 i4\", s)");
+        assert!(diags.is_empty(), "`string.unpack` takes the data, not one value each: {diags:?}");
+    }
+
+    #[test]
+    fn bug_flags_pack_integer_size_out_of_limits() {
+        let diags = run("local p = string.pack(\"i17\", 1)");
+        assert_eq!(diags.len(), 1, "integer sizes above 16 raise an error: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_c99_date_specifier_on_lua54() {
+        let diags = run("local d = os.date(\"%F\")");
+        assert!(diags.is_empty(), "stock non-Windows Lua 5.4 accepts C99 `%F`: {diags:?}");
+    }
+
+    #[test]
+    fn bug_format_error_span_covers_whole_character() {
+        let source = "local s = string.format(\"%\u{e9}\", 1)";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(
+            diags[0].span.text(source),
+            "\u{e9}",
+            "the span should cover the whole character: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn bug_format_error_message_does_not_garble_character() {
+        let diags = run("local s = string.format(\"%\u{e9}\", 1)");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(
+            !diags[0].message.contains('\u{c3}'),
+            "the lead byte shouldn't print as a Latin-1 character: {diags:?}"
+        );
+    }
 }

@@ -278,6 +278,7 @@ const KEYWORD_COMPLETIONS: &[&str] = &[
 mod tests {
     use luck_core::LuaTarget;
     use luck_token::index_to_offset;
+    use tower_lsp::lsp_types::Range as LspRange;
 
     use super::*;
 
@@ -504,5 +505,84 @@ mod tests {
         assert_eq!(floor.sort_text.as_deref(), Some("1floor"));
         assert_eq!(pow.sort_text.as_deref(), Some("2pow"));
         assert_eq!(pow.deprecated, Some(true));
+    }
+
+    #[test]
+    fn bug_completion_offers_nothing_inside_a_comment() {
+        let text = "-- string.";
+        let document = lua54_document(text);
+        let items = items_at(&document, 0, index_to_offset(text.len()));
+        assert!(
+            items.is_empty(),
+            "no completion belongs inside a comment, got {} items",
+            items.len()
+        );
+    }
+
+    #[test]
+    fn bug_completion_offers_nothing_inside_a_plain_string() {
+        let text = "local s = \"string.\"";
+        let document = lua54_document(text);
+        // Just before the closing quote.
+        let items = items_at(&document, 0, index_to_offset(text.len() - 1));
+        assert!(
+            items.is_empty(),
+            "no completion belongs inside a non-constant string, got {} items",
+            items.len()
+        );
+    }
+
+    #[test]
+    fn bug_completion_refuses_members_of_a_shadowed_namespace() {
+        let text = "local math = {}\nmath.";
+        let document = lua54_document(text);
+        let items = items_at(&document, 1, 5);
+        assert!(
+            !items.iter().any(|item| item.label == "floor"),
+            "`math` is a local here, so the stdlib's members don't apply: {items:?}"
+        );
+    }
+
+    #[test]
+    fn bug_constant_completion_in_a_long_string_replaces_only_its_interior() {
+        let text = "collectgarbage([[c]])";
+        let document = lua54_document(text);
+        let items = items_at(&document, 0, 18);
+        let collect = items
+            .iter()
+            .find(|item| item.label == "collect")
+            .expect("constant values inside the string");
+        let Some(CompletionTextEdit::Edit(edit)) = &collect.text_edit else {
+            panic!("constant completion carries a text edit: {collect:?}");
+        };
+        assert_eq!(
+            edit.range,
+            LspRange::new(Position::new(0, 17), Position::new(0, 18)),
+            "only the `c` inside `[[` and `]]` may be replaced, or the brackets break"
+        );
+    }
+
+    #[test]
+    fn bug_completion_after_a_concat_offers_namespace_members() {
+        let text = "local s = \"a\"..string.";
+        let document = lua54_document(text);
+        let items = items_at(&document, 0, index_to_offset(text.len()));
+        assert!(
+            items.iter().any(|item| item.label == "format"),
+            "`..` ends the operand, so `string.` still completes its members: {:?}",
+            keywords_of(&items)
+        );
+    }
+
+    #[test]
+    fn bug_completion_after_a_member_dot_on_an_unknown_receiver_offers_no_keywords() {
+        let text = "local result = make().";
+        let document = lua54_document(text);
+        let items = items_at(&document, 0, index_to_offset(text.len()));
+        assert!(
+            keywords_of(&items).is_empty(),
+            "a keyword can't follow `.`: {:?}",
+            keywords_of(&items)
+        );
     }
 }

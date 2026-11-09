@@ -324,4 +324,34 @@ mod tests {
         let number_form_messages = run_roblox("BrickColor.new(1, 0, 0)");
         assert!(number_form_messages.is_empty(), "{number_form_messages:?}");
     }
+
+    #[test]
+    fn bug_ignores_error_without_arguments() {
+        let messages = run("error()", LuaVersion::Lua54);
+        assert!(messages.is_empty(), "`error()` raises a nil error: {messages:?}");
+    }
+
+    #[test]
+    fn bug_ignores_setlocale_without_arguments() {
+        let messages = run("local l = os.setlocale()", LuaVersion::Lua54);
+        assert!(messages.is_empty(), "`os.setlocale()` queries the locale: {messages:?}");
+    }
+
+    #[test]
+    fn bug_ignores_trailing_multi_value_at_maximum() {
+        let messages = run("local x = type(a, ...)", LuaVersion::Lua54);
+        assert!(messages.is_empty(), "`...` can expand to nothing: {messages:?}");
+    }
+
+    #[test]
+    fn bug_ignores_collectgarbage_collect_on_luau() {
+        let messages = run("collectgarbage('collect')", LuaVersion::Luau);
+        assert!(messages.is_empty(), "standalone Luau accepts `collect`: {messages:?}");
+    }
+
+    #[test]
+    fn bug_ignores_setmajorinc_on_lua52() {
+        let messages = run("local n = collectgarbage(\"setmajorinc\", 100)", LuaVersion::Lua52);
+        assert!(messages.is_empty(), "Lua 5.2 accepts `setmajorinc`: {messages:?}");
+    }
 }

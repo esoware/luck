@@ -191,3 +191,22 @@ fn leading_attribute_conflicts_with_trailing_on_any_name() {
     let result = parse_lua55("local <const> x, y <close> = 1, 2");
     assert!(!result.errors.is_empty(), "leading + trailing attrib on the list must error");
 }
+
+#[test]
+fn bug_global_stays_an_ordinary_name_when_no_declaration_follows() {
+    // Stock builds define LUA_COMPAT_GLOBAL, so `global` isn't reserved and
+    // only starts a declaration before `<`, a Name, `*`, or `function`.
+    for source in ["global = 1", "local global = 1", "print(global)", "t.global = 1"] {
+        let result = parse_lua55(source);
+        assert!(result.errors.is_empty(), "{source} is valid in Lua 5.5: {:?}", result.errors);
+    }
+}
+
+#[test]
+fn bug_postfixed_attribute_overrides_prefixed_attribute() {
+    // 5.5 `localstat`: `kind = getvarattribute(ls, defkind)`.
+    for source in ["local <const> a <close> = nil", "global <const> x <const>"] {
+        let result = parse_lua55(source);
+        assert!(result.errors.is_empty(), "{source} is valid in Lua 5.5: {:?}", result.errors);
+    }
+}

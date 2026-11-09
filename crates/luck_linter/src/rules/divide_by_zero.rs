@@ -139,4 +139,16 @@ mod tests {
         let diags = run("local r = x / 0x0", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
+
+    #[test]
+    fn bug_flags_compound_division_by_zero_on_luau() {
+        let diags = run("local x = 1\nx /= 0", LuaVersion::Luau);
+        assert_eq!(diags.len(), 1, "`x /= 0` divides by a literal zero: {diags:?}");
+    }
+
+    #[test]
+    fn bug_flags_binary_zero_divisor_on_luau() {
+        let diags = run("local r = x / 0b0", LuaVersion::Luau);
+        assert_eq!(diags.len(), 1, "`0b0` is a literal zero: {diags:?}");
+    }
 }

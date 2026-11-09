@@ -111,4 +111,16 @@ mod tests {
         let diags = run("local t = { 1, 1, a = 1, b = 1, [1] = 2, [x] = 3, [x] = 4 }");
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn bug_flags_duplicate_keys_in_table_call_argument() {
+        let diags = run("foo{ a = 1, a = 2 }");
+        assert_eq!(diags.len(), 1, "a `f{{...}}` table is a table constructor: {diags:?}");
+    }
+
+    #[test]
+    fn bug_flags_duplicate_numeric_keys() {
+        let diags = run("local t = { [1] = \"a\", [1] = \"b\" }");
+        assert_eq!(diags.len(), 1, "both fields set key 1: {diags:?}");
+    }
 }

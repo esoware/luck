@@ -65,4 +65,16 @@ mod tests {
         let diags = run("local x = 1\nprint(x)");
         assert!(diags.is_empty(), "{diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_semicolon_after_break() {
+        let diags = run("while true do break; end");
+        assert!(diags.is_empty(), "a `;` separator isn't code: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_label_after_break() {
+        let diags = run("while c do if x then goto a end break ::a:: print(1) end");
+        assert!(diags.is_empty(), "the `goto` reaches the label after `break`: {diags:?}");
+    }
 }

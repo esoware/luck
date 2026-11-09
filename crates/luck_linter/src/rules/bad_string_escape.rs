@@ -239,4 +239,16 @@ mod tests {
             assert!(diags.is_empty(), "{source}: {diags:?}");
         }
     }
+
+    #[test]
+    fn bug_span_covers_whole_escaped_character() {
+        let source = "local x = \"\\\u{e9}\"";
+        let diags = run(source, LuaVersion::Lua51);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(
+            diags[0].span.text(source),
+            "\\\u{e9}",
+            "the span should cover the whole character: {diags:?}"
+        );
+    }
 }

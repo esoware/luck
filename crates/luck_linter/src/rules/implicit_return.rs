@@ -143,4 +143,31 @@ mod tests {
         let diags = run("function f() while true do return 1 end end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
+
+    #[test]
+    fn bug_flags_fallthrough_after_while_true_with_conditional_break() {
+        let diags = run(
+            "local function f(c, d) if c then return 1 end while true do if d then break end end end",
+        );
+        assert_eq!(diags.len(), 1, "the `break` path falls off the end: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_return_after_repeat_continue_until_true() {
+        let source = "local function f(x)\n if x then return 1 end\n repeat continue until true\n return 2\nend";
+        let diags = run_rule(&ImplicitReturn, source, LuaVersion::Luau);
+        assert!(diags.is_empty(), "`continue` ends the repeat, so `return 2` runs: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_while_one_infinite_loop() {
+        let diags = run("local function f(x) while 1 do if x then return 1 end end end");
+        assert!(diags.is_empty(), "`1` is always truthy, so nothing falls through: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_guard_clause_bare_return() {
+        let diags = run("local function f(x) if not x then return end print(x) end");
+        assert!(diags.is_empty(), "no path returns a value, so no `nil` is implicit: {diags:?}");
+    }
 }

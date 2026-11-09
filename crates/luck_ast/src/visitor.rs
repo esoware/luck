@@ -529,4 +529,22 @@ mod tests {
         assert_eq!(counts.bodies, 1, "{counts:?}");
         assert_eq!(counts.generic_lists, 1, "{counts:?}");
     }
+
+    #[test]
+    fn bug_visitor_reaches_function_attribute_args() {
+        // @[deprecated("use g")] local function f() end
+        let synth = Synth::new();
+        let attribute = synth.function_attribute("deprecated", Some(vec![synth.string("use g")]));
+        let local_function = synth.local_function_full(
+            "f",
+            vec![attribute],
+            FunctionSignature::default(),
+            synth.block(vec![], None),
+        );
+        assert_eq!(
+            expr_count(vec![local_function]),
+            1,
+            "`visit_expr` must reach the expressions in a function attribute's arguments"
+        );
+    }
 }

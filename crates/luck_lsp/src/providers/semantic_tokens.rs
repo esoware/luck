@@ -874,4 +874,34 @@ mod tests {
             "defaultLibrary expected: {tokens:?}"
         );
     }
+
+    #[test]
+    fn bug_a_to_be_closed_local_is_readonly() {
+        // Manual 3.3.8: a to-be-closed variable behaves like a constant local.
+        let tokens = highlights(&parse_document("local h <close> = nil\n", LuaTarget::Lua54));
+        let declaration = tokens.iter().find(|token| token.text == "h").expect("h");
+        assert!(
+            declaration.modifiers.iter().any(|modifier| modifier == "readonly"),
+            "`<close>` can't be assigned, same as `<const>`: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn bug_a_recovered_assignment_target_emits_no_overlapping_token() {
+        // `a.b(c)` can't be assigned, so recovery names it with an empty
+        // identifier spanning the whole call. `highlights` asserts that no
+        // two tokens overlap and that each has a length.
+        let document = DocumentState::new(
+            "a.b(c), d = 1\n".to_owned(),
+            1,
+            LuaTarget::Lua54,
+            FxHashSet::default(),
+        );
+        assert!(!document.parsed.errors.is_empty(), "the target must be invalid");
+        let tokens = highlights(&document);
+        assert!(
+            tokens.iter().all(|token| !token.text.contains('(')),
+            "a token must cover one identifier: {tokens:?}"
+        );
+    }
 }

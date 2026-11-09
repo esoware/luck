@@ -4,8 +4,18 @@
 //! move independently. Run locally with `cargo bench -p luck_benchmark`. CI
 //! runs the same binaries under `CodSpeed` with the `codspeed` feature.
 
+#![cfg_attr(
+    test,
+    expect(
+        clippy::missing_panics_doc,
+        reason = "a test panics to fail, so a Panics section says nothing"
+    )
+)]
+
 mod corpus;
 mod corpus_cache;
+#[cfg(test)]
+mod fixtures;
 mod never_grow_in_place_allocator;
 
 // Every bench imports criterion from here, which links this crate, and with

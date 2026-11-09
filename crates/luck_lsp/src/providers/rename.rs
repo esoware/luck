@@ -89,3 +89,127 @@ fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), Str
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use luck_core::LuaTarget;
+    use rustc_hash::FxHashSet;
+    use tower_lsp::lsp_types::{
+        Range, TextDocumentIdentifier, TextDocumentPositionParams, Url, WorkDoneProgressParams,
+    };
+
+    use super::*;
+
+    fn uri() -> Url {
+        Url::parse("file:///main.lua").expect("valid URI")
+    }
+
+    fn document(text: &str, target: LuaTarget) -> DocumentState {
+        DocumentState::new(text.to_owned(), 1, target, FxHashSet::default())
+    }
+
+    /// # Errors
+    ///
+    /// Returns the refusal [`rename`] gives.
+    fn rename_at(
+        document: &DocumentState,
+        line: u32,
+        utf16_column: u32,
+        new_name: &str,
+    ) -> JsonRpcResult<Option<WorkspaceEdit>> {
+        rename(
+            document,
+            &RenameParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: uri() },
+                    position: Position::new(line, utf16_column),
+                },
+                new_name: new_name.to_owned(),
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            },
+        )
+    }
+
+    fn edits_of(edit: WorkspaceEdit) -> Vec<TextEdit> {
+        edit.changes.expect("changes map").remove(&uri()).expect("edits for the document")
+    }
+
+    #[test]
+    fn bug_rename_of_a_local_declared_in_a_method_edits_only_that_local() {
+        let document = document(
+            "local t = {}\nfunction t:m()\n  local value = 1\n  return value + self.x\nend\n",
+            LuaTarget::Lua54,
+        );
+        let edit = rename_at(&document, 2, 9, "total")
+            .expect("rename succeeds")
+            .expect("a local is renameable");
+        let ranges: Vec<Range> = edits_of(edit).iter().map(|text_edit| text_edit.range).collect();
+        assert_eq!(
+            ranges,
+            vec![
+                Range::new(Position::new(2, 8), Position::new(2, 13)),
+                Range::new(Position::new(3, 9), Position::new(3, 14)),
+            ],
+            "renaming `value` must edit its declaration and read, not the implicit `self`'s body"
+        );
+    }
+
+    #[test]
+    fn bug_rename_refuses_the_implicit_self() {
+        // A method's `self` has no declaration to rewrite, so no new name
+        // can work.
+        let document =
+            document("local t = {}\nfunction t:m()\n  return self.x\nend\n", LuaTarget::Lua54);
+        let result = rename_at(&document, 2, 10, "me");
+        assert!(
+            !matches!(result, Ok(Some(_))),
+            "renaming the implicit `self` must be refused, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn bug_prepare_rename_refuses_a_keyword_inside_a_method() {
+        let document =
+            document("local t = {}\nfunction t:m()\n  return 1\nend\n", LuaTarget::Lua54);
+        let prepared = prepare(&document, Position::new(2, 3));
+        assert!(
+            prepared.is_none(),
+            "`return` is no name, but it resolves to `self` through the body span: {prepared:?}"
+        );
+    }
+
+    #[test]
+    fn bug_prepare_rename_refuses_a_recovered_name() {
+        // Recovery gives the loop variable the `=` token's span and an empty
+        // name.
+        let document = document("for = 1, 2 do end\n", LuaTarget::Lua54);
+        let prepared = prepare(&document, Position::new(0, 4));
+        assert!(prepared.is_none(), "`=` is no name to rename: {prepared:?}");
+    }
+
+    #[test]
+    fn bug_rename_refuses_a_local_env() {
+        // In 5.2+ `_ENV` resolves every free name, so renaming the local
+        // sends `x` to the real globals. `local _ENV = {x = 1}; return x`
+        // returns 1 while the renamed form returns nil on lua5.4.
+        let document = document("local _ENV = {x = 1}\nreturn x\n", LuaTarget::Lua54);
+        let result = rename_at(&document, 0, 8, "scope");
+        assert!(
+            result.is_err(),
+            "renaming `_ENV` changes what every free name means, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn bug_rename_refuses_an_exported_binding() {
+        // An exported name is the module's public field name, per the Luau
+        // export RFC.
+        let document = document("export local version = 1\nprint(version)\n", LuaTarget::Luau);
+        assert!(document.parsed.errors.is_empty(), "{:?}", document.parsed.errors);
+        let result = rename_at(&document, 0, 15, "release");
+        assert!(
+            result.is_err(),
+            "renaming an exported binding changes the module's API, got {result:?}"
+        );
+    }
+}

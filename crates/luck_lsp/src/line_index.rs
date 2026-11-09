@@ -146,4 +146,35 @@ mod tests {
         let offset = index.offset(source, position);
         assert_eq!(offset, 3);
     }
+
+    #[test]
+    fn bug_a_bare_cr_ends_a_line() {
+        // LSP defines `\r` as an EOL alongside `\n` and `\r\n`, and Lua's
+        // lexer counts it as a line break too.
+        let source = "local a = 1\rlocal b = 2";
+        let index = LineIndex::new(source);
+        let b_offset = index_to_offset(source.rfind('b').expect("b"));
+        assert_eq!(
+            index.position(source, b_offset),
+            Position { line: 1, character: 6 },
+            "text after a bare `\\r` sits on the next line"
+        );
+        assert_eq!(
+            index.offset(source, Position { line: 1, character: 6 }),
+            b_offset,
+            "line 1 must start after the bare `\\r`"
+        );
+    }
+
+    #[test]
+    fn bug_position_on_a_crlf_terminator_stays_within_the_line() {
+        // Offset 3 is the `\n` of `\r\n`, which parse errors can point at.
+        let source = "ab\r\ncd";
+        let index = LineIndex::new(source);
+        assert_eq!(
+            index.position(source, 3),
+            Position { line: 0, character: 2 },
+            "a line's character count stops before its terminator"
+        );
+    }
 }

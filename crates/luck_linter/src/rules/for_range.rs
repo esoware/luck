@@ -277,4 +277,10 @@ mod tests {
         let diags = run("for i = 10, 1 do end");
         assert!(diags.is_empty(), "for_range must defer to reversed_for_loop: {diags:?}");
     }
+
+    #[test]
+    fn bug_flags_underscore_separated_bound_on_luau() {
+        let diags = run_rule(&ForRange, "for i = 1_000, 1, 1 do print(i) end", LuaVersion::Luau);
+        assert_eq!(diags.len(), 1, "1_000 is a number literal above the limit: {diags:?}");
+    }
 }

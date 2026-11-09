@@ -178,3 +178,31 @@ fn luau_function_attributes_must_be_known_and_unique() {
     assert_has_errors(&parse("@totallymadeup function f() end", LuaVersion::Luau));
     assert_has_errors(&parse("@native @native function f() end", LuaVersion::Luau));
 }
+
+#[test]
+fn bug_ambiguous_newline_check_covers_method_calls() {
+    // `funcargs` and `parseFunctionArgs` apply the line check to `a:b(...)` too.
+    for version in [LuaVersion::Lua51, LuaVersion::Luau] {
+        let result = parse("a:b\n(c)", version);
+        assert!(
+            result.errors.iter().any(|error| error.message.contains("ambiguous")),
+            "{version:?} must reject a method call whose `(` starts a new line: {:?}",
+            result.errors
+        );
+    }
+}
+
+#[test]
+fn bug_lua51_allows_paren_on_next_line_after_table_field_name() {
+    // 5.1 `constructor` looks ahead past a field's leading Name, which moves
+    // the line counter, so `funcargs` sees no line change.
+    let result = parse("x = { a\n(b) }", LuaVersion::Lua51);
+    assert!(result.errors.is_empty(), "lua5.1 accepts this program: {:?}", result.errors);
+}
+
+#[test]
+fn bug_luau_lone_carriage_return_does_not_make_a_call_ambiguous() {
+    // Luau's lexer counts only `\n` as a line break.
+    let result = parse("f\r(x)", LuaVersion::Luau);
+    assert!(result.errors.is_empty(), "luau accepts this program: {:?}", result.errors);
+}

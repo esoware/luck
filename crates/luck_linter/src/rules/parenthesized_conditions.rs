@@ -137,4 +137,22 @@ mod tests {
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
         assert_eq!(fixed, "local c = 1\nif c == 1 then end");
     }
+
+    #[test]
+    fn bug_fix_keeps_keywords_separated() {
+        let source = "if(x)then y() end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "if x then y() end", "the fix should keep the tokens apart");
+    }
+
+    #[test]
+    fn bug_fix_keeps_comment() {
+        let source = "if (--[[why]] x) then end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert!(fixed.contains("--[[why]]"), "the fix shouldn't delete the comment: {fixed}");
+    }
 }

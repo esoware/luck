@@ -512,4 +512,51 @@ mod tests {
         let value = parse_luau("local y = function()\n  z += x\nend\n");
         assert!(references_any_in_expr(&first_expr_value(&value), &names_of(&["x"])));
     }
+
+    fn largest_assignment_target_count(output: &str) -> usize {
+        parse(output, LuaVersion::Lua54)
+            .stmts
+            .iter()
+            .filter_map(|stmt| {
+                if let Statement::Assignment(assignment) = stmt {
+                    Some(assignment.targets.len())
+                } else {
+                    None
+                }
+            })
+            .max()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn bug_keeps_the_store_order_of_global_assignments() {
+        let result = apply("a = 1\nb = 2\n");
+        assert_ne!(
+            result, "a,b=1,2",
+            "PUC stores right to left, so `__newindex` would see `b` before `a`"
+        );
+    }
+
+    #[test]
+    fn bug_merged_assignment_stays_within_the_parser_assignment_limit() {
+        let source = (0..250u32).map(|i| format!("g{i} = {i}\n")).collect::<Vec<_>>().concat();
+        let target_count = largest_assignment_target_count(&apply(&source));
+        assert!(
+            target_count <= 195,
+            "PUC parsers reject an assignment this long, but a statement has {target_count} targets"
+        );
+    }
+
+    #[test]
+    fn bug_merged_assignment_leaves_registers_for_live_locals() {
+        let locals =
+            (0..190u32).map(|i| format!("local v{i} = x{i}\n")).collect::<Vec<_>>().concat();
+        let assignments = (0..70u32).map(|i| format!("h{i} = {i}\n")).collect::<Vec<_>>().concat();
+        let target_count =
+            largest_assignment_target_count(&apply(&format!("{locals}{assignments}")));
+        assert!(
+            target_count <= 60,
+            "190 live locals leave room for 60 values, but a statement has {target_count} targets"
+        );
+    }
 }

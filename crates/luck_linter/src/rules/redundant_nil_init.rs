@@ -175,4 +175,28 @@ mod tests {
         let diags = run("local function g(...) local a, b = ..., nil end");
         assert!(diags.is_empty(), "must not drop nil after vararg; got {diags:?}");
     }
+
+    #[test]
+    fn bug_fix_keeps_type_annotation() {
+        let source = "local x: number? = nil";
+        let diags = run_rule(&RedundantNilInit, source, LuaVersion::Luau);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
+        assert_eq!(fixed, "local x: number?", "the fix should keep the annotation");
+    }
+
+    #[test]
+    fn bug_ignores_luau_const_nil() {
+        let diags = run_rule(&RedundantNilInit, "const x = nil", LuaVersion::Luau);
+        assert!(diags.is_empty(), "Luau requires an initializer on `const`: {diags:?}");
+    }
+
+    #[test]
+    fn bug_fix_keeps_comment() {
+        let source = "local x --[[why]] = nil";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert!(fixed.contains("--[[why]]"), "the fix shouldn't delete the comment: {fixed}");
+    }
 }

@@ -376,4 +376,11 @@ mod tests {
         let diags = run(source, LuaVersion::Luau);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
+
+    #[test]
+    fn bug_flags_copy_after_semicolon() {
+        let source = "local out = {};\nfor i = 1, #src do out[i] = src[i] end";
+        let diags = run(source, LuaVersion::Lua54);
+        assert_eq!(diags.len(), 1, "a `;` doesn't change the copy: {diags:?}");
+    }
 }

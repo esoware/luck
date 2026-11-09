@@ -683,4 +683,22 @@ mod tests {
         let lua51_result = apply_version("return -6.0 % 3.0\n", LuaVersion::Lua51);
         assert!(!lua51_result.contains("-0"), "5.1 floor formula gives +0: {lua51_result}");
     }
+
+    #[test]
+    fn bug_subtracting_integer_zero_matches_the_lua54_immediate_add() {
+        // 5.4+ compiles `x - 0` to OP_ADDI with -0, and -0.0 + 0.0 is +0.0.
+        for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
+            let result = apply_version("return -0.0 - 0\n", version);
+            assert_ne!(result, "return-0.0", "{version:?} evaluates this to +0.0");
+        }
+    }
+
+    #[test]
+    fn bug_keeps_exponentiation_with_an_inexact_result() {
+        let result = apply("return 0.3 ^ 3\n");
+        assert!(
+            result.contains('^'),
+            "an inexact `^` depends on the target's C pow, so it must not fold: {result}"
+        );
+    }
 }

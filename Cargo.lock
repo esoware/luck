@@ -1010,6 +1010,7 @@ dependencies = [
  "luck_token",
  "mimalloc-safe",
  "tar",
+ "tempfile",
  "ureq",
 ]
 

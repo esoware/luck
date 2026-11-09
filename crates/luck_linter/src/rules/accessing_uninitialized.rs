@@ -107,4 +107,32 @@ mod tests {
         let diags = run("local _x\nprint(_x)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
+
+    #[test]
+    fn bug_ignores_forward_declaration_read_in_closure() {
+        let diags = run(
+            "local helper\nlocal function main() return helper() end\nhelper = function() return 1 end\nreturn main()",
+        );
+        assert!(diags.is_empty(), "the closure runs after the assignment: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_read_of_value_written_in_previous_iteration() {
+        let diags =
+            run("local last\nfor _, v in ipairs({1}) do if last then print(last) end last = v end");
+        assert!(diags.is_empty(), "later iterations read the written value: {diags:?}");
+    }
+
+    #[test]
+    fn bug_ignores_read_after_backward_goto() {
+        let diags =
+            run("local x\ngoto set\n::use::\nprint(x)\ndo return end\n::set::\nx = 1\ngoto use");
+        assert!(diags.is_empty(), "the assignment runs before the read: {diags:?}");
+    }
+
+    #[test]
+    fn bug_flags_read_in_own_first_assignment() {
+        let diags = run("local x\nx = x + 1\nreturn x");
+        assert_eq!(diags.len(), 1, "the right-hand side reads `nil`: {diags:?}");
+    }
 }

@@ -88,6 +88,14 @@ mod tests {
         assert_eq!(make_relative("E:/elsewhere/lib.lua", "D:/proj"), "lib.lua");
     }
 
+    /// The root of a UNC path is `//server/share`, so another server or share
+    /// shares no root, and the leading empty segments don't count as one.
+    #[test]
+    fn bug_path_on_another_unc_share_keeps_only_the_file_name() {
+        assert_eq!(make_relative("//server-a/share/lib.lua", "//server-b/proj"), "lib.lua");
+        assert_eq!(make_relative("//server/other/lib.lua", "//server/share/proj"), "lib.lua");
+    }
+
     /// `luck bundle main.lua` passes the entry's parent, which is empty for a
     /// bare file name.
     #[test]

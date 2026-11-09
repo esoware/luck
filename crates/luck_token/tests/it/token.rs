@@ -125,3 +125,12 @@ fn identifier_reads_only_identifier_names() {
     assert_eq!(string.identifier(), None);
     assert_eq!(Token::new(TokenKind::Nil, span).identifier(), None);
 }
+
+#[test]
+fn bug_global_is_a_name_on_default_lua55_builds() {
+    assert_eq!(
+        TokenKind::keyword("global", LuaVersion::Lua55),
+        None,
+        "stock Lua 5.5 defines LUA_COMPAT_GLOBAL, so `global` is a regular name and `local global = 1` compiles"
+    );
+}
