@@ -14,16 +14,27 @@ use crate::limits::{
     GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, assignment_target_limit, parameter_locals,
 };
 
-/// Merges consecutive single-assignment locals (or globals) into
-/// multi-assignment statements.
+/// Merges consecutive single-assignment locals, or assignments to proven
+/// locals, into multi-assignment statements.
 pub(crate) fn merge(block: Block, version: LuaVersion) -> Block {
-    LocalMerger { version, live_registers: 0 }.transform_block(block)
+    LocalMerger {
+        version,
+        live_registers: 0,
+        locals: Vec::new(),
+        global_names: FxHashSet::default(),
+    }
+    .transform_block(block)
 }
 
 struct LocalMerger {
     version: LuaVersion,
     /// Registers the locals in scope hold in the current function.
     live_registers: usize,
+    /// Declared locals and parameters in scope, upvalues included.
+    locals: Vec<CompactString>,
+    /// Lua 5.5: every name a `global` statement has declared so far, which
+    /// stops counting as a local even past that statement's block.
+    global_names: FxHashSet<CompactString>,
 }
 
 /// The name and value of a lone `local name = value` whose value a group may
@@ -44,24 +55,6 @@ fn single_local(local: &LocalAssignment, version: LuaVersion) -> Option<(&Token,
     None
 }
 
-/// The name and value of a lone `name = value` a group can size in registers.
-///
-/// A group holds one register per value until the stores run, and only a leaf
-/// value needs exactly one.
-fn single_assignment(
-    assignment: &Assignment,
-    version: LuaVersion,
-) -> Option<(&Token, &Expression)> {
-    if let ([Var::Name(name)], [expr]) =
-        (assignment.targets.items.as_slice(), assignment.values.items.as_slice())
-        && !is_env_binding(identifier_name(name), version)
-        && is_single_register_value(expr)
-    {
-        return Some((name, expr));
-    }
-    None
-}
-
 /// Whether the single assignment of `value` to `name` can join a group that
 /// assigns `group_names`. One that joins adds its name to `group_names` for
 /// the next one to check.
@@ -77,16 +70,35 @@ fn can_join_group(
     can_join
 }
 
-/// How many locals a statement adds to its block.
-fn statement_locals(stmt: &Statement) -> usize {
-    if let Statement::LocalAssignment(local) = stmt {
-        local.names.len()
-    } else {
-        usize::from(matches!(stmt, Statement::LocalFunction(_)))
-    }
-}
-
 impl LocalMerger {
+    fn declare_local(&mut self, name: &Token) {
+        self.locals.push(identifier_name(name).into());
+        self.live_registers = self.live_registers.saturating_add(1);
+    }
+
+    /// The name and value of a lone `name = value` a group can take.
+    ///
+    /// A group stores right to left, so only a proven local may join, since
+    /// any other store can run `__newindex`. A group also holds one register
+    /// per value until the stores run, and only a leaf value needs exactly
+    /// one.
+    fn single_assignment<'stmt>(
+        &self,
+        assignment: &'stmt Assignment,
+    ) -> Option<(&'stmt Token, &'stmt Expression)> {
+        if let ([Var::Name(name)], [expr]) =
+            (assignment.targets.items.as_slice(), assignment.values.items.as_slice())
+            && is_single_register_value(expr)
+        {
+            let target = identifier_name(name);
+            let is_proven_local = !is_env_binding(target, self.version)
+                && !self.global_names.contains(target)
+                && self.locals.iter().rev().any(|local| local == target);
+            return is_proven_local.then_some((name, expr));
+        }
+        None
+    }
+
     fn merge_locals(
         &mut self,
         first: Box<LocalAssignment>,
@@ -138,7 +150,7 @@ impl LocalMerger {
                 return false;
             };
             followers.len() < follower_limit
-                && single_assignment(assignment, self.version).is_some_and(|(name, value)| {
+                && self.single_assignment(assignment).is_some_and(|(name, value)| {
                     // PUC Lua stores a multiple assignment right to left, so a
                     // repeated target would keep its first value.
                     !group_names.contains(identifier_name(name))
@@ -197,6 +209,7 @@ impl LocalMerger {
 impl Transform for LocalMerger {
     fn transform_block(&mut self, block: Block) -> Block {
         let outer_live_registers = self.live_registers;
+        let outer_local_count = self.locals.len();
         let mut merged_stmts: Vec<Statement> = Vec::new();
         let mut stmts = block.stmts.into_iter().peekable();
 
@@ -213,7 +226,7 @@ impl Transform for LocalMerger {
                     }
                 }
                 Statement::Assignment(first) => {
-                    if let Some((name, _)) = single_assignment(&first, self.version) {
+                    if let Some((name, _)) = self.single_assignment(&first) {
                         let first_name = CompactString::from(identifier_name(name));
                         self.merge_assignments(first, first_name, &mut stmts)
                     } else {
@@ -240,8 +253,14 @@ impl Transform for LocalMerger {
                 | Statement::TypeDeclaration(_)
                 | Statement::Error(_)) => self.transform_stmt(other),
             };
-            self.live_registers =
-                self.live_registers.saturating_add(statement_locals(&merged_stmt));
+            if let Statement::LocalAssignment(local) = &merged_stmt {
+                for attributed in local.names.iter() {
+                    self.declare_local(&attributed.name);
+                }
+            }
+            if let Statement::LocalFunction(function) = &merged_stmt {
+                self.declare_local(&function.name);
+            }
             merged_stmts.push(merged_stmt);
         }
 
@@ -254,10 +273,21 @@ impl Transform for LocalMerger {
         });
 
         self.live_registers = outer_live_registers;
+        self.locals.truncate(outer_local_count);
         Block { span: block.span, stmts: fused_stmts, last_stmt }
     }
 
     fn transform_stmt(&mut self, stmt: Statement) -> Statement {
+        // Lua 5.5
+        if let Statement::GlobalDeclaration(global) = &stmt {
+            for attributed in global.names.iter() {
+                self.global_names.insert(identifier_name(&attributed.name).into());
+            }
+        }
+        // Lua 5.5
+        if let Statement::GlobalFunction(function) = &stmt {
+            self.global_names.insert(identifier_name(&function.name).into());
+        }
         let outer_live_registers = self.live_registers;
         let loop_registers = if let Statement::NumericFor(_) = &stmt {
             NUMERIC_FOR_STATE_LOCALS.saturating_add(1)
@@ -274,7 +304,10 @@ impl Transform for LocalMerger {
 
     fn transform_function_body(&mut self, body: FunctionBody) -> FunctionBody {
         let outer_live_registers = mem::replace(&mut self.live_registers, parameter_locals(&body));
+        let outer_local_count = self.locals.len();
+        self.locals.extend(body.params.iter().map(|param| identifier_name(&param.name).into()));
         let walked = self.walk_function_body(body);
+        self.locals.truncate(outer_local_count);
         self.live_registers = outer_live_registers;
         walked
     }
@@ -443,10 +476,58 @@ mod tests {
     }
 
     #[test]
-    fn merges_consecutive_assignments() {
-        let result = apply("a = 1\nb = 2\nc = 3\n");
-        let equal_count = result.matches('=').count();
-        assert_eq!(equal_count, 1, "Global assignments should merge, got: {result}");
+    fn merges_assignments_to_proven_locals() {
+        for (source, expected) in [
+            ("local a, b = f()\na = 1\nb = 2\n", "local a,b=f()a,b=1,2"),
+            ("local function g(a, b)\na = 1\nb = 2\nend\n", "local function g(a,b)a,b=1,2 end"),
+            (
+                "local a, b = f()\nlocal function g()\na = 1\nb = 2\nend\n",
+                "local a,b=f()local function g()a,b=1,2 end",
+            ),
+        ] {
+            assert_eq!(apply(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn no_merge_of_global_assignments() {
+        assert_eq!(apply("a = 1\nb = 2\n"), "a=1 b=2");
+    }
+
+    #[test]
+    fn no_merge_of_a_local_with_a_global() {
+        assert_eq!(apply("local a = f()\na = 1\nb = 2\n"), "local a=f()a=1 b=2");
+    }
+
+    #[test]
+    fn no_merge_of_a_name_past_its_local_scope() {
+        assert_eq!(apply("do local a = f() end\na = 1\nb = 2\n"), "do local a=f()end a=1 b=2");
+    }
+
+    #[test]
+    fn no_merge_of_index_targets() {
+        for source in ["a.b = 1\nc.d = 2\n", "local a, c = f()\na.b = 1\nc[1] = 2\n"] {
+            let result = apply(source);
+            assert!(result.ends_with("=1 c.d=2") || result.ends_with("=1 c[1]=2"), "{result}");
+        }
+    }
+
+    #[test]
+    fn no_merge_of_fields_of_a_local_env() {
+        assert_eq!(apply("local _ENV = f()\nx = 1\ny = 2\n"), "local _ENV=f()x=1 y=2");
+    }
+
+    #[test]
+    fn no_merge_of_an_assignment_to_env() {
+        assert_eq!(apply("local _ENV, y = f()\n_ENV = 1\ny = 2\n"), "local _ENV,y=f()_ENV=1 y=2");
+    }
+
+    #[test]
+    fn no_merge_of_a_local_a_global_statement_shadows() {
+        assert_eq!(
+            apply_version("local x, y = f()\nglobal x\nx = 1\ny = 2\n", LuaVersion::Lua55),
+            "local x,y=f()global x x=1 y=2"
+        );
     }
 
     #[test]
@@ -454,7 +535,7 @@ mod tests {
         for (source, expected) in [
             ("x = 1\nx = 2\n", "x=1 x=2"),
             ("local x\nx = 1\nx = 2\n", "local x=1 x=2"),
-            ("x = 1\ny = 2\nx = 3\n", "x,y=1,2 x=3"),
+            ("local x, y = f()\nx = 1\ny = 2\nx = 3\n", "local x,y=f()x,y=1,2 x=3"),
         ] {
             assert_eq!(apply(source), expected, "source: {source}");
         }
@@ -569,10 +650,12 @@ mod tests {
 
     #[test]
     fn merged_assignment_stays_within_the_parser_assignment_limit() {
-        let source = (0..250u32).map(|i| format!("g{i} = {i}\n")).collect::<Vec<_>>().concat();
-        let target_count = largest_assignment_target_count(&apply(&source));
+        let names = (0..100u32).map(|i| format!("g{i}")).collect::<Vec<_>>().join(",");
+        let assignments = (0..100u32).map(|i| format!("g{i} = {i}\n")).collect::<Vec<_>>().concat();
+        let target_count =
+            largest_assignment_target_count(&apply(&format!("local {names} = f()\n{assignments}")));
         assert!(
-            target_count <= 195,
+            (2..=195).contains(&target_count),
             "PUC parsers reject an assignment this long, but a statement has {target_count} targets"
         );
     }
@@ -581,11 +664,11 @@ mod tests {
     fn merged_assignment_leaves_registers_for_live_locals() {
         let locals =
             (0..190u32).map(|i| format!("local v{i} = x{i}\n")).collect::<Vec<_>>().concat();
-        let assignments = (0..70u32).map(|i| format!("h{i} = {i}\n")).collect::<Vec<_>>().concat();
+        let assignments = (0..70u32).map(|i| format!("v{i} = {i}\n")).collect::<Vec<_>>().concat();
         let target_count =
             largest_assignment_target_count(&apply(&format!("{locals}{assignments}")));
         assert!(
-            target_count <= 60,
+            (2..=60).contains(&target_count),
             "190 live locals leave room for 60 values, but a statement has {target_count} targets"
         );
     }

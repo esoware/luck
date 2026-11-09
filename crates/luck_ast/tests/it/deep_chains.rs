@@ -29,6 +29,36 @@ fn long_call_chain_statement(synth: &Synth) -> Statement {
 }
 
 #[test]
+fn dropping_a_long_right_nested_chain_does_not_overflow() {
+    assert_runs_without_stack_overflow(
+        "deep_chains::dropping_a_long_right_nested_chain_does_not_overflow",
+        || {
+            let synth = Synth::new();
+            let mut chain = synth.name_expr("a");
+            for _ in 0..TERMS {
+                chain = synth.binary_op(synth.name_expr("a"), BinOp::Pow, chain);
+            }
+            drop(chain);
+        },
+    );
+}
+
+#[test]
+fn dropping_a_long_nested_index_chain_does_not_overflow() {
+    assert_runs_without_stack_overflow(
+        "deep_chains::dropping_a_long_nested_index_chain_does_not_overflow",
+        || {
+            let synth = Synth::new();
+            let mut chain = synth.name_expr("a");
+            for _ in 0..TERMS {
+                chain = synth.index(synth.name_expr("t"), chain);
+            }
+            drop(chain);
+        },
+    );
+}
+
+#[test]
 fn dropping_a_long_left_associative_chain_does_not_overflow() {
     assert_runs_without_stack_overflow(
         "deep_chains::dropping_a_long_left_associative_chain_does_not_overflow",

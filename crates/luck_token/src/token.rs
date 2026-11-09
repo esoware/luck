@@ -275,9 +275,17 @@ impl Token {
         Self { kind, span }
     }
 
+    /// The name this token spells, or `None` for any other token and for the
+    /// empty placeholder parse recovery leaves where a name was missing.
     #[inline]
     #[must_use]
     pub fn identifier(&self) -> Option<&str> {
-        if let TokenKind::Identifier(name) = &self.kind { Some(name.as_str()) } else { None }
+        if let TokenKind::Identifier(name) = &self.kind
+            && !name.is_empty()
+        {
+            Some(name.as_str())
+        } else {
+            None
+        }
     }
 }

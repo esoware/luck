@@ -767,6 +767,19 @@ cache = f()
     }
 
     #[test]
+    fn typeof_in_a_signature_reads_the_scope_around_the_function() {
+        for source in [
+            "local a = f()\nlocal function g(a: number, b: typeof(a)) return b end\nreturn g, a\n",
+            "local a = f()\nlocal function g(a: number): typeof(a) return a end\nreturn g, a\n",
+            "local g = f()\nlocal function g(z: typeof(g)) return z end\nreturn g\n",
+            "local k = f()\nfor k, v: typeof(k) in g() do print(k, v) end\nreturn k\n",
+        ] {
+            let result = apply_luau(source);
+            assert!(result.contains("typeof(l)"), "{source}: {result}");
+        }
+    }
+
+    #[test]
     fn typeof_in_a_local_annotation_follows_the_rename() {
         let result = apply_luau(
             "local outer = f()\nlocal copy: typeof(outer) = outer\nreturn copy, outer\n",

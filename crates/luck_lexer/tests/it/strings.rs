@@ -237,6 +237,7 @@ fn unicode_escape_above_10ffff_is_error_on_lua53_and_luau() {
             "a codepoint above U+10FFFF should be too large under {version:?}: {:?}",
             result.tokens
         );
+        assert!(result.errors[0].message.contains("0x110000"), "{:?}", result.errors);
     }
 }
 

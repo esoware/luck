@@ -2,13 +2,14 @@ use alloc::borrow::Cow;
 
 use luck_ast::{
     Block, Expression, Literal, Transform, UnaryOp, ensure_sufficient_stack, is_multi_value,
+    unwrap_parentheses,
 };
 use luck_token::{
     BinOp, CompactString, LuaNumber, LuaVersion, NumberSubtypes, Span, UnOp, decode_string,
     encode_string, parse_lua_number,
 };
 
-use crate::expr::{extract_boolean, int_to_float, is_nil, parenthesize, unparenthesized};
+use crate::expr::{extract_boolean, int_to_float, is_nil, parenthesize};
 
 /// Folds constant arithmetic, comparisons, string concatenation, and boolean
 /// logic, keeping Lua 5.3+ integer/float subtypes exact.
@@ -85,7 +86,7 @@ fn extract_lua_number(expr: &Expression, subtypes: NumberSubtypes) -> Option<Lua
                 .map(negate_number)
         }
         Expression::Parenthesized(paren) => {
-            extract_lua_number(unparenthesized(&paren.expr), subtypes)
+            extract_lua_number(unwrap_parentheses(&paren.expr), subtypes)
         }
         Expression::Nil(_)
         | Expression::False(_)
@@ -347,7 +348,7 @@ fn extract_string_bytes(expr: &Expression, version: LuaVersion) -> Option<Cow<'_
     match expr {
         Expression::StringLiteral(literal) => decode_string(&literal.text, version),
         Expression::Parenthesized(paren) => {
-            extract_string_bytes(unparenthesized(&paren.expr), version)
+            extract_string_bytes(unwrap_parentheses(&paren.expr), version)
         }
         Expression::Nil(_)
         | Expression::False(_)

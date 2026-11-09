@@ -248,7 +248,7 @@ fn scan_unicode_escape(cursor: &mut Cursor<'_>, version: LuaVersion) -> Result<(
         ));
     }
     if unicode_escape_codepoint(hex_digits.as_bytes(), version).is_none() {
-        let limit = if version.has_extended_unicode_escape() { "2^31" } else { "2^21" };
+        let limit = if version.has_extended_unicode_escape() { "2^31" } else { "0x110000" };
         return Err(lex_error(
             cursor.span_since(escape_start),
             format!("`\\u` codepoint too large (must be less than {limit})"),

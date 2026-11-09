@@ -212,31 +212,40 @@ impl Analyzer {
         }
     }
 
-    /// Scopes a function's parameters and implicit names, in the order the
-    /// renamer declares them.
-    fn visit_function(&mut self, body: &FunctionBody, is_method: bool) {
-        self.enter_scope();
-        if is_method {
-            self.declare_binding(METHOD_RECEIVER_NAME, BindingKind::Fixed);
-        }
+    /// Luau: a function's signature annotations, in the order the renamer
+    /// reaches them. Parameters and a `local function`'s own name bind after
+    /// the whole signature parses, so a `typeof` here reads the enclosing
+    /// scope.
+    fn visit_signature_annotations(&mut self, body: &FunctionBody) {
         if let Some(generics) = &body.generics {
             self.visit_generic_type_list(generics);
         }
         for param in body.params.iter() {
             self.visit_annotation(param.type_annotation.as_ref());
+        }
+        if let Some(vararg) = &body.vararg {
+            self.visit_annotation(vararg.type_annotation.as_ref());
+        }
+        self.visit_annotation(body.return_type.as_ref());
+    }
+
+    /// Scopes a function's parameters and implicit names, in the order the
+    /// renamer declares them, and visits its block.
+    fn visit_function_scope(&mut self, body: &FunctionBody, is_method: bool) {
+        self.enter_scope();
+        if is_method {
+            self.declare_binding(METHOD_RECEIVER_NAME, BindingKind::Fixed);
+        }
+        for param in body.params.iter() {
             self.declare_local(identifier_name(&param.name), false);
         }
         if has_implicit_arg(body, self.version) {
             self.declare_binding(IMPLICIT_VARARG_TABLE_NAME, BindingKind::Fixed);
         }
-        if let Some(vararg) = &body.vararg {
-            self.visit_annotation(vararg.type_annotation.as_ref());
-            // Lua 5.5
-            if let Some(vararg_name) = &vararg.name {
-                self.declare_local(identifier_name(vararg_name), false);
-            }
+        // Lua 5.5
+        if let Some(vararg_name) = body.vararg.as_ref().and_then(|vararg| vararg.name.as_ref()) {
+            self.declare_local(identifier_name(vararg_name), false);
         }
-        self.visit_annotation(body.return_type.as_ref());
         self.visit_block(&body.block);
         self.exit_scope();
     }
@@ -356,14 +365,16 @@ impl<'ast> Visitor<'ast> for Analyzer {
                 }
             }
             Statement::LocalFunction(local_function) => {
+                self.visit_signature_annotations(&local_function.body);
                 self.declare_local(
                     identifier_name(&local_function.name),
                     local_function.is_exported,
                 );
-                self.visit_function_body(&local_function.body);
+                self.visit_function_scope(&local_function.body, false);
             }
             Statement::FunctionDecl(function_declaration) => {
-                self.visit_function(
+                self.visit_signature_annotations(&function_declaration.body);
+                self.visit_function_scope(
                     &function_declaration.body,
                     function_declaration.name.method.is_some(),
                 );
@@ -409,9 +420,12 @@ impl<'ast> Visitor<'ast> for Analyzer {
             }
             Statement::GenericFor(generic_for) => {
                 self.visit_exprs(&generic_for.exprs);
-                self.enter_scope();
+                // Luau: every name binds after the whole list parses.
                 for param in generic_for.names.iter() {
                     self.visit_annotation(param.type_annotation.as_ref());
+                }
+                self.enter_scope();
+                for param in generic_for.names.iter() {
                     self.declare_local(identifier_name(&param.name), false);
                 }
                 self.visit_block(&generic_for.block);
@@ -456,6 +470,7 @@ impl<'ast> Visitor<'ast> for Analyzer {
     }
 
     fn visit_function_body(&mut self, body: &'ast FunctionBody) {
-        self.visit_function(body, false);
+        self.visit_signature_annotations(body);
+        self.visit_function_scope(body, false);
     }
 }

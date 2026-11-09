@@ -125,6 +125,12 @@ fn identifier_reads_only_identifier_names() {
 }
 
 #[test]
+fn identifier_is_none_for_the_empty_recovery_placeholder() {
+    let placeholder = Token::new(TokenKind::Identifier(CompactString::default()), Span::new(0, 0));
+    assert_eq!(placeholder.identifier(), None);
+}
+
+#[test]
 fn global_is_a_name_on_default_lua55_builds() {
     assert_eq!(
         TokenKind::keyword("global", LuaVersion::Lua55),

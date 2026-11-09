@@ -2,7 +2,7 @@ use core::mem;
 
 use luck_ast::Block;
 use luck_core::TransformConfig;
-use luck_token::{LuaVersion, SourceError, leading_hot_comments};
+use luck_token::{CommentKind, LuaVersion, SourceError, leading_hot_comments};
 
 use crate::transforms;
 
@@ -30,19 +30,22 @@ pub fn minify(
     if !result.errors.is_empty() {
         return Err(result.errors);
     }
-    // Luau hot comments (--!strict, --!native, --!optimize N, ...) only take
-    // effect before any code, so the leading ones go back on top of the
+    // A shebang and Luau hot comments (--!strict, --!native, --!optimize N,
+    // ...) only take effect before any code, so they go back on top of the
     // output.
-    let hot_comment_prefix = if version.is_luau() {
-        let mut prefix = String::new();
+    let mut comment_prefix = String::new();
+    if let Some(shebang) =
+        result.comments.first().filter(|comment| comment.kind == CommentKind::Shebang)
+    {
+        comment_prefix.push_str(shebang.span.text(source));
+        comment_prefix.push('\n');
+    }
+    if version.is_luau() {
         for comment in leading_hot_comments(&result.comments, source) {
-            prefix.push_str(comment.span.text(source).trim_end());
-            prefix.push('\n');
+            comment_prefix.push_str(comment.span.text(source).trim_end());
+            comment_prefix.push('\n');
         }
-        prefix
-    } else {
-        String::new()
-    };
+    }
     let mut block = result.block;
 
     // The tail runs to its own fixpoint, so measured corpora converge here in
@@ -76,10 +79,10 @@ pub fn minify(
         block = reparsed.block;
     }
 
-    if hot_comment_prefix.is_empty() {
+    if comment_prefix.is_empty() {
         Ok(previous_output)
     } else {
-        Ok(format!("{hot_comment_prefix}{previous_output}"))
+        Ok(format!("{comment_prefix}{previous_output}"))
     }
 }
 

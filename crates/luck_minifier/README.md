@@ -28,7 +28,7 @@ Core passes, one round, in order:
 4. `inline_locals` replaces a single-use local whose initializer is a literal expression with that expression.
 5. `fold_constants` runs a second time, because inlining exposes new folds.
 6. `remove_dead_code` runs a second time, because the newly exposed folds, such as `local DEBUG = false` inlined into `if DEBUG then`, expose new dead branches.
-7. `merge_locals` combines adjacent single-name `local` declarations, or adjacent assignments, into one statement.
+7. `merge_locals` combines adjacent single-name `local` declarations, or adjacent assignments to proven locals, into one statement. A merged assignment stores right to left, so a global or field store, which can run `__newindex`, stays on its own.
 8. `simplify_indexes` converts `t["key"]` into `t.key` and `{["key"] = v}` into `{key = v}` when the string is a valid identifier on the target, and drops `[1]`, `[2]`, ... keys that run in sequence.
 9. `shorten_strings` re-encodes each string literal as a double-quoted string and keeps whichever spelling is shorter.
 10. `shorten_numbers` picks the shortest spelling of each number literal that keeps its value and subtype.

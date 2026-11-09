@@ -1,7 +1,7 @@
 //! Stack safety for chains, whose depth the parser's nesting cap can't bound.
 //!
 //! `a.b.c...`, `f()()...`, `1 + 1 + ...`, and `T???...` grow in loops, and
-//! inlining can stack parens and unary operators without limit. Every recursion
+//! inlining can stack parens and operators without limit. Every recursion
 //! along such a chain goes through [`ensure_sufficient_stack`], and everything
 //! else is bounded by that cap.
 
@@ -107,35 +107,21 @@ const fn is_chain_link(expr: &Expression) -> bool {
     }
 }
 
-/// Dismantles the chains below a dropped link on an explicit worklist, so
-/// drop glue only ever sees a link whose chain children are placeholders.
-fn drop_chain_links<const N: usize>(children: [&mut Expression; N]) {
-    if !children.iter().any(|child| is_chain_link(child)) {
-        return;
-    }
-    let mut pending: Vec<Expression> = children.into_iter().map(Expression::take).collect();
-    while let Some(mut link) = pending.pop() {
-        match &mut link {
-            Expression::BinaryOp(binary_op) => {
-                pending.push(binary_op.left.take());
-                pending.push(binary_op.right.take());
-            }
-            Expression::UnaryOp(unary_op) => pending.push(unary_op.operand.take()),
-            Expression::Parenthesized(parenthesized) => pending.push(parenthesized.expr.take()),
-            Expression::FunctionCall(call) => pending.push(call.callee.take()),
-            Expression::Var(Var::FieldAccess(field_access)) => {
-                pending.push(field_access.prefix.take());
-            }
-            Expression::Var(Var::Index(index)) => {
-                pending.push(index.prefix.take());
-                pending.push(index.index.take());
-            }
+/// Follows `link`'s chain in a loop, so drop glue only ever sees a link whose
+/// chain child is a placeholder.
+fn drop_chain(mut link: Expression) {
+    loop {
+        link = match &mut link {
+            Expression::BinaryOp(binary_op) => binary_op.left.take(),
+            Expression::UnaryOp(unary_op) => unary_op.operand.take(),
+            Expression::Parenthesized(parenthesized) => parenthesized.expr.take(),
+            Expression::FunctionCall(call) => call.callee.take(),
+            Expression::Var(Var::FieldAccess(field_access)) => field_access.prefix.take(),
+            Expression::Var(Var::Index(index)) => index.prefix.take(),
             // Luau
-            Expression::TypeCast(cast) => pending.push(cast.expr.take()),
+            Expression::TypeCast(cast) => cast.expr.take(),
             // Luau
-            Expression::TypeInstantiation(instantiation) => {
-                pending.push(instantiation.expr.take());
-            }
+            Expression::TypeInstantiation(instantiation) => instantiation.expr.take(),
             Expression::Var(Var::Name(_))
             | Expression::Nil(_)
             | Expression::False(_)
@@ -148,29 +134,36 @@ fn drop_chain_links<const N: usize>(children: [&mut Expression; N]) {
             | Expression::TableConstructor(_)
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
-            | Expression::Error(_) => {}
-        }
+            | Expression::Error(_) => return,
+        };
     }
 }
 
-macro_rules! drop_expression_children {
-    ($node:ident: $($child:ident),+) => {
+// `$branch` is a right operand or an index, which only inlining can grow past
+// the parser's cap, so it recurses behind the guard.
+macro_rules! drop_expression_chain {
+    ($node:ident: $chain:ident $(, $branch:ident)?) => {
         impl Drop for $node {
             fn drop(&mut self) {
-                drop_chain_links([$(&mut self.$child),+]);
+                drop_chain(self.$chain.take());
+                $(
+                    if is_chain_link(&self.$branch) {
+                        ensure_sufficient_stack(|| drop(self.$branch.take()));
+                    }
+                )?
             }
         }
     };
 }
 
-drop_expression_children!(BinaryOp: left, right);
-drop_expression_children!(UnaryOp: operand);
-drop_expression_children!(ParenthesizedExpression: expr);
-drop_expression_children!(FunctionCall: callee);
-drop_expression_children!(IndexExpression: prefix, index);
-drop_expression_children!(FieldAccess: prefix);
-drop_expression_children!(TypeCast: expr);
-drop_expression_children!(TypeInstantiation: expr);
+drop_expression_chain!(BinaryOp: left, right);
+drop_expression_chain!(UnaryOp: operand);
+drop_expression_chain!(ParenthesizedExpression: expr);
+drop_expression_chain!(FunctionCall: callee);
+drop_expression_chain!(IndexExpression: prefix, index);
+drop_expression_chain!(FieldAccess: prefix);
+drop_expression_chain!(TypeCast: expr);
+drop_expression_chain!(TypeInstantiation: expr);
 
 impl Drop for OptionalType {
     fn drop(&mut self) {

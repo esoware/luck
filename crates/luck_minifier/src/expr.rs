@@ -3,20 +3,12 @@
 
 use luck_ast::{
     BinaryOp, Expression, Field, Literal, ParenthesizedExpression, Var, ensure_sufficient_stack,
+    unwrap_parentheses,
 };
 use luck_token::{BinOp, LuaNumber, NumberSubtypes, OperandSide, Span, UnOp, parse_lua_number};
 
-/// `expr` with any enclosing parentheses stripped.
-pub(crate) fn unparenthesized(expr: &Expression) -> &Expression {
-    let mut current = expr;
-    while let Expression::Parenthesized(paren) = current {
-        current = &paren.expr;
-    }
-    current
-}
-
 pub(crate) fn extract_boolean(expr: &Expression) -> Option<bool> {
-    match unparenthesized(expr) {
+    match unwrap_parentheses(expr) {
         Expression::True(_) => Some(true),
         Expression::False(_) => Some(false),
         Expression::Parenthesized(_)
@@ -40,7 +32,7 @@ pub(crate) fn extract_boolean(expr: &Expression) -> Option<bool> {
 }
 
 pub(crate) fn is_nil(expr: &Expression) -> bool {
-    match unparenthesized(expr) {
+    match unwrap_parentheses(expr) {
         Expression::Nil(_) => true,
         Expression::Parenthesized(_)
         | Expression::False(_)
@@ -98,7 +90,7 @@ fn literal_kind(expr: &Expression) -> Option<LiteralKind> {
         | Expression::True(_)
         | Expression::False(_)
         | Expression::Integer(_) => Some(LiteralKind::Other),
-        Expression::Parenthesized(paren) => literal_kind(unparenthesized(&paren.expr)),
+        Expression::Parenthesized(paren) => literal_kind(unwrap_parentheses(&paren.expr)),
         Expression::UnaryOp(unop) => ensure_sufficient_stack(|| {
             let operand = literal_kind(&unop.operand)?;
             unary_literal_kind(unop.op, operand)
@@ -186,7 +178,7 @@ fn binary_literal_kind(binop: &BinaryOp) -> Option<LiteralKind> {
 }
 
 fn is_nonzero_number_literal(expr: &Expression) -> bool {
-    let Expression::Number(literal) = unparenthesized(expr) else {
+    let Expression::Number(literal) = unwrap_parentheses(expr) else {
         return false;
     };
     match parse_lua_number(&literal.text, NumberSubtypes::IntFloat) {
@@ -224,7 +216,7 @@ fn is_effect_free(expr: &Expression, can_read_names: bool) -> bool {
         // function body.
         | Expression::VarArg(_) => true,
         Expression::Parenthesized(paren) => {
-            is_effect_free(unparenthesized(&paren.expr), can_read_names)
+            is_effect_free(unwrap_parentheses(&paren.expr), can_read_names)
         }
         Expression::UnaryOp(_) => literal_kind(expr).is_some(),
         Expression::BinaryOp(binop) => {
@@ -272,14 +264,15 @@ fn is_effect_free(expr: &Expression, can_read_names: bool) -> bool {
 /// Whether `key` is a table constructor `[key]` that can't raise: `nil` and
 /// NaN raise, and only a key spelled out as a literal is known to be neither.
 fn is_valid_table_key(key: &Expression) -> bool {
-    match unparenthesized(key) {
+    match unwrap_parentheses(key) {
         Expression::Number(_)
         | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::True(_)
         | Expression::False(_) => true,
         Expression::UnaryOp(unop) => {
-            unop.op == UnOp::Neg && matches!(unparenthesized(&unop.operand), Expression::Number(_))
+            unop.op == UnOp::Neg
+                && matches!(unwrap_parentheses(&unop.operand), Expression::Number(_))
         }
         Expression::Parenthesized(_)
         | Expression::Nil(_)
@@ -339,7 +332,7 @@ pub(crate) fn is_always_truthy(expr: &Expression) -> bool {
         | Expression::FunctionDef(_)
         | Expression::TableConstructor(_)
         | Expression::True(_) => true,
-        Expression::Parenthesized(paren) => is_always_truthy(unparenthesized(&paren.expr)),
+        Expression::Parenthesized(paren) => is_always_truthy(unwrap_parentheses(&paren.expr)),
         Expression::UnaryOp(_) | Expression::BinaryOp(_) => {
             literal_kind(expr).is_some_and(|kind| kind.is_number() || kind == LiteralKind::String)
         }

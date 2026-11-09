@@ -347,11 +347,13 @@ impl ScopeTreeBuilder {
 impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
     fn visit_block(&mut self, block: &'ast Block) {
         // Luau: a type function sees every type of its block, earlier or later.
-        for stmt in &block.stmts {
-            if let Statement::TypeDeclaration(declaration) = stmt
-                && let TokenKind::Identifier(name) = &declaration.name.kind
-            {
-                self.type_names.insert(name.clone());
+        if self.tree.version.has_type_syntax() {
+            for stmt in &block.stmts {
+                if let Statement::TypeDeclaration(declaration) = stmt
+                    && let TokenKind::Identifier(name) = &declaration.name.kind
+                {
+                    self.type_names.insert(name.clone());
+                }
             }
         }
         self.walk_block(block);

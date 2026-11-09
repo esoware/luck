@@ -112,6 +112,20 @@ fn function_inside_a_type_survives_minification() {
 }
 
 #[test]
+fn shebang_stays_on_the_first_line() {
+    let output = minify_lua54("#!/usr/bin/env lua\nprint(1)\n");
+    assert_eq!(output, "#!/usr/bin/env lua\nprint(1)");
+    assert_eq!(minify_lua54(&output), output, "must be idempotent");
+}
+
+#[test]
+fn shebang_stays_above_luau_hot_comments() {
+    let output = minify_luau("#!/usr/bin/env luau\n--!strict\nprint(1)\n");
+    assert_eq!(output, "#!/usr/bin/env luau\n--!strict\nprint(1)");
+    assert_eq!(minify_luau(&output), output, "must be idempotent");
+}
+
+#[test]
 fn luau_hot_comments_survive_minification() {
     let output = minify_luau(
         "--!strict
