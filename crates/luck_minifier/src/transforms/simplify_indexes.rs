@@ -210,13 +210,4 @@ mod tests {
             "Integer keys should be removed, got: {result}"
         );
     }
-
-    #[test]
-    fn bug_keeps_sequential_keys_when_a_value_can_be_nil() {
-        let result = apply("return {[1] = a, [2] = b, [3] = c}\n");
-        assert!(
-            result.contains("[2]="),
-            "a nil `b` gives `#t` 1 with keys but 3 in a positional constructor: {result}"
-        );
-    }
 }

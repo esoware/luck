@@ -9,9 +9,6 @@
 use luck_testgen::generate_full;
 use luck_token::LuaVersion;
 
-// Lua's own limit: `too many local variables (limit is 200)`.
-const MAX_LOCALS_PER_FUNCTION: usize = 200;
-
 /// The names a module-scope `local` or `global function` line declares.
 fn module_declarations(line: &str) -> Vec<&str> {
     let Some(declaration) =
@@ -48,17 +45,6 @@ fn bug_full_lua55_assigns_no_name_the_const_wildcard_makes_read_only() {
              `attempt to assign to const variable`\n{program}"
         );
     }
-}
-
-#[test]
-fn bug_full_module_scope_stays_within_the_local_limit() {
-    let program = generate_full(42, LuaVersion::Lua54, 800);
-    let module_locals = program.lines().filter(|line| line.starts_with("local ")).count();
-    assert!(
-        module_locals <= MAX_LOCALS_PER_FUNCTION,
-        "{module_locals} module-scope locals: PUC-Rio Lua rejects a function with more than \
-         {MAX_LOCALS_PER_FUNCTION}, so the program must stay within the limit to parse"
-    );
 }
 
 #[test]

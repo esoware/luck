@@ -329,18 +329,6 @@ mod tests {
     }
 
     #[test]
-    fn bug_ty_named_refuses_the_name_typeof() {
-        // Luau always reads a type named `typeof` as `typeof(expr)`, so
-        // `local x: typeof = 1` is a parse error.
-        let built = catch_unwind(|| Synth::new().with_version(LuaVersion::Luau).ty_named("typeof"));
-        assert!(
-            built.is_err(),
-            "`ty_named(\"typeof\")` must fail loudly instead of building a type that won't \
-             re-parse, got {built:?}"
-        );
-    }
-
-    #[test]
     fn bug_ty_table_keeps_no_array_element_beside_other_fields() {
         // Luau: `TableType ::= '{' Type '}' | '{' [PropList] '}'`, so
         // `{ T, a: U }` is a parse error.

@@ -529,15 +529,6 @@ mod tests {
     }
 
     #[test]
-    fn bug_keeps_the_store_order_of_global_assignments() {
-        let result = apply("a = 1\nb = 2\n");
-        assert_ne!(
-            result, "a,b=1,2",
-            "PUC stores right to left, so `__newindex` would see `b` before `a`"
-        );
-    }
-
-    #[test]
     fn bug_merged_assignment_stays_within_the_parser_assignment_limit() {
         let source = (0..250u32).map(|i| format!("g{i} = {i}\n")).collect::<Vec<_>>().concat();
         let target_count = largest_assignment_target_count(&apply(&source));

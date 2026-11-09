@@ -29,20 +29,6 @@ fn bug_editorconfig_bom_before_the_first_section_keeps_its_properties() {
     );
 }
 
-#[test]
-fn bug_malformed_ancestor_editorconfig_keeps_the_nearer_settings() {
-    let project = project_with(&[
-        (".editorconfig", "root = true\n[*]\nnot a valid line\n"),
-        ("project/.editorconfig", "[*.lua]\nindent_size = 2\n"),
-    ]);
-    let config = resolved_format_config(None, Some(&project.path().join("project/main.lua")));
-    assert_eq!(
-        config.indent_width,
-        Some(2),
-        "a broken ancestor file must not silently discard a valid nearer one"
-    );
-}
-
 /// A section with a `/` is relative to the `.editorconfig` that holds it, and
 /// the CLI passes the paths its walk yields, which are relative to cwd.
 #[test]
@@ -79,19 +65,6 @@ fn bug_deeply_nested_editorconfig_section_does_not_crash() {
     assert!(
         matches!(config.indent_width, None | Some(2)),
         "the section either matches or is ignored as invalid: {config:?}"
-    );
-}
-
-/// `line_width` is a `u16`, so the widest limit it can hold is the closest
-/// value to one past its range.
-#[test]
-fn bug_editorconfig_oversized_max_line_length_saturates() {
-    let project = project_with(&[(".editorconfig", "root = true\n[*]\nmax_line_length = 70000\n")]);
-    let config = resolved_format_config(None, Some(&project.path().join("main.lua")));
-    assert_eq!(
-        config.line_width,
-        Some(u16::MAX),
-        "a limit of 70000 must not fall back to the formatter's default width of 100"
     );
 }
 

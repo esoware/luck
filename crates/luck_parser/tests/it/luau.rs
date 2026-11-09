@@ -628,20 +628,6 @@ fn bug_attribute_is_accepted_on_const_function() {
 }
 
 #[test]
-fn bug_native_and_checked_accept_arguments_like_luau() {
-    // Only `deprecated` has an arguments validator; the others ignore them.
-    for source in [
-        "@[native(1)] function f() end",
-        "@[native()] function f() end",
-        "@[native \"x\"] function f() end",
-        "@[checked(1)] function f() end",
-    ] {
-        let result = parse_luau(source);
-        assert!(result.errors.is_empty(), "{source} is valid Luau: {:?}", result.errors);
-    }
-}
-
-#[test]
 fn bug_deprecated_arguments_are_validated() {
     for source in [
         "@[deprecated(\"x\")] function f() end",

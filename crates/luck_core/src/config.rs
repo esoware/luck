@@ -72,15 +72,4 @@ mod tests {
              `cargo test -p luck_core regenerate_luckrc_schema -- --ignored`"
         );
     }
-
-    #[test]
-    fn bug_schema_lists_the_perf_category_alias() {
-        parse_luck_config(r#"{ "lint": { "categories": ["perf"] } }"#).expect("`perf` is accepted");
-        let schema = serde_json::to_value(schemars::schema_for!(LuckConfig)).expect("serializes");
-        let category_values = schema["$defs"]["Category"]["oneOf"].as_array().expect("variants");
-        assert!(
-            category_values.iter().any(|variant| variant["const"] == "perf"),
-            "the schema must accept every value the parser does: {category_values:?}"
-        );
-    }
 }

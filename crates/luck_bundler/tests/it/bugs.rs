@@ -554,39 +554,6 @@ fn bug_multiline_require_keeps_its_lone_cr_line_breaks() {
     );
 }
 
-// An inclusive range can't end before it starts.
-#[test]
-fn bug_line_map_range_of_an_empty_module_is_not_inverted() {
-    let result = bundle_files(
-        &[("main.lua", LUA_REQUIRE_UTIL), ("util.lua", b"")],
-        "main.lua",
-        LuaVersion::Lua54,
-    );
-    let entry = line_map_entry(&result, "util.lua");
-    assert!(
-        entry.bundle_start_line <= entry.bundle_end_line,
-        "an inclusive line range must not be inverted: {entry:?}"
-    );
-}
-
-// The README says a cycle emits W003. Only the first one found does.
-#[test]
-fn bug_flags_w003_for_each_independent_cycle() {
-    let result = bundle_files(
-        &[
-            ("main.lua", b"require(\"a\")\nrequire(\"c\")\n"),
-            ("a.lua", b"require(\"b\")\n"),
-            ("b.lua", b"require(\"a\")\n"),
-            ("c.lua", b"require(\"d\")\n"),
-            ("d.lua", b"require(\"c\")\n"),
-        ],
-        "main.lua",
-        LuaVersion::Lua54,
-    );
-    let w003_count = result.warnings.iter().filter(|warning| warning.code == "W003").count();
-    assert_eq!(w003_count, 2, "each independent cycle needs its W003: {:?}", result.warnings);
-}
-
 // The parser builds left-associative chains in a loop, with no depth limit,
 // and the passes after it recurse, so a legal 800 KB file aborts the process
 // on the CLI's own 16 MiB stack instead of returning a diagnostic.

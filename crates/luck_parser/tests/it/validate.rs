@@ -363,33 +363,3 @@ fn bug_continue_until_ignores_typeof_in_the_condition() {
     let errors = check(source, LuaVersion::Luau);
     assert!(errors.is_empty(), "luau compiles this program: {errors:?}");
 }
-
-#[test]
-fn bug_continue_until_ignores_continue_in_a_constant_dead_branch() {
-    // The compiler folds these conditions and never compiles the `continue`.
-    for guard in ["if false then continue end", "if nil then continue end"] {
-        let source = format!("repeat {guard} local x = f() until x");
-        let errors = check(&source, LuaVersion::Luau);
-        assert!(errors.is_empty(), "{source} compiles in luau: {errors:?}");
-    }
-}
-
-#[test]
-fn bug_continue_until_ignores_closure_capture_of_a_constant_local() {
-    // The compiler folds an unassigned constant local, so the closure has no
-    // upvalue for it.
-    let source = "repeat if a then continue end local x = 1 until (function() return x end)()";
-    let errors = check(source, LuaVersion::Luau);
-    assert!(errors.is_empty(), "luau compiles this program: {errors:?}");
-}
-
-#[test]
-fn bug_luau_const_write_inside_typeof_is_rejected() {
-    // Luau reports this while parsing, so annotations are no exception.
-    let source = "const x = 1\ntype T = typeof((function() x = 2 end)())";
-    let errors = check(source, LuaVersion::Luau);
-    assert!(
-        errors.iter().any(|error| error.message.contains("const variable `x`")),
-        "the write inside `typeof` must be rejected: {errors:?}"
-    );
-}

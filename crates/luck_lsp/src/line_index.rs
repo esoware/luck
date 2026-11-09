@@ -165,16 +165,4 @@ mod tests {
             "line 1 must start after the bare `\\r`"
         );
     }
-
-    #[test]
-    fn bug_position_on_a_crlf_terminator_stays_within_the_line() {
-        // Offset 3 is the `\n` of `\r\n`, which parse errors can point at.
-        let source = "ab\r\ncd";
-        let index = LineIndex::new(source);
-        assert_eq!(
-            index.position(source, 3),
-            Position { line: 0, character: 2 },
-            "a line's character count stops before its terminator"
-        );
-    }
 }

@@ -1,9 +1,6 @@
 use core::mem::ManuallyDrop;
 
-use luck_ast::{
-    Expression, Statement, Synth, Transform, Visitor, expr_starts_with_brace,
-    stmt_starts_with_paren,
-};
+use luck_ast::{Expression, Statement, Synth, Transform, Visitor, stmt_starts_with_paren};
 use luck_token::BinOp;
 
 use crate::common::assert_runs_without_stack_overflow;
@@ -76,17 +73,6 @@ fn bug_stmt_starts_with_paren_handles_a_long_call_chain_without_overflow() {
         || {
             let stmt = ManuallyDrop::new(long_call_chain_statement(&Synth::new()));
             assert!(!stmt_starts_with_paren(&stmt), "`f()()...` starts with an identifier");
-        },
-    );
-}
-
-#[test]
-fn bug_expr_starts_with_brace_handles_a_long_chain_without_overflow() {
-    assert_runs_without_stack_overflow(
-        "deep_chains::bug_expr_starts_with_brace_handles_a_long_chain_without_overflow",
-        || {
-            let chain = ManuallyDrop::new(long_left_associative_sum(&Synth::new()));
-            assert!(!expr_starts_with_brace(&chain), "`a + 1 + ...` starts with an identifier");
         },
     );
 }

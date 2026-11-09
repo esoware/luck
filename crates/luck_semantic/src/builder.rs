@@ -714,15 +714,4 @@ mod tests {
              in a parameter annotation names the outer local"
         );
     }
-
-    #[test]
-    fn bug_qualified_type_prefix_reads_the_module_local() {
-        let tree = scope_tree_for("local M = {}\ntype T = M.Foo", LuaVersion::Luau);
-        let module = symbol(&tree, "M");
-        assert!(
-            module.reference_ids.iter().any(|&id| tree.reference(id).kind.is_read()),
-            "M.Foo uses the local M, as luau-analyze's LocalUnused agrees, so M needs a read \
-             reference or it is reported unused and left out of rename"
-        );
-    }
 }

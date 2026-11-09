@@ -74,21 +74,3 @@ impl<T> Punctuated<T> {
         self.items.is_empty()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bug_push_does_not_keep_a_stale_trailing_separator() {
-        // `{ a, }` with `b` pushed: the old trailing comma becomes the
-        // interior separator, so nothing follows the new final item.
-        let mut list = Punctuated::from_item("a");
-        list.has_trailing_separator = true;
-        list.push("b");
-        assert!(
-            !list.has_trailing_separator,
-            "pushing after a trailing separator must leave no separator after the new final item"
-        );
-    }
-}

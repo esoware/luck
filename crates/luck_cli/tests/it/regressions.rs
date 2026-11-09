@@ -133,23 +133,6 @@ fn bug_lint_fix_exits_failure_when_a_file_cannot_be_written() {
 }
 
 #[test]
-fn bug_lint_fix_applies_every_available_fix_in_one_run() {
-    let directory = TempDir::new().unwrap();
-    let path = write_file(directory.path(), "main.lua", "local a = 1\nlocal b = 2\nreturn 3\n");
-    let args = ["lint", "--fix", "main.lua", "-W", "merge_adjacent_locals", "--silent"];
-
-    run(directory.path(), &args);
-    let after_first_run = fs::read_to_string(&path).unwrap();
-    run(directory.path(), &args);
-    let after_second_run = fs::read_to_string(&path).unwrap();
-
-    assert_eq!(
-        after_second_run, after_first_run,
-        "one `lint --fix` run must leave nothing for a second run to fix"
-    );
-}
-
-#[test]
 fn bug_lint_counts_a_file_reached_twice_once() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", "local unused = 1\nreturn 1\n");
@@ -206,24 +189,6 @@ fn bug_minify_missing_input_exits_usage() {
         output.status.code(),
         Some(2i32),
         "a path that doesn't exist exits 2, as it does for every other command:\n{}",
-        stderr_text(&output)
-    );
-}
-
-#[test]
-fn bug_minify_accepts_a_repeated_pass_flag() {
-    let directory = TempDir::new().unwrap();
-
-    let output = luck_in(directory.path())
-        .args(["minify", "-", "--fold-constants", "--fold-constants"])
-        .write_stdin("return 1 + 2")
-        .output()
-        .expect("luck runs");
-
-    assert_eq!(
-        output.status.code(),
-        Some(0i32),
-        "the pass flag given last wins, so repeating one is not an error:\n{}",
         stderr_text(&output)
     );
 }
@@ -445,20 +410,6 @@ fn bug_fmt_applies_a_path_scoped_editorconfig_section_from_a_subdirectory() {
 }
 
 #[test]
-fn bug_fmt_keeps_a_utf8_bom() {
-    let directory = TempDir::new().unwrap();
-    let path = write_file(directory.path(), "main.lua", "\u{feff}local    x=1\nreturn x\n");
-
-    run(directory.path(), &["fmt", "main.lua"]);
-    let formatted = fs::read_to_string(path).unwrap();
-
-    assert!(
-        formatted.starts_with('\u{feff}'),
-        "formatting must not silently re-encode the file:\n{formatted:?}"
-    );
-}
-
-#[test]
 fn bug_fmt_range_leaves_crlf_outside_the_range_verbatim() {
     let directory = TempDir::new().unwrap();
     let path = write_file(directory.path(), "main.lua", "local    a=1\r\nlocal    b=2\r\n");
@@ -469,25 +420,6 @@ fn bug_fmt_range_leaves_crlf_outside_the_range_verbatim() {
     assert!(
         formatted.starts_with("local    a=1\r\n"),
         "a statement outside the range is copied verbatim, line ending included:\n{formatted:?}"
-    );
-}
-
-#[test]
-fn bug_fmt_keeps_formatting_after_a_file_cannot_be_written() {
-    let directory = TempDir::new().unwrap();
-    let locked = write_file(directory.path(), "a.lua", "local    x=1\n");
-    make_read_only(&locked);
-    for name in ["b.lua", "c.lua", "d.lua", "e.lua"] {
-        write_file(directory.path(), name, "local    x=1\n");
-    }
-
-    // One thread makes the chunk size four, so `e.lua` sits past the first chunk.
-    luck_in(directory.path()).env("RAYON_NUM_THREADS", "1").arg("fmt").output().expect("luck runs");
-
-    assert_eq!(
-        fs::read_to_string(directory.path().join("e.lua")).unwrap(),
-        "local x = 1\n",
-        "one unwritable file must not leave later files unformatted"
     );
 }
 

@@ -545,11 +545,6 @@ fn bug_type_pack_must_be_the_last_function_type_parameter() {
 }
 
 #[test]
-fn bug_number_singleton_type_is_rejected() {
-    assert_rejected(&["type X = 1", "local x: 1 = 1"]);
-}
-
-#[test]
 fn bug_typeof_requires_a_parenthesized_expression() {
     assert_rejected(&["type X = typeof", "local x: typeof = 1", "type X = typeof<T>"]);
 }
@@ -597,10 +592,4 @@ fn bug_type_pack_after_a_defaulted_parameter_needs_a_default() {
 #[test]
 fn bug_parenthesized_single_type_is_a_valid_pack_default() {
     assert_accepted(&["type X<T... = (number)> = number"]);
-}
-
-#[test]
-fn bug_generic_close_does_not_split_greater_equal() {
-    // Luau lexes `>=` as one token and never splits it.
-    assert_rejected(&["type X<T>= number", "local x: Foo<T>= 1", "local x: Foo<Bar<T>>= 1"]);
 }

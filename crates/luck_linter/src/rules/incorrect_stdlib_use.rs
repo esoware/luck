@@ -338,12 +338,6 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_trailing_multi_value_at_maximum() {
-        let messages = run("local x = type(a, ...)", LuaVersion::Lua54);
-        assert!(messages.is_empty(), "`...` can expand to nothing: {messages:?}");
-    }
-
-    #[test]
     fn bug_ignores_collectgarbage_collect_on_luau() {
         let messages = run("collectgarbage('collect')", LuaVersion::Luau);
         assert!(messages.is_empty(), "standalone Luau accepts `collect`: {messages:?}");

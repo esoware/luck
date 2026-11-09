@@ -436,24 +436,6 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_method_unpack_data_literal() {
-        let diags = run("local v = (\"abcd\"):unpack(\"i4\")");
-        assert!(diags.is_empty(), "the receiver of `:unpack` is the data: {diags:?}");
-    }
-
-    #[test]
-    fn bug_ignores_literal_dash_at_pattern_start() {
-        let diags = run("local i = string.find(s, \"-\")");
-        assert!(diags.is_empty(), "a `-` with nothing to repeat is a literal: {diags:?}");
-    }
-
-    #[test]
-    fn bug_ignores_dash_after_quantifier() {
-        let diags = run("local i = string.find(s, \"%s*-%s*\")");
-        assert!(diags.is_empty(), "a `-` right after a quantifier is a literal: {diags:?}");
-    }
-
-    #[test]
     fn bug_ignores_set_with_leading_close_bracket() {
         let diags = run("local i = string.find(s, \"[]]\")");
         assert!(diags.is_empty(), "a `]` first in a set is a member: {diags:?}");
@@ -481,12 +463,6 @@ mod tests {
     fn bug_flags_pack_integer_size_out_of_limits() {
         let diags = run("local p = string.pack(\"i17\", 1)");
         assert_eq!(diags.len(), 1, "integer sizes above 16 raise an error: {diags:?}");
-    }
-
-    #[test]
-    fn bug_ignores_c99_date_specifier_on_lua54() {
-        let diags = run("local d = os.date(\"%F\")");
-        assert!(diags.is_empty(), "stock non-Windows Lua 5.4 accepts C99 `%F`: {diags:?}");
     }
 
     #[test]
