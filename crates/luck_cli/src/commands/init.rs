@@ -7,6 +7,7 @@ use clap::Args;
 use luck_core::LuaTarget;
 
 use crate::exit::{Exit, operation_error};
+use crate::verbosity::Verbosity;
 
 #[derive(Args)]
 pub(crate) struct InitArgs {
@@ -20,7 +21,7 @@ impl InitArgs {
     ///
     /// Reports the failure and returns [`Exit::Failure`] when `luck.json`
     /// exists or a scaffold file can't be written.
-    pub(crate) fn run(self) -> Result<(), Exit> {
+    pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let target = self.target.unwrap_or(LuaTarget::Lua54);
 
         let config_path = Path::new("luck.json");
@@ -28,15 +29,9 @@ impl InitArgs {
             return Err(operation_error("`luck.json` already exists"));
         }
 
-        fs::write(config_path, init_config_content(target))
-            .map_err(|error| operation_error(format!("cannot write `luck.json`: {error}")))?;
-
         let source_directory = Path::new("src");
-        if !source_directory.exists() {
-            fs::create_dir_all(source_directory).map_err(|error| {
-                operation_error(format!("cannot create `src` directory: {error}"))
-            })?;
-        }
+        fs::create_dir_all(source_directory)
+            .map_err(|error| operation_error(format!("cannot create `src` directory: {error}")))?;
 
         let extension = entry_extension(target);
         let entry_file = source_directory.join(format!("main.{extension}"));
@@ -46,7 +41,13 @@ impl InitArgs {
             })?;
         }
 
-        eprintln!("Created luck.json and src/main.{extension}");
+        // Last, because an existing `luck.json` is what blocks another `init`.
+        fs::write(config_path, init_config_content(target))
+            .map_err(|error| operation_error(format!("cannot write `luck.json`: {error}")))?;
+
+        if verbosity != Verbosity::Quiet {
+            eprintln!("Created luck.json and src/main.{extension}");
+        }
         Ok(())
     }
 }

@@ -1,14 +1,12 @@
 //! `luck graph` - print the dependency graph as JSON or Graphviz DOT.
 
-use std::path::Path;
-
 use clap::{Args, ValueEnum};
 use luck_bundler::{BundleOptions, DependencyGraph, ModuleId};
 use luck_core::{DynamicRequire, LuaTarget};
 
-use crate::exit::{Exit, fail_with_diags, usage_error};
+use crate::exit::{Exit, fail_with_diags};
 use crate::project::{
-    config_for_one_shot, current_directory, resolve_configured_target, resolve_dynamic_require,
+    config_for_one_shot, entry_and_root, resolve_configured_target, resolve_dynamic_require,
 };
 use crate::render::print_diags;
 use crate::verbosity::Verbosity;
@@ -52,12 +50,7 @@ impl GraphArgs {
         let target = resolve_configured_target(&config, self.target, &self.entry)?;
         let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require);
 
-        let entry_path = Path::new(&self.entry);
-        if !entry_path.is_file() {
-            return Err(usage_error(format!("entry file not found: `{}`", self.entry)));
-        }
-
-        let working_directory = current_directory()?;
+        let (entry_path, project_root) = entry_and_root(&self.entry)?;
         let version = target.lua_version();
 
         let dependency_graph = DependencyGraph::build(
@@ -65,7 +58,7 @@ impl GraphArgs {
             &BundleOptions {
                 version,
                 search_paths: &self.search_paths,
-                project_root: &working_directory,
+                project_root,
                 dynamic_require,
             },
         )

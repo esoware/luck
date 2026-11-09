@@ -48,13 +48,14 @@ fn fetch_bytes(url: &str) -> Vec<u8> {
 }
 
 /// Reads `file_name` from the cache, fetching it from under `base_url` on a
-/// miss.
+/// miss. `base_url` ends in the pinned commit, which keys the cached copy.
 ///
 /// # Panics
 ///
 /// Panics when the file can't be fetched or isn't UTF-8.
 pub(crate) fn fetch_corpus_file(base_url: &str, file_name: &str) -> String {
-    let cache_path = cache_directory().join(file_name);
+    let pinned_commit = base_url.rsplit('/').next().unwrap_or(base_url);
+    let cache_path = cache_directory().join(format!("{pinned_commit}-{file_name}"));
     if let Ok(text) = fs::read_to_string(&cache_path) {
         return text;
     }
@@ -74,17 +75,22 @@ pub(crate) fn fetch_corpus_file(base_url: &str, file_name: &str) -> String {
 ///
 /// Panics when the tarball can't be fetched or extracted.
 pub(crate) fn fetch_project_tarball(owner: &str, repository: &str, sha: &str) -> PathBuf {
-    let extracted = cache_directory().join(format!("{repository}-{sha}"));
+    let extracted_name = format!("{repository}-{sha}");
+    let extracted = cache_directory().join(&extracted_name);
     if extracted.is_dir() {
         return extracted;
     }
     let url = format!("https://codeload.github.com/{owner}/{repository}/tar.gz/{sha}");
     let bytes = fetch_bytes(&url);
-    let _unused = fs::create_dir_all(cache_directory());
+    // Extracting aside and renaming keeps `extracted` absent until it's whole.
+    // An interrupted run's leftovers go first.
+    let partial = cache_directory().join(format!("{extracted_name}.partial"));
+    let _stale_partial = fs::remove_dir_all(&partial);
     let mut archive = Archive::new(GzDecoder::new(bytes.as_slice()));
-    archive
-        .unpack(cache_directory())
-        .unwrap_or_else(|error| panic!("failed to extract {url}: {error}"));
+    archive.unpack(&partial).unwrap_or_else(|error| panic!("failed to extract {url}: {error}"));
+    fs::rename(partial.join(&extracted_name), &extracted)
+        .unwrap_or_else(|error| panic!("failed to move {url} into the cache: {error}"));
+    let _empty_partial = fs::remove_dir_all(&partial);
     extracted
 }
 
@@ -97,7 +103,7 @@ mod tests {
     use crate::fixtures::{gzip, isolated_cache, tar_archive};
 
     #[test]
-    fn bug_fetch_corpus_file_refetches_when_the_pinned_commit_changes() {
+    fn fetch_corpus_file_refetches_when_the_pinned_commit_changes() {
         let _cache = isolated_cache(|url| {
             if url.contains("old-commit") { b"old pin".to_vec() } else { b"new pin".to_vec() }
         });
@@ -111,7 +117,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fetch_project_tarball_refetches_after_an_interrupted_extraction() {
+    fn fetch_project_tarball_refetches_after_an_interrupted_extraction() {
         let complete_archive = tar_archive(&[
             ("project-0123/first.lua", "return 1\n"),
             ("project-0123/second.lua", "return 2\n"),

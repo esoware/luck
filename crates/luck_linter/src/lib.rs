@@ -54,6 +54,9 @@ pub use luck_core::{LintConfig, RuleSetting};
 
 pub use diagnostic::{Category, LintDiagnostic, Severity};
 pub use driver::{lint, lint_analyzed, lint_parsed, lint_target};
-pub use fix::{FIXPOINT_BUDGET, Fix, FixpointError, TextEdit, apply_fixes, apply_fixes_fixpoint};
+pub use fix::{
+    FIXPOINT_BUDGET, Fix, FixpointError, TextEdit, apply_fixes, apply_fixes_fixpoint,
+    non_overlapping_edits,
+};
 pub use rule::Rule;
 pub use rules::{rules, unknown_rule_names};

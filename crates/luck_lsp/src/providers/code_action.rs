@@ -2,9 +2,7 @@
 //! disabling its rule for the statement, plus `source.fixAll.luck` for the
 //! whole file.
 
-use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
-use core::cmp::Reverse;
 
 use luck_ast::{Block, LastStatement, Statement, Visitor};
 use luck_linter::{Fix, LintDiagnostic};
@@ -110,46 +108,16 @@ fn fix_edits(document: &DocumentState, fix: &Fix) -> Vec<TextEdit> {
         .collect()
 }
 
-/// Every fix that overlaps none taken so far, later edits first as
-/// `luck_linter::apply_fixes` prefers, in document order.
-///
-/// LSP forbids overlapping edits in one change list. A fix is kept or dropped
-/// whole, because half of a multi-edit fix changes the code's meaning; the
-/// dropped ones reappear on the next pass.
+/// LSP forbids overlapping edits in one change list, and a dropped fix
+/// reappears on the next pass.
 fn all_fix_edits(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<TextEdit> {
-    let mut fixes: Vec<&Fix> = lints.iter().filter_map(|lint| lint.fix.as_ref()).collect();
-    fixes.sort_by_key(|fix| Reverse(fix.edits.iter().map(|edit| edit.span.start).max()));
-    // Each kept span's end by its start, so a candidate has two neighbors to
-    // check. Two inserts at one offset don't conflict, and the wider span at
-    // an offset is the one that can.
-    let mut kept_spans: BTreeMap<u32, u32> = BTreeMap::new();
-    let mut edits: Vec<&luck_linter::TextEdit> = Vec::new();
-    for fix in fixes {
-        if fix.edits.iter().any(|edit| overlaps_kept(&kept_spans, edit.span)) {
-            continue;
-        }
-        for edit in &fix.edits {
-            let end = kept_spans.entry(edit.span.start).or_insert(edit.span.end);
-            *end = edit.span.end.max(*end);
-        }
-        edits.extend(&fix.edits);
-    }
-    edits.sort_by_key(|edit| (edit.span.start, edit.span.end));
-    edits
+    luck_linter::non_overlapping_edits(lints)
         .into_iter()
         .map(|edit| TextEdit {
             range: document.range(edit.span),
             new_text: edit.replacement.clone(),
         })
         .collect()
-}
-
-/// Half-open overlap, so edits that only touch, like an insert at the end of
-/// a replaced range, don't conflict.
-fn overlaps_kept(kept_spans: &BTreeMap<u32, u32>, span: Span) -> bool {
-    let is_overlapping = |(&start, &end): (&u32, &u32)| start < span.end && span.start < end;
-    kept_spans.range(..=span.start).next_back().is_some_and(is_overlapping)
-        || kept_spans.range(span.start..).next().is_some_and(is_overlapping)
 }
 
 /// A comment that disables `rule` for the innermost statement holding `span`,

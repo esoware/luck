@@ -1,3 +1,5 @@
+use alloc::collections::BTreeMap;
+use core::cmp::Reverse;
 use core::error::Error;
 use core::fmt;
 use core::ops::Range;
@@ -32,11 +34,10 @@ pub(crate) fn comments_within(comments: &[Comment], span: Span) -> &[Comment] {
     comments.get(first..last).unwrap_or_default()
 }
 
-/// Applies the diagnostics' fixes to `source` in one pass.
+/// Applies the diagnostics' [`non_overlapping_edits`] to `source` in one pass.
 ///
-/// Overlap is checked per edit, not per fix: of two overlapping edits, the
-/// one starting later wins. If the result doesn't parse, the original source
-/// comes back unchanged, so a broken fix never reaches the user's file.
+/// If the result doesn't parse, the original source comes back unchanged, so a
+/// broken fix never reaches the user's file.
 ///
 /// [`apply_fixes_fixpoint`] re-lints and repeats until no fixes remain.
 #[must_use]
@@ -49,35 +50,61 @@ pub fn apply_fixes(source: &str, diags: &[LintDiagnostic], version: LuaVersion) 
 }
 
 pub(crate) fn apply_one_pass(source: &str, diags: &[LintDiagnostic]) -> String {
-    let mut edits: Vec<&TextEdit> =
-        diags.iter().filter_map(|diag| diag.fix.as_ref()).flat_map(|fix| &fix.edits).collect();
-
-    if edits.is_empty() {
-        return source.to_owned();
+    let mut fixed = String::with_capacity(source.len());
+    let mut copied_to = 0;
+    for edit in non_overlapping_edits(diags) {
+        let Range { start, end } = Range::<usize>::from(edit.span);
+        fixed.push_str(source.get(copied_to..start).unwrap_or_default());
+        fixed.push_str(&edit.replacement);
+        copied_to = end;
     }
-
-    // Sorting on the full key puts edits at the same offset, such as two
-    // inserts, in a fixed order, whichever rule produced them.
-    edits.sort_by(|left, right| {
-        right
-            .span
-            .start
-            .cmp(&left.span.start)
-            .then(right.span.end.cmp(&left.span.end))
-            .then(left.replacement.cmp(&right.replacement))
-    });
-
-    let mut fixed = source.to_owned();
-    let mut last_start = u32::MAX;
-
-    for edit in &edits {
-        if edit.span.end <= last_start {
-            fixed.replace_range(Range::<usize>::from(edit.span), &edit.replacement);
-            last_start = edit.span.start;
-        }
-    }
-
+    fixed.push_str(source.get(copied_to..).unwrap_or_default());
     fixed
+}
+
+/// The edits of every fix that overlaps none taken so far, in source order.
+///
+/// The fixes reaching furthest into the source are taken first, so of two
+/// overlapping ones the later wins. A fix is kept or dropped whole, because
+/// half of a multi-edit fix changes the code's meaning, and a dropped one
+/// comes back on the next pass. Edits at one offset keep a fixed order,
+/// whichever rule produced them.
+#[must_use]
+pub fn non_overlapping_edits(diags: &[LintDiagnostic]) -> Vec<&TextEdit> {
+    let mut fixes: Vec<&Fix> = diags.iter().filter_map(|diag| diag.fix.as_ref()).collect();
+    fixes.sort_by_key(|fix| {
+        let furthest_edit = fix
+            .edits
+            .iter()
+            .map(|edit| (edit.span.start, edit.span.end, Reverse(&edit.replacement)))
+            .max();
+        Reverse(furthest_edit)
+    });
+    // Each kept span's end by its start, so a candidate has two neighbors to
+    // check. Two inserts at one offset don't conflict, and the wider span at
+    // an offset is the one that can.
+    let mut kept_spans: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut edits: Vec<&TextEdit> = Vec::new();
+    for fix in fixes {
+        if fix.edits.iter().any(|edit| overlaps_kept(&kept_spans, edit.span)) {
+            continue;
+        }
+        for edit in &fix.edits {
+            let end = kept_spans.entry(edit.span.start).or_insert(edit.span.end);
+            *end = edit.span.end.max(*end);
+        }
+        edits.extend(&fix.edits);
+    }
+    edits.sort_by_key(|edit| (edit.span.start, edit.span.end, Reverse(&edit.replacement)));
+    edits
+}
+
+/// Half-open overlap, so edits that only touch, like an insert at the end of
+/// a replaced range, don't conflict.
+fn overlaps_kept(kept_spans: &BTreeMap<u32, u32>, span: Span) -> bool {
+    let is_overlapping = |(&start, &end): (&u32, &u32)| start < span.end && span.start < end;
+    kept_spans.range(..=span.start).next_back().is_some_and(is_overlapping)
+        || kept_spans.range(span.start..).next().is_some_and(is_overlapping)
 }
 
 /// Why [`apply_fixes_fixpoint`] stopped without converging.
@@ -212,6 +239,26 @@ mod tests {
         // Mechanics test on non-Lua text, so bypass the reparse guard.
         let fixed = apply_one_pass(source, &diags);
         assert_eq!(fixed, "abcdYYij");
+    }
+
+    #[test]
+    fn a_fix_overlapped_by_a_later_one_drops_whole() {
+        let source = "abcdefghij";
+        let span = Span { start: 0, end: 1 };
+        let overlapped_span = Span { start: 2, end: 6 };
+        let two_edit_fix = LintDiagnostic {
+            fix: Some(Fix {
+                description: "two edits".to_owned(),
+                edits: vec![
+                    TextEdit { span, replacement: "X".to_owned() },
+                    TextEdit { span: overlapped_span, replacement: "Y".to_owned() },
+                ],
+            }),
+            ..diagnostic("test", span)
+        };
+        let diags = vec![two_edit_fix, diag_with_edit(5, 8, "Z")];
+        // Mechanics test on non-Lua text, so bypass the reparse guard.
+        assert_eq!(apply_one_pass(source, &diags), "abcdeZij");
     }
 
     #[test]

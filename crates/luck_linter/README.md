@@ -9,7 +9,7 @@ Rule-based linter for Lua and Luau with scope-aware analysis.
 ## Key features
 
 - **Four categories.** Correctness, Suspicious, Style, and Performance (`luck_core::Category`). Correctness rules run by default. The other three are opt-in, enabled per rule or by enabling the whole category in `luck.json`.
-- **Auto-fix.** Rules with a safe fix attach `TextEdit`s to their diagnostic, and `apply_fixes` applies them in a single pass, skipping overlapping edits.
+- **Auto-fix.** Rules with a safe fix attach `TextEdit`s to their diagnostic, and `apply_fixes` applies them in a single pass, dropping a fix whole when it overlaps another.
 - **Suppression comments.** `-- luck: allow(rule_name)` suppresses the rule for the statement that follows, or for the statement it trails on the same line. `deny(...)` and `warn(...)` set the severity instead, `allow(...) start` and `allow(...) end` bound a region, `-- #luck: allow(...)` covers the whole file, and `*` matches every rule.
 - **Semantic-aware.** Unused/undefined variable, incorrect stdlib usage, and similar rules query `luck_semantic`'s `ScopeTree` and stdlib resolution instead of tracking scopes themselves.
 
@@ -39,7 +39,7 @@ A `Finding` holds only what differs per report: the message, span, optional help
 
 ### Auto-fix
 
-A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix` holds a description and a list of `TextEdit`s, each a span and its replacement. `apply_fixes` sorts the edits, skips any that overlap an edit already applied, applies the rest in a single pass, and returns the original source if the result doesn't parse. `apply_fixes_fixpoint` re-lints and repeats until no fixes remain. Fixes that are sometimes wrong aren't shipped. There is no unsafe-fix tier.
+A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix` holds a description and a list of `TextEdit`s, each a span and its replacement. `non_overlapping_edits` drops any fix with an edit that overlaps a fix already taken, so a fix applies whole or not at all, and the language server's fix-all shares it. `apply_fixes` applies what remains in a single pass and returns the original source if the result doesn't parse. `apply_fixes_fixpoint` re-lints and repeats until no fixes remain. Fixes that are sometimes wrong aren't shipped. There is no unsafe-fix tier.
 
 ### Module layout
 

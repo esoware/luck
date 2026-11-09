@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use luck_bundler::{BundleOptions, LineMapEntry, bundle};
-use luck_core::{DynamicRequire, LuaTarget};
+use luck_core::{DynamicRequire, LuaTarget, check_output_paths};
 
 use crate::exit::{Exit, fail_with_diags, fail_with_source_errors, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::write_output;
 use crate::project::{
-    config_for_one_shot, current_directory, resolve_configured_target, resolve_dynamic_require,
+    config_for_one_shot, entry_and_root, resolve_configured_target, resolve_dynamic_require,
 };
 use crate::render::print_diags;
 use crate::verbosity::Verbosity;
@@ -57,7 +57,8 @@ pub(crate) struct BundleArgs {
 impl BundleArgs {
     /// # Errors
     ///
-    /// Returns [`Exit::Usage`] on a bad config or entry path, and
+    /// Returns [`Exit::Usage`] on a bad config, a bad entry path, or an output
+    /// that would replace a bundled file or another output, and
     /// [`Exit::Failure`] when bundling, minifying, or writing fails.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let config = config_for_one_shot(self.config.as_deref(), &self.entry)?;
@@ -66,27 +67,21 @@ impl BundleArgs {
         let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require);
         let transforms = self.minify_flags.apply_to(config.transforms.unwrap_or_default());
 
-        let entry_path = Path::new(&self.entry);
-        if !entry_path.is_file() {
-            return Err(usage_error(format!("entry file not found: `{}`", self.entry)));
-        }
-
-        // Root search paths at the entry's directory, so `luck bundle
-        // src/main.lua` finds the modules next to it without `-s`.
-        let search_root = entry_path
-            .parent()
-            .map_or_else(current_directory, |parent| Ok(parent.to_path_buf()))?;
+        let (entry_path, project_root) = entry_and_root(&self.entry)?;
 
         let result = bundle(
             entry_path,
             &BundleOptions {
                 version,
                 search_paths: &self.search_paths,
-                project_root: &search_root,
+                project_root,
                 dynamic_require,
             },
         )
         .map_err(|errors| fail_with_diags(&errors, version))?;
+
+        check_output_paths(&result.source_files, self.output.iter().chain(&self.line_map))
+            .map_err(usage_error)?;
 
         if verbosity != Verbosity::Quiet {
             print_diags(&result.warnings, version);

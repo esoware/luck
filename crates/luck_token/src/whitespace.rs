@@ -71,3 +71,14 @@ pub fn ends_with_line_break(text: &str, version: LuaVersion) -> bool {
 pub fn chunk_start(source: &str, version: LuaVersion) -> usize {
     if version.has_bom_skip() && source.starts_with('\u{FEFF}') { '\u{FEFF}'.len_utf8() } else { 0 }
 }
+
+/// Whether `chunk`, the source from [`chunk_start`] on, opens with a first line
+/// `version`'s loader skips.
+#[must_use]
+pub const fn has_shebang(chunk: &[u8], version: LuaVersion) -> bool {
+    match chunk {
+        [b'#', b'!', _, ..] => true,
+        [b'#', ..] => version.has_bare_hash_shebang(),
+        _ => false,
+    }
+}

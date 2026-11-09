@@ -1,6 +1,6 @@
 use luck_token::{
     Comment, CommentKind, CommentPosition, CompactString, LuaVersion, Span, Token, TokenKind,
-    chunk_start, has_line_break,
+    chunk_start, has_line_break, has_shebang,
 };
 
 use crate::cursor::Cursor;
@@ -113,12 +113,7 @@ impl<'source> Lexer<'source> {
 
         lexer.cursor.advance_by(chunk_start(source, version));
 
-        let is_shebang = match lexer.cursor.rest() {
-            [b'#', b'!', _, ..] => true,
-            [b'#', ..] => version.has_bare_hash_shebang(),
-            _ => false,
-        };
-        if is_shebang {
+        if has_shebang(lexer.cursor.rest(), version) {
             lexer.lex_shebang();
         }
 

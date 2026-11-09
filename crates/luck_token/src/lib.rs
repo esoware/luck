@@ -45,6 +45,6 @@ pub use string::{decode_string, encode_string, short_string_body, unicode_escape
 pub use token::{Token, TokenKind};
 pub use version::{LuaVersion, StdlibEnvironment};
 pub use whitespace::{
-    chunk_start, ends_with_line_break, has_line_break, is_lua_whitespace, line_breaks,
+    chunk_start, ends_with_line_break, has_line_break, has_shebang, is_lua_whitespace, line_breaks,
     strip_line_break,
 };

@@ -244,17 +244,20 @@ impl Diagnostic {
         )
     }
 
-    /// A call through a local binding named `require`; left untouched.
+    /// A call that doesn't reach the global `require`, through a local binding
+    /// named `require`, a local `_ENV`, or a global the file replaced; left
+    /// untouched.
     #[must_use]
     pub fn w005_shadowed(file_path: &str, span: Span) -> Self {
         Self::warning_at(
             "W005",
-            "call goes through a local binding named `require` and is not bundled",
+            "call does not reach the global `require` and is not bundled",
             file_path,
             span,
         )
         .with_help(
-            "the call is left exactly as written and will invoke the local function at runtime",
+            "the call is left exactly as written and will invoke whatever `require` resolves to \
+             at runtime",
         )
     }
 

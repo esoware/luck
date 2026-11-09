@@ -8,7 +8,7 @@ use luck_core::{LuaTarget, read_source_file};
 use crate::exit::{Exit, fail_with_source_errors, operation_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::{format_size, read_stdin_source, write_output};
-use crate::project::{config_for_one_shot, resolve_configured_target};
+use crate::project::{config_for_one_shot, existing_file, resolve_configured_target};
 
 #[derive(Args)]
 pub(crate) struct MinifyArgs {
@@ -41,8 +41,9 @@ impl MinifyArgs {
     ///
     /// # Errors
     ///
-    /// Returns [`Exit::Usage`] on a bad config, and [`Exit::Failure`] when the
-    /// input can't be read or minified or the result can't be written.
+    /// Returns [`Exit::Usage`] on a bad config or an input that isn't a file,
+    /// and [`Exit::Failure`] when the input can't be read or minified or the
+    /// result can't be written.
     pub(crate) fn run(self) -> Result<(), Exit> {
         let config = config_for_one_shot(self.config.as_deref(), &self.input)?;
         let target = resolve_configured_target(&config, self.target, &self.input)?;
@@ -51,7 +52,7 @@ impl MinifyArgs {
         let (source, file_path) = if self.input == "-" {
             (read_stdin_source()?, "<stdin>".to_owned())
         } else {
-            let source = read_source_file(&self.input).map_err(|error| {
+            let source = read_source_file(existing_file(&self.input)?).map_err(|error| {
                 operation_error(format!("failed to read `{}`: {error}", self.input))
             })?;
             (source, self.input)

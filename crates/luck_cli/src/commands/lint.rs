@@ -79,7 +79,8 @@ pub(crate) struct LintArgs {
     print_config: bool,
 
     /// Read source from stdin, using PATH only to pick the target and
-    /// label diagnostics; --fix writes the fixed source to stdout.
+    /// label diagnostics; --fix writes the fixed source to stdout and any
+    /// findings to stderr.
     #[arg(long, value_name = "PATH")]
     stdin_filepath: Option<String>,
 }
@@ -106,8 +107,8 @@ impl LintArgs {
     /// # Errors
     ///
     /// Returns [`Exit::Usage`] on a bad config, rule name, or path, and
-    /// [`Exit::Failure`] when the findings fail the run under the exit-code
-    /// policy.
+    /// [`Exit::Failure`] when a file can't be read or written back, or the
+    /// findings fail the run under the exit-code policy.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let project = resolve_project(self.config.as_deref())?;
         let lint_config = self.lint_config(&project.config)?;
@@ -171,8 +172,9 @@ impl LintArgs {
 
     /// Lint one document from stdin as if it were the `--stdin-filepath` file.
     ///
-    /// `--fix` writes the fixed source to stdout, never to disk. Output formats
-    /// and the exit-code policy match the file walk.
+    /// `--fix` writes the fixed source to stdout, never to disk, and findings
+    /// to stderr whatever their format, because stdout is the new file content.
+    /// Otherwise output formats and the exit-code policy match the file walk.
     ///
     /// # Errors
     ///
@@ -209,6 +211,7 @@ impl LintArgs {
                 Rendered::Pretty(pretty) => {
                     let _unused = io::stderr().write_all(&pretty);
                 }
+                Rendered::Json(lines) if self.fix => eprint!("{lines}"),
                 Rendered::Json(lines) => print!("{lines}"),
             }
         }
@@ -274,10 +277,12 @@ impl LintArgs {
             }
         }
 
-        let (error_count, warning_count) = severity_counts(&diags);
+        let (finding_errors, warning_count) = severity_counts(&diags);
         let rendered = (!diags.is_empty() && !self.silent).then(|| {
             self.render(&file_path.to_string_lossy(), &current_source, &diags, target.lua_version())
         });
+        // A fix that couldn't be written fails the run, as an unread file does.
+        let error_count = finding_errors.saturating_add(usize::from(note.is_some()));
         LintOutcome { error_count, warning_count, is_fixed, note, rendered }
     }
 

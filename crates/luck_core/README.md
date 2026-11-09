@@ -37,7 +37,7 @@ The `config` module handles project configuration, split into focused submodules
 - **`lint_config`** holds the `lint` section's `LintConfig`, `RuleSetting`, and `Category`, which `luck_linter` re-exports.
 - **`transform_config`** and **`dynamic_require`** hold `TransformConfig` and `DynamicRequire`, the `transforms` and `dynamic_require` values.
 - **`load`** owns `parse_luck_config` (JSON5), the recursive `extends` chain with its cycle, depth, and transitive `root`-boundary checks, upward `discover_config`, and `load_or_discover_config`, which loads an explicit `-c` path or else discovers. Both return a `ProjectConfig`: the config and the directory holding it, which roots the project's relative paths and globs.
-- **`resolve`** turns a loaded `LuckConfig` into `BuildConfig`s, applying the selected profile and resolving entry/output paths for the single-entry or multi-entry (`entries`) form. `check_output_paths` rejects an output that would replace a source file or another output, and the CLI's one-shot commands go through it too.
+- **`resolve`** turns a loaded `LuckConfig` into `BuildConfig`s, applying the selected profile and resolving entry/output paths for the single-entry or multi-entry (`entries`) form. `check_output_paths` rejects an output that would replace a source file or another output, and `luck bundle` goes through it too.
 - **`filter`** holds `ProjectFilter`, which decides from `include`/`exclude` globs whether a file belongs to the project (exclude wins). `*` stops at `/` and `**/` crosses directories. The CLI and the LSP both build it through `LuckConfig::project_filter`.
 - **`editorconfig`** holds `resolved_format_config`, which layers `FormatConfig` precedence: built-in defaults < `.editorconfig` < the luck.json `format` section. Without a file path, for an untitled document or `fmt --no-editorconfig`, the `format` section stands alone. It reads the spec itself, and matches sections with a compiled glob whose memoized matching stays polynomial on any section.
 
@@ -67,6 +67,6 @@ The VS Code schema at `editors/vscode/schemas/luckrc.schema.json` is **generated
 | W002 | top-level vararg in bundled module (not emitted) |
 | W003 | circular dependency between lazily-loaded modules |
 | W004 | `.luaurc` alias `self` shadowed by built-in `@self` |
-| W005 | require call not bundled (a local named `require`, or the global `require` used other than in a direct call) |
+| W005 | require call not bundled (a call that doesn't reach the global `require`, or the global `require` used other than in a direct call) |
 | W006 | Luau hot comment has no effect in a bundle |
 | W007 | require argument not a string literal, so the call resolves at runtime |

@@ -13,8 +13,8 @@ use crate::render::{print_diags, print_source_errors};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Exit {
     /// Exits 1: the command ran but failed or found problems: diagnostics,
-    /// lint findings, files `fmt --check` would change, or a file it couldn't
-    /// read or write.
+    /// lint findings, files `fmt --check` would change, or a file or directory
+    /// it couldn't read or write.
     Failure,
     /// Exits 2: bad arguments, a missing or invalid config, or a path that
     /// doesn't exist.

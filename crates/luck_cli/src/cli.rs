@@ -64,7 +64,7 @@ pub(crate) fn run() -> ExitCode {
     let verbosity = if cli.quiet { Verbosity::Quiet } else { Verbosity::Normal };
 
     let outcome = match cli.command {
-        Command::Init(args) => args.run(),
+        Command::Init(args) => args.run(verbosity),
         Command::Build(args) => args.run(verbosity),
         Command::Bundle(args) => args.run(verbosity),
         Command::Minify(args) => args.run(),

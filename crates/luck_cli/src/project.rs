@@ -7,14 +7,15 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use ignore::{DirEntry, WalkBuilder};
+use ignore::WalkBuilder;
 use luck_core::{
     DynamicRequire, LuaTarget, LuckConfig, ProjectConfig, ProjectFilter, discover_config,
-    load_or_discover_config,
+    load_or_discover_config, normalize_path,
 };
 use rayon::prelude::*;
+use rustc_hash::FxHashSet;
 
-use crate::exit::{Exit, usage_error};
+use crate::exit::{Exit, operation_error, usage_error};
 
 /// # Errors
 ///
@@ -23,6 +24,30 @@ use crate::exit::{Exit, usage_error};
 pub(crate) fn current_directory() -> Result<PathBuf, Exit> {
     env::current_dir()
         .map_err(|error| usage_error(format!("failed to get current directory: {error}")))
+}
+
+/// `input` as a path, once it's known to name a file.
+///
+/// # Errors
+///
+/// Reports the failure and returns [`Exit::Usage`] when it doesn't.
+pub(crate) fn existing_file(input: &str) -> Result<&Path, Exit> {
+    let path = Path::new(input);
+    if path.is_file() { Ok(path) } else { Err(usage_error(format!("file not found: `{input}`"))) }
+}
+
+/// A `bundle` or `graph` entry, and the root its modules resolve from: the
+/// entry's directory, so `luck bundle src/main.lua` finds the modules next to
+/// it without `-s`.
+///
+/// # Errors
+///
+/// Reports the failure and returns [`Exit::Usage`] when `entry` isn't a file.
+pub(crate) fn entry_and_root(entry: &str) -> Result<(&Path, &Path), Exit> {
+    let entry_path = existing_file(entry)?;
+    // A bare file name's parent is empty, and an empty root is the working
+    // directory.
+    Ok((entry_path, entry_path.parent().unwrap_or_else(|| Path::new(""))))
 }
 
 /// Resolve the target for the one-shot `bundle`/`minify`/`graph` commands.
@@ -110,7 +135,7 @@ pub(crate) fn resolve_project(config_path: Option<&Path>) -> Result<ProjectConfi
 ///
 /// Empty args default to the current directory. Directories are walked and
 /// gated by the include/exclude filter; explicit file args are included
-/// unconditionally.
+/// unconditionally. A file several arguments reach is processed once.
 ///
 /// Every target resolves here, before the parallel commands' locked output
 /// sections. Those hold the stdio locks on the main thread while rayon
@@ -119,7 +144,8 @@ pub(crate) fn resolve_project(config_path: Option<&Path>) -> Result<ProjectConfi
 /// # Errors
 ///
 /// Reports the failure and returns [`Exit::Usage`] on a bad glob, a path that
-/// doesn't exist, or a bad dialect.
+/// doesn't exist, or a bad dialect, and [`Exit::Failure`] when a directory
+/// can't be walked.
 pub(crate) fn project_files(
     project: &ProjectConfig,
     paths: &[String],
@@ -133,12 +159,18 @@ pub(crate) fn project_files(
     for arg in requested_paths {
         let path = PathBuf::from(arg);
         if path.is_dir() {
-            files.extend(collect_lua_files(&path, &filter));
+            files.extend(collect_lua_files(&path, &filter)?);
         } else if path.is_file() {
             files.push(path);
         } else {
             return Err(usage_error(format!("path not found: `{arg}`")));
         }
+    }
+
+    // One argument can't reach a file twice, so only several pay for this.
+    if requested_paths.len() > 1 {
+        let mut seen_paths = FxHashSet::default();
+        files.retain(|path| seen_paths.insert(normalize_path(path)));
     }
 
     files
@@ -171,22 +203,26 @@ where
     })
 }
 
-fn collect_lua_files(directory: &Path, filter: &ProjectFilter) -> Vec<PathBuf> {
+/// # Errors
+///
+/// Reports the failure and returns [`Exit::Failure`] when part of `directory`
+/// can't be walked, since the files in it would go unprocessed.
+fn collect_lua_files(directory: &Path, filter: &ProjectFilter) -> Result<Vec<PathBuf>, Exit> {
     let walker = WalkBuilder::new(directory).add_custom_ignore_filename(".luckignore").build();
-    let mut files: Vec<PathBuf> = walker
-        .flatten()
-        .filter(|entry| {
-            let path = entry.path();
-            path.is_file()
-                && path
-                    .extension()
-                    .is_some_and(|extension| extension == "lua" || extension == "luau")
-                && filter.is_included(path)
-        })
-        .map(DirEntry::into_path)
-        .collect();
+    let mut files: Vec<PathBuf> = Vec::new();
+    for walked in walker {
+        let entry =
+            walked.map_err(|error| operation_error(format!("cannot walk directory: {error}")))?;
+        let path = entry.path();
+        if path.extension().is_some_and(|extension| extension == "lua" || extension == "luau")
+            && path.is_file()
+            && filter.is_included(path)
+        {
+            files.push(entry.into_path());
+        }
+    }
     files.sort();
-    files
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -309,7 +345,7 @@ mod tests {
         // canonicalizes it.
         let filter =
             ProjectFilter::new(root, None, Some(&["gen/**".to_owned()])).expect("valid globs");
-        let files = collect_lua_files(root, &filter);
+        let files = collect_lua_files(root, &filter).expect("directory walks");
 
         let names = file_names(&files);
         assert!(names.contains(&"keep.lua".to_owned()), "kept file present");
@@ -325,7 +361,7 @@ mod tests {
         fs::write(root.join("c.txt"), "nope\n").expect("write c");
 
         let filter = ProjectFilter::new(root, None, None).expect("valid globs");
-        let files = collect_lua_files(root, &filter);
+        let files = collect_lua_files(root, &filter).expect("directory walks");
         let names = file_names(&files);
         assert!(names.contains(&"a.lua".to_owned()));
         assert!(names.contains(&"b.luau".to_owned()));

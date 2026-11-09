@@ -59,7 +59,7 @@ fn set_directory_listing(directory: &Path, is_allowed: bool) {
 }
 
 #[test]
-fn bug_lint_renders_a_span_ending_inside_a_multibyte_char() {
+fn lint_renders_a_span_ending_inside_a_multibyte_char() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", "print(string.format(\"%\u{e9}\", 1))\n");
 
@@ -100,7 +100,7 @@ fn lint_column_does_not_count_a_bom() {
 }
 
 #[test]
-fn bug_lint_stdin_fix_json_keeps_findings_out_of_the_fixed_source() {
+fn lint_stdin_fix_json_keeps_findings_out_of_the_fixed_source() {
     let directory = TempDir::new().unwrap();
 
     let output = luck_in(directory.path())
@@ -117,7 +117,7 @@ fn bug_lint_stdin_fix_json_keeps_findings_out_of_the_fixed_source() {
 }
 
 #[test]
-fn bug_lint_fix_exits_failure_when_a_file_cannot_be_written() {
+fn lint_fix_exits_failure_when_a_file_cannot_be_written() {
     let directory = TempDir::new().unwrap();
     let path = write_file(directory.path(), "main.lua", "local unused = 1\nreturn 1\n");
     make_read_only(&path);
@@ -133,7 +133,7 @@ fn bug_lint_fix_exits_failure_when_a_file_cannot_be_written() {
 }
 
 #[test]
-fn bug_lint_counts_a_file_reached_twice_once() {
+fn lint_counts_a_file_reached_twice_once() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", "local unused = 1\nreturn 1\n");
 
@@ -180,7 +180,7 @@ fn minify_survives_a_long_operator_chain() {
 }
 
 #[test]
-fn bug_minify_missing_input_exits_usage() {
+fn minify_missing_input_exits_usage() {
     let directory = TempDir::new().unwrap();
 
     let output = run(directory.path(), &["minify", "missing.lua"]);
@@ -194,7 +194,7 @@ fn bug_minify_missing_input_exits_usage() {
 }
 
 #[test]
-fn bug_graph_resolves_modules_next_to_the_entry_as_bundle_does() {
+fn graph_resolves_modules_next_to_the_entry_as_bundle_does() {
     let directory = TempDir::new().unwrap();
     fs::create_dir_all(directory.path().join("sources")).unwrap();
     write_file(directory.path(), "sources/main.lua", TWO_MODULE_ENTRY);
@@ -213,7 +213,7 @@ fn bug_graph_resolves_modules_next_to_the_entry_as_bundle_does() {
 }
 
 #[test]
-fn bug_bundle_refuses_to_overwrite_its_entry() {
+fn bundle_refuses_to_overwrite_its_entry() {
     let directory = two_module_project();
 
     run(directory.path(), &["bundle", "main.lua", "-o", "main.lua"]);
@@ -226,7 +226,7 @@ fn bug_bundle_refuses_to_overwrite_its_entry() {
 }
 
 #[test]
-fn bug_bundle_refuses_to_overwrite_a_dependency() {
+fn bundle_refuses_to_overwrite_a_dependency() {
     let directory = two_module_project();
 
     run(directory.path(), &["bundle", "main.lua", "-o", "helper.lua"]);
@@ -239,7 +239,7 @@ fn bug_bundle_refuses_to_overwrite_a_dependency() {
 }
 
 #[test]
-fn bug_bundle_line_map_refuses_to_overwrite_its_entry() {
+fn bundle_line_map_refuses_to_overwrite_its_entry() {
     let directory = two_module_project();
 
     run(directory.path(), &["bundle", "main.lua", "-o", "bundle.lua", "--line-map", "main.lua"]);
@@ -252,7 +252,7 @@ fn bug_bundle_line_map_refuses_to_overwrite_its_entry() {
 }
 
 #[test]
-fn bug_bundle_rejects_one_path_for_the_output_and_the_line_map() {
+fn bundle_rejects_one_path_for_the_output_and_the_line_map() {
     let directory = two_module_project();
 
     let output =
@@ -265,7 +265,7 @@ fn bug_bundle_rejects_one_path_for_the_output_and_the_line_map() {
 }
 
 #[test]
-fn bug_build_refuses_to_overwrite_its_entry() {
+fn build_refuses_to_overwrite_its_entry() {
     let directory = two_module_project();
     write_file(directory.path(), "luck.json", r#"{"entry":"main.lua","output":"main.lua"}"#);
 
@@ -279,7 +279,21 @@ fn bug_build_refuses_to_overwrite_its_entry() {
 }
 
 #[test]
-fn bug_build_rejects_two_entries_writing_one_output() {
+fn build_refuses_to_overwrite_a_dependency() {
+    let directory = two_module_project();
+    write_file(directory.path(), "luck.json", r#"{"entry":"main.lua","output":"helper.lua"}"#);
+
+    run(directory.path(), &["build", "--quiet"]);
+
+    assert_eq!(
+        fs::read_to_string(directory.path().join("helper.lua")).unwrap(),
+        HELPER_MODULE,
+        "an `output` naming a bundled module must not destroy the module's source"
+    );
+}
+
+#[test]
+fn build_rejects_two_entries_writing_one_output() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "a.lua", "return 1\n");
     write_file(directory.path(), "b.lua", "return 2\n");
@@ -298,7 +312,7 @@ fn bug_build_rejects_two_entries_writing_one_output() {
 }
 
 #[test]
-fn bug_build_preamble_stays_after_a_shebang() {
+fn build_preamble_stays_after_a_shebang() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", "#!/usr/bin/env lua\nprint(1)\n");
     write_file(
@@ -317,7 +331,7 @@ fn bug_build_preamble_stays_after_a_shebang() {
 }
 
 #[test]
-fn bug_build_preamble_leaves_no_bom_inside_the_bundle() {
+fn build_preamble_leaves_no_bom_inside_the_bundle() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", "\u{feff}print(1)\n");
     write_file(
@@ -336,7 +350,7 @@ fn bug_build_preamble_leaves_no_bom_inside_the_bundle() {
 }
 
 #[test]
-fn bug_build_reports_a_size_increase_without_a_double_minus() {
+fn build_reports_a_size_increase_without_a_double_minus() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", "return 1\n");
     write_file(
@@ -351,7 +365,7 @@ fn bug_build_reports_a_size_increase_without_a_double_minus() {
 }
 
 #[test]
-fn bug_build_rejects_release_with_dev() {
+fn build_rejects_release_with_dev() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", "return 1\n");
     write_file(
@@ -370,7 +384,7 @@ fn bug_build_rejects_release_with_dev() {
 }
 
 #[test]
-fn bug_check_fails_when_a_directory_cannot_be_walked() {
+fn check_fails_when_a_directory_cannot_be_walked() {
     let directory = TempDir::new().unwrap();
     let locked = directory.path().join("locked");
     fs::create_dir_all(&locked).unwrap();
@@ -389,7 +403,7 @@ fn bug_check_fails_when_a_directory_cannot_be_walked() {
 }
 
 #[test]
-fn bug_fmt_applies_a_path_scoped_editorconfig_section_from_a_subdirectory() {
+fn fmt_applies_a_path_scoped_editorconfig_section_from_a_subdirectory() {
     let directory = TempDir::new().unwrap();
     let sources = directory.path().join("sources");
     fs::create_dir_all(&sources).unwrap();
@@ -424,7 +438,7 @@ fn fmt_range_leaves_crlf_outside_the_range_verbatim() {
 }
 
 #[test]
-fn bug_init_quiet_prints_no_summary() {
+fn init_quiet_prints_no_summary() {
     let directory = TempDir::new().unwrap();
 
     let output = run(directory.path(), &["init", "--quiet"]);
@@ -433,7 +447,7 @@ fn bug_init_quiet_prints_no_summary() {
 }
 
 #[test]
-fn bug_init_failure_leaves_no_partial_project() {
+fn init_failure_leaves_no_partial_project() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "src", "a file where the source directory belongs\n");
 

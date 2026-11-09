@@ -10,9 +10,10 @@ use std::time::Instant;
 use clap::Args;
 use luck_bundler::{BundleOptions, bundle};
 use luck_core::{
-    BuildConfig, config_directory, discover_config, load_or_discover_config, native_path,
-    resolve_build_config,
+    BuildConfig, check_output_paths, config_directory, discover_config, load_or_discover_config,
+    native_path, normalize_path, resolve_build_config,
 };
+use luck_token::{LuaVersion, chunk_start, has_shebang};
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
 use crate::exit::{Exit, operation_error, usage_error};
@@ -37,7 +38,7 @@ pub(crate) struct BuildArgs {
     profile: Option<String>,
 
     /// Shorthand for --profile release.
-    #[arg(long, conflicts_with = "profile")]
+    #[arg(long, conflicts_with_all = ["profile", "dev"])]
     release: bool,
 
     /// Shorthand for --profile dev.
@@ -52,10 +53,11 @@ pub(crate) struct BuildArgs {
 /// Why one build config didn't produce output.
 enum BuildFailure {
     /// Bundling or minifying failed and the diagnostics are already rendered.
-    /// Watch mode keeps going.
-    Failed(&'static str),
-    /// The output couldn't be written. The run ends with this exit code, even
-    /// in watch mode.
+    /// Watch mode keeps going and watches `source_files`, since an edit to one
+    /// of them may fix the build.
+    Failed { message: &'static str, source_files: Vec<String> },
+    /// The output can't be written. The run ends with this exit code, even in
+    /// watch mode.
     Fatal(Exit),
 }
 
@@ -101,8 +103,9 @@ impl BuildArgs {
     ///
     /// # Errors
     ///
-    /// Returns [`Exit::Usage`] on a bad config, and [`Exit::Failure`] when a
-    /// build fails or its output can't be written.
+    /// Returns [`Exit::Usage`] on a bad config or an output that would replace
+    /// a bundled file, and [`Exit::Failure`] when a build fails or its output
+    /// can't be written.
     fn build_once(&self, verbosity: Verbosity) -> Result<(), Exit> {
         let total_start = Instant::now();
         let configs = self.resolved_configs()?;
@@ -116,7 +119,7 @@ impl BuildArgs {
         for config in &configs {
             match self.build_one(config, verbosity) {
                 Ok(_) => {}
-                Err(BuildFailure::Failed(message)) => {
+                Err(BuildFailure::Failed { message, .. }) => {
                     eprintln!("\n  \x1b[31merror:\x1b[0m {message}");
                     return Err(Exit::Failure);
                 }
@@ -135,8 +138,8 @@ impl BuildArgs {
     ///
     /// # Errors
     ///
-    /// Returns [`Exit::Failure`] when the file watcher can't start or a
-    /// build's output can't be written.
+    /// Returns [`Exit::Failure`] when the file watcher can't start, and the
+    /// exit code when a build's output can't be written.
     fn rebuild_on_change(&self, verbosity: Verbosity) -> Result<(), Exit> {
         let mut source_files = self.build_for_watch(verbosity)?;
 
@@ -205,9 +208,9 @@ impl BuildArgs {
     ///
     /// # Errors
     ///
-    /// Returns [`Exit::Failure`] when a build's output can't be written. A
-    /// failed build or a bad config isn't an error here: watch mode reports it
-    /// and keeps watching.
+    /// Returns the exit code when a build's output can't be written. A failed
+    /// build or a bad config isn't an error here: watch mode reports it and
+    /// keeps watching.
     fn build_for_watch(&self, verbosity: Verbosity) -> Result<Vec<String>, Exit> {
         let Ok(configs) = self.resolved_configs() else {
             return Ok(Vec::new());
@@ -216,8 +219,9 @@ impl BuildArgs {
         let mut all_source_files = Vec::new();
         for config in &configs {
             match self.build_one(config, verbosity) {
-                Ok(files) => all_source_files.extend(files),
-                Err(BuildFailure::Failed(_)) => {}
+                Ok(source_files) | Err(BuildFailure::Failed { source_files, .. }) => {
+                    all_source_files.extend(source_files);
+                }
                 Err(BuildFailure::Fatal(exit)) => return Err(exit),
             }
         }
@@ -233,7 +237,7 @@ impl BuildArgs {
     ///
     /// Returns [`BuildFailure::Failed`] after rendering bundle or minify
     /// diagnostics, and [`BuildFailure::Fatal`] when the output can't be
-    /// written.
+    /// written or would replace a bundled file.
     fn build_one(
         &self,
         config: &BuildConfig,
@@ -253,8 +257,16 @@ impl BuildArgs {
         )
         .map_err(|errors| {
             print_diags(&errors, version);
-            BuildFailure::Failed("build failed")
+            let source_files = errors
+                .iter()
+                .map(|diag| diag.file_path.clone())
+                .chain([normalize_path(&config.entry)])
+                .collect();
+            BuildFailure::Failed { message: "build failed", source_files }
         })?;
+
+        check_output_paths(&result.source_files, [&config.output])
+            .map_err(|message| BuildFailure::Fatal(usage_error(message)))?;
 
         if verbosity != Verbosity::Quiet {
             print_diags(&result.warnings, version);
@@ -273,14 +285,14 @@ impl BuildArgs {
                         &errors,
                         version,
                     );
-                    BuildFailure::Failed("minification failed")
+                    BuildFailure::Failed {
+                        message: "minification failed",
+                        source_files: source_files.clone(),
+                    }
                 })?;
         }
 
-        let preamble = build_preamble(config);
-        if !preamble.is_empty() {
-            output = format!("{preamble}\n{output}");
-        }
+        output = with_preamble(config, output, version);
 
         if self.dry_run {
             eprintln!("[dry-run] Would write: {}", config.output.display());
@@ -298,7 +310,9 @@ impl BuildArgs {
     }
 }
 
-fn build_preamble(config: &BuildConfig) -> String {
+/// `output` with `config`'s preamble on top, after the BOM and shebang line a
+/// loader only skips at the very start of a chunk.
+fn with_preamble(config: &BuildConfig, output: String, version: LuaVersion) -> String {
     let mut lines = Vec::new();
 
     if let Some(text) = &config.preamble {
@@ -309,11 +323,23 @@ fn build_preamble(config: &BuildConfig) -> String {
 
     if config.luck_preamble {
         let action = if config.minify { "Bundled & minified" } else { "Bundled" };
-        let version = env!("CARGO_PKG_VERSION");
-        lines.push(format!("-- {action} with luck v{version} // https://github.com/esoware/luck"));
+        let luck_version = env!("CARGO_PKG_VERSION");
+        lines.push(format!(
+            "-- {action} with luck v{luck_version} // https://github.com/esoware/luck"
+        ));
     }
 
-    lines.join("\n")
+    if lines.is_empty() {
+        return output;
+    }
+    let preamble = lines.join("\n");
+
+    let (bom, chunk) = output.split_at(chunk_start(&output, version));
+    if !has_shebang(chunk.as_bytes(), version) {
+        return format!("{bom}{preamble}\n{chunk}");
+    }
+    let (shebang, body) = chunk.split_once('\n').unwrap_or((chunk, ""));
+    format!("{bom}{shebang}\n{preamble}\n{body}")
 }
 
 /// Blocks until a relevant file changes, then drains what's queued behind it.
@@ -394,9 +420,9 @@ fn print_build_stat(
             clippy::float_arithmetic,
             reason = "display math, and its exact rounding is part of the output"
         )]
-        let percent = ((original as f64 - output_size as f64) / original as f64 * 100.0f64) as i64;
+        let percent = ((output_size as f64 - original as f64) / original as f64 * 100.0f64) as i64;
         eprintln!(
-            "  \x1b[1m{path}\x1b[0m  \x1b[2m{}\x1b[0m \x1b[2m->\x1b[0m \x1b[32m{size}\x1b[0m  \x1b[2m(-{percent}%)\x1b[0m  \x1b[2m{time}\x1b[0m",
+            "  \x1b[1m{path}\x1b[0m  \x1b[2m{}\x1b[0m \x1b[2m->\x1b[0m \x1b[32m{size}\x1b[0m  \x1b[2m({percent:+}%)\x1b[0m  \x1b[2m{time}\x1b[0m",
             format_size(original),
         );
         return;
@@ -428,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_watch_keeps_watching_a_failed_entry_outside_the_config_directory() {
+    fn watch_keeps_watching_a_failed_entry_outside_the_config_directory() {
         let directory = tempfile::tempdir().expect("tempdir");
         let project = directory.path().join("project");
         let sources = directory.path().join("sources");
