@@ -3,7 +3,7 @@ members  = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version      = "0.4.0"
+version      = "0.5.0"
 authors      = ["Esoware"]
 categories   = ["compilers", "command-line-utilities"]
 description  = "Lua 5.1-5.5 and Luau parser, formatter, linter, bundler, and minifier"
@@ -15,20 +15,20 @@ repository   = "https://github.com/esoware/luck"
 rust-version = "1.99.1"
 
 [workspace.dependencies]
-luck_ast       = { version = "0.4.0", path = "crates/luck_ast" }
-luck_bundler   = { version = "0.4.0", path = "crates/luck_bundler" }
-luck_codegen   = { version = "0.4.0", path = "crates/luck_codegen" }
-luck_core      = { version = "0.4.0", path = "crates/luck_core" }
-luck_formatter = { version = "0.4.0", path = "crates/luck_formatter" }
-luck_lexer     = { version = "0.4.0", path = "crates/luck_lexer" }
-luck_linter    = { version = "0.4.0", path = "crates/luck_linter" }
-luck_lsp       = { version = "0.4.0", path = "crates/luck_lsp" }
-luck_minifier  = { version = "0.4.0", path = "crates/luck_minifier" }
-luck_parser    = { version = "0.4.0", path = "crates/luck_parser" }
-luck_resolver  = { version = "0.4.0", path = "crates/luck_resolver" }
-luck_semantic  = { version = "0.4.0", path = "crates/luck_semantic" }
+luck_ast       = { version = "0.5.0", path = "crates/luck_ast" }
+luck_bundler   = { version = "0.5.0", path = "crates/luck_bundler" }
+luck_codegen   = { version = "0.5.0", path = "crates/luck_codegen" }
+luck_core      = { version = "0.5.0", path = "crates/luck_core" }
+luck_formatter = { version = "0.5.0", path = "crates/luck_formatter" }
+luck_lexer     = { version = "0.5.0", path = "crates/luck_lexer" }
+luck_linter    = { version = "0.5.0", path = "crates/luck_linter" }
+luck_lsp       = { version = "0.5.0", path = "crates/luck_lsp" }
+luck_minifier  = { version = "0.5.0", path = "crates/luck_minifier" }
+luck_parser    = { version = "0.5.0", path = "crates/luck_parser" }
+luck_resolver  = { version = "0.5.0", path = "crates/luck_resolver" }
+luck_semantic  = { version = "0.5.0", path = "crates/luck_semantic" }
 luck_testgen   = { path = "crates/luck_testgen" }
-luck_token     = { version = "0.4.0", path = "crates/luck_token" }
+luck_token     = { version = "0.5.0", path = "crates/luck_token" }
 
 ariadne               = "0.6"
 assert_cmd            = "2"
