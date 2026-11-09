@@ -17,6 +17,7 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::document::DocumentState;
+use crate::providers::cursor::{dotted_chain_ending_tokens, token_name};
 
 const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::NAMESPACE,
@@ -121,9 +122,8 @@ fn is_screaming_case(name: &str) -> bool {
 }
 
 fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> SemanticTokens {
-    let lex_result = luck_lexer::lex(document.text(), document.lua_version);
     let mut classifier =
-        Classifier { document, tokens: &lex_result.tokens, raw_tokens: RawTokens::new() };
+        Classifier { document, tokens: document.tokens(), raw_tokens: RawTokens::new() };
     classifier.classify_scope_names();
     classifier.classify_members();
     classifier.visit_block(&document.parsed.block);
@@ -185,7 +185,9 @@ impl Classifier<'_> {
         }
 
         for reference in &tree.references {
-            if reference.name == "self" {
+            // An empty name is a placeholder for what parse recovery dropped,
+            // and it can span tokens of its own.
+            if reference.name == "self" || reference.name.is_empty() {
                 continue;
             }
             let base = reference.resolved.map_or_else(
@@ -219,10 +221,12 @@ impl Classifier<'_> {
             if !matches!(separator.kind, TokenKind::Dot | TokenKind::Colon) {
                 continue;
             }
-            let stdlib_member =
-                dotted_path(name.as_str(), before_separator).and_then(|(segments, root_span)| {
+            let stdlib_member = dotted_chain_ending_tokens(before_separator).and_then(
+                |(mut segments, root_span)| {
+                    segments.push(name.as_str());
                     document.semantic.resolve_stdlib_path(&segments, root_span).map(member_classify)
-                });
+                },
+            );
             let classification =
                 stdlib_member.unwrap_or_else(|| match value_shape(tokens, index) {
                     ValueShape::Called | ValueShape::AssignedFunction => {
@@ -337,30 +341,6 @@ impl Classifier<'_> {
     }
 }
 
-/// The path ending in `name`, root first, plus the root's span.
-/// `preceding_tokens` is everything before `name`'s separator, which may be
-/// `.` or `:`; the rest of the chain is dots only.
-fn dotted_path<'token>(
-    name: &'token str,
-    preceding_tokens: &'token [Token],
-) -> Option<(Vec<&'token str>, Span)> {
-    let mut segments: Vec<&str> = vec![name];
-    let mut remaining_tokens = preceding_tokens;
-    loop {
-        let (base, before_base) = remaining_tokens.split_last()?;
-        let TokenKind::Identifier(base_name) = &base.kind else {
-            return None;
-        };
-        segments.push(base_name.as_str());
-        if let Some((Token { kind: TokenKind::Dot, .. }, before_dot)) = before_base.split_last() {
-            remaining_tokens = before_dot;
-        } else {
-            segments.reverse();
-            return Some((segments, base.span));
-        }
-    }
-}
-
 impl<'ast> Visitor<'ast> for Classifier<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
@@ -396,17 +376,23 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
                     {
                         self.insert(name.name.span, TYPE_FUNCTION);
                     }
-                    let is_const = assignment.is_const
-                        || name
-                            .attribute
-                            .as_ref()
-                            .is_some_and(|attribute| attribute.name.identifier() == Some("const"));
-                    if is_const
+                    // Lua 5.4+: a to-be-closed local can't be assigned either.
+                    let is_read_only = assignment.is_const
+                        || name.attribute.as_ref().is_some_and(|attribute| {
+                            matches!(attribute.name.identifier(), Some("const" | "close"))
+                        });
+                    if is_read_only
                         && let Some((_, classification)) =
                             self.raw_tokens.get_mut(&name.name.span.start)
                     {
                         classification.modifiers |= MODIFIER_READONLY;
                     }
+                }
+            }
+            // Lua 5.5
+            Statement::GlobalFunction(global_function) => {
+                if token_name(&global_function.name).is_some() {
+                    self.insert(global_function.name.span, TYPE_FUNCTION);
                 }
             }
             Statement::Assignment(_)
@@ -419,7 +405,6 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
             | Statement::GenericFor(_)
             | Statement::LocalFunction(_)
             | Statement::CompoundAssignment(_)
-            | Statement::GlobalFunction(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalStar(_)
             | Statement::Goto(_)
@@ -883,7 +868,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_a_to_be_closed_local_is_readonly() {
+    fn a_to_be_closed_local_is_readonly() {
         // Manual 3.3.8: a to-be-closed variable behaves like a constant local.
         let tokens = highlights(&parse_document("local h <close> = nil\n", LuaTarget::Lua54));
         let declaration = tokens.iter().find(|token| token.text == "h").expect("h");
@@ -894,7 +879,15 @@ mod tests {
     }
 
     #[test]
-    fn bug_a_recovered_assignment_target_emits_no_overlapping_token() {
+    fn a_global_function_name_is_a_function_token() {
+        let tokens =
+            highlights(&parse_document("global function setup()\nend\n", LuaTarget::Lua55));
+        let name = tokens.iter().find(|token| token.text == "setup").expect("setup");
+        assert_eq!(name.kind, "function", "{tokens:?}");
+    }
+
+    #[test]
+    fn a_recovered_assignment_target_emits_no_overlapping_token() {
         // `a.b(c)` can't be assigned, so recovery names it with an empty
         // identifier spanning the whole call. `highlights` asserts that no
         // two tokens overlap and that each has a length.

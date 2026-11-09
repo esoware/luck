@@ -451,20 +451,24 @@ async fn selection_range_expands_from_identifier() {
         .await
         .expect("selection range errored")
         .expect("selection range should return a chain");
-    // The chain nests from the widest enclosing node down to the narrowest.
-    let root = &ranges[0];
-    let mut deepest = root;
+    // Each link's `parent` contains it, so the chain runs from the narrowest
+    // span out to the widest.
+    let narrowest = &ranges[0];
+    let mut widest = narrowest;
     let mut depth = 1u32;
-    while let Some(parent) = deepest.parent.as_ref() {
-        deepest = parent;
+    while let Some(parent) = widest.parent.as_ref() {
+        widest = parent;
         depth += 1;
     }
-    assert!(depth >= 2u32, "selection should expand through at least one enclosing node: {root:?}");
-    let root_width = root.range.end.character - root.range.start.character;
-    let deepest_width = deepest.range.end.character - deepest.range.start.character;
     assert!(
-        deepest_width < root_width,
-        "the narrowest selection must cover less than the whole statement: {root:?}"
+        depth >= 2u32,
+        "selection should expand through at least one enclosing node: {narrowest:?}"
+    );
+    let narrowest_width = narrowest.range.end.character - narrowest.range.start.character;
+    let widest_width = widest.range.end.character - widest.range.start.character;
+    assert!(
+        narrowest_width < widest_width,
+        "the narrowest selection must cover less than the whole statement: {narrowest:?}"
     );
 }
 
@@ -1279,7 +1283,7 @@ fn replace_all(uri: &Url, version: i32, text: &str) -> DidChangeTextDocumentPara
 }
 
 #[tokio::test]
-async fn bug_a_change_arriving_during_open_is_not_lost() {
+async fn a_change_arriving_during_open_is_not_lost() {
     // tower-lsp polls notifications concurrently, and `did_open` awaits
     // settings discovery before it stores the document.
     let directory = tempfile::tempdir().expect("tempdir");
@@ -1307,7 +1311,7 @@ async fn bug_a_change_arriving_during_open_is_not_lost() {
 }
 
 #[tokio::test]
-async fn bug_closing_during_a_lint_leaves_no_diagnostics() {
+async fn closing_during_a_lint_leaves_no_diagnostics() {
     let directory = tempfile::tempdir().expect("tempdir");
     let uri = file_in_project(directory.path(), "local x =\n");
     let notifier = CapturedNotifier::default();
@@ -1356,7 +1360,7 @@ impl Notifier for ReorderingNotifier {
 }
 
 #[tokio::test]
-async fn bug_a_superseded_lint_does_not_publish_after_the_newer_one() {
+async fn a_superseded_lint_does_not_publish_after_the_newer_one() {
     let directory = tempfile::tempdir().expect("tempdir");
     let uri = file_in_project(directory.path(), "local one = 1\n");
     let notifier = ReorderingNotifier {

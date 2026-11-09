@@ -1,17 +1,89 @@
-//! Lookups the providers share for what sits at a byte offset: the name or
-//! call under the cursor, the enclosing call, a string argument, or a local
-//! symbol.
+//! Lookups the providers share for what sits at a byte offset: whether it's
+//! code, a comment, or a string; the name or call under the cursor, the
+//! enclosing call, a string argument, or a local symbol.
 
 use core::slice;
 
-use luck_ast::{Block, Expression, FieldAccess, FunctionArgs, FunctionCall, Var, Visitor};
-use luck_semantic::{ScopeTree, SymbolId};
-use luck_token::{Span, index_to_offset, offset_to_index};
+use luck_ast::{Block, Expression, FieldAccess, FunctionArgs, FunctionCall, Literal, Var, Visitor};
+use luck_semantic::{ScopeTree, SymbolId, SymbolKind};
+use luck_token::{CommentKind, Span, Token, TokenKind, offset_to_index};
+
+use crate::document::DocumentState;
 
 /// Whether `offset` falls inside `span`, either end included, so a cursor
 /// just past a name still counts as on it.
 pub(crate) const fn touches(span: Span, offset: u32) -> bool {
     span.start <= offset && offset <= span.end
+}
+
+/// What the text at a byte offset belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TextKind {
+    Code,
+    Comment,
+    String,
+}
+
+/// Whether `offset` sits in code, a comment, or a string, by the lexer's view
+/// of the document.
+pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
+    let comments = &document.parsed.comments;
+    let at_offset = comments.get(comments.partition_point(|comment| comment.span.end < offset));
+    let is_in_comment = at_offset.is_some_and(|comment| {
+        // A line comment runs through the end of its line, so typing there
+        // stays inside it. A block comment closes at its `]]`.
+        let has_room = match comment.kind {
+            CommentKind::Line | CommentKind::Shebang => offset <= comment.span.end,
+            CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => offset < comment.span.end,
+        };
+        comment.span.start < offset && has_room
+    });
+    if is_in_comment {
+        return TextKind::Comment;
+    }
+    let tokens = document.tokens();
+    let enclosing = tokens.get(tokens.partition_point(|token| token.span.end <= offset));
+    let is_in_string = enclosing.is_some_and(|token| {
+        token.span.start < offset
+            && matches!(
+                token.kind,
+                TokenKind::StringLiteral(_)
+                    | TokenKind::InterpolatedStringBegin(_)
+                    | TokenKind::InterpolatedStringMiddle(_)
+                    | TokenKind::InterpolatedStringEnd(_)
+            )
+    });
+    if is_in_string {
+        return TextKind::String;
+    }
+    // An unterminated string or block comment is a lex error over its text
+    // rather than a token, so its opener is what tells the two apart.
+    document
+        .parsed
+        .errors
+        .iter()
+        .find_map(|error| {
+            (error.span.start < offset && offset <= error.span.end)
+                .then(|| unterminated_text_kind(error.span.text(document.text())))
+        })
+        .unwrap_or(TextKind::Code)
+}
+
+fn unterminated_text_kind(text: &str) -> TextKind {
+    if text.starts_with("--") {
+        TextKind::Comment
+    } else if text.starts_with(['"', '\'', '`']) || text.starts_with("[[") || text.starts_with("[=")
+    {
+        TextKind::String
+    } else {
+        TextKind::Code
+    }
+}
+
+/// The name `token` reads or declares, or `None` for the placeholder parse
+/// recovery leaves where a name was missing.
+pub(crate) fn token_name(token: &Token) -> Option<&str> {
+    token.identifier().filter(|name| !name.is_empty())
 }
 
 /// The plain-name chain ending at `access` (`a.b.c`), root first, and the
@@ -21,11 +93,11 @@ pub(crate) const fn touches(span: Span, offset: u32) -> bool {
 /// yields only the trailing segments that are plain names. `None` when
 /// `access` itself isn't named by an identifier.
 fn field_access_chain(access: &FieldAccess) -> Option<(Vec<&str>, Span)> {
-    let mut path = vec![access.name.identifier()?];
+    let mut path = vec![token_name(&access.name)?];
     let mut root_span = access.name.span;
     let mut prefix: &Expression = &access.prefix;
     while let Expression::Var(Var::FieldAccess(inner)) = prefix {
-        let Some(name) = inner.name.identifier() else {
+        let Some(name) = token_name(&inner.name) else {
             break;
         };
         path.push(name);
@@ -33,7 +105,7 @@ fn field_access_chain(access: &FieldAccess) -> Option<(Vec<&str>, Span)> {
         prefix = &inner.prefix;
     }
     if let Expression::Var(Var::Name(token)) = prefix
-        && let Some(name) = token.identifier()
+        && let Some(name) = token_name(token)
     {
         path.push(name);
         root_span = token.span;
@@ -49,9 +121,29 @@ fn callee_chain(callee: &Expression) -> Option<(Vec<&str>, Span)> {
         return None;
     };
     match var {
-        Var::Name(token) => Some((vec![token.identifier()?], token.span)),
+        Var::Name(token) => Some((vec![token_name(token)?], token.span)),
         Var::FieldAccess(access) => field_access_chain(access),
         Var::Index(_) => None,
+    }
+}
+
+/// The `Name(.Name)*` chain `tokens` ends with, root first, and the root's
+/// span. `None` when anything else, such as a call, breaks the chain.
+pub(crate) fn dotted_chain_ending_tokens(tokens: &[Token]) -> Option<(Vec<&str>, Span)> {
+    let mut segments: Vec<&str> = Vec::new();
+    let mut remaining_tokens = tokens;
+    loop {
+        let (base, before_base) = remaining_tokens.split_last()?;
+        let TokenKind::Identifier(base_name) = &base.kind else {
+            return None;
+        };
+        segments.push(base_name.as_str());
+        if let Some((Token { kind: TokenKind::Dot, .. }, before_dot)) = before_base.split_last() {
+            remaining_tokens = before_dot;
+        } else {
+            segments.reverse();
+            return Some((segments, base.span));
+        }
     }
 }
 
@@ -119,7 +211,7 @@ impl<'ast> NodeFinder<'ast> {
         // The method name is a path segment too: `game:GetService(...)`
         // resolves as `["game", "GetService"]` through shaped lookup.
         if let Some(method_token) = &call.method {
-            if let Some(name) = method_token.identifier()
+            if let Some(name) = token_name(method_token)
                 && !path.is_empty()
             {
                 path.push(name);
@@ -136,7 +228,7 @@ impl<'ast> Visitor<'ast> for NodeFinder<'ast> {
     fn visit_var(&mut self, var: &'ast Var) {
         match var {
             Var::Name(token) => {
-                if let Some(name) = token.identifier() {
+                if let Some(name) = token_name(token) {
                     self.try_set(CursorNode::Identifier { name, span: token.span });
                 }
             }
@@ -154,11 +246,9 @@ impl<'ast> Visitor<'ast> for NodeFinder<'ast> {
         }
     }
 
-    fn visit_expr(&mut self, expr: &'ast Expression) {
-        if let Expression::FunctionCall(call) = expr {
-            self.record_call(call);
-        }
-        self.walk_expr(expr);
+    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+        self.record_call(call);
+        self.walk_function_call(call);
     }
 }
 
@@ -172,69 +262,66 @@ pub(crate) struct CallSite<'ast> {
     pub active_param: usize,
 }
 
-pub(crate) fn find_call_site_at<'ast>(
-    block: &'ast Block,
-    source: &str,
-    offset: u32,
-) -> Option<CallSite<'ast>> {
-    let mut finder = CallSiteFinder { offset, source, result: None };
-    finder.visit_block(block);
+pub(crate) fn find_call_site_at(document: &DocumentState, offset: u32) -> Option<CallSite<'_>> {
+    let mut finder =
+        CallSiteFinder { offset, source: document.text(), tokens: document.tokens(), result: None };
+    finder.visit_block(&document.parsed.block);
     finder.result
 }
 
-struct CallSiteFinder<'source, 'ast> {
+struct CallSiteFinder<'document> {
     offset: u32,
-    source: &'source str,
-    result: Option<CallSite<'ast>>,
+    source: &'document str,
+    tokens: &'document [Token],
+    result: Option<CallSite<'document>>,
 }
 
-impl<'ast> Visitor<'ast> for CallSiteFinder<'_, 'ast> {
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+impl<'document> Visitor<'document> for CallSiteFinder<'document> {
+    fn visit_function_call(&mut self, call: &'document FunctionCall) {
         self.try_record(call);
         self.walk_function_call(call);
     }
 }
 
-impl<'ast> CallSiteFinder<'_, 'ast> {
-    fn try_record(&mut self, call: &'ast FunctionCall) {
-        let span = call.span;
-        if !touches(span, self.offset) {
-            return;
-        }
-        // Heuristic: treat the first '(' after the callee as the open paren.
-        let bytes = self.source.as_bytes();
-        let callee_end = call.callee.span().end;
-        let scan_end = offset_to_index(span.end).min(bytes.len());
-        let Some(paren_offset) = bytes
-            .get(offset_to_index(callee_end)..scan_end)
-            .and_then(|scanned| scanned.iter().position(|&byte| byte == b'('))
-        else {
+impl<'document> CallSiteFinder<'document> {
+    fn try_record(&mut self, call: &'document FunctionCall) {
+        // `f"..."` and `f{...}` have no parens for the cursor to be inside.
+        let FunctionArgs::Parenthesized { span: parens, args } = &call.args else {
             return;
         };
-        let paren_open = callee_end.saturating_add(index_to_offset(paren_offset));
-        if self.offset <= paren_open {
+        // An unclosed list ends where the parser stopped, so the end still
+        // counts as inside it. Past a real `)` the cursor has left the call.
+        let is_closed = self.source.as_bytes().get(offset_to_index(parens.end.saturating_sub(1)))
+            == Some(&b')');
+        if self.offset <= parens.start
+            || self.offset > parens.end
+            || (is_closed && self.offset == parens.end)
+        {
             return;
         }
-        // The active parameter is the number of arguments that end before
-        // the cursor. Parser spans can't be fooled by commas inside strings,
-        // long brackets, or comments.
-        let active_param = match &call.args {
-            FunctionArgs::Parenthesized { args, .. } => {
-                args.iter().filter(|arg| arg.span().end < self.offset).count()
-            }
-            FunctionArgs::StringLiteral(_) | FunctionArgs::TableConstructor(_) => 0,
-        };
+        let active_param =
+            args.iter().filter(|arg| self.is_followed_by_comma_before_cursor(arg)).count();
         self.result = Some(CallSite { call, active_param });
+    }
+
+    /// Whether the token after `arg` is a comma the cursor is past. Reading
+    /// the next token, rather than counting commas, can't mistake one inside
+    /// a nested argument for a separator of this list.
+    fn is_followed_by_comma_before_cursor(&self, arg: &Expression) -> bool {
+        let next_token = self.tokens.partition_point(|token| token.span.start < arg.span().end);
+        self.tokens.get(next_token).is_some_and(|token| {
+            matches!(token.kind, TokenKind::Comma) && token.span.end <= self.offset
+        })
     }
 }
 
 /// A string-literal argument enclosing the cursor. Completion offers
-/// constant-set values inside its quotes.
+/// constant-set values inside its delimiters.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StringArgSite<'ast> {
     pub call: &'ast FunctionCall,
     pub arg_index: usize,
-    pub literal_span: Span,
+    pub literal: &'ast Literal,
 }
 
 /// Find the innermost call whose argument list contains a string
@@ -265,28 +352,28 @@ impl<'ast> StringArgFinder<'ast> {
     }
 
     fn try_record(&mut self, call: &'ast FunctionCall) {
-        let literal = match &call.args {
+        let site = match &call.args {
             FunctionArgs::Parenthesized { args, .. } => {
                 args.iter().enumerate().find_map(|(index, arg)| {
-                    if let Expression::StringLiteral(token) = arg
-                        && self.contains(token.span)
+                    if let Expression::StringLiteral(literal) = arg
+                        && self.contains(literal.span)
                     {
-                        Some((index, token.span))
+                        Some((index, literal))
                     } else {
                         None
                     }
                 })
             }
-            FunctionArgs::StringLiteral(token) if self.contains(token.span) => {
-                Some((0, token.span))
+            FunctionArgs::StringLiteral(literal) if self.contains(literal.span) => {
+                Some((0, literal))
             }
             FunctionArgs::StringLiteral(_) | FunctionArgs::TableConstructor(_) => None,
         };
-        let Some((arg_index, span)) = literal else {
+        let Some((arg_index, literal)) = site else {
             return;
         };
         // Nested calls visit outer-first; the innermost match wins.
-        self.result = Some(StringArgSite { call, arg_index, literal_span: span });
+        self.result = Some(StringArgSite { call, arg_index, literal });
     }
 }
 
@@ -294,15 +381,23 @@ impl<'ast> StringArgFinder<'ast> {
 /// a reference to the local, or its declaration.
 ///
 /// `None` for globals, keywords, and non-names. Matching is by span through
-/// the scope tree, so shadowed names map to the right declaration.
+/// the scope tree, so shadowed names map to the right declaration. A name
+/// parse recovery made up is nothing to find, and neither is the implicit
+/// `self`'s declaration, which no token spells.
 pub(crate) fn local_at(tree: &ScopeTree, offset: u32) -> Option<(SymbolId, Span)> {
-    if let Some(reference) =
-        tree.references.iter().find(|reference| touches(reference.span, offset))
+    if let Some(reference) = tree
+        .references
+        .iter()
+        .find(|reference| !reference.name.is_empty() && touches(reference.span, offset))
     {
         return Some((reference.resolved?, reference.span));
     }
     tree.symbols
         .iter()
-        .find(|symbol| touches(symbol.definition_span, offset))
+        .find(|symbol| {
+            symbol.kind != SymbolKind::ImplicitSelf
+                && !symbol.name.is_empty()
+                && touches(symbol.definition_span, offset)
+        })
         .map(|symbol| (symbol.id, symbol.definition_span))
 }

@@ -1,12 +1,14 @@
 //! Rename.
 //!
-//! Locals only: [`prepare`] refuses globals and stdlib names, and a rename is
-//! refused whenever the new name could change meaning: an invalid
-//! identifier, a reserved word, a known global, or a name already used
-//! anywhere in the document. Refusing is safer than silently capturing a
-//! shadowed name.
+//! Locals only: [`prepare`] refuses globals, stdlib names, and locals whose
+//! name something outside its declaration depends on (a method's implicit
+//! `self`, a local `_ENV`, an exported binding). A rename is also refused
+//! whenever the new name could change meaning: an invalid identifier, a
+//! reserved word, a known global, or a name already used anywhere in the
+//! document. Refusing is safer than silently capturing a shadowed name.
 
 use luck_ast::is_valid_identifier_in;
+use luck_semantic::{SymbolId, SymbolKind};
 use luck_token::Span;
 use tower_lsp::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
 use tower_lsp::lsp_types::{
@@ -20,11 +22,44 @@ pub(crate) fn prepare(
     document: &DocumentState,
     position: Position,
 ) -> Option<PrepareRenameResponse> {
-    let (_, span) = local_at(&document.semantic.scope_tree, document.offset(position))?;
+    let (_, span) = rename_target(document, document.offset(position)).ok().flatten()?;
     Some(PrepareRenameResponse::RangeWithPlaceholder {
         range: document.range(span),
         placeholder: span.text(document.text()).to_owned(),
     })
+}
+
+/// The local at `offset` and the name span holding it, or `None` when no
+/// local is there.
+///
+/// # Errors
+///
+/// Returns the refusal to show the user when that local's name can't change
+/// without changing what the document means.
+fn rename_target(
+    document: &DocumentState,
+    offset: u32,
+) -> Result<Option<(SymbolId, Span)>, String> {
+    let tree = &document.semantic.scope_tree;
+    let Some((symbol_id, span)) = local_at(tree, offset) else {
+        return Ok(None);
+    };
+    let symbol = tree.symbol(symbol_id);
+    if symbol.kind == SymbolKind::ImplicitSelf {
+        return Err(
+            "`self` is the method's implicit parameter, so it has no declaration to rename"
+                .to_owned(),
+        );
+    }
+    if tree.is_env_binding(symbol_id) {
+        return Err(
+            "renaming `_ENV` would change what every free name in its scope means".to_owned()
+        );
+    }
+    if symbol.is_exported {
+        return Err(format!("`{}` is exported, so its name is the module's API", symbol.name));
+    }
+    Ok(Some((symbol_id, span)))
 }
 
 /// Compute the workspace edit for a rename.
@@ -38,14 +73,16 @@ pub(crate) fn rename(
     params: &RenameParams,
 ) -> JsonRpcResult<Option<WorkspaceEdit>> {
     let text_document_position = &params.text_document_position;
-    let tree = &document.semantic.scope_tree;
-    let Some((symbol_id, _)) = local_at(tree, document.offset(text_document_position.position))
+    let Some((symbol_id, _)) =
+        rename_target(document, document.offset(text_document_position.position))
+            .map_err(JsonRpcError::invalid_params)?
     else {
         return Ok(None);
     };
     let new_name = params.new_name.as_str();
     validate_new_name(document, new_name).map_err(JsonRpcError::invalid_params)?;
 
+    let tree = &document.semantic.scope_tree;
     let symbol = tree.symbol(symbol_id);
     let mut spans: Vec<Span> = symbol
         .reference_ids
@@ -135,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_rename_of_a_local_declared_in_a_method_edits_only_that_local() {
+    fn rename_of_a_local_declared_in_a_method_edits_only_that_local() {
         let document = document(
             "local t = {}\nfunction t:m()\n  local value = 1\n  return value + self.x\nend\n",
             LuaTarget::Lua54,
@@ -155,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_rename_refuses_the_implicit_self() {
+    fn rename_refuses_the_implicit_self() {
         // A method's `self` has no declaration to rewrite, so no new name
         // can work.
         let document =
@@ -168,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_prepare_rename_refuses_a_keyword_inside_a_method() {
+    fn prepare_rename_refuses_a_keyword_inside_a_method() {
         let document =
             document("local t = {}\nfunction t:m()\n  return 1\nend\n", LuaTarget::Lua54);
         let prepared = prepare(&document, Position::new(2, 3));
@@ -179,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_prepare_rename_refuses_a_recovered_name() {
+    fn prepare_rename_refuses_a_recovered_name() {
         // Recovery gives the loop variable the `=` token's span and an empty
         // name.
         let document = document("for = 1, 2 do end\n", LuaTarget::Lua54);
@@ -188,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_rename_refuses_a_local_env() {
+    fn rename_refuses_a_local_env() {
         // In 5.2+ `_ENV` resolves every free name, so renaming the local
         // sends `x` to the real globals. `local _ENV = {x = 1}; return x`
         // returns 1 while the renamed form returns nil on lua5.4.
@@ -201,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_rename_refuses_an_exported_binding() {
+    fn rename_refuses_an_exported_binding() {
         // An exported name is the module's public field name, per the Luau
         // export RFC.
         let document = document("export local version = 1\nprint(version)\n", LuaTarget::Luau);
@@ -211,5 +248,13 @@ mod tests {
             result.is_err(),
             "renaming an exported binding changes the module's API, got {result:?}"
         );
+    }
+
+    #[test]
+    fn prepare_rename_refuses_what_rename_refuses() {
+        let exported = document("export local version = 1\n", LuaTarget::Luau);
+        assert!(prepare(&exported, Position::new(0, 15)).is_none());
+        let env = document("local _ENV = {x = 1}\nreturn x\n", LuaTarget::Lua54);
+        assert!(prepare(&env, Position::new(0, 8)).is_none());
     }
 }

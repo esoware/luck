@@ -2,12 +2,13 @@
 //! byte offsets and LSP positions.
 
 use core::ops;
+use std::sync::OnceLock;
 
 use luck_core::LuaTarget;
 use luck_linter::{LintConfig, LintDiagnostic};
 use luck_parser::ParseResult;
 use luck_semantic::SemanticAnalysis;
-use luck_token::{LuaVersion, Span};
+use luck_token::{LuaVersion, Span, Token};
 use rustc_hash::FxHashSet;
 use tower_lsp::lsp_types::{Position, Range, TextDocumentContentChangeEvent};
 
@@ -25,6 +26,7 @@ pub(crate) struct DocumentState {
     pub parsed: ParseResult,
     pub semantic: SemanticAnalysis,
     pub line_index: LineIndex,
+    pub tokens: OnceLock<Vec<Token>>,
 }
 
 impl DocumentState {
@@ -45,11 +47,22 @@ impl DocumentState {
             target.stdlib_environment(),
         );
         semantic.extra_globals = extra_globals;
-        Self { version, target, lua_version, parsed, semantic, line_index }
+        Self { version, target, lua_version, parsed, semantic, line_index, tokens: OnceLock::new() }
+    }
+
+    /// The same document at new text, under the same target and globals.
+    pub(crate) fn with_text(&self, text: String, version: i32) -> Self {
+        Self::new(text, version, self.target, self.semantic.extra_globals.clone())
     }
 
     pub(crate) fn text(&self) -> &str {
         &self.parsed.source
+    }
+
+    /// This state's tokens, lexed on first use: most keystrokes serve no
+    /// request that needs them.
+    pub(crate) fn tokens(&self) -> &[Token] {
+        self.tokens.get_or_init(|| luck_lexer::lex(self.text(), self.lua_version).tokens)
     }
 
     pub(crate) fn position(&self, offset: u32) -> Position {

@@ -2,7 +2,6 @@
 //! Matching is by name across the whole file, and declarations aren't
 //! included.
 
-use luck_semantic::ReferenceKind;
 use tower_lsp::lsp_types::{DocumentHighlight, DocumentHighlightKind, Position};
 
 use crate::document::DocumentState;
@@ -27,9 +26,10 @@ pub(crate) fn document_highlights(
         .filter(|reference| reference.name == name)
         .map(|reference| DocumentHighlight {
             range: document.range(reference.span),
-            kind: Some(match reference.kind {
-                ReferenceKind::Write => DocumentHighlightKind::WRITE,
-                ReferenceKind::Read | ReferenceKind::ReadWrite => DocumentHighlightKind::READ,
+            kind: Some(if reference.kind.is_write() {
+                DocumentHighlightKind::WRITE
+            } else {
+                DocumentHighlightKind::READ
             }),
         })
         .collect()
@@ -43,7 +43,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bug_highlight_marks_compound_assignment_as_a_write() {
+    fn highlight_marks_compound_assignment_as_a_write() {
         let text = "local n = 1\nn += 1\n";
         let document =
             DocumentState::new(text.to_owned(), 1, LuaTarget::Luau, FxHashSet::default());

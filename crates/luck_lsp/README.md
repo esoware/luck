@@ -13,8 +13,8 @@ Text-document features:
 - signature help (active-parameter tracking, typed parameter labels)
 - document symbols (outline view for functions, methods, locals) and workspace symbols (substring search over open documents' outlines)
 - go-to-definition (local symbols through the scope tree, and `require("path")` strings jump to the resolved module file)
-- find references and rename (local symbols only, and rename refuses globals, stdlib names, and any new name that would change meaning)
-- code actions: per-diagnostic auto-fix, `source.fixAll.luck`, "disable rule for this line"
+- find references and rename (local symbols only, and rename refuses globals, stdlib names, a method's implicit `self`, a local `_ENV`, exported bindings, and any new name that would change meaning)
+- code actions: per-diagnostic auto-fix, `source.fixAll.luck`, "disable rule for this statement"
 - semantic tokens (full document and range)
 - document highlights (reads and writes of the name under the cursor)
 - folding ranges (blocks, functions, and table constructors)

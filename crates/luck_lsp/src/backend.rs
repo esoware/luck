@@ -9,8 +9,8 @@ use alloc::sync::Arc;
 use luck_core::LuaTarget;
 use luck_linter::LintDiagnostic;
 use rustc_hash::FxHashSet;
-use tokio::sync::RwLock;
-use tokio::task::spawn_blocking;
+use tokio::sync::{Mutex, RwLock};
+use tokio::task::{spawn_blocking, yield_now};
 use tower_lsp::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
 use tower_lsp::lsp_types::{
     CodeActionKind, CodeActionOptions, CodeActionParams, CodeActionProviderCapability,
@@ -101,30 +101,17 @@ struct OpenDocument {
     published_lints: Option<Arc<[LintDiagnostic]>>,
 }
 
-impl OpenDocument {
-    fn new(
-        text: String,
-        version: i32,
-        target: LuaTarget,
-        extra_globals: FxHashSet<String>,
-    ) -> Self {
-        Self {
-            state: Arc::new(DocumentState::new(text, version, target, extra_globals)),
-            published_lints: None,
-        }
-    }
-
-    /// The same document at new text, under the same target and globals.
-    fn with_text(&self, text: String, version: i32) -> Self {
-        Self::new(text, version, self.state.target, self.state.semantic.extra_globals.clone())
-    }
-}
-
 /// The LSP server state shared across requests.
 #[derive(Debug)]
 pub struct Backend<N: Notifier = Client> {
     notifier: N,
     documents: RwLock<BTreeMap<Url, OpenDocument>>,
+    /// Orders what changes the open documents and what tells the client about
+    /// them. tower-lsp polls notifications concurrently, but this lock
+    /// queues them in arrival order: an edit can't overtake the open it
+    /// follows, and a publish can't land after what replaced or closed its
+    /// document.
+    sync: Mutex<()>,
     settings_cache: SettingsCache,
 }
 
@@ -133,8 +120,18 @@ impl<N: Notifier> Backend<N> {
         Self {
             notifier,
             documents: RwLock::new(BTreeMap::new()),
+            sync: Mutex::new(()),
             settings_cache: SettingsCache::default(),
         }
+    }
+
+    /// Makes `state` what's open at `uri`, which leaves any lint still
+    /// running on what it replaces with nothing to publish.
+    async fn store(&self, uri: &Url, state: DocumentState) -> Arc<DocumentState> {
+        let shared = Arc::new(state);
+        let open = OpenDocument { state: Arc::clone(&shared), published_lints: None };
+        self.documents.write().await.insert(uri.clone(), open);
+        shared
     }
 
     async fn snapshot(&self, uri: &Url) -> Option<Arc<DocumentState>> {
@@ -175,26 +172,34 @@ impl<N: Notifier> Backend<N> {
             .then_some(settings)
     }
 
-    async fn lint_and_publish(&self, uri: Url) {
-        let Some(document) = self.snapshot(&uri).await else {
+    /// Lints `document` and publishes the result, unless `document` has been
+    /// replaced or closed by the time the result is ready.
+    async fn lint_and_publish(&self, uri: Url, document: Arc<DocumentState>) {
+        // A change already queued behind this one replaces `document`, which
+        // saves linting it, so a burst of keystrokes lints once.
+        yield_now().await;
+        if !self.is_open(&uri, &document).await {
             return;
-        };
+        }
         let lints: Arc<[LintDiagnostic]> = self.settings_if_included(&uri).await.map_or_else(
             || Vec::new().into(),
             |settings| document.lint(&settings.lint_config).into(),
         );
-        {
-            let mut documents = self.documents.write().await;
-            // A change that landed while linting has already replaced the
-            // state these lints belong to.
-            if let Some(open) = documents.get_mut(&uri)
-                && Arc::ptr_eq(&open.state, &document)
-            {
-                open.published_lints = Some(Arc::clone(&lints));
-            }
-        }
         let diagnostics = diagnostics::to_lsp(&document, &lints);
+        // Through the send, so nothing newer can reach the client before it.
+        let _ordered = self.sync.lock().await;
+        if !self.is_open(&uri, &document).await {
+            return;
+        }
+        if let Some(open) = self.documents.write().await.get_mut(&uri) {
+            open.published_lints = Some(lints);
+        }
         self.notifier.publish_diagnostics(uri, diagnostics, Some(document.version)).await;
+    }
+
+    /// Whether `document` is still the state open at `uri`.
+    async fn is_open(&self, uri: &Url, document: &Arc<DocumentState>) -> bool {
+        self.documents.read().await.get(uri).is_some_and(|open| Arc::ptr_eq(&open.state, document))
     }
 
     /// Formats the document at `uri`, or only `range` of it, as one
@@ -281,34 +286,31 @@ impl<N: Notifier> Backend<N> {
         }
         Ok(code_action::fix_all_open(&documents))
     }
-}
 
-/// Folds a `didChange` batch into the store. Returns whether the document is
-/// still open and the batch was current, so diagnostics should be republished.
-fn update_stored_document(
-    documents: &mut BTreeMap<Url, OpenDocument>,
-    params: DidChangeTextDocumentParams,
-) -> bool {
-    let uri = &params.text_document.uri;
-    let Some(open) = documents.get_mut(uri) else {
-        return false;
-    };
-    // tower-lsp handles notifications concurrently, so batches can arrive out
-    // of order. A stale or duplicate batch's ranges don't fit the current
-    // text, and applying them would corrupt it.
-    let version = params.text_document.version;
-    if version <= open.state.version {
-        return false;
+    /// Folds a `didChange` batch into the store. Returns the new state when
+    /// the document is still open and the batch was current, so diagnostics
+    /// should be republished.
+    async fn apply_change(
+        &self,
+        params: DidChangeTextDocumentParams,
+    ) -> Option<Arc<DocumentState>> {
+        let uri = &params.text_document.uri;
+        let current = self.snapshot(uri).await?;
+        // A repeated or older batch's ranges don't fit the current text, and
+        // applying them would corrupt it.
+        let version = params.text_document.version;
+        if version <= current.version {
+            return None;
+        }
+        let Some(text) = current.changed_text(params.content_changes) else {
+            // A range that doesn't fit means we've already desynced from the
+            // client. Drop the document so nothing is served from corrupt
+            // text until the client reopens it.
+            self.documents.write().await.remove(uri);
+            return None;
+        };
+        Some(self.store(uri, current.with_text(text, version)).await)
     }
-    let Some(text) = open.state.changed_text(params.content_changes) else {
-        // A range that doesn't fit means we've already desynced from the
-        // client. Drop the document so nothing is served from corrupt text
-        // until the client reopens it.
-        documents.remove(uri);
-        return false;
-    };
-    *open = open.with_text(text, version);
-    true
 }
 
 #[tower_lsp::async_trait]
@@ -344,7 +346,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
                     CodeActionOptions {
                         code_action_kinds: Some(vec![
                             CodeActionKind::QUICKFIX,
-                            CodeActionKind::SOURCE_FIX_ALL,
+                            code_action::FIX_ALL_KIND,
                         ]),
                         resolve_provider: Some(false),
                         work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -422,28 +424,28 @@ impl<N: Notifier> LanguageServer for Backend<N> {
 
     async fn did_change_watched_files(&self, _params: DidChangeWatchedFilesParams) {
         self.settings_cache.clear().await;
-        // Rebuild every open document whose dialect or extra globals changed
-        // and republish diagnostics under the new settings. Each document's
-        // settings are found before taking the documents lock, so config
-        // discovery doesn't stall other requests.
+        // Rebuild every open document under the new settings, whether or not
+        // its dialect or extra globals changed, so a lint running under the
+        // old settings has nothing to publish. Each document's settings are
+        // found before taking the sync lock, so config discovery doesn't
+        // stall edits.
         let uris: Vec<Url> = self.documents.read().await.keys().cloned().collect();
-        for uri in &uris {
-            let (target, extra_globals) = self.document_settings(uri).await;
-            let mut documents = self.documents.write().await;
-            if let Some(open) = documents.get_mut(uri)
-                && (open.state.target != target
-                    || open.state.semantic.extra_globals != extra_globals)
-            {
-                *open = OpenDocument::new(
-                    open.state.text().to_owned(),
-                    open.state.version,
+        for uri in uris {
+            let (target, extra_globals) = self.document_settings(&uri).await;
+            let document = {
+                let _ordered = self.sync.lock().await;
+                let Some(current) = self.snapshot(&uri).await else {
+                    continue;
+                };
+                let state = DocumentState::new(
+                    current.text().to_owned(),
+                    current.version,
                     target,
                     extra_globals,
                 );
-            }
-        }
-        for uri in uris {
-            self.lint_and_publish(uri).await;
+                self.store(&uri, state).await
+            };
+            self.lint_and_publish(uri, document).await;
         }
     }
 
@@ -453,44 +455,57 @@ impl<N: Notifier> LanguageServer for Backend<N> {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
-        let (target, extra_globals) = self.document_settings(&uri).await;
-        let document = OpenDocument::new(
-            params.text_document.text,
-            params.text_document.version,
-            target,
-            extra_globals,
-        );
-        self.documents.write().await.insert(uri.clone(), document);
-        self.lint_and_publish(uri).await;
+        let document = {
+            // Held across settings discovery, so a change arriving during the
+            // open waits for the document it edits.
+            let _ordered = self.sync.lock().await;
+            let (target, extra_globals) = self.document_settings(&uri).await;
+            let state = DocumentState::new(
+                params.text_document.text,
+                params.text_document.version,
+                target,
+                extra_globals,
+            );
+            self.store(&uri, state).await
+        };
+        self.lint_and_publish(uri, document).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.clone();
-        let is_current = update_stored_document(&mut *self.documents.write().await, params);
-        if is_current {
-            self.lint_and_publish(uri).await;
+        let updated = {
+            let _ordered = self.sync.lock().await;
+            self.apply_change(params).await
+        };
+        if let Some(document) = updated {
+            self.lint_and_publish(uri, document).await;
         }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
-        // We register with `include_text: false`, but a client may send the
-        // text anyway.
-        if let Some(text) = params.text {
-            let mut documents = self.documents.write().await;
-            if let Some(open) = documents.get_mut(&uri)
-                // didSave carries no version, and the saved text belongs to
-                // the current one.
-                && open.state.text() != text
+        let document = {
+            let _ordered = self.sync.lock().await;
+            let Some(current) = self.snapshot(&uri).await else {
+                return;
+            };
+            // We register with `include_text: false`, but a client may send
+            // the text anyway. didSave carries no version, and the saved
+            // text belongs to the current one.
+            if let Some(text) = params.text
+                && current.text() != text
             {
-                *open = open.with_text(text, open.state.version);
+                self.store(&uri, current.with_text(text, current.version)).await
+            } else {
+                current
             }
-        }
-        self.lint_and_publish(uri).await;
+        };
+        self.lint_and_publish(uri, document).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
+        let _ordered = self.sync.lock().await;
         self.documents.write().await.remove(&uri);
         // Per LSP spec, clear diagnostics for closed files.
         self.notifier.publish_diagnostics(uri, Vec::new(), None).await;

@@ -10,7 +10,7 @@ use std::path::Path;
 use luck_ast::{Expression, FunctionArgs, FunctionCall, Var, Visitor};
 use luck_core::normalize_path;
 use luck_resolver::{ResolveRequest, Resolver};
-use luck_token::short_string_body;
+use luck_token::decode_string;
 use tower_lsp::lsp_types::{DocumentLink, Position, Url};
 
 use crate::document::DocumentState;
@@ -76,11 +76,9 @@ struct LinkCollector<'document> {
 }
 
 impl<'ast> Visitor<'ast> for LinkCollector<'_> {
-    fn visit_expr(&mut self, expr: &'ast Expression) {
-        if let Expression::FunctionCall(call) = expr {
-            self.try_record(call);
-        }
-        self.walk_expr(expr);
+    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+        self.try_record(call);
+        self.walk_function_call(call);
     }
 }
 
@@ -92,12 +90,16 @@ impl LinkCollector<'_> {
         let Expression::Var(Var::Name(token)) = &call.callee else {
             return;
         };
-        if token.identifier() != Some("require") {
+        // A local `require`, a local `_ENV`, or a rebound global isn't the
+        // module loader, so a build leaves the call alone too.
+        if token.identifier() != Some("require")
+            || !self.document.semantic.reaches_host_global("require", token.span)
+        {
             return;
         }
         let literal = match &call.args {
             FunctionArgs::Parenthesized { args, .. } => {
-                let Some(Expression::StringLiteral(literal)) = args.first() else {
+                let [Expression::StringLiteral(literal)] = args.items.as_slice() else {
                     return;
                 };
                 literal
@@ -106,16 +108,18 @@ impl LinkCollector<'_> {
             FunctionArgs::TableConstructor(_) => return,
         };
 
-        let Some(module) = short_string_body(&literal.text).filter(|module| !module.is_empty())
-        else {
-            return;
-        };
         let range = self.document.range(literal.span);
         if self.position.is_some_and(|position| position < range.start || position > range.end) {
             return;
         }
+        let Some(module) = decode_string(&literal.text, self.document.lua_version)
+            .and_then(|decoded| String::from_utf8(decoded.into_owned()).ok())
+            .filter(|module| !module.is_empty())
+        else {
+            return;
+        };
         let Ok(resolved) = self.resolver.resolve(&ResolveRequest {
-            module,
+            module: &module,
             from_file: &self.from_file,
             span: literal.span,
         }) else {
@@ -127,7 +131,7 @@ impl LinkCollector<'_> {
         self.links.push(DocumentLink {
             range,
             target: Some(target),
-            tooltip: Some(module.to_owned()),
+            tooltip: Some(module),
             data: None,
         });
     }
@@ -224,13 +228,13 @@ mod tests {
     }
 
     #[test]
-    fn bug_a_statement_level_require_links() {
+    fn a_statement_level_require_links() {
         let links = links_beside_foo("require(\"foo\")\n");
         assert_eq!(links.len(), 1, "a side-effect `require` resolves like any other: {links:?}");
     }
 
     #[test]
-    fn bug_a_shadowed_require_does_not_link() {
+    fn a_shadowed_require_does_not_link() {
         // The bundler leaves a call through a local `require` alone (W005),
         // so a build doesn't resolve it to the module.
         let links = links_beside_foo("local require = print\nlocal m = require(\"foo\")\n");
@@ -238,14 +242,14 @@ mod tests {
     }
 
     #[test]
-    fn bug_a_long_string_require_links() {
+    fn a_long_string_require_links() {
         // The bundler decodes long-bracket require strings.
         let links = links_beside_foo("local m = require[[foo]]\n");
         assert_eq!(links.len(), 1, "`require[[foo]]` resolves in a build: {links:?}");
     }
 
     #[test]
-    fn bug_an_escaped_require_string_links() {
+    fn an_escaped_require_string_links() {
         // The bundler decodes escapes, so this requires `foo`.
         let links = links_beside_foo("local m = require(\"\\x66oo\")\n");
         assert_eq!(links.len(), 1, "`\"\\x66oo\"` is the string `foo`: {links:?}");

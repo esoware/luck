@@ -9,11 +9,9 @@
 //! after the colon) gets no member completion. The dangling colon doesn't
 //! parse, so there's no AST to resolve the receiver from.
 
-use core::ops::Range;
-
-use luck_ast::{FunctionArgs, FunctionCall};
+use luck_ast::{FunctionArgs, FunctionCall, Literal};
 use luck_semantic::{StdlibEntry, StdlibFunction};
-use luck_token::{Span, TokenKind};
+use luck_token::{Span, TokenKind, index_to_offset};
 use rustc_hash::FxHashSet;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemTag, CompletionResponse, CompletionTextEdit,
@@ -21,7 +19,9 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::document::DocumentState;
-use crate::providers::cursor::find_string_arg_at;
+use crate::providers::cursor::{
+    TextKind, dotted_chain_ending_tokens, find_string_arg_at, text_kind_at,
+};
 use crate::providers::stdlib_render::param_label;
 
 pub(crate) fn completion(document: &DocumentState, position: Position) -> CompletionResponse {
@@ -29,71 +29,105 @@ pub(crate) fn completion(document: &DocumentState, position: Position) -> Comple
     if let Some(items) = constant_value_completions(document, offset) {
         return CompletionResponse::Array(items);
     }
+    if text_kind_at(document, offset) != TextKind::Code {
+        return CompletionResponse::Array(Vec::new());
+    }
+    let items = member_access_before(document, offset).map_or_else(
+        || bare_name_completions(document, offset),
+        |access| member_completions(document, &access, offset),
+    );
+    CompletionResponse::Array(items)
+}
+
+/// Stdlib globals, the locals declared before the cursor, and keywords.
+fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<CompletionItem> {
+    let mut items: Vec<CompletionItem> = document
+        .semantic
+        .stdlib()
+        .globals
+        .iter()
+        .map(|(name, entry)| item_for_entry(name.as_str(), entry))
+        .collect();
+    // Every local or parameter declared before the cursor, whether or not it's
+    // still in scope there, because completion is best-effort. The implicit
+    // `self` has an empty span, so it fails the text check.
+    for symbol in &document.semantic.scope_tree.symbols {
+        let span = symbol.definition_span;
+        if span.end <= offset && span.text(document.text()) == symbol.name.as_str() {
+            items.push(CompletionItem {
+                label: symbol.name.to_string(),
+                kind: Some(CompletionItemKind::VARIABLE),
+                ..Default::default()
+            });
+        }
+    }
+    for keyword in KEYWORD_COMPLETIONS {
+        if TokenKind::is_reserved(keyword, document.lua_version) {
+            items.push(CompletionItem {
+                label: (*keyword).to_owned(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                ..Default::default()
+            });
+        }
+    }
+    items
+}
+
+/// After `string.`, `Enum.Material.`, or `Enum.Material:`, the receiver's
+/// members: non-methods after a dot, methods after a colon.
+fn member_completions(
+    document: &DocumentState,
+    access: &MemberAccess<'_>,
+    offset: u32,
+) -> Vec<CompletionItem> {
+    let Some((segments, root_span)) = &access.receiver else {
+        return Vec::new();
+    };
+    let Some(&root) = segments.first() else {
+        return Vec::new();
+    };
+    let tree = &document.semantic.scope_tree;
+    // A reference at the root is exact. Text mid-typing often has none, so
+    // that case falls back to the nearest declaration before the cursor.
+    let (root_local, reaches_host_global) = tree.references_by_span.get(root_span).map_or_else(
+        || {
+            let local = document.semantic.nearest_local(root, offset).map(|symbol| symbol.id);
+            (local, local.is_none())
+        },
+        |&reference_id| {
+            (tree.reference(reference_id).resolved, tree.reaches_host_global(root, *root_span))
+        },
+    );
 
     let stdlib = document.semantic.stdlib();
     let mut items: Vec<CompletionItem> = Vec::new();
-    if let Some(prefix) = preceding_member_prefix(document.text(), offset) {
-        // After `string.`, `Enum.Material.`, or `Enum.Material:`, offer the
-        // prefix's members: non-methods after a dot, methods after a colon.
-        let mut push = |name: &str, member: &StdlibEntry| {
-            let is_method = matches!(member, StdlibEntry::Function(function) if function.is_method);
-            if is_method == prefix.is_colon {
-                items.push(item_for_entry(name, member));
-            }
-        };
-        let shape = if let Some(entry) = stdlib.lookup(&prefix.segments) {
-            if let StdlibEntry::Namespace(namespace) = entry
-                && !prefix.is_colon
-            {
-                for (name, member) in &namespace.members {
-                    push(name.as_str(), member);
-                }
-            }
-            entry.shape()
-        } else if let [root] = prefix.segments.as_slice() {
-            // A shaped local: `local f = io.open(...); f:` offers the
-            // file methods, `local g = game; g:` the DataModel ones. It
-            // resolves to the nearest declaration before the cursor, because
-            // text mid-typing has no reference to resolve by span.
-            document.semantic.shape_of_nearest_local(root, offset)
-        } else {
-            None
-        };
-        if let Some(shape_members) = shape.and_then(|name| stdlib.shapes.get(name.as_str())) {
-            for (name, member) in &shape_members.members {
-                push(name.as_str(), member);
-            }
+    let mut push = |name: &str, member: &StdlibEntry| {
+        let is_method = matches!(member, StdlibEntry::Function(function) if function.is_method);
+        if is_method == access.is_colon {
+            items.push(item_for_entry(name, member));
         }
-    } else {
-        // Bare identifier: stdlib globals + scope locals + keywords.
-        for (name, entry) in &stdlib.globals {
-            items.push(item_for_entry(name.as_str(), entry));
-        }
-        // Every local or parameter declared before the cursor, whether or not
-        // it's still in scope there, because completion is best-effort. The
-        // implicit `self` has an empty span, so it fails the text check.
-        for symbol in &document.semantic.scope_tree.symbols {
-            let span = symbol.definition_span;
-            if span.end <= offset && span.text(document.text()) == symbol.name.as_str() {
-                items.push(CompletionItem {
-                    label: symbol.name.to_string(),
-                    kind: Some(CompletionItemKind::VARIABLE),
-                    ..Default::default()
-                });
-            }
-        }
-        for keyword in KEYWORD_COMPLETIONS {
-            if TokenKind::is_reserved(keyword, document.lua_version) {
-                items.push(CompletionItem {
-                    label: (*keyword).to_owned(),
-                    kind: Some(CompletionItemKind::KEYWORD),
-                    ..Default::default()
-                });
-            }
+    };
+    let stdlib_entry = reaches_host_global.then(|| stdlib.lookup(segments)).flatten();
+    if let Some(StdlibEntry::Namespace(namespace)) = stdlib_entry
+        && !access.is_colon
+    {
+        for (name, member) in &namespace.members {
+            push(name.as_str(), member);
         }
     }
-
-    CompletionResponse::Array(items)
+    // A shaped local: `local f = io.open(...); f:` offers the file methods,
+    // `local g = game; g:` the DataModel ones.
+    let shape = match (stdlib_entry, root_local, segments.as_slice()) {
+        (Some(entry), _, _) => entry.shape(),
+        (None, Some(symbol_id), [_]) => document.semantic.symbol_shapes.get(&symbol_id),
+        (None, _, _) => None,
+    };
+    if let Some(shape_members) = shape.and_then(|name| stdlib.shapes.get(name.as_str())) {
+        for (name, member) in &shape_members.members {
+            push(name.as_str(), member);
+        }
+    }
+    items
 }
 
 /// Offers the allowed values when the cursor sits in a constant-typed string
@@ -113,11 +147,8 @@ fn constant_value_completions(
     };
     let allowed_sets = function.allowed_constants(site.arg_index, call_arg_count(site.call))?;
     // Replace the literal's interior, so the client filters on whatever is
-    // typed inside the quotes.
-    let interior = document.range(Span::new(
-        site.literal_span.start.saturating_add(1),
-        site.literal_span.end.saturating_sub(1),
-    ));
+    // typed inside the delimiters.
+    let interior = document.range(string_interior(site.literal));
     let mut seen_values: FxHashSet<&str> = FxHashSet::default();
     let mut items: Vec<CompletionItem> = Vec::new();
     for constant in allowed_sets.into_iter().flatten() {
@@ -163,42 +194,48 @@ const fn call_arg_count(call: &FunctionCall) -> usize {
     }
 }
 
-struct MemberPrefix<'source> {
-    /// Dotted path before the final separator, root first
-    /// (`Enum.Material.` -> `["Enum", "Material"]`).
-    segments: Vec<&'source str>,
-    /// Final separator was `:`, so complete methods instead of members.
+/// The part of a string literal between its delimiters. A long bracket's
+/// opener is `[`, any number of `=`, then `[`, and its closer mirrors it.
+fn string_interior(literal: &Literal) -> Span {
+    let delimiter_width =
+        index_to_offset(literal.text.strip_prefix('[').map_or(1, |after_bracket| {
+            after_bracket.bytes().take_while(|&byte| byte == b'=').count().saturating_add(2)
+        }));
+    Span::new(
+        literal.span.start.saturating_add(delimiter_width),
+        literal.span.end.saturating_sub(delimiter_width),
+    )
+}
+
+struct MemberAccess<'source> {
+    /// The receiver's dotted path before the final separator, root first
+    /// (`Enum.Material.` gives `["Enum", "Material"]`), and the root's span.
+    /// `None` for a receiver that isn't a plain name chain, such as `f().`.
+    receiver: Option<(Vec<&'source str>, Span)>,
+    /// The final separator was `:`, so complete methods instead of members.
     is_colon: bool,
 }
 
-/// The dotted path right before `offset` when it ends in `.` or `:`,
-/// optionally followed by a partial name (`a.b.` / `a.b:fo`).
-fn preceding_member_prefix(source: &str, offset: u32) -> Option<MemberPrefix<'_>> {
-    let before_cursor = source.get(Range::<usize>::from(Span::new(0, offset)))?;
-    // Walk back over an in-progress partial identifier.
-    let before_partial = before_cursor.trim_end_matches(is_identifier_char);
-    let (receiver, is_colon) = match before_partial.strip_suffix(':') {
-        Some(receiver) => (receiver, true),
-        None => (before_partial.strip_suffix('.')?, false),
-    };
-    let mut segments = Vec::new();
-    let mut remaining = Some(receiver);
-    while let Some(path) = remaining {
-        let before_segment = path.trim_end_matches(is_identifier_char);
-        let segment = path.strip_prefix(before_segment)?;
-        if segment.is_empty() {
-            return None;
-        }
-        segments.push(segment);
-        // Only dots continue the path; the colon was the final separator.
-        remaining = before_segment.strip_suffix('.');
+/// The member access the cursor is at, if any.
+///
+/// The tokens before the cursor end in a `.` or `:`, optionally followed by a
+/// partial name (`a.b.` or `a.b:fo`). Working from tokens keeps a `..` concat
+/// from reading as a member separator.
+fn member_access_before(document: &DocumentState, offset: u32) -> Option<MemberAccess<'_>> {
+    let tokens = document.tokens();
+    let before_cursor = tokens.get(..tokens.partition_point(|token| token.span.start < offset))?;
+    let (last, before_last) = before_cursor.split_last()?;
+    // The word in progress can lex as a keyword: `string.for` is on its way
+    // to `format`.
+    let is_partial_word =
+        offset <= last.span.end && TokenKind::is_identifier_shaped(last.span.text(document.text()));
+    let (separator, before_separator) =
+        if is_partial_word { before_last.split_last()? } else { (last, before_last) };
+    let is_colon = matches!(separator.kind, TokenKind::Colon);
+    if !is_colon && !matches!(separator.kind, TokenKind::Dot) {
+        return None;
     }
-    segments.reverse();
-    Some(MemberPrefix { segments, is_colon })
-}
-
-const fn is_identifier_char(character: char) -> bool {
-    character == '_' || character.is_ascii_alphanumeric()
+    Some(MemberAccess { receiver: dotted_chain_ending_tokens(before_separator), is_colon })
 }
 
 fn item_for_entry(name: &str, entry: &StdlibEntry) -> CompletionItem {
@@ -276,7 +313,6 @@ const KEYWORD_COMPLETIONS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use luck_core::LuaTarget;
-    use luck_token::index_to_offset;
     use tower_lsp::lsp_types::Range as LspRange;
 
     use super::*;
@@ -507,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_completion_offers_nothing_inside_a_comment() {
+    fn completion_offers_nothing_inside_a_comment() {
         let text = "-- string.";
         let document = lua54_document(text);
         let items = items_at(&document, 0, index_to_offset(text.len()));
@@ -519,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_completion_offers_nothing_inside_a_plain_string() {
+    fn completion_offers_nothing_inside_a_plain_string() {
         let text = "local s = \"string.\"";
         let document = lua54_document(text);
         // Just before the closing quote.
@@ -532,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_completion_refuses_members_of_a_shadowed_namespace() {
+    fn completion_refuses_members_of_a_shadowed_namespace() {
         let text = "local math = {}\nmath.";
         let document = lua54_document(text);
         let items = items_at(&document, 1, 5);
@@ -543,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_constant_completion_in_a_long_string_replaces_only_its_interior() {
+    fn constant_completion_in_a_long_string_replaces_only_its_interior() {
         let text = "collectgarbage([[c]])";
         let document = lua54_document(text);
         let items = items_at(&document, 0, 18);
@@ -562,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_completion_after_a_concat_offers_namespace_members() {
+    fn completion_after_a_concat_offers_namespace_members() {
         let text = "local s = \"a\"..string.";
         let document = lua54_document(text);
         let items = items_at(&document, 0, index_to_offset(text.len()));
@@ -574,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_completion_after_a_member_dot_on_an_unknown_receiver_offers_no_keywords() {
+    fn completion_after_a_member_dot_on_an_unknown_receiver_offers_no_keywords() {
         let text = "local result = make().";
         let document = lua54_document(text);
         let items = items_at(&document, 0, index_to_offset(text.len()));
@@ -583,5 +619,21 @@ mod tests {
             "a keyword can't follow `.`: {:?}",
             keywords_of(&items)
         );
+    }
+
+    #[test]
+    fn completion_offers_nothing_inside_an_unterminated_string() {
+        let text = "local s = \"string.";
+        let document = lua54_document(text);
+        let items = items_at(&document, 0, index_to_offset(text.len()));
+        assert_eq!(items.len(), 0, "the string is still being typed: {items:?}");
+    }
+
+    #[test]
+    fn completion_after_a_keyword_shaped_partial_offers_namespace_members() {
+        let text = "local s = string.for";
+        let document = lua54_document(text);
+        let items = items_at(&document, 0, index_to_offset(text.len()));
+        assert!(items.iter().any(|item| item.label == "format"), "{items:?}");
     }
 }

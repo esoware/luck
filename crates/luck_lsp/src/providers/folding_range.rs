@@ -1,7 +1,7 @@
 //! Folds function bodies, do-end blocks, control-flow blocks, and table
 //! constructors.
 
-use luck_ast::{Expression, Statement, Visitor};
+use luck_ast::{FunctionBody, Statement, TableConstructor, Visitor};
 use luck_token::Span;
 use tower_lsp::lsp_types::FoldingRange;
 
@@ -44,11 +44,11 @@ impl<'ast> Visitor<'ast> for Folder<'_> {
             | Statement::RepeatLoop(_)
             | Statement::IfStatement(_)
             | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_) => self.push(stmt.span()),
+            | Statement::GenericFor(_) => self.push(stmt.span()),
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
+            | Statement::FunctionDecl(_)
+            | Statement::LocalFunction(_)
             | Statement::LocalAssignment(_)
             | Statement::EmptyStatement(_)
             | Statement::Goto(_)
@@ -64,28 +64,16 @@ impl<'ast> Visitor<'ast> for Folder<'_> {
         self.walk_stmt(stmt);
     }
 
-    fn visit_expr(&mut self, expr: &'ast Expression) {
-        match expr {
-            Expression::FunctionDef(_) | Expression::TableConstructor(_) => self.push(expr.span()),
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
-            | Expression::Parenthesized(_)
-            | Expression::BinaryOp(_)
-            | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
-            | Expression::Error(_) => {}
-        }
-        self.walk_expr(expr);
+    // Every function form reaches this: declarations, `local` and `global`
+    // functions, Luau type functions, and anonymous functions.
+    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
+        self.push(body.span);
+        self.walk_function_body(body);
+    }
+
+    fn visit_table_constructor(&mut self, table: &'ast TableConstructor) {
+        self.push(table.span);
+        self.walk_table_constructor(table);
     }
 }
 
@@ -102,19 +90,19 @@ mod tests {
     }
 
     #[test]
-    fn bug_a_table_call_argument_folds() {
+    fn a_table_call_argument_folds() {
         let folds = folded_lines("setup {\n  a = 1,\n}\n", LuaTarget::Lua54);
         assert_eq!(folds, vec![(0, 2)], "`f {{...}}` is a table constructor like any other");
     }
 
     #[test]
-    fn bug_a_luau_type_function_folds() {
+    fn a_luau_type_function_folds() {
         let folds = folded_lines("type function f(t)\n  return t\nend\n", LuaTarget::Luau);
         assert_eq!(folds, vec![(0, 2)], "a `type function` body folds like any other");
     }
 
     #[test]
-    fn bug_a_lua55_global_function_folds() {
+    fn a_lua55_global_function_folds() {
         let folds = folded_lines("global function f()\n  return 1\nend\n", LuaTarget::Lua55);
         assert_eq!(folds, vec![(0, 2)], "a `global function` body folds like any other");
     }

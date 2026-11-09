@@ -12,7 +12,7 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::document::DocumentState;
-use crate::providers::cursor::find_call_site_at;
+use crate::providers::cursor::{TextKind, find_call_site_at, text_kind_at};
 use crate::providers::stdlib_render::{constant_preview, param_label};
 
 pub(crate) fn signature_help(
@@ -20,7 +20,10 @@ pub(crate) fn signature_help(
     position: Position,
 ) -> Option<SignatureHelp> {
     let offset = document.offset(position);
-    let site = find_call_site_at(&document.parsed.block, document.text(), offset)?;
+    if text_kind_at(document, offset) == TextKind::Comment {
+        return None;
+    }
+    let site = find_call_site_at(document, offset)?;
     // Semantic resolution handles shaped locals (`f:read(` after
     // `local f = io.open(...)`) and literal receivers (`("x"):rep(`), and
     // gives a shadowed base no help. Method params exclude `self`, matching
@@ -183,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_signature_help_ends_at_the_closing_paren() {
+    fn signature_help_ends_at_the_closing_paren() {
         let document =
             DocumentState::new("print(1)".to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         let help = signature_help(&document, Position::new(0, 8));
@@ -191,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_signature_help_counts_commas_before_the_cursor() {
+    fn signature_help_counts_commas_before_the_cursor() {
         let text = "string.rep(\"a\" , 3 )";
         let document =
             DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
@@ -201,5 +204,26 @@ mod tests {
         let before_paren =
             signature_help(&document, Position::new(0, 19)).expect("inside the call");
         assert_eq!(before_paren.active_parameter, Some(1), "one comma before the cursor");
+    }
+
+    #[test]
+    fn signature_help_stays_inside_an_unclosed_argument_list() {
+        let document =
+            DocumentState::new("print(1".to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        assert!(
+            signature_help(&document, Position::new(0, 7)).is_some(),
+            "the closing paren hasn't been typed yet"
+        );
+    }
+
+    #[test]
+    fn signature_help_offers_nothing_inside_a_comment_argument() {
+        let document = DocumentState::new(
+            "print(--[[ note ]] 1)".to_owned(),
+            1,
+            LuaTarget::Lua54,
+            FxHashSet::default(),
+        );
+        assert!(signature_help(&document, Position::new(0, 13)).is_none());
     }
 }

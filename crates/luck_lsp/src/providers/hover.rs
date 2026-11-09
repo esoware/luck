@@ -7,11 +7,14 @@ use luck_token::LuaVersion;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
 
 use crate::document::DocumentState;
-use crate::providers::cursor::{CursorNode, find_node_at};
+use crate::providers::cursor::{CursorNode, TextKind, find_node_at, text_kind_at};
 use crate::providers::stdlib_render::{constant_preview, param_label};
 
 pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hover> {
     let offset = document.offset(position);
+    if text_kind_at(document, offset) != TextKind::Code {
+        return None;
+    }
     let node = find_node_at(&document.parsed.block, offset)?;
     let path = node.path();
     // Resolving from the root's span lets shaped locals (`f:read` after
@@ -196,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_hover_ignores_a_field_of_a_call_result() {
+    fn hover_ignores_a_field_of_a_call_result() {
         let text = "local printer = make().print\n";
         let document =
             DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
@@ -209,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_hover_on_a_statement_level_method_call_resolves() {
+    fn hover_on_a_statement_level_method_call_resolves() {
         let text = "local f = io.open('x')\nf:seek('set')\n";
         let document =
             DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
@@ -218,5 +221,13 @@ mod tests {
             markdown.as_deref().is_some_and(|rendered| rendered.contains("f:seek(")),
             "a method call in statement position hovers like one in an expression: {markdown:?}"
         );
+    }
+
+    #[test]
+    fn hover_ignores_a_comment_inside_a_call() {
+        let text = "print(--[[ print ]] 1)\n";
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        assert!(markdown_at(&document, 0, 13).is_none());
     }
 }

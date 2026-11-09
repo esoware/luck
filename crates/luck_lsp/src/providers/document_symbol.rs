@@ -7,11 +7,15 @@
     reason = "`DocumentSymbol` has no constructor, so building one names its deprecated field"
 )]
 
-use luck_ast::{Block, Expression, FunctionBody, FunctionName, Statement, Var, Visitor};
-use luck_token::Span;
+use luck_ast::{
+    Assignment, Block, Expression, FunctionBody, FunctionName, Statement, TypeDeclarationValue,
+    Var, Visitor,
+};
+use luck_token::{Span, Token};
 use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
 
 use crate::document::DocumentState;
+use crate::providers::cursor::token_name;
 
 pub(crate) fn document_symbols(document: &DocumentState) -> Vec<DocumentSymbol> {
     outline(document, &document.parsed.block)
@@ -35,27 +39,48 @@ impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
         match stmt {
             Statement::FunctionDecl(declaration) => {
                 let (name, kind) = function_name_label(&declaration.name);
-                self.push_function(&name, kind, &declaration.body, declaration.span);
-            }
-            Statement::LocalFunction(local_function) => {
-                if let Some(name) = local_function.name.identifier() {
+                if !name.is_empty() {
                     self.push_function(
-                        name,
-                        SymbolKind::FUNCTION,
-                        &local_function.body,
-                        local_function.span,
+                        &name,
+                        kind,
+                        &declaration.body,
+                        declaration.span,
+                        declaration.name.span,
                     );
+                }
+            }
+            Statement::LocalFunction(local_function) => self.push_named_function(
+                &local_function.name,
+                &local_function.body,
+                local_function.span,
+            ),
+            // Lua 5.5
+            Statement::GlobalFunction(global_function) => self.push_named_function(
+                &global_function.name,
+                &global_function.body,
+                global_function.span,
+            ),
+            // Luau
+            Statement::TypeDeclaration(declaration) => {
+                if let TypeDeclarationValue::TypeFunction(body) = &declaration.type_value {
+                    self.push_named_function(&declaration.name, body, declaration.span);
                 }
             }
             Statement::LocalAssignment(local) => {
                 for (index, name_token) in local.names.iter().enumerate() {
-                    let Some(name) = name_token.name.identifier() else {
+                    let Some(name) = token_name(&name_token.name) else {
                         continue;
                     };
                     let initializer =
                         local.exprs.as_ref().and_then(|exprs| exprs.iter().nth(index));
                     if let Some(Expression::FunctionDef(function)) = initializer {
-                        self.push_function(name, SymbolKind::FUNCTION, &function.body, local.span);
+                        self.push_function(
+                            name,
+                            SymbolKind::FUNCTION,
+                            &function.body,
+                            local.span,
+                            name_token.name.span,
+                        );
                         continue;
                     }
                     self.symbols.push(DocumentSymbol {
@@ -70,29 +95,7 @@ impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
                     });
                 }
             }
-            Statement::Assignment(assignment) => {
-                // Function-table assignment: `Module.thing = function() ... end`
-                for (index, var) in assignment.targets.iter().enumerate() {
-                    let Some(Expression::FunctionDef(function)) =
-                        assignment.values.iter().nth(index)
-                    else {
-                        continue;
-                    };
-                    let (name, span) = match var {
-                        Var::Name(token) => {
-                            let Some(name) = token.identifier() else {
-                                continue;
-                            };
-                            (name, token.span)
-                        }
-                        Var::FieldAccess(access) => {
-                            (access.span.text(self.document.text()), access.span)
-                        }
-                        Var::Index(_) => continue,
-                    };
-                    self.push_function(name, SymbolKind::FUNCTION, &function.body, span);
-                }
-            }
+            Statement::Assignment(assignment) => self.push_assigned_functions(assignment),
             Statement::DoBlock(_)
             | Statement::WhileLoop(_)
             | Statement::RepeatLoop(_)
@@ -104,11 +107,9 @@ impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
             | Statement::Break(_)
             | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
         }
     }
@@ -119,35 +120,75 @@ impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
 }
 
 impl SymbolEmitter<'_> {
-    fn push_function(&mut self, name: &str, kind: SymbolKind, body: &FunctionBody, span: Span) {
+    /// Function-table assignments: `Module.thing = function() ... end`.
+    fn push_assigned_functions(&mut self, assignment: &Assignment) {
+        for (index, var) in assignment.targets.iter().enumerate() {
+            let Some(Expression::FunctionDef(function)) = assignment.values.iter().nth(index)
+            else {
+                continue;
+            };
+            let (label, selection_span) = match var {
+                Var::Name(token) => (token_name(token), token.span),
+                Var::FieldAccess(access) => (
+                    token_name(&access.name).map(|_| access.span.text(self.document.text())),
+                    access.span,
+                ),
+                Var::Index(_) => continue,
+            };
+            if let Some(name) = label {
+                self.push_function(
+                    name,
+                    SymbolKind::FUNCTION,
+                    &function.body,
+                    assignment.span,
+                    selection_span,
+                );
+            }
+        }
+    }
+
+    fn push_named_function(&mut self, name: &Token, body: &FunctionBody, span: Span) {
+        if let Some(label) = token_name(name) {
+            self.push_function(label, SymbolKind::FUNCTION, body, span, name.span);
+        }
+    }
+
+    /// `span` is the declaration, and `selection_span` the name within it,
+    /// which LSP wants the editor to reveal.
+    fn push_function(
+        &mut self,
+        name: &str,
+        kind: SymbolKind,
+        body: &FunctionBody,
+        span: Span,
+        selection_span: Span,
+    ) {
         let children = outline(self.document, &body.block);
-        let range = self.document.range(span);
         self.symbols.push(DocumentSymbol {
             name: name.to_owned(),
             detail: Some(format_params(body)),
             kind,
             tags: None,
             deprecated: None,
-            range,
-            selection_range: range,
+            range: self.document.range(span),
+            selection_range: self.document.range(selection_span),
             children: (!children.is_empty()).then_some(children),
         });
     }
 }
 
+/// The label for `name`, empty when recovery left no real name in it.
 fn function_name_label(name: &FunctionName) -> (String, SymbolKind) {
     let mut label = String::new();
-    for identifier in name.names.iter().filter_map(|token| token.identifier()) {
+    for identifier in name.names.iter().filter_map(token_name) {
         if !label.is_empty() {
             label.push('.');
         }
         label.push_str(identifier);
     }
-    if let Some(method) = &name.method {
+    if let Some(method) = name.method.as_ref().and_then(token_name) {
         label.push(':');
-        if let Some(identifier) = method.identifier() {
-            label.push_str(identifier);
-        }
+        label.push_str(method);
     }
     let kind = if name.method.is_none() && name.names.len() <= 1 {
         SymbolKind::FUNCTION
@@ -159,7 +200,7 @@ fn function_name_label(name: &FunctionName) -> (String, SymbolKind) {
 
 fn format_params(body: &FunctionBody) -> String {
     let mut parts: Vec<&str> =
-        body.params.iter().filter_map(|param| param.name.identifier()).collect();
+        body.params.iter().filter_map(|param| token_name(&param.name)).collect();
     if body.vararg.is_some() {
         parts.push("...");
     }
@@ -179,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_assigned_function_symbol_range_covers_its_body() {
+    fn assigned_function_symbol_range_covers_its_body() {
         let symbols = symbols_of("M.foo = function()\n  local x = 1\nend\n", LuaTarget::Lua54);
         let foo = symbols.first().expect("the assigned function is outlined");
         assert_eq!(
@@ -189,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_a_recovered_function_name_yields_no_empty_symbol() {
+    fn a_recovered_function_name_yields_no_empty_symbol() {
         // LSP: a symbol's name "must not be an empty string".
         let symbols = symbols_of("local function (x) end\n", LuaTarget::Lua54);
         assert!(
@@ -199,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_lua55_global_function_is_outlined() {
+    fn lua55_global_function_is_outlined() {
         let symbols = symbols_of("global function setup()\nend\n", LuaTarget::Lua55);
         assert!(
             symbols.iter().any(|symbol| symbol.name == "setup"),

@@ -1,19 +1,28 @@
-//! Code actions: each diagnostic's fix, when it has one, and a
-//! disable-for-this-line comment, plus `source.fixAll.luck` for the whole
-//! file.
+//! Code actions: each diagnostic's fix, when it has one, and a comment
+//! disabling its rule for the statement, plus `source.fixAll.luck` for the
+//! whole file.
 
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use core::cmp::Reverse;
 
+use luck_ast::{Block, LastStatement, Statement, Visitor};
 use luck_linter::{Fix, LintDiagnostic};
-use luck_token::Span;
+use luck_token::{Span, is_lua_whitespace, line_breaks, offset_to_index};
 use rustc_hash::FxHashMap;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams,
-    CodeActionResponse, NumberOrString, Position, Range, TextEdit, Url, WorkspaceEdit,
+    CodeActionResponse, NumberOrString, Range, TextEdit, Url, WorkspaceEdit,
 };
 
 use crate::document::DocumentState;
 use crate::settings::ProjectSettings;
+
+/// A client drops an action that isn't inside the kind it asked for, and this
+/// most specific kind is inside `source`, `source.fixAll`, and itself.
+const FIX_ALL_KIND_NAME: &str = "source.fixAll.luck";
+
+pub(crate) const FIX_ALL_KIND: CodeActionKind = CodeActionKind::new(FIX_ALL_KIND_NAME);
 
 /// The actions for `params`, built from `document`'s `lints`.
 pub(crate) fn code_action(
@@ -22,41 +31,48 @@ pub(crate) fn code_action(
     lints: &[LintDiagnostic],
 ) -> CodeActionResponse {
     let uri = &params.text_document.uri;
-    let mut lints_by_rule: FxHashMap<&str, Vec<&LintDiagnostic>> = FxHashMap::default();
-    for lint in lints {
-        lints_by_rule.entry(lint.rule).or_default().push(lint);
-    }
+    let lint_of_diagnostic: FxHashMap<(&str, Span), &LintDiagnostic> =
+        lints.iter().map(|lint| ((lint.rule, lint.span), lint)).collect();
 
     let mut actions: Vec<CodeActionOrCommand> = Vec::new();
     for diagnostic in &params.context.diagnostics {
         let Some(NumberOrString::String(rule)) = &diagnostic.code else {
             continue;
         };
-        let Some(matching_lints) = lints_by_rule.get(rule.as_str()) else {
+        if diagnostic.range.end < params.range.start || diagnostic.range.start > params.range.end {
+            continue;
+        }
+        // A diagnostic carries its lint's rule and range back unchanged, so
+        // the pair names the one lint it came from.
+        let Some(byte_range) = document.byte_range(diagnostic.range) else {
             continue;
         };
-        for lint in matching_lints {
-            let lint_range = document.range(lint.span);
-            if lint_range.end < params.range.start || lint_range.start > params.range.end {
-                continue;
-            }
-            if let Some(fix) = &lint.fix {
-                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: fix.description.clone(),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: Some(vec![diagnostic.clone()]),
-                    edit: Some(workspace_edit(uri, fix_edits(document, fix))),
-                    is_preferred: Some(true),
-                    disabled: None,
-                    command: None,
-                    data: None,
-                }));
-            }
+        let span = Span::from_indices(byte_range.start, byte_range.end);
+        let Some(lint) = lint_of_diagnostic.get(&(rule.as_str(), span)) else {
+            continue;
+        };
+        if let Some(fix) = &lint.fix {
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                title: format!("Disable {rule} for this line"),
+                title: fix.description.clone(),
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: Some(vec![diagnostic.clone()]),
-                edit: Some(workspace_edit(uri, vec![disable_for_line(document, lint.span, rule)])),
+                edit: Some(workspace_edit(uri, fix_edits(document, fix))),
+                is_preferred: Some(true),
+                disabled: None,
+                command: None,
+                data: None,
+            }));
+        }
+        // Directives apply only after a clean parse, so none can silence a
+        // syntax error.
+        if document.parsed.errors.is_empty()
+            && let Some(edit) = disable_for_statement(document, lint.span, rule)
+        {
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title: format!("Disable {rule} for this statement"),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![diagnostic.clone()]),
+                edit: Some(workspace_edit(uri, vec![edit])),
                 is_preferred: Some(false),
                 disabled: None,
                 command: None,
@@ -70,7 +86,7 @@ pub(crate) fn code_action(
         if !edits.is_empty() {
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                 title: "Fix all auto-fixable problems".to_owned(),
-                kind: Some(CodeActionKind::SOURCE_FIX_ALL),
+                kind: Some(FIX_ALL_KIND),
                 diagnostics: None,
                 edit: Some(workspace_edit(uri, edits)),
                 is_preferred: None,
@@ -94,20 +110,106 @@ fn fix_edits(document: &DocumentState, fix: &Fix) -> Vec<TextEdit> {
         .collect()
 }
 
-/// Every fix's edits, in lint order.
+/// Every fix that overlaps none taken so far, later edits first as
+/// `luck_linter::apply_fixes` prefers, in document order.
+///
+/// LSP forbids overlapping edits in one change list. A fix is kept or dropped
+/// whole, because half of a multi-edit fix changes the code's meaning; the
+/// dropped ones reappear on the next pass.
 fn all_fix_edits(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<TextEdit> {
-    lints
-        .iter()
-        .filter_map(|lint| lint.fix.as_ref())
-        .flat_map(|fix| fix_edits(document, fix))
+    let mut fixes: Vec<&Fix> = lints.iter().filter_map(|lint| lint.fix.as_ref()).collect();
+    fixes.sort_by_key(|fix| Reverse(fix.edits.iter().map(|edit| edit.span.start).max()));
+    // Each kept span's end by its start, so a candidate has two neighbors to
+    // check. Two inserts at one offset don't conflict, and the wider span at
+    // an offset is the one that can.
+    let mut kept_spans: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut edits: Vec<&luck_linter::TextEdit> = Vec::new();
+    for fix in fixes {
+        if fix.edits.iter().any(|edit| overlaps_kept(&kept_spans, edit.span)) {
+            continue;
+        }
+        for edit in &fix.edits {
+            let end = kept_spans.entry(edit.span.start).or_insert(edit.span.end);
+            *end = edit.span.end.max(*end);
+        }
+        edits.extend(&fix.edits);
+    }
+    edits.sort_by_key(|edit| (edit.span.start, edit.span.end));
+    edits
+        .into_iter()
+        .map(|edit| TextEdit {
+            range: document.range(edit.span),
+            new_text: edit.replacement.clone(),
+        })
         .collect()
 }
 
-fn disable_for_line(document: &DocumentState, span: Span, rule: &str) -> TextEdit {
-    let line_start = Position { line: document.position(span.start).line, character: 0 };
-    TextEdit {
-        range: Range { start: line_start, end: line_start },
-        new_text: format!("-- luck: allow({rule})\n"),
+/// Half-open overlap, so edits that only touch, like an insert at the end of
+/// a replaced range, don't conflict.
+fn overlaps_kept(kept_spans: &BTreeMap<u32, u32>, span: Span) -> bool {
+    let is_overlapping = |(&start, &end): (&u32, &u32)| start < span.end && span.start < end;
+    kept_spans.range(..=span.start).next_back().is_some_and(is_overlapping)
+        || kept_spans.range(span.start..).next().is_some_and(is_overlapping)
+}
+
+/// A comment that disables `rule` for the innermost statement holding `span`,
+/// or `None` for a lint no statement holds.
+///
+/// It trails the statement, the one place a directive covers exactly that
+/// statement and no text can swallow it. A line comment fits only at the end
+/// of a line, and one before a following statement or comment needs the block
+/// form.
+fn disable_for_statement(document: &DocumentState, span: Span, rule: &str) -> Option<TextEdit> {
+    let statement_end = innermost_statement_end(&document.parsed.block, span.start)?;
+    let after_statement = document.text().get(offset_to_index(statement_end)..).unwrap_or_default();
+    let line_end = line_breaks(after_statement, document.lua_version)
+        .next()
+        .map_or(after_statement.len(), |line_break| line_break.start);
+    let is_line_end =
+        after_statement.get(..line_end).is_some_and(|rest| rest.bytes().all(is_lua_whitespace));
+    let new_text = if is_line_end {
+        format!(" -- luck: allow({rule})")
+    } else {
+        format!(" --[[ luck: allow({rule}) ]]")
+    };
+    let position = document.position(statement_end);
+    Some(TextEdit { range: Range::new(position, position), new_text })
+}
+
+fn innermost_statement_end(block: &Block, offset: u32) -> Option<u32> {
+    let mut finder = StatementFinder { offset, end: None };
+    finder.visit_block(block);
+    finder.end
+}
+
+struct StatementFinder {
+    offset: u32,
+    end: Option<u32>,
+}
+
+impl StatementFinder {
+    /// Whether a statement at `span` holds the offset, the same test a
+    /// directive's range applies to a lint's start.
+    const fn holds(&mut self, span: Span) -> bool {
+        let is_held = span.start <= self.offset && self.offset < span.end;
+        if is_held {
+            self.end = Some(span.end);
+        }
+        is_held
+    }
+}
+
+impl<'ast> Visitor<'ast> for StatementFinder {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+        if self.holds(stmt.span()) {
+            self.walk_stmt(stmt);
+        }
+    }
+
+    fn visit_last_stmt(&mut self, last: &'ast LastStatement) {
+        if self.holds(last.span()) {
+            self.walk_last_stmt(last);
+        }
     }
 }
 
@@ -122,9 +224,12 @@ fn workspace_edit(uri: &Url, edits: Vec<TextEdit>) -> WorkspaceEdit {
 fn should_offer_fix_all(context: &CodeActionContext) -> bool {
     context.only.as_ref().is_none_or(|kinds| {
         kinds.iter().any(|kind| {
-            kind == &CodeActionKind::SOURCE_FIX_ALL
-                || kind.as_str() == "source.fixAll.luck"
-                || kind == &CodeActionKind::SOURCE
+            // Kinds nest on `.`, and the empty kind holds them all.
+            let requested = kind.as_str();
+            requested.is_empty()
+                || FIX_ALL_KIND_NAME
+                    .strip_prefix(requested)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
         })
     })
 }
@@ -149,10 +254,10 @@ pub(crate) fn fix_all_open(
 #[cfg(test)]
 mod tests {
     use luck_core::{LuaTarget, RuleSetting};
-    use luck_linter::LintConfig;
+    use luck_linter::{Category, LintConfig, Severity, TextEdit as LinterTextEdit};
     use rustc_hash::FxHashSet;
     use tower_lsp::lsp_types::{
-        Diagnostic, PartialResultParams, TextDocumentIdentifier, WorkDoneProgressParams,
+        Diagnostic, PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams,
     };
 
     use super::*;
@@ -212,12 +317,13 @@ mod tests {
         let document = document(text);
         let lints = document.lint(config);
         let lint = lints.get(lint_index).expect("the lint fired");
-        let edit = disable_for_line(&document, lint.span, lint.rule);
+        let edit =
+            disable_for_statement(&document, lint.span, lint.rule).expect("a statement holds it");
         applied(&document, vec![edit])
     }
 
     #[test]
-    fn bug_fix_all_action_has_the_kind_the_client_requests() {
+    fn fix_all_action_has_the_kind_the_client_requests() {
         let document = document("local x = nil\n");
         let lints = document.lint(&config_enabling("redundant_nil_init"));
         let kind = CodeActionKind::new("source.fixAll.luck");
@@ -235,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_all_edits_do_not_overlap() {
+    fn fix_all_edits_do_not_overlap() {
         let document = document("return not (a == (not (b == c)))\n");
         let lints = document.lint(&config_enabling("unnecessary_negation"));
         let edits = all_fix_edits(&document, &lints);
@@ -252,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_two_diagnostics_of_one_rule_yield_one_fix_each() {
+    fn two_diagnostics_of_one_rule_yield_one_fix_each() {
         let document = document("local x = nil local y = nil\n");
         let lints = document.lint(&config_enabling("redundant_nil_init"));
         let diagnostics = diagnostics::to_lsp(&document, &lints);
@@ -266,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_no_disable_action_for_a_parse_error() {
+    fn no_disable_action_for_a_parse_error() {
         // Directives apply only after a clean parse, so a comment can't
         // silence a syntax error.
         let document = document("local x =\n");
@@ -284,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_disable_comment_suppresses_a_later_statement_on_the_line() {
+    fn disable_comment_suppresses_a_later_statement_on_the_line() {
         let text = "local a = 1 local x = nil\n";
         let config = config_enabling("redundant_nil_init");
         let edited = disabled(text, &config, 0);
@@ -296,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_disable_comment_stays_out_of_a_long_string() {
+    fn disable_comment_stays_out_of_a_long_string() {
         let text = "local s = [[\nx]] local y = nil\n";
         let config = config_enabling("redundant_nil_init");
         let edited = disabled(text, &config, 0);
@@ -307,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_disable_comment_does_not_silence_the_next_statement() {
+    fn disable_comment_does_not_silence_the_next_statement() {
         let text = "local t = {\n  first_missing,\n}\nlocal u = second_missing\n";
         let config = config_enabling("undefined_variable");
         let edited = disabled(text, &config, 0);
@@ -316,5 +422,46 @@ mod tests {
             remaining.iter().any(|lint| lint.message.contains("second_missing")),
             "\"for this line\" must leave the next statement flagged: {edited:?}"
         );
+    }
+
+    #[test]
+    fn disable_comment_before_a_later_statement_silences_only_its_own() {
+        let text = "local x = nil local y = nil\n";
+        let config = config_enabling("redundant_nil_init");
+        let edited = disabled(text, &config, 0);
+        assert!(edited.contains("--[[ luck: allow(redundant_nil_init) ]]"), "{edited:?}");
+        let reparsed = document(&edited);
+        assert!(reparsed.parsed.errors.is_empty(), "{:?}", reparsed.parsed.errors);
+        let remaining = reparsed.lint(&config);
+        assert_eq!(remaining.len(), 1, "the later statement stays flagged: {remaining:?}");
+    }
+
+    fn lint_with_fix(edits: Vec<LinterTextEdit>) -> LintDiagnostic {
+        LintDiagnostic {
+            rule: "test_rule",
+            category: Category::Style,
+            severity: Severity::Warning,
+            message: "bad".to_owned(),
+            span: Span::new(0, 0),
+            help: None,
+            fix: Some(Fix { description: "fix".to_owned(), edits }),
+        }
+    }
+
+    fn linter_edit(start: u32, end: u32) -> LinterTextEdit {
+        LinterTextEdit { span: Span::new(start, end), replacement: "x".to_owned() }
+    }
+
+    #[test]
+    fn a_fix_that_overlaps_a_later_one_drops_whole() {
+        let document = document("0123456789\n");
+        let fixes = [
+            lint_with_fix(vec![linter_edit(0, 1), linter_edit(2, 6)]),
+            lint_with_fix(vec![linter_edit(5, 8)]),
+            lint_with_fix(vec![linter_edit(9, 9), linter_edit(9, 9)]),
+        ];
+        let edits = all_fix_edits(&document, &fixes);
+        let starts: Vec<u32> = edits.iter().map(|edit| edit.range.start.character).collect();
+        assert_eq!(starts, vec![5, 9, 9], "the two-part fix is kept or dropped whole: {edits:?}");
     }
 }

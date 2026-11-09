@@ -1,7 +1,7 @@
 //! For each requested position, return the chain of enclosing AST node spans
 //! so the editor can expand selection in semantic increments.
 
-use luck_ast::{Expression, Statement, Visitor};
+use luck_ast::{Expression, LastStatement, Statement, Visitor};
 use luck_token::Span;
 use tower_lsp::lsp_types::{Position, SelectionRange};
 
@@ -27,8 +27,10 @@ fn selection_for(document: &DocumentState, position: Position) -> SelectionRange
     let first_kept = collector.stack.len().saturating_sub(MAX_SELECTION_DEPTH);
     collector.stack.drain(..first_kept);
 
+    // The returned link is the narrowest span and each `parent` the next one
+    // out, so the chain folds from the outside in.
     let mut chain: Option<SelectionRange> = None;
-    for &span in collector.stack.iter().rev() {
+    for &span in &collector.stack {
         chain = Some(SelectionRange { range: document.range(span), parent: chain.map(Box::new) });
     }
     chain.unwrap_or_else(|| SelectionRange {
@@ -44,9 +46,15 @@ struct SpanStack {
 
 impl SpanStack {
     fn record(&mut self, span: Span) {
-        if touches(span, self.offset) {
-            self.stack.push(span);
+        if !touches(span, self.offset) {
+            return;
         }
+        // At a boundary between siblings the offset touches both, so the
+        // later one replaces the earlier one's whole chain.
+        while self.stack.last().is_some_and(|top| span.start < top.start || top.end < span.end) {
+            self.stack.pop();
+        }
+        self.stack.push(span);
     }
 }
 
@@ -54,6 +62,11 @@ impl<'ast> Visitor<'ast> for SpanStack {
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
         self.record(stmt.span());
         self.walk_stmt(stmt);
+    }
+
+    fn visit_last_stmt(&mut self, last: &'ast LastStatement) {
+        self.record(last.span());
+        self.walk_last_stmt(last);
     }
 
     fn visit_expr(&mut self, expr: &'ast Expression) {
@@ -71,7 +84,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bug_a_selection_chain_at_a_statement_boundary_is_nested() {
+    fn a_selection_chain_at_a_statement_boundary_is_nested() {
         // Offset 3 ends `f()` and starts `g()`. Either direction of nesting
         // passes, so this is independent of the chain's order.
         let document =
@@ -97,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_a_selection_range_parent_contains_its_child() {
+    fn a_selection_range_parent_contains_its_child() {
         let document = DocumentState::new(
             "local value = alpha.beta + 1\n".to_owned(),
             1,
