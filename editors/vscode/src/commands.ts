@@ -1,14 +1,12 @@
 import * as vscode from "vscode";
 import path from "node:path";
 import * as fs from "node:fs";
+import { version as extensionVersion } from "../package.json";
 import type { LuckClient } from "./client";
-import { downloadServer } from "./discover";
+import { VSIX_PLATFORM } from "./discover";
 import { outputChannel } from "./output";
 
-export function registerCommands(
-	client: LuckClient,
-	extensionVersion: string | undefined,
-): vscode.Disposable[] {
+export function registerCommands(client: LuckClient): vscode.Disposable[] {
 	const handlers = {
 		"luck.restart": () => client.restart(),
 		"luck.start": () => client.start(),
@@ -22,9 +20,9 @@ export function registerCommands(
 		"luck.applyAllFixesFile": applyAllFixesFile,
 		"luck.applyAllFixesWorkspace": () => applyAllFixesWorkspace(client),
 		"luck.createConfig": createConfig,
-		"luck.downloadServer": () => downloadServer(extensionVersion),
+		"luck.downloadServer": downloadServer,
 		"luck.viewSyntaxTree": () => viewSyntaxTree(client),
-		"luck.copyDebugInfo": () => copyDebugInfo(client, extensionVersion),
+		"luck.copyDebugInfo": () => copyDebugInfo(client),
 		"luck.reportIssue": async () => {
 			await vscode.env.openExternal(vscode.Uri.parse("https://github.com/esoware/luck/issues/new"));
 		},
@@ -100,6 +98,19 @@ async function createConfig(): Promise<void> {
 	await vscode.window.showTextDocument(vscode.Uri.file(configPath));
 }
 
+function downloadServer(): void {
+	if (!VSIX_PLATFORM) {
+		void vscode.window.showErrorMessage(
+			`Luck: no prebuilt binary for ${process.platform}/${process.arch}. Install via cargo and set luck.server.path.`,
+		);
+		return;
+	}
+	const url = `https://github.com/esoware/luck/releases/download/v${extensionVersion}/luck-${VSIX_PLATFORM}.zip`;
+	void vscode.window.showInformationMessage(
+		`Luck: download from ${url} not yet implemented. Set luck.server.path or install luck via cargo.`,
+	);
+}
+
 async function viewSyntaxTree(client: LuckClient): Promise<void> {
 	const { languageClient } = client;
 	const editor = vscode.window.activeTextEditor;
@@ -121,13 +132,10 @@ async function viewSyntaxTree(client: LuckClient): Promise<void> {
 	}
 }
 
-async function copyDebugInfo(
-	client: LuckClient,
-	extensionVersion: string | undefined,
-): Promise<void> {
+async function copyDebugInfo(client: LuckClient): Promise<void> {
 	const serverVersion = client.languageClient?.initializeResult?.serverInfo?.version;
 	const lines = [
-		`Luck extension: ${extensionVersion ?? "unknown"}`,
+		`Luck extension: ${extensionVersion}`,
 		`Luck server:    ${serverVersion ?? "unknown"}`,
 		`VS Code:        ${vscode.version}`,
 		`Platform:       ${process.platform}/${process.arch}`,

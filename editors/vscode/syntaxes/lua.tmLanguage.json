@@ -174,11 +174,7 @@
           "end": "(?=\\S)"
         },
         {
-          "match": "\\\\(?:[abfnrtv\\\\'\"]|[0-9]{1,3}|x[\\da-fA-F]{2}|u\\{[\\da-fA-F]+\\}|\\r?\\n)",
-          "name": "constant.character.escape.lua"
-        },
-        {
-          "match": "\\\\.",
+          "match": "\\\\(?:[0-9]{1,3}|x[\\da-fA-F]{2}|u\\{[\\da-fA-F]+\\}|\\r?\\n|.)",
           "name": "constant.character.escape.lua"
         }
       ]
@@ -230,10 +226,13 @@
           "name": "variable.language.this.lua"
         },
         {
-          "match": "\\.\\.\\.",
-          "name": "keyword.operator.rest.lua"
+          "include": "#rest"
         }
       ]
+    },
+    "rest": {
+      "match": "\\.\\.\\.",
+      "name": "keyword.operator.rest.lua"
     },
     "declarations": {
       "patterns": [
@@ -258,8 +257,7 @@
               "include": "#binding"
             },
             {
-              "match": ",",
-              "name": "punctuation.separator.comma.lua"
+              "include": "#comma"
             }
           ],
           "beginCaptures": {
@@ -272,6 +270,10 @@
     },
     "function-assignment": {
       "match": "[A-Za-z_][A-Za-z0-9_]*(?=\\s*=\\s*function\\b)",
+      "name": "entity.name.function.lua"
+    },
+    "function-call": {
+      "match": "[A-Za-z_][A-Za-z0-9_]*(?=\\s*(?:[({'\"]|\\[=*\\[))",
       "name": "entity.name.function.lua"
     },
     "binding": {
@@ -338,8 +340,7 @@
           "include": "#comments"
         },
         {
-          "match": "\\.\\.\\.",
-          "name": "keyword.operator.rest.lua"
+          "include": "#rest"
         },
         {
           "match": "[A-Za-z_][A-Za-z0-9_]*",
@@ -360,8 +361,7 @@
           "include": "#comments"
         },
         {
-          "match": "[A-Za-z_][A-Za-z0-9_]*(?=\\s*(?:[({'\"]|\\[=*\\[))",
-          "name": "entity.name.function.lua"
+          "include": "#function-call"
         },
         {
           "match": "\\b[A-Z][A-Z0-9_]*\\b",
@@ -381,8 +381,7 @@
     "identifiers": {
       "patterns": [
         {
-          "match": "[A-Za-z_][A-Za-z0-9_]*(?=\\s*(?:[({'\"]|\\[=*\\[))",
-          "name": "entity.name.function.lua"
+          "include": "#function-call"
         },
         {
           "include": "#binding"
@@ -479,9 +478,6 @@
           },
           "patterns": [
             {
-              "include": "#comments"
-            },
-            {
               "include": "#function-assignment"
             },
             {
@@ -495,11 +491,14 @@
         }
       ]
     },
+    "comma": {
+      "match": ",",
+      "name": "punctuation.separator.comma.lua"
+    },
     "punctuation": {
       "patterns": [
         {
-          "match": ",",
-          "name": "punctuation.separator.comma.lua"
+          "include": "#comma"
         },
         {
           "match": ";",

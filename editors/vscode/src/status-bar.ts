@@ -9,16 +9,15 @@ type ServerStatus =
 
 export class StatusBar implements vscode.Disposable {
 	private readonly item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-	private readonly settingsListener: vscode.Disposable;
 	private status: ServerStatus = { state: "stopped" };
+	private readonly settingsListener = vscode.workspace.onDidChangeConfiguration((event) => {
+		if (affectsSetting(event, "statusBar.enable") || affectsSetting(event, "statusBar.click")) {
+			this.render();
+		}
+	});
 
 	public constructor() {
 		this.item.name = "Luck";
-		this.settingsListener = vscode.workspace.onDidChangeConfiguration((event) => {
-			if (affectsSetting(event, "statusBar.enable") || affectsSetting(event, "statusBar.click")) {
-				this.render();
-			}
-		});
 		this.render();
 	}
 

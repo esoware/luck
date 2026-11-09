@@ -7,6 +7,19 @@ import { setting } from "./settings";
 
 const BINARY_NAME = process.platform === "win32" ? "luck.exe" : "luck";
 
+const VSIX_OPERATING_SYSTEMS: ReadonlySet<NodeJS.Platform> = new Set(["win32", "darwin", "linux"]);
+
+export const VSIX_PLATFORM = VSIX_OPERATING_SYSTEMS.has(process.platform)
+	? `${process.platform}-${process.arch === "arm64" ? "arm64" : "x64"}`
+	: null;
+
+const WINDOWS_EXECUTABLE_EXTENSIONS = new Set(
+	(process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD")
+		.split(";")
+		.map((extension) => extension.trim().toLowerCase())
+		.filter((extension) => extension.length > 0),
+);
+
 export async function discoverServer(extensionPath: string): Promise<string | null> {
 	const explicitPath = setting("server.path").trim();
 	if (explicitPath) {
@@ -19,17 +32,23 @@ export async function discoverServer(extensionPath: string): Promise<string | nu
 		);
 	}
 
-	const platform = vsixPlatform();
-	const bundledPath = platform && path.join(extensionPath, "server", platform, BINARY_NAME);
+	const bundledPath =
+		VSIX_PLATFORM && path.join(extensionPath, "server", VSIX_PLATFORM, BINARY_NAME);
 	if (bundledPath && (await isExecutable(bundledPath))) {
 		logExtension(`server: using bundled binary ${bundledPath}`);
 		return setting("runFromTemporaryLocation") ? copyToTemporaryLocation(bundledPath) : bundledPath;
 	}
 
-	const binaryOnPath = await findOnPath();
-	if (binaryOnPath) {
-		logExtension(`server: using PATH binary ${binaryOnPath}`);
-		return binaryOnPath;
+	for (const directory of (process.env["PATH"] ?? "").split(path.delimiter)) {
+		if (!directory) {
+			continue;
+		}
+		const candidate = path.join(directory, BINARY_NAME);
+		// oxlint-disable-next-line no-await-in-loop -- PATH order is a preference order; probe sequentially.
+		if (await isExecutable(candidate)) {
+			logExtension(`server: using PATH binary ${candidate}`);
+			return candidate;
+		}
 	}
 
 	logExtension("server: no binary found");
@@ -52,31 +71,6 @@ async function copyToTemporaryLocation(source: string): Promise<string> {
 	}
 }
 
-function vsixPlatform(): string | null {
-	const { arch } = process;
-	switch (process.platform) {
-		case "win32": {
-			return arch === "arm64" ? "win32-arm64" : "win32-x64";
-		}
-		case "darwin": {
-			return arch === "arm64" ? "darwin-arm64" : "darwin-x64";
-		}
-		case "linux": {
-			return arch === "arm64" ? "linux-arm64" : "linux-x64";
-		}
-		default: {
-			return null;
-		}
-	}
-}
-
-const WINDOWS_EXECUTABLE_EXTENSIONS = new Set(
-	(process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD")
-		.split(";")
-		.map((extension) => extension.trim().toLowerCase())
-		.filter((extension) => extension.length > 0),
-);
-
 async function isExecutable(filePath: string): Promise<boolean> {
 	try {
 		if (process.platform === "win32") {
@@ -90,32 +84,4 @@ async function isExecutable(filePath: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
-}
-
-async function findOnPath(): Promise<string | null> {
-	for (const directory of (process.env["PATH"] ?? "").split(path.delimiter)) {
-		if (!directory) {
-			continue;
-		}
-		const candidate = path.join(directory, BINARY_NAME);
-		// oxlint-disable-next-line no-await-in-loop -- PATH order is a preference order; probe sequentially.
-		if (await isExecutable(candidate)) {
-			return candidate;
-		}
-	}
-	return null;
-}
-
-export function downloadServer(extensionVersion: string | undefined): void {
-	const platform = vsixPlatform();
-	if (!platform) {
-		void vscode.window.showErrorMessage(
-			`Luck: no prebuilt binary for ${process.platform}/${process.arch}. Install via cargo and set luck.server.path.`,
-		);
-		return;
-	}
-	const url = `https://github.com/esoware/luck/releases/download/v${extensionVersion ?? "latest"}/luck-${platform}.zip`;
-	void vscode.window.showInformationMessage(
-		`Luck: download from ${url} not yet implemented. Set luck.server.path or install luck via cargo.`,
-	);
 }

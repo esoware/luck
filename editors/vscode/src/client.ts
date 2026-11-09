@@ -3,19 +3,40 @@ import type { LanguageClientOptions, ServerOptions } from "vscode-languageclient
 import { LanguageClient, RevealOutputChannelOn } from "vscode-languageclient/node";
 import { discoverServer } from "./discover";
 import { logExtension, outputChannel } from "./output";
-import { setting } from "./settings";
+import { affectsSetting, setting } from "./settings";
+import type { SettingKey } from "./settings";
 import type { StatusBar } from "./status-bar";
+
+const RESTART_SETTINGS = [
+	"server.path",
+	"server.extraEnv",
+	"server.args",
+	"runFromTemporaryLocation",
+] as const satisfies readonly SettingKey[];
+
+const RESTART_DEBOUNCE_MS = 500;
 
 interface Session {
 	readonly client: LanguageClient;
 	readonly watcher: vscode.FileSystemWatcher;
 }
 
-export class LuckClient implements vscode.Disposable {
+export class LuckClient {
 	private session: Session | undefined;
 	private operation: Promise<void> = Promise.resolve();
+	private restartTimer: NodeJS.Timeout | undefined;
 	private readonly extensionPath: string;
 	private readonly statusBar: StatusBar;
+	private readonly settingsListener = vscode.workspace.onDidChangeConfiguration((event) => {
+		if (affectsSetting(event, "enable")) {
+			void (setting("enable") ? this.start() : this.stop());
+			return;
+		}
+		if (RESTART_SETTINGS.some((key) => affectsSetting(event, key))) {
+			clearTimeout(this.restartTimer);
+			this.restartTimer = setTimeout(() => void this.restart(), RESTART_DEBOUNCE_MS);
+		}
+	});
 
 	public constructor(extensionPath: string, statusBar: StatusBar) {
 		this.extensionPath = extensionPath;
@@ -41,12 +62,16 @@ export class LuckClient implements vscode.Disposable {
 		});
 	}
 
-	public dispose(): void {
-		void this.stop();
+	public shutdown(): Promise<void> {
+		clearTimeout(this.restartTimer);
+		this.settingsListener.dispose();
+		return this.stop();
 	}
 
 	private enqueue(task: () => Promise<void>): Promise<void> {
-		this.operation = this.operation.then(task, task);
+		this.operation = this.operation.then(task).catch((error: unknown) => {
+			void this.reportStartFailure(error);
+		});
 		return this.operation;
 	}
 
@@ -65,22 +90,17 @@ export class LuckClient implements vscode.Disposable {
 		}
 
 		const watcher = vscode.workspace.createFileSystemWatcher("**/{luck.json,.luaurc}");
-		const client = createLanguageClient(command, watcher);
 		try {
+			const client = createLanguageClient(command, watcher);
 			await client.start();
+			const version = client.initializeResult?.serverInfo?.version;
+			this.session = { client, watcher };
+			this.statusBar.update({ state: "ready", version });
+			logExtension(`start: ready (server ${version ?? "unknown"})`);
 		} catch (error) {
 			watcher.dispose();
-			const message = error instanceof Error ? error.message : String(error);
-			this.statusBar.update({ state: "error", message });
-			logExtension(`start failed: ${message}`);
-			void this.reportStartFailure(message);
-			return;
+			throw error;
 		}
-
-		const version = client.initializeResult?.serverInfo?.version;
-		this.session = { client, watcher };
-		this.statusBar.update({ state: "ready", version });
-		logExtension(`start: ready (server ${version ?? "unknown"})`);
 	}
 
 	private async doStop(): Promise<void> {
@@ -98,7 +118,10 @@ export class LuckClient implements vscode.Disposable {
 		this.statusBar.update({ state: "stopped" });
 	}
 
-	private async reportStartFailure(message: string): Promise<void> {
+	private async reportStartFailure(error: unknown): Promise<void> {
+		const message = error instanceof Error ? error.message : String(error);
+		this.statusBar.update({ state: "error", message });
+		logExtension(`start failed: ${message}`);
 		const selection = await vscode.window.showErrorMessage(
 			`Luck failed to start: ${message}`,
 			"Show Output",
@@ -116,10 +139,7 @@ function createLanguageClient(command: string, watcher: vscode.FileSystemWatcher
 	const args = ["lsp", ...(setting("server.args") ?? [])];
 	const env = { ...process.env, ...setting("server.extraEnv") };
 
-	const serverOptions: ServerOptions = {
-		run: { command, args, options: { env } },
-		debug: { command, args, options: { env: { ...env, RUST_LOG: "debug" } } },
-	};
+	const serverOptions: ServerOptions = { command, args, options: { env } };
 
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [
