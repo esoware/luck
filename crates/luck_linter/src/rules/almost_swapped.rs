@@ -1,6 +1,7 @@
 use luck_ast::{Expression, Statement, Var};
 
 use crate::diagnostic::Finding;
+use crate::nodes::adjacent_stmts;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -19,14 +20,15 @@ impl WholeRule for AlmostSwapped {
         context
             .blocks
             .iter()
-            .flat_map(|block| block.stmts.windows(2))
-            .filter_map(failed_swap)
+            .flat_map(|block| adjacent_stmts(block))
+            .filter_map(|(first, second)| failed_swap(first, second))
             .collect()
     }
 }
 
-fn failed_swap(pair: &[Statement]) -> Option<Finding> {
-    let [Statement::Assignment(first), Statement::Assignment(second)] = pair else {
+fn failed_swap(first_stmt: &Statement, second_stmt: &Statement) -> Option<Finding> {
+    let (Statement::Assignment(first), Statement::Assignment(second)) = (first_stmt, second_stmt)
+    else {
         return None;
     };
     let ([first_target], [first_value], [second_target], [second_value]) = (
@@ -104,7 +106,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_flags_failed_swap_separated_by_semicolon() {
+    fn flags_failed_swap_separated_by_semicolon() {
         let diags = run("local a, b = 1, 2\na = b; b = a");
         assert_eq!(diags.len(), 1, "a `;` doesn't change the failed swap: {diags:?}");
     }

@@ -66,8 +66,8 @@ pub(crate) struct DirectiveComment<'source> {
 /// `comment_start` is the comment's offset in the source, so name spans come
 /// out absolute.
 pub(crate) fn parse_directive(text: &str, comment_start: u32) -> Option<DirectiveComment<'_>> {
-    // Strip the dashes and a block comment's `[[`.
-    let body = text.trim_start_matches('-').trim_start_matches('[').trim_start();
+    // Strip the dashes and a block comment's `[[` or `[=[`.
+    let body = text.trim_start_matches('-').trim_start_matches(['[', '=']).trim_start();
 
     let (after_prefix, is_file_level) = if let Some(rest) = body.strip_prefix("#luck:") {
         (rest, true)
@@ -107,10 +107,10 @@ pub(crate) fn parse_directive(text: &str, comment_start: u32) -> Option<Directiv
         return None;
     }
 
-    // A block comment leaves a trailing `]]`. Any other word, like a
+    // A block comment leaves a trailing `]]` or `]=]`. Any other word, like a
     // misspelled `start`, disables the whole directive instead of quietly
     // turning a region into a single-statement directive.
-    let extent = match (after_close.trim().trim_end_matches(']').trim(), is_file_level) {
+    let extent = match (after_close.trim().trim_end_matches([']', '=']).trim(), is_file_level) {
         ("" | "start" | "end", true) => Some(Extent::File),
         ("", false) => Some(Extent::Statement),
         ("start", false) => Some(Extent::RegionStart),
@@ -222,7 +222,7 @@ fn sorted_stmt_spans(nodes: &Nodes<'_>) -> Vec<Span> {
         .filter_map(|node| match node.kind {
             NodeKind::Statement(stmt) => Some(stmt.span()),
             NodeKind::LastStatement(last_stmt) => Some(last_stmt.span()),
-            NodeKind::Expression(_) => None,
+            NodeKind::Expression(_) | NodeKind::Table(_) => None,
         })
         .collect();
     stmt_spans.sort_unstable_by_key(|span| span.start);
@@ -331,6 +331,13 @@ mod tests {
     fn parse_block_comment_ignores_closing_brackets() {
         let parsed = parse_directive("--[[ luck: allow(foo) end ]]", 0).expect("parse");
         assert_eq!(parsed.extent, Some(Extent::RegionEnd));
+    }
+
+    #[test]
+    fn parse_leveled_block_comment_ignores_its_brackets() {
+        let parsed = parse_directive("--[==[ luck: allow(foo) start ]==]", 0).expect("parse");
+        assert_eq!(parsed.extent, Some(Extent::RegionStart));
+        assert_eq!(parsed.rules[0].0, DirectiveRule::Named("foo"));
     }
 
     #[test]

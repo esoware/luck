@@ -33,16 +33,17 @@ impl NodeRule for DuplicateParameter {
 }
 
 /// Flags each parameter named like an earlier one, or `self` in a colon
-/// method, which already has an implicit `self`. `_` may repeat.
+/// method, which already has an implicit `self`. `_` may repeat, and a Lua
+/// 5.5 named vararg counts as the last parameter.
 fn duplicate_params(function: FunctionNode<'_>) -> impl Iterator<Item = Finding> {
-    let params = function.body.params.items.as_slice();
-    params.iter().enumerate().filter_map(move |(index, param)| {
-        let name = param.name.identifier().filter(|&name| name != "_")?;
+    let vararg_name = function.body.vararg.as_deref().and_then(|vararg| vararg.name.as_ref());
+    let names = function.body.params.items.iter().map(|param| &param.name).chain(vararg_name);
+    names.clone().enumerate().filter_map(move |(index, token)| {
+        let name = token.identifier().filter(|&name| name != "_")?;
         let is_duplicate = (function.is_method && name == "self")
-            || params.iter().take(index).any(|earlier| earlier.name.identifier() == Some(name));
-        is_duplicate.then(|| {
-            Finding::new(format!("parameter `{name}` is already defined"), param.name.span)
-        })
+            || names.clone().take(index).any(|earlier| earlier.identifier() == Some(name));
+        is_duplicate
+            .then(|| Finding::new(format!("parameter `{name}` is already defined"), token.span))
     })
 }
 
@@ -119,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_flags_named_vararg_matching_parameter() {
+    fn flags_named_vararg_matching_parameter() {
         let source = "local function f(a, ...a) return a end";
         let diags = run_rule(&DuplicateParameter, source, LuaVersion::Lua55);
         assert_eq!(diags.len(), 1, "the named vararg repeats parameter `a`: {diags:?}");

@@ -1,8 +1,8 @@
-//! Locals declared without a value, for the rules that follow what a local
-//! holds before anything assigns it.
+//! Locals declared without a value and the bare names field writes go
+//! through, for the rules that follow a local before anything assigns it.
 
 use luck_ast::{Expression, Statement, Var};
-use luck_semantic::{Reference, ScopeTree, Symbol, SymbolKind};
+use luck_semantic::{Reference, Symbol, SymbolKind};
 use luck_token::Span;
 
 /// What the scope tree doesn't record, sorted by position once [`Self::sort`]
@@ -87,19 +87,4 @@ impl UninitializedLocals {
     pub(crate) fn is_field_write_prefix(&self, reference: &Reference) -> bool {
         self.field_write_prefix_starts.binary_search(&reference.span.start).is_ok()
     }
-}
-
-/// The first reference to `symbol` in source order, from any scope.
-///
-/// Searching only the declaring scope would miss a write in an `if` or loop
-/// body, as in `local x if c then x = 1 end print(x)`.
-pub(crate) fn first_reference<'tree>(
-    symbol: &Symbol,
-    tree: &'tree ScopeTree,
-) -> Option<&'tree Reference> {
-    symbol
-        .reference_ids
-        .iter()
-        .map(|&reference_id| tree.reference(reference_id))
-        .min_by_key(|reference| reference.span.start)
 }

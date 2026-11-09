@@ -23,10 +23,15 @@ impl WholeRule for DuplicateFunction {
             definitions.clear();
             for stmt in &block.stmts {
                 // `redefining_local` covers local functions.
-                let Statement::FunctionDecl(decl) = stmt else {
+                let (declared_name, name_span) = if let Statement::FunctionDecl(decl) = stmt {
+                    (full_name(&decl.name), decl.name.span)
+                } else if let Statement::GlobalFunction(function) = stmt {
+                    // Lua 5.5
+                    (function.name.identifier().map(str::to_owned), function.name.span)
+                } else {
                     continue;
                 };
-                let Some(name) = full_name(&decl.name) else {
+                let Some(name) = declared_name else {
                     continue;
                 };
                 if let Some((_, first_span)) =
@@ -38,10 +43,10 @@ impl WholeRule for DuplicateFunction {
                         format!(
                             "duplicate function definition `{name}`, also defined on line {line}"
                         ),
-                        decl.name.span,
+                        name_span,
                     ));
                 } else {
-                    definitions.push((name, decl.name.span));
+                    definitions.push((name, name_span));
                 }
             }
         }
@@ -138,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_flags_duplicate_global_function() {
+    fn flags_duplicate_global_function() {
         let source = "global function f() end\nglobal function f() end";
         let diags = run_rule(&DuplicateFunction, source, LuaVersion::Lua55);
         assert_eq!(diags.len(), 1, "both statements define `f` in one block: {diags:?}");

@@ -31,9 +31,9 @@ Migrating from 0.2.x: `global_usage` named that broader policy through 0.2 and n
 
 Every rule implements the `Rule` trait through `impl_rule!`, which holds its identity: `name`, `category`, `default_severity`, and `description`. It also implements exactly one of two checking traits, and its `RULES` entry (`RuleEntry::Whole` or `RuleEntry::Node`) names which.
 
-Rules that need state across nodes (scope stacks, statement sequences, the scope tree's symbols) implement `WholeRule`, whose `fn check(&self, context: &LintContext<'_>) -> Vec<Finding>` sees the whole document at once. A rule that checks each block's statement list reads `context.blocks` instead of walking the tree, and any other walk goes through `Visitor`. The `LintContext` bundles the block, every block in pre-order, the locals declared without a value, the semantic analysis, the source text, the comment array, and the resolved config.
+Rules that need state across nodes (scope stacks, statement sequences, the scope tree's symbols) implement `WholeRule`, whose `fn check(&self, context: &LintContext<'_>) -> Vec<Finding>` sees the whole document at once. A rule that checks each block's statement list reads `context.blocks` instead of walking the tree, and any other walk goes through `Visitor`. The `LintContext` bundles the block, every block in pre-order, each function's block, the locals declared without a value, the flow facts about locals computed on first use, the semantic analysis, the source text, the comment array, and the resolved config.
 
-Rules whose logic is node-local implement `NodeRule` instead: per-node hooks (`on_stmt`, `on_expr`, and `on_call`, which gets every call in either position and marks which) that push onto a `Vec<Finding>`, and a `NodeTypeSet` of the `NodeType`s they act on. The `bus` makes one pass over the node table and calls each node rule only for the node types it declared, so every node rule shares a single traversal, and a node rule whose types don't occur in a file is skipped. In debug builds the driver re-runs every node rule on every node and asserts the results match, which catches a `node_types` set that misses a type.
+Rules whose logic is node-local implement `NodeRule` instead: per-node hooks (`on_stmt`, `on_expr`, `on_table`, which gets every table constructor including `f{...}` arguments, and `on_call`, which gets every call in either position and marks which) that push onto a `Vec<Finding>`, and a `NodeTypeSet` of the `NodeType`s they act on. The `bus` makes one pass over the node table and calls each node rule only for the node types it declared, so every node rule shares a single traversal, and a node rule whose types don't occur in a file is skipped. In debug builds the driver re-runs every node rule on every node and asserts the results match, which catches a `node_types` set that misses a type.
 
 A `Finding` holds only what differs per report: the message, span, optional help, and optional fix. The driver turns it into a public `LintDiagnostic` by adding the reporting rule's name and category and the severity the config resolves for it, so a rule can't report under another rule's name or set its own severity.
 
@@ -50,9 +50,10 @@ A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix`
 | `rule.rs` | `Rule`, `WholeRule`, and `NodeRule` traits, the `impl_rule!` macro, `CallPosition`, `LintContext` |
 | `rules.rs` | `RULES` registry, `rules()`, and the registered rule names |
 | `bus.rs` | The single-pass dispatch that drives every `NodeRule` in one shared walk |
-| `nodes.rs` | Flat pre-order node table (`Nodes::collect`) of borrowed `NodeKind` views that the bus walks, with the set of node types present, the pre-order block table whole rules read, and the `UninitializedLocals` built in the same walk |
+| `nodes.rs` | Flat pre-order node table (`Nodes::collect`) of borrowed `NodeKind` views that the bus walks, with the set of node types present, the pre-order block table whole rules read, the block of the chunk and each function, the `UninitializedLocals` built in the same walk, and `adjacent_stmts` for the rules that match neighboring statements |
 | `node_type.rs` | `NodeType`, one discriminant per statement, last-statement, and expression variant, and the `NodeTypeSet` bitset node rules declare |
-| `cfg.rs` | Control-flow analysis over statement slices (exits, decision points), used by some rules |
+| `cfg.rs` | `FlowGraph`, the control-flow graph of a block that rules ask how it ends and what can run, and the decision points `cyclomatic_complexity` counts |
+| `local_flow.rs` | `LocalFlow`, what each function's control flow says about its locals, shared by the rules that follow a local's value and computed once per chunk |
 | `diagnostic.rs` | `LintDiagnostic`, the `Finding` rules report, `Severity` and `Category` from `luck_core`, and the `line_column` positions that messages quote |
 | `suppression.rs` | `-- luck:` directive parsing, shared with `invalid_lint_filter`, and suppression |
 | `fix.rs` | `Fix` and `TextEdit`, and auto-fix application |
@@ -63,7 +64,7 @@ A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix`
 | `roblox.rs` | Shared helpers for the Roblox `<Global>.new(...)` constructor rules |
 | `suggest.rs` | Levenshtein distance and the nearest-candidate search behind "did you mean" suggestions |
 | `underscore_fix.rs` | The `_name` rename that `unused_variable`, `unused_argument`, and `unused_loop_variable` share, and when it's refused |
-| `uninitialized.rs` | Locals declared without a value, field writes through a bare name, and a symbol's first reference, shared by the rules that track a local before its first assignment |
+| `uninitialized.rs` | Locals declared without a value and field writes through a bare name, shared by the rules that track a local before its first assignment |
 | `rules/*.rs` | Individual rule implementations |
 
 ### Testing

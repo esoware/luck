@@ -1,11 +1,14 @@
 //! The traits lint rules implement, and the context their checks read.
 
-use luck_ast::{Block, Expression, FunctionCall, Statement};
+use std::sync::OnceLock;
+
+use luck_ast::{Block, Expression, FunctionCall, Statement, TableConstructor};
 use luck_core::LintConfig;
 use luck_semantic::SemanticAnalysis;
 use luck_token::Comment;
 
 use crate::diagnostic::{Category, Finding, Severity};
+use crate::local_flow::LocalFlow;
 use crate::node_type::NodeTypeSet;
 use crate::uninitialized::UninitializedLocals;
 
@@ -16,11 +19,21 @@ pub(crate) struct LintContext<'document> {
     /// Every block in the document, `block` first, in the default
     /// visitor's pre-order.
     pub blocks: &'document [&'document Block],
+    /// `block`, then the body of every function in it.
+    pub function_blocks: &'document [&'document Block],
     pub uninitialized_locals: &'document UninitializedLocals,
     pub semantic: &'document SemanticAnalysis,
     pub source: &'document str,
     pub comments: &'document [Comment],
     pub config: &'document LintConfig,
+    pub local_flow: OnceLock<LocalFlow>,
+}
+
+impl LintContext<'_> {
+    /// The flow facts about this document's locals, computed on first use.
+    pub(crate) fn local_flow(&self) -> &LocalFlow {
+        self.local_flow.get_or_init(|| LocalFlow::compute(self))
+    }
 }
 
 /// A rule's identity and defaults. Its `WholeRule` or `NodeRule` impl does
@@ -88,10 +101,21 @@ pub(crate) trait NodeRule: Rule {
     }
 
     /// Never gets an `Expression::FunctionCall`, which goes to
-    /// [`Self::on_call`].
+    /// [`Self::on_call`], or an `Expression::TableConstructor`, which goes
+    /// to [`Self::on_table`].
     fn on_expr(
         &self,
         _expr: &Expression,
+        _context: &LintContext<'_>,
+        _findings: &mut Vec<Finding>,
+    ) {
+    }
+
+    /// Runs for every table constructor, as an expression or a `f{...}`
+    /// argument.
+    fn on_table(
+        &self,
+        _table: &TableConstructor,
         _context: &LintContext<'_>,
         _findings: &mut Vec<Finding>,
     ) {

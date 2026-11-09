@@ -1,16 +1,10 @@
-use luck_semantic::{ReferenceKind, SymbolKind};
-use luck_token::Span;
-
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
-/// Flags a value written to a local and then overwritten before anything
-/// reads it (Luacheck 311).
+/// Flags a value written to a local that some path overwrites and no path
+/// reads first (Luacheck 311).
 ///
-/// This isn't a full reaching-definitions analysis. It tracks writes only in
-/// the declaring scope, in source order, and counts any reference from a
-/// nested scope as a read. That catches the linear `x = 1; x = 2` and stays
-/// quiet on `local x = 1; if c then x = 2 end; return x`.
+/// A captured local is skipped, since a closure can read it at any time.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ValueOverwrittenBeforeRead;
 
@@ -24,65 +18,23 @@ impl_rule!(
 
 impl WholeRule for ValueOverwrittenBeforeRead {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let scope_tree = &context.semantic.scope_tree;
-        let uninitialized_locals = context.uninitialized_locals;
-        let mut findings = Vec::new();
-
-        for symbol in &scope_tree.symbols {
-            if symbol.kind != SymbolKind::Local || symbol.name.starts_with('_') {
-                continue;
-            }
-            // A closure can read a captured local at any time, so source
-            // order proves nothing for upvalues.
-            if symbol.is_upvalue {
-                continue;
-            }
-
-            // A reference from a nested scope counts as a read, since a
-            // write inside a branch or loop might not run.
-            let mut references: Vec<(u32, ReferenceKind)> = symbol
-                .reference_ids
-                .iter()
-                .map(|&reference_id| {
-                    let reference = scope_tree.reference(reference_id);
-                    let kind = if reference.scope == symbol.scope {
-                        reference.kind
-                    } else {
-                        ReferenceKind::Read
-                    };
-                    (reference.span.start, kind)
-                })
-                .collect();
-            references.sort_by_key(|&(start, _)| start);
-
-            // Where the value no reference has read yet was written, if any.
-            // A `Local` comes only from a `local` statement, so one not
-            // declared bare starts with its initializer unread.
-            let mut unread_write =
-                (!uninitialized_locals.contains(symbol)).then_some(symbol.definition_span);
-            for (start, kind) in references {
-                match kind {
-                    ReferenceKind::Read => unread_write = None,
-                    ReferenceKind::Write => {
-                        if let Some(span) = unread_write {
-                            findings.push(overwritten_finding(&symbol.name, span));
-                        }
-                        unread_write = Some(Span::new(start, start));
-                    }
-                    // A compound assignment reads then writes, so the read
-                    // clears any pending write before its own registers.
-                    ReferenceKind::ReadWrite => unread_write = Some(Span::new(start, start)),
-                }
-            }
-        }
-
-        findings
+        let tree = &context.semantic.scope_tree;
+        context
+            .local_flow()
+            .overwritten_values
+            .iter()
+            .map(|&(symbol_id, span)| {
+                Finding::new(
+                    format!(
+                        "value assigned to `{}` is overwritten before it is read",
+                        tree.symbol(symbol_id).name
+                    ),
+                    span,
+                )
+                .with_help("remove the earlier assignment or read it first")
+            })
+            .collect()
     }
-}
-
-fn overwritten_finding(name: &str, span: Span) -> Finding {
-    Finding::new(format!("value assigned to `{name}` is overwritten before it is read"), span)
-        .with_help("remove the earlier assignment or read it first")
 }
 
 #[cfg(test)]
@@ -136,22 +88,34 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_assignment_reading_its_own_target() {
+    fn ignores_assignment_reading_its_own_target() {
         let diags = run("local x = 1\nx = x + 1\nreturn x");
         assert!(diags.is_empty(), "the right-hand side reads the old value: {diags:?}");
     }
 
     #[test]
-    fn bug_ignores_write_skipped_by_goto() {
+    fn ignores_write_skipped_by_goto() {
         let diags = run("local x = 1\nif c then goto skip end\nx = 2\n::skip::\nprint(x)");
         assert!(diags.is_empty(), "the `goto` path reads the initializer: {diags:?}");
     }
 
     #[test]
-    fn bug_points_at_the_overwritten_assignment() {
+    fn flags_the_overwritten_assignment_at_its_name() {
         let source = "local x\nx = 1\nx = 2\nreturn x";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(diags[0].span.text(source), "x", "the span should cover `x`: {diags:?}");
+    }
+
+    #[test]
+    fn flags_initializer_overwritten_on_every_branch() {
+        let diags = run("local x = 1\nif c then x = 2 else x = 3 end\nreturn x");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_value_read_in_the_next_iteration() {
+        let diags = run("local x = 1\nfor _ = 1, 3 do print(x)\nx = 2 end");
+        assert!(diags.is_empty(), "got: {diags:?}");
     }
 }

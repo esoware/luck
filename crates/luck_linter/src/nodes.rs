@@ -4,7 +4,9 @@
 //! The bus iterates the node table once, and rules that check each block
 //! read the block table, instead of each rule re-walking the tree.
 
-use luck_ast::{Block, Expression, LastStatement, Statement, Visitor};
+use luck_ast::{
+    Block, Expression, FunctionBody, LastStatement, Statement, TableConstructor, Visitor,
+};
 
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::uninitialized::UninitializedLocals;
@@ -14,7 +16,10 @@ use crate::uninitialized::UninitializedLocals;
 pub(crate) enum NodeKind<'ast> {
     Statement(&'ast Statement),
     LastStatement(&'ast LastStatement),
+    /// Never an `Expression::TableConstructor`, which is a [`Self::Table`].
     Expression(&'ast Expression),
+    /// A table in an expression or as a `f{...}` argument.
+    Table(&'ast TableConstructor),
 }
 
 /// One AST node, with its type computed once for the bus's buckets.
@@ -29,6 +34,7 @@ pub(crate) struct AstNode<'ast> {
 pub(crate) struct Nodes<'ast> {
     table: Vec<AstNode<'ast>>,
     blocks: Vec<&'ast Block>,
+    function_blocks: Vec<&'ast Block>,
     uninitialized_locals: UninitializedLocals,
     present_types: NodeTypeSet,
 }
@@ -40,6 +46,7 @@ impl<'ast> Nodes<'ast> {
             nodes: Self {
                 table: Vec::new(),
                 blocks: Vec::new(),
+                function_blocks: vec![block],
                 uninitialized_locals: UninitializedLocals::default(),
                 present_types: NodeTypeSet::new(),
             },
@@ -58,6 +65,11 @@ impl<'ast> Nodes<'ast> {
         &self.blocks
     }
 
+    /// The chunk's block, then every function's, nested ones included.
+    pub(crate) fn function_blocks(&self) -> &[&'ast Block] {
+        &self.function_blocks
+    }
+
     pub(crate) const fn uninitialized_locals(&self) -> &UninitializedLocals {
         &self.uninitialized_locals
     }
@@ -65,6 +77,12 @@ impl<'ast> Nodes<'ast> {
     pub(crate) const fn contains_any(&self, node_types: NodeTypeSet) -> bool {
         self.present_types.intersects(node_types)
     }
+}
+
+/// Each statement of `block` with the one after it, ignoring `;`.
+pub(crate) fn adjacent_stmts(block: &Block) -> impl Iterator<Item = (&Statement, &Statement)> {
+    let stmts = block.stmts.iter().filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_)));
+    stmts.clone().zip(stmts.skip(1))
 }
 
 struct NodeCollector<'ast> {
@@ -91,8 +109,20 @@ impl<'ast> Visitor<'ast> for NodeCollector<'ast> {
     }
 
     fn visit_expr(&mut self, expr: &'ast Expression) {
-        self.push_node(NodeKind::Expression(expr), NodeType::of_expr(expr));
+        if !matches!(expr, Expression::TableConstructor(_)) {
+            self.push_node(NodeKind::Expression(expr), NodeType::of_expr(expr));
+        }
         self.walk_expr(expr);
+    }
+
+    fn visit_table_constructor(&mut self, table: &'ast TableConstructor) {
+        self.push_node(NodeKind::Table(table), NodeType::TableConstructor);
+        self.walk_table_constructor(table);
+    }
+
+    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
+        self.nodes.function_blocks.push(&body.block);
+        self.walk_function_body(body);
     }
 
     fn visit_last_stmt(&mut self, last: &'ast LastStatement) {

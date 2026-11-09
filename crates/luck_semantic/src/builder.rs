@@ -9,7 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::scope::{
     Reference, ReferenceId, ReferenceKind, Scope, ScopeId, ScopeKind, ScopeTree, Symbol, SymbolId,
-    SymbolKind,
+    SymbolKind, crosses_function_boundary,
 };
 
 /// The `bindings` key of a live `global *`, which no identifier can equal.
@@ -464,23 +464,6 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
     fn visit_var(&mut self, var: &'ast Var) {
         self.reference_var(var, ReferenceKind::Read);
     }
-}
-
-fn crosses_function_boundary(scopes: &[Scope], from: ScopeId, to: ScopeId) -> bool {
-    let mut current = Some(from);
-    while let Some(scope_id) = current {
-        if scope_id == to {
-            return false;
-        }
-        let Some(scope) = scopes.get(scope_id.index()) else {
-            return false;
-        };
-        if scope.kind == ScopeKind::Function {
-            return true;
-        }
-        current = scope.parent;
-    }
-    false
 }
 
 #[cfg(test)]

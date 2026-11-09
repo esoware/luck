@@ -1,6 +1,6 @@
 use luck_ast::{Expression, Statement};
 
-use crate::cfg::analyze_full_block;
+use crate::cfg::decision_points;
 use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
 use crate::node_type::NodeTypeSet;
@@ -38,7 +38,7 @@ impl NodeRule for CyclomaticComplexity {
 fn check_function(function: FunctionNode<'_>, context: &LintContext<'_>) -> Option<Finding> {
     let threshold = context.config.max_cyclomatic_complexity?;
     // McCabe: one straight-line path plus one per decision point.
-    let complexity = analyze_full_block(&function.body.block).decision_points.saturating_add(1);
+    let complexity = decision_points(&function.body.block).saturating_add(1);
     (complexity > threshold).then(|| {
         // Slice the name from source so `mod.f` and `a.b:c` appear whole.
         let label = function.name_span.map_or_else(

@@ -22,7 +22,7 @@ impl WholeRule for SettingGlobal {
                 continue;
             }
             // Writing a known global like `print` isn't a forgotten `local`.
-            if semantic.is_known_global(&reference.name) {
+            if semantic.is_defined_global(reference) {
                 continue;
             }
             // `_` is a conventional discard name, not an accidental global.
@@ -83,13 +83,13 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_write_through_local_env() {
+    fn ignores_write_through_local_env() {
         let diags = run("local _ENV = {}\nx = 1");
         assert!(diags.is_empty(), "`x` is a field of the local `_ENV`: {diags:?}");
     }
 
     #[test]
-    fn bug_ignores_write_after_global_star() {
+    fn ignores_write_after_global_star() {
         let diags = run_rule(&SettingGlobal, "global *\nx = 1", LuaVersion::Lua55);
         assert!(diags.is_empty(), "`global *` declares every free name: {diags:?}");
     }

@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use luck_core::{LintConfig, LuaTarget};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{LuaVersion, SourceError, StdlibEnvironment};
@@ -72,11 +74,13 @@ pub fn lint_analyzed(
     let context = LintContext {
         block: &parse.block,
         blocks: nodes.blocks(),
+        function_blocks: nodes.function_blocks(),
         uninitialized_locals: nodes.uninitialized_locals(),
         semantic,
         source: &parse.source,
         comments: &parse.comments,
         config,
+        local_flow: OnceLock::new(),
     };
 
     let mut diags = run_rules(&context, &nodes);

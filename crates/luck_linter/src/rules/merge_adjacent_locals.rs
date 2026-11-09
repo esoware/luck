@@ -5,6 +5,7 @@ use rustc_hash::FxHashMap;
 
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit, comments_within};
+use crate::nodes::adjacent_stmts;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags two adjacent `local NAME = VALUE` statements that could be one
@@ -31,12 +32,12 @@ impl WholeRule for MergeAdjacentLocals {
             .collect();
         let mut findings = Vec::new();
         for block in context.blocks {
-            let mut pairs = block.stmts.windows(2);
-            while let Some(pair) = pairs.next() {
-                let [
+            let mut pairs = adjacent_stmts(block);
+            while let Some((first_stmt, second_stmt)) = pairs.next() {
+                let (
                     Statement::LocalAssignment(first_local),
                     Statement::LocalAssignment(second_local),
-                ] = pair
+                ) = (first_stmt, second_stmt)
                 else {
                     continue;
                 };
@@ -269,6 +270,14 @@ mod tests {
     fn ignores_uninitialized() {
         let diags = run("local a\nlocal b = 2");
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_locals_separated_by_semicolon() {
+        let source = "local a = 1; local b = 2";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(fix_and_reparse(source, &diags, LuaVersion::Lua54), "local a, b = 1, 2");
     }
 
     #[test]

@@ -37,6 +37,7 @@ mod fix;
 mod fixtures;
 mod format_pattern;
 mod function_node;
+mod local_flow;
 mod node_type;
 mod nodes;
 mod number;

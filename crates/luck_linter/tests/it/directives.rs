@@ -159,7 +159,7 @@ fn wildcard_allow_covers_only_next_stmt() {
 }
 
 #[test]
-fn bug_allow_in_leveled_block_comment_covers_next_stmt() {
+fn allow_in_leveled_block_comment_covers_next_stmt() {
     let diags = lint(
         "--[=[ luck: allow(unused_variable) ]=]\nlocal unused = 1",
         LuaVersion::Lua54,

@@ -1,15 +1,17 @@
 use luck_ast::{Expression, Statement};
+use luck_semantic::SemanticAnalysis;
 
-use crate::cfg::analyze_full_block;
+use crate::cfg::{Exit, FlowGraph};
 use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
 use crate::node_type::NodeTypeSet;
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
-/// Flags functions that return on some paths but fall off the end on
+/// Flags functions that return a value on some paths but fall off the end on
 /// others.
 ///
-/// A function with no `return` at all is a procedure and isn't flagged.
+/// A function that never returns a value is a procedure and isn't flagged,
+/// so a bare `return` used as a guard clause doesn't count.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ImplicitReturn;
 
@@ -27,17 +29,23 @@ impl NodeRule for ImplicitReturn {
     fn node_types(&self) -> NodeTypeSet {
         FunctionNode::NODE_TYPES
     }
-    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        findings.extend(FunctionNode::of_stmt(stmt).and_then(check_function));
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        findings.extend(
+            FunctionNode::of_stmt(stmt)
+                .and_then(|function| check_function(function, context.semantic)),
+        );
     }
-    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        findings.extend(FunctionNode::of_expr(expr).and_then(check_function));
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        findings.extend(
+            FunctionNode::of_expr(expr)
+                .and_then(|function| check_function(function, context.semantic)),
+        );
     }
 }
 
-fn check_function(function: FunctionNode<'_>) -> Option<Finding> {
-    let summary = analyze_full_block(&function.body.block);
-    (summary.can_return && !summary.always_returns()).then(|| {
+fn check_function(function: FunctionNode<'_>, semantic: &SemanticAnalysis) -> Option<Finding> {
+    let graph = FlowGraph::of_block(&function.body.block, semantic);
+    (graph.reaches(Exit::ReturnValue) && graph.reaches(Exit::End)).then(|| {
         Finding::new("function returns on some paths but falls through on others", function.span)
             .with_help("add a `return` on the fallthrough path to make the implicit `nil` explicit")
     })
@@ -145,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_flags_fallthrough_after_while_true_with_conditional_break() {
+    fn flags_fallthrough_after_while_true_with_conditional_break() {
         let diags = run(
             "local function f(c, d) if c then return 1 end while true do if d then break end end end",
         );
@@ -153,21 +161,27 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_return_after_repeat_continue_until_true() {
+    fn ignores_return_after_repeat_continue_until_true() {
         let source = "local function f(x)\n if x then return 1 end\n repeat continue until true\n return 2\nend";
         let diags = run_rule(&ImplicitReturn, source, LuaVersion::Luau);
         assert!(diags.is_empty(), "`continue` ends the repeat, so `return 2` runs: {diags:?}");
     }
 
     #[test]
-    fn bug_ignores_while_one_infinite_loop() {
+    fn ignores_while_one_infinite_loop() {
         let diags = run("local function f(x) while 1 do if x then return 1 end end end");
         assert!(diags.is_empty(), "`1` is always truthy, so nothing falls through: {diags:?}");
     }
 
     #[test]
-    fn bug_ignores_guard_clause_bare_return() {
+    fn ignores_guard_clause_bare_return() {
         let diags = run("local function f(x) if not x then return end print(x) end");
         assert!(diags.is_empty(), "no path returns a value, so no `nil` is implicit: {diags:?}");
+    }
+
+    #[test]
+    fn flags_value_return_beside_a_guard_clause() {
+        let diags = run("local function f(x, y) if x then return end if y then return 1 end end");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 }

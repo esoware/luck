@@ -1,4 +1,4 @@
-use luck_ast::{Expression, Field};
+use luck_ast::{Field, TableConstructor};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -21,10 +21,12 @@ impl NodeRule for MixedTable {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::TableConstructor])
     }
-    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let Expression::TableConstructor(table) = expr else {
-            return;
-        };
+    fn on_table(
+        &self,
+        table: &TableConstructor,
+        _context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         let mut has_positional = false;
         let mut has_named = false;
         for field in table.fields.iter() {
@@ -101,7 +103,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_flags_mixed_table_in_table_call_argument() {
+    fn flags_mixed_table_in_table_call_argument() {
         let diags = run("foo{ 1, x = 2 }");
         assert_eq!(diags.len(), 1, "a `f{{...}}` table is a table constructor: {diags:?}");
     }

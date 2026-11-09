@@ -4,6 +4,7 @@ use luck_token::{Span, Token, UnOp};
 
 use crate::call::is_global_call;
 use crate::diagnostic::Finding;
+use crate::nodes::adjacent_stmts;
 use crate::number::is_number_literal;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
@@ -36,8 +37,8 @@ impl WholeRule for ManualTableClone {
         context
             .blocks
             .iter()
-            .flat_map(|block| block.stmts.windows(2))
-            .filter_map(|pair| manual_copy_span(pair, suggestion, semantic))
+            .flat_map(|block| adjacent_stmts(block))
+            .filter_map(|(first, second)| manual_copy_span(first, second, suggestion, semantic))
             .map(|span| {
                 Finding::new("manual table copy can be replaced with a stdlib call", span)
                     .with_help(suggestion.help())
@@ -75,14 +76,15 @@ impl Suggestion {
     }
 }
 
-/// The span from the `local` through the loop, when `pair` is
-/// `local out = {}` and then a copy loop that `suggestion` can replace.
+/// The span from the `local` through the loop, when `stmt` is
+/// `local out = {}` and `next` a copy loop that `suggestion` can replace.
 fn manual_copy_span(
-    pair: &[Statement],
+    stmt: &Statement,
+    next: &Statement,
     suggestion: Suggestion,
     semantic: &SemanticAnalysis,
 ) -> Option<Span> {
-    let [Statement::LocalAssignment(local), next] = pair else {
+    let Statement::LocalAssignment(local) = stmt else {
         return None;
     };
     let destination = single_empty_table_local(local)?;
@@ -380,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_flags_copy_after_semicolon() {
+    fn flags_copy_after_semicolon() {
         let source = "local out = {};\nfor i = 1, #src do out[i] = src[i] end";
         let diags = run(source, LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "a `;` doesn't change the copy: {diags:?}");

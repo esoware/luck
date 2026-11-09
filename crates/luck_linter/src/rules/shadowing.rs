@@ -1,3 +1,5 @@
+use luck_semantic::SymbolKind;
+
 use crate::diagnostic::{Finding, line_column};
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
@@ -21,8 +23,9 @@ impl WholeRule for Shadowing {
             let Some(shadowed_id) = symbol.shadows else {
                 continue;
             };
-            // A leading `_` marks a name as deliberately unused.
-            if symbol.name.starts_with('_') {
+            // A leading `_` marks a name as deliberately unused, and an
+            // implicit `self` has no name the author could change.
+            if symbol.name.starts_with('_') || symbol.kind == SymbolKind::ImplicitSelf {
                 continue;
             }
             let shadowed = semantic.scope_tree.symbol(shadowed_id);
@@ -81,10 +84,17 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_implicit_self_of_nested_method() {
+    fn ignores_implicit_self_of_nested_method() {
         let diags = run(
             "local M = {}\nfunction M:a()\n local t = {}\n function t:b() return self end\n return t\nend\nreturn M",
         );
         assert!(diags.is_empty(), "an implicit `self` has no name to change: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_local_arg_in_a_lua51_vararg_function() {
+        let source = "local function f(...) local arg = { ... } return arg end";
+        let diags = run_rule(&Shadowing, source, LuaVersion::Lua51);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

@@ -41,6 +41,7 @@ fn dispatch(
         }
         NodeKind::Statement(stmt) => rule.on_stmt(stmt, context, findings),
         NodeKind::Expression(expr) => rule.on_expr(expr, context, findings),
+        NodeKind::Table(table) => rule.on_table(table, context, findings),
         // In the node table for suppression, with no hook of their own.
         NodeKind::LastStatement(_) => {}
     }

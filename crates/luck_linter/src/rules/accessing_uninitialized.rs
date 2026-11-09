@@ -1,9 +1,8 @@
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
-use crate::uninitialized::first_reference;
 
-/// Luacheck 321: a local declared without a value is read before anything
-/// is assigned to it.
+/// Luacheck 321: a local declared without a value is read where no assignment
+/// can have reached it.
 ///
 /// Only a bare `local x` counts. `local x = nil` is initialized, and
 /// `redundant_nil_init` covers it instead. A field or index write through the
@@ -22,19 +21,17 @@ impl_rule!(
 impl WholeRule for AccessingUninitialized {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let tree = &context.semantic.scope_tree;
-        let uninitialized_locals = context.uninitialized_locals;
-        tree.symbols
+        context
+            .local_flow()
+            .first_unassigned_uses
             .iter()
-            .filter(|symbol| uninitialized_locals.contains(symbol) && !symbol.name.starts_with('_'))
-            .filter_map(|symbol| {
-                let first = first_reference(symbol, tree)?;
-                let is_read =
-                    first.kind.is_read() && !uninitialized_locals.is_field_write_prefix(first);
-                is_read.then(|| {
+            .filter_map(|&(symbol_id, reference_id)| {
+                let first = tree.reference(reference_id);
+                (!context.uninitialized_locals.is_field_write_prefix(first)).then(|| {
                     Finding::new(
                         format!(
                             "`{}` is read before any value is assigned, so it is `nil`",
-                            symbol.name
+                            tree.symbol(symbol_id).name
                         ),
                         first.span,
                     )
@@ -109,7 +106,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_forward_declaration_read_in_closure() {
+    fn ignores_forward_declaration_read_in_closure() {
         let diags = run(
             "local helper\nlocal function main() return helper() end\nhelper = function() return 1 end\nreturn main()",
         );
@@ -117,22 +114,46 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_read_of_value_written_in_previous_iteration() {
+    fn ignores_read_of_value_written_in_previous_iteration() {
         let diags =
             run("local last\nfor _, v in ipairs({1}) do if last then print(last) end last = v end");
         assert!(diags.is_empty(), "later iterations read the written value: {diags:?}");
     }
 
     #[test]
-    fn bug_ignores_read_after_backward_goto() {
+    fn ignores_read_after_backward_goto() {
         let diags =
             run("local x\ngoto set\n::use::\nprint(x)\ndo return end\n::set::\nx = 1\ngoto use");
         assert!(diags.is_empty(), "the assignment runs before the read: {diags:?}");
     }
 
     #[test]
-    fn bug_flags_read_in_own_first_assignment() {
+    fn flags_read_in_own_first_assignment() {
         let diags = run("local x\nx = x + 1\nreturn x");
         assert_eq!(diags.len(), 1, "the right-hand side reads `nil`: {diags:?}");
+    }
+
+    #[test]
+    fn flags_read_in_the_branch_that_skips_the_write() {
+        let diags = run("local x\nif c then x = 1 else print(x) end");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_read_before_the_closure_that_writes_it() {
+        let diags = run("local x\nprint(x)\nlocal function set() x = 1 end\nset()");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_read_after_a_closure_that_writes_it() {
+        let diags = run("local x\nlocal function set() x = 1 end\nset()\nprint(x)");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_read_after_the_loop_redeclares_the_local() {
+        let diags = run("for _ = 1, 3 do local x\nprint(x)\nx = 1 end");
+        assert_eq!(diags.len(), 1, "a fresh `x` starts each iteration: {diags:?}");
     }
 }

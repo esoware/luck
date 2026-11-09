@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use luck_core::LintConfig;
 use luck_parser::ParseResult;
 use luck_token::{LuaVersion, Span, StdlibEnvironment};
@@ -69,11 +71,13 @@ fn check(
     let context = LintContext {
         block: &parse.block,
         blocks: nodes.blocks(),
+        function_blocks: nodes.function_blocks(),
         uninitialized_locals: nodes.uninitialized_locals(),
         semantic: &semantic,
         source: &parse.source,
         comments: &parse.comments,
         config,
+        local_flow: OnceLock::new(),
     };
     let entry = RULES
         .iter()

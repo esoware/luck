@@ -1,5 +1,3 @@
-use rustc_hash::FxHashSet;
-
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
@@ -17,40 +15,24 @@ impl_rule!(
 impl WholeRule for UndefinedVariable {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let mut findings = Vec::new();
-
-        // Globals this file assigns (`function f() end`, `counter = 0`)
-        // count as defined everywhere in it, or script-style Lua would
-        // error on every use.
-        let assigned_globals: FxHashSet<&str> = semantic
+        semantic
             .scope_tree
             .unresolved_references()
-            .filter(|reference| reference.kind.is_write())
-            .map(|reference| reference.name.as_str())
-            .collect();
-
-        for reference in semantic.scope_tree.unresolved_references() {
-            // `setting_global` owns writes to undeclared names.
-            if reference.kind.is_write() {
-                continue;
-            }
-            if semantic.is_known_global(&reference.name) {
-                continue;
-            }
-            if reference.name == "_" {
-                continue;
-            }
-            if assigned_globals.contains(reference.name.as_str()) {
-                continue;
-            }
-
-            findings.push(
+            .filter(|reference| {
+                // `setting_global` owns writes, and a global this file writes
+                // (`function f() end`, `counter = 0`) counts as defined
+                // everywhere in it, or script-style Lua would error on every
+                // use.
+                !reference.kind.is_write()
+                    && !semantic.is_defined_global(reference)
+                    && reference.name != "_"
+                    && !semantic.scope_tree.assigned_globals.contains(&reference.name)
+            })
+            .map(|reference| {
                 Finding::new(format!("undefined variable `{}`", reference.name), reference.span)
-                    .with_help("declare it with `local`, or add it to `extra_globals`"),
-            );
-        }
-
-        findings
+                    .with_help("declare it with `local`, or add it to `extra_globals`")
+            })
+            .collect()
     }
 }
 
@@ -105,21 +87,28 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_read_through_local_env() {
+    fn ignores_read_through_local_env() {
         let diags = run("local _ENV = { y = 1 }\nreturn y");
         assert!(diags.is_empty(), "`y` is a field of the local `_ENV`: {diags:?}");
     }
 
     #[test]
-    fn bug_ignores_read_after_global_star() {
+    fn ignores_read_after_global_star() {
         let diags = run_rule(&UndefinedVariable, "global *\nreturn y", LuaVersion::Lua55);
         assert!(diags.is_empty(), "`global *` declares every free name: {diags:?}");
     }
 
     #[test]
-    fn bug_ignores_types_library_in_type_function() {
+    fn ignores_types_library_in_type_function() {
         let source = "type function t1(a)\n return types.string\nend";
         let diags = run_rule(&UndefinedVariable, source, LuaVersion::Luau);
         assert!(diags.is_empty(), "type functions have the `types` library: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_implicit_arg_table_of_a_lua51_vararg_function() {
+        let diags =
+            run_rule(&UndefinedVariable, "local function f(...) return arg end", LuaVersion::Lua51);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

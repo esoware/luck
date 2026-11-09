@@ -229,6 +229,30 @@ impl ScopeTree {
     pub fn unresolved_references(&self) -> impl Iterator<Item = &Reference> {
         self.references.iter().filter(|reference| self.is_global(reference))
     }
+
+    /// Whether code in the scope `from` runs in a function nested inside the
+    /// scope `to`, rather than in the function that holds `to`.
+    #[must_use]
+    pub fn crosses_function_boundary(&self, from: ScopeId, to: ScopeId) -> bool {
+        crosses_function_boundary(&self.scopes, from, to)
+    }
+}
+
+pub(crate) fn crosses_function_boundary(scopes: &[Scope], from: ScopeId, to: ScopeId) -> bool {
+    let mut current = Some(from);
+    while let Some(scope_id) = current {
+        if scope_id == to {
+            return false;
+        }
+        let Some(scope) = scopes.get(scope_id.index()) else {
+            return false;
+        };
+        if scope.kind == ScopeKind::Function {
+            return true;
+        }
+        current = scope.parent;
+    }
+    false
 }
 
 #[cfg(test)]

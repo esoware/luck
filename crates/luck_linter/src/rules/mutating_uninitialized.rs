@@ -1,9 +1,8 @@
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
-use crate::uninitialized::first_reference;
 
 /// Flags a field or index write on a local declared without a value, before
-/// anything assigns the local itself (Luacheck 341). `local x; x.foo = 1`
+/// any assignment can have reached it (Luacheck 341). `local x; x.foo = 1`
 /// indexes `nil`.
 ///
 /// The scope tree records the `x` in `x.foo = ...` as a plain read, so
@@ -23,17 +22,17 @@ impl_rule!(
 impl WholeRule for MutatingUninitialized {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let tree = &context.semantic.scope_tree;
-        let uninitialized_locals = context.uninitialized_locals;
-        tree.symbols
+        context
+            .local_flow()
+            .first_unassigned_uses
             .iter()
-            .filter(|symbol| uninitialized_locals.contains(symbol) && !symbol.name.starts_with('_'))
-            .filter_map(|symbol| {
-                let first = first_reference(symbol, tree)?;
-                uninitialized_locals.is_field_write_prefix(first).then(|| {
+            .filter_map(|&(symbol_id, reference_id)| {
+                let first = tree.reference(reference_id);
+                context.uninitialized_locals.is_field_write_prefix(first).then(|| {
                     Finding::new(
                         format!(
                             "field/index assignment on uninitialized `{}` (value is `nil`)",
-                            symbol.name
+                            tree.symbol(symbol_id).name
                         ),
                         first.span,
                     )
@@ -95,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_forward_declaration_field_write_in_closure() {
+    fn ignores_forward_declaration_field_write_in_closure() {
         let diags = run("local M\nlocal function init() M.x = 1 end\nM = {}\ninit()");
         assert!(diags.is_empty(), "the closure runs after the assignment: {diags:?}");
     }

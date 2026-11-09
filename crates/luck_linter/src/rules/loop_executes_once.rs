@@ -1,6 +1,6 @@
 use luck_ast::Statement;
 
-use crate::cfg::{Exit, analyze_full_block};
+use crate::cfg::{Exit, FlowGraph};
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, impl_rule};
@@ -28,7 +28,7 @@ impl NodeRule for LoopExecutesOnce {
             NodeType::GenericFor,
         ])
     }
-    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let (body, span, kind) = match stmt {
             Statement::WhileLoop(node) => (&node.block, node.span, "`while`"),
             Statement::RepeatLoop(node) => (&node.block, node.span, "`repeat`"),
@@ -52,11 +52,18 @@ impl NodeRule for LoopExecutesOnce {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => return,
         };
-        let label = match analyze_full_block(body).exit {
-            Exit::Return => "always returns",
-            Exit::Break => "always breaks",
-            Exit::Error => "always errors",
-            Exit::Continue | Exit::Normal => return,
+        let graph = FlowGraph::of_block(body, context.semantic);
+        if graph.reaches(Exit::End) {
+            return;
+        }
+        let can_return = graph.reaches(Exit::ReturnValue) || graph.reaches(Exit::ReturnEmpty);
+        let label = match (can_return, graph.reaches(Exit::Break), graph.reaches(Exit::Error)) {
+            (true, false, _) => "always returns",
+            (false, true, false) => "always breaks",
+            // A body stuck in an inner infinite loop reaches no exit, and
+            // never starts another iteration either.
+            (false, false, _) => "always errors",
+            (true, true, _) | (false, true, true) => "always exits",
         };
         findings.push(
             Finding::new(
@@ -142,14 +149,14 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_loop_with_conditional_continue() {
+    fn ignores_loop_with_conditional_continue() {
         let source = "for _, v in ipairs(t) do if v then continue end return v end";
         let diags = run_rule(&LoopExecutesOnce, source, LuaVersion::Luau);
         assert!(diags.is_empty(), "`continue` starts another iteration: {diags:?}");
     }
 
     #[test]
-    fn bug_ignores_loop_with_goto_continue() {
+    fn ignores_loop_with_goto_continue() {
         let diags = run(
             "for _, v in ipairs(t) do if v then goto continue end do return v end ::continue:: end",
         );
@@ -157,14 +164,21 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_outer_loop_around_while_true_with_conditional_break() {
+    fn ignores_outer_loop_around_while_true_with_conditional_break() {
         let diags = run("for i = 1, 3 do while true do if i then break end end end");
         assert!(diags.is_empty(), "the inner `break` lets the outer loop go on: {diags:?}");
     }
 
     #[test]
-    fn bug_ignores_shadowed_error_call() {
+    fn ignores_shadowed_error_call() {
         let diags = run("local function error(text) print(text) end\nfor i = 1, 3 do error(i) end");
         assert!(diags.is_empty(), "a local `error` doesn't raise: {diags:?}");
+    }
+
+    #[test]
+    fn flags_body_that_always_exits_one_of_two_ways() {
+        let diags = run("for i = 1, 3 do if i then break else return end end");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+        assert!(diags[0].message.contains("always exits"), "got: {diags:?}");
     }
 }

@@ -4,6 +4,7 @@
 use luck_ast::{Expression, LastStatement, Statement};
 
 /// One variant per `Statement`, `LastStatement`, and `Expression` variant.
+/// `TableConstructor` also covers a `f{...}` argument.
 ///
 /// `of_stmt`, `of_last_stmt`, and `of_expr` match exhaustively, so a new AST
 /// variant doesn't compile until it has a `NodeType`.
