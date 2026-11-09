@@ -54,7 +54,7 @@ pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
 pub use punctuated::Punctuated;
 pub use query::{
     DottedPath, dotted_path, expr_starts_with_brace, is_multi_value, is_prefix_expr,
-    stmt_starts_with_paren,
+    stmt_starts_with_paren, unwrap_parentheses,
 };
 pub use stack::ensure_sufficient_stack;
 pub use stmt::{

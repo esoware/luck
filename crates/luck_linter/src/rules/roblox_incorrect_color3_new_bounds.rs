@@ -36,7 +36,7 @@ impl NodeRule for RobloxIncorrectColor3NewBounds {
         };
         let has_out_of_bounds = args
             .iter()
-            .filter_map(signed_number_value)
+            .filter_map(|arg| signed_number_value(arg, context.semantic.version))
             .any(|value| !(0.0f64..=1.0f64).contains(&value));
         if has_out_of_bounds {
             findings.push(

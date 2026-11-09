@@ -3,7 +3,7 @@ use core::fmt;
 use core::ops::Range;
 
 use luck_core::LintConfig;
-use luck_token::{LuaVersion, Span};
+use luck_token::{Comment, LuaVersion, Span};
 
 use crate::diagnostic::LintDiagnostic;
 use crate::driver::lint;
@@ -22,6 +22,14 @@ pub struct Fix {
 pub struct TextEdit {
     pub span: Span,
     pub replacement: String,
+}
+
+/// The comments that sit inside `span`, which a fix rewriting `span` would
+/// delete. `comments` is in source order.
+pub(crate) fn comments_within(comments: &[Comment], span: Span) -> &[Comment] {
+    let first = comments.partition_point(|comment| comment.span.start < span.start);
+    let last = comments.partition_point(|comment| comment.span.end <= span.end);
+    comments.get(first..last).unwrap_or_default()
 }
 
 /// Applies the diagnostics' fixes to `source` in one pass.

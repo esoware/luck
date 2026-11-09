@@ -326,25 +326,25 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_error_without_arguments() {
+    fn ignores_error_without_arguments() {
         let messages = run("error()", LuaVersion::Lua54);
         assert!(messages.is_empty(), "`error()` raises a nil error: {messages:?}");
     }
 
     #[test]
-    fn bug_ignores_setlocale_without_arguments() {
+    fn ignores_setlocale_without_arguments() {
         let messages = run("local l = os.setlocale()", LuaVersion::Lua54);
         assert!(messages.is_empty(), "`os.setlocale()` queries the locale: {messages:?}");
     }
 
     #[test]
-    fn bug_ignores_collectgarbage_collect_on_luau() {
+    fn ignores_collectgarbage_collect_on_luau() {
         let messages = run("collectgarbage('collect')", LuaVersion::Luau);
         assert!(messages.is_empty(), "standalone Luau accepts `collect`: {messages:?}");
     }
 
     #[test]
-    fn bug_ignores_setmajorinc_on_lua52() {
+    fn ignores_setmajorinc_on_lua52() {
         let messages = run("local n = collectgarbage(\"setmajorinc\", 100)", LuaVersion::Lua52);
         assert!(messages.is_empty(), "Lua 5.2 accepts `setmajorinc`: {messages:?}");
     }

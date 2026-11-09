@@ -1,8 +1,9 @@
-use luck_ast::Expression;
-use luck_token::BinOp;
+use luck_ast::{Expression, Statement};
+use luck_token::{BinOp, CompoundOp, Span};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
+use crate::number::is_number_literal;
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags `/`, `%`, and `//` with a literal zero divisor.
@@ -23,39 +24,30 @@ impl_rule!(
 
 impl NodeRule for DivideByZero {
     fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::BinaryOp])
+        NodeTypeSet::from_types(&[NodeType::BinaryOp, NodeType::CompoundAssignment])
     }
-    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Expression::BinaryOp(binary) = expr
             && let Some(op_name) = divisive_op_name(binary.op)
-            && is_zero_literal(&binary.right)
+            && is_number_literal(&binary.right, 0.0, context.semantic.version)
         {
-            findings.push(
-                Finding::new(format!("{op_name} by literal zero"), binary.span).with_help(
-                    "guard with an `if divisor ~= 0 then` check or use a nonzero constant",
-                ),
-            );
+            findings.push(zero_divisor_finding(op_name, binary.span));
+        }
+    }
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        // Luau
+        if let Statement::CompoundAssignment(compound) = stmt
+            && let Some(op_name) = compound_divisive_op_name(compound.op)
+            && is_number_literal(&compound.expr, 0.0, context.semantic.version)
+        {
+            findings.push(zero_divisor_finding(op_name, compound.span));
         }
     }
 }
 
-/// Whether `expr` is a number literal equal to zero, such as `0`, `0.0`,
-/// `0x0`, or `0e0`.
-fn is_zero_literal(expr: &Expression) -> bool {
-    let Expression::Number(literal) = expr else {
-        return false;
-    };
-    let text = literal.text.as_str();
-    if let Ok(value) = text.parse::<f64>() {
-        return value == 0.0;
-    }
-    // `f64::from_str` doesn't take hex.
-    if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        return rest
-            .bytes()
-            .all(|byte| byte == b'0' || byte == b'.' || byte == b'p' || byte == b'P');
-    }
-    false
+fn zero_divisor_finding(op_name: &str, span: Span) -> Finding {
+    Finding::new(format!("{op_name} by literal zero"), span)
+        .with_help("guard with an `if divisor ~= 0 then` check or use a nonzero constant")
 }
 
 const fn divisive_op_name(op: BinOp) -> Option<&'static str> {
@@ -82,6 +74,19 @@ const fn divisive_op_name(op: BinOp) -> Option<&'static str> {
         | BinOp::BitXor
         | BinOp::Shl
         | BinOp::Shr => None,
+    }
+}
+
+const fn compound_divisive_op_name(op: CompoundOp) -> Option<&'static str> {
+    match op {
+        CompoundOp::Div => Some("division"),
+        CompoundOp::Mod => Some("modulo"),
+        CompoundOp::FloorDiv => Some("floor division"),
+        CompoundOp::Add
+        | CompoundOp::Sub
+        | CompoundOp::Mul
+        | CompoundOp::Pow
+        | CompoundOp::Concat => None,
     }
 }
 
@@ -141,14 +146,38 @@ mod tests {
     }
 
     #[test]
-    fn bug_flags_compound_division_by_zero_on_luau() {
+    fn flags_compound_division_by_zero_on_luau() {
         let diags = run("local x = 1\nx /= 0", LuaVersion::Luau);
         assert_eq!(diags.len(), 1, "`x /= 0` divides by a literal zero: {diags:?}");
     }
 
     #[test]
-    fn bug_flags_binary_zero_divisor_on_luau() {
+    fn flags_binary_zero_divisor_on_luau() {
         let diags = run("local r = x / 0b0", LuaVersion::Luau);
         assert_eq!(diags.len(), 1, "`0b0` is a literal zero: {diags:?}");
+    }
+
+    #[test]
+    fn flags_zero_hex_float() {
+        let diags = run("local r = x / 0x0p0", LuaVersion::Lua54);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_nonzero_hex_float() {
+        let diags = run("local r = x / 0x1p4", LuaVersion::Lua54);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_compound_modulo_by_underscored_zero_on_luau() {
+        let diags = run("local x = 1\nx %= 0_0", LuaVersion::Luau);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_compound_multiplication_by_zero_on_luau() {
+        let diags = run("local x = 1\nx *= 0", LuaVersion::Luau);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

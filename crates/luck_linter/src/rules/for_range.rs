@@ -1,5 +1,5 @@
 use luck_ast::{Expression, NumericFor, Statement, Var};
-use luck_token::UnOp;
+use luck_token::{LuaVersion, UnOp};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -26,9 +26,9 @@ impl NodeRule for ForRange {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::NumericFor])
     }
-    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Statement::NumericFor(numeric_for) = stmt
-            && let Some((message, help)) = range_problem(numeric_for)
+            && let Some((message, help)) = range_problem(numeric_for, context.semantic.version)
         {
             findings.push(Finding::new(message, numeric_for.span).with_help(help));
         }
@@ -36,10 +36,10 @@ impl NodeRule for ForRange {
 }
 
 /// The message and help for what's wrong with a loop's range, if anything.
-fn range_problem(numeric_for: &NumericFor) -> Option<(String, &'static str)> {
-    let start = signed_number_value(&numeric_for.start);
-    let limit = signed_number_value(&numeric_for.limit);
-    let step = numeric_for.step.as_ref().and_then(signed_number_value);
+fn range_problem(numeric_for: &NumericFor, version: LuaVersion) -> Option<(String, &'static str)> {
+    let start = signed_number_value(&numeric_for.start, version);
+    let limit = signed_number_value(&numeric_for.limit, version);
+    let step = numeric_for.step.as_ref().and_then(|step| signed_number_value(step, version));
 
     // A zero step loops forever before Lua 5.4 and raises an error from 5.4
     // on.
@@ -167,8 +167,6 @@ fn is_length_of_identifier(expr: &Expression) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
@@ -279,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_flags_underscore_separated_bound_on_luau() {
+    fn flags_underscore_separated_bound_on_luau() {
         let diags = run_rule(&ForRange, "for i = 1_000, 1, 1 do print(i) end", LuaVersion::Luau);
         assert_eq!(diags.len(), 1, "1_000 is a number literal above the limit: {diags:?}");
     }

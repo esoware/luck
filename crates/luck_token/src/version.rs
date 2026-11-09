@@ -483,6 +483,76 @@ impl LuaVersion {
             Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Luau => false,
         }
     }
+
+    /// Whether `string.format` takes `%a` and `%A` (5.2+, not Luau).
+    #[must_use]
+    pub const fn has_hex_float_format(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Luau => false,
+        }
+    }
+
+    /// Whether `string.format` takes `%p` (5.4+).
+    #[must_use]
+    pub const fn has_pointer_format(self) -> bool {
+        match self {
+            Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Luau => false,
+        }
+    }
+
+    /// Whether `string.format` takes `%*`, which formats any value (Luau).
+    #[must_use]
+    pub const fn has_star_format(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Whether `string.format` checks a specifier's flags, width, and
+    /// precision against its conversion, as 5.4's `checkformat` does. Earlier
+    /// versions and Luau only limit how many there are.
+    #[must_use]
+    pub const fn has_checked_format_modifiers(self) -> bool {
+        match self {
+            Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Luau => false,
+        }
+    }
+
+    /// Whether a `gsub` replacement string raises an error on a `%` before
+    /// anything but a digit or `%`, a trailing one included. Lua 5.1 copies
+    /// the following character.
+    #[must_use]
+    pub const fn has_strict_gsub_replacement(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
+            Self::Lua51 => false,
+        }
+    }
+
+    /// Whether `os.date` checks its conversion specifiers. Lua 5.1 passes
+    /// the whole format to `strftime`.
+    #[must_use]
+    pub const fn has_checked_date_format(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
+            Self::Lua51 => false,
+        }
+    }
+
+    /// Whether `os.date` reads specifiers through a `checkoption` table,
+    /// with C99 and two-character forms and an error on a trailing `%`
+    /// (5.2+). Luau checks one C89 list and keeps a trailing `%`.
+    #[must_use]
+    pub const fn has_date_format_options(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Luau => false,
+        }
+    }
 }
 
 /// The standard-library environment a Luau program targets. Only meaningful

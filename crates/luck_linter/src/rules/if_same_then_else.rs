@@ -29,10 +29,14 @@ impl NodeRule for IfSameThenElse {
         let then_text = if_stmt.block.span.text(context.source);
         let else_text = else_clause.block.span.text(context.source);
         if !then_text.is_empty() && then_text.trim() == else_text.trim() {
-            findings.push(
-                Finding::new("`if` and `else` branches have identical bodies", if_stmt.span)
-                    .with_help("the condition has no effect, so remove the `if`"),
-            );
+            let finding =
+                Finding::new("`if` and `else` branches have identical bodies", if_stmt.span);
+            // An `elseif` keeps the first condition meaningful.
+            findings.push(if if_stmt.elseif_clauses.is_empty() {
+                finding.with_help("the condition has no effect, so remove the `if`")
+            } else {
+                finding
+            });
         }
     }
 }
@@ -74,7 +78,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_help_does_not_call_condition_dead_with_elseif() {
+    fn flags_identical_branches_with_elseif_without_dead_condition_help() {
         let diags = run("if a then f() elseif b then g() else f() end");
         assert!(
             diags.iter().all(|diag| !diag.help.as_deref().unwrap_or("").contains("no effect")),

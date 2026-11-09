@@ -74,6 +74,10 @@ pub enum ScopeKind {
 
 /// A declared symbol (local variable, parameter, etc.).
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "four independent facts about a binding, in any combination"
+)]
 pub struct Symbol {
     pub id: SymbolId,
     pub name: CompactString,
@@ -89,6 +93,9 @@ pub struct Symbol {
     /// bindings. The module's export table reads them, so they're used even
     /// with no references in the module, and their name is the module's API.
     pub is_exported: bool,
+    /// Lua 5.4+: true for a `<close>` local, which its scope's exit uses even
+    /// with no references.
+    pub is_close: bool,
     pub shadows: Option<SymbolId>,
 }
 

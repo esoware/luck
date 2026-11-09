@@ -50,10 +50,10 @@ params = [
 
 [globals.error]
 kind = "function"
-min_args = 1
+min_args = 0
 max_args = 2
 params = [
-  { kind = "any" },
+  { kind = "any", is_required = false },
   { kind = "number", is_required = false },
 ]
 

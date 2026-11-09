@@ -125,24 +125,29 @@ fn check_escapes(
         if let Some(consumed) = escape_length(after, is_interpolated, version) {
             index = after_byte.saturating_add(consumed);
         } else {
-            let bad_char = after.first().copied().unwrap_or(b'?');
-            let display = if bad_char.is_ascii_graphic() {
-                format!("\\{}", char::from(bad_char))
+            let bad_char =
+                body.get(after_byte..).and_then(|rest| rest.chars().next()).unwrap_or('?');
+            let display = if bad_char.is_ascii_control() || bad_char == ' ' {
+                format!("\\x{:02x}", u32::from(bad_char))
             } else {
-                format!("\\x{bad_char:02x}")
+                format!("\\{bad_char}")
             };
             let escape_start = body_start.saturating_add(index_to_offset(index));
+            let escape_width = bad_char.len_utf8().saturating_add(1);
             findings.push(
                 Finding::new(
                     format!("invalid string escape `{display}`"),
-                    Span::new(escape_start, escape_start.saturating_add(2)),
+                    Span::new(
+                        escape_start,
+                        escape_start.saturating_add(index_to_offset(escape_width)),
+                    ),
                 )
                 .with_help(format!(
                     "valid escapes: `\\a` `\\b` `\\f` `\\n` `\\r` `\\t` `\\v` `\\\\` `\\\"` `\\'` \
                      `\\ddd`{extended_escapes}"
                 )),
             );
-            index = after_byte.saturating_add(after.len().min(1));
+            index = after_byte.saturating_add(bad_char.len_utf8());
         }
     }
 }
@@ -264,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_span_covers_whole_escaped_character() {
+    fn span_covers_whole_escaped_character() {
         let source = "local x = \"\\\u{e9}\"";
         let diags = run(source, LuaVersion::Lua51);
         assert_eq!(diags.len(), 1, "{diags:?}");

@@ -36,6 +36,10 @@ impl WholeRule for CommentDirective {
             let Some(body) = comment.span.text(context.source).strip_prefix("--!") else {
                 continue;
             };
+            // Luau reserves `--!` and `--! ...` for plain comments.
+            if body.is_empty() || body.starts_with([' ', '\t']) {
+                continue;
+            }
             // Luau ignores hot comments after the first statement.
             if first_code_start.is_some_and(|start| comment.span.start > start) {
                 findings.push(Finding::new(
@@ -245,13 +249,13 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_reserved_space_comment() {
+    fn ignores_reserved_space_comment() {
         let diags = run("--! note\nlocal _x = 1");
         assert!(diags.is_empty(), "Luau reserves `--! ` for plain comments: {diags:?}");
     }
 
     #[test]
-    fn bug_ignores_reserved_space_comment_after_code() {
+    fn ignores_reserved_space_comment_after_code() {
         let diags = run("local _x = 1\n--! note");
         assert!(diags.is_empty(), "Luau reserves `--! ` for plain comments: {diags:?}");
     }

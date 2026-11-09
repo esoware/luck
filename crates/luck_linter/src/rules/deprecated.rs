@@ -1,12 +1,15 @@
-use luck_ast::{DottedPath, Expression, FunctionArgs, FunctionCall, Var, dotted_path};
+use luck_ast::{
+    DottedPath, Expression, FunctionArgs, FunctionCall, LastStatement, Var, dotted_path,
+};
 use luck_semantic::{
     ResolvedCallee, SemanticAnalysis, StdlibDeprecation, StdlibEntry, StdlibFunction,
     expand_replace_template,
 };
+use luck_token::{index_to_offset, is_lua_whitespace, offset_to_index};
 
 use crate::call::{positional_args, string_literal_value};
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
+use crate::fix::{Fix, TextEdit, comments_within};
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
@@ -76,7 +79,7 @@ fn check_call(
 
     if let Some(deprecation) = entry.deprecation() {
         let name = callee.name();
-        let fix = replacement_fix(call, position, &name, deprecation, context);
+        let fix = replacement_fix(call, entry, position, &name, deprecation, context);
         findings.push(
             Finding::new(format!("`{name}` is deprecated"), call.span)
                 .with_help(deprecation.message.as_str())
@@ -154,24 +157,106 @@ fn deprecated_constants(
 /// the call does.
 fn replacement_fix(
     call: &FunctionCall,
+    entry: &StdlibEntry,
     position: CallPosition,
     display_name: &str,
     deprecation: &StdlibDeprecation,
     context: &LintContext<'_>,
 ) -> Option<Fix> {
     let template = deprecation.replace_template.as_ref()?;
-    let replacement = expand_replace_template(template, &arg_texts(&call.args, context.source));
-    // A template like `(%1 ^ %2)` expands to an expression, which can't
-    // stand alone as a statement. Keep the diagnostic and drop the fix.
-    if position == CallPosition::Statement
-        && !luck_parser::parse(&replacement, context.semantic.version).errors.is_empty()
+    let StdlibEntry::Function(function) = entry else {
+        return None;
+    };
+    // A template spells the positional arguments, which a method's receiver
+    // isn't among, and the argument text can't carry a comment between them.
+    if call.method.is_some()
+        || !function.accepts_arg_count(positional_args(&call.args).1)
+        || !comments_within(context.comments, call.span).is_empty()
     {
         return None;
     }
+    let expanded = expand_replace_template(template, &arg_texts(&call.args, context.source));
+    if starts_with_rebound_name(&expanded, call.span.start, context.semantic) {
+        return None;
+    }
+    let replacement = fit_to_position(expanded, call.span.end, position, context)?;
     Some(Fix {
         description: format!("replace deprecated `{display_name}` with `{replacement}`"),
         edits: vec![TextEdit { span: call.span, replacement }],
     })
+}
+
+/// Whether the name `expanded` starts with may not be the host's global at
+/// `offset`, because a local before it or a write in the chunk rebinds it.
+fn starts_with_rebound_name(expanded: &str, offset: u32, semantic: &SemanticAnalysis) -> bool {
+    let name_length = expanded
+        .find(|character: char| !character.is_alphanumeric() && character != '_')
+        .unwrap_or(expanded.len());
+    let name = expanded.get(..name_length).unwrap_or_default();
+    !name.is_empty()
+        && (semantic.nearest_local(name, offset).is_some()
+            || semantic.scope_tree.assigned_globals.contains(name))
+}
+
+/// `expanded` as it must read where the call stood, or `None` if it doesn't
+/// parse there. Parsing inside a block keeps a leading `#` from reading as a
+/// shebang line.
+fn fit_to_position(
+    expanded: String,
+    call_end: u32,
+    position: CallPosition,
+    context: &LintContext<'_>,
+) -> Option<String> {
+    let version = context.semantic.version;
+    if position == CallPosition::Statement {
+        let parse = luck_parser::parse(format!("do {expanded} end"), version);
+        return parse.errors.is_empty().then_some(expanded);
+    }
+    let parse = luck_parser::parse(format!("return {expanded}"), version);
+    if !parse.errors.is_empty() {
+        return None;
+    }
+    let is_unary = matches!(
+        parse.block.last_stmt.as_deref(),
+        Some(LastStatement::Return(returned))
+            if matches!(returned.exprs.first(), Some(Expression::UnaryOp(_)))
+    );
+    // A unary expression stops at an operator binding looser than it, but
+    // not at `^` or a suffix, which would capture only its operand.
+    let should_group = is_unary && is_followed_by_tighter_binding(call_end, context);
+    Some(if should_group { format!("({expanded})") } else { expanded })
+}
+
+/// Whether the next token after `offset` binds tighter than a unary operator:
+/// `^`, or a suffix that continues the expression.
+fn is_followed_by_tighter_binding(offset: u32, context: &LintContext<'_>) -> bool {
+    let bytes = context.source.as_bytes();
+    let mut index = offset_to_index(offset);
+    loop {
+        index = index.saturating_add(
+            bytes
+                .get(index..)
+                .unwrap_or_default()
+                .iter()
+                .take_while(|&&byte| is_lua_whitespace(byte))
+                .count(),
+        );
+        let found = context
+            .comments
+            .binary_search_by_key(&index_to_offset(index), |comment| comment.span.start)
+            .ok()
+            .and_then(|position| context.comments.get(position));
+        let Some(comment) = found else {
+            break;
+        };
+        index = offset_to_index(comment.span.end);
+    }
+    match bytes.get(index..).unwrap_or_default() {
+        // `..` concatenates, which binds looser than a unary operator.
+        [b'.', second, ..] => *second != b'.',
+        [b'^' | b':' | b'[' | b'(' | b'{' | b'"' | b'\'', ..] => true,
+        _ => false,
+    }
 }
 
 /// The source text of each argument, as a replacement template takes it.
@@ -244,9 +329,9 @@ mod tests {
 
     #[test]
     fn flags_and_fixes_table_getn_to_length() {
-        let (description, after) = run_fix("table.getn(t)", LuaVersion::Lua54).unwrap();
+        let (description, after) = run_fix("local n = table.getn(t)", LuaVersion::Lua54).unwrap();
         assert_eq!(description, "replace deprecated `table.getn` with `#t`");
-        assert_eq!(after, "#t");
+        assert_eq!(after, "local n = #t");
     }
 
     #[test]
@@ -352,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_keeps_math_pow_argument_grouping() {
+    fn flags_and_fixes_keeping_math_pow_argument_grouping() {
         let after = run_fix("local r = math.pow(a + 1, b)", LuaVersion::Lua54).map(|fix| fix.1);
         assert_ne!(
             after.as_deref(),
@@ -362,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_keeps_getn_argument_grouping() {
+    fn flags_and_fixes_keeping_getn_argument_grouping() {
         let after = run_fix("local r = table.getn(a or b)", LuaVersion::Lua54).map(|fix| fix.1);
         assert_ne!(
             after.as_deref(),
@@ -372,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_keeps_getn_grouping_in_power() {
+    fn flags_and_fixes_keeping_getn_grouping_in_power() {
         let after = run_fix("local r = table.getn(t) ^ 2", LuaVersion::Lua54).map(|fix| fix.1);
         assert_ne!(
             after.as_deref(),
@@ -382,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_keeps_extra_unpack_arguments() {
+    fn flags_and_fixes_keeping_extra_unpack_arguments() {
         let after = run_fix("local a, b = unpack(t, 2, 3)", LuaVersion::Lua54).map(|fix| fix.1);
         assert_ne!(
             after.as_deref(),
@@ -392,19 +477,60 @@ mod tests {
     }
 
     #[test]
-    fn bug_no_fix_when_template_arguments_are_missing() {
+    fn flags_without_fix_when_template_arguments_are_missing() {
         let diags = run_rule(&Deprecated, "local r = math.pow(f())", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].fix.is_none(), "`(f() ^ )` doesn't parse, so no fix applies: {diags:?}");
     }
 
     #[test]
-    fn bug_no_fix_for_bit32_bnot_on_lua53() {
+    fn flags_without_fix_for_bit32_bnot_on_lua53() {
         let after = run_fix("local x = bit32.bnot(0)", LuaVersion::Lua53).map(|fix| fix.1);
         assert_ne!(
             after.as_deref(),
             Some("local x = (~0)"),
             "`bit32.bnot(0)` is 4294967295 and `~0` is -1"
         );
+    }
+
+    #[test]
+    fn flags_without_fix_for_length_template_as_statement() {
+        let diags = run_rule(&Deprecated, "local a = 1\ntable.getn(t)", LuaVersion::Lua54);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].fix.is_none(), "`#t` can't stand as a statement: {diags:?}");
+    }
+
+    #[test]
+    fn flags_and_fixes_grouping_length_before_a_suffix() {
+        let after = run_fix("local r = table.getn(t).x", LuaVersion::Lua54).map(|fix| fix.1);
+        assert_eq!(after.as_deref(), Some("local r = (#t).x"));
+    }
+
+    #[test]
+    fn flags_and_fixes_length_before_concatenation_without_grouping() {
+        let after = run_fix("local r = table.getn(t) .. 'x'", LuaVersion::Lua54).map(|fix| fix.1);
+        assert_eq!(after.as_deref(), Some("local r = #t .. 'x'"));
+    }
+
+    #[test]
+    fn flags_without_fix_when_a_comment_sits_inside_the_call() {
+        let diags = run_rule(&Deprecated, "local r = math.pow(a --[[why]], b)", LuaVersion::Lua54);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].fix.is_none(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_without_fix_when_the_replacement_name_is_shadowed() {
+        let diags =
+            run_rule(&Deprecated, "local table = {}\nlocal a = unpack(t)", LuaVersion::Lua54);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].fix.is_none(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_without_fix_for_a_method_call() {
+        let diags = run_rule(&Deprecated, "local it = ('x'):gfind('a')", LuaVersion::Lua51);
+        assert!(diags.iter().any(|diag| diag.message.contains("gfind")), "{diags:?}");
+        assert!(diags.iter().all(|diag| diag.fix.is_none()), "{diags:?}");
     }
 }

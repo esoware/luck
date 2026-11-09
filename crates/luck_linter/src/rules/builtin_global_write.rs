@@ -1,5 +1,5 @@
-use luck_ast::{Expression, FunctionName, Statement, Var, Visitor, dotted_path};
-use luck_semantic::SemanticAnalysis;
+use luck_ast::{DottedPath, Expression, FunctionName, Statement, Var, Visitor, dotted_path};
+use luck_semantic::{SemanticAnalysis, StdlibEntry};
 use luck_token::{Span, Token};
 
 use crate::diagnostic::Finding;
@@ -57,82 +57,84 @@ fn overwrite_finding(name: &str, span: Span) -> Finding {
     )
 }
 
-fn expr_base_identifier(expr: &Expression) -> Option<(&str, Span)> {
-    let mut current = expr;
-    while let Expression::Var(var) = current {
-        match var {
-            Var::Name(token) => return Some((token.identifier()?, token.span)),
-            Var::FieldAccess(field_access) => current = &field_access.prefix,
-            Var::Index(index) => current = &index.prefix,
-        }
-    }
-    None
-}
-
 struct FieldWriteChecker<'semantic> {
     semantic: &'semantic SemanticAnalysis,
     findings: Vec<Finding>,
 }
 
 impl FieldWriteChecker<'_> {
-    fn check_var_target(&mut self, var: &Var) {
-        let (base, span) = match var {
-            // Whole-name writes surface as unresolved Write references.
-            Var::Name(_) => return,
-            Var::Index(index) => (expr_base_identifier(&index.prefix), index.span),
-            Var::FieldAccess(field_access) => {
-                (expr_base_identifier(&field_access.prefix), field_access.span)
-            }
-        };
-        let Some((name, name_span)) = base else {
-            return;
+    /// Whether writing the field `leaf` of the global `path` replaces a
+    /// member of a stdlib namespace.
+    ///
+    /// A field of a stdlib value, such as `package.loaded` or a Roblox
+    /// instance's property, isn't the library. Neither is a `path` that no
+    /// longer reaches the host's global.
+    fn writes_namespace_member(&self, path: &[&str], root_span: Span, leaf: Option<&str>) -> bool {
+        let Some(&root) = path.first() else {
+            return false;
         };
         // Writing through a writable base (`_G.x = 1`, Roblox's
-        // `shared.score = 1`) or to a leaf the model marks writable
-        // (`package.path = ...`) is intended.
-        if !is_overwritable_builtin(self.semantic, name) {
-            return;
-        }
-        if self.semantic.resolves_to_local(name, name_span) {
-            return;
-        }
-        let path_segments = dotted_path(var).map(|path| path.segments);
-        if let Some(segments) = &path_segments
-            && let Some(entry) = self.semantic.stdlib().lookup(segments)
-            && !entry.is_read_only()
+        // `shared.score = 1`) is intended.
+        if !is_overwritable_builtin(self.semantic, root)
+            || !self.semantic.reaches_host_global(root, root_span)
         {
+            return false;
+        }
+        let Some(StdlibEntry::Namespace(namespace)) = self.semantic.stdlib().lookup(path) else {
+            return false;
+        };
+        // So is a leaf the model marks writable (`package.path = ...`).
+        leaf.and_then(|name| namespace.members.get(name)).is_none_or(StdlibEntry::is_read_only)
+    }
+
+    fn check_var_target(&mut self, var: &Var) {
+        let (prefix, leaf, span) = match var {
+            // Whole-name writes surface as unresolved Write references.
+            Var::Name(_) => return,
+            Var::Index(index) => (&index.prefix, None, index.span),
+            Var::FieldAccess(field_access) => {
+                (&field_access.prefix, field_access.name.identifier(), field_access.span)
+            }
+        };
+        let Expression::Var(container) = prefix else {
+            return;
+        };
+        let Some(DottedPath { segments, root_span, .. }) = dotted_path(container) else {
+            return;
+        };
+        if !self.writes_namespace_member(&segments, root_span, leaf) {
             return;
         }
-        let display = path_segments.map_or_else(|| name.to_owned(), |segments| segments.join("."));
+        let mut display = segments.join(".");
+        if let Some(name) = leaf {
+            display.push('.');
+            display.push_str(name);
+        }
         self.findings.push(overwrite_finding(&display, span));
     }
 
     fn check_function_name(&mut self, function_name: &FunctionName) {
-        // Bare `function print()` surfaces as an unresolved Write reference.
-        if function_name.names.len() < 2 && function_name.method.is_none() {
-            return;
-        }
-        let Some(first) = function_name.names.first() else {
+        let (container, leaf, separator) = if let Some(method) = &function_name.method {
+            (function_name.names.as_slice(), method, ':')
+        } else {
+            // Bare `function print()` surfaces as an unresolved Write
+            // reference, and has no container here.
+            let Some((leaf, container)) = function_name.names.split_last() else {
+                return;
+            };
+            (container, leaf, '.')
+        };
+        let Some(segments) = container.iter().map(Token::identifier).collect::<Option<Vec<_>>>()
+        else {
             return;
         };
-        let Some(name) = first.identifier() else {
+        let (Some(root), Some(leaf_name)) = (container.first(), leaf.identifier()) else {
             return;
         };
-        if !is_overwritable_builtin(self.semantic, name) {
+        if !self.writes_namespace_member(&segments, root.span, Some(leaf_name)) {
             return;
         }
-        if self.semantic.resolves_to_local(name, first.span) {
-            return;
-        }
-        let mut display = name.to_owned();
-        for part in function_name.names.iter().skip(1).filter_map(Token::identifier) {
-            display.push('.');
-            display.push_str(part);
-        }
-        if let Some(part) = function_name.method.as_ref().and_then(Token::identifier) {
-            display.push(':');
-            display.push_str(part);
-        }
+        let display = format!("{}{separator}{leaf_name}", segments.join("."));
         self.findings.push(overwrite_finding(&display, function_name.span));
     }
 }
@@ -326,20 +328,39 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_package_preload_entry_write() {
+    fn ignores_package_preload_entry_write() {
         let diags = run("package.preload.foo = function() end");
         assert!(diags.is_empty(), "`package.preload` exists to be filled: {diags:?}");
     }
 
     #[test]
-    fn bug_ignores_package_loaded_entry_write() {
+    fn ignores_package_loaded_entry_write() {
         let diags = run("package.loaded[name] = nil");
         assert!(diags.is_empty(), "clearing a loaded module is documented: {diags:?}");
     }
 
     #[test]
-    fn bug_ignores_roblox_instance_property_write() {
+    fn ignores_roblox_instance_property_write() {
         let diags = run_rule_roblox(&BuiltinGlobalWrite, "script.Parent.Visible = false");
         assert!(diags.is_empty(), "this sets a property, not a builtin: {diags:?}");
+    }
+
+    #[test]
+    fn flags_only_the_whole_name_write_of_a_rebound_builtin() {
+        let diags = run("table = {}\ntable.insert = 1");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+        assert!(diags[0].message.contains("`table`"), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_field_write_under_a_local_env() {
+        let diags = run("local _ENV = {}\ntable.insert = 1");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_function_decl_on_builtin_value() {
+        let diags = run("function package.preload.foo() end");
+        assert!(diags.is_empty(), "got: {diags:?}");
     }
 }

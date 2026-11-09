@@ -75,29 +75,55 @@ fn check_attributes(
         if attribute.name.identifier() != Some("native") {
             continue;
         }
-        // Also delete one trailing whitespace byte so no doubled
-        // separator is left behind. It's cosmetic; the code re-parses
-        // either way.
-        let name_end = attribute.name.span.end;
-        let has_trailing_space = matches!(
-            context.source.as_bytes().get(offset_to_index(name_end)),
-            Some(b' ' | b'\t' | b'\n' | b'\r')
-        );
-        let edit_end = name_end.saturating_add(u32::from(has_trailing_space));
         findings.push(
             Finding::new(
                 "`@native` attribute is redundant in a `--!native` module",
                 attribute.span,
             )
-            .with_fix(Fix {
-                description: "remove the redundant `@native` attribute".to_owned(),
-                edits: vec![TextEdit {
-                    span: Span::new(attribute.span.start, edit_end),
-                    replacement: String::new(),
-                }],
-            }),
+            .with_optional_fix(removal_fix(attribute, attributes, context.source)),
         );
     }
+}
+
+/// Deletes `attribute` and one whitespace byte after it, so no doubled
+/// separator is left behind. A `@[...]` list keeps the fix only when
+/// `attribute` is its sole entry and nothing but its name sits in brackets.
+fn removal_fix(
+    attribute: &FunctionAttribute,
+    attributes: &[FunctionAttribute],
+    source: &str,
+) -> Option<Fix> {
+    let bytes = source.as_bytes();
+    let after_at = offset_to_index(attribute.span.start).saturating_add(1);
+    let mut edit_end = offset_to_index(attribute.name.span.end);
+    if bytes.get(after_at) == Some(&b'[') {
+        if attribute.args.is_some()
+            || attributes.iter().filter(|other| other.span.start == attribute.span.start).count()
+                > 1
+        {
+            return None;
+        }
+        let whitespace_length = bytes
+            .get(edit_end..)
+            .unwrap_or_default()
+            .iter()
+            .take_while(|byte| byte.is_ascii_whitespace())
+            .count();
+        let close_index = edit_end.saturating_add(whitespace_length);
+        if bytes.get(close_index) != Some(&b']') {
+            return None;
+        }
+        edit_end = close_index.saturating_add(1);
+    }
+    let has_trailing_space = matches!(bytes.get(edit_end), Some(b' ' | b'\t' | b'\n' | b'\r'));
+    let span = Span::from_indices(
+        offset_to_index(attribute.span.start),
+        edit_end.saturating_add(usize::from(has_trailing_space)),
+    );
+    Some(Fix {
+        description: "remove the redundant `@native` attribute".to_owned(),
+        edits: vec![TextEdit { span, replacement: String::new() }],
+    })
 }
 
 /// Whether a `--!native` hot comment comes before any code. Luau ignores one
@@ -121,7 +147,7 @@ fn has_native_directive(context: &LintContext<'_>) -> bool {
                     .span
                     .text(context.source)
                     .strip_prefix("--!")
-                    .is_some_and(|body| body.split(char::is_whitespace).next() == Some("native"))
+                    .is_some_and(|body| body.trim_end() == "native")
         })
 }
 
@@ -198,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_removes_bracketed_attribute() {
+    fn flags_and_fixes_bracketed_attribute() {
         let source = "--!native\n@[native] function f() end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
@@ -210,8 +236,21 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_native_directive_with_trailing_text() {
+    fn ignores_native_directive_with_trailing_text() {
         let diags = run("--!native on\n@native function f() end");
         assert!(diags.is_empty(), "the compiler ignores `--!native on`: {diags:?}");
+    }
+
+    #[test]
+    fn flags_without_fix_when_attribute_shares_a_list() {
+        let diags = run("--!native\n@[native, deprecated] function f() end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].fix.is_none(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_with_directive_followed_by_trailing_space() {
+        let diags = run("--!native \n@native function f() end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }

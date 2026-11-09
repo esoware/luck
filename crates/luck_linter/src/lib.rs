@@ -45,6 +45,7 @@ mod rule;
 mod rules;
 mod suggest;
 mod suppression;
+mod underscore_fix;
 mod uninitialized;
 
 /// Lint config types, defined in `luck_core` with the rest of `luck.json`.

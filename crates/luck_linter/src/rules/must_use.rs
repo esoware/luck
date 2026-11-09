@@ -124,7 +124,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_discarded_collectgarbage_on_luau() {
+    fn ignores_discarded_collectgarbage_on_luau() {
         let messages = run("collectgarbage()", LuaVersion::Luau);
         assert!(messages.is_empty(), "the call runs a full collection: {messages:?}");
     }

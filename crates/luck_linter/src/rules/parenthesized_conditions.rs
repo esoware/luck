@@ -1,5 +1,5 @@
 use luck_ast::{Expression, Statement};
-use luck_token::Span;
+use luck_token::{Span, offset_to_index};
 
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
@@ -76,8 +76,8 @@ impl NodeRule for ParenthesizedConditions {
     }
 }
 
-/// Flags `span` when `condition` is wrapped in parentheses, with a fix that
-/// keeps only the inner expression's text.
+/// Flags `span` when `condition` is wrapped in parentheses. The fix deletes
+/// just those two tokens, so anything between them stays.
 fn check_condition(
     condition: &Expression,
     message: &str,
@@ -87,13 +87,30 @@ fn check_condition(
     let Expression::Parenthesized(parenthesized) = condition else {
         return None;
     };
+    let Span { start, end } = parenthesized.span;
+    let bytes = source.as_bytes();
+    let before = offset_to_index(start).checked_sub(1).and_then(|index| bytes.get(index));
+    let after = bytes.get(offset_to_index(end));
     Some(Finding::new(message, span).with_fix(Fix {
         description: "remove unnecessary parentheses".to_owned(),
-        edits: vec![TextEdit {
-            span: parenthesized.span,
-            replacement: parenthesized.expr.span().text(source).to_owned(),
-        }],
+        edits: vec![
+            TextEdit {
+                span: Span::new(start, start.saturating_add(1)),
+                replacement: replacement_beside(before),
+            },
+            TextEdit {
+                span: Span::new(end.saturating_sub(1), end),
+                replacement: replacement_beside(after),
+            },
+        ],
     }))
+}
+
+/// What a deleted parenthesis leaves: a space if the byte beside it would
+/// otherwise run into the condition.
+fn replacement_beside(neighbor: Option<&u8>) -> String {
+    let is_word_byte = neighbor.is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+    if is_word_byte { " ".to_owned() } else { String::new() }
 }
 
 #[cfg(test)]
@@ -139,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_keeps_keywords_separated() {
+    fn flags_and_fixes_keeping_keywords_separated() {
         let source = "if(x)then y() end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
@@ -148,11 +165,20 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_keeps_comment() {
+    fn flags_and_fixes_keeping_comment() {
         let source = "if (--[[why]] x) then end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
         assert!(fixed.contains("--[[why]]"), "the fix shouldn't delete the comment: {fixed}");
+    }
+
+    #[test]
+    fn flags_and_fixes_elseif_and_while_keywords_glued_to_parens() {
+        let source = "local c = 1\nif c then elseif(c)then end\nwhile(c)do break end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "local c = 1\nif c then elseif c then end\nwhile c do break end");
     }
 }

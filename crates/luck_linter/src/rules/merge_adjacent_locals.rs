@@ -1,10 +1,10 @@
 use luck_ast::{Attribute, LocalAssignment, Statement};
 use luck_semantic::{ScopeTree, SymbolId};
-use luck_token::{Comment, Span};
+use luck_token::Span;
 use rustc_hash::FxHashMap;
 
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
+use crate::fix::{Fix, TextEdit, comments_within};
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags two adjacent `local NAME = VALUE` statements that could be one
@@ -75,7 +75,8 @@ fn merged_local(
 ) -> Option<String> {
     let first = simple_binding(first_local)?;
     let second = simple_binding(second_local)?;
-    if has_comment_between(context.comments, first_local.span.end, second_local.span.start) {
+    let rewritten_span = Span::new(first_local.span.start, second_local.span.end);
+    if !comments_within(context.comments, rewritten_span).is_empty() {
         return None;
     }
     let source = context.source;
@@ -104,27 +105,33 @@ fn is_read_in_span(symbol_id: SymbolId, span: Span, tree: &ScopeTree) -> bool {
     })
 }
 
-fn has_comment_between(comments: &[Comment], start: u32, end: u32) -> bool {
-    comments.iter().any(|comment| comment.span.start >= start && comment.span.end <= end)
-}
-
-/// A `local` with one name and one value: the name, its attribute if any,
-/// and the value.
+/// A `local` with one name and one value: the name, the name with any type
+/// annotation, its attribute if any, and the value.
 struct SimpleBinding<'ast> {
     name: Span,
+    declaration: Span,
     attribute: Option<&'ast Attribute>,
     initializer: Span,
 }
 
 fn simple_binding(local: &LocalAssignment) -> Option<SimpleBinding<'_>> {
+    // `const` and `export` belong to the statement this rule rebuilds.
+    if local.is_const || local.is_exported {
+        return None;
+    }
     let [attributed] = local.names.items.as_slice() else {
         return None;
     };
     let [initializer] = local.exprs.as_ref()?.items.as_slice() else {
         return None;
     };
+    let declaration_end = attributed
+        .type_annotation
+        .as_ref()
+        .map_or(attributed.name.span.end, |annotation| annotation.span().end);
     Some(SimpleBinding {
         name: attributed.name.span,
+        declaration: Span::new(attributed.name.span.start, declaration_end),
         attribute: attributed.attribute.as_deref(),
         initializer: initializer.span(),
     })
@@ -144,8 +151,8 @@ fn annotations_match(source: &str, first: &SimpleBinding<'_>, second: &SimpleBin
 /// Builds the merged statement from source slices, which keeps the
 /// author's formatting.
 fn build_merged(source: &str, first: &SimpleBinding<'_>, second: &SimpleBinding<'_>) -> String {
-    let first_name = first.name.text(source);
-    let second_name = second.name.text(source);
+    let first_declaration = first.declaration.text(source);
+    let second_declaration = second.declaration.text(source);
 
     let first_expr = first.initializer.text(source);
     let second_expr = second.initializer.text(source);
@@ -156,8 +163,8 @@ fn build_merged(source: &str, first: &SimpleBinding<'_>, second: &SimpleBinding<
         .map_or_else(String::new, |attribute| format!(" {}", attribute.span.text(source)));
 
     format!(
-        "local {first_name}{attribute_suffix}, {second_name}{attribute_suffix} = {first_expr}, \
-         {second_expr}"
+        "local {first_declaration}{attribute_suffix}, {second_declaration}{attribute_suffix} = \
+         {first_expr}, {second_expr}"
     )
 }
 
@@ -272,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_keeps_type_annotations() {
+    fn flags_and_fixes_keeping_type_annotations() {
         let source = "local a: number = 1\nlocal b: string = \"x\"";
         let diags = run_rule(&MergeAdjacentLocals, source, LuaVersion::Luau);
         let fixed = apply_one_pass(source, &diags);
@@ -283,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_keeps_export() {
+    fn ignores_export() {
         let source = "export local a = 1\nexport local b = 2";
         let diags = run_rule(&MergeAdjacentLocals, source, LuaVersion::Luau);
         let fixed = apply_one_pass(source, &diags);
@@ -291,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_keeps_const() {
+    fn ignores_const() {
         let source = "const a = 1\nconst b = 2";
         let diags = run_rule(&MergeAdjacentLocals, source, LuaVersion::Luau);
         let fixed = apply_one_pass(source, &diags);
@@ -299,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_keeps_comment_inside_first_local() {
+    fn ignores_comment_inside_first_local() {
         let source = "local a --[[why]] = 1\nlocal b = 2";
         let diags = run(source);
         let fixed = apply_one_pass(source, &diags);

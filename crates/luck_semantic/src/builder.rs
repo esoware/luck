@@ -117,6 +117,7 @@ impl ScopeTreeBuilder {
             is_upvalue: false,
             is_modified: false,
             is_exported: false,
+            is_close: false,
             shadows,
         });
         self.bindings.entry(name.clone()).or_default().push(Some(id));
@@ -263,6 +264,14 @@ impl ScopeTreeBuilder {
                 let id = self.declare_local(name, attributed.name.span, SymbolKind::Local);
                 if local.is_exported {
                     self.mark_exported(id); // Luau
+                }
+                if attributed
+                    .attribute
+                    .as_ref()
+                    .is_some_and(|attribute| attribute.name.identifier() == Some("close"))
+                    && let Some(symbol) = self.tree.symbols.get_mut(id.index())
+                {
+                    symbol.is_close = true;
                 }
             }
         }

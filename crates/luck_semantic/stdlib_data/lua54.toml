@@ -74,10 +74,10 @@ params = [{ kind = "string", is_required = false }]
 
 [globals.error]
 kind = "function"
-min_args = 1
+min_args = 0
 max_args = 2
 params = [
-  { kind = "any" },
+  { kind = "any", is_required = false },
   { kind = "number", is_required = false },
 ]
 
@@ -1156,10 +1156,10 @@ params = [{ kind = "string" }, { kind = "string" }]
 
 [globals.os.members.setlocale]
 kind = "function"
-min_args = 1
+min_args = 0
 max_args = 2
 params = [
-  { kind = "string" },
+  { kind = "string", is_required = false },
   { kind = "constant", values = ["all", "collate", "ctype", "monetary", "numeric", "time"], is_required = false },
 ]
 

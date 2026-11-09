@@ -57,11 +57,12 @@ A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix`
 | `suppression.rs` | `-- luck:` directive parsing, shared with `invalid_lint_filter`, and suppression |
 | `fix.rs` | `Fix` and `TextEdit`, and auto-fix application |
 | `format_pattern.rs` | Validators for `string.format`, pattern, `string.pack`, `gsub` replacement, and `os.date` literals |
-| `call.rs` | Whether a call names an unshadowed global, a `root.field(...)` callee's parts, plus positional arguments, argument count, and raw string-argument text, shared by the rules that match calls |
-| `number.rs` | Values of number literals, shared by `for_range`, `reversed_for_loop`, `manual_table_clone`, `table_operations`, `compare_nan`, and the Roblox rules |
+| `call.rs` | Whether a call still names the host's global, a `root.field(...)` callee's parts, plus positional arguments, argument count, and raw string-argument text, shared by the rules that match calls |
+| `number.rs` | Values and digits of number literals, shared by `for_range`, `reversed_for_loop`, `manual_table_clone`, `table_operations`, `compare_nan`, `divide_by_zero`, `integer_parsing`, and the Roblox rules |
 | `function_node.rs` | `FunctionNode`, one view of function statements and function expressions, for the node rules that check every function |
 | `roblox.rs` | Shared helpers for the Roblox `<Global>.new(...)` constructor rules |
 | `suggest.rs` | Levenshtein distance and the nearest-candidate search behind "did you mean" suggestions |
+| `underscore_fix.rs` | The `_name` rename that `unused_variable`, `unused_argument`, and `unused_loop_variable` share, and when it's refused |
 | `uninitialized.rs` | Locals declared without a value, field writes through a bare name, and a symbol's first reference, shared by the rules that track a local before its first assignment |
 | `rules/*.rs` | Individual rule implementations |
 

@@ -1,5 +1,5 @@
 use luck_ast::{Expression, FunctionArgs, FunctionCall, Var};
-use luck_token::{BinOp, Token, UnOp};
+use luck_token::{BinOp, LuaVersion, Token, UnOp};
 
 use crate::call::dotted_callee;
 use crate::diagnostic::Finding;
@@ -40,10 +40,11 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
     let FunctionArgs::Parenthesized { args, .. } = &call.args else {
         return;
     };
+    let version = context.semantic.version;
     let finding = |message: &str| Finding::new(message, call.span);
     match (function_name, args.items.as_slice()) {
         ("insert", [table, index, _]) => {
-            if is_number_literal(index, 0.0) {
+            if is_number_literal(index, 0.0, version) {
                 findings.push(
                     finding("`table.insert` with index 0, but Lua arrays are 1-based")
                         .with_help("did you mean index 1?"),
@@ -57,7 +58,7 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
                 );
                 return;
             }
-            if length_offset_operand(index, BinOp::Add)
+            if length_offset_operand(index, BinOp::Add, version)
                 .is_some_and(|target| same_target(target, table))
             {
                 findings.push(
@@ -69,14 +70,14 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
             }
         }
         ("remove", [table, index]) => {
-            if is_number_literal(index, 0.0) {
+            if is_number_literal(index, 0.0, version) {
                 findings.push(
                     finding("`table.remove` with index 0, but Lua arrays are 1-based")
                         .with_help("did you mean index 1?"),
                 );
                 return;
             }
-            if length_offset_operand(index, BinOp::Sub)
+            if length_offset_operand(index, BinOp::Sub, version)
                 .is_some_and(|target| same_target(target, table))
             {
                 findings.push(
@@ -86,11 +87,14 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
             }
         }
         ("move", move_args) => {
-            if move_args.get(1).is_some_and(|start| is_number_literal(start, 0.0)) {
+            if move_args.get(1).is_some_and(|start| is_number_literal(start, 0.0, version)) {
                 findings
                     .push(finding("`table.move` with start index 0, but Lua arrays are 1-based"));
             }
-            if move_args.get(3).is_some_and(|destination| is_number_literal(destination, 0.0)) {
+            if move_args
+                .get(3)
+                .is_some_and(|destination| is_number_literal(destination, 0.0, version))
+            {
                 findings.push(finding(
                     "`table.move` with destination index 0, but Lua arrays are 1-based",
                 ));
@@ -129,11 +133,11 @@ fn length_operand(expr: &Expression) -> Option<&Expression> {
 }
 
 /// The operand of `#operand + 1` or `#operand - 1`, as `op` picks.
-fn length_offset_operand(expr: &Expression, op: BinOp) -> Option<&Expression> {
+fn length_offset_operand(expr: &Expression, op: BinOp, version: LuaVersion) -> Option<&Expression> {
     let Expression::BinaryOp(binary) = expr else {
         return None;
     };
-    if binary.op != op || !is_number_literal(&binary.right, 1.0) {
+    if binary.op != op || !is_number_literal(&binary.right, 1.0, version) {
         return None;
     }
     length_operand(&binary.left)
@@ -170,8 +174,6 @@ fn same_identifier(left: &Token, right: &Token) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;

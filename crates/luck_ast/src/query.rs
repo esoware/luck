@@ -47,6 +47,16 @@ pub fn dotted_path(var: &Var) -> Option<DottedPath<'_>> {
     Some(DottedPath { segments, root_span, leaf_span })
 }
 
+/// Walks past any parentheses wrapping `expr`.
+#[must_use]
+pub fn unwrap_parentheses(expr: &Expression) -> &Expression {
+    let mut current = expr;
+    while let Expression::Parenthesized(parenthesized) = current {
+        current = &parenthesized.expr;
+    }
+    current
+}
+
 /// Whether `expr` is a call or `...`, the only forms that can yield any
 /// number of values, none included.
 ///

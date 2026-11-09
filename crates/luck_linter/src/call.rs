@@ -5,15 +5,15 @@ use luck_ast::{Expression, FunctionArgs, FunctionCall, Var, is_multi_value};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, Token, short_string_body};
 
-/// Whether `call` is a plain `name(...)` call to the global `name`. A method
-/// call, or a local that shadows `name`, is user code.
+/// Whether `call` is a plain `name(...)` call to the host's global `name`. A
+/// method call, or a `name` the chunk shadows or rebinds, is user code.
 pub(crate) fn is_global_call(call: &FunctionCall, name: &str, semantic: &SemanticAnalysis) -> bool {
     call.method.is_none()
         && matches!(
             &call.callee,
             Expression::Var(Var::Name(token))
                 if token.identifier() == Some(name)
-                    && !semantic.resolves_to_local(name, token.span)
+                    && semantic.reaches_host_global(name, token.span)
         )
 }
 

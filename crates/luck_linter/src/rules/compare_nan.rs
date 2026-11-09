@@ -1,5 +1,5 @@
-use luck_ast::Expression;
-use luck_token::BinOp;
+use luck_ast::{Expression, unwrap_parentheses};
+use luck_token::{BinOp, LuaVersion};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -21,10 +21,11 @@ impl NodeRule for CompareNan {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let version = context.semantic.version;
         if let Expression::BinaryOp(binary) = expr
             && matches!(binary.op, BinOp::Eq | BinOp::Ne)
-            && (is_nan_expr(&binary.left) || is_nan_expr(&binary.right))
+            && (is_nan_expr(&binary.left, version) || is_nan_expr(&binary.right, version))
         {
             findings.push(
                 Finding::new(
@@ -38,20 +39,18 @@ impl NodeRule for CompareNan {
 }
 
 /// Whether `expr` divides a zero literal by a zero literal, each in any
-/// spelling.
-fn is_nan_expr(expr: &Expression) -> bool {
-    let Expression::BinaryOp(binary) = expr else {
+/// spelling, parentheses aside.
+fn is_nan_expr(expr: &Expression, version: LuaVersion) -> bool {
+    let Expression::BinaryOp(binary) = unwrap_parentheses(expr) else {
         return false;
     };
     binary.op == BinOp::Div
-        && is_number_literal(&binary.left, 0.0)
-        && is_number_literal(&binary.right, 0.0)
+        && is_number_literal(&binary.left, 0.0, version)
+        && is_number_literal(&binary.right, 0.0, version)
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
@@ -93,7 +92,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_flags_parenthesized_nan() {
+    fn flags_parenthesized_nan() {
         let diags = run("local same = x == (0/0)");
         assert_eq!(diags.len(), 1, "parentheses don't change the NaN: {diags:?}");
     }

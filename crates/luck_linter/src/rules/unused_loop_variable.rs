@@ -1,8 +1,8 @@
 use luck_semantic::SymbolKind;
 
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
 use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::underscore_fix::UnderscoreFixes;
 
 /// Flags a `for` loop variable that's never read (Luacheck 213).
 ///
@@ -23,6 +23,7 @@ impl_rule!(
 impl WholeRule for UnusedLoopVariable {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
+        let fixes = UnderscoreFixes::new(semantic);
         let mut findings = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
@@ -48,13 +49,7 @@ impl WholeRule for UnusedLoopVariable {
                     symbol.definition_span,
                 )
                 .with_help("prefix with `_` to suppress this warning")
-                .with_fix(Fix {
-                    description: format!("rename `{}` to `_{}`", symbol.name, symbol.name),
-                    edits: vec![TextEdit {
-                        span: symbol.definition_span,
-                        replacement: format!("_{}", symbol.name),
-                    }],
-                }),
+                .with_optional_fix(fixes.fix_for(symbol)),
             );
         }
 
@@ -117,7 +112,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_does_not_capture_existing_underscore_name() {
+    fn flags_without_fix_that_captures_existing_underscore_name() {
         let source = "local _k = 1\nfor k, v in pairs({}) do print(_k, v) end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
@@ -129,7 +124,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_no_fix_when_loop_variable_is_written() {
+    fn flags_without_fix_when_loop_variable_is_written() {
         let diags = run("for i = 1, 3 do i = 5 end");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(

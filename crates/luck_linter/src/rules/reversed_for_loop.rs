@@ -20,10 +20,11 @@ impl NodeRule for ReversedForLoop {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::NumericFor])
     }
-    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let version = context.semantic.version;
         if let Statement::NumericFor(numeric_for) = stmt
-            && let Some(start) = signed_number_value(&numeric_for.start)
-            && let Some(limit) = signed_number_value(&numeric_for.limit)
+            && let Some(start) = signed_number_value(&numeric_for.start, version)
+            && let Some(limit) = signed_number_value(&numeric_for.limit, version)
             && start > limit
             && numeric_for.step.is_none()
         {
@@ -93,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_hex_limit_above_i64_on_luau() {
+    fn ignores_hex_limit_above_i64_on_luau() {
         let source = "for i = 1, 0xFFFFFFFFFFFFFFFF do print(i) end";
         let diags = run_rule(&ReversedForLoop, source, LuaVersion::Luau);
         assert!(diags.is_empty(), "Luau reads this limit as 1.8e19, not -1: {diags:?}");

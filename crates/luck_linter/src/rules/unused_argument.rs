@@ -1,8 +1,8 @@
 use luck_semantic::SymbolKind;
 
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
 use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::underscore_fix::UnderscoreFixes;
 
 /// Flags a function parameter that's never referenced (Luacheck 212).
 ///
@@ -23,6 +23,7 @@ impl_rule!(
 impl WholeRule for UnusedArgument {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
+        let fixes = UnderscoreFixes::new(semantic);
         let mut findings = Vec::new();
 
         for symbol in &semantic.scope_tree.symbols {
@@ -43,13 +44,7 @@ impl WholeRule for UnusedArgument {
             findings.push(
                 Finding::new(format!("unused argument `{}`", symbol.name), symbol.definition_span)
                     .with_help("prefix with `_` to suppress this warning")
-                    .with_fix(Fix {
-                        description: format!("prefix `{}` with `_`", symbol.name),
-                        edits: vec![TextEdit {
-                            span: symbol.definition_span,
-                            replacement: format!("_{}", symbol.name),
-                        }],
-                    }),
+                    .with_optional_fix(fixes.fix_for(symbol)),
             );
         }
 
@@ -136,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_fix_does_not_duplicate_existing_underscore_parameter() {
+    fn flags_without_fix_that_duplicates_existing_underscore_parameter() {
         let source = "local function f(_a, a) return _a end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
