@@ -151,9 +151,12 @@ impl Synth {
 
     /// A full table type mixing named fields, indexers, and an array element.
     /// Named fields and indexers can take a `read`/`write` access modifier.
+    /// Luau allows the `{ T }` shorthand only alone, so an array element
+    /// beside other fields becomes its `[number]: T` long form.
     #[must_use]
     pub fn ty_table(&self, fields: Vec<TypeFieldSpec<'_>>) -> Type {
         let span = self.next_span();
+        let can_use_array_shorthand = fields.len() == 1;
         let built_fields = fields
             .into_iter()
             .map(|field| match field {
@@ -169,7 +172,15 @@ impl Synth {
                     key,
                     value,
                 },
-                TypeFieldSpec::Array(value) => TypeField::Array { span: self.next_span(), value },
+                TypeFieldSpec::Array(value) if can_use_array_shorthand => {
+                    TypeField::Array { span: self.next_span(), value }
+                }
+                TypeFieldSpec::Array(value) => TypeField::Indexer {
+                    span: self.next_span(),
+                    access: None,
+                    key: self.ty_named("number"),
+                    value,
+                },
             })
             .collect();
         Type::Table(Box::new(TableType { span, fields: Punctuated::from_items(built_fields) }))
@@ -329,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_ty_table_keeps_no_array_element_beside_other_fields() {
+    fn ty_table_keeps_no_array_element_beside_other_fields() {
         // Luau: `TableType ::= '{' Type '}' | '{' [PropList] '}'`, so
         // `{ T, a: U }` is a parse error.
         let built = catch_unwind(|| {

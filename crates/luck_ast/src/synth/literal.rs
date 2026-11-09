@@ -130,15 +130,18 @@ impl Synth {
     }
 
     /// A `[[...]]` long-bracket string at the lowest `=` level whose closer
-    /// neither appears in the content nor straddles its end. Content with
-    /// carriage returns (which Lua normalizes) or NUL bytes (which Luau
-    /// rejects) falls back to [`Synth::string`].
+    /// neither appears in the content nor straddles its end, and which any
+    /// `[[` in the content can't nest inside on a dialect that rejects that.
+    /// Content with carriage returns (which Lua normalizes) or NUL bytes
+    /// (which Luau rejects) falls back to [`Synth::string`].
     #[must_use]
     pub fn long_string(&self, content: &str) -> Expression {
         if content.contains(['\r', '\0']) {
             return self.string(content);
         }
-        let mut equals = String::new();
+        let must_avoid_level_zero = content.contains("[[")
+            && self.version.is_none_or(LuaVersion::has_long_bracket_nesting_error);
+        let mut equals = if must_avoid_level_zero { "=".to_owned() } else { String::new() };
         // The closer's first byte can finish a delimiter begun in content.
         while content.contains(&format!("]{equals}]")) || content.ends_with(&format!("]{equals}")) {
             equals.push('=');
@@ -474,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_long_string_does_not_nest_level_zero_brackets_on_lua51() {
+    fn long_string_does_not_nest_level_zero_brackets_on_lua51() {
         let synth = Synth::new().with_version(LuaVersion::Lua51);
         let text = string_text(synth.long_string("a[[b"));
         assert!(

@@ -42,7 +42,7 @@ fn display_quotes_symbols_and_keywords() {
 
 #[test]
 fn static_text_is_none_only_for_text_carrying_kinds_and_eof() {
-    assert_eq!(TokenKind::Global.static_text(), Some("global"));
+    assert_eq!(TokenKind::Goto.static_text(), Some("goto"));
     assert_eq!(TokenKind::DoubleColon.static_text(), Some("::"));
     assert_eq!(TokenKind::Eof.static_text(), None);
     assert_eq!(TokenKind::Identifier(CompactString::from("end")).static_text(), None);
@@ -81,9 +81,7 @@ fn keyword_reads_back_each_keyword_spelling_under_its_versions() {
         }
         let goto = version.has_goto().then_some(TokenKind::Goto);
         assert_eq!(TokenKind::keyword("goto", version), goto, "{version:?}");
-        let global = version.has_global().then_some(TokenKind::Global);
-        assert_eq!(TokenKind::keyword("global", version), global, "{version:?}");
-        for name in ["", "x", "End", "functions", "continue", "type"] {
+        for name in ["", "x", "End", "functions", "continue", "type", "global"] {
             assert_eq!(TokenKind::keyword(name, version), None, "{name:?}");
         }
     }
@@ -127,7 +125,7 @@ fn identifier_reads_only_identifier_names() {
 }
 
 #[test]
-fn bug_global_is_a_name_on_default_lua55_builds() {
+fn global_is_a_name_on_default_lua55_builds() {
     assert_eq!(
         TokenKind::keyword("global", LuaVersion::Lua55),
         None,

@@ -27,9 +27,9 @@ pub fn short_string_body(raw: &str) -> Option<&str> {
 /// Handles both quote forms with every Lua escape, and long-bracket strings
 /// (EOL normalization, leading-newline strip, no escapes). Returns `None` for
 /// any form this doesn't model exactly, including text that isn't a whole
-/// string literal, and a caller that gets `None` must not fold. Lua 5.1 reads
-/// an undefined escape as the literal character, and Luau's long strings keep
-/// a lone CR as content. The result borrows from `raw` when the body needs no
+/// string literal, and a caller that gets `None` must not fold. Lua 5.1 and
+/// Luau read an undefined escape as the literal character, and Luau's long
+/// strings keep a lone CR as content. The result borrows from `raw` when the body needs no
 /// rewriting: a quoted string without escapes, or a long-bracket string
 /// without a CR.
 #[must_use]
@@ -130,7 +130,7 @@ fn decode_escape<'text>(
         b'u' if version.has_unicode_escape() => {
             return decode_unicode_escape(rest, version, output);
         }
-        // Lua 5.1 reads any other escaped character as itself. Strict
+        // Lua 5.1 and Luau read any other escaped character as itself. Strict
         // versions reject the token, so refuse to fold it.
         _ if !version.has_strict_escapes() => output.push(escaped),
         _ => return None,

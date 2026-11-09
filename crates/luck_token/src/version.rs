@@ -51,7 +51,9 @@ impl LuaVersion {
         }
     }
 
-    /// Whether `global` declarations are supported (Lua 5.5).
+    /// Whether `global` declarations are supported (Lua 5.5). `global` stays
+    /// an ordinary name, as in stock builds (`LUA_COMPAT_GLOBAL`), and the
+    /// parser recognizes a declaration by the token after it.
     #[must_use]
     pub const fn has_global(self) -> bool {
         match self {
@@ -123,14 +125,14 @@ impl LuaVersion {
         }
     }
 
-    /// Whether undefined escape sequences are lexer errors. Lua 5.1
-    /// treats any escaped non-digit character as that literal character
-    /// (`"\m"` is `"m"`); 5.2+ and Luau reject them.
+    /// Whether undefined escape sequences are lexer errors. Lua 5.1 and Luau
+    /// treat any escaped non-digit character as that literal character
+    /// (`"\m"` is `"m"`); 5.2+ reject them.
     #[must_use]
     pub const fn has_strict_escapes(self) -> bool {
         match self {
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
-            Self::Lua51 => false,
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Luau => false,
         }
     }
 
@@ -197,13 +199,14 @@ impl LuaVersion {
         }
     }
 
-    /// Whether a `.` is part of a hex numeral's scan, so `0xFF..2` is malformed
-    /// rather than a concat. 5.1's hex scanner stops before the dot.
+    /// Whether a `.` stays in the numeral scan past a radix prefix or an
+    /// exponent, so `0xFF..2` and `1e5..2` are malformed rather than concats.
+    /// The 5.1 and Luau scanners stop before the dot there.
     #[must_use]
     pub const fn has_hex_scan_dots(self) -> bool {
         match self {
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
-            Self::Lua51 => false,
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Luau => false,
         }
     }
 
@@ -428,14 +431,14 @@ impl LuaVersion {
     }
 
     /// Whether a failed module load may be retried by a later `require`.
-    /// 5.2+ leaves `package.loaded[name]` unset when the loader raises;
-    /// 5.1 leaves its sentinel behind and raises "loop or previous
-    /// error" forever after, and Luau caches the failure.
+    /// 5.2+ leaves `package.loaded[name]` unset when the loader raises, and
+    /// Luau's `require` library caches only a returned value. 5.1 leaves its
+    /// sentinel behind and raises "loop or previous error" forever after.
     #[must_use]
     pub const fn has_require_error_retry(self) -> bool {
         match self {
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
-            Self::Lua51 | Self::Luau => false,
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
+            Self::Lua51 => false,
         }
     }
 

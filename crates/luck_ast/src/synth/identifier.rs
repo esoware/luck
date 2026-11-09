@@ -3,6 +3,13 @@
 
 use luck_token::{CompactString, LuaVersion, TokenKind};
 
+/// Whether generated code must not use `name` as an identifier under
+/// `version`: a keyword, or Lua 5.5's `global`, which builds without
+/// `LUA_COMPAT_GLOBAL` reserve.
+fn is_unavailable(name: &str, version: LuaVersion) -> bool {
+    TokenKind::keyword(name, version).is_some() || (version.has_global() && name == "global")
+}
+
 /// Whether `name` lexes as an identifier in at least one supported dialect.
 ///
 /// That means an ASCII identifier that isn't one of the 21 keywords every
@@ -12,16 +19,16 @@ use luck_token::{CompactString, LuaVersion, TokenKind};
 #[must_use]
 pub fn is_valid_identifier(name: &str) -> bool {
     TokenKind::is_identifier_shaped(name)
-        && LuaVersion::ALL.iter().any(|&version| TokenKind::keyword(name, version).is_none())
+        && LuaVersion::ALL.iter().any(|&version| !is_unavailable(name, version))
 }
 
 /// Whether `name` lexes as an identifier under `version`.
 ///
 /// `goto` is reserved on Lua 5.2-5.5 but is an identifier on 5.1 and Luau;
-/// `global` is reserved only on 5.5.
+/// `global` is refused only on 5.5, where some builds reserve it.
 #[must_use]
 pub fn is_valid_identifier_in(name: &str, version: LuaVersion) -> bool {
-    TokenKind::is_identifier_shaped(name) && TokenKind::keyword(name, version).is_none()
+    TokenKind::is_identifier_shaped(name) && !is_unavailable(name, version)
 }
 
 /// Deterministic valid-identifier form of `name`, safe in every supported
@@ -36,7 +43,7 @@ pub fn is_valid_identifier_in(name: &str, version: LuaVersion) -> bool {
 #[must_use]
 pub fn sanitize_identifier(name: &str) -> CompactString {
     sanitize_with(name, |candidate| {
-        LuaVersion::ALL.iter().any(|&version| TokenKind::keyword(candidate, version).is_some())
+        LuaVersion::ALL.iter().any(|&version| is_unavailable(candidate, version))
     })
 }
 
@@ -46,7 +53,7 @@ pub fn sanitize_identifier(name: &str) -> CompactString {
 /// Words the dialect treats as identifiers pass through (`goto` on Luau).
 #[must_use]
 pub fn sanitize_identifier_in(name: &str, version: LuaVersion) -> CompactString {
-    sanitize_with(name, |candidate| TokenKind::keyword(candidate, version).is_some())
+    sanitize_with(name, |candidate| is_unavailable(candidate, version))
 }
 
 fn sanitize_with(name: &str, is_reserved: impl Fn(&str) -> bool) -> CompactString {

@@ -9,6 +9,57 @@ fn parse_lua55(source: &str) -> ParseResult {
 }
 
 #[test]
+fn global_stays_a_name_outside_a_declaration() {
+    for source in [
+        "local global = 1",
+        "global = 1",
+        "global.x = 1",
+        "global()",
+        "global \"x\"",
+        "global {}",
+        "function global() end",
+        "return global",
+    ] {
+        let result = parse_lua55(source);
+        assert_no_errors(&result);
+        assert!(
+            !matches!(
+                result.block.stmts.first(),
+                Some(
+                    Statement::GlobalDeclaration(_)
+                        | Statement::GlobalFunction(_)
+                        | Statement::GlobalStar(_)
+                )
+            ),
+            "{source}: {:?}",
+            result.block.stmts
+        );
+    }
+}
+
+#[test]
+fn global_declares_before_a_name_attribute_star_or_function() {
+    for source in
+        ["global x", "global global", "global <const> x", "global *", "global function f() end"]
+    {
+        let result = parse_lua55(source);
+        assert_no_errors(&result);
+        assert!(
+            matches!(
+                result.block.stmts.first(),
+                Some(
+                    Statement::GlobalDeclaration(_)
+                        | Statement::GlobalFunction(_)
+                        | Statement::GlobalStar(_)
+                )
+            ),
+            "{source}: {:?}",
+            result.block.stmts
+        );
+    }
+}
+
+#[test]
 fn global_simple() {
     let result = parse_lua55("global x");
     assert_no_errors(&result);

@@ -41,7 +41,6 @@ pub(super) const fn is_stmt_start(kind: &TokenKind) -> bool {
         | TokenKind::Repeat
         | TokenKind::Function
         | TokenKind::Local
-        | TokenKind::Global
         | TokenKind::Goto
         | TokenKind::DoubleColon
         | TokenKind::Semicolon
@@ -250,7 +249,6 @@ impl Parser<'_> {
             }
             TokenKind::Goto if self.version.has_goto() => self.parse_goto_stmt(),
             TokenKind::DoubleColon if self.version.has_goto() => self.parse_label_stmt(),
-            TokenKind::Global if self.version.has_global() => self.parse_global_stmt(),
             // Luau `@` attribute on function declarations.
             TokenKind::At if self.version.has_function_attributes() => {
                 self.parse_attributed_function()
@@ -289,6 +287,21 @@ impl Parser<'_> {
                     ) =>
             {
                 self.parse_const_stmt()
+            }
+            // Lua 5.5: `global` is an ordinary name unless the next token
+            // continues a declaration.
+            TokenKind::Identifier(name)
+                if self.version.has_global()
+                    && name == "global"
+                    && matches!(
+                        self.peek_next(),
+                        TokenKind::Less
+                            | TokenKind::Identifier(_)
+                            | TokenKind::Star
+                            | TokenKind::Function
+                    ) =>
+            {
+                self.parse_global_stmt()
             }
             TokenKind::Identifier(_) | TokenKind::LeftParen => self.parse_assignment_or_call(),
             _ => {

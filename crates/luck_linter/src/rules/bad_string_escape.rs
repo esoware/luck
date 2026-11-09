@@ -1,13 +1,15 @@
-use luck_token::{Comment, LuaVersion, Span, index_to_offset, offset_to_index, strip_line_break};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Literal};
+use luck_token::{LuaVersion, Span, Token, TokenKind, index_to_offset, short_string_body};
 
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
-/// Flags backslash escapes in short strings that Lua 5.1 doesn't define,
-/// which it reads as the bare character.
+/// Flags backslash escapes in short strings that the dialect doesn't define,
+/// which Lua 5.1 and Luau read as the bare character.
 ///
-/// Every later version and Luau reject these in the lexer, so a file on those
-/// targets that reaches the rules has none left to flag.
+/// Every other version rejects these in the lexer, so a file on those targets
+/// that reaches the rules has none left to flag.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BadStringEscape;
 
@@ -19,23 +21,75 @@ impl_rule!(
     "invalid backslash escape in string literal"
 );
 
-impl WholeRule for BadStringEscape {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        if context.semantic.version.has_strict_escapes() {
-            return Vec::new();
+impl NodeRule for BadStringEscape {
+    fn node_types(&self) -> NodeTypeSet {
+        NodeTypeSet::from_types(&[
+            NodeType::StringLiteral,
+            NodeType::InterpolatedString,
+            NodeType::FunctionCallStmt,
+            NodeType::FunctionCallExpr,
+        ])
+    }
+
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let version = context.semantic.version;
+        if let Expression::StringLiteral(literal) = expr {
+            check_literal(literal, version, findings);
         }
-        scan_source(context.source, context.comments, context.semantic.version)
+        if let Expression::InterpolatedString(interpolated) = expr {
+            for segment in &interpolated.segments {
+                check_segment(&segment.literal, version, findings);
+            }
+        }
+    }
+
+    fn on_call(
+        &self,
+        call: &FunctionCall,
+        _position: CallPosition,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
+        if let FunctionArgs::StringLiteral(literal) = &call.args {
+            check_literal(literal, context.semantic.version, findings);
+        }
     }
 }
 
-/// Returns how many bytes after the `\` an escape spans, or `None` if Lua 5.1
-/// doesn't define it.
-fn escape_length(rest: &[u8], version: LuaVersion) -> Option<usize> {
-    if let Some(after_break) = strip_line_break(rest, version) {
-        return Some(rest.len().saturating_sub(after_break.len()));
+/// Long-bracket strings have no escapes, so only a quoted body is checked.
+fn check_literal(literal: &Literal, version: LuaVersion, findings: &mut Vec<Finding>) {
+    if let Some(body) = short_string_body(&literal.text) {
+        check_escapes(body, literal.span.start.saturating_add(1), false, version, findings);
     }
+}
+
+fn check_segment(literal: &Token, version: LuaVersion, findings: &mut Vec<Finding>) {
+    let (TokenKind::InterpolatedStringBegin(text)
+    | TokenKind::InterpolatedStringMiddle(text)
+    | TokenKind::InterpolatedStringEnd(text)) = &literal.kind
+    else {
+        return;
+    };
+    // Every segment's span ends with its one-byte delimiter.
+    let body_start = literal.span.end.saturating_sub(1).saturating_sub(index_to_offset(text.len()));
+    check_escapes(text, body_start, true, version, findings);
+}
+
+/// Returns how many bytes after the `\` an escape spans, or `None` if
+/// `version` doesn't define it.
+fn escape_length(rest: &[u8], is_interpolated: bool, version: LuaVersion) -> Option<usize> {
     match rest {
-        [b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'"' | b'\'', ..] => Some(1),
+        [b'\r', b'\n', ..] => Some(2),
+        [b'\n', b'\r', ..] if version.has_lfcr_line_break() => Some(2),
+        [
+            b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'"' | b'\'' | b'\n' | b'\r',
+            ..,
+        ] => Some(1),
+        [b'x', ..] if version.has_hex_escape() => Some(1),
+        [b'z', ..] if version.has_whitespace_escape() => Some(1),
+        [b'u', ..] if version.has_unicode_escape() => Some(1),
+        // Luau: an escaped delimiter is literal text.
+        [b'{' | b'}' | b'`', ..] if is_interpolated => Some(1),
         // `\ddd` takes up to three decimal digits.
         [b'0'..=b'9', after_first @ ..] => {
             let extra_digit_count =
@@ -46,117 +100,57 @@ fn escape_length(rest: &[u8], version: LuaVersion) -> Option<usize> {
     }
 }
 
-/// Walks the source outside comments and checks each short string's
-/// escapes.
-///
-/// Long-bracket strings (`[[...]]`, `[=[...]=]`) have no escapes, so
-/// they're skipped whole.
-fn scan_source(source: &str, comments: &[Comment], version: LuaVersion) -> Vec<Finding> {
-    let bytes = source.as_bytes();
-    let mut findings = Vec::new();
-    // The list is sorted and the scan only moves forward, so a comment that
-    // ends behind the scan is done with.
-    let mut pending_comments = comments.iter().peekable();
-    let mut index = 0usize;
-    while let Some(&byte) = bytes.get(index) {
-        let offset = index_to_offset(index);
-        while pending_comments.next_if(|comment| comment.span.end <= offset).is_some() {}
-        if let Some(comment) = pending_comments.peek()
-            && comment.span.start <= offset
-        {
-            index = offset_to_index(comment.span.end);
-            continue;
-        }
-        index = if byte == b'"' || byte == b'\'' {
-            scan_short_string(bytes, index, byte, version, &mut findings)
-        } else if byte == b'['
-            && let Some(skip_to) = skip_long_bracket(bytes, index)
-        {
-            skip_to
-        } else {
-            index.saturating_add(1)
-        };
-    }
-    findings
-}
-
-/// Returns the offset just past a long-bracket string `[==[...]==]` that
-/// opens at `start`, or `None` if no opener is there.
-///
-/// An unterminated string runs to the end of the source.
-fn skip_long_bracket(bytes: &[u8], start: usize) -> Option<usize> {
-    let after_bracket = bytes.get(start.saturating_add(1)..)?;
-    let level = after_bracket.iter().take_while(|&&byte| byte == b'=').count();
-    let [b'[', body @ ..] = after_bracket.get(level..)? else {
-        return None;
-    };
-    // The opener and closer are the same width: two brackets around
-    // `level` equals signs.
-    let delimiter_length = level.saturating_add(2);
-    let body_start = start.saturating_add(delimiter_length);
-    let closer = body.windows(delimiter_length).position(|window| {
-        matches!(window, [b']', equals @ .., b']'] if equals.iter().all(|&byte| byte == b'='))
-    });
-    Some(closer.map_or(bytes.len(), |closer_index| {
-        body_start.saturating_add(closer_index).saturating_add(delimiter_length)
-    }))
-}
-
-/// Checks the escapes in the short string whose opening `quote` is at
-/// `start`, and returns the offset after its closing quote.
-///
-/// An unterminated string stops at its newline or the end of the source.
-fn scan_short_string(
-    bytes: &[u8],
-    start: usize,
-    quote: u8,
+/// Flags the undefined escapes in the short-string `body` that starts at
+/// `body_start`.
+fn check_escapes(
+    body: &str,
+    body_start: u32,
+    is_interpolated: bool,
     version: LuaVersion,
     findings: &mut Vec<Finding>,
-) -> usize {
-    let mut index = start.saturating_add(1);
+) {
+    if version.has_strict_escapes() {
+        return;
+    }
+    let bytes = body.as_bytes();
+    let extended_escapes = if version.has_hex_escape() { " `\\xXX` `\\z` `\\u{XXX}`" } else { "" };
+    let mut index = 0usize;
     while let Some(&byte) = bytes.get(index) {
         let after_byte = index.saturating_add(1);
-        if byte == quote {
-            return after_byte;
+        if byte != b'\\' {
+            index = after_byte;
+            continue;
         }
-        match byte {
-            b'\\' => {
-                let after = bytes.get(after_byte..).unwrap_or_default();
-                if let Some(consumed) = escape_length(after, version) {
-                    index = after_byte.saturating_add(consumed);
-                } else {
-                    let bad_char = after.first().copied().unwrap_or(b'?');
-                    let display = if bad_char.is_ascii_graphic() {
-                        format!("\\{}", char::from(bad_char))
-                    } else {
-                        format!("\\x{bad_char:02x}")
-                    };
-                    findings.push(
-                        Finding::new(
-                            format!("invalid string escape `{display}`"),
-                            Span::from_indices(index, index.saturating_add(2)),
-                        )
-                        .with_help(
-                            "valid escapes: `\\a` `\\b` `\\f` `\\n` `\\r` `\\t` \
-                             `\\v` `\\\\` `\\\"` `\\'` `\\ddd`",
-                        ),
-                    );
-                    index = after_byte.saturating_add(after.len().min(1));
-                }
-            }
-            b'\n' | b'\r' => {
-                // Unterminated. The lexer reports it, and scanning on into
-                // the next line would only add noise.
-                return index;
-            }
-            _ => index = after_byte,
+        let after = bytes.get(after_byte..).unwrap_or_default();
+        if let Some(consumed) = escape_length(after, is_interpolated, version) {
+            index = after_byte.saturating_add(consumed);
+        } else {
+            let bad_char = after.first().copied().unwrap_or(b'?');
+            let display = if bad_char.is_ascii_graphic() {
+                format!("\\{}", char::from(bad_char))
+            } else {
+                format!("\\x{bad_char:02x}")
+            };
+            let escape_start = body_start.saturating_add(index_to_offset(index));
+            findings.push(
+                Finding::new(
+                    format!("invalid string escape `{display}`"),
+                    Span::new(escape_start, escape_start.saturating_add(2)),
+                )
+                .with_help(format!(
+                    "valid escapes: `\\a` `\\b` `\\f` `\\n` `\\r` `\\t` `\\v` `\\\\` `\\\"` `\\'` \
+                     `\\ddd`{extended_escapes}"
+                )),
+            );
+            index = after_byte.saturating_add(after.len().min(1));
         }
     }
-    index
 }
 
 #[cfg(test)]
 mod tests {
+    use luck_token::offset_to_index;
+
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
@@ -241,6 +235,32 @@ mod tests {
             let diags = run(source, LuaVersion::Luau);
             assert!(diags.is_empty(), "{source}: {diags:?}");
         }
+    }
+
+    #[test]
+    fn flags_unknown_letter_escape_on_luau() {
+        let diags = run(r#"local x = "\q""#, LuaVersion::Luau);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_luau_hex_whitespace_and_unicode_escapes() {
+        let diags = run(r#"local x = "\x41\z  \u{41}""#, LuaVersion::Luau);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_unknown_escapes_in_interpolated_string_segments() {
+        let source = "local x = `a\\q{1}b\\w`";
+        let diags = run(source, LuaVersion::Luau);
+        let flagged: Vec<&str> = diags.iter().map(|diag| diag.span.text(source)).collect();
+        assert_eq!(flagged, ["\\q", "\\w"], "{diags:?}");
+    }
+
+    #[test]
+    fn flags_unknown_escape_in_a_string_call_argument() {
+        let diags = run(r#"print "\q""#, LuaVersion::Lua51);
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]

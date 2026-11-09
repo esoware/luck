@@ -76,12 +76,6 @@ fn scan_hex_number(
         if matches!(cursor.peek(), Some(b'p' | b'P')) && !eat_exponent(cursor, version) {
             return Err(lex_error(cursor.span_since(start), "hex float exponent requires digits"));
         }
-        if cursor.peek() == Some(b'.') {
-            return Err(lex_error(
-                Span::from_indices(start, cursor.position().saturating_add(1)),
-                "malformed hexadecimal number",
-            ));
-        }
     } else {
         // Without hex floats, a `.` can't start a fraction, so a digitless
         // `0x` is malformed whatever follows it.
@@ -101,16 +95,11 @@ fn scan_hex_number(
         }
     }
 
-    if version.has_hex_scan_dots() {
-        reject_adjacent_concat(cursor, start)?;
-    }
-
     eat_integer_suffix(cursor, version, start, 16)?;
 
-    // Every Lua scanner swallows the letters trailing a hex numeral and then
-    // fails to convert them, so `0xFF.foo` is one malformed number rather
-    // than `0xFF.f` followed by the name `oo`.
-    if cursor.peek().is_some_and(|byte| byte.is_ascii_alphanumeric() || byte == b'_') {
+    if (version.has_hex_scan_dots() && cursor.peek() == Some(b'.'))
+        || is_touching_numeral(cursor, version)
+    {
         return Err(lex_error(
             Span::from_indices(start, cursor.position().saturating_add(1)),
             "malformed hexadecimal number",
@@ -137,12 +126,9 @@ fn scan_binary_number(
         ));
     }
 
-    // Binary literals are Luau-only, and Luau's scanner consumes dots.
-    reject_adjacent_concat(cursor, start)?;
-
     eat_integer_suffix(cursor, version, start, 2)?;
 
-    if cursor.peek().is_some_and(|byte| byte.is_ascii_alphanumeric() || byte == b'_') {
+    if is_touching_numeral(cursor, version) {
         return Err(touching_letter_error(cursor, start));
     }
     Ok(())
@@ -165,14 +151,17 @@ fn scan_decimal_number(
         eat_digits(cursor, version, u8::is_ascii_digit);
     }
 
-    if matches!(cursor.peek(), Some(b'e' | b'E')) {
+    let has_exponent = matches!(cursor.peek(), Some(b'e' | b'E'));
+    if has_exponent {
         is_float = true;
         if !eat_exponent(cursor, version) {
             return Err(lex_error(cursor.span_since(start), "decimal exponent requires digits"));
         }
     }
 
-    reject_adjacent_concat(cursor, start)?;
+    if !has_exponent || version.has_hex_scan_dots() {
+        reject_adjacent_concat(cursor, start)?;
+    }
 
     // Luau consumes the suffix on floats too: `2.5i` is a malformed integer,
     // not a float followed by an identifier.
@@ -184,17 +173,23 @@ fn scan_decimal_number(
     }
     eat_integer_suffix(cursor, version, start, 10)?;
 
-    let is_touching_letter = cursor.peek().is_some_and(|byte| {
+    if is_touching_numeral(cursor, version) {
+        return Err(touching_letter_error(cursor, start));
+    }
+    Ok(())
+}
+
+/// Whether the byte at the cursor would join the numeral in `version`'s
+/// scanner and leave it unconvertible. 5.2 and 5.3 only read on through hex
+/// digits, so any other letter starts a new token there.
+fn is_touching_numeral(cursor: &Cursor<'_>, version: LuaVersion) -> bool {
+    cursor.peek().is_some_and(|byte| {
         if version.has_strict_numeral_end() {
             byte.is_ascii_alphanumeric() || byte == b'_'
         } else {
             byte.is_ascii_hexdigit()
         }
-    });
-    if is_touching_letter {
-        return Err(touching_letter_error(cursor, start));
-    }
-    Ok(())
+    })
 }
 
 /// A malformed-number error spanning the numeral through the letter at the
@@ -256,11 +251,11 @@ fn eat_integer_suffix(
     Ok(())
 }
 
-/// Reject a numeral running straight into `..`.
+/// Reject a decimal numeral running straight into `..`.
 ///
-/// Every real Lua numeral scanner consumes `.` greedily, so that is
-/// "malformed number", never a concat (`1 ..2` needs the space). 5.1's hex
-/// scanner is the exception; see `scan_hex_number`.
+/// Every reference scanner consumes `.` greedily up to an exponent, so that
+/// is "malformed number", never a concat (`1 ..2` needs the space). Past an
+/// exponent only the 5.2+ scanners still do.
 ///
 /// # Errors
 ///

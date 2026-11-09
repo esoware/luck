@@ -216,7 +216,7 @@ fn interpolated_string_rejects_unescaped_line_breaks() {
 
 #[test]
 fn interpolated_string_validates_escapes_like_short_strings() {
-    for source in [r"`\u{}`", r"`\u41`", r"`\u{41`", r"`\999`", r"`\xZZ`", r"`\q`", r"`{n} \256`"] {
+    for source in [r"`\u{}`", r"`\u41`", r"`\u{41`", r"`\999`", r"`\xZZ`", r"`{n} \256`"] {
         let result = lex(source, LuaVersion::Luau);
         assert!(!result.errors.is_empty(), "{source:?} must be rejected");
     }
@@ -226,6 +226,7 @@ fn interpolated_string_validates_escapes_like_short_strings() {
         r"`\``",
         r"`\u{41}`",
         r"`\x41\65\255\a\z  x`",
+        r"`\q`",
         "`\\\n`",
         "`\\\r\n`",
         r"`{n} \n {m}`",

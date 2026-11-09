@@ -13,7 +13,7 @@ The parser consumes a token stream from `luck_lexer` and produces an AST from `l
 - **Depth limiting.** Nesting caps at 256 levels to protect the host stack. This is a tool resource limit, not a dialect grammar rule or an emulation of a VM's configurable compiler limits, and deeply nested valid programs can exceed it.
 - **Error recovery.** On failure, the parser records a `SourceError` and skips to the next statement start or block boundary, so one pass reports many errors.
 - **Construct-aware errors.** A compound statement that is missing one of its own keywords says which construct expected it: ``missing `then` in if-statement``.
-- **Version-gated syntax.** Goto and labels (5.2+), bitwise operators (5.3+), local attributes (5.4+), `global` declarations, leading attributes, and named varargs (5.5), plus the Luau extensions, including 64-bit integer literals, explicit type instantiation, value exports, and the full Luau type grammar.
+- **Version-gated syntax.** Goto and labels (5.2+), bitwise operators (5.3+), local attributes (5.4+), `global` declarations, leading attributes, and named varargs (5.5), plus the Luau extensions. `global` is an ordinary name, as in stock 5.5 builds, and opens a declaration only at the start of a statement when `<`, a name, `*`, or `function` follows. The Luau extensions cover 64-bit integer literals, explicit type instantiation, value exports, and the full Luau type grammar.
 
 ## Architecture
 

@@ -107,7 +107,7 @@ pub(crate) static RULES: &[RuleEntry] = &[
     RuleEntry::Node(&duplicate_conditions::DuplicateConditions),
     RuleEntry::Whole(&invalid_lint_filter::InvalidLintFilter),
     RuleEntry::Node(&for_range::ForRange),
-    RuleEntry::Whole(&bad_string_escape::BadStringEscape),
+    RuleEntry::Node(&bad_string_escape::BadStringEscape),
     RuleEntry::Node(&comparison_precedence::ComparisonPrecedence),
     RuleEntry::Node(&integer_parsing::IntegerParsing),
     RuleEntry::Node(&divide_by_zero::DivideByZero),

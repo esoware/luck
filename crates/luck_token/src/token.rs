@@ -37,9 +37,6 @@ pub enum TokenKind {
     // Lua 5.2+
     Goto,
 
-    // Lua 5.5
-    Global,
-
     // Symbols
     Plus,         // +
     Minus,        // -
@@ -153,8 +150,7 @@ impl TokenKind {
             Self::True => "true",
             Self::Until => "until",
             Self::While => "while",
-            Self::Goto => "goto",     // Lua 5.2+
-            Self::Global => "global", // Lua 5.5
+            Self::Goto => "goto", // Lua 5.2+
             Self::Plus => "+",
             Self::Minus => "-",
             Self::Star => "*",
@@ -241,18 +237,18 @@ impl TokenKind {
             "while" => Self::While,
             // Lua 5.2+
             "goto" if version.has_goto() => Self::Goto,
-            // Lua 5.5
-            "global" if version.has_global() => Self::Global,
             _ => return None,
         };
         Some(kind)
     }
 
     /// Whether `text` is a keyword under `version`, counting Luau's
-    /// contextual `continue` as one.
+    /// contextual `continue` and Lua 5.5's contextual `global` as ones.
     #[must_use]
     pub fn is_reserved(text: &str, version: LuaVersion) -> bool {
-        Self::keyword(text, version).is_some() || (version.has_continue() && text == "continue")
+        Self::keyword(text, version).is_some()
+            || (version.has_continue() && text == "continue")
+            || (version.has_global() && text == "global")
     }
 
     /// Whether `text` is spelled like an identifier: an ASCII letter or `_`,

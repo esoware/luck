@@ -34,10 +34,15 @@ fn number_adjacent_to_concat_is_malformed() {
     // Every real Lua numeral scanner consumes the dots, so `1..2` is
     // "malformed number", never `1 .. 2`.
     for version in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Luau] {
-        for source in ["return 1..2", "return 1.5..2", "return 1e5..2"] {
+        for source in ["return 1..2", "return 1.5..2"] {
             let result = lex(source, version);
             assert!(!result.errors.is_empty(), "{source} must be malformed under {version:?}");
         }
+    }
+    // Only the 5.2+ scanners keep consuming dots past an exponent.
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        let result = lex("return 1e5..2", version);
+        assert!(!result.errors.is_empty(), "1e5..2 must be malformed under {version:?}");
     }
     // With a space the concat is valid.
     for version in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Luau] {
@@ -47,13 +52,11 @@ fn number_adjacent_to_concat_is_malformed() {
 }
 
 #[test]
-fn hex_number_adjacent_to_concat_is_malformed_outside_lua51() {
-    // 5.1's hex scanner stops at the dot, so `0xFF..2` is a valid concat
-    // there. Luau's consumes the dots, and 5.2+ fails in the hex-float path.
+fn hex_number_adjacent_to_concat_is_malformed_on_lua52_and_later() {
+    // The 5.1 and Luau scanners stop at the dot after a radix prefix, so
+    // `0xFF..2` is a valid concat there. 5.2+ fails in the hex-float path.
     assert_eq!(lex("return 0xFF..2", LuaVersion::Lua51).errors, Vec::<SourceError>::new());
-    assert_ne!(lex("return 0xFF..2", LuaVersion::Luau).errors, Vec::<SourceError>::new());
     assert_ne!(lex("return 0xFF..2", LuaVersion::Lua54).errors, Vec::<SourceError>::new());
-    assert_ne!(lex("return 0b1..2", LuaVersion::Luau).errors, Vec::<SourceError>::new());
 }
 
 #[test]
@@ -119,12 +122,27 @@ fn hex_float_exponent_is_optional() {
 }
 
 #[test]
-fn hex_numeral_touching_a_letter_is_error() {
+fn hex_numeral_touching_a_letter_is_error_on_strict_versions() {
     // The optional exponent must not turn `0xFF.foo` into the number
     // `0xFF.f` followed by the name `oo`.
-    for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+    for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
         for source in ["0xFF.foo", "0x1.5g", "0x1.5p2x", "0x1_2"] {
             assert!(!lex(source, version).errors.is_empty(), "{version:?} must reject {source}");
+        }
+    }
+    // 5.2 and 5.3 have no touching-a-letter check, so the numeral just ends.
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
+        for (source, numeral, name) in [
+            ("0xFF.foo", "0xFF.f", "oo"),
+            ("0x1.5g", "0x1.5", "g"),
+            ("0x1.5p2x", "0x1.5p2", "x"),
+            ("0x1_2", "0x1", "_2"),
+        ] {
+            assert_eq!(
+                kinds_in(source, version),
+                vec![TokenKind::Number(numeral.into()), TokenKind::Identifier(name.into())],
+                "{version:?} {source}"
+            );
         }
     }
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
@@ -321,7 +339,7 @@ fn integer_range_normalization_preserves_boundaries_and_spans() {
 }
 
 #[test]
-fn bug_decimal_exponent_directly_before_concat_lexes_on_lua51_and_luau() {
+fn decimal_exponent_directly_before_concat_lexes_on_lua51_and_luau() {
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
         let result = lex("return 1e5..2", version);
         assert_eq!(
@@ -333,7 +351,7 @@ fn bug_decimal_exponent_directly_before_concat_lexes_on_lua51_and_luau() {
 }
 
 #[test]
-fn bug_luau_hex_and_binary_numerals_directly_before_concat_lex() {
+fn luau_hex_and_binary_numerals_directly_before_concat_lex() {
     for source in ["return 0xFF..2", "return 0b1..2"] {
         let result = lex(source, LuaVersion::Luau);
         assert_eq!(
@@ -345,7 +363,7 @@ fn bug_luau_hex_and_binary_numerals_directly_before_concat_lex() {
 }
 
 #[test]
-fn bug_hex_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
+fn hex_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
         let result = lex("x=0x1g=2", version);
         assert_eq!(

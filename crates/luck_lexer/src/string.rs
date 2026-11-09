@@ -173,8 +173,8 @@ fn scan_escape(cursor: &mut Cursor<'_>, version: LuaVersion, escaped: u8) -> Res
         b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'\'' | b'"' => {
             cursor.advance();
         }
-        // Lua 5.1 accepts any other escaped character as that
-        // literal character; 5.2+ and Luau reject it.
+        // Lua 5.1 and Luau accept any other escaped character as that
+        // literal character; 5.2+ reject it.
         _ if !version.has_strict_escapes() => {
             cursor.advance();
         }

@@ -94,14 +94,12 @@ fn unterminated_string_is_error() {
 }
 
 #[test]
-fn undefined_escape_is_error_outside_lua51() {
-    // 5.2+ and Luau reject undefined escapes; real 5.1 accepts them as
-    // the literal character.
-    for version in [LuaVersion::Lua52, LuaVersion::Luau] {
-        let result = lex("\"\\q\"", version);
-        assert!(!result.errors.is_empty(), "{version:?} must reject \\q");
-        assert!(result.errors[0].message.contains("invalid escape"));
-    }
+fn undefined_escape_is_error_on_lua52_and_later() {
+    // 5.2+ rejects undefined escapes; 5.1 and Luau accept them as the
+    // literal character.
+    let strict_result = lex("\"\\q\"", LuaVersion::Lua52);
+    assert!(!strict_result.errors.is_empty(), "Lua52 must reject \\q");
+    assert!(strict_result.errors[0].message.contains("invalid escape"));
     let result = lex_lua51("\"\\q\"");
     assert!(result.errors.is_empty(), "5.1 accepts \\q as literal 'q'");
 }
@@ -221,7 +219,7 @@ fn unterminated_long_string_is_error() {
 }
 
 #[test]
-fn bug_luau_undefined_escape_lexes_as_the_literal_character() {
+fn luau_undefined_escape_lexes_as_the_literal_character() {
     let result = lex(r#""\q""#, LuaVersion::Luau);
     assert_eq!(
         result.errors,

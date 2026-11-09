@@ -94,7 +94,11 @@ fn decode_string_skips_whitespace_after_z() {
 #[test]
 fn decode_string_refuses_undefined_escapes_on_strict_versions() {
     assert_eq!(decode(r#""\q""#), None);
-    assert_eq!(decode_in(r#""\q""#, LuaVersion::Luau), None);
+}
+
+#[test]
+fn decode_string_reads_luau_undefined_escapes_as_the_character() {
+    assert_eq!(decode_in(r#""\q""#, LuaVersion::Luau), Some(b"q".to_vec()));
 }
 
 #[test]

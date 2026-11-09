@@ -216,15 +216,8 @@ fn goto_is_a_keyword_only_in_lua52_plus() {
 }
 
 #[test]
-fn global_is_a_keyword_only_in_lua55() {
-    assert_eq!(first_kind_in("global", LuaVersion::Lua55), TokenKind::Global);
-    for version in [
-        LuaVersion::Lua51,
-        LuaVersion::Lua52,
-        LuaVersion::Lua53,
-        LuaVersion::Lua54,
-        LuaVersion::Luau,
-    ] {
+fn global_is_a_name_in_every_version() {
+    for version in LuaVersion::ALL {
         assert_eq!(
             first_kind_in("global", version),
             TokenKind::Identifier("global".into()),
@@ -252,7 +245,7 @@ fn lua55_global_stmt_lexes_token_by_token() {
     assert_eq!(
         kinds_in("global x = 5", LuaVersion::Lua55),
         vec![
-            TokenKind::Global,
+            TokenKind::Identifier("global".into()),
             TokenKind::Identifier("x".into()),
             TokenKind::Equal,
             TokenKind::Number("5".into()),
