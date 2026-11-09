@@ -10,7 +10,7 @@ use core::mem;
 use core::ops::Range;
 
 use luck_ast::{Block, Expression, FunctionArgs, LocalAssignment, Punctuated, Statement, Var};
-use luck_token::{Comment, Span, index_to_offset, offset_to_index};
+use luck_token::{Comment, LuaVersion, Span, index_to_offset, line_breaks, offset_to_index};
 
 use crate::directive::format_off_regions;
 use crate::format_block::has_blank_line;
@@ -30,10 +30,12 @@ pub(crate) fn sort_requires_in_source(
     source: &str,
     block: &Block,
     comments: &[Comment],
+    version: LuaVersion,
 ) -> Option<String> {
     let source_end = index_to_offset(source.len());
     let mut collector = RunCollector {
         source,
+        version,
         disabled_ranges: format_off_regions(comments, source)
             .into_iter()
             .map(|(off, on)| off.start..on.map_or(source_end, |close| close.end))
@@ -78,6 +80,7 @@ pub(crate) fn sort_requires_in_source(
 /// source order.
 struct RunCollector<'source> {
     source: &'source str,
+    version: LuaVersion,
     disabled_ranges: Vec<Range<u32>>,
     runs: Vec<Vec<SortableLine<'source>>>,
 }
@@ -95,8 +98,9 @@ impl<'source> RunCollector<'source> {
             let Span { start: stmt_start, end: stmt_end } = stmt.span();
 
             // Counts newlines, so a comment line breaks the run as well.
-            let is_blank_break = previous_end
-                .is_some_and(|previous| has_blank_line(self.source, previous, stmt_start));
+            let is_blank_break = previous_end.is_some_and(|previous| {
+                has_blank_line(self.source, previous, stmt_start, self.version)
+            });
 
             let is_disabled = self
                 .disabled_ranges
@@ -115,7 +119,7 @@ impl<'source> RunCollector<'source> {
                 continue;
             }
 
-            if let Some(line) = sortable_line(self.source, stmt) {
+            if let Some(line) = sortable_line(self.source, stmt, self.version) {
                 if !is_disabled {
                     current_lines.push(line);
                 }
@@ -207,7 +211,11 @@ impl<'source> RunCollector<'source> {
 
 /// Matches a `local` with one name bound to one require or `GetService` call,
 /// in any dialect.
-fn sortable_line<'source>(source: &'source str, stmt: &Statement) -> Option<SortableLine<'source>> {
+fn sortable_line<'source>(
+    source: &'source str,
+    stmt: &Statement,
+    version: LuaVersion,
+) -> Option<SortableLine<'source>> {
     let Statement::LocalAssignment(local) = stmt else {
         return None;
     };
@@ -222,7 +230,7 @@ fn sortable_line<'source>(source: &'source str, stmt: &Statement) -> Option<Sort
         return None;
     }
 
-    let range = line_range(source, local.span);
+    let range = line_range(source, local.span, version);
     let text = source.get(range.clone())?;
     Some(SortableLine { range, text, key })
 }
@@ -282,31 +290,27 @@ fn is_single_string_arg(call_args: &FunctionArgs) -> bool {
 
 /// Widens `stmt_span` to the whole source lines it occupies, including the
 /// trailing newline.
-fn line_range(source: &str, stmt_span: Span) -> Range<usize> {
-    let line_start = Span::new(0, stmt_span.start)
-        .text(source)
-        .trim_end_matches(|character: char| character != '\n')
-        .len();
+fn line_range(source: &str, stmt_span: Span, version: LuaVersion) -> Range<usize> {
+    let line_start = line_breaks(Span::new(0, stmt_span.start).text(source), version)
+        .last()
+        .map_or(0, |line_break| line_break.end);
 
     let stmt_end = offset_to_index(stmt_span.end);
-    let line_remainder = source
-        .get(stmt_end..)
-        .and_then(|following| following.split_inclusive('\n').next())
-        .unwrap_or_default();
+    let following = source.get(stmt_end..).unwrap_or_default();
+    let remainder_length =
+        line_breaks(following, version).next().map_or(following.len(), |line_break| line_break.end);
 
-    line_start..stmt_end.saturating_add(line_remainder.len())
+    line_start..stmt_end.saturating_add(remainder_length)
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
 
     fn sort_source(input: &str) -> String {
         let parsed = luck_parser::parse(input, LuaVersion::Lua54);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
-        sort_requires_in_source(input, &parsed.block, &parsed.comments)
+        sort_requires_in_source(input, &parsed.block, &parsed.comments, LuaVersion::Lua54)
             .unwrap_or_else(|| input.to_owned())
     }
 

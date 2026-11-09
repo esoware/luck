@@ -1,4 +1,7 @@
-use luck_token::{CompactString, LuaVersion, Span, TokenKind};
+use luck_token::{
+    CompactString, LuaVersion, Span, TokenKind, is_lua_whitespace, unicode_escape_codepoint,
+};
+use memchr::memmem;
 
 use crate::cursor::Cursor;
 use crate::lex_error::{LexError, lex_error};
@@ -164,10 +167,9 @@ fn scan_escape(cursor: &mut Cursor<'_>, version: LuaVersion, escaped: u8) -> Res
         b'x' if version.has_hex_escape() => scan_hex_escape(cursor)?,
         b'z' if version.has_whitespace_escape() => {
             cursor.advance();
-            cursor
-                .eat_while(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'\x0B' | b'\x0C'));
+            cursor.eat_while(is_lua_whitespace);
         }
-        b'u' if version.has_unicode_escape() => scan_unicode_escape(cursor)?,
+        b'u' if version.has_unicode_escape() => scan_unicode_escape(cursor, version)?,
         b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'\'' | b'"' => {
             cursor.advance();
         }
@@ -228,9 +230,9 @@ fn scan_hex_escape(cursor: &mut Cursor<'_>) -> Result<(), LexError> {
 ///
 /// # Errors
 ///
-/// Returns a [`LexError`] for missing braces, no digits, or a codepoint of
-/// 2^31 or above.
-fn scan_unicode_escape(cursor: &mut Cursor<'_>) -> Result<(), LexError> {
+/// Returns a [`LexError`] for missing braces, no digits, or a codepoint
+/// `version` doesn't allow.
+fn scan_unicode_escape(cursor: &mut Cursor<'_>, version: LuaVersion) -> Result<(), LexError> {
     let escape_start = cursor.position().saturating_sub(1);
     cursor.advance();
     if !cursor.eat(b'{') {
@@ -245,10 +247,11 @@ fn scan_unicode_escape(cursor: &mut Cursor<'_>) -> Result<(), LexError> {
             "`\\u{}` requires at least one hex digit",
         ));
     }
-    if !u64::from_str_radix(hex_digits, 16).is_ok_and(|codepoint| codepoint < 0x8000_0000) {
+    if unicode_escape_codepoint(hex_digits.as_bytes(), version).is_none() {
+        let limit = if version.has_extended_unicode_escape() { "2^31" } else { "2^21" };
         return Err(lex_error(
             cursor.span_since(escape_start),
-            "`\\u` codepoint too large (must be less than 2^31)",
+            format!("`\\u` codepoint too large (must be less than {limit})"),
         ));
     }
     if !cursor.eat(b'}') {
@@ -282,17 +285,28 @@ pub(crate) fn eat_long_bracket_open(cursor: &mut Cursor<'_>) -> Option<usize> {
     Some(level)
 }
 
-/// Advance from just past a long-bracket opener to its matching `]=*]` closer.
+/// Advance from just past a long-bracket opener to past its matching `]=*]`
+/// closer. Shared by long-bracket strings and block comments, which name
+/// themselves in `unterminated`.
 ///
-/// Consumes the closer and returns `true` when it's found. At EOF it consumes
-/// the rest and returns `false`, so the caller can report its own
-/// unterminated error. Shared by long-bracket strings and block comments.
-pub(crate) fn advance_past_long_bracket_close(cursor: &mut Cursor<'_>, level: usize) -> bool {
+/// # Errors
+///
+/// Returns a [`LexError`] spanning from `start`, with the cursor at EOF, when
+/// the closer is missing, and when a level-0 body holds a `[[` that `version`
+/// rejects.
+pub(crate) fn advance_past_long_bracket_close(
+    cursor: &mut Cursor<'_>,
+    version: LuaVersion,
+    start: usize,
+    level: usize,
+    unterminated: &'static str,
+) -> Result<(), LexError> {
+    let body_start = cursor.position();
     loop {
         let rest = cursor.rest();
         let Some(bracket_offset) = memchr::memchr(b']', rest) else {
             cursor.advance_by(rest.len());
-            return false;
+            return Err(lex_error(cursor.span_since(start), unterminated));
         };
         cursor.advance_by(bracket_offset);
         cursor.advance();
@@ -301,7 +315,16 @@ pub(crate) fn advance_past_long_bracket_close(cursor: &mut Cursor<'_>, level: us
         if closing_level == level && after_bracket.get(level) == Some(&b']') {
             cursor.advance_by(level);
             cursor.advance();
-            return true;
+            if level == 0
+                && version.has_long_bracket_nesting_error()
+                && memmem::find(cursor.text_since(body_start).as_bytes(), b"[[").is_some()
+            {
+                return Err(lex_error(
+                    cursor.span_since(start),
+                    "nesting of `[[...]]` is deprecated",
+                ));
+            }
+            return Ok(());
         }
     }
 }
@@ -311,14 +334,19 @@ pub(crate) fn advance_past_long_bracket_close(cursor: &mut Cursor<'_>, level: us
 ///
 /// # Errors
 ///
-/// Returns a [`LexError`] when the closing bracket is missing.
+/// Returns a [`LexError`] for a missing closer or a `[[` `version` rejects.
 pub(crate) fn scan_long_string(
     cursor: &mut Cursor<'_>,
+    version: LuaVersion,
     start: usize,
     level: usize,
 ) -> Result<TokenKind, LexError> {
-    if !advance_past_long_bracket_close(cursor, level) {
-        return Err(lex_error(cursor.span_since(start), "unterminated long bracket string"));
-    }
+    advance_past_long_bracket_close(
+        cursor,
+        version,
+        start,
+        level,
+        "unterminated long bracket string",
+    )?;
     Ok(TokenKind::StringLiteral(cursor.text_since(start).into()))
 }

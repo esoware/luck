@@ -1,7 +1,7 @@
 //! `-- luck:` directive comments, and what they do to the diagnostics they
 //! cover.
 
-use luck_token::{Comment, Span, index_to_offset};
+use luck_token::{Comment, LuaVersion, Span, has_line_break, index_to_offset};
 
 use crate::diagnostic::{LintDiagnostic, Severity};
 use crate::nodes::{NodeKind, Nodes};
@@ -144,8 +144,9 @@ pub(crate) fn apply(
     comments: &[Comment],
     source: &str,
     nodes: &Nodes<'_>,
+    version: LuaVersion,
 ) {
-    apply_directives(&resolve(comments, source, nodes), diags);
+    apply_directives(&resolve(comments, source, nodes, version), diags);
 }
 
 /// Resolves every directive in `comments`. Regions appear where they close,
@@ -154,6 +155,7 @@ fn resolve<'source>(
     comments: &[Comment],
     source: &'source str,
     nodes: &Nodes<'_>,
+    version: LuaVersion,
 ) -> Vec<Directive<'source>> {
     let mut directives = Vec::new();
     // Open regions as (rule, verb, start). An `end` closes the latest one
@@ -178,7 +180,7 @@ fn resolve<'source>(
             }
             Extent::Statement => {
                 let stmt_spans = sorted_spans.get_or_insert_with(|| sorted_stmt_spans(nodes));
-                let range = stmt_range(comment.span, stmt_spans, source, source_end);
+                let range = stmt_range(comment.span, stmt_spans, source, source_end, version);
                 directives.extend(rules.iter().map(|&(rule, _)| Directive { rule, verb, range }));
             }
             Extent::RegionStart => {
@@ -232,13 +234,19 @@ fn sorted_stmt_spans(nodes: &Nodes<'_>) -> Vec<Span> {
 /// A directive trailing a statement on the same line
 /// (`local x = 1 -- luck: allow(...)`) covers that statement. Otherwise it
 /// covers the next one.
-fn stmt_range(comment_span: Span, stmt_spans: &[Span], source: &str, source_end: u32) -> Span {
+fn stmt_range(
+    comment_span: Span,
+    stmt_spans: &[Span],
+    source: &str,
+    source_end: u32,
+    version: LuaVersion,
+) -> Span {
     let trailed_span = stmt_spans
         .iter()
         .filter(|stmt_span| stmt_span.end <= comment_span.start)
         .max_by_key(|stmt_span| stmt_span.end)
         .filter(|stmt_span| {
-            !Span::new(stmt_span.end, comment_span.start).text(source).contains('\n')
+            !has_line_break(Span::new(stmt_span.end, comment_span.start).text(source), version)
         });
     if let Some(&stmt_span) = trailed_span {
         return stmt_span;

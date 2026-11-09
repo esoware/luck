@@ -1,5 +1,5 @@
 use luck_ast::{LastStatement, Statement};
-use luck_token::{Span, index_to_offset};
+use luck_token::{LuaVersion, Span, index_to_offset, line_breaks};
 
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -23,7 +23,7 @@ impl_rule!(
 
 impl WholeRule for MultipleStatementsPerLine {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let lines = LineIndex::new(context.source);
+        let lines = LineIndex::new(context.source, context.semantic.version);
         let mut findings = Vec::new();
         let mut spans: Vec<Span> = Vec::new();
         for block in context.blocks {
@@ -60,26 +60,25 @@ impl WholeRule for MultipleStatementsPerLine {
 
 /// Maps byte positions to 1-based line numbers in O(log n) per query.
 struct LineIndex {
-    /// Byte offset of each `\n`, in source order.
-    line_breaks: Vec<u32>,
+    /// Byte offset where each line after the first starts, in source order.
+    line_starts: Vec<u32>,
 }
 
 impl LineIndex {
-    fn new(source: &str) -> Self {
-        let line_breaks =
-            source.match_indices('\n').map(|(index, _)| index_to_offset(index)).collect();
-        Self { line_breaks }
+    fn new(source: &str, version: LuaVersion) -> Self {
+        let line_starts = line_breaks(source, version)
+            .map(|line_break| index_to_offset(line_break.end))
+            .collect();
+        Self { line_starts }
     }
 
     fn line_of(&self, offset: u32) -> usize {
-        self.line_breaks.partition_point(|&line_break| line_break < offset).saturating_add(1)
+        self.line_starts.partition_point(|&line_start| line_start <= offset).saturating_add(1)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
@@ -126,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_ignores_cr_only_line_breaks() {
+    fn ignores_cr_only_line_breaks() {
         let diags = run("local a = 1\rlocal b = 2");
         assert!(diags.is_empty(), "Lua reads a lone CR as a line break: {diags:?}");
     }

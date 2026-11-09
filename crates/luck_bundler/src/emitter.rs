@@ -1,6 +1,6 @@
 use core::ops::Range;
 
-use luck_token::{LuaVersion, Span, encode_string};
+use luck_token::{LuaVersion, Span, chunk_start, encode_string, ends_with_line_break, line_breaks};
 use rustc_hash::FxHashSet;
 
 use crate::exports::lower_exports;
@@ -64,7 +64,10 @@ pub(crate) fn emit(graph: &DependencyGraph, version: LuaVersion) -> (String, Vec
     if modules.len() == 1 && entry.dependencies.is_empty() {
         let line_map = vec![LineMapEntry {
             bundle_start_line: 1,
-            bundle_end_line: entry.source.lines().count().max(1),
+            // A final line break closes its line rather than opening an empty one.
+            bundle_end_line: line_breaks(&entry.source, version)
+                .count()
+                .saturating_add(usize::from(!ends_with_line_break(&entry.source, version))),
             path: entry.path.clone(),
         }];
         return (entry.source.clone(), line_map);
@@ -155,7 +158,7 @@ struct BundleWriter<'prefix> {
 impl BundleWriter<'_> {
     fn push(&mut self, fragment: &str) {
         self.output.push_str(fragment);
-        self.next_line = self.next_line.saturating_add(fragment.matches('\n').count());
+        self.next_line = self.next_line.saturating_add(line_breaks(fragment, self.version).count());
     }
 
     /// Luau caches per resolved file: one numeric slot per module, including
@@ -283,7 +286,7 @@ impl BundleWriter<'_> {
                 if call.is_empty() {
                     return None;
                 }
-                let newlines = "\n".repeat(call.matches('\n').count());
+                let newlines = "\n".repeat(line_breaks(call, self.version).count());
                 let key = keys.key(dependency)?;
                 Some((dependency.call_span, format!("{}require({key}{newlines})", self.prefix)))
             })
@@ -313,7 +316,14 @@ impl BundleWriter<'_> {
 
         let first_line = self.next_line;
         let body_start = self.output.len();
-        let mut cursor = if source.starts_with('\u{FEFF}') { '\u{FEFF}'.len_utf8() } else { 0 };
+        let mut cursor = chunk_start(source, self.version);
+        // A lone CR opening the body would join the generated LF above it into
+        // one LFCR line break, losing the body's first line.
+        let body = source.get(cursor..).unwrap_or_default();
+        if self.version.has_lfcr_line_break() && body.starts_with('\r') && !body.starts_with("\r\n")
+        {
+            self.push(" ");
+        }
         for (span, replacement) in &edits {
             let range = Range::<usize>::from(*span);
             self.push(source.get(cursor..range.start).unwrap_or_default());
@@ -323,14 +333,15 @@ impl BundleWriter<'_> {
         self.push(source.get(cursor..).unwrap_or_default());
 
         if !value_exports.is_empty() {
-            if self.output.len() == body_start || !self.output.ends_with('\n') {
+            if self.output.len() == body_start || !ends_with_line_break(&self.output, self.version)
+            {
                 self.push("\n");
             }
             let fields: Vec<String> =
                 value_exports.iter().map(|name| format!("{name}={name}")).collect();
             self.push(&format!("return table.freeze({{{}}})\n", fields.join(",")));
         }
-        if self.output.len() > body_start && !self.output.ends_with('\n') {
+        if self.output.len() > body_start && !ends_with_line_break(&self.output, self.version) {
             self.push("\n");
         }
 

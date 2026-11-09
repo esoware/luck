@@ -509,10 +509,8 @@ fn bug_luau_export_function_attribute_lowering_keeps_lines_one_to_one() {
     }
 }
 
-// PUC Lua counts a lone CR as a line break, so tracebacks run ahead of a
-// line map that only counts LF.
 #[test]
-fn bug_line_map_counts_lone_cr_line_breaks_in_a_wrapped_module() {
+fn line_map_counts_lone_cr_line_breaks_in_a_wrapped_module() {
     let result = bundle_files(
         &[("main.lua", LUA_REQUIRE_UTIL), ("util.lua", b"local x = 1\rlocal y = 2\rreturn y\r")],
         "main.lua",
@@ -527,17 +525,15 @@ fn bug_line_map_counts_lone_cr_line_breaks_in_a_wrapped_module() {
 }
 
 #[test]
-fn bug_line_map_counts_lone_cr_line_breaks_in_a_lone_module() {
+fn line_map_counts_lone_cr_line_breaks_in_a_lone_module() {
     let result =
         bundle_files(&[("main.lua", b"print(1)\rprint(2)\r")], "main.lua", LuaVersion::Lua54);
     let entry = line_map_entry(&result, "main.lua");
     assert_eq!(entry.bundle_end_line, 2, "a two-line CR file must map two lines: {entry:?}");
 }
 
-// The padding only counts LF, so a CR-delimited multiline require loses its
-// line breaks and every later line of the module moves up.
 #[test]
-fn bug_multiline_require_keeps_its_lone_cr_line_breaks() {
+fn multiline_require_keeps_its_lone_cr_line_breaks() {
     let result = bundle_files(
         &[("main.lua", b"local d = require(\r\"util\"\r)\rprint(d)\r"), ("util.lua", RETURN_ONE)],
         "main.lua",

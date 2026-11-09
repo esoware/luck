@@ -86,17 +86,17 @@ impl BundleArgs {
                 dynamic_require,
             },
         )
-        .map_err(|errors| fail_with_diags(&errors))?;
+        .map_err(|errors| fail_with_diags(&errors, version))?;
 
         if verbosity != Verbosity::Quiet {
-            print_diags(&result.warnings);
+            print_diags(&result.warnings, version);
         }
 
         let mut code = result.output;
 
         if self.minify {
             code = luck_minifier::minify(&code, version, &transforms)
-                .map_err(|errors| fail_with_source_errors(self.entry, code, &errors))?;
+                .map_err(|errors| fail_with_source_errors(self.entry, &code, &errors, version))?;
         }
 
         if let Some(map_path) = self.line_map.as_deref() {

@@ -9,7 +9,7 @@ use core::fmt::Write as _;
 
 use compact_str::CompactString;
 
-use crate::LuaVersion;
+use crate::{LuaVersion, is_lua_whitespace, strip_line_break};
 
 /// The text between a quoted string literal's quotes, escapes left undecoded,
 /// so `"\65"` and `"A"` give different bodies.
@@ -26,11 +26,12 @@ pub fn short_string_body(raw: &str) -> Option<&str> {
 ///
 /// Handles both quote forms with every Lua escape, and long-bracket strings
 /// (EOL normalization, leading-newline strip, no escapes). Returns `None` for
-/// any form this doesn't model exactly, and a caller that gets `None` must
-/// not fold. Lua 5.1 reads an undefined escape as the literal character, and
-/// Luau's long strings keep a lone CR as content. The result borrows from
-/// `raw` when the body needs no rewriting: a quoted string without escapes,
-/// or a long-bracket string without a CR.
+/// any form this doesn't model exactly, including text that isn't a whole
+/// string literal, and a caller that gets `None` must not fold. Lua 5.1 reads
+/// an undefined escape as the literal character, and Luau's long strings keep
+/// a lone CR as content. The result borrows from `raw` when the body needs no
+/// rewriting: a quoted string without escapes, or a long-bracket string
+/// without a CR.
 #[must_use]
 pub fn decode_string(raw: &str, version: LuaVersion) -> Option<Cow<'_, [u8]>> {
     if raw.starts_with('[') {
@@ -41,7 +42,10 @@ pub fn decode_string(raw: &str, version: LuaVersion) -> Option<Cow<'_, [u8]>> {
     if quote != b'"' && quote != b'\'' {
         return None;
     }
-    let (_, inner) = after_quote.split_last()?;
+    let (&closing_quote, inner) = after_quote.split_last()?;
+    if closing_quote != quote {
+        return None;
+    }
     if !inner.contains(&b'\\') {
         return Some(Cow::Borrowed(inner));
     }
@@ -61,39 +65,30 @@ pub fn decode_string(raw: &str, version: LuaVersion) -> Option<Cow<'_, [u8]>> {
 fn decode_long_bracket(raw: &[u8], version: LuaVersion) -> Option<Cow<'_, [u8]>> {
     let after_open = raw.strip_prefix(b"[")?;
     let level = after_open.iter().take_while(|&&byte| byte == b'=').count();
-    let delimiter_length = level.saturating_add(2);
-    let content_end = raw.len().checked_sub(delimiter_length)?;
-    let content = raw.get(delimiter_length..content_end).unwrap_or_default();
-    // Each EOL sequence becomes one newline, and an EOL right after the
-    // opening bracket is dropped (5.4 manual section 3.1). Every EOL but a
-    // lone LF holds a CR, so a body without one is already the value.
-    let body = strip_eol(content, version).unwrap_or(content);
+    let body_with_closer = after_open.get(level..)?.strip_prefix(b"[")?;
+    let closer_length = level.saturating_add(2);
+    let content_length = body_with_closer.len().checked_sub(closer_length)?;
+    let (content, closer) = body_with_closer.split_at(content_length);
+    let closer_equals = closer.strip_prefix(b"]")?.strip_suffix(b"]")?;
+    if closer_equals.iter().any(|&byte| byte != b'=') {
+        return None;
+    }
+    // Each line break becomes one newline, and one right after the opening
+    // bracket is dropped (5.4 manual section 3.1). Every break but a lone LF
+    // holds a CR, so a body without one is already the value.
+    let body = strip_line_break(content, version).unwrap_or(content);
     if !body.contains(&b'\r') {
         return Some(Cow::Borrowed(body));
     }
     let mut output = Vec::with_capacity(body.len());
     let mut remaining = body;
     while let Some((&byte, rest)) = remaining.split_first() {
-        let (decoded, after_decoded) =
-            strip_eol(remaining, version).map_or((byte, rest), |after_eol| (b'\n', after_eol));
+        let (decoded, after_decoded) = strip_line_break(remaining, version)
+            .map_or((byte, rest), |after_break| (b'\n', after_break));
         output.push(decoded);
         remaining = after_decoded;
     }
     Some(Cow::Owned(output))
-}
-
-/// The bytes after a leading EOL sequence, or `None` when there is none. PUC
-/// recognizes CR, LF, CRLF, and LFCR; Luau only LF and CRLF, keeping a lone
-/// CR as a literal byte (`Lexer::fixupMultilineString`).
-const fn strip_eol(bytes: &[u8], version: LuaVersion) -> Option<&[u8]> {
-    match bytes {
-        [b'\r', b'\n', rest @ ..] => Some(rest),
-        [b'\n', b'\r', rest @ ..] | [b'\r', rest @ ..] if version.has_lfcr_line_break() => {
-            Some(rest)
-        }
-        [b'\n', rest @ ..] => Some(rest),
-        _ => None,
-    }
 }
 
 /// Decode the escape in `escape`, which starts just past its `\`, and return
@@ -127,14 +122,14 @@ fn decode_escape<'text>(
         }
         b'x' if version.has_hex_escape() => return decode_hex_escape(rest, output),
         b'z' if version.has_whitespace_escape() => {
-            let whitespace_length = rest
-                .iter()
-                .take_while(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C))
-                .count();
+            let whitespace_length =
+                rest.iter().take_while(|&&byte| is_lua_whitespace(byte)).count();
             return rest.get(whitespace_length..);
         }
         b'0'..=b'9' => return decode_decimal_escape(escape, output),
-        b'u' if version.has_unicode_escape() => return decode_unicode_escape(rest, output),
+        b'u' if version.has_unicode_escape() => {
+            return decode_unicode_escape(rest, version, output);
+        }
         // Lua 5.1 reads any other escaped character as itself. Strict
         // versions reject the token, so refuse to fold it.
         _ if !version.has_strict_escapes() => output.push(escaped),
@@ -160,20 +155,36 @@ fn decode_decimal_escape<'text>(escape: &'text [u8], output: &mut Vec<u8>) -> Op
     Some(rest)
 }
 
-fn decode_unicode_escape<'text>(rest: &'text [u8], output: &mut Vec<u8>) -> Option<&'text [u8]> {
-    let mut remaining = rest.strip_prefix(b"{")?;
-    let mut value: u32 = 0;
-    while let Some((&digit, after_digit)) = remaining.split_first() {
-        remaining = after_digit;
-        if digit == b'}' {
-            break;
-        }
-        value = value.checked_mul(16)?.checked_add(char::from(digit).to_digit(16)?)?;
-    }
-    let character = char::from_u32(value)?;
+fn decode_unicode_escape<'text>(
+    rest: &'text [u8],
+    version: LuaVersion,
+    output: &mut Vec<u8>,
+) -> Option<&'text [u8]> {
+    let after_open = rest.strip_prefix(b"{")?;
+    let digit_count = after_open.iter().take_while(|byte| byte.is_ascii_hexdigit()).count();
+    let (hex_digits, after_digits) = after_open.split_at(digit_count);
+    let remaining = after_digits.strip_prefix(b"}")?;
+    let character = char::from_u32(unicode_escape_codepoint(hex_digits, version)?)?;
     let mut encoded = [0u8; 4];
     output.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
     Some(remaining)
+}
+
+/// The code point the hex digits of a `\u{...}` escape spell under `version`,
+/// or `None` when it's malformed there: no digits, too many, or too large a
+/// value.
+#[must_use]
+pub fn unicode_escape_codepoint(hex_digits: &[u8], version: LuaVersion) -> Option<u32> {
+    if hex_digits.is_empty() || (version.has_unicode_escape_digit_limit() && hex_digits.len() > 16)
+    {
+        return None;
+    }
+    let mut value: u32 = 0;
+    for &digit in hex_digits {
+        value = value.checked_mul(16)?.checked_add(char::from(digit).to_digit(16)?)?;
+    }
+    let limit = if version.has_extended_unicode_escape() { 0x7FFF_FFFF } else { 0x0010_FFFF };
+    (value <= limit).then_some(value)
 }
 
 /// Encode runtime bytes back into a double-quoted literal.

@@ -80,7 +80,13 @@ pub fn lint_analyzed(
     };
 
     let mut diags = run_rules(&context, &nodes);
-    suppression::apply(&mut diags, context.comments, context.source, &nodes);
+    suppression::apply(
+        &mut diags,
+        context.comments,
+        context.source,
+        &nodes,
+        context.semantic.version,
+    );
     diags.sort_by_key(|diag| diag.span.start);
     diags
 }

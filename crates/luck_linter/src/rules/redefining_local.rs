@@ -1,5 +1,5 @@
 use luck_ast::{Block, Statement};
-use luck_token::{Span, Token};
+use luck_token::{LuaVersion, Span, Token};
 
 use crate::diagnostic::{Finding, line_column};
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -25,6 +25,7 @@ impl WholeRule for RedefiningLocal {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let mut checker = RedefineChecker {
             source: context.source,
+            version: context.semantic.version,
             declarations: Vec::new(),
             findings: Vec::new(),
         };
@@ -37,6 +38,7 @@ impl WholeRule for RedefiningLocal {
 
 struct RedefineChecker<'ast> {
     source: &'ast str,
+    version: LuaVersion,
     /// Each local declared so far in the block being checked, with its
     /// name's span.
     declarations: Vec<(&'ast str, Span)>,
@@ -88,7 +90,7 @@ impl<'ast> RedefineChecker<'ast> {
         if let Some((_, first_span)) =
             self.declarations.iter().find(|(declared_name, _)| *declared_name == name)
         {
-            let (line, column) = line_column(self.source, first_span.start);
+            let (line, column) = line_column(self.source, first_span.start, self.version);
             self.findings.push(
                 Finding::new(
                     format!("local `{name}` is redeclared in the same block"),
@@ -103,8 +105,6 @@ impl<'ast> RedefineChecker<'ast> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;

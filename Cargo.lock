@@ -1226,6 +1226,7 @@ name = "luck_token"
 version = "0.4.0"
 dependencies = [
  "compact_str",
+ "memchr",
 ]
 
 [[package]]

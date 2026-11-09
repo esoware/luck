@@ -45,7 +45,8 @@ impl NodeRule for DuplicateKeys {
                 continue;
             };
             if let Some(first_span) = first_spans.get(key.as_ref()) {
-                let (line, column) = line_column(context.source, first_span.start);
+                let (line, column) =
+                    line_column(context.source, first_span.start, context.semantic.version);
                 findings.push(
                     Finding::new(format!("duplicate key `{key}` in table constructor"), span)
                         .with_help(format!("previous definition at {line}:{column}")),

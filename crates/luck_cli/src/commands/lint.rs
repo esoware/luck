@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use clap::{Args, ValueEnum};
 use luck_core::{Diagnostic, LuaTarget, LuckConfig, read_source_file};
 use luck_linter::{Category, LintConfig, LintDiagnostic, RuleSetting, Severity};
+use luck_token::LuaVersion;
 
 use crate::exit::{Exit, usage_error};
 use crate::output::read_stdin_source;
@@ -204,7 +205,7 @@ impl LintArgs {
         let (total_errors, total_warnings) = severity_counts(&diags);
 
         if !diags.is_empty() && !self.silent {
-            match self.render(stdin_path, current_source, &diags) {
+            match self.render(stdin_path, &current_source, &diags, target.lua_version()) {
                 Rendered::Pretty(pretty) => {
                     let _unused = io::stderr().write_all(&pretty);
                 }
@@ -274,13 +275,20 @@ impl LintArgs {
         }
 
         let (error_count, warning_count) = severity_counts(&diags);
-        let rendered = (!diags.is_empty() && !self.silent)
-            .then(|| self.render(&file_path.to_string_lossy(), current_source, &diags));
+        let rendered = (!diags.is_empty() && !self.silent).then(|| {
+            self.render(&file_path.to_string_lossy(), &current_source, &diags, target.lua_version())
+        });
         LintOutcome { error_count, warning_count, is_fixed, note, rendered }
     }
 
     /// Renders one document's diagnostics in the requested format.
-    fn render(&self, file_label: &str, source: String, diags: &[LintDiagnostic]) -> Rendered {
+    fn render(
+        &self,
+        file_label: &str,
+        source: &str,
+        diags: &[LintDiagnostic],
+        version: LuaVersion,
+    ) -> Rendered {
         match self.format {
             LintFormat::Default => {
                 let renderable_diags: Vec<Diagnostic> = diags
@@ -298,6 +306,7 @@ impl LintArgs {
                     file_label.to_owned(),
                     source,
                     &renderable_diags,
+                    version,
                 ))
             }
             LintFormat::Json => {

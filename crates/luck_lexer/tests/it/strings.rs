@@ -231,7 +231,7 @@ fn bug_luau_undefined_escape_lexes_as_the_literal_character() {
 }
 
 #[test]
-fn bug_unicode_escape_above_10ffff_is_error_on_lua53_and_luau() {
+fn unicode_escape_above_10ffff_is_error_on_lua53_and_luau() {
     for version in [LuaVersion::Lua53, LuaVersion::Luau] {
         let result = lex(r#""\u{110000}""#, version);
         assert!(
@@ -243,7 +243,7 @@ fn bug_unicode_escape_above_10ffff_is_error_on_lua53_and_luau() {
 }
 
 #[test]
-fn bug_lua51_level_zero_long_bracket_rejects_a_nested_opener() {
+fn lua51_level_zero_long_bracket_rejects_a_nested_opener() {
     for source in ["return [[ a [[ b ]]", "--[[ a [[ b ]]\nreturn 1"] {
         let result = lex(source, LuaVersion::Lua51);
         assert!(
@@ -255,7 +255,7 @@ fn bug_lua51_level_zero_long_bracket_rejects_a_nested_opener() {
 }
 
 #[test]
-fn bug_luau_raw_nul_in_a_short_string_is_unterminated() {
+fn luau_raw_nul_in_a_short_string_is_unterminated() {
     let result = lex("return 'a\0b'", LuaVersion::Luau);
     assert!(
         !result.errors.is_empty(),

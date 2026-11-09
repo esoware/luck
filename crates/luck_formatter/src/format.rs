@@ -131,7 +131,7 @@ pub(crate) fn format_source(
     let parsed = if options.sort_requires
         && format_range.is_none()
         && let Some(sorted) =
-            sort_requires_in_source(source, &source_parse.block, &source_parse.comments)
+            sort_requires_in_source(source, &source_parse.block, &source_parse.comments, version)
     {
         luck_parser::parse(sorted, version)
     } else {

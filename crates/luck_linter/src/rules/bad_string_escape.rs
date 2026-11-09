@@ -1,4 +1,4 @@
-use luck_token::{Comment, Span, index_to_offset, offset_to_index};
+use luck_token::{Comment, LuaVersion, Span, index_to_offset, offset_to_index, strip_line_break};
 
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -24,19 +24,18 @@ impl WholeRule for BadStringEscape {
         if context.semantic.version.has_strict_escapes() {
             return Vec::new();
         }
-        scan_source(context.source, context.comments)
+        scan_source(context.source, context.comments, context.semantic.version)
     }
 }
 
 /// Returns how many bytes after the `\` an escape spans, or `None` if Lua 5.1
 /// doesn't define it.
-fn escape_length(rest: &[u8]) -> Option<usize> {
+fn escape_length(rest: &[u8], version: LuaVersion) -> Option<usize> {
+    if let Some(after_break) = strip_line_break(rest, version) {
+        return Some(rest.len().saturating_sub(after_break.len()));
+    }
     match rest {
-        [b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'"' | b'\'' | b'\n', ..] => {
-            Some(1)
-        }
-        // CRLF and bare CR are both one logical newline.
-        [b'\r', after_cr @ ..] => Some(if after_cr.first() == Some(&b'\n') { 2 } else { 1 }),
+        [b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'"' | b'\'', ..] => Some(1),
         // `\ddd` takes up to three decimal digits.
         [b'0'..=b'9', after_first @ ..] => {
             let extra_digit_count =
@@ -52,7 +51,7 @@ fn escape_length(rest: &[u8]) -> Option<usize> {
 ///
 /// Long-bracket strings (`[[...]]`, `[=[...]=]`) have no escapes, so
 /// they're skipped whole.
-fn scan_source(source: &str, comments: &[Comment]) -> Vec<Finding> {
+fn scan_source(source: &str, comments: &[Comment], version: LuaVersion) -> Vec<Finding> {
     let bytes = source.as_bytes();
     let mut findings = Vec::new();
     // The list is sorted and the scan only moves forward, so a comment that
@@ -69,7 +68,7 @@ fn scan_source(source: &str, comments: &[Comment]) -> Vec<Finding> {
             continue;
         }
         index = if byte == b'"' || byte == b'\'' {
-            scan_short_string(bytes, index, byte, &mut findings)
+            scan_short_string(bytes, index, byte, version, &mut findings)
         } else if byte == b'['
             && let Some(skip_to) = skip_long_bracket(bytes, index)
         {
@@ -107,7 +106,13 @@ fn skip_long_bracket(bytes: &[u8], start: usize) -> Option<usize> {
 /// `start`, and returns the offset after its closing quote.
 ///
 /// An unterminated string stops at its newline or the end of the source.
-fn scan_short_string(bytes: &[u8], start: usize, quote: u8, findings: &mut Vec<Finding>) -> usize {
+fn scan_short_string(
+    bytes: &[u8],
+    start: usize,
+    quote: u8,
+    version: LuaVersion,
+    findings: &mut Vec<Finding>,
+) -> usize {
     let mut index = start.saturating_add(1);
     while let Some(&byte) = bytes.get(index) {
         let after_byte = index.saturating_add(1);
@@ -117,7 +122,7 @@ fn scan_short_string(bytes: &[u8], start: usize, quote: u8, findings: &mut Vec<F
         match byte {
             b'\\' => {
                 let after = bytes.get(after_byte..).unwrap_or_default();
-                if let Some(consumed) = escape_length(after) {
+                if let Some(consumed) = escape_length(after, version) {
                     index = after_byte.saturating_add(consumed);
                 } else {
                     let bad_char = after.first().copied().unwrap_or(b'?');
@@ -139,7 +144,7 @@ fn scan_short_string(bytes: &[u8], start: usize, quote: u8, findings: &mut Vec<F
                     index = after_byte.saturating_add(after.len().min(1));
                 }
             }
-            b'\n' => {
+            b'\n' | b'\r' => {
                 // Unterminated. The lexer reports it, and scanning on into
                 // the next line would only add noise.
                 return index;
@@ -152,8 +157,6 @@ fn scan_short_string(bytes: &[u8], start: usize, quote: u8, findings: &mut Vec<F
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;

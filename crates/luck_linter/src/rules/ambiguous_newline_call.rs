@@ -1,5 +1,5 @@
 use luck_ast::{FunctionArgs, FunctionCall};
-use luck_token::Span;
+use luck_token::{LuaVersion, Span, has_line_break};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -27,11 +27,11 @@ impl NodeRule for AmbiguousNewlineCall {
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        findings.extend(check_call(call, context.source));
+        findings.extend(check_call(call, context.source, context.semantic.version));
     }
 }
 
-fn check_call(call: &FunctionCall, source: &str) -> Option<Finding> {
+fn check_call(call: &FunctionCall, source: &str, version: LuaVersion) -> Option<Finding> {
     let FunctionArgs::Parenthesized { span: args_span, .. } = &call.args else {
         return None;
     };
@@ -40,7 +40,9 @@ fn check_call(call: &FunctionCall, source: &str) -> Option<Finding> {
         .as_ref()
         .map_or_else(|| call.callee.span().end, |method_token| method_token.span.end);
     let open_start = args_span.start;
-    if open_start <= prefix_end || !Span::new(prefix_end, open_start).text(source).contains('\n') {
+    if open_start <= prefix_end
+        || !has_line_break(Span::new(prefix_end, open_start).text(source), version)
+    {
         return None;
     }
     Some(
@@ -57,8 +59,6 @@ fn check_call(call: &FunctionCall, source: &str) -> Option<Finding> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
@@ -117,7 +117,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_flags_paren_after_cr_only_line_break() {
+    fn flags_paren_after_cr_only_line_break() {
         let diags = run("local f = print\nf\r(3)");
         assert_eq!(diags.len(), 1, "Lua reads a lone CR as a line break: {diags:?}");
     }

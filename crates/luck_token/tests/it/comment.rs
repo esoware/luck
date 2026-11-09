@@ -58,7 +58,7 @@ fn every_hot_comment_of_the_run_counts() {
 }
 
 #[test]
-fn bug_a_hot_comment_after_non_ascii_whitespace_is_not_leading() {
+fn a_hot_comment_after_non_ascii_whitespace_is_not_leading() {
     let source = "\u{A0}--!strict\nlocal x\n";
     let comments = [comment_at(source, "--!strict", CommentKind::Line)];
     assert_eq!(

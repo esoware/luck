@@ -1,4 +1,4 @@
-use luck_token::Span;
+use luck_token::{LuaVersion, Span, strip_line_break};
 
 /// Zero-copy, forward-only byte cursor over source text.
 #[derive(Debug)]
@@ -92,8 +92,10 @@ impl<'source> Cursor<'source> {
 
     /// Whether only spaces and tabs stand between the cursor and a line break
     /// or EOF.
-    pub(crate) fn is_at_line_end(&self) -> bool {
-        let next_content = self.rest().iter().find(|byte| !matches!(byte, b' ' | b'\t'));
-        matches!(next_content, Some(b'\n' | b'\r') | None)
+    pub(crate) fn is_at_line_end(&self, version: LuaVersion) -> bool {
+        let rest = self.rest();
+        let blank_length = rest.iter().take_while(|byte| matches!(byte, b' ' | b'\t')).count();
+        let after_blanks = rest.get(blank_length..).unwrap_or_default();
+        after_blanks.is_empty() || strip_line_break(after_blanks, version).is_some()
     }
 }

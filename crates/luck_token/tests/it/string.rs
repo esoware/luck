@@ -1,6 +1,8 @@
 use alloc::borrow::Cow;
 
-use luck_token::{LuaVersion, decode_string, encode_string, short_string_body};
+use luck_token::{
+    LuaVersion, decode_string, encode_string, short_string_body, unicode_escape_codepoint,
+};
 
 fn decode(raw: &str) -> Option<Vec<u8>> {
     decode_in(raw, LuaVersion::Lua54)
@@ -251,7 +253,20 @@ fn encode_string_round_trips_through_decode_string() {
 }
 
 #[test]
-fn bug_decode_string_refuses_an_empty_unicode_escape() {
+fn unicode_escape_codepoint_applies_each_version_range() {
+    assert_eq!(unicode_escape_codepoint(b"10FFFF", LuaVersion::Lua53), Some(0x10_FFFF));
+    assert_eq!(unicode_escape_codepoint(b"110000", LuaVersion::Lua53), None);
+    assert_eq!(unicode_escape_codepoint(b"110000", LuaVersion::Luau), None);
+    assert_eq!(unicode_escape_codepoint(b"7FFFFFFF", LuaVersion::Lua54), Some(0x7FFF_FFFF));
+    assert_eq!(unicode_escape_codepoint(b"80000000", LuaVersion::Lua54), None);
+    assert_eq!(unicode_escape_codepoint(b"", LuaVersion::Lua54), None);
+    let seventeen_digits = b"00000000000000041";
+    assert_eq!(unicode_escape_codepoint(seventeen_digits, LuaVersion::Luau), None);
+    assert_eq!(unicode_escape_codepoint(seventeen_digits, LuaVersion::Lua54), Some(0x41));
+}
+
+#[test]
+fn decode_string_refuses_an_empty_unicode_escape() {
     for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55, LuaVersion::Luau] {
         assert_eq!(
             decode_in(r#""\u{}""#, version),
@@ -262,7 +277,7 @@ fn bug_decode_string_refuses_an_empty_unicode_escape() {
 }
 
 #[test]
-fn bug_decode_string_refuses_an_unterminated_unicode_escape() {
+fn decode_string_refuses_an_unterminated_unicode_escape() {
     for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55, LuaVersion::Luau] {
         assert_eq!(
             decode_in(r#""\u{41""#, version),
@@ -273,7 +288,7 @@ fn bug_decode_string_refuses_an_unterminated_unicode_escape() {
 }
 
 #[test]
-fn bug_decode_string_refuses_luau_unicode_escapes_past_sixteen_digits() {
+fn decode_string_refuses_luau_unicode_escapes_past_sixteen_digits() {
     assert_eq!(
         decode_in(r#""\u{00000000000000041}""#, LuaVersion::Luau),
         None,
@@ -282,14 +297,14 @@ fn bug_decode_string_refuses_luau_unicode_escapes_past_sixteen_digits() {
 }
 
 #[test]
-fn bug_decode_string_refuses_text_without_its_closing_quote() {
+fn decode_string_refuses_text_without_its_closing_quote() {
     for raw in ["\"a'", "'a\"", "\"abc", "\"abc\\"] {
         assert_eq!(decode(raw), None, "{raw:?} has no matching closing quote");
     }
 }
 
 #[test]
-fn bug_decode_string_refuses_malformed_long_brackets() {
+fn decode_string_refuses_malformed_long_brackets() {
     for raw in ["[abc]", "[[", "[[x]", "[=[x]]"] {
         assert_eq!(decode(raw), None, "{raw:?} is not a complete long-bracket string");
     }

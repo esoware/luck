@@ -74,7 +74,7 @@ fn bug_lint_renders_a_span_ending_inside_a_multibyte_char() {
 }
 
 #[test]
-fn bug_lint_line_numbers_do_not_count_a_form_feed_as_a_newline() {
+fn lint_line_numbers_do_not_count_a_form_feed_as_a_newline() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", "-- a\u{c}\nreturn missingglobal\n");
 
@@ -87,7 +87,7 @@ fn bug_lint_line_numbers_do_not_count_a_form_feed_as_a_newline() {
 }
 
 #[test]
-fn bug_lint_column_does_not_count_a_bom() {
+fn lint_column_does_not_count_a_bom() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", "\u{feff}return missingglobal\n");
 

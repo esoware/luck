@@ -22,8 +22,12 @@ impl LineIndex {
     pub(crate) fn new(source: &str) -> Self {
         let mut line_starts = Vec::with_capacity(source.len().div_ceil(40));
         line_starts.push(0);
-        for (index, byte) in source.bytes().enumerate() {
-            if byte == b'\n' {
+        let bytes = source.as_bytes();
+        for (index, byte) in bytes.iter().enumerate() {
+            // LSP's EOLs, the client's for every dialect, are LF, CRLF, and CR.
+            let is_line_end = *byte == b'\n'
+                || (*byte == b'\r' && bytes.get(index.saturating_add(1)) != Some(&b'\n'));
+            if is_line_end {
                 line_starts.push(index_to_offset(index).saturating_add(1));
             }
         }
@@ -72,9 +76,8 @@ impl LineIndex {
         // LSP clamps a character past the line's end to the line end. The
         // walk excludes the terminator so an overshooting column can't land
         // on the next line.
-        let line_text = terminated_line.strip_suffix('\n').map_or(terminated_line, |without_lf| {
-            without_lf.strip_suffix('\r').unwrap_or(without_lf)
-        });
+        let without_lf = terminated_line.strip_suffix('\n').unwrap_or(terminated_line);
+        let line_text = without_lf.strip_suffix('\r').unwrap_or(without_lf);
         let mut remaining_utf16_units = position.character;
         for (byte_offset, character) in line_text.char_indices() {
             match remaining_utf16_units.checked_sub(index_to_offset(character.len_utf16())) {
@@ -148,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn bug_a_bare_cr_ends_a_line() {
+    fn a_bare_cr_ends_a_line() {
         // LSP defines `\r` as an EOL alongside `\n` and `\r\n`, and Lua's
         // lexer counts it as a line break too.
         let source = "local a = 1\rlocal b = 2";

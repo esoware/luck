@@ -193,7 +193,7 @@ fn bug_ambiguous_newline_check_covers_method_calls() {
 }
 
 #[test]
-fn bug_luau_lone_carriage_return_does_not_make_a_call_ambiguous() {
+fn luau_lone_carriage_return_does_not_make_a_call_ambiguous() {
     // Luau's lexer counts only `\n` as a line break.
     let result = parse("f\r(x)", LuaVersion::Luau);
     assert!(result.errors.is_empty(), "luau accepts this program: {:?}", result.errors);

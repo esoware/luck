@@ -59,8 +59,9 @@ impl MinifyArgs {
 
         let original_size = source.len();
 
-        let minified = luck_minifier::minify(&source, target.lua_version(), &transforms)
-            .map_err(|errors| fail_with_source_errors(file_path, source, &errors))?;
+        let version = target.lua_version();
+        let minified = luck_minifier::minify(&source, version, &transforms)
+            .map_err(|errors| fail_with_source_errors(file_path, &source, &errors, version))?;
 
         if self.stats {
             let minified_size = minified.len();

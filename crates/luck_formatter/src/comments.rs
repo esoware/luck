@@ -18,7 +18,8 @@ use core::ops::Range;
 
 use luck_ast::SyntheticComment;
 use luck_token::{
-    Comment, CommentKind, CommentPosition, CompactString, LuaVersion, Span, index_to_offset,
+    Comment, CommentKind, CommentPosition, CompactString, LuaVersion, Span, has_line_break,
+    index_to_offset, is_lua_whitespace,
 };
 use rustc_hash::FxHashSet;
 
@@ -246,8 +247,8 @@ impl Comments {
         if_end: u32,
     ) -> bool {
         match &self.store {
-            Store::Sourced { comments, printed_count, source, .. } => {
-                let is_body_one_line = !body_stmt.text(source).contains(['\n', '\r']);
+            Store::Sourced { comments, printed_count, source, version, .. } => {
+                let is_body_one_line = !has_line_break(body_stmt.text(source), *version);
                 let mut gap_start = condition_end;
                 pending_comments(comments, *printed_count)
                     .iter()
@@ -430,7 +431,7 @@ pub(crate) fn write_trailing_comments(
         OwnLine(CompactString),
     }
     let placements: Vec<Placement> = match &mut formatter.comments_mut().store {
-        Store::Sourced { comments, printed_count, source, .. } => {
+        Store::Sourced { comments, printed_count, source, version, .. } => {
             // Left pending, comments inside the span would block the cursor
             // for every later comment. One that starts before the statement
             // isn't this statement's to move: it stalled inside an enclosing
@@ -446,7 +447,7 @@ pub(crate) fn write_trailing_comments(
                 // A newline puts the comment on its own line, and a token in
                 // between means it trails something else.
                 let gap = Span::new(stmt_end, comment.span.start).text(source);
-                !gap.contains(['\n', '\r']) && is_code_free(gap)
+                !has_line_break(gap, *version) && is_code_free(gap)
             });
 
             // After the inner comments' own lines, a suffix would land on
@@ -541,12 +542,15 @@ pub(crate) fn write_inline_comments_after(formatter: &mut Formatter, offset: u32
 /// this list and isn't the list's to place.
 fn write_same_line_comments_after(formatter: &mut Formatter, offset: u32, limit: u32) {
     let mut gap_start = offset;
+    let Some(version) = formatter.comments().source_version() else {
+        return;
+    };
     let texts = formatter.comments_mut().take_sourced_while(|comment, source| {
         if comment.span.start < gap_start || comment.span.start >= limit {
             return false;
         }
         let gap = Span::new(gap_start, comment.span.start).text(source);
-        if gap.contains(['\n', '\r']) {
+        if has_line_break(gap, version) {
             return false;
         }
         gap_start = comment.span.end;
@@ -723,7 +727,7 @@ fn is_movable_run(run: &[SourcedComment], source: &str, run_end: u32) -> bool {
 /// `;` doesn't count, since the formatter writes statement separators as it
 /// sees fit.
 fn is_code_free(text: &str) -> bool {
-    text.bytes().all(|byte| byte.is_ascii_whitespace() || byte == b';')
+    text.bytes().all(|byte| is_lua_whitespace(byte) || byte == b';')
 }
 
 /// Synthetic text may leave out the `--` marker, so add it when missing.

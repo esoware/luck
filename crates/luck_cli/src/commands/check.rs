@@ -80,8 +80,9 @@ fn check_file(file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
 
     Some(render_source_errors(
         file_path.to_string_lossy().into_owned(),
-        result.source,
+        &result.source,
         &result.errors,
+        version,
     ))
 }
 

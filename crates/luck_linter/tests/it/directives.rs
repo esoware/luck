@@ -172,7 +172,7 @@ fn bug_allow_in_leveled_block_comment_covers_next_stmt() {
 }
 
 #[test]
-fn bug_allow_after_cr_only_line_break_covers_next_stmt() {
+fn allow_after_cr_only_line_break_covers_next_stmt() {
     let diags = lint(
         "local first = 1\r-- luck: allow(unused_variable)\rlocal second = 2",
         LuaVersion::Lua54,

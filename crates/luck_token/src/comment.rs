@@ -1,4 +1,4 @@
-use crate::Span;
+use crate::{Span, is_lua_whitespace};
 
 /// A comment extracted during lexing, stored in a flat sorted array.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,7 +51,7 @@ pub fn leading_hot_comments<'comments>(
         .take_while(move |comment| {
             let gap = Span::new(run_end, comment.span.start).text(source);
             run_end = comment.span.end;
-            gap.chars().all(char::is_whitespace)
+            gap.bytes().all(is_lua_whitespace)
         })
         .filter(move |comment| comment.span.text(source).starts_with("--!"))
 }

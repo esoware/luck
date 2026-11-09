@@ -480,7 +480,7 @@ fn luau_attribute_lexes_as_at_and_a_name() {
 }
 
 #[test]
-fn bug_luau_nul_byte_ends_the_source() {
+fn luau_nul_byte_ends_the_source() {
     let result = lex("return 1\0$", LuaVersion::Luau);
     assert!(
         result.errors.is_empty(),
@@ -491,7 +491,7 @@ fn bug_luau_nul_byte_ends_the_source() {
 }
 
 #[test]
-fn bug_bom_is_an_error_on_lua51_and_luau() {
+fn bom_is_an_error_on_lua51_and_luau() {
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
         let result = lex("\u{FEFF}return 1", version);
         assert!(

@@ -26,7 +26,8 @@ impl WholeRule for Shadowing {
                 continue;
             }
             let shadowed = semantic.scope_tree.symbol(shadowed_id);
-            let (line, column) = line_column(context.source, shadowed.definition_span.start);
+            let (line, column) =
+                line_column(context.source, shadowed.definition_span.start, semantic.version);
             findings.push(
                 Finding::new(
                     format!("variable `{}` shadows outer variable", symbol.name),

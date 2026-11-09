@@ -311,8 +311,9 @@ impl FmtArgs {
         if !result.errors.is_empty() {
             return FormatOutcome::Failed(render_source_errors(
                 file_path.to_string_lossy().into_owned(),
-                source.to_owned(),
+                source,
                 &result.errors,
+                version,
             ));
         }
 

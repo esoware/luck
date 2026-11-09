@@ -252,12 +252,12 @@ impl BuildArgs {
             },
         )
         .map_err(|errors| {
-            print_diags(&errors);
+            print_diags(&errors, version);
             BuildFailure::Failed("build failed")
         })?;
 
         if verbosity != Verbosity::Quiet {
-            print_diags(&result.warnings);
+            print_diags(&result.warnings, version);
         }
 
         let source_files = result.source_files;
@@ -267,7 +267,12 @@ impl BuildArgs {
         if config.minify {
             output =
                 luck_minifier::minify(&output, version, &config.transforms).map_err(|errors| {
-                    print_source_errors(config.entry.display().to_string(), output, &errors);
+                    print_source_errors(
+                        config.entry.display().to_string(),
+                        &output,
+                        &errors,
+                        version,
+                    );
                     BuildFailure::Failed("minification failed")
                 })?;
         }

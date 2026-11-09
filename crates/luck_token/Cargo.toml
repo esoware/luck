@@ -16,3 +16,4 @@ workspace = true
 
 [dependencies]
 compact_str = { workspace = true }
+memchr      = { workspace = true }

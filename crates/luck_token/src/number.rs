@@ -27,15 +27,22 @@ impl From<LuaVersion> for NumberSubtypes {
 /// The value of a number literal token's raw text.
 ///
 /// Returns `None` for any spelling this doesn't model exactly, such as a hex
-/// float, and a caller that gets `None` must not fold.
+/// float, and for text no numeral token spells, and a caller that gets `None`
+/// must not fold.
 #[must_use]
 pub fn parse_lua_number(text: &str, subtypes: NumberSubtypes) -> Option<LuaNumber> {
+    // A numeral token starts with a digit or `.`, while Rust's float parser
+    // also takes a sign, `inf`, and `nan`.
+    if !text.starts_with(|first: char| first.is_ascii_digit() || first == '.') {
+        return None;
+    }
     if subtypes == NumberSubtypes::Unified {
         return text.parse::<f64>().ok().map(LuaNumber::Float);
     }
     if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        if hex.contains(['.', 'p', 'P']) {
-            // Hex floats are rare, and never folded.
+        // Hex floats are rare, and never folded. `from_str_radix` would also
+        // take a leading `+`.
+        if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return None;
         }
         // Lua 5.3+: hex integer literals wrap into the integer range.

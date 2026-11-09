@@ -62,6 +62,17 @@ fn string_predicates_match_their_versions() {
 }
 
 #[test]
+fn source_predicates_match_their_versions() {
+    let puc_versions = [Lua51, Lua52, Lua53, Lua54, Lua55];
+    assert_eq!(versions_with(LuaVersion::has_bom_skip), [Lua52, Lua53, Lua54, Lua55]);
+    assert_eq!(versions_with(LuaVersion::has_bare_hash_shebang), puc_versions);
+    assert_eq!(versions_with(LuaVersion::has_nul_source_end), [Luau]);
+    assert_eq!(versions_with(LuaVersion::has_long_bracket_nesting_error), [Lua51]);
+    assert_eq!(versions_with(LuaVersion::has_extended_unicode_escape), [Lua54, Lua55]);
+    assert_eq!(versions_with(LuaVersion::has_unicode_escape_digit_limit), [Luau]);
+}
+
+#[test]
 fn require_predicates_match_their_versions() {
     let lua52_and_later = [Lua52, Lua53, Lua54, Lua55];
     assert_eq!(versions_with(LuaVersion::has_require_filepath_arg), lua52_and_later);

@@ -1,5 +1,6 @@
 use luck_token::{
     Comment, CommentKind, CommentPosition, CompactString, LuaVersion, Span, Token, TokenKind,
+    chunk_start, has_line_break,
 };
 
 use crate::cursor::Cursor;
@@ -74,8 +75,8 @@ impl PendingComment {
 }
 
 impl<'source> Lexer<'source> {
-    /// A lexer positioned past any UTF-8 BOM, with a first line that starts
-    /// with `#` already captured as a shebang comment.
+    /// A lexer positioned past a UTF-8 BOM `version` skips, with a shebang
+    /// first line already captured as a comment.
     ///
     /// # Errors
     ///
@@ -92,8 +93,14 @@ impl<'source> Lexer<'source> {
             ));
         }
 
+        let source_end = if version.has_nul_source_end() {
+            memchr::memchr(0, source.as_bytes()).unwrap_or(source.len())
+        } else {
+            source.len()
+        };
+
         let mut lexer = Self {
-            cursor: Cursor::new(source),
+            cursor: Cursor::new(source.get(..source_end).unwrap_or(source)),
             version,
             queued: None,
             comments: Vec::new(),
@@ -104,13 +111,14 @@ impl<'source> Lexer<'source> {
             interpolation_brace_depths: Vec::new(),
         };
 
-        // UTF-8 BOM: PUC Lua's loadfile and Luau both skip it.
-        if source.starts_with('\u{FEFF}') {
-            lexer.cursor.advance_by('\u{FEFF}'.len_utf8());
-        }
+        lexer.cursor.advance_by(chunk_start(source, version));
 
-        // Lua skips any first line beginning with '#', not just '#!'.
-        if lexer.cursor.peek() == Some(b'#') {
+        let is_shebang = match lexer.cursor.rest() {
+            [b'#', b'!', _, ..] => true,
+            [b'#', ..] => version.has_bare_hash_shebang(),
+            _ => false,
+        };
+        if is_shebang {
             lexer.lex_shebang();
         }
 
@@ -200,9 +208,13 @@ impl<'source> Lexer<'source> {
                 b' ' | b'\t' | 0x0B | 0x0C => {
                     self.cursor.advance();
                 }
-                b'\n' | b'\r' => {
+                b'\n' => {
                     self.cursor.advance();
                     self.has_newline_since_last_token = true;
+                }
+                b'\r' => {
+                    self.cursor.advance();
+                    self.has_newline_since_last_token |= self.version.has_lfcr_line_break();
                 }
                 _ => break,
             }
@@ -244,12 +256,17 @@ impl<'source> Lexer<'source> {
 
     fn lex_shebang(&mut self) {
         let start = self.cursor.position();
-        self.cursor.advance_to_line_break();
+        // Every loader skips this line up to LF, so a lone CR stays in the
+        // comment and only a CRLF's CR is left out of it.
+        let rest = self.cursor.rest();
+        let line_length = memchr::memchr(b'\n', rest).unwrap_or(rest.len());
+        let line = rest.get(..line_length).unwrap_or_default();
+        self.cursor.advance_by(line.strip_suffix(b"\r").unwrap_or(line).len());
         self.pending_leading_comments.push(PendingComment {
             span: self.cursor.span_since(start),
             kind: CommentKind::Shebang,
             is_preceded_by_newline: false,
-            is_followed_by_newline: self.cursor.is_at_line_end(),
+            is_followed_by_newline: self.cursor.is_at_line_end(self.version),
         });
     }
 
@@ -258,16 +275,21 @@ impl<'source> Lexer<'source> {
         self.cursor.advance_by(2); // `--`
 
         let kind = if let Some(level) = eat_long_bracket_open(&mut self.cursor) {
-            if !advance_past_long_bracket_close(&mut self.cursor, level) {
-                self.errors
-                    .push(lex_error(self.cursor.span_since(start), "unterminated block comment"));
+            let result = advance_past_long_bracket_close(
+                &mut self.cursor,
+                self.version,
+                start,
+                level,
+                "unterminated block comment",
+            );
+            if let Err(error) = result {
+                self.errors.push(error);
                 return;
             }
             // The delimiters (`--[=*[` and `]=*]`) never hold a line break,
             // so scanning the whole comment is equivalent to scanning only
             // the body.
-            let comment_bytes = self.cursor.text_since(start).as_bytes();
-            if memchr::memchr2(b'\n', b'\r', comment_bytes).is_some() {
+            if has_line_break(self.cursor.text_since(start), self.version) {
                 CommentKind::MultiLineBlock
             } else {
                 CommentKind::SingleLineBlock
@@ -281,7 +303,7 @@ impl<'source> Lexer<'source> {
             span: self.cursor.span_since(start),
             kind,
             is_preceded_by_newline: self.has_newline_since_last_token,
-            is_followed_by_newline: self.cursor.is_at_line_end(),
+            is_followed_by_newline: self.cursor.is_at_line_end(self.version),
         };
         // A comment with no newline since the previous token trails it, and
         // any other leads the next token.
@@ -326,7 +348,7 @@ impl<'source> Lexer<'source> {
         let Some(level) = eat_long_bracket_open(&mut self.cursor) else {
             return self.lex_symbol();
         };
-        let result = scan_long_string(&mut self.cursor, start, level);
+        let result = scan_long_string(&mut self.cursor, self.version, start, level);
         let kind = self.ok_or_record(result)?;
         Some(self.make_token(kind, start))
     }

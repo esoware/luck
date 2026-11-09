@@ -58,20 +58,21 @@ impl GraphArgs {
         }
 
         let working_directory = current_directory()?;
+        let version = target.lua_version();
 
         let dependency_graph = DependencyGraph::build(
             entry_path,
             &BundleOptions {
-                version: target.lua_version(),
+                version,
                 search_paths: &self.search_paths,
                 project_root: &working_directory,
                 dynamic_require,
             },
         )
-        .map_err(|errors| fail_with_diags(&errors))?;
+        .map_err(|errors| fail_with_diags(&errors, version))?;
 
         if verbosity != Verbosity::Quiet {
-            print_diags(&dependency_graph.warnings);
+            print_diags(&dependency_graph.warnings, version);
         }
 
         match self.format {

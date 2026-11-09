@@ -282,13 +282,74 @@ impl LuaVersion {
         }
     }
 
-    /// Whether LFCR is one line break and a lone CR is a line break in a long
-    /// string. Luau recognizes only LF and CRLF there (`fixupMultilineString`).
+    /// Whether a lone CR ends a line and LFCR is one line break. Luau's lexer
+    /// counts only LF and reads a lone CR as whitespace. See
+    /// [`crate::line_breaks`] for the shared definition.
     #[must_use]
     pub const fn has_lfcr_line_break(self) -> bool {
         match self {
             Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
             Self::Luau => false,
+        }
+    }
+
+    /// Whether loading a file skips a leading UTF-8 BOM (5.2+). 5.1 and Luau
+    /// read it as a malformed first token.
+    #[must_use]
+    pub const fn has_bom_skip(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Luau => false,
+        }
+    }
+
+    /// Whether a first line starting with `#` is skipped without a `!` after
+    /// it. Luau's loader skips only a `#!` line longer than those two bytes.
+    #[must_use]
+    pub const fn has_bare_hash_shebang(self) -> bool {
+        match self {
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Luau => false,
+        }
+    }
+
+    /// Whether a raw NUL byte ends the source. Luau's lexer reads 0 as the
+    /// end of input, and PUC Lua lexes a NUL like any other byte.
+    #[must_use]
+    pub const fn has_nul_source_end(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Whether a `[[` inside a level-0 long bracket is an error. Lua 5.1's
+    /// default `LUA_COMPAT_LSTR` rejects the nesting.
+    #[must_use]
+    pub const fn has_long_bracket_nesting_error(self) -> bool {
+        match self {
+            Self::Lua51 => true,
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => false,
+        }
+    }
+
+    /// Whether a `\u{XXX}` escape reaches past U+10FFFF, up to 2^31 - 1
+    /// (5.4+). 5.3 and Luau stop at U+10FFFF.
+    #[must_use]
+    pub const fn has_extended_unicode_escape(self) -> bool {
+        match self {
+            Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Luau => false,
+        }
+    }
+
+    /// Whether a `\u{XXX}` escape is limited to 16 digits, however small its
+    /// value (Luau's `fixupQuotedString`).
+    #[must_use]
+    pub const fn has_unicode_escape_digit_limit(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
         }
     }
 

@@ -1,4 +1,4 @@
-use luck_token::{Span, index_to_offset, offset_to_index};
+use luck_token::{LuaVersion, Span, chunk_start, index_to_offset, line_breaks, offset_to_index};
 
 use crate::fix::Fix;
 
@@ -78,16 +78,20 @@ impl Finding {
 ///
 /// Columns count bytes from the line start, matching ariadne's
 /// `IndexType::Byte` rendering so a position quoted in diagnostic text lines
-/// up with what the CLI prints. An out-of-range offset clamps to the end of
-/// the source.
+/// up with what the CLI prints. A BOM that `version` skips is not a column.
+/// An out-of-range offset clamps to the end of the source.
 #[must_use]
-pub(crate) fn line_column(source: &str, offset: u32) -> (u32, u32) {
+pub(crate) fn line_column(source: &str, offset: u32, version: LuaVersion) -> (u32, u32) {
     let end = offset_to_index(offset).min(source.len());
-    let prefix = source.as_bytes().get(..end).unwrap_or_default();
-    let mut lines = prefix.rsplit(|&byte| byte == b'\n');
-    let line_bytes = lines.next().map_or(0, <[u8]>::len);
-    let line_breaks = lines.count();
-    (index_to_offset(line_breaks).saturating_add(1), index_to_offset(line_bytes).saturating_add(1))
+    let prefix = source.get(..end).unwrap_or_default();
+    let mut line_count = 0usize;
+    let mut line_start = chunk_start(source, version);
+    for line_break in line_breaks(prefix, version) {
+        line_count = line_count.saturating_add(1);
+        line_start = line_break.end;
+    }
+    let column = end.saturating_sub(line_start);
+    (index_to_offset(line_count).saturating_add(1), index_to_offset(column).saturating_add(1))
 }
 
 #[cfg(test)]
@@ -97,17 +101,17 @@ mod tests {
     #[test]
     fn line_column_is_one_based_byte_columns() {
         let source = "local x\ndo local y\nend";
-        assert_eq!(line_column(source, 0), (1, 1));
-        assert_eq!(line_column(source, 6), (1, 7));
+        assert_eq!(line_column(source, 0, LuaVersion::Lua54), (1, 1));
+        assert_eq!(line_column(source, 6, LuaVersion::Lua54), (1, 7));
         // First byte of line 2 (the `d` in `do`).
-        assert_eq!(line_column(source, 8), (2, 1));
+        assert_eq!(line_column(source, 8, LuaVersion::Lua54), (2, 1));
         // `y` on line 2.
-        assert_eq!(line_column(source, 17), (2, 10));
+        assert_eq!(line_column(source, 17, LuaVersion::Lua54), (2, 10));
     }
 
     #[test]
     fn line_column_clamps_out_of_range() {
         let source = "abc\ndef";
-        assert_eq!(line_column(source, 999), (2, 4));
+        assert_eq!(line_column(source, 999, LuaVersion::Lua54), (2, 4));
     }
 }

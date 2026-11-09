@@ -1,6 +1,6 @@
 use luck_ast::{Expression, FunctionBody, FunctionCall, Statement, Var, Visitor};
 use luck_semantic::ScopeTree;
-use luck_token::Span;
+use luck_token::{LuaVersion, Span};
 use rustc_hash::FxHashMap;
 
 use crate::call::{has_multi_value_tail, positional_args};
@@ -30,6 +30,7 @@ impl WholeRule for MismatchedArgCount {
         }
         let mut checker = CallChecker {
             source: context.source,
+            version: context.semantic.version,
             callees: definitions.callees,
             findings: Vec::new(),
         };
@@ -118,6 +119,7 @@ impl<'ast> Visitor<'ast> for DefinitionCollector<'_> {
 
 struct CallChecker<'source> {
     source: &'source str,
+    version: LuaVersion,
     callees: FxHashMap<Span, FunctionSignature>,
     findings: Vec<Finding>,
 }
@@ -147,7 +149,7 @@ impl CallChecker<'_> {
         if guaranteed_arg_count <= signature.param_count {
             return;
         }
-        let (line, _) = line_column(self.source, signature.definition_start);
+        let (line, _) = line_column(self.source, signature.definition_start, self.version);
         self.findings.push(
             Finding::new(
                 format!(

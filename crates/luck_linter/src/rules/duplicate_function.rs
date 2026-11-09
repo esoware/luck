@@ -32,7 +32,8 @@ impl WholeRule for DuplicateFunction {
                 if let Some((_, first_span)) =
                     definitions.iter().find(|(defined_name, _)| *defined_name == name)
                 {
-                    let (line, _) = line_column(context.source, first_span.start);
+                    let (line, _) =
+                        line_column(context.source, first_span.start, context.semantic.version);
                     findings.push(Finding::new(
                         format!(
                             "duplicate function definition `{name}`, also defined on line {line}"

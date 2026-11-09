@@ -10,7 +10,7 @@ use core::ops::Range;
 
 use luck_ast::{Block, Literal};
 use luck_lexer::Lexer;
-use luck_token::{Comment, CompactString, LuaVersion, Span, Token, TokenKind};
+use luck_token::{Comment, CompactString, LuaVersion, Span, Token, TokenKind, has_line_break};
 use rustc_hash::FxHashSet;
 
 use crate::{ParseError, ParseResult};
@@ -129,7 +129,7 @@ impl<'source> Parser<'source> {
         let between = Span::new(self.previous_span.end, self.current.span.start);
         self.source
             .get(Range::<usize>::from(between))
-            .is_some_and(|text| text.bytes().any(|byte| byte == b'\n' || byte == b'\r'))
+            .is_some_and(|text| has_line_break(text, self.version))
     }
 
     #[inline]

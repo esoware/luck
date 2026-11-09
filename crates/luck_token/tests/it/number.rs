@@ -118,7 +118,7 @@ fn parse_lua_number_refuses_malformed_text() {
 }
 
 #[test]
-fn bug_parse_lua_number_refuses_float_word_spellings() {
+fn parse_lua_number_refuses_float_word_spellings() {
     for text in ["inf", "Infinity", "nan", "NaN"] {
         for subtypes in [NumberSubtypes::IntFloat, NumberSubtypes::Unified] {
             assert_eq!(
@@ -131,7 +131,7 @@ fn bug_parse_lua_number_refuses_float_word_spellings() {
 }
 
 #[test]
-fn bug_parse_lua_number_refuses_signed_text() {
+fn parse_lua_number_refuses_signed_text() {
     for text in ["+1", "-1", "+1.5", "0x+1"] {
         for subtypes in [NumberSubtypes::IntFloat, NumberSubtypes::Unified] {
             assert_eq!(

@@ -4,7 +4,7 @@ use core::fmt::Display;
 use std::process::ExitCode;
 
 use luck_core::Diagnostic;
-use luck_token::SourceError;
+use luck_token::{LuaVersion, SourceError};
 
 use crate::render::{print_diags, print_source_errors};
 
@@ -47,8 +47,8 @@ pub(crate) fn operation_error(message: impl Display) -> Exit {
 
 /// Render the diagnostics to stderr, reading the files they point into from
 /// disk, and return [`Exit::Failure`].
-pub(crate) fn fail_with_diags(diags: &[Diagnostic]) -> Exit {
-    print_diags(diags);
+pub(crate) fn fail_with_diags(diags: &[Diagnostic], version: LuaVersion) -> Exit {
+    print_diags(diags, version);
     Exit::Failure
 }
 
@@ -57,9 +57,10 @@ pub(crate) fn fail_with_diags(diags: &[Diagnostic]) -> Exit {
 /// bundle being minified or stdin.
 pub(crate) fn fail_with_source_errors(
     path: String,
-    source: String,
+    source: &str,
     errors: &[SourceError],
+    version: LuaVersion,
 ) -> Exit {
-    print_source_errors(path, source, errors);
+    print_source_errors(path, source, errors, version);
     Exit::Failure
 }

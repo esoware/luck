@@ -169,7 +169,7 @@ fn single_line_block_comment_keeps_the_next_comment_trailing() {
 }
 
 #[test]
-fn bug_shebang_runs_past_a_carriage_return_to_the_line_feed() {
+fn shebang_runs_past_a_carriage_return_to_the_line_feed() {
     for version in [LuaVersion::Lua54, LuaVersion::Luau] {
         let result = lex("#!x\rprint(1)\n", version);
         assert_eq!(
@@ -182,7 +182,7 @@ fn bug_shebang_runs_past_a_carriage_return_to_the_line_feed() {
 }
 
 #[test]
-fn bug_luau_hash_first_line_without_bang_is_not_a_shebang() {
+fn luau_hash_first_line_without_bang_is_not_a_shebang() {
     let result = lex("#x\nreturn 1", LuaVersion::Luau);
     assert_eq!(
         result.comments,

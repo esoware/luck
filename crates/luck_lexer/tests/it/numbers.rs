@@ -359,7 +359,7 @@ fn bug_hex_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
 }
 
 #[test]
-fn bug_dot_zero_x_is_malformed_on_lua52_and_lua53() {
+fn dot_zero_x_is_malformed_on_lua52_and_lua53() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
         let result = lex("x=.0x1=2", version);
         assert!(
@@ -371,7 +371,7 @@ fn bug_dot_zero_x_is_malformed_on_lua52_and_lua53() {
 }
 
 #[test]
-fn bug_luau_binary_numeral_touching_a_letter_is_malformed() {
+fn luau_binary_numeral_touching_a_letter_is_malformed() {
     let result = lex("x=0b1y=2", LuaVersion::Luau);
     assert!(
         !result.errors.is_empty(),
@@ -381,7 +381,7 @@ fn bug_luau_binary_numeral_touching_a_letter_is_malformed() {
 }
 
 #[test]
-fn bug_luau_binary_literal_of_only_underscores_is_error() {
+fn luau_binary_literal_of_only_underscores_is_error() {
     let result = lex("return 0b_", LuaVersion::Luau);
     assert!(
         !result.errors.is_empty(),
@@ -391,7 +391,7 @@ fn bug_luau_binary_literal_of_only_underscores_is_error() {
 }
 
 #[test]
-fn bug_luau_exponent_of_only_underscores_is_error() {
+fn luau_exponent_of_only_underscores_is_error() {
     for source in ["return 1e_", "return 1e+_"] {
         let result = lex(source, LuaVersion::Luau);
         assert!(
@@ -403,7 +403,7 @@ fn bug_luau_exponent_of_only_underscores_is_error() {
 }
 
 #[test]
-fn bug_luau_underscore_after_integer_suffix_lexes() {
+fn luau_underscore_after_integer_suffix_lexes() {
     let result = lex("return 1i_", LuaVersion::Luau);
     assert_eq!(
         result.errors,
@@ -413,7 +413,7 @@ fn bug_luau_underscore_after_integer_suffix_lexes() {
 }
 
 #[test]
-fn bug_luau_underscore_inside_radix_prefix_lexes() {
+fn luau_underscore_inside_radix_prefix_lexes() {
     for source in ["return 0_x1", "return 0_b1"] {
         let result = lex(source, LuaVersion::Luau);
         assert_eq!(

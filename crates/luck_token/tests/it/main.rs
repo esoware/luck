@@ -13,3 +13,4 @@ mod span;
 mod string;
 mod token;
 mod version;
+mod whitespace;

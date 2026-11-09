@@ -12,7 +12,10 @@ use core::iter;
 use core::ops::Range;
 
 use luck_ast::{Block, LastStatement, Statement, stmt_starts_with_paren};
-use luck_token::{CompactString, LuaVersion, Span, offset_to_index};
+use luck_token::{
+    CompactString, LuaVersion, Span, is_lua_whitespace, line_breaks, offset_to_index,
+    strip_line_break,
+};
 
 use crate::BlockNewlineGaps;
 use crate::comments::{write_leading_comments, write_stalled_comments, write_trailing_comments};
@@ -120,7 +123,8 @@ impl Format for Block {
             let has_blank = formatter
                 .comments()
                 .source_text()
-                .is_some_and(|source| has_leading_edge_blank(source, anchor));
+                .zip(formatter.comments().source_version())
+                .is_some_and(|(source, version)| has_leading_edge_blank(source, anchor, version));
             if has_blank {
                 empty_line().fmt(formatter);
             }
@@ -161,7 +165,10 @@ impl Format for Block {
             let has_blank = formatter
                 .comments()
                 .source_text()
-                .is_some_and(|source| has_trailing_edge_blank(source, last_item.end));
+                .zip(formatter.comments().source_version())
+                .is_some_and(|(source, version)| {
+                    has_trailing_edge_blank(source, last_item.end, version)
+                });
             if has_blank {
                 empty_line().fmt(formatter);
             }
@@ -171,20 +178,24 @@ impl Format for Block {
 
 /// Whether the whitespace run immediately before `anchor` contains a blank
 /// line (the gap between a block opener and its first statement).
-fn has_leading_edge_blank(source: &str, anchor: u32) -> bool {
+fn has_leading_edge_blank(source: &str, anchor: u32, version: LuaVersion) -> bool {
     let preceding = source.get(..offset_to_index(anchor)).unwrap_or(source);
-    whitespace_run_has_blank(preceding.bytes().rev())
+    let run_length = preceding.bytes().rev().take_while(|&byte| is_lua_whitespace(byte)).count();
+    let run_start = preceding.len().saturating_sub(run_length);
+    run_has_blank(preceding.get(run_start..).unwrap_or_default(), version)
 }
 
 /// Whether the whitespace run immediately after `end` contains a blank line
 /// (the gap between the last statement and the block closer).
-fn has_trailing_edge_blank(source: &str, end: u32) -> bool {
+fn has_trailing_edge_blank(source: &str, end: u32, version: LuaVersion) -> bool {
     let following = source.get(offset_to_index(end)..).unwrap_or_default();
-    whitespace_run_has_blank(following.bytes())
+    let run_length = following.bytes().take_while(|&byte| is_lua_whitespace(byte)).count();
+    run_has_blank(following.get(..run_length).unwrap_or_default(), version)
 }
 
-fn whitespace_run_has_blank(bytes: impl Iterator<Item = u8>) -> bool {
-    bytes.take_while(u8::is_ascii_whitespace).filter(|&byte| byte == b'\n').count() >= 2
+/// Whether `text` holds two or more line breaks.
+fn run_has_blank(text: &str, version: LuaVersion) -> bool {
+    line_breaks(text, version).nth(1).is_some()
 }
 
 /// Write the line break between two adjacent items.
@@ -213,7 +224,10 @@ fn write_separator(
                 .comments()
                 .last_printed_end()
                 .map_or(previous.end, |printed_end| printed_end.max(previous.end));
-            has_blank_line(source, gap_start, gap_end)
+            formatter
+                .comments()
+                .source_version()
+                .is_some_and(|version| has_blank_line(source, gap_start, gap_end, version))
         }
         None => {
             previous.should_surround_with_blank
@@ -287,8 +301,8 @@ fn write_verbatim_or(formatter: &mut Formatter, item: BlockItem<'_>, is_opted_ou
 fn reindented_lines(source: &str, start: u32, end: u32, version: LuaVersion) -> Vec<CompactString> {
     let text = Span::new(start, end).text(source);
     let preceding = Span::new(0, start).text(source);
-    let line_prefix =
-        preceding.rsplit_once('\n').map_or(preceding, |(_, after_newline)| after_newline);
+    let line_start = line_breaks(preceding, version).last().map_or(0, |line_break| line_break.end);
+    let line_prefix = preceding.get(line_start..).unwrap_or_default();
     // A statement that shares its line with earlier code has no indentation
     // of its own to strip.
     let base_indent = if line_prefix.bytes().all(|byte| byte == b' ' || byte == b'\t') {
@@ -301,24 +315,24 @@ fn reindented_lines(source: &str, start: u32, end: u32, version: LuaVersion) -> 
     let mut cursor = 0;
     let separators = separable_newlines(text, version);
     for offset in separators.into_iter().chain(iter::once(text.len())) {
-        let raw_line = text.get(cursor..offset).unwrap_or_default();
-        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        let line = text.get(cursor..offset).unwrap_or_default();
         lines.push(CompactString::from(if lines.is_empty() {
             line
         } else {
             line.strip_prefix(base_indent).unwrap_or(line)
         }));
-        cursor = offset.saturating_add(1);
+        let rest = text.as_bytes().get(offset..).unwrap_or_default();
+        cursor = text.len().saturating_sub(strip_line_break(rest, version).unwrap_or(rest).len());
     }
     lines
 }
 
-/// The offsets of the newlines in `text` that separate lines, as opposed to
-/// ones inside a token.
+/// The start offsets of the line breaks in `text` that separate lines, as
+/// opposed to ones inside a token.
 ///
-/// A long string or long comment carries its newlines as content, and a `\`
-/// continues a short string across one. Lexing tells them apart: a newline
-/// outside every token and comment span sits between two tokens.
+/// A long string or long comment carries its line breaks as content, and a
+/// `\` continues a short string across one. Lexing tells them apart: a line
+/// break outside every token and comment span sits between two tokens.
 fn separable_newlines(text: &str, version: LuaVersion) -> Vec<usize> {
     let lexed = luck_lexer::lex(text, version);
     // A parsed statement always lexes. If this text doesn't, leave it unsplit,
@@ -339,19 +353,20 @@ fn separable_newlines(text: &str, version: LuaVersion) -> Vec<usize> {
 
     let mut upcoming_spans = spans.into_iter().peekable();
     let mut separators = Vec::new();
-    for (offset, _) in text.match_indices('\n') {
-        while upcoming_spans.next_if(|span| span.end <= offset).is_some() {}
-        let is_inside = upcoming_spans.peek().is_some_and(|span| span.start <= offset);
+    for line_break in line_breaks(text, version) {
+        while upcoming_spans.next_if(|span| span.end <= line_break.start).is_some() {}
+        let is_inside = upcoming_spans.peek().is_some_and(|span| span.start <= line_break.start);
         if !is_inside {
-            separators.push(offset);
+            separators.push(line_break.start);
         }
     }
     separators
 }
 
-/// Whether `source[start..end]` contains a blank line (two or more newlines).
-pub(crate) fn has_blank_line(source: &str, start: u32, end: u32) -> bool {
-    Span::new(start, end).text(source).bytes().filter(|&byte| byte == b'\n').count() >= 2
+/// Whether `source[start..end]` contains a blank line (two or more line
+/// breaks).
+pub(crate) fn has_blank_line(source: &str, start: u32, end: u32, version: LuaVersion) -> bool {
+    run_has_blank(Span::new(start, end).text(source), version)
 }
 
 #[cfg(test)]

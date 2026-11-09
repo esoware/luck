@@ -17,7 +17,7 @@ Two entry points share the same machine:
 - **Complete number literals.** Decimal, hexadecimal, hex floats (5.2+), binary literals and underscore separators (Luau), plus Luau's 64-bit integer literals with an `i` suffix, which must fit an `i64` in decimal but may use all 64 bits in hex and binary. A letter touching a decimal numeral makes it malformed, except that 5.2 and 5.3 read only hex digits past a numeral and split before any other letter.
 - **Complete string literals.** Short strings with single or double quotes, long brackets (`[==[...]==]`) at any equals-sign depth, and the full escape repertoire (`\x`, `\z`, `\u{}`, decimal escapes), each escape gated to the versions that accept it.
 - **Luau interpolated strings.** Backtick-delimited strings with `{expr}` segments, split into `InterpolatedStringBegin` / `InterpolatedStringMiddle` / `InterpolatedStringEnd` tokens. A brace-depth stack finds the `}` that closes each expression, and a string with no expressions still lexes as an empty `InterpolatedStringBegin` plus an `InterpolatedStringEnd`, so the parser always sees a begin/end pair.
-- **Shebang and BOM.** The lexer skips a leading UTF-8 BOM and captures a `#`-prefixed first line as a shebang comment rather than parsing it as the length operator.
+- **Shebang and BOM.** On Lua 5.2+, where the loader does, the lexer skips a leading UTF-8 BOM. A `#`-prefixed first line, or in Luau only a `#!` one, is captured as a shebang comment rather than parsed as the length operator, and runs up to the line feed whatever carriage returns it holds.
 
 ## Architecture
 
