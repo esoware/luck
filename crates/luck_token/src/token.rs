@@ -6,7 +6,6 @@ use crate::{LuaVersion, Span};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
-    // Literals
     Identifier(CompactString),
     Number(CompactString),
     StringLiteral(CompactString),
@@ -37,50 +36,49 @@ pub enum TokenKind {
     // Lua 5.2+
     Goto,
 
-    // Symbols
-    Plus,         // +
-    Minus,        // -
-    Star,         // *
-    Slash,        // /
-    FloorDiv,     // //
-    Percent,      // %
-    Caret,        // ^
-    Hash,         // #
-    Ampersand,    // &
-    Tilde,        // ~
-    Pipe,         // |
-    ShiftLeft,    // <<
-    ShiftRight,   // >>
-    Dot,          // .
-    DotDot,       // ..
-    DotDotDot,    // ...
-    Semicolon,    // ;
-    Colon,        // :
-    DoubleColon,  // ::
-    Comma,        // ,
-    Equal,        // =
-    EqualEqual,   // ==
-    TildeEqual,   // ~=
-    Less,         // <
-    LessEqual,    // <=
-    Greater,      // >
-    GreaterEqual, // >=
-    LeftParen,    // (
-    RightParen,   // )
-    LeftBrace,    // {
-    RightBrace,   // }
-    LeftBracket,  // [
-    RightBracket, // ]
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    FloorDiv,
+    Percent,
+    Caret,
+    Hash,
+    Ampersand,
+    Tilde,
+    Pipe,
+    ShiftLeft,
+    ShiftRight,
+    Dot,
+    DotDot,
+    DotDotDot,
+    Semicolon,
+    Colon,
+    DoubleColon,
+    Comma,
+    Equal,
+    EqualEqual,
+    TildeEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    LeftParen,
+    RightParen,
+    LeftBrace,
+    RightBrace,
+    LeftBracket,
+    RightBracket,
 
     // Luau compound assignment operators
-    PlusEqual,     // +=
-    MinusEqual,    // -=
-    StarEqual,     // *=
-    SlashEqual,    // /=
-    FloorDivEqual, // //=
-    PercentEqual,  // %=
-    CaretEqual,    // ^=
-    DotDotEqual,   // ..=
+    PlusEqual,
+    MinusEqual,
+    StarEqual,
+    SlashEqual,
+    FloorDivEqual,
+    PercentEqual,
+    CaretEqual,
+    DotDotEqual,
 
     // Luau interpolated string tokens
     InterpolatedStringBegin(CompactString),  // `text{
@@ -88,11 +86,10 @@ pub enum TokenKind {
     InterpolatedStringEnd(CompactString),    // }text`
 
     // Luau
-    At,       // @
-    Arrow,    // ->
-    Question, // ?
+    At,
+    Arrow,
+    Question,
 
-    // Special
     Eof,
 }
 
@@ -258,8 +255,8 @@ impl TokenKind {
     #[must_use]
     pub fn is_identifier_shaped(text: &str) -> bool {
         let mut bytes = text.bytes();
-        bytes.next().is_some_and(|first| first.is_ascii_alphabetic() || first == b'_')
-            && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        bytes.next().is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+            && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
     }
 }
 

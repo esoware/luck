@@ -9,8 +9,6 @@ use luck_token::{CodeBuffer, Token, TokenKind};
 
 use crate::separator::{PieceClass, needs_space};
 
-/// Prints `block` as compact Lua, with no comments and minimal whitespace.
-///
 /// The output starts with no reserved capacity. Use
 /// [`compact_with_capacity`] when there's a useful size estimate.
 #[must_use]
@@ -18,10 +16,9 @@ pub fn compact(block: &Block) -> String {
     compact_with_capacity(block, 0)
 }
 
-/// Like [`compact()`], but with an initial output capacity in bytes.
+/// The hint only affects allocation, never the output.
 ///
-/// The hint only affects allocation, never the output. A previous output's
-/// length makes a good one. Source length over-reserves for comment-heavy
+/// A previous output's length makes a good one. Source length over-reserves for comment-heavy
 /// input, and a transformed AST can print longer than its source.
 #[must_use]
 pub fn compact_with_capacity(block: &Block, capacity: usize) -> String {
@@ -55,13 +52,11 @@ impl CompactPrinter {
         self.previous = class;
     }
 
-    /// Emit a fixed-spelling piece (keyword, operator, punctuation).
     #[inline]
     fn emit_fixed(&mut self, text: &'static str) {
         self.emit_piece(text, PieceClass::of_fixed(text));
     }
 
-    /// Emit a payload-carrying token (identifier, number, string literal).
     /// Fixed-spelling kinds (`Type::Singleton` carries `nil`/`true`/`false`)
     /// fall through to their static text.
     #[expect(
@@ -82,15 +77,14 @@ impl CompactPrinter {
         }
     }
 
-    /// Emit `items` with `separator` between them and none after the last.
     fn emit_joined<T>(
         &mut self,
         items: &[T],
         separator: &'static str,
         mut emit_item: impl FnMut(&mut Self, &T),
     ) {
-        for (index, item) in items.iter().enumerate() {
-            if index > 0 {
+        for (i, item) in items.iter().enumerate() {
+            if i > 0 {
                 self.emit_fixed(separator);
             }
             emit_item(self, item);

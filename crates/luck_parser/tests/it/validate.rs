@@ -1,6 +1,3 @@
-//! Scope-context validation: const writes, goto/label resolution, and
-//! Luau's continue/until rule (all compile errors in Lua).
-
 use core::ops::Range;
 
 use luck_parser::ParseError;
@@ -102,10 +99,8 @@ fn validation_errors_follow_check_and_walk_order() {
 local x <const> = 1
 x = function() x = 2 goto inner end";
     let errors = check(source, LuaVersion::Lua54);
-    let found: Vec<(usize, &str)> = errors
-        .iter()
-        .map(|error| (Range::<usize>::from(error.span).start, error.message.as_str()))
-        .collect();
+    let found: Vec<(usize, &str)> =
+        errors.iter().map(|e| (Range::<usize>::from(e.span).start, e.message.as_str())).collect();
     let outer_write = source.find("x = function").expect("outer write");
     let inner_write = source.find("x = 2").expect("inner write");
     let inner_goto = source.find("goto inner").expect("inner goto");
@@ -264,7 +259,7 @@ fn goto_cannot_skip_a_local_to_reach_a_label_before_return() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         let errors = check("goto l local x ::l:: return", version);
         assert!(
-            errors.iter().any(|error| error.message.contains("jumps into the scope")),
+            errors.iter().any(|e| e.message.contains("jumps into the scope")),
             "{version:?} must reject the jump into the scope of `x`: {errors:?}"
         );
     }
@@ -306,7 +301,7 @@ fn lua55_const_global_star_makes_undeclared_names_readonly() {
     for source in ["global <const> *; y = 1", "global <const> *; function y() end"] {
         let errors = check(source, LuaVersion::Lua55);
         assert!(
-            errors.iter().any(|error| error.message.contains("const variable `y`")),
+            errors.iter().any(|e| e.message.contains("const variable `y`")),
             "{source}: `y` is read-only under `global <const> *`: {errors:?}"
         );
     }
@@ -333,7 +328,7 @@ fn lua55_goto_cannot_enter_the_scope_of_a_global_declaration() {
     ] {
         let errors = check(source, LuaVersion::Lua55);
         assert!(
-            errors.iter().any(|error| error.message.contains("jumps into the scope")),
+            errors.iter().any(|e| e.message.contains("jumps into the scope")),
             "{source} must be rejected as a jump into a declaration's scope: {errors:?}"
         );
     }
@@ -344,7 +339,7 @@ fn lua55_named_vararg_is_readonly() {
     // 5.5 manual: the name denotes a read-only local variable.
     let errors = check("function f(...t) t = 1 end", LuaVersion::Lua55);
     assert!(
-        errors.iter().any(|error| error.message.contains("const variable `t`")),
+        errors.iter().any(|e| e.message.contains("const variable `t`")),
         "writing a named vararg must be rejected: {errors:?}"
     );
 }

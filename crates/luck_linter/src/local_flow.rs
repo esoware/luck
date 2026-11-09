@@ -1,6 +1,3 @@
-//! What each function's control flow says about its locals, computed once
-//! per chunk for the rules that follow a local's value.
-
 use core::mem;
 
 use luck_semantic::{ReferenceId, ReferenceKind, Symbol, SymbolId, SymbolKind};
@@ -99,12 +96,12 @@ impl LocalFlow {
             {
                 self.overwritten_values.push((symbol.id, symbol.definition_span));
             }
-            for (index, used) in uses.iter().enumerate() {
+            for (i, used) in uses.iter().enumerate() {
                 if !used.kind.is_write() {
                     continue;
                 }
                 let next_in_node =
-                    uses.get(index.saturating_add(1)).filter(|next| next.node == used.node);
+                    uses.get(i.saturating_add(1)).filter(|next| next.node == used.node);
                 let is_overwritten = next_in_node.map_or_else(
                     || walk.is_overwritten_unread(&uses, local, graph.successors(used.node)),
                     |next| !next.kind.is_read(),
@@ -117,7 +114,6 @@ impl LocalFlow {
     }
 }
 
-/// One reference to a tracked local, from its own function or a closure.
 #[derive(Debug, Clone, Copy)]
 struct Use {
     node: usize,
@@ -135,7 +131,6 @@ struct Use {
 /// fresh array for each one.
 struct GraphWalk<'graph> {
     graph: &'graph FlowGraph,
-    /// The last walk that visited each node.
     visited_in_walk: Vec<u32>,
     walk: u32,
     stack: Vec<usize>,
@@ -203,7 +198,6 @@ impl<'graph> GraphWalk<'graph> {
         self.stack.extend(starts);
     }
 
-    /// The next node this walk can enter, marked visited.
     fn next_node(&mut self, local: &LocalDeclaration) -> Option<usize> {
         while let Some(node) = self.stack.pop() {
             if node != local.node
@@ -216,7 +210,6 @@ impl<'graph> GraphWalk<'graph> {
         None
     }
 
-    /// Records this walk's visit to `node`, false if it's already been.
     fn visit(&mut self, node: usize) -> bool {
         self.visited_in_walk
             .get_mut(node)

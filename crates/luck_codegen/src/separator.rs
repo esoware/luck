@@ -1,14 +1,9 @@
-//! Token-boundary ambiguity rules for compact output.
-//!
 //! The printer remembers the last emitted piece as a one-byte [`PieceClass`]
 //! and inserts a space only when that class and the next piece's first byte
 //! would otherwise merge into a different token.
 
-/// What the merge rules need to know about an emitted piece. Everything they
-/// don't single out is `Other`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PieceClass {
-    /// Identifier or keyword.
     Word,
     /// Number literal: word-like, and a following `.` would extend it.
     Number,
@@ -26,7 +21,6 @@ pub(crate) enum PieceClass {
 }
 
 impl PieceClass {
-    /// Classifies a fixed-spelling piece (keyword, operator, punctuation).
     #[inline]
     pub(crate) fn of_fixed(text: &str) -> Self {
         match text {
@@ -47,7 +41,6 @@ impl PieceClass {
         }
     }
 
-    /// Identifiers, keywords, and numbers: two of them in a row merge.
     const fn is_wordlike(self) -> bool {
         match self {
             Self::Word | Self::Number => true,
@@ -64,8 +57,6 @@ impl PieceClass {
     }
 }
 
-/// Whether a space must separate a `previous` piece from the `next` one,
-/// whose first byte is `next_first_byte`.
 pub(crate) const fn needs_space(
     previous: PieceClass,
     next_first_byte: u8,

@@ -1,7 +1,4 @@
-//! Luau type grammar parser.
-//!
-//! Recursive descent over the type grammar, producing `luck_ast::Type`
-//! nodes. Union (`|` and `?`) and intersection (`&`) suffixes can't mix
+//! Union (`|` and `?`) and intersection (`&`) suffixes can't mix
 //! without parentheses. A `->` after the closing paren is what makes
 //! `(params) -> R` a function type, and its return type may be a pack.
 
@@ -22,10 +19,7 @@ const MIXED_TYPE_MESSAGE: &str =
 /// parameters may take defaults.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum GenericsOwner {
-    /// `type Name<T = U> = ...`, the only owner whose parameters take
-    /// defaults.
     TypeAlias,
-    /// A function body or a function type.
     Function,
 }
 
@@ -39,7 +33,6 @@ impl Parser<'_> {
         (self.version.has_type_syntax() && self.eat(&TokenKind::Colon)).then(|| self.parse_type())
     }
 
-    /// Whether `...T` or `T...` starts here.
     const fn is_at_type_pack(&self) -> bool {
         matches!(self.peek(), TokenKind::DotDotDot) || self.is_at_generic_pack()
     }
@@ -48,7 +41,6 @@ impl Parser<'_> {
         self.is_at_identifier() && matches!(self.peek_next(), TokenKind::DotDotDot)
     }
 
-    /// Parse the `...T` or `T...` that [`Self::is_at_type_pack`] found.
     fn parse_type_pack(&mut self) -> Type {
         if self.is_at_generic_pack() {
             return self.parse_generic_pack();
@@ -66,12 +58,10 @@ impl Parser<'_> {
         Type::GenericPack(Box::new(GenericPackType { span, name }))
     }
 
-    /// Parse a vararg parameter's annotation: a type, or a generic pack `T...`.
     pub(super) fn parse_vararg_type(&mut self) -> Type {
         if self.is_at_generic_pack() { self.parse_generic_pack() } else { self.parse_type() }
     }
 
-    /// Parse a function's return type, which may be a type pack.
     pub(super) fn parse_return_type(&mut self) -> Type {
         if self.is_at_type_pack() {
             return self.parse_type_pack();
@@ -99,8 +89,6 @@ impl Parser<'_> {
         first
     }
 
-    /// Parse a generic argument or a generic pack's default, which may be a
-    /// type pack.
     fn parse_type_or_pack(&mut self) -> Type {
         if self.is_at_type_pack() {
             return self.parse_type_pack();
@@ -118,8 +106,8 @@ impl Parser<'_> {
         result
     }
 
-    /// Parse a complete single type. A pack is valid only where
-    /// [`Self::parse_return_type`] or [`Self::parse_type_or_pack`] takes one.
+    /// A pack is valid only where [`Self::parse_return_type`] or [`Self::parse_type_or_pack`] takes
+    /// one.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     pub(super) fn parse_type(&mut self) -> Type {
         if !self.enter_depth() {
@@ -163,7 +151,6 @@ impl Parser<'_> {
         result
     }
 
-    /// Parse the suffixes of the union whose first primary is `primary`.
     fn parse_union_level(&mut self, primary: Type) -> Type {
         let first = self.parse_intersection_level(primary);
         if !matches!(self.peek(), TokenKind::Pipe) {
@@ -175,9 +162,6 @@ impl Parser<'_> {
         Type::Union(Box::new(UnionType { span, has_leading_pipe: false, types }))
     }
 
-    /// Parse the `| B | C` after a union's `first` member. Each member is an
-    /// intersection-level type.
-    ///
     /// Luau's type suffix chain is flat, so `A & B | C` and `A | B & C` are
     /// both mixing errors, not a precedence question.
     fn parse_union_members(&mut self, first: Type) -> Punctuated<Type> {
@@ -207,9 +191,6 @@ impl Parser<'_> {
         Type::Intersection(Box::new(IntersectionType { span, has_leading_ampersand: false, types }))
     }
 
-    /// Parse the `& B & C` after an intersection's `first` member. Each
-    /// member is a postfix-level type.
-    ///
     /// `?` is a union in Luau, so `A? & B` and `A & B?` are the same mixing
     /// error as `A | B & C`.
     fn parse_intersection_members(&mut self, first: Type) -> Punctuated<Type> {
@@ -319,7 +300,6 @@ impl Parser<'_> {
         }))
     }
 
-    /// Generic argument list at a use site: `<T, U..., (A, B)>`.
     pub(super) fn parse_type_args(&mut self) -> TypeArgs {
         let open = self.advance_span(); // `<`
         let mut args = Punctuated::<Type>::empty();
@@ -342,8 +322,6 @@ impl Parser<'_> {
         TypeArgs { span: open.merge(close), args }
     }
 
-    /// Generic parameter list at a declaration site:
-    /// `<T, U = string, V... = ...number>`.
     pub(super) fn parse_generic_type_list(&mut self, owner: GenericsOwner) -> GenericTypeList {
         let open = self.advance_span(); // `<`
         let mut params = Punctuated::<GenericTypeParam>::empty();
@@ -418,9 +396,6 @@ impl Parser<'_> {
         GenericTypeList { span: open.merge(close), params }
     }
 
-    /// Consume the `>` that closes a generic list, recording an error if it's
-    /// missing.
-    ///
     /// The lexer is greedy, so `Foo<Bar<T>>` ends in `ShiftRight` and
     /// `Foo<T>=x` holds `GreaterEqual`. Both get split here: this returns the
     /// first `>`'s span and leaves the rest as the current token.
@@ -633,7 +608,6 @@ impl Parser<'_> {
         }))
     }
 
-    /// Parse the `(params) -> R` that follows a generic list.
     fn parse_function_type(&mut self, generics: GenericTypeList) -> Type {
         let start_span = generics.span;
 

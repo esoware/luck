@@ -1,5 +1,3 @@
-//! Finds and caches the `luck.json` that governs each open document.
-//!
 //! Discovery walks up from the document's directory. Results, misses
 //! included, stay cached until a watched config file changes.
 
@@ -52,7 +50,7 @@ impl ProjectSettings {
     fn new(config: &LuckConfig, root: Option<PathBuf>) -> Self {
         // Unlike the CLI, the server can't just exit on a config mistake, so a
         // bad dialect or glob falls back to its default.
-        let target = |key: DialectKey| config.target(key).unwrap_or_else(|_| key.default_target());
+        let target = |k: DialectKey| config.target(k).unwrap_or_else(|_| k.default_target());
         let filter_base = root.as_deref().unwrap_or_else(|| Path::new("."));
         Self {
             lua_target: target(DialectKey::Lua),
@@ -91,10 +89,6 @@ impl ProjectSettings {
     }
 }
 
-/// Thread-safe cache of project settings keyed by config-file directory.
-///
-/// Misses fall through to disk discovery; hits share the cached
-/// [`ProjectSettings`].
 #[derive(Debug, Default)]
 pub(crate) struct SettingsCache {
     /// Shared by every document without a config or a file path.

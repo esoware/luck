@@ -43,8 +43,6 @@ impl Default for FormatOptions {
     }
 }
 
-/// Applies each `Some` field of the config over `FormatOptions::default()`.
-///
 /// The CLI and the LSP both convert through this, so they agree on every
 /// field.
 impl From<&FormatConfig> for FormatOptions {

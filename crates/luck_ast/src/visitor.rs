@@ -5,10 +5,10 @@ use crate::stack::ensure_sufficient_stack;
 use crate::stmt::{AttributedName, Block, LastStatement, Statement, TypeDeclarationValue};
 use crate::types::{GenericTypeList, Type, TypeField};
 
-/// Read-only AST traversal.
-///
 /// Each `visit_*` hook defaults to its `walk_*`, which visits the node's
-/// children. Override the hooks you need and call `self.walk_*` from them to
+/// children.
+///
+/// Override the hooks you need and call `self.walk_*` from them to
 /// keep recursing. The `walk_*` methods are the default recursion, so
 /// overriding one instead of its hook would leave nothing to fall back on.
 pub trait Visitor<'ast> {
@@ -227,8 +227,8 @@ pub trait Visitor<'ast> {
             // Luau
             Expression::TypeInstantiation(instantiation) => {
                 ensure_sufficient_stack(|| self.visit_expr(&instantiation.expr));
-                for argument in instantiation.type_args.args.iter() {
-                    self.visit_type(argument);
+                for arg in instantiation.type_args.args.iter() {
+                    self.visit_type(arg);
                 }
             }
         }

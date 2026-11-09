@@ -76,8 +76,8 @@ fn global_multiple_names() {
     let result = parse_lua55("global x, y");
     assert_no_errors(&result);
     if let Statement::GlobalDeclaration(global) = &result.block.stmts[0] {
-        let count = global.names.len();
-        assert_eq!(count, 2);
+        let n = global.names.len();
+        assert_eq!(n, 2);
     } else {
         panic!("expected GlobalDeclaration");
     }

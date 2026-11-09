@@ -1,5 +1,3 @@
-//! `luck init` - scaffold a fresh `luck.json` and `src/main.{lua,luau}`.
-
 use std::fs;
 use std::path::Path;
 
@@ -31,19 +29,19 @@ impl InitArgs {
 
         let source_directory = Path::new("src");
         fs::create_dir_all(source_directory)
-            .map_err(|error| operation_error(format!("cannot create `src` directory: {error}")))?;
+            .map_err(|e| operation_error(format!("cannot create `src` directory: {e}")))?;
 
         let extension = entry_extension(target);
         let entry_file = source_directory.join(format!("main.{extension}"));
         if !entry_file.exists() {
-            fs::write(&entry_file, "print(\"hello world\")\n").map_err(|error| {
-                operation_error(format!("cannot write `{}`: {error}", entry_file.display()))
+            fs::write(&entry_file, "print(\"hello world\")\n").map_err(|e| {
+                operation_error(format!("cannot write `{}`: {e}", entry_file.display()))
             })?;
         }
 
         // Last, because an existing `luck.json` is what blocks another `init`.
         fs::write(config_path, init_config_content(target))
-            .map_err(|error| operation_error(format!("cannot write `luck.json`: {error}")))?;
+            .map_err(|e| operation_error(format!("cannot write `luck.json`: {e}")))?;
 
         if verbosity != Verbosity::Quiet {
             eprintln!("Created luck.json and src/main.{extension}");
@@ -52,17 +50,15 @@ impl InitArgs {
     }
 }
 
-/// Any Luau dialect gets a `.luau` entry, everything else `.lua`.
 const fn entry_extension(target: LuaTarget) -> &'static str {
     if target.lua_version().is_luau() { "luau" } else { "lua" }
 }
 
-/// Build the scaffolded `luck.json` contents for a fresh project.
+/// Both the `lua` and `luau` keys are set.
 ///
-/// Both the `lua` and `luau` keys are set. The chosen target fills its own key
-/// (lowercased, e.g. `lua53` or `roblox`) and the other keeps its default
-/// (`lua54` or `luau`). A Luau target gets a `.luau` entry and no
-/// `search_paths`.
+/// The chosen target fills its own key (lowercased, e.g. `lua53` or `roblox`)
+/// and the other keeps its default (`lua54` or `luau`). A Luau target gets a
+/// `.luau` entry and no `search_paths`.
 fn init_config_content(target: LuaTarget) -> String {
     let target_name = target.to_string().to_lowercase();
     let is_luau = target.lua_version().is_luau();

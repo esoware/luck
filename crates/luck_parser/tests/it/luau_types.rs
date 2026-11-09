@@ -5,7 +5,6 @@ use luck_token::LuaVersion;
 
 use crate::common::{assert_no_errors, parse_luau};
 
-/// Extract the alias type from `type X = ...` in a one-statement program.
 fn alias_type(source: &str) -> Type {
     let result = parse_luau(source);
     assert_no_errors(&result);
@@ -240,14 +239,14 @@ fn parenthesized_type_is_not_a_pack() {
 #[test]
 fn parenthesized_types_preserve_pack_and_function_shapes() {
     // Packs stand alone only where one is expected, such as a return.
-    for (source, count) in [("type X = () -> ()", 0), ("type X = () -> (number, string)", 2)] {
+    for (source, n) in [("type X = () -> ()", 0), ("type X = () -> (number, string)", 2)] {
         let Type::Function(function) = alias_type(source) else {
             panic!("expected function for {source}");
         };
         let Type::Pack(pack) = function.return_type else {
             panic!("expected pack return for {source}");
         };
-        assert_eq!(pack.types.len(), count);
+        assert_eq!(pack.types.len(), n);
     }
     for source in ["type X = (number) -> string", "type X = (value: number) -> string"] {
         let Type::Function(function) = alias_type(source) else {

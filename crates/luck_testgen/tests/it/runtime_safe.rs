@@ -13,17 +13,15 @@ use luck_token::LuaVersion;
 const MAX_LOCALS_PER_FUNCTION: usize = 200;
 
 fn tab_depth(line: &str) -> usize {
-    line.chars().take_while(|character| *character == '\t').count()
+    line.chars().take_while(|c| *c == '\t').count()
 }
 
-/// The name and value of a final `print("name", value)` line.
 fn final_print(line: &str) -> Option<(&str, &str)> {
     let rest = line.strip_prefix("print(\"")?;
     let (name, value) = rest.split_once("\", ")?;
     Some((name, value.strip_suffix(')')?))
 }
 
-/// The last line declaring `name` at module scope.
 fn last_module_declaration<'program>(program: &'program str, name: &str) -> Option<&'program str> {
     let value_prefix = format!("local {name} = ");
     let function_prefix = format!("local function {name}(");
@@ -33,12 +31,12 @@ fn last_module_declaration<'program>(program: &'program str, name: &str) -> Opti
         .find(|line| line.starts_with(&value_prefix) || line.starts_with(&function_prefix))
 }
 
-/// The depth at which `statement`, sitting at `depth`, starts hiding `name`.
-fn shadow_depth(statement: &str, name: &str, depth: usize) -> Option<usize> {
-    let is_local = statement.starts_with(&format!("local {name} = "))
-        || statement.starts_with(&format!("local function {name}("));
-    let is_block_binding = statement.starts_with(&format!("for {name} = "))
-        || (statement.starts_with("local function ") && statement.ends_with(&format!("({name})")));
+/// The depth at which `stmt`, sitting at `depth`, starts hiding `name`.
+fn shadow_depth(stmt: &str, name: &str, depth: usize) -> Option<usize> {
+    let is_local = stmt.starts_with(&format!("local {name} = "))
+        || stmt.starts_with(&format!("local function {name}("));
+    let is_block_binding = stmt.starts_with(&format!("for {name} = "))
+        || (stmt.starts_with("local function ") && stmt.ends_with(&format!("({name})")));
     if is_local {
         Some(depth)
     } else if is_block_binding {
@@ -123,12 +121,12 @@ fn runtime_while_bodies_never_write_their_counter() {
             if hidden_from.is_some() {
                 continue;
             }
-            let statement = line.trim_start();
-            hidden_from = shadow_depth(statement, counter, depth);
+            let stmt = line.trim_start();
+            hidden_from = shadow_depth(stmt, counter, depth);
             assert!(
-                !statement.starts_with(&format!("{counter} = "))
-                    && !statement.starts_with(&format!("{counter} += ")),
-                "`{statement}` writes the counter of `{}`, so the loop is no longer bounded\n\
+                !stmt.starts_with(&format!("{counter} = "))
+                    && !stmt.starts_with(&format!("{counter} += ")),
+                "`{stmt}` writes the counter of `{}`, so the loop is no longer bounded\n\
                  {program}",
                 header.trim_start()
             );
@@ -157,12 +155,12 @@ fn runtime_until_conditions_read_their_counter_not_a_body_local() {
             .expect("every generated until compares its counter");
         for line in after_header().take_while(|line| tab_depth(line) >= body_depth) {
             let is_body_level = tab_depth(line) == body_depth;
-            let statement = line.trim_start();
-            let hides_counter = statement.starts_with(&format!("local {counter} = "))
-                || statement.starts_with(&format!("local function {counter}("));
+            let stmt = line.trim_start();
+            let hides_counter = stmt.starts_with(&format!("local {counter} = "))
+                || stmt.starts_with(&format!("local function {counter}("));
             assert!(
                 !(is_body_level && hides_counter),
-                "`{statement}` hides the counter from `{}`, which can see the block's locals, \
+                "`{stmt}` hides the counter from `{}`, which can see the block's locals, \
                  so the comparison errors or never becomes true\n{program}",
                 until.trim_start()
             );

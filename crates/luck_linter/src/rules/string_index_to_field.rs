@@ -6,8 +6,6 @@ use crate::fix::{Fix, TextEdit};
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
-/// Flags `t["foo"]` where `foo` is a valid identifier and not a keyword, since
-/// `t.foo` means the same and reads better.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StringIndexToField;
 

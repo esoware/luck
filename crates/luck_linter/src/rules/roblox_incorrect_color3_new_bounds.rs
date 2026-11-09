@@ -37,7 +37,7 @@ impl NodeRule for RobloxIncorrectColor3NewBounds {
         let has_out_of_bounds = args
             .iter()
             .filter_map(|arg| signed_number_value(arg, context.semantic.version))
-            .any(|value| !(0.0f64..=1.0f64).contains(&value));
+            .any(|v| !(0.0f64..=1.0f64).contains(&v));
         if has_out_of_bounds {
             findings.push(
                 Finding::new("`Color3.new` components are on a 0 to 1 scale", call.span)

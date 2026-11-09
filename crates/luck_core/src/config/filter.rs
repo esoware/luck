@@ -1,5 +1,3 @@
-//! Deciding which files belong to a project from `include`/`exclude` globs.
-
 use std::path::{Path, PathBuf};
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
@@ -94,17 +92,17 @@ fn build_set(patterns: &[String]) -> Result<GlobSet, String> {
         let glob = GlobBuilder::new(pattern)
             .literal_separator(true)
             .build()
-            .map_err(|error| format!("invalid glob pattern `{pattern}`: {error}"))?;
+            .map_err(|e| format!("invalid glob pattern `{pattern}`: {e}"))?;
         builder.add(glob);
     }
-    builder.build().map_err(|error| format!("invalid glob set: {error}"))
+    builder.build().map_err(|e| format!("invalid glob set: {e}"))
 }
 
 fn brace_depth(pattern: &str) -> usize {
     let mut depth: usize = 0;
     let mut deepest = 0;
-    for byte in pattern.bytes() {
-        match byte {
+    for b in pattern.bytes() {
+        match b {
             b'{' => {
                 depth = depth.saturating_add(1);
                 deepest = deepest.max(depth);

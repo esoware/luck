@@ -5,8 +5,6 @@ use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
-/// Flags a call statement to a stdlib function marked `must_use`, which
-/// throws away its result.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MustUse;
 

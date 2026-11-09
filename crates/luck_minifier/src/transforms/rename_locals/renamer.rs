@@ -1,5 +1,3 @@
-//! The rewrite that gives each binding the name the analyzer picked.
-
 use luck_ast::{
     AttributedName, FunctionBody, IfStatement, Parameter, Punctuated, Statement, Transform, Var,
 };
@@ -32,8 +30,6 @@ impl Renamer {
         }
     }
 
-    /// Declares the globals being renamed, as `Analyzer::declare_root_globals`
-    /// did.
     pub(super) fn declare_root_globals(&mut self, names: &[&str]) {
         for name in names {
             self.declare_binding(name);
@@ -106,8 +102,6 @@ impl Renamer {
         if_stmt
     }
 
-    /// Declares each name a `local` binds, after renaming the type annotations
-    /// that read the outer scope.
     fn declare_attributed_names(
         &mut self,
         mut names: Punctuated<AttributedName>,

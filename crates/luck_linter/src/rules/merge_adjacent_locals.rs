@@ -8,8 +8,6 @@ use crate::fix::{Fix, TextEdit, comments_within};
 use crate::nodes::adjacent_stmts;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
-/// Flags two adjacent `local NAME = VALUE` statements that could be one
-/// `local A, B = X, Y`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MergeAdjacentLocals;
 
@@ -106,8 +104,6 @@ fn is_read_in_span(symbol_id: SymbolId, span: Span, tree: &ScopeTree) -> bool {
     })
 }
 
-/// A `local` with one name and one value: the name, the name with any type
-/// annotation, its attribute if any, and the value.
 struct SimpleBinding<'ast> {
     name: Span,
     declaration: Span,
@@ -138,7 +134,6 @@ fn simple_binding(local: &LocalAssignment) -> Option<SimpleBinding<'_>> {
     })
 }
 
-/// Whether both bindings have the same attribute text, or neither has one.
 fn annotations_match(source: &str, first: &SimpleBinding<'_>, second: &SimpleBinding<'_>) -> bool {
     match (first.attribute, second.attribute) {
         (None, None) => true,

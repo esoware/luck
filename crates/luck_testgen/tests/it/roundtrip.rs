@@ -1,7 +1,3 @@
-//! Property tests over generated programs: formatter and minifier
-//! idempotency, re-parseable output, and compact codegen round-tripping,
-//! across many seeds and versions.
-
 #![expect(
     clippy::missing_panics_doc,
     reason = "a test panics to fail, so a Panics section says nothing"
@@ -23,8 +19,6 @@ struct Program {
     label: String,
 }
 
-/// Every (version, seed) program from both generator profiles.
-///
 /// The full-grammar profile reaches constructs (goto, types, varargs,
 /// interpolation) the runtime-safe profile can't emit.
 fn programs() -> impl Iterator<Item = Program> {

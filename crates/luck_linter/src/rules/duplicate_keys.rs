@@ -41,10 +41,10 @@ impl NodeRule for DuplicateKeys {
                 // Compare decoded values, since `["\97"]` and `["a"]` are the
                 // same key.
                 Field::Bracketed { key: Expression::StringLiteral(literal), .. } => {
-                    decoded_key(literal, version).map(|key| (Key::String(key), literal.span))
+                    decoded_key(literal, version).map(|k| (Key::String(k), literal.span))
                 }
                 Field::Bracketed { key: key_expr, .. } => {
-                    number_key(key_expr, version).map(|key| (key, key_expr.span()))
+                    number_key(key_expr, version).map(|k| (k, key_expr.span()))
                 }
                 Field::Positional { .. } => None,
             };
@@ -64,7 +64,6 @@ impl NodeRule for DuplicateKeys {
     }
 }
 
-/// A table key this rule can compare.
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum Key<'ast> {
     String(Cow<'ast, str>),

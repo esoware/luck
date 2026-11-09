@@ -1,7 +1,3 @@
-//! Tests for the loaded stdlib catalog: per-version entries, arities, and
-//! deprecations, the Roblox shapes and generated sets, and call resolution
-//! through shapes.
-
 use core::ptr;
 
 use luck_ast::{Expression, LastStatement, Statement};
@@ -800,11 +796,11 @@ fn region3_requires_both_corners() {
 #[test]
 fn cframe_new_overloads_accept_documented_arities_only() {
     let function = function_at(roblox(), &["CFrame", "new"]);
-    for count in [0, 1, 2, 3, 7, 12] {
-        assert!(function.accepts_arg_count(count), "CFrame.new must accept {count} args");
+    for n in [0, 1, 2, 3, 7, 12] {
+        assert!(function.accepts_arg_count(n), "CFrame.new must accept {n} args");
     }
-    for count in [4, 5, 6, 8, 11, 13] {
-        assert!(!function.accepts_arg_count(count), "CFrame.new must reject {count} args");
+    for n in [4, 5, 6, 8, 11, 13] {
+        assert!(!function.accepts_arg_count(n), "CFrame.new must reject {n} args");
     }
 }
 
@@ -820,17 +816,11 @@ fn instance_new_parent_param_is_deprecated() {
 #[test]
 fn physical_properties_overloads_match_docs() {
     let function = function_at(roblox(), &["PhysicalProperties", "new"]);
-    for count in [1, 3, 5, 6] {
-        assert!(
-            function.accepts_arg_count(count),
-            "PhysicalProperties.new must accept {count} args"
-        );
+    for n in [1, 3, 5, 6] {
+        assert!(function.accepts_arg_count(n), "PhysicalProperties.new must accept {n} args");
     }
-    for count in [0, 2, 4, 7] {
-        assert!(
-            !function.accepts_arg_count(count),
-            "PhysicalProperties.new must reject {count} args"
-        );
+    for n in [0, 2, 4, 7] {
+        assert!(!function.accepts_arg_count(n), "PhysicalProperties.new must reject {n} args");
     }
 }
 
@@ -1429,7 +1419,6 @@ fn fix_template<'library>(
     function_at(library, path).deprecated.as_ref()?.replace_template.as_deref()
 }
 
-/// The expression of `return <text>`, without its outer parentheses.
 fn returned_expr(text: &str, version: LuaVersion) -> Expression {
     let parsed = luck_parser::parse(format!("return {text}"), version);
     assert!(parsed.errors.is_empty(), "{text}: {:?}", parsed.errors);

@@ -1,6 +1,3 @@
-//! Declarations: function statements, `local`, Luau `const`, `export`, and
-//! `type`, and Lua 5.5 `global`, with the attributed name lists they share.
-
 use luck_ast::{
     Attribute, AttributedName, Expression, FunctionAttribute, FunctionDecl, FunctionName,
     GlobalDeclaration, GlobalFunction, GlobalStar, LocalAssignment, LocalFunction, Punctuated,
@@ -16,9 +13,7 @@ use super::types::GenericsOwner;
 #[derive(Clone, Copy)]
 enum LocalKind {
     Local,
-    /// Luau `const`.
     Const,
-    /// Luau `export local`.
     ExportedLocal,
     /// Luau `export const`, and `export function`, whose binding is read-only
     /// too.
@@ -73,8 +68,6 @@ fn declaration_span(
     reason = "the parser is one type with its grammar split by file"
 )]
 impl Parser<'_> {
-    /// Parse the Luau attributes before a function declaration and the
-    /// declaration they apply to.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     pub(super) fn parse_attributed_function(&mut self) -> Statement {
         let attributes = self.parse_function_attributes();
@@ -138,8 +131,6 @@ impl Parser<'_> {
         self.parse_local_assignment(local_span, LocalKind::Local)
     }
 
-    /// Parse a Luau `const` declaration: `const bindinglist '=' explist` or
-    /// `const function NAME funcbody`.
     pub(super) fn parse_const_stmt(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
         let const_span = self.advance_span(); // contextual `const`
         if matches!(self.peek(), TokenKind::Function) {
@@ -215,8 +206,6 @@ impl Parser<'_> {
         }))
     }
 
-    /// Parse an attnamelist: `[attrib] Name [attrib] {',' Name [attrib]}`.
-    ///
     /// The leading attribute is new in 5.5; in 5.4, attributes only follow
     /// names.
     fn parse_attname_list(&mut self) -> Punctuated<AttributedName> {
@@ -227,7 +216,6 @@ impl Parser<'_> {
         self.parse_attributed_names(leading_attribute.as_ref())
     }
 
-    /// Parse the names of an attnamelist after any leading attribute.
     /// `global <attrib> name...` also enters here directly.
     fn parse_attributed_names(
         &mut self,
@@ -265,8 +253,6 @@ impl Parser<'_> {
         Some(AttributedName { name, type_annotation, attribute: attribute.map(Box::new) })
     }
 
-    /// Parse a `global` statement: `global function`, `global [attrib] *`, or
-    /// `global attnamelist`.
     pub(super) fn parse_global_stmt(&mut self) -> Statement {
         let global_span = self.advance_span();
 
@@ -339,8 +325,6 @@ impl Parser<'_> {
         }
     }
 
-    /// Parse a Luau type declaration: `type Name ['<' ... '>'] '=' Type` or
-    /// `type function Name funcbody`.
     pub(super) fn parse_type_declaration(&mut self, export_span: Option<Span>) -> Statement {
         let type_span = self.advance_span(); // `type` identifier
         let start_span = export_span.unwrap_or(type_span);
@@ -380,8 +364,6 @@ impl Parser<'_> {
         }))
     }
 
-    /// Parse Luau `export type`, `export local`, `export const`, or
-    /// `export function` after an optional function attribute list.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     pub(super) fn parse_export_stmt(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
         let export_span = self.advance_span(); // contextual `export`
@@ -411,7 +393,7 @@ impl Parser<'_> {
         }
         self.has_value_exports = true;
 
-        let statement = match self.peek() {
+        let stmt = match self.peek() {
             TokenKind::Local => {
                 let local_span = self.advance_span();
                 if matches!(self.peek(), TokenKind::Function) {
@@ -458,19 +440,19 @@ impl Parser<'_> {
             }
         };
 
-        self.register_exported_names(&statement);
-        statement
+        self.register_exported_names(&stmt);
+        stmt
     }
 
-    fn register_exported_names(&mut self, statement: &Statement) {
-        if let Statement::LocalAssignment(local) = statement
+    fn register_exported_names(&mut self, stmt: &Statement) {
+        if let Statement::LocalAssignment(local) = stmt
             && local.is_exported
         {
             for attributed in local.names.iter() {
                 self.register_exported_name(&attributed.name);
             }
         }
-        if let Statement::LocalFunction(function) = statement
+        if let Statement::LocalFunction(function) = stmt
             && function.is_exported
         {
             self.register_exported_name(&function.name);

@@ -5,7 +5,6 @@ use std::path::{Component, Path, PathBuf};
 use luck_core::native_path;
 use rustc_hash::FxHashMap;
 
-/// What an alias names once its `.luaurc` is read.
 #[derive(Debug)]
 pub(crate) enum AliasTarget {
     Directory(PathBuf),
@@ -21,7 +20,6 @@ pub(crate) enum AliasTarget {
 /// The `.luaurc` alias tables read so far, which are never reread.
 #[derive(Debug, Default)]
 pub(crate) struct AliasCache {
-    /// Each directory's own `.luaurc` aliases.
     declared_tables: FxHashMap<PathBuf, DeclaredTable>,
     /// The aliases in effect in each directory a require came from.
     merged_tables: FxHashMap<PathBuf, FxHashMap<String, AliasTarget>>,
@@ -117,8 +115,7 @@ impl Deref for DeclaredTable {
     }
 }
 
-/// The aliases `directory/.luaurc` declares. Empty when the file is missing,
-/// malformed, or declares none.
+/// Empty when the file is missing, malformed, or declares none.
 fn read_declared_aliases(directory: &Path) -> DeclaredTable {
     let candidate = directory.join(".luaurc");
     if !candidate.is_file() {
@@ -129,8 +126,6 @@ fn read_declared_aliases(directory: &Path) -> DeclaredTable {
     DeclaredTable { aliases: parsed.unwrap_or_default(), is_malformed }
 }
 
-/// The `aliases` of a `.luaurc`, or `None` when it doesn't parse.
-///
 /// This reads Luau's own grammar: bytes rather than UTF-8, nesting on the heap,
 /// and a repeated key merging into the earlier ones.
 fn parse_aliases(file_bytes: &[u8]) -> Option<FxHashMap<String, String>> {
@@ -207,9 +202,7 @@ fn is_valid_alias_name(name: &[u8]) -> bool {
     let unprefixed = name.strip_prefix(b"@").unwrap_or(name);
     !name.is_empty()
         && !matches!(name, b"." | b"..")
-        && unprefixed
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && unprefixed.iter().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
 struct LuaurcReader<'contents> {
@@ -217,8 +210,7 @@ struct LuaurcReader<'contents> {
 }
 
 impl<'contents> LuaurcReader<'contents> {
-    /// The next byte past any whitespace and comments. A long comment that
-    /// never closes yields its `-`, which no caller accepts.
+    /// A long comment that never closes yields its `-`, which no caller accepts.
     fn peek(&mut self) -> Option<u8> {
         loop {
             match self.rest {
@@ -241,11 +233,8 @@ impl<'contents> LuaurcReader<'contents> {
     }
 
     fn skip_line(&mut self) {
-        let line_end = self
-            .rest
-            .iter()
-            .position(|byte| matches!(byte, b'\r' | b'\n'))
-            .unwrap_or(self.rest.len());
+        let line_end =
+            self.rest.iter().position(|b| matches!(b, b'\r' | b'\n')).unwrap_or(self.rest.len());
         self.rest = self.rest.get(line_end..).unwrap_or_default();
     }
 
@@ -271,10 +260,10 @@ impl<'contents> LuaurcReader<'contents> {
         (self.eat(b',') || self.peek() == Some(closer)).then_some(())
     }
 
-    /// The next quoted string's raw bytes. Luau keeps escapes as written, so
-    /// this only needs them to find the closing quote.
+    /// Luau keeps escapes as written, so this only needs them to find the closing
+    /// quote.
     fn string(&mut self) -> Option<&'contents [u8]> {
-        let quote = self.peek().filter(|byte| matches!(byte, b'"' | b'\''))?;
+        let quote = self.peek().filter(|b| matches!(b, b'"' | b'\''))?;
         let body = self.rest.get(1..)?;
         let mut remaining = body;
         loop {
@@ -292,21 +281,18 @@ impl<'contents> LuaurcReader<'contents> {
     }
 }
 
-/// The level of the long bracket `text` opens with, if it opens one.
 fn long_bracket_level(text: &[u8]) -> Option<usize> {
     let after_opening = text.strip_prefix(b"[")?;
-    let level = after_opening.iter().take_while(|byte| **byte == b'=').count();
+    let level = after_opening.iter().take_while(|b| **b == b'=').count();
     (after_opening.get(level) == Some(&b'[')).then_some(level)
 }
 
-/// What follows the close of the level-`level` long bracket `text` opens with,
-/// or `None` when it doesn't close.
 fn after_long_bracket(text: &[u8], level: usize) -> Option<&[u8]> {
     let mut remaining = text.get(level.saturating_add(2)..)?;
     loop {
-        let closer = remaining.iter().position(|byte| *byte == b']')?;
+        let closer = remaining.iter().position(|b| *b == b']')?;
         let after_closer = remaining.get(closer.saturating_add(1)..)?;
-        let equals_count = after_closer.iter().take_while(|byte| **byte == b'=').count();
+        let equals_count = after_closer.iter().take_while(|b| **b == b'=').count();
         if equals_count == level && after_closer.get(level) == Some(&b']') {
             return after_closer.get(level.saturating_add(1)..);
         }
@@ -333,7 +319,7 @@ mod tests {
         // lookups must use the canonical directory too.
         let source_directory = PathBuf::from(normalize_path(&project.path().join("src")));
         let aliases: serde_json::Map<String, serde_json::Value> =
-            (0u8..64).map(|index| (format!("alias{index}"), serde_json::json!("."))).collect();
+            (0u8..64).map(|i| (format!("alias{i}"), serde_json::json!("."))).collect();
         fs::write(
             source_directory.join(".luaurc"),
             serde_json::json!({"aliases": aliases}).to_string(),

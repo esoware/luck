@@ -1,10 +1,5 @@
-//! `.editorconfig` support for the formatter.
-//!
-//! This module reads the spec's upward chain of files, stopping at
-//! `root = true`, and maps the properties that apply to a file onto the
-//! [`FormatConfig`] fields they cover. It lives here so the CLI and the LSP
-//! share one precedence order: built-in defaults < `.editorconfig` < the
-//! luck.json `format` section.
+//! Lives here so the CLI and the LSP share one precedence order: built-in
+//! defaults < `.editorconfig` < the luck.json `format` section.
 
 mod glob;
 
@@ -22,9 +17,6 @@ const EDITORCONFIG_FILE_NAME: &str = ".editorconfig";
 /// bounds what a hostile section can cost to compile and match.
 const MAX_SECTION_NAME_BYTES: usize = 4096;
 
-/// Resolves the [`FormatConfig`] for a file, with the luck.json `format`
-/// section winning over the `.editorconfig` chain of `file_path`.
-///
 /// Without a `file_path`, for a document that isn't on disk or a caller that
 /// ignores `.editorconfig`, the `format` section stands alone. The formatter
 /// fills in its own defaults for whatever neither sets.
@@ -40,11 +32,6 @@ pub fn resolved_format_config(
     project_format.map_or(editorconfig, |format| format.merge_onto(editorconfig))
 }
 
-/// Resolves a [`FormatConfig`] for `file_path` from the `.editorconfig` chain.
-///
-/// Returns [`FormatConfig::default`] (all `None`) when no `.editorconfig` is
-/// found or none match. Only `indent_style`, `indent_width`, `line_endings`,
-/// and `line_width` are ever set.
 fn format_config_for(file_path: &Path) -> FormatConfig {
     // A relative path would hide the directories above the working directory
     // from the walk and from sections anchored at them.
@@ -52,8 +39,8 @@ fn format_config_for(file_path: &Path) -> FormatConfig {
         return FormatConfig::default();
     };
     let properties = editorconfig_properties(&absolute_path);
-    let lowercase_value = |key: &str| properties.get(key).map(|value| value.to_ascii_lowercase());
-    let number_value = |key: &str| properties.get(key)?.parse::<usize>().ok();
+    let lowercase_value = |k: &str| properties.get(k).map(|v| v.to_ascii_lowercase());
+    let number_value = |k: &str| properties.get(k)?.parse::<usize>().ok();
 
     let indent_style = match lowercase_value("indent_style").as_deref() {
         Some("tab") => Some(IndentStyle::Tabs),
@@ -61,7 +48,6 @@ fn format_config_for(file_path: &Path) -> FormatConfig {
         _ => None,
     };
 
-    // `indent_size` takes precedence over `tab_width`; either alone works.
     let indent_width = number_value("indent_size").or_else(|| number_value("tab_width"));
 
     let line_endings = match lowercase_value("end_of_line").as_deref() {
@@ -73,9 +59,9 @@ fn format_config_for(file_path: &Path) -> FormatConfig {
 
     FormatConfig {
         // `off`, like any other non-number, leaves `line_width` unset.
-        line_width: number_value("max_line_length").and_then(|width| u16::try_from(width).ok()),
+        line_width: number_value("max_line_length").and_then(|w| u16::try_from(w).ok()),
         indent_style,
-        indent_width: indent_width.and_then(|width| u8::try_from(width).ok()),
+        indent_width: indent_width.and_then(|w| u8::try_from(w).ok()),
         line_endings,
         ..FormatConfig::default()
     }
@@ -110,17 +96,15 @@ fn editorconfig_properties(file_path: &Path) -> FxHashMap<String, String> {
     properties
 }
 
-/// Whether the preamble, the pairs before the first section, sets
-/// `root = true`.
 fn is_root_file(contents: &str) -> bool {
     parsed_lines(contents)
         .map_while(|line| match line {
             EditorconfigLine::Pair(key, value) => Some((key, value)),
             EditorconfigLine::Section(_) => None,
         })
-        .filter(|(key, _)| key.eq_ignore_ascii_case("root"))
+        .filter(|(k, _)| k.eq_ignore_ascii_case("root"))
         .last()
-        .is_some_and(|(_, value)| value.eq_ignore_ascii_case("true"))
+        .is_some_and(|(_, v)| v.eq_ignore_ascii_case("true"))
 }
 
 fn apply_file(contents: &str, subject: &[char], properties: &mut FxHashMap<String, String>) {
@@ -145,8 +129,6 @@ enum EditorconfigLine<'text> {
     Pair(&'text str, &'text str),
 }
 
-/// The sections and pairs of `contents`, skipping comments, blanks, and any
-/// invalid line.
 fn parsed_lines(contents: &str) -> impl Iterator<Item = EditorconfigLine<'_>> {
     contents.strip_prefix('\u{feff}').unwrap_or(contents).lines().filter_map(parse_line)
 }
@@ -164,8 +146,7 @@ fn parse_line(untrimmed: &str) -> Option<EditorconfigLine<'_>> {
     (!key.is_empty()).then_some(EditorconfigLine::Pair(key, value.trim_start()))
 }
 
-/// The name in a `[name]` header. A name may hold `]`, and only a comment may
-/// follow the last one.
+/// A name may hold `]`, and only a comment may follow the last one.
 fn section_name(line: &str) -> Option<&str> {
     let (name, after_closing) = line.strip_prefix('[')?.rsplit_once(']')?;
     let trailing = after_closing.trim_start();
@@ -209,7 +190,6 @@ mod tests {
     #[test]
     fn root_true_stops_the_walk() {
         let parent = tempfile::tempdir().expect("tempdir");
-        // Parent sets indent_size = 8; it must be ignored because the child is root.
         fs::write(parent.path().join(".editorconfig"), "[*]\nindent_size = 8\n")
             .expect("write parent");
         let child = parent.path().join("project");
@@ -239,7 +219,6 @@ mod tests {
         .expect("write parent");
         let child = parent.path().join("project");
         fs::create_dir_all(&child).expect("mkdir");
-        // Child overrides indent_size but not max_line_length.
         fs::write(child.join(".editorconfig"), "[*]\nindent_size = 2\n").expect("write child");
         let config = format_config_for(&child.join("main.lua"));
         assert_eq!(config.indent_width, Some(2));

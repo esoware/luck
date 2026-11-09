@@ -11,14 +11,12 @@ use crate::{ResolveRequest, ResolvedModule};
 /// requires pass through the same directories.
 pub(crate) type ModuleProbes = FxHashMap<PathBuf, ModuleFiles>;
 
-/// Which of a module's two spellings exist.
 #[derive(Debug, Clone, Copy)]
 struct ExtensionFiles {
     has_luau: bool,
     has_lua: bool,
 }
 
-/// The files and directory a module path could name.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ModuleFiles {
     module: ExtensionFiles,
@@ -44,7 +42,6 @@ impl ModuleFiles {
     }
 }
 
-/// What a module path names on disk.
 enum Probed {
     Module(PathBuf),
     /// A directory without an init file, which a path can walk through but
@@ -346,8 +343,6 @@ fn probe(
     }
 }
 
-/// Whichever of `luau` and `lua` is a file.
-///
 /// # Errors
 ///
 /// Returns E007 when both are.

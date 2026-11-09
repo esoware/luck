@@ -66,7 +66,6 @@ impl NodeRule for EmptyBlock {
     }
 }
 
-/// Flags `span` with `message` when `block` holds no statements.
 fn check_body(block: &Block, message: &str, span: Span) -> Option<Finding> {
     (block.stmts.is_empty() && block.last_stmt.is_none()).then(|| Finding::new(message, span))
 }

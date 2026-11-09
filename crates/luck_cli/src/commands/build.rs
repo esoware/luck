@@ -1,6 +1,3 @@
-//! `luck build` - drive the full bundle (and optional minify) pipeline from
-//! `luck.json`, with `--watch`, `--dry-run`, and profile selection.
-
 use core::time::Duration;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -50,7 +47,6 @@ pub(crate) struct BuildArgs {
     watch: bool,
 }
 
-/// Why one build config didn't produce output.
 enum BuildFailure {
     /// Bundling or minifying failed and the diagnostics are already rendered.
     /// Watch mode keeps going and watches `source_files`, since an edit to one
@@ -71,7 +67,6 @@ impl BuildArgs {
         if self.watch { self.rebuild_on_change(verbosity) } else { self.build_once(verbosity) }
     }
 
-    /// Fold `--release`/`--dev` shorthands into the explicit `--profile` name.
     fn resolved_profile(&self) -> Option<&str> {
         self.profile
             .as_deref()
@@ -79,9 +74,6 @@ impl BuildArgs {
             .or_else(|| self.dev.then_some("dev"))
     }
 
-    /// The project's build configs under the resolved profile. Loads `-c`, or
-    /// else discovers `luck.json` from the working directory.
-    ///
     /// # Errors
     ///
     /// Reports the failure and returns [`Exit::Usage`] when the working
@@ -99,8 +91,6 @@ impl BuildArgs {
         resolve_build_config(&project, self.resolved_profile()).map_err(usage_error)
     }
 
-    /// Build every config once.
-    ///
     /// # Errors
     ///
     /// Returns [`Exit::Usage`] on a bad config or an output that would replace
@@ -133,9 +123,6 @@ impl BuildArgs {
         Ok(())
     }
 
-    /// Build, then rebuild whenever a watched file changes, until the watcher
-    /// closes.
-    ///
     /// # Errors
     ///
     /// Returns [`Exit::Failure`] when the file watcher can't start, and the
@@ -147,10 +134,8 @@ impl BuildArgs {
             let directories = self.watched_directories(&source_files);
 
             let (sender, receiver) = mpsc::channel();
-            let mut debouncer =
-                new_debouncer(Duration::from_millis(200), sender).map_err(|error| {
-                    operation_error(format!("failed to create file watcher: {error}"))
-                })?;
+            let mut debouncer = new_debouncer(Duration::from_millis(200), sender)
+                .map_err(|e| operation_error(format!("failed to create file watcher: {e}")))?;
 
             for directory in &directories {
                 if directory.exists()
@@ -173,8 +158,6 @@ impl BuildArgs {
         }
     }
 
-    /// The directories to watch: each source file's, the config's, and, with
-    /// neither, the working directory.
     fn watched_directories(&self, source_files: &[String]) -> Vec<PathBuf> {
         let config_path = self.config.as_deref();
         let mut directories: Vec<PathBuf> = source_files
@@ -203,9 +186,6 @@ impl BuildArgs {
         directories
     }
 
-    /// One watch-mode build. Returns every config's sources, for the next
-    /// round to watch.
-    ///
     /// # Errors
     ///
     /// Returns the exit code when a build's output can't be written. A failed
@@ -229,10 +209,6 @@ impl BuildArgs {
         Ok(all_source_files)
     }
 
-    /// Bundle, minify if configured, and write one build config, or only say
-    /// what would be written under `--dry-run`, which clap keeps out of watch
-    /// mode. Returns its source files, which watch mode watches.
-    ///
     /// # Errors
     ///
     /// Returns [`BuildFailure::Failed`] after rendering bundle or minify

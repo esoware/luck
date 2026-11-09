@@ -70,7 +70,6 @@ fn first_code_start(block: &Block) -> Option<u32> {
     stmt_start.into_iter().chain(last_start).min()
 }
 
-/// The text after a `--!`, split into its directive word and the rest.
 struct HotComment<'body> {
     word: &'body str,
     rest: &'body str,
@@ -78,27 +77,22 @@ struct HotComment<'body> {
 }
 
 impl<'body> HotComment<'body> {
-    /// Splits `body`, which starts at `word_start` in source.
     fn split(body: &'body str, word_start: u32) -> Self {
         let word_length = body.find(char::is_whitespace).unwrap_or(body.len());
         let (word, rest) = body.split_at(word_length);
         Self { word, rest, word_span: Span::from_indices(0, word_length).shifted(word_start) }
     }
 
-    /// The span of whatever follows the word, or `None` if only whitespace
-    /// does.
     fn trailing_symbols_span(&self) -> Option<Span> {
         let trimmed = self.rest.trim_end();
-        let first = trimmed.find(|character: char| !character.is_whitespace())?;
+        let first = trimmed.find(|c: char| !c.is_whitespace())?;
         Some(Span::from_indices(first, trimmed.len()).shifted(self.word_span.end))
     }
 
-    /// Whether the word names a type checking mode.
     fn is_mode(&self) -> bool {
         matches!(self.word, "nocheck" | "nonstrict" | "strict")
     }
 
-    /// Whether this is a well-formed type checking mode directive.
     fn sets_mode(&self) -> bool {
         self.is_mode() && self.trailing_symbols_span().is_none()
     }

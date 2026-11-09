@@ -34,8 +34,6 @@ pub struct TestFile {
 }
 
 impl TestFile {
-    /// Parses the file, for benches that time a later stage.
-    ///
     /// # Panics
     ///
     /// Panics when the file doesn't parse cleanly.
@@ -59,8 +57,6 @@ pub struct TestProject {
 }
 
 impl TestProject {
-    /// Parses every file, for benches that time a later stage.
-    ///
     /// # Panics
     ///
     /// Panics when a file doesn't parse cleanly.
@@ -102,9 +98,6 @@ const CORPUS_URL_BASE: &str = "https://raw.githubusercontent.com/esoware/luck-be
 const ROACT_SHA: &str = "956891b70fdc5410e44e9664719cd0a9f7e6fabd"; // Roblox/roact v1.4.4
 const PENLIGHT_SHA: &str = "e0bc8f7fce3b6a4fdef3660066f5006bf8456b32"; // lunarmodules/Penlight 1.15.0
 
-/// All `.lua` files under `root` whose path relative to `root` contains
-/// `filter`, sorted by path for deterministic ordering.
-///
 /// # Panics
 ///
 /// Panics when the tree can't be read.
@@ -113,7 +106,7 @@ fn collect_lua_files(root: &Path, filter: &str) -> Vec<ProjectFile> {
     let mut pending_directories = vec![root.to_path_buf()];
     while let Some(directory) = pending_directories.pop() {
         let entries = fs::read_dir(&directory)
-            .unwrap_or_else(|error| panic!("failed to list {}: {error}", directory.display()));
+            .unwrap_or_else(|e| panic!("failed to list {}: {e}", directory.display()));
         for entry in entries {
             let path = entry.expect("directory entry").path();
             if path.is_dir() {
@@ -129,11 +122,11 @@ fn collect_lua_files(root: &Path, filter: &str) -> Vec<ProjectFile> {
                 continue;
             }
             let source_text = fs::read_to_string(&path)
-                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
             files.push(ProjectFile { relative_path, source_text });
         }
     }
-    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
     files
 }
 
@@ -179,13 +172,12 @@ pub fn test_files() -> Vec<TestFile> {
     ]
 }
 
-/// Deterministic multi-module require graph for the bundler bench.
+/// Real projects don't bundle cleanly: Penlight requires stdlib modules and
+/// builds require strings dynamically, and Roact uses Roblox instance paths.
 ///
-/// Real projects don't bundle cleanly (Penlight requires stdlib modules and
-/// builds require strings dynamically; Roact uses Roblox instance paths),
-/// so the full-grammar generator supplies the module bodies and a diamond
-/// DAG supplies the graph. Written fresh on every call so the tree always
-/// matches the current generator.
+/// So the full-grammar generator supplies the module bodies and a diamond DAG
+/// supplies the graph. Written fresh on every call so the tree always matches
+/// the current generator.
 ///
 /// # Panics
 ///
@@ -196,7 +188,7 @@ pub fn bundle_project_root() -> PathBuf {
     let root = cache_directory().join("gen_bundle");
     let lib_directory = root.join("lib");
     fs::create_dir_all(&lib_directory)
-        .unwrap_or_else(|error| panic!("failed to create {}: {error}", lib_directory.display()));
+        .unwrap_or_else(|e| panic!("failed to create {}: {e}", lib_directory.display()));
     for index in 0..MODULE_COUNT {
         let mut source = String::new();
         for offset in [1, 3] {
@@ -209,11 +201,11 @@ pub fn bundle_project_root() -> PathBuf {
         source.push_str(&luck_testgen::generate_full(index, LuaVersion::Lua54, 15));
         let path = lib_directory.join(format!("mod{index}.lua"));
         fs::write(&path, source)
-            .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+            .unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
     }
     let entry_path = root.join("main.lua");
     fs::write(&entry_path, "local root = require(\"lib.mod0\")\nreturn root\n")
-        .unwrap_or_else(|error| panic!("failed to write {}: {error}", entry_path.display()));
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", entry_path.display()));
     root
 }
 

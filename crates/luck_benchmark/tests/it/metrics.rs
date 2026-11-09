@@ -27,7 +27,6 @@ const SNAPSHOT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/minsize.snap")
 const REGENERATE_COMMAND: &str =
     "cargo test -p luck_benchmark --test it regenerate_minsize -- --ignored";
 
-/// Byte counts for a file or a whole project.
 struct Row {
     name: String,
     original_bytes: usize,
@@ -88,8 +87,6 @@ fn collect_rows() -> Result<Vec<Row>, Box<dyn Error>> {
     Ok(rows)
 }
 
-/// Renders the snapshot.
-///
 /// The regenerator and the up-to-date check both call this, so they can't
 /// disagree on the format.
 ///

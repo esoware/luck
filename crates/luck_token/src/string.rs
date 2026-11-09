@@ -1,6 +1,3 @@
-//! Lua string literal semantics shared by every crate that folds, compares,
-//! or re-emits string values.
-//!
 //! Working on raw token text instead of decoded values miscompiles: UTF-8
 //! corruption, escape-state confusion, and `"\65"` comparing unequal to `"A"`.
 
@@ -22,11 +19,10 @@ pub fn short_string_body(raw: &str) -> Option<&str> {
     strip_quote('"').or_else(|| strip_quote('\''))
 }
 
-/// Decode a string literal token's raw text to its runtime bytes.
-///
 /// Handles both quote forms with every Lua escape, and long-bracket strings
-/// (EOL normalization, leading-newline strip, no escapes). Returns `None` for
-/// any form this doesn't model exactly, including text that isn't a whole
+/// (EOL normalization, leading-newline strip, no escapes).
+///
+/// Returns `None` for any form this doesn't model exactly, including text that isn't a whole
 /// string literal, and a caller that gets `None` must not fold. Lua 5.1 and
 /// Luau read an undefined escape as the literal character, and Luau's long
 /// strings keep a lone CR as content. The result borrows from `raw` when the body needs no
@@ -64,13 +60,13 @@ pub fn decode_string(raw: &str, version: LuaVersion) -> Option<Cow<'_, [u8]>> {
 
 fn decode_long_bracket(raw: &[u8], version: LuaVersion) -> Option<Cow<'_, [u8]>> {
     let after_open = raw.strip_prefix(b"[")?;
-    let level = after_open.iter().take_while(|&&byte| byte == b'=').count();
+    let level = after_open.iter().take_while(|&&b| b == b'=').count();
     let body_with_closer = after_open.get(level..)?.strip_prefix(b"[")?;
     let closer_length = level.saturating_add(2);
     let content_length = body_with_closer.len().checked_sub(closer_length)?;
     let (content, closer) = body_with_closer.split_at(content_length);
     let closer_equals = closer.strip_prefix(b"]")?.strip_suffix(b"]")?;
-    if closer_equals.iter().any(|&byte| byte != b'=') {
+    if closer_equals.iter().any(|&b| b != b'=') {
         return None;
     }
     // Each line break becomes one newline, and one right after the opening
@@ -122,8 +118,7 @@ fn decode_escape<'text>(
         }
         b'x' if version.has_hex_escape() => return decode_hex_escape(rest, output),
         b'z' if version.has_whitespace_escape() => {
-            let whitespace_length =
-                rest.iter().take_while(|&&byte| is_lua_whitespace(byte)).count();
+            let whitespace_length = rest.iter().take_while(|&&b| is_lua_whitespace(b)).count();
             return rest.get(whitespace_length..);
         }
         b'0'..=b'9' => return decode_decimal_escape(escape, output),
@@ -149,7 +144,7 @@ fn decode_hex_escape<'text>(rest: &'text [u8], output: &mut Vec<u8>) -> Option<&
 }
 
 fn decode_decimal_escape<'text>(escape: &'text [u8], output: &mut Vec<u8>) -> Option<&'text [u8]> {
-    let digit_count = escape.iter().take(3).take_while(|byte| byte.is_ascii_digit()).count();
+    let digit_count = escape.iter().take(3).take_while(|b| b.is_ascii_digit()).count();
     let (digits, rest) = escape.split_at(digit_count);
     output.push(str::from_utf8(digits).ok()?.parse().ok()?);
     Some(rest)
@@ -161,12 +156,12 @@ fn decode_unicode_escape<'text>(
     output: &mut Vec<u8>,
 ) -> Option<&'text [u8]> {
     let after_open = rest.strip_prefix(b"{")?;
-    let digit_count = after_open.iter().take_while(|byte| byte.is_ascii_hexdigit()).count();
+    let digit_count = after_open.iter().take_while(|b| b.is_ascii_hexdigit()).count();
     let (hex_digits, after_digits) = after_open.split_at(digit_count);
     let remaining = after_digits.strip_prefix(b"}")?;
-    let character = char::from_u32(unicode_escape_codepoint(hex_digits, version)?)?;
+    let c = char::from_u32(unicode_escape_codepoint(hex_digits, version)?)?;
     let mut encoded = [0u8; 4];
-    output.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
+    output.extend_from_slice(c.encode_utf8(&mut encoded).as_bytes());
     Some(remaining)
 }
 
@@ -187,8 +182,6 @@ pub fn unicode_escape_codepoint(hex_digits: &[u8], version: LuaVersion) -> Optio
     (value <= limit).then_some(value)
 }
 
-/// Encode runtime bytes back into a double-quoted literal.
-///
 /// Escapes double quotes, backslashes, and control bytes. Valid UTF-8 runs
 /// pass through intact, and bytes that aren't valid UTF-8 (such as those from
 /// `\xFF` escapes) become decimal escapes.
@@ -203,10 +196,10 @@ pub fn encode_string(bytes: &[u8]) -> CompactString {
         for chunk in bytes.utf8_chunks() {
             push_escaped_text(&mut output, chunk.valid());
             remaining = remaining.get(chunk.valid().len()..).unwrap_or_default();
-            for &byte in chunk.invalid() {
+            for &b in chunk.invalid() {
                 remaining = remaining.get(1..).unwrap_or_default();
                 let is_followed_by_digit = remaining.first().is_some_and(u8::is_ascii_digit);
-                push_decimal_escape(&mut output, byte, is_followed_by_digit);
+                push_decimal_escape(&mut output, b, is_followed_by_digit);
             }
         }
     }
@@ -214,14 +207,12 @@ pub fn encode_string(bytes: &[u8]) -> CompactString {
     output
 }
 
-/// Append valid UTF-8, copying the runs between bytes that need escaping.
-///
-/// Those bytes are all ASCII, so every split lands on a char boundary. `text`
+/// The bytes that need escaping are all ASCII, so every split lands on a char boundary. `text`
 /// ends at an invalid byte or the end of input, never a digit, so an escape
 /// at its end needs no padding.
 fn push_escaped_text(output: &mut CompactString, mut text: &str) {
     while let Some((index, byte)) =
-        text.bytes().enumerate().find(|&(_, byte)| matches!(byte, 0..=0x1F | 0x7F | b'"' | b'\\'))
+        text.bytes().enumerate().find(|&(_, b)| matches!(b, 0..=0x1F | 0x7F | b'"' | b'\\'))
     {
         let (run, escaped) = text.split_at(index);
         output.push_str(run);

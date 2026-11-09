@@ -45,8 +45,8 @@ fn compact_output_of_every_fixture_reparses() {
         for (path, compacted, errors) in &failures {
             writeln!(report, "  {}:", path.display()).unwrap();
             writeln!(report, "    compact output: {compacted}").unwrap();
-            for error in errors {
-                writeln!(report, "    - {}", error.message).unwrap();
+            for e in errors {
+                writeln!(report, "    - {}", e.message).unwrap();
             }
         }
         panic!("{report}{success_count} fixture(s) passed compact roundtrip");

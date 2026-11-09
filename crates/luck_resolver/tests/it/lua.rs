@@ -15,9 +15,6 @@ fn lua_project() -> TempDir {
     ])
 }
 
-/// Resolves `module`, required from `src/main.lua`, against `templates`
-/// rooted at `project`.
-///
 /// # Errors
 ///
 /// Returns the resolver's diagnostic when `module` doesn't resolve.

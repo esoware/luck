@@ -1,9 +1,8 @@
-//! Whitespace and line breaks in Lua source, the one definition every crate
-//! that counts, splits, or classifies lines goes through.
-//!
 //! PUC Lua reads LF, CR, CRLF, and LFCR as one line break each (`inclinenumber`
-//! in `llex.c`). Luau counts only LF (`Lexer::consumeAny`), so a lone CR is
-//! plain whitespace there and a CRLF is one break by virtue of its LF.
+//! in `llex.c`).
+//!
+//! Luau counts only LF (`Lexer::consumeAny`), so a lone CR is plain whitespace there and a CRLF
+//! is one break by virtue of its LF.
 
 use core::iter;
 use core::ops::Range;
@@ -17,8 +16,6 @@ pub const fn is_lua_whitespace(byte: u8) -> bool {
     matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C)
 }
 
-/// The bytes after the line break `bytes` opens with, or `None` when it opens
-/// with none.
 #[must_use]
 pub const fn strip_line_break(bytes: &[u8], version: LuaVersion) -> Option<&[u8]> {
     match bytes {
@@ -31,7 +28,6 @@ pub const fn strip_line_break(bytes: &[u8], version: LuaVersion) -> Option<&[u8]
     }
 }
 
-/// The byte range of each line break in `text`, in source order.
 pub fn line_breaks(text: &str, version: LuaVersion) -> impl Iterator<Item = Range<usize>> {
     let bytes = text.as_bytes();
     let mut position = 0usize;
@@ -53,13 +49,11 @@ pub fn line_breaks(text: &str, version: LuaVersion) -> impl Iterator<Item = Rang
     })
 }
 
-/// Whether `text` holds a line break.
 #[must_use]
 pub fn has_line_break(text: &str, version: LuaVersion) -> bool {
     line_breaks(text, version).next().is_some()
 }
 
-/// Whether `text` ends with a line break, so whatever follows starts a line.
 #[must_use]
 pub fn ends_with_line_break(text: &str, version: LuaVersion) -> bool {
     text.ends_with('\n') || (version.has_lfcr_line_break() && text.ends_with('\r'))

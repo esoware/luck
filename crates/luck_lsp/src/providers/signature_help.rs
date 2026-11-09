@@ -1,9 +1,3 @@
-//! Signature help.
-//!
-//! Finds the enclosing call expression at the cursor, looks the callee up in
-//! the stdlib model, and renders one signature per overload with the active
-//! signature and parameter selected from the cursor's argument position.
-
 use luck_semantic::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
 use luck_token::index_to_offset;
 use tower_lsp::lsp_types::{
@@ -61,15 +55,15 @@ fn build_signature(
     is_must_use: bool,
 ) -> SignatureInformation {
     let mut label = format!("{name}(");
-    let mut parameters: Vec<ParameterInformation> = Vec::new();
-    for (index, param) in signature.params.iter().enumerate() {
-        if index > 0 {
+    let mut params: Vec<ParameterInformation> = Vec::new();
+    for (i, param) in signature.params.iter().enumerate() {
+        if i > 0 {
             label.push_str(", ");
         }
         let start = index_to_offset(label.chars().count());
         label.push_str(&param_label(param));
         let end = index_to_offset(label.chars().count());
-        parameters.push(ParameterInformation {
+        params.push(ParameterInformation {
             label: ParameterLabel::LabelOffsets([start, end]),
             documentation: param_documentation(param),
         });
@@ -92,7 +86,7 @@ fn build_signature(
                 value: documentation,
             }))
         },
-        parameters: Some(parameters),
+        parameters: Some(params),
         active_parameter: None,
     }
 }

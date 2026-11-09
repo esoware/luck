@@ -1,5 +1,3 @@
-//! `luck graph` - print the dependency graph as JSON or Graphviz DOT.
-
 use clap::{Args, ValueEnum};
 use luck_bundler::{BundleOptions, DependencyGraph, ModuleId};
 use luck_core::{DynamicRequire, LuaTarget};

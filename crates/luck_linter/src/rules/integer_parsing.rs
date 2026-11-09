@@ -6,11 +6,11 @@ use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::{IntegerDigits, integer_digits};
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
-/// Flags integer literals the target can't represent exactly.
-///
 /// Lua 5.1, 5.2, and Luau store every number as a double, so integers above
-/// 2^53 can round. Lua 5.3+ has 64-bit integers: a decimal literal above
-/// 2^63-1 becomes a float, and a hex literal above 2^64-1 wraps around.
+/// 2^53 can round.
+///
+/// Lua 5.3+ has 64-bit integers: a decimal literal above 2^63-1 becomes a
+/// float, and a hex literal above 2^64-1 wraps around.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct IntegerParsing;
 
@@ -64,7 +64,7 @@ fn check_number(literal: &Literal, version: LuaVersion) -> Option<Finding> {
         )
     } else {
         // Lua 5.3+ wraps a hex literal that overflows 64 bits.
-        if magnitude.is_ok_and(|value| value <= u128::from(u64::MAX)) {
+        if magnitude.is_ok_and(|v| v <= u128::from(u64::MAX)) {
             return None;
         }
         (

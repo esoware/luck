@@ -28,7 +28,6 @@ pub(crate) fn check_type_functions(block: &Block, version: LuaVersion) -> Vec<Pa
     ScopeChecker::run(block, version, true)
 }
 
-/// One entry of the active-variable stack.
 struct Binding<'ast> {
     /// `None` for a Lua 5.5 `global *`, which covers any name no other entry
     /// declares.
@@ -42,7 +41,6 @@ struct Binding<'ast> {
 
 enum Resolved {
     Binding(usize),
-    /// The implicit `global *` a chunk starts with.
     ImplicitGlobal,
     /// A Lua 5.5 name that no longer falls under the implicit `global *`.
     Undeclared,
@@ -56,8 +54,6 @@ struct ScopeChecker<'ast> {
     bindings: Vec<Binding<'ast>>,
     /// Bindings below this index lie outside the innermost type function.
     type_function_base: usize,
-    /// Whether an `until` condition is being walked with skipped locals to
-    /// flag.
     has_skipped_locals: bool,
     gotos: GotoTracker<'ast>,
     errors: Vec<ParseError>,
@@ -124,11 +120,11 @@ impl<'ast> ScopeChecker<'ast> {
     fn resolve(&self, name: &str) -> Resolved {
         let mut collective = None;
         let mut has_named_global = false;
-        for (index, binding) in self.bindings.iter().enumerate().rev() {
+        for (i, binding) in self.bindings.iter().enumerate().rev() {
             match binding.name {
-                Some(declared) if declared == name => return Resolved::Binding(index),
+                Some(declared) if declared == name => return Resolved::Binding(i),
                 Some(_) => has_named_global |= binding.is_global,
-                None => collective = collective.or(Some(index)),
+                None => collective = collective.or(Some(i)),
             }
         }
         match collective {
@@ -218,12 +214,12 @@ impl<'ast> ScopeChecker<'ast> {
                 .rposition(|stmt| {
                     !matches!(stmt, Statement::Label(_) | Statement::EmptyStatement(_))
                 })
-                .map_or(0, |index| index.saturating_add(1))
+                .map_or(0, |i| i.saturating_add(1))
         };
-        for (index, stmt) in block.stmts.iter().enumerate() {
+        for (i, stmt) in block.stmts.iter().enumerate() {
             if let Statement::Label(label) = stmt {
                 let active_vars =
-                    if index >= trailing_start { outer_active_vars } else { self.bindings.len() };
+                    if i >= trailing_start { outer_active_vars } else { self.bindings.len() };
                 self.gotos.add_label(label, active_vars);
             } else if let Statement::Goto(goto) = stmt {
                 self.gotos.add_goto(goto, self.bindings.len());
@@ -281,9 +277,9 @@ impl<'ast> ScopeChecker<'ast> {
             self.visit_expr(expr);
         }
         let start = self.gotos.open_block(self.bindings.len());
-        for (index, binding) in generic_for.names.iter().enumerate() {
+        for (i, binding) in generic_for.names.iter().enumerate() {
             // Lua 5.5: only the first variable is the control variable.
-            self.declare_local(&binding.name, index == 0 && self.version.has_const_for_variables());
+            self.declare_local(&binding.name, i == 0 && self.version.has_const_for_variables());
         }
         self.walk_statements(&generic_for.block, false, start.active_vars());
         self.close_block(start);
@@ -318,8 +314,8 @@ impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::Assignment(assignment) => {
-                for value in assignment.values.iter() {
-                    self.visit_expr(value);
+                for v in assignment.values.iter() {
+                    self.visit_expr(v);
                 }
                 for target in assignment.targets.iter() {
                     self.check_target(target);

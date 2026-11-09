@@ -186,7 +186,7 @@ fn ambiguous_newline_check_covers_method_calls() {
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
         let result = parse("a:b\n(c)", version);
         assert!(
-            result.errors.iter().any(|error| error.message.contains("ambiguous")),
+            result.errors.iter().any(|e| e.message.contains("ambiguous")),
             "{version:?} must reject a method call whose `(` starts a new line: {:?}",
             result.errors
         );

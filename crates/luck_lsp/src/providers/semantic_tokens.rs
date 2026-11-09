@@ -17,7 +17,7 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::document::DocumentState;
-use crate::providers::cursor::{dotted_chain_ending_tokens, token_name};
+use crate::providers::cursor::dotted_chain_ending_tokens;
 
 const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::NAMESPACE,
@@ -49,7 +49,6 @@ const MODIFIER_DEPRECATED: u32 = 1 << 0;
 const MODIFIER_READONLY: u32 = 1 << 1;
 const MODIFIER_DEFAULT_LIBRARY: u32 = 1 << 2;
 
-/// A token's type index and modifier bitset.
 #[derive(Debug, Clone, Copy)]
 struct Classification {
     token_type: u32,
@@ -77,9 +76,6 @@ pub(crate) fn semantic_tokens(document: &DocumentState) -> SemanticTokensResult 
     SemanticTokensResult::Tokens(encode_tokens(document, None))
 }
 
-/// Range request: same classification, filtered to tokens overlapping the
-/// range.
-///
 /// Deltas are re-encoded from the filtered list, so the first token is
 /// relative to the document start exactly as the protocol requires.
 pub(crate) fn in_range(document: &DocumentState, range: Range) -> SemanticTokensRangeResult {
@@ -87,7 +83,6 @@ pub(crate) fn in_range(document: &DocumentState, range: Range) -> SemanticTokens
     SemanticTokensRangeResult::Tokens(encode_tokens(document, Some(byte_range)))
 }
 
-/// How a name is used, judged from the tokens right after it.
 enum ValueShape {
     Called,
     AssignedFunction,
@@ -117,7 +112,7 @@ fn value_shape(tokens: &[Token], index: usize) -> ValueShape {
 /// Matches the grammar's all-caps constant pattern: `[A-Z][A-Z0-9_]*`.
 fn is_screaming_case(name: &str) -> bool {
     let mut chars = name.chars();
-    chars.next().is_some_and(|first| first.is_ascii_uppercase())
+    chars.next().is_some_and(|c| c.is_ascii_uppercase())
         && chars.all(|rest| rest.is_ascii_uppercase() || rest.is_ascii_digit() || rest == '_')
 }
 
@@ -139,16 +134,15 @@ struct Classifier<'document> {
 }
 
 impl Classifier<'_> {
-    /// Classifies every declaration and reference the scope tree recorded.
     fn classify_scope_names(&mut self) {
         let Self { document, tokens, raw_tokens } = self;
         let stdlib = document.semantic.stdlib();
         let tree = &document.semantic.scope_tree;
 
         let mut identifier_indexes_by_offset: FxHashMap<u32, usize> = FxHashMap::default();
-        for (index, token) in tokens.iter().enumerate() {
+        for (i, token) in tokens.iter().enumerate() {
             if matches!(token.kind, TokenKind::Identifier(_)) {
-                identifier_indexes_by_offset.insert(token.span.start, index);
+                identifier_indexes_by_offset.insert(token.span.start, i);
             }
         }
 
@@ -173,9 +167,7 @@ impl Classifier<'_> {
 
         for symbol in &tree.symbols {
             if symbol.name == "self"
-                || !symbol
-                    .name
-                    .starts_with(|first: char| first.is_ascii_alphabetic() || first == '_')
+                || !symbol.name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
             {
                 continue;
             }
@@ -241,8 +233,6 @@ impl Classifier<'_> {
         }
     }
 
-    /// Carries a declaration's function type and readonly modifier to its
-    /// references.
     fn propagate_to_references(&mut self) {
         let Self { document, raw_tokens, .. } = self;
         let tree = &document.semantic.scope_tree;
@@ -298,7 +288,6 @@ impl Classifier<'_> {
         self.raw_tokens.insert(span.start, (span, Classification::plain(token_type)));
     }
 
-    /// Retypes the token already classified at `span`, if any.
     fn retype(&mut self, span: Span, token_type: u32) {
         if let Some((_, classification)) = self.raw_tokens.get_mut(&span.start) {
             classification.token_type = token_type;
@@ -391,7 +380,7 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
             }
             // Lua 5.5
             Statement::GlobalFunction(global_function) => {
-                if token_name(&global_function.name).is_some() {
+                if global_function.name.identifier().is_some() {
                     self.insert(global_function.name.span, TYPE_FUNCTION);
                 }
             }
@@ -593,7 +582,6 @@ mod tests {
         tokens.data
     }
 
-    /// A decoded token: its text, legend type and modifiers, and position.
     #[derive(Debug)]
     struct Highlight {
         text: String,
@@ -630,7 +618,7 @@ mod tests {
                         .token_modifiers
                         .iter()
                         .enumerate()
-                        .filter(|(index, _)| token.token_modifiers_bitset & (1 << index) != 0)
+                        .filter(|(i, _)| token.token_modifiers_bitset & (1 << i) != 0)
                         .map(|(_, modifier)| modifier.as_str().to_owned())
                         .collect(),
                     position,

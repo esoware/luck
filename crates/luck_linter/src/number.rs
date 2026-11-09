@@ -1,9 +1,7 @@
-//! Values of number literals, for the rules that check literal bounds and
-//! indices.
-//!
 //! Every rule reads a literal through here, so Luau's `_` separators and
-//! binary literals and each dialect's hex overflow live in one place. A
-//! spelling this doesn't model, such as a nonzero hex float, yields `None`.
+//! binary literals and each dialect's hex overflow live in one place.
+//!
+//! A spelling this doesn't model, such as a nonzero hex float, yields `None`.
 
 use alloc::borrow::Cow;
 use core::ops::Neg;
@@ -11,8 +9,6 @@ use core::ops::Neg;
 use luck_ast::Expression;
 use luck_token::{LuaVersion, UnOp};
 
-/// The digits of an integer literal and their radix.
-///
 /// Decimal text overflows past 64 bits into a float on 5.3+, hex wraps, and
 /// either loses precision as a double elsewhere, so the rules that care read
 /// these rather than a value.
@@ -33,7 +29,7 @@ pub(crate) fn integer_digits(text: &str) -> Option<IntegerDigits<'_>> {
     let is_integer = !digits.is_empty()
         && digits
             .bytes()
-            .all(|byte| if radix == 16 { byte.is_ascii_hexdigit() } else { byte.is_ascii_digit() });
+            .all(|b| if radix == 16 { b.is_ascii_hexdigit() } else { b.is_ascii_digit() });
     is_integer.then_some(IntegerDigits { digits, radix })
 }
 
@@ -85,7 +81,7 @@ fn float_value(text: &str) -> Option<f64> {
     };
     // Only a zero hex float has a value that doesn't need correct rounding.
     let mantissa = hex_float.split(['p', 'P']).next()?;
-    mantissa.bytes().all(|byte| byte == b'0' || byte == b'.').then_some(0.0)
+    mantissa.bytes().all(|b| b == b'0' || b == b'.').then_some(0.0)
 }
 
 fn without_separators(text: &str) -> Cow<'_, str> {

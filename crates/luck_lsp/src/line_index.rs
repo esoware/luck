@@ -1,6 +1,3 @@
-//! Mapping between byte offsets and LSP positions, whose `character` counts
-//! UTF-16 code units.
-//!
 //! Byte offsets are `u32` to match `luck_token::Span`, which caps files at
 //! 4 GB.
 
@@ -23,26 +20,23 @@ impl LineIndex {
         let mut line_starts = Vec::with_capacity(source.len().div_ceil(40));
         line_starts.push(0);
         let bytes = source.as_bytes();
-        for (index, byte) in bytes.iter().enumerate() {
+        for (i, b) in bytes.iter().enumerate() {
             // LSP's EOLs, the client's for every dialect, are LF, CRLF, and CR.
-            let is_line_end = *byte == b'\n'
-                || (*byte == b'\r' && bytes.get(index.saturating_add(1)) != Some(&b'\n'));
+            let is_line_end =
+                *b == b'\n' || (*b == b'\r' && bytes.get(i.saturating_add(1)) != Some(&b'\n'));
             if is_line_end {
-                line_starts.push(index_to_offset(index).saturating_add(1));
+                line_starts.push(index_to_offset(i).saturating_add(1));
             }
         }
         Self { line_starts, source_length: index_to_offset(source.len()) }
     }
 
-    /// Byte offsets where `line` starts and where the next line starts, or
-    /// the end of the file on the last line.
     fn line_bounds(&self, line: usize) -> (u32, u32) {
         let mut starts = self.line_starts.iter().skip(line).copied();
         let start = starts.next().unwrap_or_default();
         (start, starts.next().unwrap_or(self.source_length))
     }
 
-    /// Convert a byte offset into an LSP `Position` (UTF-16 character index).
     pub(crate) fn position(&self, source: &str, offset: u32) -> Position {
         let clamped = offset.min(self.source_length);
         let line = match self.line_starts.binary_search(&clamped) {
@@ -61,8 +55,6 @@ impl LineIndex {
         }
     }
 
-    /// Convert an LSP `Position` (line + UTF-16 character) into a byte offset.
-    ///
     /// A line past the end clamps to the last line, and a character past the
     /// end of its line clamps to the line end.
     pub(crate) fn offset(&self, source: &str, position: Position) -> u32 {
@@ -79,8 +71,8 @@ impl LineIndex {
         let without_lf = terminated_line.strip_suffix('\n').unwrap_or(terminated_line);
         let line_text = without_lf.strip_suffix('\r').unwrap_or(without_lf);
         let mut remaining_utf16_units = position.character;
-        for (byte_offset, character) in line_text.char_indices() {
-            match remaining_utf16_units.checked_sub(index_to_offset(character.len_utf16())) {
+        for (byte_offset, c) in line_text.char_indices() {
+            match remaining_utf16_units.checked_sub(index_to_offset(c.len_utf16())) {
                 Some(utf16_units) => remaining_utf16_units = utf16_units,
                 None => return line_start.saturating_add(index_to_offset(byte_offset)),
             }

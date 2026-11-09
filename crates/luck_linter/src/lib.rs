@@ -49,7 +49,6 @@ mod suppression;
 mod underscore_fix;
 mod uninitialized;
 
-/// Lint config types, defined in `luck_core` with the rest of `luck.json`.
 pub use luck_core::{LintConfig, RuleSetting};
 
 pub use diagnostic::{Category, LintDiagnostic, Severity};

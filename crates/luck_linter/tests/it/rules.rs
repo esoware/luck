@@ -1,5 +1,3 @@
-//! Rules firing, or staying quiet, through the full `lint` driver.
-
 use luck_linter::{LintConfig, lint};
 use luck_token::LuaVersion;
 

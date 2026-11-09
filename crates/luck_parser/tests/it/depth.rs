@@ -13,10 +13,7 @@ fn depth_cap_is_the_same_in_every_dialect() {
                 assert!(result.errors.is_empty(), "{version:?}: {:?}", result.errors);
             } else {
                 assert!(
-                    result
-                        .errors
-                        .iter()
-                        .any(|error| error.message.contains("luck parser resource limit")),
+                    result.errors.iter().any(|e| e.message.contains("luck parser resource limit")),
                     "{version:?}: {:?}",
                     result.errors
                 );
@@ -94,7 +91,7 @@ fn concat_chain_under_the_depth_cap_parses() {
 }
 
 fn has_depth_limit_error(result: &luck_parser::ParseResult) -> bool {
-    result.errors.iter().any(|error| error.message.contains("luck parser resource limit"))
+    result.errors.iter().any(|e| e.message.contains("luck parser resource limit"))
 }
 
 #[test]

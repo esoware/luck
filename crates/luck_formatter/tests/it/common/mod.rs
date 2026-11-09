@@ -21,7 +21,6 @@ pub(crate) fn format_once(input: &str, version: LuaVersion, options: &FormatOpti
     result.output
 }
 
-/// [`formatted_with`] as Lua 5.4 under the default options.
 pub(crate) fn formatted(input: &str) -> String {
     formatted_with(input, LuaVersion::Lua54, &FormatOptions::default())
 }

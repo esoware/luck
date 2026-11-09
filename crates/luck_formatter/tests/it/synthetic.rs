@@ -1,8 +1,8 @@
-//! End-to-end coverage of the AST-in path (`format_block`).
-//!
 //! Most tests format a tree built in code with no source text, then require
 //! the output to re-parse cleanly into a tree equivalent to the one they
-//! started from. Source-based tests can't show this, since they always have
+//! started from.
+//!
+//! Source-based tests can't show this, since they always have
 //! the original text to lean on.
 
 use luck_ast::{
@@ -32,7 +32,6 @@ fn assert_roundtrips_in(block: &Block, version: LuaVersion) -> String {
     output
 }
 
-/// Round-trip as Luau (the widest grammar).
 fn assert_roundtrips(block: &Block) -> String {
     assert_roundtrips_in(block, LuaVersion::Luau)
 }

@@ -1,6 +1,5 @@
 use luck_linter::{LintConfig, RuleSetting};
 
-/// The default config with `name` turned on.
 pub(crate) fn enable(name: &str) -> LintConfig {
     let mut config = LintConfig::default();
     config
@@ -9,7 +8,6 @@ pub(crate) fn enable(name: &str) -> LintConfig {
     config
 }
 
-/// The default config with `name` turned off.
 pub(crate) fn disable(name: &str) -> LintConfig {
     let mut config = LintConfig::default();
     config

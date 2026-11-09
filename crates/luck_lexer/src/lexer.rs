@@ -18,8 +18,6 @@ const BYTES_PER_TOKEN: usize = 5;
 /// Keeps a huge comment-only file from reserving gigabytes it never touches.
 const MAX_RESERVED_TOKENS: usize = 1 << 20;
 
-/// Lex all of `source` at once.
-///
 /// A source over 4 GiB yields only the error [`Lexer::new`] reports, with no
 /// tokens.
 #[must_use]
@@ -44,7 +42,6 @@ pub struct Lexer<'source> {
     last_token_start: Option<u32>,
     /// The file start counts as a newline.
     has_newline_since_last_token: bool,
-    /// Leading comments that get their `attached_to` from the next token.
     pending_leading_comments: Vec<PendingComment>,
     /// Unmatched `{` count for each open interpolation expression, innermost
     /// last (Luau). A `}` at depth 0 closes the expression and resumes the
@@ -52,7 +49,6 @@ pub struct Lexer<'source> {
     interpolation_brace_depths: Vec<u32>,
 }
 
-/// A comment whose attachment is not settled yet.
 #[derive(Debug)]
 struct PendingComment {
     span: Span,
@@ -140,15 +136,12 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    /// Consume the lexer after streaming, yielding the accumulated
-    /// comments and errors.
     #[must_use]
     pub fn finish(self) -> (Vec<Comment>, Vec<LexError>) {
         (self.comments, self.errors)
     }
 
-    /// Lex the whole source into one stream ending in EOF. Its own loop
-    /// rather than `next_token` until EOF, so no per-token EOF test.
+    /// Its own loop rather than `next_token` until EOF, so no per-token EOF test.
     fn tokenize(mut self) -> LexResult {
         let capacity = self.cursor.rest().len().div_ceil(BYTES_PER_TOKEN);
         let mut tokens = Vec::with_capacity(capacity.min(MAX_RESERVED_TOKENS));
@@ -171,10 +164,9 @@ impl<'source> Lexer<'source> {
         LexResult { tokens, comments: self.comments, errors: self.errors }
     }
 
-    /// Single-jump dispatch on the lead byte. A match compiles to the same
-    /// jump table as a fn-pointer array but keeps the small handlers
-    /// inlinable. Callers consume whitespace first. Returns `None` when the
-    /// byte produced no token (a comment or an error).
+    /// A match compiles to the same jump table as a fn-pointer array but keeps the small handlers
+    /// inlinable. Callers consume whitespace first. Returns `None` when the byte produced no token
+    /// (a comment or an error).
     #[inline]
     fn dispatch_byte(&mut self, byte: u8) -> Option<Token> {
         match byte {
@@ -242,7 +234,6 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    /// Record an error spanning `start` to the cursor and yield no token.
     #[cold]
     fn reject(&mut self, start: usize, message: impl Into<String>) -> Option<Token> {
         self.errors.push(lex_error(self.cursor.span_since(start), message));
@@ -316,7 +307,7 @@ impl<'source> Lexer<'source> {
 
     fn lex_identifier(&mut self) -> Token {
         let start = self.cursor.position();
-        self.cursor.eat_while(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+        self.cursor.eat_while(|b| b.is_ascii_alphanumeric() || b == b'_');
         let text = self.cursor.text_since(start);
 
         let kind = TokenKind::keyword(text, self.version)
@@ -348,7 +339,6 @@ impl<'source> Lexer<'source> {
         Some(self.make_token(kind, start))
     }
 
-    /// Lex from an opening backtick to the first `{` or the closing backtick.
     /// A string with no expressions becomes an empty `InterpolatedStringBegin`
     /// plus a queued `InterpolatedStringEnd` holding its text, so the parser
     /// always sees a pair.

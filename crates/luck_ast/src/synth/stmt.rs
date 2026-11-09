@@ -18,7 +18,6 @@ use crate::types::{GenericTypeList, Type};
     reason = "the synthesizer is one type with its constructors split by node family"
 )]
 impl Synth {
-    /// `function a.b.c(params) body end` / `function a.b:m(params) body end`.
     /// For attributes, generics, typed parameters, varargs, or a return
     /// type, use [`Synth::function_decl_full`].
     #[must_use]
@@ -38,8 +37,7 @@ impl Synth {
         )
     }
 
-    /// Full-fidelity function declaration. Build `attributes` with
-    /// [`Synth::function_attribute`].
+    /// Build `attributes` with [`Synth::function_attribute`].
     #[must_use]
     pub fn function_decl_full(
         &self,
@@ -57,8 +55,7 @@ impl Synth {
         }))
     }
 
-    /// `local function name(params) body end`. For attributes or a full
-    /// signature, use [`Synth::local_function_full`].
+    /// For attributes or a full signature, use [`Synth::local_function_full`].
     #[must_use]
     pub fn local_function(&self, name: &str, params: &[&str], body: Block) -> Statement {
         self.local_function_full(
@@ -69,8 +66,7 @@ impl Synth {
         )
     }
 
-    /// Full-fidelity local function. Build `attributes` with
-    /// [`Synth::function_attribute`].
+    /// Build `attributes` with [`Synth::function_attribute`].
     #[must_use]
     pub fn local_function_full(
         &self,
@@ -84,8 +80,6 @@ impl Synth {
         ))
     }
 
-    /// Luau `const function name(params) body end`, a read-only local
-    /// function binding.
     #[must_use]
     pub fn const_function(
         &self,
@@ -100,7 +94,6 @@ impl Synth {
         }))
     }
 
-    /// Luau `export function name(...) ... end`.
     #[must_use]
     pub fn export_function(
         &self,
@@ -116,7 +109,6 @@ impl Synth {
         }))
     }
 
-    /// A plain `local function`, for the callers to flag.
     fn local_function_node(
         &self,
         name: &str,
@@ -134,7 +126,6 @@ impl Synth {
         }
     }
 
-    /// Lua 5.5 `global function name(params) body end`.
     #[must_use]
     pub fn global_function(
         &self,
@@ -158,8 +149,7 @@ impl Synth {
         }
     }
 
-    /// `local names = exprs` with plain untyped names. For type annotations
-    /// or Lua 5.4 attributes, use [`Synth::local_full`].
+    /// For type annotations or Lua 5.4 attributes, use [`Synth::local_full`].
     #[must_use]
     pub fn local(&self, names: &[&str], exprs: Vec<Expression>) -> Statement {
         self.local_full(
@@ -173,8 +163,6 @@ impl Synth {
         Statement::LocalAssignment(Box::new(self.local_assignment(names, exprs)))
     }
 
-    /// Luau `const names = exprs`, a `local` whose names are read-only.
-    ///
     /// # Panics
     ///
     /// Panics if `exprs` is empty; the grammar requires an initializer.
@@ -187,7 +175,6 @@ impl Synth {
         }))
     }
 
-    /// Luau `export local names [= exprs]`.
     #[must_use]
     pub fn export_local(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
         Statement::LocalAssignment(Box::new(LocalAssignment {
@@ -196,8 +183,6 @@ impl Synth {
         }))
     }
 
-    /// Luau `export const names = exprs`.
-    ///
     /// # Panics
     ///
     /// Panics if `exprs` is empty; the grammar requires an initializer.
@@ -211,7 +196,6 @@ impl Synth {
         }))
     }
 
-    /// A plain `local`, for the callers to flag.
     fn local_assignment(
         &self,
         names: Vec<AttributedName>,
@@ -248,7 +232,6 @@ impl Synth {
         }
     }
 
-    /// Lua 5.5 `global names [= exprs]` declaration.
     #[must_use]
     pub fn global_declaration(
         &self,
@@ -262,7 +245,6 @@ impl Synth {
         }))
     }
 
-    /// Lua 5.5 `global *` / `global <attrib> *`.
     #[must_use]
     pub fn global_star(&self, attribute: Option<&str>) -> Statement {
         Statement::GlobalStar(Box::new(GlobalStar {
@@ -272,8 +254,7 @@ impl Synth {
         }))
     }
 
-    /// `targets = values`. Build targets with [`Synth::name_var`],
-    /// [`Synth::index_var`], [`Synth::field_var`].
+    /// Build targets with [`Synth::name_var`], [`Synth::index_var`], [`Synth::field_var`].
     #[must_use]
     pub fn assign(&self, targets: Vec<Var>, values: Vec<Expression>) -> Statement {
         Statement::Assignment(Box::new(Assignment {
@@ -283,7 +264,6 @@ impl Synth {
         }))
     }
 
-    /// Luau compound assignment: `target op= value`.
     #[must_use]
     pub fn compound_assign(&self, target: Var, op: CompoundOp, value: Expression) -> Statement {
         Statement::CompoundAssignment(Box::new(CompoundAssignment {
@@ -294,8 +274,6 @@ impl Synth {
         }))
     }
 
-    /// A call expression as a statement.
-    ///
     /// # Panics
     ///
     /// Panics if `call_expr` isn't a function call.
@@ -353,8 +331,7 @@ impl Synth {
         }))
     }
 
-    /// `for variable = start, limit [, step] do block end`. Build `variable`
-    /// with [`Synth::param`] or [`Synth::param_typed`].
+    /// Build `variable` with [`Synth::param`] or [`Synth::param_typed`].
     #[must_use]
     pub fn numeric_for(
         &self,
@@ -375,8 +352,7 @@ impl Synth {
         }))
     }
 
-    /// `for names in exprs do block end`. Build names with [`Synth::param`]
-    /// or [`Synth::param_typed`].
+    /// Build names with [`Synth::param`] or [`Synth::param_typed`].
     #[must_use]
     pub fn generic_for(
         &self,
@@ -392,7 +368,6 @@ impl Synth {
         }))
     }
 
-    /// `goto label` (Lua 5.2+).
     #[must_use]
     pub fn goto_(&self, label: &str) -> Statement {
         Statement::Goto(Box::new(GotoStatement {
@@ -401,7 +376,6 @@ impl Synth {
         }))
     }
 
-    /// `::name::` label (Lua 5.2+).
     #[must_use]
     pub fn label(&self, name: &str) -> Statement {
         Statement::Label(Box::new(LabelStatement {
@@ -410,15 +384,13 @@ impl Synth {
         }))
     }
 
-    /// A mid-block `break` (Lua 5.2+). Lua 5.1 and Luau only allow `break` as
-    /// the last statement, so use [`Synth::break_`] there.
+    /// Lua 5.1 and Luau only allow `break` as the last statement, so use [`Synth::break_`] there.
     #[must_use]
     pub fn break_stmt(&self) -> Statement {
         Statement::Break(self.next_span())
     }
 
-    /// Bare `;` (Lua 5.2+). The formatter drops these; only compact output
-    /// prints them.
+    /// The formatter drops these; only compact output prints them.
     #[must_use]
     pub fn empty_stmt(&self) -> Statement {
         Statement::EmptyStatement(self.next_span())
@@ -437,7 +409,6 @@ impl Synth {
         LastStatement::Break(self.next_span())
     }
 
-    /// Luau `continue`.
     #[must_use]
     pub fn continue_(&self) -> LastStatement {
         LastStatement::Continue(self.next_span())
@@ -448,7 +419,6 @@ impl Synth {
         Block { span: self.next_span(), stmts, last_stmt: last.map(Box::new) }
     }
 
-    /// Luau alias `[export] type Name [<generics>] = T`.
     #[must_use]
     pub fn type_declaration(
         &self,
@@ -466,8 +436,6 @@ impl Synth {
         }))
     }
 
-    /// Luau `[export] type function Name(params) body end`, a compile-time
-    /// type function whose body is ordinary Luau.
     #[must_use]
     pub fn type_function(
         &self,

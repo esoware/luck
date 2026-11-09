@@ -34,8 +34,6 @@ pub(crate) fn comments_within(comments: &[Comment], span: Span) -> &[Comment] {
     comments.get(first..last).unwrap_or_default()
 }
 
-/// Applies the diagnostics' [`non_overlapping_edits`] to `source` in one pass.
-///
 /// If the result doesn't parse, the original source comes back unchanged, so a
 /// broken fix never reaches the user's file.
 ///
@@ -62,13 +60,12 @@ pub(crate) fn apply_one_pass(source: &str, diags: &[LintDiagnostic]) -> String {
     fixed
 }
 
-/// The edits of every fix that overlaps none taken so far, in source order.
-///
 /// The fixes reaching furthest into the source are taken first, so of two
-/// overlapping ones the later wins. A fix is kept or dropped whole, because
-/// half of a multi-edit fix changes the code's meaning, and a dropped one
-/// comes back on the next pass. Edits at one offset keep a fixed order,
-/// whichever rule produced them.
+/// overlapping ones the later wins.
+///
+/// A fix is kept or dropped whole, because half of a multi-edit fix changes
+/// the code's meaning, and a dropped one comes back on the next pass. Edits
+/// at one offset keep a fixed order, whichever rule produced them.
 #[must_use]
 pub fn non_overlapping_edits(diags: &[LintDiagnostic]) -> Vec<&TextEdit> {
     let mut fixes: Vec<&Fix> = diags.iter().filter_map(|diag| diag.fix.as_ref()).collect();
@@ -107,13 +104,16 @@ fn overlaps_kept(kept_spans: &BTreeMap<u32, u32>, span: Span) -> bool {
         || kept_spans.range(span.start..).next().is_some_and(is_overlapping)
 }
 
-/// Why [`apply_fixes_fixpoint`] stopped without converging.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FixpointError {
-    /// The rounds ran out while rules were still producing fixes.
-    BudgetExhausted { iterations: usize },
-    /// A round's output didn't parse. `iteration` counts from 0.
-    ReparseFailed { iteration: usize, message: String },
+    BudgetExhausted {
+        iterations: usize,
+    },
+    /// `iteration` counts from 0.
+    ReparseFailed {
+        iteration: usize,
+        message: String,
+    },
 }
 
 impl fmt::Display for FixpointError {
@@ -133,9 +133,6 @@ impl fmt::Display for FixpointError {
 
 impl Error for FixpointError {}
 
-/// Lints `source` with [`crate::lint`] and applies the fixes, repeating until
-/// no fixes remain.
-///
 /// # Errors
 ///
 /// [`FixpointError::BudgetExhausted`] when fixes are still coming after
@@ -149,8 +146,6 @@ pub fn apply_fixes_fixpoint(
     fixpoint_within(source, version, config, FIXPOINT_BUDGET)
 }
 
-/// [`apply_fixes_fixpoint`] with a caller-chosen round limit.
-///
 /// # Errors
 ///
 /// As for [`apply_fixes_fixpoint`], with `budget` as the limit.
@@ -169,7 +164,6 @@ fn fixpoint_within(
         }
         let next = apply_one_pass(&current, &diags);
         if next == current {
-            // The fixes changed nothing, so this is a fixed point.
             return Ok(current);
         }
         let parse = luck_parser::parse(&next, version);
@@ -179,7 +173,7 @@ fn fixpoint_within(
                 message: parse
                     .errors
                     .iter()
-                    .map(|error| error.message.as_str())
+                    .map(|e| e.message.as_str())
                     .collect::<Vec<_>>()
                     .join("; "),
             });
@@ -207,7 +201,6 @@ mod tests {
         }
     }
 
-    /// The default config with `name` turned on.
     fn enable(name: &str) -> LintConfig {
         let mut config = LintConfig::default();
         config

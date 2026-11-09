@@ -1,11 +1,8 @@
-//! `luck.json` project configuration: one module of typed schema per section,
-//! file loading and `extends` resolution, build resolution, `.editorconfig`
-//! layering, and project file filtering.
-//!
 //! Every config struct denies unknown fields, and every config type derives
-//! `schemars::JsonSchema`. The VS Code schema is generated from
-//! [`LuckConfig`], with the type names as its `$defs` keys and the doc
-//! comments as its descriptions.
+//! `schemars::JsonSchema`.
+//!
+//! The VS Code schema is generated from [`LuckConfig`], with the type names as
+//! its `$defs` keys and the doc comments as its descriptions.
 
 mod dynamic_require;
 mod editorconfig;

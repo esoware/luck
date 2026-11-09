@@ -1,5 +1,3 @@
-//! Stand-ins for the corpus cache directory and the network.
-
 use core::cell::RefCell;
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -36,7 +34,6 @@ where
     directory
 }
 
-/// A tar stream holding `entries`, each a path and its file contents.
 pub(crate) fn tar_archive(entries: &[(&str, &str)]) -> Vec<u8> {
     let mut builder = tar::Builder::new(Vec::new());
     for (path, contents) in entries {

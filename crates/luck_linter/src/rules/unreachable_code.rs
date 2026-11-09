@@ -27,8 +27,6 @@ impl WholeRule for UnreachableCode {
     }
 }
 
-/// The first statement that can't run after a Lua 5.2+ mid-block `break`.
-///
 /// A `goto` can still reach the code after a label.
 fn first_unreachable_stmt<'ast>(
     block: &'ast Block,

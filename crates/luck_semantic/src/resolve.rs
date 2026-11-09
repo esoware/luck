@@ -1,8 +1,6 @@
-//! Conservative stdlib resolution: maps call sites and value reads to
-//! `StdlibEntry`s, including colon calls on shaped values such as
-//! `game:GetService(...)` and `f:read()` after `local f = io.open(...)`.
+//! There's no type inference.
 //!
-//! There's no type inference. A value has a known shape only when it's a
+//! A value has a known shape only when it's a
 //! stdlib value that declares one, a string literal, a call whose entry
 //! declares a return shape, or a never-reassigned local initialized from
 //! one of those.
@@ -17,11 +15,8 @@ use rustc_hash::FxHashMap;
 use crate::scope::{ScopeTree, SymbolId};
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
-/// The shapes of never-reassigned locals, by symbol.
 pub(crate) type SymbolShapes = FxHashMap<SymbolId, CompactString>;
 
-/// What shape resolution reads: the names in scope, the library, and the
-/// local shapes known so far.
 #[derive(Clone, Copy)]
 pub(crate) struct ShapeResolver<'input> {
     tree: &'input ScopeTree,
@@ -82,9 +77,6 @@ impl<'input> ShapeResolver<'input> {
         }
     }
 
-    /// The function a colon call `receiver:method_name(...)` reaches through
-    /// the receiver's shape, along with that shape.
-    ///
     /// Only method-flagged functions are colon-callable; a dot member
     /// reached with `:` would receive a bogus self.
     pub(crate) fn method_callee(
@@ -114,8 +106,6 @@ impl<'input> ShapeResolver<'input> {
         self.tree.reaches_host_global(segments.first()?, root_span).then_some(segments)
     }
 
-    /// Shape of a call's first return value.
-    ///
     /// Unlike `SemanticAnalysis::resolve_callee`, this accepts a method
     /// called with `.`: passing self explicitly doesn't change what the call
     /// returns.

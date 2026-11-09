@@ -1,13 +1,10 @@
-//! The memoizing loader at the top of a bundle, which reproduces the target
-//! version's own `require` (`ll_require` in `loadlib.c`).
-
 use luck_token::LuaVersion;
 
-/// The loader, with every generated name starting with `prefix`.
-///
 /// `is_loader_global` is true only for a 5.1 bundle with a function that has
-/// no upvalue left for a local loader. A global read costs none, but two
-/// bundles in one Lua state then overwrite each other's loader.
+/// no upvalue left for a local loader.
+///
+/// A global read costs none, but two bundles in one Lua state then overwrite
+/// each other's loader.
 pub(crate) fn loader_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -> String {
     if version.is_luau() {
         return luau_loader_text(prefix);
@@ -34,12 +31,11 @@ const fn entry_point_keyword(is_loader_global: bool) -> &'static str {
     if is_loader_global { "function" } else { "local function" }
 }
 
-/// Luau/Roblox require, with a private cache keyed by file.
-///
 /// The cache holds only a non-nil result, so a raising or nil-returning
-/// module runs again on the next require. Chunks receive no arguments and
-/// must return exactly one value (`Require/src/RequireImpl.cpp`,
-/// `CLI/src/ReplRequirer.cpp`).
+/// module runs again on the next require.
+///
+/// Chunks receive no arguments and must return exactly one value
+/// (`Require/src/RequireImpl.cpp`, `CLI/src/ReplRequirer.cpp`).
 fn luau_loader_text(prefix: &str) -> String {
     format!(
         "local {prefix}modules={{}}\n\

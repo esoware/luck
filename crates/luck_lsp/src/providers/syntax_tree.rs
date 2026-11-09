@@ -1,6 +1,3 @@
-//! Custom `luck/syntaxTree` request: a debug pretty-print of the document's
-//! parsed AST. The VS Code extension opens it beside the editor.
-
 use core::fmt::{self, Write as _};
 
 use crate::document::DocumentState;
@@ -17,7 +14,6 @@ pub(crate) fn syntax_tree(document: &DocumentState) -> String {
     dump.text
 }
 
-/// A `fmt` sink that stops accepting text once [`MAX_DUMP_BYTES`] is reached.
 struct BoundedDump {
     text: String,
 }

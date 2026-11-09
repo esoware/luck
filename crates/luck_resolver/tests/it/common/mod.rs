@@ -1,5 +1,3 @@
-//! Temporary project trees and requests for the resolver's tests.
-
 use std::fs;
 use std::path::Path;
 
@@ -8,8 +6,6 @@ use luck_resolver::ResolveRequest;
 use luck_token::Span;
 use tempfile::TempDir;
 
-/// A temporary directory holding `files`, each a `/`-separated path relative
-/// to it and that file's contents.
 pub(crate) fn project_with(files: &[(&str, &str)]) -> TempDir {
     let directory = TempDir::new().expect("create temp dir");
     write_files(directory.path(), files);
@@ -26,7 +22,6 @@ pub(crate) fn write_files(root: &Path, files: &[(&str, &str)]) {
     }
 }
 
-/// The Luau tree most tests start from.
 pub(crate) fn luau_project() -> TempDir {
     project_with(&[
         ("src/main.luau", "-- entry"),
@@ -35,7 +30,6 @@ pub(crate) fn luau_project() -> TempDir {
     ])
 }
 
-/// The normalized path of `relative_path` under `project`.
 pub(crate) fn normalized(project: &TempDir, relative_path: &str) -> String {
     normalize_path(&project.path().join(relative_path))
 }

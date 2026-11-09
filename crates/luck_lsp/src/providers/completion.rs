@@ -1,10 +1,3 @@
-//! Completion provider.
-//!
-//! Offers stdlib globals, namespace members, locals declared before the
-//! cursor, keywords, shaped-local members, and constant-set values inside a
-//! string argument whose parameter is constant-typed (service names, class
-//! names, collectgarbage options).
-//!
 //! Known limitation: a literal receiver mid-typing (`("x"):` with nothing
 //! after the colon) gets no member completion. The dangling colon doesn't
 //! parse, so there's no AST to resolve the receiver from.
@@ -39,7 +32,6 @@ pub(crate) fn completion(document: &DocumentState, position: Position) -> Comple
     CompletionResponse::Array(items)
 }
 
-/// Stdlib globals, the locals declared before the cursor, and keywords.
 fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<CompletionItem> {
     let mut items: Vec<CompletionItem> = document
         .semantic
@@ -130,9 +122,6 @@ fn member_completions(
     items
 }
 
-/// Offers the allowed values when the cursor sits in a constant-typed string
-/// argument.
-///
 /// The literal must be a positional argument whose parameter is constant-typed
 /// in every signature matching the call's arity. `None` falls through to
 /// ordinary identifier completion.
@@ -199,7 +188,7 @@ const fn call_arg_count(call: &FunctionCall) -> usize {
 fn string_interior(literal: &Literal) -> Span {
     let delimiter_width =
         index_to_offset(literal.text.strip_prefix('[').map_or(1, |after_bracket| {
-            after_bracket.bytes().take_while(|&byte| byte == b'=').count().saturating_add(2)
+            after_bracket.bytes().take_while(|&b| b == b'=').count().saturating_add(2)
         }));
     Span::new(
         literal.span.start.saturating_add(delimiter_width),
@@ -216,8 +205,6 @@ struct MemberAccess<'source> {
     is_colon: bool,
 }
 
-/// The member access the cursor is at, if any.
-///
 /// The tokens before the cursor end in a `.` or `:`, optionally followed by a
 /// partial name (`a.b.` or `a.b:fo`). Working from tokens keeps a `..` concat
 /// from reading as a member separator.

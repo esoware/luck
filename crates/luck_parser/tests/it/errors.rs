@@ -15,7 +15,7 @@ fn expectation_errors_have_exact_message_and_span() {
     ] {
         let result = parse(source);
         assert!(
-            result.errors.iter().any(|error| error.span == span && error.message == message),
+            result.errors.iter().any(|e| e.span == span && e.message == message),
             "{source}: {:?}",
             result.errors
         );

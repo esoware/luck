@@ -1,11 +1,5 @@
-//! The forward-slash path form resolved modules are keyed on, and the way
-//! back to a native path.
-
 use std::path::{self, Component, MAIN_SEPARATOR_STR, Path, PathBuf};
 
-/// Canonicalizes `path` when it exists, converts it to forward slashes, and
-/// drops the Windows extended-length prefix where the result stays absolute.
-///
 /// The bundler keys modules on this form, and it displays the same on every
 /// platform.
 #[must_use]
@@ -52,8 +46,6 @@ pub(crate) fn canonicalize_existing(path: &Path) -> PathBuf {
     absolute
 }
 
-/// The native form of a forward-slash path, such as a [`normalize_path`]
-/// result or a require string, for filesystem calls.
 #[must_use]
 pub fn native_path(path: &str) -> PathBuf {
     PathBuf::from(path.replace('/', MAIN_SEPARATOR_STR))

@@ -1,5 +1,3 @@
-//! Expression layout.
-//!
 //! Leaf text comes from token and literal values, never from source, so
 //! synthetic ASTs stay printable.
 
@@ -17,47 +15,46 @@ use crate::numbers::normalize_number;
 use crate::quotes::normalize_quote;
 
 impl Format for Expression {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         match self {
-            Self::Nil(_) => token("nil").fmt(formatter),
-            Self::False(_) => token("false").fmt(formatter),
-            Self::True(_) => token("true").fmt(formatter),
-            Self::VarArg(_) => token("...").fmt(formatter),
+            Self::Nil(_) => token("nil").fmt(f),
+            Self::False(_) => token("false").fmt(f),
+            Self::True(_) => token("true").fmt(f),
+            Self::VarArg(_) => token("...").fmt(f),
 
             Self::Number(literal) | Self::Integer(literal) => {
-                let normalized =
-                    normalize_number(&literal.text, formatter.options().hexadecimal_case);
-                formatter.write_text(normalized);
+                let normalized = normalize_number(&literal.text, f.options().hexadecimal_case);
+                f.write_text(normalized);
             }
             Self::StringLiteral(literal) => {
-                let normalized = normalize_quote(&literal.text, formatter.options().quote_style);
-                formatter.write_text(normalized);
+                let normalized = normalize_quote(&literal.text, f.options().quote_style);
+                f.write_text(normalized);
             }
 
-            Self::Var(var) => var.fmt(formatter),
-            Self::BinaryOp(binary_op) => binary_op.fmt(formatter),
-            Self::UnaryOp(unary_op) => unary_op.fmt(formatter),
-            Self::Parenthesized(parenthesized) => parenthesized.fmt(formatter),
-            Self::TableConstructor(table) => table.fmt(formatter),
+            Self::Var(var) => var.fmt(f),
+            Self::BinaryOp(binary_op) => binary_op.fmt(f),
+            Self::UnaryOp(unary_op) => unary_op.fmt(f),
+            Self::Parenthesized(parenthesized) => parenthesized.fmt(f),
+            Self::TableConstructor(table) => table.fmt(f),
 
-            Self::FunctionCall(call) => call.fmt(formatter),
+            Self::FunctionCall(call) => call.fmt(f),
             Self::FunctionDef(function_def) => {
                 // Luau attributes stay on the same line as `function` here.
                 for attribute in &function_def.attributes {
-                    (attribute, space()).fmt(formatter);
+                    (attribute, space()).fmt(f);
                 }
-                (token("function"), &function_def.body).fmt(formatter);
+                (token("function"), &function_def.body).fmt(f);
             }
 
-            Self::IfExpression(if_expr) => if_expr.fmt(formatter), // Luau
-            Self::InterpolatedString(interpolated) => interpolated.fmt(formatter), // Luau
+            Self::IfExpression(if_expr) => if_expr.fmt(f), // Luau
+            Self::InterpolatedString(interpolated) => interpolated.fmt(f), // Luau
             // Luau
             Self::TypeCast(cast) => ensure_sufficient_stack(|| {
-                (&cast.expr, space(), token("::"), space(), &cast.type_annotation).fmt(formatter);
+                (&cast.expr, space(), token("::"), space(), &cast.type_annotation).fmt(f);
             }),
             // Luau
             Self::TypeInstantiation(instantiation) => ensure_sufficient_stack(|| {
-                (&instantiation.expr, ExplicitTypeArgs(&instantiation.type_args)).fmt(formatter);
+                (&instantiation.expr, ExplicitTypeArgs(&instantiation.type_args)).fmt(f);
             }),
 
             // A parse-recovery placeholder has no text to print.
@@ -67,33 +64,31 @@ impl Format for Expression {
 }
 
 impl Format for Var {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         match self {
-            Self::Name(name) => name.fmt(formatter),
-            Self::FieldAccess(access) => access.fmt(formatter),
+            Self::Name(name) => name.fmt(f),
+            Self::FieldAccess(access) => access.fmt(f),
             Self::Index(index) => ensure_sufficient_stack(|| {
-                (&index.prefix, BracketedKey(&index.index)).fmt(formatter);
+                (&index.prefix, BracketedKey(&index.index)).fmt(f);
             }),
         }
     }
 }
 
-/// `[key]`, as an index or a table field's key.
 pub(crate) struct BracketedKey<'expr>(pub &'expr Expression);
 
 impl Format for BracketedKey<'_> {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         // Right after the opening `[`, a long-bracket string would lex as
         // `[[`, a long-string opener, so it's padded with spaces.
         if starts_with_bracket(self.0) {
-            (token("["), space(), self.0, space(), token("]")).fmt(formatter);
+            (token("["), space(), self.0, space(), token("]")).fmt(f);
         } else {
-            (token("["), self.0, token("]")).fmt(formatter);
+            (token("["), self.0, token("]")).fmt(f);
         }
     }
 }
 
-/// Whether the expression's leftmost token is a long-bracket string.
 fn starts_with_bracket(expr: &Expression) -> bool {
     let mut current = expr;
     loop {
@@ -125,8 +120,6 @@ fn starts_with_bracket(expr: &Expression) -> bool {
     }
 }
 
-/// Collect a left-recursive dot chain `a.b.c.d` into its non-`.` root and the
-/// field-name tokens in source order.
 fn collect_access_chain(access: &FieldAccess) -> (&Expression, Vec<&Token>) {
     let mut names = vec![&access.name];
     let mut current = &access.prefix;
@@ -146,7 +139,7 @@ fn collect_access_chain(access: &FieldAccess) -> (&Expression, Vec<&Token>) {
 /// A dot chain of three or more accesses gets its own group so it can break
 /// one segment per line; shorter chains stay glued to their prefix.
 impl Format for FieldAccess {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         let (root, names) = collect_access_chain(self);
         ensure_sufficient_stack(|| {
             if names.len() >= 3 {
@@ -158,21 +151,19 @@ impl Format for FieldAccess {
                         }
                     })),
                 ))
-                .fmt(formatter);
+                .fmt(f);
             } else {
-                (&self.prefix, token("."), &self.name).fmt(formatter);
+                (&self.prefix, token("."), &self.name).fmt(f);
             }
         });
     }
 }
 
-/// Flattens a binary chain into its leftmost operand and the
-/// `(operator, operand)` pairs that follow.
+/// Runs of the right-associative `..` or `^` nest on the right.
 ///
-/// Runs of the right-associative `..` or `^` nest on the right. Left nested,
-/// each level would be its own group and re-run `fits` over its remainder,
-/// which is quadratic on long concat chains. Splicing them in keeps the
-/// emitted text the same and lays the run out like a left-associative chain.
+/// Left nested, each level would be its own group and re-run `fits` over its remainder, which is
+/// quadratic on long concat chains. Splicing them in keeps the emitted text the same and lays the
+/// run out like a left-associative chain.
 fn collect_binary_chain(binary_op: &BinaryOp) -> (&Expression, Vec<(BinOp, &Expression)>) {
     let mut parts = Vec::new();
     let mut current = binary_op;
@@ -204,7 +195,7 @@ fn collect_binary_chain(binary_op: &BinaryOp) -> (&Expression, Vec<(BinOp, &Expr
 }
 
 impl Format for BinaryOp {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         let (first, chain) = collect_binary_chain(self);
         // One group over the whole chain, so it's either flat or breaks before
         // every operator.
@@ -218,7 +209,7 @@ impl Format for BinaryOp {
                     }
                 })),
             ))
-            .fmt(formatter);
+            .fmt(f);
         });
     }
 }
@@ -230,24 +221,24 @@ fn is_double_minus_hazard(op: UnOp, operand: &Expression) -> bool {
 }
 
 impl Format for UnaryOp {
-    fn fmt(&self, formatter: &mut Formatter) {
-        token(self.op.static_text()).fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        token(self.op.static_text()).fmt(f);
         // `not` is a keyword operator: always separated from its operand.
         if self.op == UnOp::Not || is_double_minus_hazard(self.op, &self.operand) {
-            space().fmt(formatter);
+            space().fmt(f);
         }
-        ensure_sufficient_stack(|| self.operand.fmt(formatter));
+        ensure_sufficient_stack(|| self.operand.fmt(f));
     }
 }
 
 impl Format for ParenthesizedExpression {
-    fn fmt(&self, formatter: &mut Formatter) {
-        ensure_sufficient_stack(|| (token("("), &self.expr, token(")")).fmt(formatter));
+    fn fmt(&self, f: &mut Formatter) {
+        ensure_sufficient_stack(|| (token("("), &self.expr, token(")")).fmt(f));
     }
 }
 
 impl Format for IfExpression {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         // Luau: one group so a long if-expression breaks before each branch.
         group(format_with(|grouped| {
             (
@@ -276,12 +267,12 @@ impl Format for IfExpression {
             (soft_line_or_space(), token("else"), indent((soft_line_or_space(), &self.else_expr)))
                 .fmt(grouped);
         }))
-        .fmt(formatter);
+        .fmt(f);
     }
 }
 
 impl Format for InterpolatedString {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         // Luau. Punctuation follows expression presence, not token kind: a
         // plain `` `text` `` parses as `InterpolatedStringBegin("")` plus
         // `InterpolatedStringEnd(text)` with no expression, and must print
@@ -302,20 +293,20 @@ impl Format for InterpolatedString {
             if segment.expr.is_some() {
                 piece.push('{');
             }
-            formatter.write_text(piece);
+            f.write_text(piece);
             if let Some(expr) = &segment.expr {
                 // Luau rejects `{{`, so an expression starting with `{`
                 // gets a space after the opening brace, and one before the
                 // closing brace to match.
                 if expr_starts_with_brace(expr) {
-                    (space(), expr, space()).fmt(formatter);
+                    (space(), expr, space()).fmt(f);
                 } else {
-                    expr.fmt(formatter);
+                    expr.fmt(f);
                 }
             }
             opener = segment.expr.is_some().then_some('}');
         }
-        formatter.write_text("`");
+        f.write_text("`");
     }
 }
 

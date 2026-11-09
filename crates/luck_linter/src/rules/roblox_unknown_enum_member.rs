@@ -4,9 +4,6 @@ use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
-/// Flags dotted accesses under the `Enum` global that name a
-/// nonexistent enum type, item, or item member.
-///
 /// Indexing `Enum` with an unknown name throws at runtime on Roblox, so a
 /// typo here is always a bug. Only the first segment that fails to resolve is
 /// reported; accesses built on a broken prefix stay silent.

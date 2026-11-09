@@ -1,9 +1,3 @@
-//! Byte lookup tables for batched scanning. A table marks the bytes a scan
-//! must stop at, and `find_match` walks fixed-size batches of scalar table
-//! lookups to keep long runs branch-light.
-
-/// 256-entry stop-byte table, cache-line aligned. Build with
-/// `byte_match_table!` at compile time.
 #[repr(C, align(64))]
 pub(crate) struct ByteMatchTable([bool; 256]);
 
@@ -22,18 +16,18 @@ impl ByteMatchTable {
     }
 }
 
-/// `byte_match_table!(|byte| ...)` evaluates the predicate for every byte
+/// `byte_match_table!(|b| ...)` evaluates the predicate for every byte
 /// value at compile time.
 macro_rules! byte_match_table {
     (|$byte:ident| $test:expr) => {{
         #[expect(clippy::as_conversions, clippy::cast_possible_truncation, clippy::indexing_slicing, reason = "runs at compile time with index < 256, and the checked conversions aren't const")]
         const TABLE: [bool; 256] = {
             let mut table = [false; 256];
-            let mut index = 0;
-            while index < 256 {
-                let $byte = index as u8;
-                table[index] = $test;
-                index += 1;
+            let mut i = 0;
+            while i < 256 {
+                let $byte = i as u8;
+                table[i] = $test;
+                i += 1;
             }
             table
         };
@@ -52,20 +46,20 @@ pub(crate) fn find_match(bytes: &[u8], table: &ByteMatchTable) -> usize {
     const SCALAR_PREFIX: usize = 8;
     const BATCH_SIZE: usize = 32;
     let (prefix, mut remaining) = bytes.split_at(bytes.len().min(SCALAR_PREFIX));
-    if let Some(offset) = prefix.iter().position(|&byte| table.matches(byte)) {
+    if let Some(offset) = prefix.iter().position(|&b| table.matches(b)) {
         return offset;
     }
     while let Some((batch, after_batch)) = remaining.split_first_chunk::<BATCH_SIZE>() {
         let mut has_match = false;
-        for &byte in batch {
-            has_match |= table.matches(byte);
+        for &b in batch {
+            has_match |= table.matches(b);
         }
         if has_match {
             break;
         }
         remaining = after_batch;
     }
-    let tail_length = remaining.iter().take_while(|&&byte| !table.matches(byte)).count();
+    let tail_length = remaining.iter().take_while(|&&b| !table.matches(b)).count();
     bytes.len().saturating_sub(remaining.len()).saturating_add(tail_length)
 }
 

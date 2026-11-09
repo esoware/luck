@@ -1,6 +1,3 @@
-//! `luck fmt` - config-driven, oxfmt-style formatting with `--check`,
-//! `--list-different`, range formatting, and stdin mode.
-
 use core::ops::Range;
 use std::fs;
 use std::io::{self, BufWriter, Write as _};
@@ -64,12 +61,8 @@ pub(crate) struct FmtArgs {
     verify: bool,
 }
 
-/// What formatting one in-memory document came to, shared by the file-walk
-/// and stdin paths.
 enum FormatOutcome {
-    /// The source parsed and the formatted result is identical to the input.
     Unchanged,
-    /// The source parsed and formatting produced different output.
     Changed(String),
     /// The source didn't parse, or `--verify` found the output structurally
     /// different from the input. Holds the errors ready for stderr, buffered
@@ -77,8 +70,6 @@ enum FormatOutcome {
     Failed(Vec<u8>),
 }
 
-/// What reading, formatting, and writing one file on the parallel walk came
-/// to.
 enum FileOutcome {
     /// The file couldn't be read, parsed, or verified. Holds the errors ready
     /// for stderr.
@@ -175,9 +166,6 @@ impl FmtArgs {
         Ok(())
     }
 
-    /// Format one document from stdin as if it were the `--stdin-filepath`
-    /// file.
-    ///
     /// The default mode writes the result to stdout. `--check` and
     /// `--list-different` only report, and `--check` fails when the document
     /// would change.
@@ -226,12 +214,10 @@ impl FmtArgs {
         }
     }
 
-    /// Whether the run only reports what would change and writes nothing.
     const fn is_report_only(&self) -> bool {
         self.check || self.list_different
     }
 
-    /// Read, format, and (unless only reporting) write one file.
     fn format_file(
         &self,
         file_path: &Path,
@@ -268,9 +254,7 @@ impl FmtArgs {
         }
     }
 
-    /// Format one in-memory document, labeling its errors with `file_path`.
-    /// Writes nothing; callers decide whether the result goes to disk or
-    /// stdout.
+    /// Writes nothing; callers decide whether the result goes to disk or stdout.
     fn format_document(
         &self,
         luck_config: &LuckConfig,
@@ -324,9 +308,6 @@ impl FmtArgs {
         }
     }
 
-    /// Resolve `--range-start`/`--range-end` into a byte range over a source of
-    /// `source_length` bytes.
-    ///
     /// A missing start is 0, a missing end is the end of the source, and an
     /// explicit end is clamped to the source length.
     ///
@@ -356,7 +337,6 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Command};
 
-    /// `luck fmt` parsed with `flags`, as clap builds it.
     fn fmt_args(flags: &[&str]) -> FmtArgs {
         let command_line = ["luck", "fmt"].iter().chain(flags);
         let Command::Fmt(args) = Cli::try_parse_from(command_line).expect("fmt parses").command

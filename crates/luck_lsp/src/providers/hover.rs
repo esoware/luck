@@ -1,7 +1,3 @@
-//! Looks up the name under the cursor in the stdlib model and renders it as
-//! Markdown: every overload's signature, any deprecation, and tags such as
-//! must-use and pure.
-
 use luck_semantic::{StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibParam};
 use luck_token::LuaVersion;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};

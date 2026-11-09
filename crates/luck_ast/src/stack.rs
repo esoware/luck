@@ -21,7 +21,6 @@ use crate::types::{OptionalType, Type};
 /// allows beneath one link, so only links need a guard.
 const RED_ZONE: usize = 1024 * 1024;
 
-/// Size of each stack segment allocated once a chain outgrows the current one.
 const STACK_SEGMENT: usize = 8 * 1024 * 1024;
 
 /// Runs `descend` with enough stack to recurse, moving onto a fresh
@@ -45,8 +44,6 @@ where
     reason = "`take` lives beside the `Drop` impls that force it"
 )]
 impl Expression {
-    /// Moves the value out and leaves a childless placeholder behind.
-    ///
     /// Chain links implement `Drop`, so their children can't be moved out
     /// directly. Assign the replacement back, or let the link drop.
     #[must_use]
@@ -81,7 +78,6 @@ impl Type {
     }
 }
 
-/// Whether dropping `expr` would recurse into a chain.
 const fn is_chain_link(expr: &Expression) -> bool {
     match expr {
         Expression::Var(Var::Index(_) | Var::FieldAccess(_))
@@ -191,9 +187,9 @@ macro_rules! guarded_chain_traits {
         }
 
         impl fmt::Debug for $node {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 ensure_sufficient_stack(|| {
-                    formatter
+                    f
                         .debug_struct(stringify!($node))
                         $(.field(stringify!($field), &self.$field))+
                         .finish()

@@ -246,7 +246,7 @@ fn integer_suffix_lexes_only_on_luau_integers_within_64_bits() {
 fn assert_malformed_number(source: &str, version: LuaVersion) {
     let result = lex(source, version);
     assert!(
-        result.errors.iter().any(|error| error.message.starts_with("malformed number")),
+        result.errors.iter().any(|e| e.message.starts_with("malformed number")),
         "{source} under {version:?}: {:?}",
         result.errors
     );

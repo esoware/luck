@@ -1,13 +1,9 @@
-//! Byte-level output builder for the code emitters.
-//!
 //! Skips per-push UTF-8 machinery for the ASCII punctuation that dominates
 //! generated code, while holding a UTF-8 invariant so the final `String`
 //! conversion is zero-copy.
 
 use core::iter;
 
-/// A string builder over a byte buffer.
-///
 /// INVARIANT: `bytes` is valid UTF-8 at every public-method boundary. All
 /// safe methods preserve it, so `into_string` can skip re-validation.
 #[derive(Debug, Default)]
@@ -34,8 +30,6 @@ impl CodeBuffer {
         self.bytes.is_empty()
     }
 
-    /// Push a single ASCII byte.
-    ///
     /// The assertion compiles away for a literal byte, and the grow path is
     /// outlined so a push with spare capacity stays a load, store, and
     /// increment.
@@ -60,8 +54,6 @@ impl CodeBuffer {
         }
     }
 
-    /// Push `count` copies of an ASCII byte (indentation runs).
-    ///
     /// # Panics
     ///
     /// Panics if `byte` is not ASCII.
@@ -82,8 +74,7 @@ impl CodeBuffer {
         &self.bytes
     }
 
-    /// Shorten the buffer to `new_length` bytes. The cut must land on a UTF-8
-    /// boundary (always true when the removed bytes are ASCII).
+    /// The cut must land on a UTF-8 boundary (always true when the removed bytes are ASCII).
     ///
     /// # Panics
     ///
@@ -91,7 +82,7 @@ impl CodeBuffer {
     #[inline]
     pub fn truncate(&mut self, new_length: usize) {
         assert!(
-            self.bytes.get(new_length).is_none_or(|byte| byte & 0xC0 != 0x80),
+            self.bytes.get(new_length).is_none_or(|b| b & 0xC0 != 0x80),
             "truncation must land on a UTF-8 boundary"
         );
         self.bytes.truncate(new_length);

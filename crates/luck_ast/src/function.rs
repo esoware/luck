@@ -8,11 +8,9 @@ use crate::types::{GenericTypeList, Type};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionBody {
     pub span: Span,
-    /// Luau: `<T, U...>` generic list before the parameter parens.
     pub generics: Option<Box<GenericTypeList>>,
     pub params: Punctuated<Parameter>,
     pub vararg: Option<Box<VarArgParam>>,
-    /// Luau: `: T` return annotation after `)`.
     pub return_type: Option<Type>,
     pub block: Block,
 }
@@ -35,11 +33,9 @@ impl FunctionBody {
 pub struct Parameter {
     pub span: Span,
     pub name: Token,
-    /// Luau: `: T`.
     pub type_annotation: Option<Type>,
 }
 
-/// Vararg parameter (`...` or `...name` in Lua 5.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VarArgParam {
     pub span: Span,
@@ -48,8 +44,6 @@ pub struct VarArgParam {
     pub type_annotation: Option<Type>,
 }
 
-/// Luau function attribute: `@native`, `@checked`, `@deprecated`, and so on.
-///
 /// Output must keep these, since some change runtime behavior (`@native`
 /// forces native codegen).
 #[derive(Debug, Clone, PartialEq, Eq)]

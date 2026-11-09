@@ -31,8 +31,6 @@ pub(crate) const fn assignment_target_limit(live_registers: usize) -> usize {
     MAX_REGISTERS.saturating_sub(live_registers).div_euclid(REGISTERS_PER_ASSIGNMENT_TARGET)
 }
 
-/// Locals and registers `body`'s parameters hold.
-///
 /// A `:` method's `self` and a named vararg aren't all visible from the body
 /// alone, so both are assumed present.
 pub(crate) const fn parameter_locals(body: &FunctionBody) -> usize {

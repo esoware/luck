@@ -129,8 +129,6 @@ const fn can_follow_last_stmt(kind: &TokenKind) -> bool {
     reason = "the parser is one type with its grammar split by file"
 )]
 impl Parser<'_> {
-    /// Parse a block: statements plus an optional trailing `return`, `break`,
-    /// or `continue`.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     pub(super) fn parse_block(&mut self) -> Block {
         let start_span = self.current_span();
@@ -214,7 +212,6 @@ impl Parser<'_> {
         Block { span: start_span.merge(end_span), stmts, last_stmt }
     }
 
-    /// Parse a loop body, where `break` and `continue` are valid.
     fn parse_loop_block(&mut self) -> Block {
         let was_in_loop = mem::replace(&mut self.function_scope.is_in_loop, true);
         let block = self.parse_block();
@@ -325,7 +322,7 @@ impl Parser<'_> {
     }
 
     fn parse_return_stmt(&mut self) -> LastStatement {
-        let return_span = self.advance_span(); // `return`
+        let return_span = self.advance_span();
 
         if self.function_scope.is_chunk {
             self.has_module_return = true;
@@ -481,7 +478,6 @@ impl Parser<'_> {
         Statement::RepeatLoop(Box::new(RepeatLoop { span, block, condition }))
     }
 
-    /// Parse `goto Name`.
     fn parse_goto_stmt(&mut self) -> Statement {
         let goto_span = self.advance_span();
         let name = self.expect_identifier_recover();
@@ -489,7 +485,6 @@ impl Parser<'_> {
         Statement::Goto(Box::new(GotoStatement { span, name }))
     }
 
-    /// Parse `:: Name ::`.
     fn parse_label_stmt(&mut self) -> Statement {
         let colons_open = self.advance_span();
         let name = self.expect_identifier_recover();

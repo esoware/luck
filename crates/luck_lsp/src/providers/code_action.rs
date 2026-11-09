@@ -1,7 +1,3 @@
-//! Code actions: each diagnostic's fix, when it has one, and a comment
-//! disabling its rule for the statement, plus `source.fixAll.luck` for the
-//! whole file.
-
 use alloc::sync::Arc;
 
 use luck_ast::{Block, LastStatement, Statement, Visitor};
@@ -22,7 +18,6 @@ const FIX_ALL_KIND_NAME: &str = "source.fixAll.luck";
 
 pub(crate) const FIX_ALL_KIND: CodeActionKind = CodeActionKind::new(FIX_ALL_KIND_NAME);
 
-/// The actions for `params`, built from `document`'s `lints`.
 pub(crate) fn code_action(
     document: &DocumentState,
     params: &CodeActionParams,
@@ -33,16 +28,16 @@ pub(crate) fn code_action(
         lints.iter().map(|lint| ((lint.rule, lint.span), lint)).collect();
 
     let mut actions: Vec<CodeActionOrCommand> = Vec::new();
-    for diagnostic in &params.context.diagnostics {
-        let Some(NumberOrString::String(rule)) = &diagnostic.code else {
+    for diag in &params.context.diagnostics {
+        let Some(NumberOrString::String(rule)) = &diag.code else {
             continue;
         };
-        if diagnostic.range.end < params.range.start || diagnostic.range.start > params.range.end {
+        if diag.range.end < params.range.start || diag.range.start > params.range.end {
             continue;
         }
         // A diagnostic carries its lint's rule and range back unchanged, so
         // the pair names the one lint it came from.
-        let Some(byte_range) = document.byte_range(diagnostic.range) else {
+        let Some(byte_range) = document.byte_range(diag.range) else {
             continue;
         };
         let span = Span::from_indices(byte_range.start, byte_range.end);
@@ -53,7 +48,7 @@ pub(crate) fn code_action(
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                 title: fix.description.clone(),
                 kind: Some(CodeActionKind::QUICKFIX),
-                diagnostics: Some(vec![diagnostic.clone()]),
+                diagnostics: Some(vec![diag.clone()]),
                 edit: Some(workspace_edit(uri, fix_edits(document, fix))),
                 is_preferred: Some(true),
                 disabled: None,
@@ -69,7 +64,7 @@ pub(crate) fn code_action(
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                 title: format!("Disable {rule} for this statement"),
                 kind: Some(CodeActionKind::QUICKFIX),
-                diagnostics: Some(vec![diagnostic.clone()]),
+                diagnostics: Some(vec![diag.clone()]),
                 edit: Some(workspace_edit(uri, vec![edit])),
                 is_preferred: Some(false),
                 disabled: None,
@@ -202,8 +197,6 @@ fn should_offer_fix_all(context: &CodeActionContext) -> bool {
     })
 }
 
-/// Every available fix across `documents`, for the `luck/fixAllWorkspace`
-/// custom request.
 pub(crate) fn fix_all_open(
     documents: &[(Url, Arc<DocumentState>, Arc<ProjectSettings>)],
 ) -> WorkspaceEdit {
@@ -249,13 +242,13 @@ mod tests {
 
     fn params(
         range: Range,
-        diagnostics: Vec<Diagnostic>,
+        diags: Vec<Diagnostic>,
         only: Option<Vec<CodeActionKind>>,
     ) -> CodeActionParams {
         CodeActionParams {
             text_document: TextDocumentIdentifier { uri: uri() },
             range,
-            context: CodeActionContext { diagnostics, only, trigger_kind: None },
+            context: CodeActionContext { diagnostics: diags, only, trigger_kind: None },
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         }
@@ -268,7 +261,6 @@ mod tests {
         }
     }
 
-    /// `text` after applying `edits`, which must not overlap.
     fn applied(document: &DocumentState, mut edits: Vec<TextEdit>) -> String {
         edits.sort_by_key(|edit| edit.range.start);
         let mut text = document.text().to_owned();
@@ -279,8 +271,6 @@ mod tests {
         text
     }
 
-    /// `text` with the disable comment for the rule's `lint_index`th lint
-    /// applied.
     fn disabled(text: &str, config: &LintConfig, lint_index: usize) -> String {
         let document = document(text);
         let lints = document.lint(config);
@@ -329,9 +319,9 @@ mod tests {
     fn two_diagnostics_of_one_rule_yield_one_fix_each() {
         let document = document("local x = nil local y = nil\n");
         let lints = document.lint(&config_enabling("redundant_nil_init"));
-        let diagnostics = diagnostics::to_lsp(&document, &lints);
+        let diags = diagnostics::to_lsp(&document, &lints);
         let range = Range::new(Position::new(0, 0), Position::new(0, 27));
-        let actions = code_action(&document, &params(range, diagnostics, None), &lints);
+        let actions = code_action(&document, &params(range, diags, None), &lints);
         let fix_count = actions
             .iter()
             .filter(|action| only_action(action).title.starts_with("drop redundant"))
@@ -346,9 +336,9 @@ mod tests {
         let document = document("local x =\n");
         let config = config_enabling("redundant_nil_init");
         let lints = document.lint(&config);
-        let diagnostics = diagnostics::to_lsp(&document, &lints);
+        let diags = diagnostics::to_lsp(&document, &lints);
         let range = Range::new(Position::new(0, 0), Position::new(1, 0));
-        let actions = code_action(&document, &params(range, diagnostics, None), &lints);
+        let actions = code_action(&document, &params(range, diags, None), &lints);
         let titles: Vec<&str> =
             actions.iter().map(|action| only_action(action).title.as_str()).collect();
         assert!(

@@ -84,7 +84,6 @@ fn check_local(local: &LocalAssignment, source: &str, comments: &[Comment]) -> O
     )
 }
 
-/// A fix that deletes `span`, unless a comment sits inside it.
 fn deletion_fix(description: &str, span: Span, comments: &[Comment]) -> Option<Fix> {
     comments_within(comments, span).is_empty().then(|| Fix {
         description: description.to_owned(),
@@ -111,8 +110,6 @@ fn whole_initializer_span(
     Span::new(delete_start, local.span.end)
 }
 
-/// Byte offset just past the last name and whatever annotation or attribute
-/// follows it.
 fn last_binding_end(local: &LocalAssignment) -> u32 {
     let Some(last) = local.names.last() else {
         return local.span.start;

@@ -58,8 +58,8 @@ fn run_bundle_with(
     )
 }
 
-fn codes(diagnostics: &[Diagnostic]) -> Vec<&str> {
-    diagnostics.iter().map(|diagnostic| diagnostic.code).collect()
+fn codes(diags: &[Diagnostic]) -> Vec<&str> {
+    diags.iter().map(|diag| diag.code).collect()
 }
 
 #[test]
@@ -415,9 +415,6 @@ fn emitted_paths_stay_project_relative() {
     assert!(output.contains("../shared/util.lua"), "{output}");
 }
 
-/// Writes `files`, each a file name and its contents, into a new temporary
-/// project.
-///
 /// # Errors
 ///
 /// Returns the I/O error that stopped a file from being written.
@@ -667,8 +664,8 @@ fn dependency_targets_index_the_modules_they_resolve_to() {
     let relative_paths: Vec<&str> =
         graph.modules.iter().map(|module| module.relative_path.as_str()).collect();
     assert_eq!(relative_paths, ["main.lua", "a.lua", "b.lua"]);
-    let targets = |index: usize| -> Vec<&str> {
-        graph.modules[index]
+    let targets = |i: usize| -> Vec<&str> {
+        graph.modules[i]
             .dependencies
             .iter()
             .map(|dependency| graph.modules[dependency.target.0].relative_path.as_str())

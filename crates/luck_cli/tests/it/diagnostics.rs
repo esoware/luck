@@ -1,6 +1,3 @@
-//! What the binary prints for a diagnostic: rule help in both lint formats,
-//! and a report for a file ariadne has no source for.
-
 use std::fs;
 
 use predicates::prelude::*;

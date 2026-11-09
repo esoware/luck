@@ -9,9 +9,6 @@ const WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
 
 const STACK_PROBE_VARIABLE: &str = "LUCK_CODEGEN_STACK_PROBE";
 
-/// Asserts that `source` compacts to exactly `expected`, which re-parses
-/// clean and compacts to itself.
-///
 /// A second compaction that changes the output catches output that re-parses
 /// with a different meaning.
 pub(crate) fn assert_compacts_to(source: &str, expected: &str, version: LuaVersion) {
@@ -32,11 +29,10 @@ pub(crate) fn assert_compacts_to(source: &str, expected: &str, version: LuaVersi
     );
 }
 
-/// Asserts that `compact` returns for `source` on a worker-sized stack.
-///
 /// A stack overflow aborts the process, so a child copy of the test at
-/// `test_path` compacts and the parent asserts on how it exited. The AST is
-/// never dropped, since dropping a deep one recurses outside this crate.
+/// `test_path` compacts and the parent asserts on how it exited.
+///
+/// The AST is never dropped, since dropping a deep one recurses outside this crate.
 #[expect(clippy::expect_used, reason = "a test helper panics to fail")]
 pub(crate) fn assert_compact_fits_worker_stack(test_path: &str, source: &str, version: LuaVersion) {
     if env::var_os(STACK_PROBE_VARIABLE).is_some() {

@@ -55,13 +55,11 @@ pub(crate) fn normalize_quote(literal: &str, style: QuoteStyle) -> Cow<'_, str> 
     Cow::Owned(requoted)
 }
 
-/// Picks the delimiter for `style`.
-///
 /// Auto modes count each quote kind in the content, escaped or not, since
-/// every quote matching the delimiter needs an escape. They leave the
-/// preferred quote only when the other needs strictly fewer escapes. The
-/// counts don't depend on the current delimiter, so the choice is stable
-/// across reformats.
+/// every quote matching the delimiter needs an escape.
+///
+/// They leave the preferred quote only when the other needs strictly fewer escapes. The counts
+/// don't depend on the current delimiter, so the choice is stable across reformats.
 fn resolve_target_quote(style: QuoteStyle, content: &str) -> char {
     let (preferred, other) = match style {
         QuoteStyle::Double | QuoteStyle::AutoPreferDouble => ('"', '\''),

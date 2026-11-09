@@ -37,8 +37,6 @@ impl WholeRule for BuiltinGlobalWrite {
     }
 }
 
-/// Whether writing to `name` overwrites a read-only builtin.
-///
 /// Names in the config's extra globals belong to the user, even when they
 /// collide with a stdlib name. Globals the stdlib model marks writable
 /// (`_G`, Roblox's `shared`, `_PROMPT`) exist to be set.
@@ -63,9 +61,6 @@ struct FieldWriteChecker<'semantic> {
 }
 
 impl FieldWriteChecker<'_> {
-    /// Whether writing the field `leaf` of the global `path` replaces a
-    /// member of a stdlib namespace.
-    ///
     /// A field of a stdlib value, such as `package.loaded` or a Roblox
     /// instance's property, isn't the library. Neither is a `path` that no
     /// longer reaches the host's global.

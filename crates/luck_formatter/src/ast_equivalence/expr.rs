@@ -116,22 +116,20 @@ pub(super) fn expr_eq(
     }
 }
 
-/// Luau. Each segment's literal text and embedded expression both have to
-/// match.
 fn interpolated_string_eq(
     left: &InterpolatedString,
     right: &InterpolatedString,
     version: LuaVersion,
 ) -> ControlFlow<AstDiff> {
     require(left.segments.len() == right.segments.len(), "interpolated segment count differs")?;
-    for (index, (lhs, rhs)) in left.segments.iter().zip(&right.segments).enumerate() {
-        at_index("segments", index, token_text_eq(&lhs.literal, &rhs.literal))?;
+    for (i, (lhs, rhs)) in left.segments.iter().zip(&right.segments).enumerate() {
+        at_index("segments", i, token_text_eq(&lhs.literal, &rhs.literal))?;
         presence_eq(
             lhs.expr.as_ref(),
             rhs.expr.as_ref(),
             "interpolated expression presence differs",
             |left_expr, right_expr| {
-                at_index("segments", index, at("expr", expr_eq(left_expr, right_expr, version)))
+                at_index("segments", i, at("expr", expr_eq(left_expr, right_expr, version)))
             },
         )?;
     }
@@ -147,7 +145,6 @@ fn function_def_eq(
     at("FunctionDef/body", function_body_eq(&left.body, &right.body, version))
 }
 
-/// Luau `f<<T>>`.
 fn type_instantiation_eq(
     left: &TypeInstantiation,
     right: &TypeInstantiation,
@@ -178,8 +175,8 @@ fn if_expr_eq(
         at("expr", expr_eq(&lhs.expr, &rhs.expr, version))
     };
     let clauses = left.elseif_clauses.iter().zip(&right.elseif_clauses);
-    for (index, (lhs, rhs)) in clauses.enumerate() {
-        at_index("IfExpression/elseif_clauses", index, clause_eq(lhs, rhs))?;
+    for (i, (lhs, rhs)) in clauses.enumerate() {
+        at_index("IfExpression/elseif_clauses", i, clause_eq(lhs, rhs))?;
     }
     at("IfExpression/else_expr", expr_eq(&left.else_expr, &right.else_expr, version))
 }
@@ -271,8 +268,8 @@ fn table_eq(
             right.fields.len()
         ));
     }
-    for (index, (lhs, rhs)) in left.fields.iter().zip(right.fields.iter()).enumerate() {
-        at_index("fields", index, field_eq(lhs, rhs, version))?;
+    for (i, (lhs, rhs)) in left.fields.iter().zip(right.fields.iter()).enumerate() {
+        at_index("fields", i, field_eq(lhs, rhs, version))?;
     }
     Continue(())
 }
@@ -308,6 +305,7 @@ fn field_eq(left: &Field, right: &Field, version: LuaVersion) -> ControlFlow<Ast
 ///
 /// Those are lowercasing the base prefix and exponent marker, changing hex
 /// digit case, and adding a zero before a bare leading dot (`.5` -> `0.5`).
+///
 /// A case-insensitive comparison after undoing the leading zero allows just
 /// those. `0x10` and `16` still differ, since the formatter never changes
 /// base.
@@ -315,7 +313,6 @@ fn number_raw_eq(left_raw: &str, right_raw: &str) -> bool {
     without_bare_zero(left_raw).eq_ignore_ascii_case(without_bare_zero(right_raw))
 }
 
-/// `raw` with the zero of a leading `0.` dropped.
 fn without_bare_zero(raw: &str) -> &str {
     raw.strip_prefix('0').filter(|rest| rest.starts_with('.')).unwrap_or(raw)
 }

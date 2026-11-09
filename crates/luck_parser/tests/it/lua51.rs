@@ -601,8 +601,8 @@ fn return_multiple_values() {
     if let LastStatement::Return(return_stmt) =
         result.block.last_stmt.as_deref().expect("block has last statement")
     {
-        let count = return_stmt.exprs.len();
-        assert_eq!(count, 3);
+        let n = return_stmt.exprs.len();
+        assert_eq!(n, 3);
     } else {
         panic!("expected Return");
     }

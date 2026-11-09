@@ -21,15 +21,15 @@ impl NodeRule for ConstantTableComparison {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
     fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        if let Expression::BinaryOp(binary) = expr
-            && matches!(binary.op, BinOp::Eq | BinOp::Ne)
-            && (matches!(&binary.left, Expression::TableConstructor(_))
-                || matches!(&binary.right, Expression::TableConstructor(_)))
+        if let Expression::BinaryOp(binary_op) = expr
+            && matches!(binary_op.op, BinOp::Eq | BinOp::Ne)
+            && (matches!(&binary_op.left, Expression::TableConstructor(_))
+                || matches!(&binary_op.right, Expression::TableConstructor(_)))
         {
             findings.push(
                 Finding::new(
                     "tables compare by identity, so a table literal never equals another value",
-                    binary.span,
+                    binary_op.span,
                 )
                 .with_help("compare table contents instead"),
             );

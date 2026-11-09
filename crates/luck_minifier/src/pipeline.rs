@@ -6,8 +6,6 @@ use luck_token::{CommentKind, LuaVersion, SourceError, leading_hot_comments};
 
 use crate::transforms;
 
-/// Round cap for the outer pipeline loop and the tail's inner loop.
-///
 /// Measured corpora converge in two outer rounds, so the cap only bounds
 /// pathological oscillation.
 const MAX_PIPELINE_ROUNDS: usize = 8;
@@ -86,7 +84,6 @@ pub fn minify(
     }
 }
 
-/// One round of the cheap peephole passes, in dependency order.
 fn apply_core_transforms(mut block: Block, config: &TransformConfig, version: LuaVersion) -> Block {
     if config.remove_dead_code {
         block = transforms::remove_dead_code::remove(block, version);
@@ -127,10 +124,9 @@ fn apply_core_transforms(mut block: Block, config: &TransformConfig, version: Lu
     block
 }
 
-/// The expensive, ordering-sensitive tail of the pipeline.
-///
 /// Lift decides by name, and rename's slot reuse gives distinct bindings the
 /// same name, so each rename, lift, and merge round can unblock more lifts.
+///
 /// The loop runs that cascade to its own fixpoint here, so the outer loop
 /// never reruns the core passes or reparses for tail-only work.
 fn apply_tail_transforms(

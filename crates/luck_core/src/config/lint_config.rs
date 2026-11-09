@@ -1,5 +1,3 @@
-//! The `lint` section's types.
-//!
 //! They live here, not in `luck_linter`, so `luck.json` deserializes without
 //! depending on the linter. `luck_linter` re-exports them.
 
@@ -38,8 +36,6 @@ pub struct LintConfig {
 }
 
 impl LintConfig {
-    /// Merges `self` over `base`.
-    ///
     /// Lists concatenate base-first without repeats, a `rule_overrides` entry
     /// from `self` replaces the base's entry for the same rule, and
     /// `max_cyclomatic_complexity` is self-or-base. `disable_default_rules` is

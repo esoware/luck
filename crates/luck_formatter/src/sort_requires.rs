@@ -1,15 +1,13 @@
-//! Sorts runs of `local NAME = require(...)` and
-//! `local NAME = X:GetService(...)` statements by binding name.
-//!
 //! Works on the source lines of formatted text instead of the AST, so
-//! comments and trivia on a line move with it. A run is two or more sortable
-//! statements on consecutive lines, outside any `-- luck: format off` region.
-//! A statement is sortable only if its lines hold nothing that can't move with
-//! it. A blank line, a comment between two statements, a statement under
-//! `luck: ignore`, a `<close>` binding, or any other statement ends a run, and
-//! a run whose members read each other's bindings stays as written.
+//! comments and trivia on a line move with it.
 //!
-//! [`crate::format`] only ever runs this on formatted text, so every line
+//! A run is two or more sortable statements on consecutive lines, outside any `-- luck: format off`
+//! region. A statement is sortable only if its lines hold nothing that can't move with it. A blank
+//! line, a comment between two statements, a statement under `luck: ignore`, a `<close>` binding,
+//! or any other statement ends a run, and a run whose members read each other's bindings stays as
+//! written.
+//!
+//! [`crate::format()`] only ever runs this on formatted text, so every line
 //! ends in a line break and no `;` stands between two statements.
 
 use core::mem;
@@ -31,7 +29,6 @@ struct SortableLine<'source> {
     /// Byte range of the statement's whole lines, from leading indentation
     /// through the trailing newline, so ranges swap cleanly.
     range: Range<usize>,
-    /// The source text under `range`.
     text: &'source str,
     /// The binding name, used as the sort key.
     key: &'source str,
@@ -39,7 +36,6 @@ struct SortableLine<'source> {
     callee: &'source str,
 }
 
-/// `source` with every run sorted, or `None` when there's no run to sort.
 pub(crate) fn sort_requires_in_source(
     source: &str,
     block: &Block,
@@ -91,8 +87,6 @@ pub(crate) fn sort_requires_in_source(
     Some(output)
 }
 
-/// Finds the sortable runs in a block and the blocks nested in it, in
-/// source order.
 struct RunCollector<'source> {
     source: &'source str,
     version: LuaVersion,
@@ -102,8 +96,6 @@ struct RunCollector<'source> {
 }
 
 impl<'source> RunCollector<'source> {
-    /// Collects runs from `block` and the blocks nested in it.
-    ///
     /// A function literal is searched only when it's assigned directly, so
     /// one passed as a call argument or held in a table isn't.
     fn collect_block(&mut self, block: &Block) {
@@ -125,9 +117,7 @@ impl<'source> RunCollector<'source> {
 
             let comments_above = self.comments_above(stmt_start);
             let has_comment_since_last_line = current_lines.last().is_some_and(|last_line| {
-                comments_above
-                    .iter()
-                    .any(|comment| offset_to_index(comment.span.start) >= last_line.range.end)
+                comments_above.iter().any(|c| offset_to_index(c.span.start) >= last_line.range.end)
             });
 
             if is_blank_break || is_disabled || has_comment_since_last_line {
@@ -171,10 +161,10 @@ impl<'source> RunCollector<'source> {
     /// The comments right above `stmt_start`, those only whitespace and `;`
     /// separate from it, nearest last.
     fn comments_above(&self, stmt_start: u32) -> &'source [Comment] {
-        let end = self.comments.partition_point(|comment| comment.span.start < stmt_start);
+        let end = self.comments.partition_point(|c| c.span.start < stmt_start);
         let mut first = end;
         let mut next_start = stmt_start;
-        while let Some(comment) = first.checked_sub(1).and_then(|index| self.comments.get(index))
+        while let Some(comment) = first.checked_sub(1).and_then(|i| self.comments.get(i))
             && is_code_free(Span::new(comment.span.end, next_start).text(self.source))
         {
             first = first.saturating_sub(1);
@@ -330,7 +320,7 @@ fn movable_line_end(
     stmt_end: u32,
     version: LuaVersion,
 ) -> Option<usize> {
-    let first_index = comments.partition_point(|comment| comment.span.start < stmt_end);
+    let first_index = comments.partition_point(|c| c.span.start < stmt_end);
     let mut cursor = stmt_end;
     for comment in comments.get(first_index..)? {
         let gap = Span::new(cursor, comment.span.start).text(source);

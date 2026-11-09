@@ -129,10 +129,7 @@ fn lua51_wrapper_does_not_shadow_the_global_arg() {
 
 #[test]
 fn entry_keeps_its_200_local_budget_on_vararg_slot_versions() {
-    let locals = (0..199usize)
-        .map(|index| format!("local v{index} = {index}\n"))
-        .collect::<Vec<_>>()
-        .concat();
+    let locals = (0..199usize).map(|i| format!("local v{i} = {i}\n")).collect::<Vec<_>>().concat();
     let main = format!("{locals}local d = require(\"util\")\nprint(d)\n");
     for version in [LuaVersion::Lua51, LuaVersion::Lua55] {
         let result = bundle_files(
@@ -149,11 +146,8 @@ fn entry_keeps_its_200_local_budget_on_vararg_slot_versions() {
 
 #[test]
 fn lua51_rewritten_require_stays_within_the_upvalue_limit() {
-    let locals = (0..60usize)
-        .map(|index| format!("local u{index} = {index}\n"))
-        .collect::<Vec<_>>()
-        .concat();
-    let sum = (0..60usize).map(|index| format!("u{index}")).collect::<Vec<_>>().join(" + ");
+    let locals = (0..60usize).map(|i| format!("local u{i} = {i}\n")).collect::<Vec<_>>().concat();
+    let sum = (0..60usize).map(|i| format!("u{i}")).collect::<Vec<_>>().join(" + ");
     let main = format!(
         "{locals}local function f()\n    local d = require(\"util\")\n    return {sum} + d\nend\nprint(f())\n"
     );
@@ -338,9 +332,9 @@ fn luau_failed_load_does_not_leave_the_cycle_marker() {
         "main.luau",
         LuaVersion::Luau,
     );
-    let marks_in_progress = result.output.contains("__luck_loaded[id]=__luck_loading");
+    let has_in_progress_marker = result.output.contains("__luck_loaded[id]=__luck_loading");
     assert!(
-        !marks_in_progress || result.output.contains("pcall("),
+        !has_in_progress_marker || result.output.contains("pcall("),
         "a raising module must not stay marked as loading:\n{}",
         result.output
     );
@@ -370,7 +364,7 @@ fn luau_export_table_reads_the_export_not_a_later_shadow() {
     );
     let tree = scope_tree_of(&result.output, LuaVersion::Luau);
     let shadow_start = result.output.find("\"cat\"").expect("the shadow stays in the bundle");
-    let reads_shadow = tree
+    let has_shadow_read = tree
         .references
         .iter()
         .filter(|reference| reference.name == "animal" && reference.kind.is_read())
@@ -379,7 +373,7 @@ fn luau_export_table_reads_the_export_not_a_later_shadow() {
             luck_token::offset_to_index(tree.symbol(symbol).definition_span.start)
                 > shadow_start.saturating_sub("local animal = ".len())
         });
-    assert!(!reads_shadow, "the export must read the exported binding:\n{}", result.output);
+    assert!(!has_shadow_read, "the export must read the exported binding:\n{}", result.output);
 }
 
 #[test]

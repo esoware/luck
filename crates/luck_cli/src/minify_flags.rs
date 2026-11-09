@@ -1,6 +1,3 @@
-//! The per-pass transform toggles shared by `bundle` and `minify`, and
-//! their projection onto a [`TransformConfig`].
-
 use clap::Args;
 use luck_core::TransformConfig;
 

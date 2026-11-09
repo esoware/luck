@@ -11,8 +11,6 @@ use luck_token::{
 
 use crate::expr::{extract_boolean, int_to_float, is_nil, parenthesize};
 
-/// Folds constant arithmetic, comparisons, string concatenation, and boolean
-/// logic, keeping Lua 5.3+ integer/float subtypes exact.
 pub(crate) fn fold(block: Block, version: LuaVersion) -> Block {
     ConstantFolder { version }.transform_block(block)
 }
@@ -24,12 +22,12 @@ struct ConstantFolder {
 impl Transform for ConstantFolder {
     fn transform_expr(&mut self, expr: Expression) -> Expression {
         match self.walk_expr(expr) {
-            Expression::BinaryOp(mut binop) => {
-                match fold_binary(&binop.left, binop.op, &binop.right, self.version) {
+            Expression::BinaryOp(mut binary_op) => {
+                match fold_binary(&binary_op.left, binary_op.op, &binary_op.right, self.version) {
                     Some(BinaryFold::Literal(literal)) => literal,
-                    Some(BinaryFold::Left) => binop.left.take(),
-                    Some(BinaryFold::Right) => truncate_multi_value(binop.right.take()),
-                    None => Expression::BinaryOp(binop),
+                    Some(BinaryFold::Left) => binary_op.left.take(),
+                    Some(BinaryFold::Right) => truncate_multi_value(binary_op.right.take()),
+                    None => Expression::BinaryOp(binary_op),
                 }
             }
             Expression::UnaryOp(unop) => {
@@ -57,7 +55,6 @@ impl Transform for ConstantFolder {
     }
 }
 
-/// What a foldable binary expression reduces to.
 enum BinaryFold {
     Literal(Expression),
     /// The left operand, as written.
@@ -66,7 +63,7 @@ enum BinaryFold {
     Right,
 }
 
-/// Lua's unary minus. Integers wrap, so `i64::MIN` negates to itself.
+/// Integers wrap, so `i64::MIN` negates to itself.
 #[expect(clippy::float_arithmetic, reason = "this is Lua unary minus, evaluated at compile time")]
 fn negate_number(number: LuaNumber) -> LuaNumber {
     match number {
@@ -370,8 +367,7 @@ fn extract_string_bytes(expr: &Expression, version: LuaVersion) -> Option<Cow<'_
     }
 }
 
-/// Whether two string or boolean operands are equal. Strings compare by
-/// decoded bytes, since `"\65"` and `"A"` are the same string.
+/// Strings compare by decoded bytes, since `"\65"` and `"A"` are the same string.
 fn fold_equality(lhs: &Expression, rhs: &Expression, version: LuaVersion) -> Option<bool> {
     if let (Some(left), Some(right)) =
         (extract_string_bytes(lhs, version), extract_string_bytes(rhs, version))

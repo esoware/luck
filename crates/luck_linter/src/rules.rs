@@ -70,12 +70,9 @@ use luck_core::LintConfig;
 
 use crate::rule::{NodeRule, Rule, WholeRule};
 
-/// How a rule takes part in the lint pass.
 #[derive(Clone, Copy)]
 pub(crate) enum RuleEntry {
-    /// Checks the whole document in `WholeRule::check`.
     Whole(&'static dyn WholeRule),
-    /// Driven by the bus's shared walk.
     Node(&'static dyn NodeRule),
 }
 
@@ -178,13 +175,10 @@ pub(crate) fn is_registered_rule_name(name: &str) -> bool {
     registered_rule_names().any(|registered| registered == name)
 }
 
-/// Every registered rule, in registration order.
 pub fn rules() -> impl Iterator<Item = &'static dyn Rule> {
     RULES.iter().map(RuleEntry::rule)
 }
 
-/// Returns the config's rule-override names that aren't registered rules.
-///
 /// The names come back sorted. They're checked against the same list
 /// `invalid_lint_filter` uses, which includes `parse_error`.
 #[must_use]

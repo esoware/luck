@@ -32,7 +32,6 @@ impl Rng {
             .unwrap_or(0)
     }
 
-    /// A uniform value in `1..=bound`.
     pub(crate) fn one_through(&mut self, bound: usize) -> usize {
         self.below(bound).saturating_add(1)
     }

@@ -1,9 +1,6 @@
-//! `blocks_equivalent`, the structural comparison behind verified formatting.
-
 use luck_formatter::{AstDiff, blocks_equivalent};
 use luck_token::LuaVersion;
 
-/// Where `left` and `right`, parsed as `version`, first diverge.
 fn divergence(version: LuaVersion, left: &str, right: &str) -> Option<AstDiff> {
     let [left_block, right_block] = [left, right].map(|source| {
         let parsed = luck_parser::parse(source, version);

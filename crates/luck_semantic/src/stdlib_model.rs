@@ -1,12 +1,7 @@
-//! The stdlib catalog model: overloaded signatures, typed parameters, colon
-//! methods on named shapes, and deprecation on entries, parameters, and
-//! constant values.
-
 use alloc::collections::BTreeMap;
 
 use luck_token::{CompactString, LuaVersion, StdlibEnvironment, offset_to_index};
 
-/// A global, namespace member, or shape member.
 #[derive(Debug, Clone)]
 pub enum StdlibEntry {
     Function(Box<StdlibFunction>),
@@ -16,7 +11,6 @@ pub enum StdlibEntry {
 }
 
 impl StdlibEntry {
-    /// Entry-level deprecation, regardless of entry kind.
     #[must_use]
     pub fn deprecation(&self) -> Option<&StdlibDeprecation> {
         match self {
@@ -26,8 +20,7 @@ impl StdlibEntry {
         }
     }
 
-    /// Whether assigning to this entry overwrites a builtin. A namespace is
-    /// always read-only, even when some members (`package.path`) aren't.
+    /// A namespace is always read-only, even when some members (`package.path`) aren't.
     #[must_use]
     pub fn is_read_only(&self) -> bool {
         match self {
@@ -49,7 +42,6 @@ impl StdlibEntry {
     }
 }
 
-/// A stdlib function: one or more signatures plus call-site metadata.
 /// Boxed in `StdlibEntry` to keep the enum small.
 #[derive(Debug, Clone)]
 #[expect(
@@ -73,7 +65,6 @@ pub struct StdlibFunction {
 }
 
 impl StdlibFunction {
-    /// Minimum arity across all signatures.
     #[must_use]
     pub fn min_args(&self) -> usize {
         self.signatures.iter().map(|signature| signature.min_args).min().unwrap_or(0)
@@ -89,13 +80,11 @@ impl StdlibFunction {
         Some(max)
     }
 
-    /// Whether any signature accepts a call with `count` arguments.
     #[must_use]
     pub fn accepts_arg_count(&self, count: usize) -> bool {
         self.signatures.iter().any(|signature| signature.accepts(count))
     }
 
-    /// Signatures that accept a call with `count` arguments.
     pub fn matching_signatures(&self, count: usize) -> impl Iterator<Item = &StdlibSignature> {
         self.signatures.iter().filter(move |signature| signature.accepts(count))
     }
@@ -121,7 +110,6 @@ impl StdlibFunction {
         (!sets.is_empty()).then_some(sets)
     }
 
-    /// The primary (first) signature.
     #[must_use]
     #[expect(
         clippy::indexing_slicing,
@@ -237,7 +225,6 @@ pub struct StdlibShape {
     pub members: BTreeMap<CompactString, StdlibEntry>,
 }
 
-/// Top-level library: every global and shape of one environment.
 #[derive(Debug, Clone)]
 pub struct StdlibLibrary {
     pub version: LuaVersion,
@@ -247,8 +234,6 @@ pub struct StdlibLibrary {
 }
 
 impl StdlibLibrary {
-    /// Resolve a dotted path like `["table", "concat"]` to its entry.
-    ///
     /// Each step goes through a namespace's members or the shape of a
     /// property or constant, so `["game", "GetService"]` resolves through
     /// `game`'s shape.
@@ -286,11 +271,10 @@ impl StdlibLibrary {
     }
 }
 
-/// Expand a deprecation's `replace_template` with the call's argument
-/// source text.
-///
 /// `%1` through `%9` stand for `args[0]` through `args[8]`, and `%%` is a
-/// literal percent. A placeholder in a call's argument list expands verbatim,
+/// literal percent.
+///
+/// A placeholder in a call's argument list expands verbatim,
 /// and one before that list's `)` also forwards every later argument, so a
 /// fix keeps the arguments the template doesn't spell out. Any other
 /// placeholder is an operand, which gets parentheses unless it's a bare
@@ -315,11 +299,11 @@ pub fn expand_replace_template(template: &str, args: &[&str]) -> String {
                 let Some(from_argument) = digit
                     .to_digit(10)
                     .and_then(|position| position.checked_sub(1))
-                    .and_then(|index| args.get(offset_to_index(index)..))
+                    .and_then(|i| args.get(offset_to_index(i)..))
                 else {
                     continue;
                 };
-                let Some(argument) = from_argument.first() else {
+                let Some(arg) = from_argument.first() else {
                     continue;
                 };
                 let after_placeholder = remaining.trim_start();
@@ -327,11 +311,11 @@ pub fn expand_replace_template(template: &str, args: &[&str]) -> String {
                     && after_placeholder.starts_with([')', ',']);
                 if is_in_argument_list && after_placeholder.starts_with(')') {
                     output.push_str(&from_argument.join(", "));
-                } else if is_in_argument_list || is_bare_operand(argument) {
-                    output.push_str(argument);
+                } else if is_in_argument_list || is_bare_operand(arg) {
+                    output.push_str(arg);
                 } else {
                     output.push('(');
-                    output.push_str(argument);
+                    output.push_str(arg);
                     output.push(')');
                 }
             }
@@ -345,16 +329,11 @@ pub fn expand_replace_template(template: &str, args: &[&str]) -> String {
     output
 }
 
-/// Whether an expression's text is a name, a dotted path, or a number.
-///
 /// No operator can split one. Anything else gets grouped, which is harmless:
 /// a parenthesized call only keeps its first value, and an operand takes one
 /// value anyway.
-fn is_bare_operand(argument: &str) -> bool {
-    !argument.contains("..")
-        && argument
-            .chars()
-            .all(|character| character.is_alphanumeric() || character == '_' || character == '.')
+fn is_bare_operand(arg: &str) -> bool {
+    !arg.contains("..") && arg.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
 }
 
 #[cfg(test)]

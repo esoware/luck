@@ -1,5 +1,3 @@
-//! `luck lsp` - run the language server over stdio, or TCP with `--socket`.
-
 use clap::Args;
 use tokio::runtime::Builder;
 
@@ -23,14 +21,14 @@ impl LspArgs {
             .enable_all()
             .thread_stack_size(WORKER_STACK_BYTES)
             .build()
-            .map_err(|error| {
-                eprintln!("luck lsp: failed to start async runtime: {error}");
+            .map_err(|e| {
+                eprintln!("luck lsp: failed to start async runtime: {e}");
                 Exit::Failure
             })?;
         runtime.block_on(async {
             if let Some(port) = self.socket {
-                luck_lsp::serve_socket(port).await.map_err(|error| {
-                    eprintln!("luck lsp: socket transport failed: {error}");
+                luck_lsp::serve_socket(port).await.map_err(|e| {
+                    eprintln!("luck lsp: socket transport failed: {e}");
                     Exit::Failure
                 })
             } else {

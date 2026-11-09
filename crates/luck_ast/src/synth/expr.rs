@@ -216,7 +216,6 @@ impl Synth {
         }))
     }
 
-    /// Luau explicit type-parameter instantiation: `expr<<T, U>>`.
     #[must_use]
     pub fn type_instantiation(&self, expr: Expression, type_args: Vec<Type>) -> Expression {
         Expression::TypeInstantiation(Box::new(TypeInstantiation {
@@ -266,7 +265,6 @@ impl Synth {
         if should_parenthesize { self.parenthesized(operand) } else { operand }
     }
 
-    /// Parenthesizes an expression that can't stand in prefix position.
     fn wrap_prefix(&self, prefix: Expression) -> Expression {
         if is_prefix_expr(&prefix) { prefix } else { self.parenthesized(prefix) }
     }
@@ -286,7 +284,6 @@ impl Synth {
         self.call_node(receiver, Some(name), None, self.parenthesized_args(args))
     }
 
-    /// `receiver:name<<T, U>>(args)`.
     #[must_use]
     pub fn method_call_with_types(
         &self,
@@ -298,7 +295,6 @@ impl Synth {
         self.call_node(receiver, Some(name), Some(type_args), self.parenthesized_args(args))
     }
 
-    /// `callee{ fields }`, the table-constructor argument form.
     #[must_use]
     pub fn call_table(&self, callee: Expression, fields: Vec<FieldSpec<'_>>) -> Expression {
         let args = FunctionArgs::TableConstructor(Box::new(self.table_constructor(fields)));
@@ -315,7 +311,6 @@ impl Synth {
         self.call_node(callee, None, None, args)
     }
 
-    /// `receiver:name{ fields }`.
     #[must_use]
     pub fn method_call_table(
         &self,
@@ -327,7 +322,6 @@ impl Synth {
         self.call_node(receiver, Some(name), None, args)
     }
 
-    /// `receiver:name"content"`.
     #[must_use]
     pub fn method_call_string(
         &self,
@@ -369,24 +363,22 @@ impl Synth {
         Expression::TableConstructor(Box::new(self.table_constructor(fields)))
     }
 
-    /// `{ v1, v2, ... }`, an all-positional table.
     #[must_use]
     pub fn array(&self, values: Vec<Expression>) -> Expression {
         self.table(values.into_iter().map(FieldSpec::Positional).collect())
     }
 
-    /// `{ k = v, ... }`, a named-field table. Keys that aren't safe
-    /// identifiers fall back to the bracketed string form.
+    /// Keys that aren't safe identifiers fall back to the bracketed string form.
     #[must_use]
     pub fn record(&self, fields: Vec<(&str, Expression)>) -> Expression {
         self.table(
             fields
                 .into_iter()
-                .map(|(name, value)| {
+                .map(|(name, v)| {
                     if self.is_safe_field_name(name) {
-                        FieldSpec::Named(name, value)
+                        FieldSpec::Named(name, v)
                     } else {
-                        FieldSpec::Bracketed(self.string(name), value)
+                        FieldSpec::Bracketed(self.string(name), v)
                     }
                 })
                 .collect(),
@@ -410,9 +402,8 @@ impl Synth {
         TableConstructor { span, fields: Punctuated::from_items(built_fields) }
     }
 
-    /// `function(params) body end` with plain untyped parameters. For
-    /// attributes, generics, typed parameters, varargs, or a return type,
-    /// use [`Synth::function_def_full`].
+    /// For attributes, generics, typed parameters, varargs, or a return type, use
+    /// [`Synth::function_def_full`].
     #[must_use]
     pub fn function_def(&self, params: &[&str], body: Block) -> Expression {
         self.function_def_full(
@@ -422,8 +413,7 @@ impl Synth {
         )
     }
 
-    /// Full-fidelity anonymous function. Build `attributes` with
-    /// [`Synth::function_attribute`].
+    /// Build `attributes` with [`Synth::function_attribute`].
     #[must_use]
     pub fn function_def_full(
         &self,
@@ -438,7 +428,6 @@ impl Synth {
         }))
     }
 
-    /// Luau `if c then a {elseif c2 then b} else z` expression.
     #[must_use]
     pub fn if_expr(
         &self,

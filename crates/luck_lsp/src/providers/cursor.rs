@@ -1,7 +1,3 @@
-//! Lookups the providers share for what sits at a byte offset: whether it's
-//! code, a comment, or a string; the name or call under the cursor, the
-//! enclosing call, a string argument, or a local symbol.
-
 use core::slice;
 
 use luck_ast::{Block, Expression, FieldAccess, FunctionArgs, FunctionCall, Literal, Var, Visitor};
@@ -16,7 +12,6 @@ pub(crate) const fn touches(span: Span, offset: u32) -> bool {
     span.start <= offset && offset <= span.end
 }
 
-/// What the text at a byte offset belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TextKind {
     Code,
@@ -24,8 +19,6 @@ pub(crate) enum TextKind {
     String,
 }
 
-/// Whether `offset` sits in code, a comment, or a string, by the lexer's view
-/// of the document.
 pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
     let comments = &document.parsed.comments;
     let at_offset = comments.get(comments.partition_point(|comment| comment.span.end < offset));
@@ -62,9 +55,9 @@ pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
         .parsed
         .errors
         .iter()
-        .find_map(|error| {
-            (error.span.start < offset && offset <= error.span.end)
-                .then(|| unterminated_text_kind(error.span.text(document.text())))
+        .find_map(|e| {
+            (e.span.start < offset && offset <= e.span.end)
+                .then(|| unterminated_text_kind(e.span.text(document.text())))
         })
         .unwrap_or(TextKind::Code)
 }
@@ -80,12 +73,6 @@ fn unterminated_text_kind(text: &str) -> TextKind {
     }
 }
 
-/// The name `token` reads or declares, or `None` for the placeholder parse
-/// recovery leaves where a name was missing.
-pub(crate) fn token_name(token: &Token) -> Option<&str> {
-    token.identifier().filter(|name| !name.is_empty())
-}
-
 /// The plain-name chain ending at `access` (`a.b.c`), root first, and the
 /// root's span.
 ///
@@ -93,11 +80,11 @@ pub(crate) fn token_name(token: &Token) -> Option<&str> {
 /// yields only the trailing segments that are plain names. `None` when
 /// `access` itself isn't named by an identifier.
 fn field_access_chain(access: &FieldAccess) -> Option<(Vec<&str>, Span)> {
-    let mut path = vec![token_name(&access.name)?];
+    let mut path = vec![access.name.identifier()?];
     let mut root_span = access.name.span;
     let mut prefix: &Expression = &access.prefix;
     while let Expression::Var(Var::FieldAccess(inner)) = prefix {
-        let Some(name) = token_name(&inner.name) else {
+        let Some(name) = inner.name.identifier() else {
             break;
         };
         path.push(name);
@@ -105,7 +92,7 @@ fn field_access_chain(access: &FieldAccess) -> Option<(Vec<&str>, Span)> {
         prefix = &inner.prefix;
     }
     if let Expression::Var(Var::Name(token)) = prefix
-        && let Some(name) = token_name(token)
+        && let Some(name) = token.identifier()
     {
         path.push(name);
         root_span = token.span;
@@ -121,7 +108,7 @@ fn callee_chain(callee: &Expression) -> Option<(Vec<&str>, Span)> {
         return None;
     };
     match var {
-        Var::Name(token) => Some((vec![token_name(token)?], token.span)),
+        Var::Name(token) => Some((vec![token.identifier()?], token.span)),
         Var::FieldAccess(access) => field_access_chain(access),
         Var::Index(_) => None,
     }
@@ -147,14 +134,19 @@ pub(crate) fn dotted_chain_ending_tokens(tokens: &[Token]) -> Option<(Vec<&str>,
     }
 }
 
-/// What we found at the cursor.
 #[derive(Debug)]
 pub(crate) enum CursorNode<'ast> {
-    /// A bare identifier (variable read/write or unresolved name).
-    Identifier { name: &'ast str, span: Span },
+    Identifier {
+        name: &'ast str,
+        span: Span,
+    },
     /// A dotted path like `string.format`, of name-only segments.
-    DottedPath { path: Vec<&'ast str>, root_span: Span, full_span: Span },
-    /// A function call expression. Path is empty for indirect callees.
+    DottedPath {
+        path: Vec<&'ast str>,
+        root_span: Span,
+        full_span: Span,
+    },
+    /// Path is empty for indirect callees.
     Call {
         path: Vec<&'ast str>,
         /// Span of the root `Name` token, when the callee is a plain
@@ -211,7 +203,7 @@ impl<'ast> NodeFinder<'ast> {
         // The method name is a path segment too: `game:GetService(...)`
         // resolves as `["game", "GetService"]` through shaped lookup.
         if let Some(method_token) = &call.method {
-            if let Some(name) = token_name(method_token)
+            if let Some(name) = method_token.identifier()
                 && !path.is_empty()
             {
                 path.push(name);
@@ -228,7 +220,7 @@ impl<'ast> Visitor<'ast> for NodeFinder<'ast> {
     fn visit_var(&mut self, var: &'ast Var) {
         match var {
             Var::Name(token) => {
-                if let Some(name) = token_name(token) {
+                if let Some(name) = token.identifier() {
                     self.try_set(CursorNode::Identifier { name, span: token.span });
                 }
             }
@@ -252,8 +244,6 @@ impl<'ast> Visitor<'ast> for NodeFinder<'ast> {
     }
 }
 
-/// The call enclosing the cursor and the index of the argument the cursor is
-/// in. Used by signature help.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CallSite<'ast> {
     /// The call node, so consumers can resolve the callee semantically
@@ -315,8 +305,6 @@ impl<'document> CallSiteFinder<'document> {
     }
 }
 
-/// A string-literal argument enclosing the cursor. Completion offers
-/// constant-set values inside its delimiters.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StringArgSite<'ast> {
     pub call: &'ast FunctionCall,

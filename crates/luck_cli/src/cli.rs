@@ -1,5 +1,3 @@
-//! The top-level `clap` model and dispatch to each command's handler.
-
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -56,8 +54,6 @@ pub(crate) enum Command {
     Lsp(LspArgs),
 }
 
-/// Parses the process arguments, runs the chosen command, and returns its
-/// exit code.
 pub(crate) fn run() -> ExitCode {
     let cli = Cli::parse();
 

@@ -42,7 +42,6 @@ pub enum Statement {
     Error(Span),
 }
 
-/// A block-terminating statement: `return`, `break`, or `continue` (Luau).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LastStatement {
     Return(Box<ReturnStatement>),
@@ -104,7 +103,6 @@ pub struct ElseClause {
 pub struct NumericFor {
     pub span: Span,
     pub name: Token,
-    /// Luau: `: T` on the loop variable.
     pub type_annotation: Option<Type>,
     pub start: Expression,
     pub limit: Expression,
@@ -120,7 +118,6 @@ pub struct GenericFor {
     pub block: Block,
 }
 
-/// Dotted function name with optional method: `a.b.c:method`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionName {
     pub span: Span,
@@ -128,7 +125,6 @@ pub struct FunctionName {
     pub method: Option<Token>,
 }
 
-/// Named function declaration: `function a.b.c:m(...) ... end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionDecl {
     pub span: Span,
@@ -138,7 +134,6 @@ pub struct FunctionDecl {
     pub body: FunctionBody,
 }
 
-/// Local function declaration: `local function name(...) ... end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalFunction {
     pub span: Span,
@@ -149,12 +144,9 @@ pub struct LocalFunction {
     /// Luau `const function NAME funcbody`. The emitter prints `const`
     /// in place of `local`.
     pub is_const: bool,
-    /// Luau: `export function NAME funcbody`.
     pub is_exported: bool,
 }
 
-/// Lua 5.4+ variable attribute: `<const>` or `<close>`.
-///
 /// The name stays a token because the parser keeps whatever identifier it
 /// finds there, after reporting any name other than `const` or `close`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,8 +155,6 @@ pub struct Attribute {
     pub name: Token,
 }
 
-/// One declared name with its optional attribute (`x <const>`) or Luau
-/// annotation (`x: T`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttributedName {
     pub name: Token,
@@ -182,18 +172,15 @@ pub struct LocalAssignment {
     /// Luau `const bindinglist = explist`. The emitter prints `const` in
     /// place of `local`, and every name in the list is read-only.
     pub is_const: bool,
-    /// Luau: `export local` or `export const`.
     pub is_exported: bool,
 }
 
-/// `goto name` statement (Lua 5.2+).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GotoStatement {
     pub span: Span,
     pub name: Token,
 }
 
-/// `::name::` label statement (Lua 5.2+).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelStatement {
     pub span: Span,
@@ -206,7 +193,6 @@ pub struct ReturnStatement {
     pub exprs: Punctuated<Expression>,
 }
 
-/// Luau compound assignment, for example `x += 1`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompoundAssignment {
     pub span: Span,
@@ -215,8 +201,6 @@ pub struct CompoundAssignment {
     pub expr: Expression,
 }
 
-/// Luau type declaration: an alias (`type Name = T`) or a type function
-/// (`type function Name funcbody`), as [`TypeDeclarationValue`] records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDeclaration {
     pub span: Span,
@@ -234,7 +218,6 @@ pub enum TypeDeclarationValue {
     TypeFunction(Box<FunctionBody>),
 }
 
-/// Lua 5.5 `global` variable declaration: `global names [= exprs]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalDeclaration {
     pub span: Span,
@@ -242,7 +225,6 @@ pub struct GlobalDeclaration {
     pub exprs: Option<Punctuated<Expression>>,
 }
 
-/// Lua 5.5 `global function`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalFunction {
     pub span: Span,
@@ -250,7 +232,6 @@ pub struct GlobalFunction {
     pub body: FunctionBody,
 }
 
-/// Lua 5.5 `global *`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalStar {
     pub span: Span,

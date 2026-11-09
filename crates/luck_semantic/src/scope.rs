@@ -23,8 +23,8 @@ macro_rules! define_index_id {
         }
 
         impl core::fmt::Debug for $name {
-            fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                write!(formatter, concat!(stringify!($name), "({})"), self.index())
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                write!(f, concat!(stringify!($name), "({})"), self.index())
             }
         }
     };
@@ -34,14 +34,13 @@ define_index_id!(ScopeId);
 define_index_id!(SymbolId);
 define_index_id!(ReferenceId);
 
-/// Every scope, symbol, and reference in one chunk, indexed by id.
 #[derive(Debug)]
 pub struct ScopeTree {
     pub version: LuaVersion,
     pub scopes: Vec<Scope>,
     pub symbols: Vec<Symbol>,
     pub references: Vec<Reference>,
-    /// Each name reference by its span. A span holds at most one reference.
+    /// A span holds at most one reference.
     pub references_by_span: FxHashMap<Span, ReferenceId>,
     /// Lua 5.5: names a `global` statement declares, which are defined
     /// wherever they're read.
@@ -62,7 +61,6 @@ pub struct Scope {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeKind {
-    /// Top-level block of a file.
     Module,
     /// Function body, which introduces an upvalue boundary.
     Function,
@@ -72,7 +70,6 @@ pub enum ScopeKind {
     Loop,
 }
 
-/// A declared symbol (local variable, parameter, etc.).
 #[derive(Debug)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -85,9 +82,7 @@ pub struct Symbol {
     pub kind: SymbolKind,
     pub definition_span: Span,
     pub reference_ids: Vec<ReferenceId>,
-    /// True if this symbol is captured by a nested function.
     pub is_upvalue: bool,
-    /// True if this symbol is assigned to after its initial definition.
     pub is_modified: bool,
     /// Luau: true for `export local`, `export const`, and `export function`
     /// bindings. The module's export table reads them, so they're used even
@@ -111,7 +106,6 @@ pub enum SymbolKind {
     ImplicitSelf,
 }
 
-/// One use of a name, local or global.
 #[derive(Debug)]
 pub struct Reference {
     pub span: Span,
@@ -181,7 +175,6 @@ impl ScopeTree {
         &self.references[id.index()]
     }
 
-    /// The reference to the identifier `name` at `span`, if any.
     fn reference_at(&self, name: &str, span: Span) -> Option<&Reference> {
         let reference = self.reference(*self.references_by_span.get(&span)?);
         (reference.name == name).then_some(reference)
@@ -193,8 +186,6 @@ impl ScopeTree {
         self.reference_at(name, span)?.resolved
     }
 
-    /// True when the identifier `name` at `span` resolves to a local rather
-    /// than a global.
     #[must_use]
     pub fn resolves_to_local(&self, name: &str, span: Span) -> bool {
         self.resolved_symbol(name, span).is_some()

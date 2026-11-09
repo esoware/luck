@@ -1,6 +1,3 @@
-//! An open document's parse and analysis, and the conversions between its
-//! byte offsets and LSP positions.
-
 use core::ops;
 use std::sync::OnceLock;
 
@@ -14,8 +11,6 @@ use tower_lsp::lsp_types::{Position, Range, TextDocumentContentChangeEvent};
 
 use crate::line_index::LineIndex;
 
-/// An open document with its parse and semantic analysis.
-///
 /// Both are built once per change, and the backend shares the whole state
 /// through an `Arc`, so no request reparses or copies the text.
 #[derive(Debug)]
@@ -50,7 +45,6 @@ impl DocumentState {
         Self { version, target, lua_version, parsed, semantic, line_index, tokens: OnceLock::new() }
     }
 
-    /// The same document at new text, under the same target and globals.
     pub(crate) fn with_text(&self, text: String, version: i32) -> Self {
         Self::new(text, version, self.target, self.semantic.extra_globals.clone())
     }
@@ -77,7 +71,6 @@ impl DocumentState {
         self.line_index.range(self.text(), span)
     }
 
-    /// The byte range an LSP `Range` covers, or `None` when it's inverted.
     pub(crate) fn byte_range(&self, range: Range) -> Option<ops::Range<usize>> {
         self.line_index.byte_range(self.text(), range)
     }

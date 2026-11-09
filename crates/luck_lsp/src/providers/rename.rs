@@ -1,11 +1,11 @@
-//! Rename.
-//!
 //! Locals only: [`prepare`] refuses globals, stdlib names, and locals whose
 //! name something outside its declaration depends on (a method's implicit
-//! `self`, a local `_ENV`, an exported binding). A rename is also refused
-//! whenever the new name could change meaning: an invalid identifier, a
-//! reserved word, a known global, or a name already used anywhere in the
-//! document. Refusing is safer than silently capturing a shadowed name.
+//! `self`, a local `_ENV`, an exported binding).
+//!
+//! A rename is also refused whenever the new name could change meaning: an
+//! invalid identifier, a reserved word, a known global, or a name already used
+//! anywhere in the document. Refusing is safer than silently capturing a
+//! shadowed name.
 
 use luck_ast::is_valid_identifier_in;
 use luck_semantic::{SymbolId, SymbolKind};
@@ -29,9 +29,6 @@ pub(crate) fn prepare(
     })
 }
 
-/// The local at `offset` and the name span holding it, or `None` when no
-/// local is there.
-///
 /// # Errors
 ///
 /// Returns the refusal to show the user when that local's name can't change
@@ -62,8 +59,6 @@ fn rename_target(
     Ok(Some((symbol_id, span)))
 }
 
-/// Compute the workspace edit for a rename.
-///
 /// # Errors
 ///
 /// Returns an invalid-params error carrying the refusal to show the user when
@@ -101,8 +96,6 @@ pub(crate) fn rename(
     Ok(Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }))
 }
 
-/// Checks that `new_name` is safe to rename a local to.
-///
 /// # Errors
 ///
 /// Returns the refusal to show the user when it isn't an identifier, shadows

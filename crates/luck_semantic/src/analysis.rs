@@ -8,7 +8,6 @@ use crate::scope::{Reference, ScopeTree, Symbol, SymbolId};
 use crate::stdlib_load::library_for;
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
-/// Semantic analysis result for one Lua chunk.
 #[derive(Debug)]
 pub struct SemanticAnalysis {
     pub scope_tree: ScopeTree,
@@ -25,8 +24,6 @@ pub struct SemanticAnalysis {
     pub symbol_shapes: FxHashMap<SymbolId, CompactString>,
 }
 
-/// Analyze a parsed Lua block, building the scope tree.
-///
 /// Uses the [`StdlibEnvironment::Standalone`] stdlib, which is right for
 /// plain Lua and standalone Luau. Roblox callers need
 /// [`analyze_with_environment`] with [`StdlibEnvironment::Roblox`].
@@ -54,7 +51,6 @@ pub fn analyze_with_environment(
     }
 }
 
-/// A stdlib entry resolved from a call's callee.
 #[derive(Debug, Clone)]
 pub struct ResolvedCallee<'call> {
     path: CalleePath<'call>,
@@ -84,15 +80,11 @@ impl<'call> ResolvedCallee<'call> {
 }
 
 impl SemanticAnalysis {
-    /// The typed library for this analysis's version and environment.
     #[must_use]
     pub fn stdlib(&self) -> &'static StdlibLibrary {
         library_for(self.version, self.environment)
     }
 
-    /// True when the identifier `name` at `span` resolves to a local rather
-    /// than a global.
-    ///
     /// Code that matches stdlib paths (`table.insert`, `require(...)`,
     /// `error(...)`) must bail when the base name is shadowed
     /// (`local table = {}`), or it reports stdlib diagnostics on user values.
@@ -101,9 +93,7 @@ impl SemanticAnalysis {
         self.scope_tree.resolves_to_local(name, span)
     }
 
-    /// True when the identifier `name` at `span` reads the host's global of
-    /// that name, so a stdlib fact about `name` holds there. See
-    /// [`ScopeTree::reaches_host_global`].
+    /// See [`ScopeTree::reaches_host_global`].
     #[must_use]
     pub fn reaches_host_global(&self, name: &str, span: Span) -> bool {
         self.scope_tree.reaches_host_global(name, span)
@@ -134,8 +124,6 @@ impl SemanticAnalysis {
         self.stdlib().globals.get(name).is_some_and(StdlibEntry::is_read_only)
     }
 
-    /// Resolve the callee of `call` to a stdlib entry and its display path.
-    ///
     /// Returns `None` for shadowed bases, unknown names, values of unknown
     /// shape, and calls whose `.` or `:` doesn't match the function's
     /// `is_method`.
@@ -170,9 +158,6 @@ impl SemanticAnalysis {
         Some(ResolvedCallee { path: CalleePath::Dotted(segments), entry })
     }
 
-    /// Resolve a dotted or colon path from its segments, where the root may
-    /// be a shaped local.
-    ///
     /// With `local f = io.open(...)`, `["f", "read"]` resolves through the
     /// `file` shape. A root that reaches the host's global is a plain library
     /// lookup. Any other root resolves to nothing unless it's a local of
@@ -216,7 +201,6 @@ impl SemanticAnalysis {
             .max_by_key(|symbol| symbol.definition_span.start)
     }
 
-    /// For completion: the shape of [`Self::nearest_local`].
     #[must_use]
     pub fn shape_of_nearest_local(&self, name: &str, offset: u32) -> Option<&CompactString> {
         self.symbol_shapes.get(&self.nearest_local(name, offset)?.id)
@@ -324,7 +308,6 @@ mod tests {
             .expect("_ENV must be declared")
     }
 
-    /// The call of the chunk's last statement, resolved under `version`.
     fn resolve_last_statement_call(source: &str, version: LuaVersion) -> Option<String> {
         let parsed = luck_parser::parse(source, version);
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);

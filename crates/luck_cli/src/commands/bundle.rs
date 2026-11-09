@@ -1,5 +1,3 @@
-//! `luck bundle` - bundle a multi-file project into a single file.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -119,7 +117,7 @@ fn write_line_map(map_path: &Path, line_map: &[LineMapEntry]) -> Result<(), Exit
         .collect();
     let map_json = serde_json::json!({ "version": 1u8, "entries": entries });
     fs::write(map_path, format!("{map_json:#}\n"))
-        .map_err(|error| operation_error(format!("cannot write `{}`: {error}", map_path.display())))
+        .map_err(|e| operation_error(format!("cannot write `{}`: {e}", map_path.display())))
 }
 
 #[cfg(test)]

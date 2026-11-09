@@ -1,5 +1,4 @@
-//! Terminal rendering for [`Diagnostic`]s via ariadne. Library crates only
-//! produce diagnostics, and the CLI prints them.
+//! Library crates only produce diagnostics, and the CLI prints them.
 
 use core::fmt;
 use core::iter;
@@ -17,7 +16,6 @@ use rustc_hash::FxHashMap;
 /// diagnostics get a compact, snippet-free rendering instead.
 const MAX_RENDERABLE_LINE_CHARS: usize = 10_000;
 
-/// One file's text as ariadne reads it.
 struct CachedFile {
     source: Source<String>,
     /// How far spans shift to reach `source`, which drops a BOM the file's
@@ -58,7 +56,6 @@ fn with_only_lua_line_breaks(text: &str, version: LuaVersion) -> String {
     rendered
 }
 
-/// Source text by file path, for ariadne to render snippets from.
 #[derive(Default)]
 struct FileCache {
     files: FxHashMap<String, CachedFile>,
@@ -71,7 +68,6 @@ impl FileCache {
         cache
     }
 
-    /// A cache holding the file each diagnostic points into, read from disk.
     /// A file that can't be read is left out.
     fn from_disk(diags: &[Diagnostic], version: LuaVersion) -> Self {
         let mut cache = Self::default();
@@ -96,7 +92,6 @@ impl FileCache {
         file.source.get_byte_line(body_offset).map_or(0, |(line, _, _)| line.len())
     }
 
-    /// How far spans in `path` shift to reach what ariadne holds.
     fn span_shift(&self, path: &str) -> usize {
         self.files.get(path).map_or(0, |file| file.span_shift)
     }
@@ -124,19 +119,17 @@ impl ariadne::Cache<&str> for FileCache {
     }
 }
 
-/// Prints diagnostics to stderr, reading the files they point into from disk.
 pub(crate) fn print_diags(diags: &[Diagnostic], version: LuaVersion) {
     let mut cache = FileCache::from_disk(diags, version);
     write_diags(diags, &mut cache, &mut io::stderr());
 }
 
-/// Each of `errors` in `path`, as the E008 it reports as.
 fn source_error_diags(path: &str, errors: &[SourceError]) -> Vec<Diagnostic> {
-    errors.iter().map(|error| Diagnostic::e008(path, error)).collect()
+    errors.iter().map(|e| Diagnostic::e008(path, e)).collect()
 }
 
-/// Prints a document's parse errors, each as an E008, to stderr. `source` is a
-/// document that isn't on disk, such as stdin or a bundle being minified.
+/// `source` is a document that isn't on disk, such as stdin or a bundle being
+/// minified.
 pub(crate) fn print_source_errors(
     path: String,
     source: &str,
@@ -163,8 +156,6 @@ pub(crate) fn render_document_diags(
     rendered_bytes
 }
 
-/// Renders a document's parse or validation errors, each as an E008, the same
-/// way [`render_document_diags`] renders diagnostics.
 pub(crate) fn render_source_errors(
     path: String,
     source: &str,
@@ -175,9 +166,6 @@ pub(crate) fn render_source_errors(
     render_document_diags(path, source, &diags, version)
 }
 
-/// Writes each diagnostic with ariadne's pretty-printer, or a compact
-/// fallback when its file couldn't be read or its source line is
-/// pathologically long.
 fn write_diags(diags: &[Diagnostic], cache: &mut FileCache, output: &mut impl Write) {
     for diag in diags {
         if !cache.files.contains_key(&diag.file_path) || is_line_too_long(diag, cache) {
@@ -213,8 +201,6 @@ fn build_report(diag: &Diagnostic, span_shift: usize) -> Report<'_, (&str, Range
     builder.finish()
 }
 
-/// Writes a diagnostic with no source snippet, the fallback when ariadne
-/// can't render one.
 fn write_compact(diag: &Diagnostic, output: &mut impl Write) {
     let help_line = diag.help.as_ref().map_or_else(String::new, |help| format!("\nhelp: {help}"));
     let _unused = writeln!(

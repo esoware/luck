@@ -35,7 +35,6 @@ impl NodeRule for ForRange {
     }
 }
 
-/// The message and help for what's wrong with a loop's range, if anything.
 fn range_problem(numeric_for: &NumericFor, version: LuaVersion) -> Option<(String, &'static str)> {
     let start = signed_number_value(&numeric_for.start, version);
     let limit = signed_number_value(&numeric_for.limit, version);
@@ -154,7 +153,6 @@ fn limit_landing_problem(
     })
 }
 
-/// Whether `expr` is `#name`.
 fn is_length_of_identifier(expr: &Expression) -> bool {
     if let Expression::UnaryOp(unary) = expr
         && unary.op == UnOp::Len

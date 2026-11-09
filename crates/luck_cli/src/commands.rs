@@ -1,6 +1,3 @@
-//! One module per subcommand. Each owns its `clap` argument struct, its `run`
-//! handler, and its tests.
-
 mod build;
 mod bundle;
 mod check;

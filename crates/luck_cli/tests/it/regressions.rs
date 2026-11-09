@@ -1,5 +1,3 @@
-//! Each test asserts the correct behavior of one known defect in the binary.
-
 use std::fs;
 use std::path::Path;
 use std::process::Output;

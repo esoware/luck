@@ -1,6 +1,4 @@
-//! Flattens each open document's outline and filters it by a
-//! case-insensitive substring query. There's no on-disk index, so only open
-//! documents are searched.
+//! There's no on-disk index, so only open documents are searched.
 
 #![expect(
     deprecated,

@@ -6,8 +6,6 @@ use luck_token::{BinOp, Span};
 
 use crate::expr::{ends_in_if_expr, is_always_truthy, parenthesize};
 
-/// Flattens nested if-statements and converts if-return guard chains into
-/// `and`/`or` expressions.
 pub(crate) fn simplify(block: Block) -> Block {
     StatementSimplifier.transform_block(block)
 }
@@ -141,8 +139,6 @@ fn extract_if_return_guard(stmt: &Statement) -> Option<(&Expression, &Expression
     Some((&if_stmt.condition, return_expr))
 }
 
-/// Takes a guard that `extract_if_return_guard` accepts apart into its
-/// condition and returned value.
 fn into_guard_parts(stmt: Statement) -> Option<(Expression, Expression)> {
     let Statement::IfStatement(if_stmt) = stmt else {
         return None;
@@ -159,9 +155,6 @@ const fn has_no_else(if_stmt: &IfStatement) -> bool {
     if_stmt.elseif_clauses.is_empty() && if_stmt.else_clause.is_none()
 }
 
-/// `left op right` for `and` and `or`, parenthesizing an operand that would
-/// regroup when codegen prints the tree flat.
-///
 /// A nested operand of the same operator stays bare on either side, because
 /// `and` and `or` are associative. An if-expression as `right` prints last, so
 /// only one in `left` can swallow an operator.

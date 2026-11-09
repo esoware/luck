@@ -41,9 +41,9 @@ impl NodeRule for DuplicateConditions {
         if conditions.first().is_none_or(|(if_text, _)| if_text.is_empty()) {
             return;
         }
-        for (index, &(text, span)) in conditions.iter().enumerate().skip(1) {
+        for (i, &(text, span)) in conditions.iter().enumerate().skip(1) {
             if !text.is_empty()
-                && conditions.iter().take(index).any(|&(earlier_text, _)| earlier_text == text)
+                && conditions.iter().take(i).any(|&(earlier_text, _)| earlier_text == text)
             {
                 findings.push(
                     Finding::new(

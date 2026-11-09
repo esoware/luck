@@ -9,7 +9,6 @@
 use luck_testgen::generate_full;
 use luck_token::LuaVersion;
 
-/// The names a module-scope `local` or `global function` line declares.
 fn module_declarations(line: &str) -> Vec<&str> {
     let Some(declaration) =
         line.strip_prefix("local ").or_else(|| line.strip_prefix("global function "))
@@ -33,9 +32,9 @@ fn full_lua55_assigns_no_name_the_const_wildcard_makes_read_only() {
     for line in program.lines() {
         declared.extend(module_declarations(line));
         let target = line.split_once(" = ").map(|(target, _)| target);
-        let Some(name) = target.filter(|text| {
-            text.chars().all(|character| character.is_ascii_alphanumeric() || character == '_')
-        }) else {
+        let Some(name) =
+            target.filter(|text| text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        else {
             continue;
         };
         assert!(

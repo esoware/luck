@@ -1,6 +1,3 @@
-//! Identifier validity per dialect, for names that come from outside the
-//! AST, such as bytecode debug info.
-
 use luck_token::{CompactString, LuaVersion, TokenKind};
 
 /// Whether generated code must not use `name` as an identifier under
@@ -22,8 +19,6 @@ pub fn is_valid_identifier(name: &str) -> bool {
         && LuaVersion::ALL.iter().any(|&version| !is_unavailable(name, version))
 }
 
-/// Whether `name` lexes as an identifier under `version`.
-///
 /// `goto` is reserved on Lua 5.2-5.5 but is an identifier on 5.1 and Luau;
 /// `global` is refused only on 5.5, where some builds reserve it.
 #[must_use]
@@ -58,9 +53,9 @@ pub fn sanitize_identifier_in(name: &str, version: LuaVersion) -> CompactString 
 
 fn sanitize_with(name: &str, is_reserved: impl Fn(&str) -> bool) -> CompactString {
     let mut sanitized = String::with_capacity(name.len().saturating_add(1));
-    for byte in name.bytes() {
-        if byte.is_ascii_alphanumeric() || byte == b'_' {
-            sanitized.push(char::from(byte));
+    for b in name.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'_' {
+            sanitized.push(char::from(b));
         } else {
             sanitized.push('_');
         }

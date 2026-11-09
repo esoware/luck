@@ -1,6 +1,6 @@
-//! IR -> text layout.
+//! Two passes.
 //!
-//! Two passes. `propagate_expand` first marks every group that contains a
+//! `propagate_expand` first marks every group that contains a
 //! forced break (a hard or empty line, `ExpandParent`, or multi-line text) as
 //! expanded, since such a group can never print flat and isn't worth
 //! measuring. The print loop then walks the stream with a mode stack.
@@ -16,15 +16,12 @@ use unicode_width::UnicodeWidthStr as _;
 use crate::ir::{FormatElement, GroupId, LineMode, Tag};
 use crate::{FormatOptions, IndentStyle};
 
-/// Whether a group prints on one line or breaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrintMode {
     Flat,
     Expanded,
 }
 
-/// Lay out a document whose groups took `group_count` ids, with `base_indent`
-/// before every line's own indentation.
 pub(crate) fn print(
     elements: &[FormatElement],
     group_count: usize,
@@ -59,8 +56,6 @@ pub(crate) fn print(
     printer.output.into_string()
 }
 
-/// The content a measurement covers, from just inside the tag that opened
-/// it to the tag that closes it.
 #[derive(Debug, Clone, Copy)]
 enum Region {
     Group,
@@ -92,9 +87,7 @@ struct Printer {
     /// Written before the indent of every line.
     base_indent: String,
     output: CodeBuffer,
-    /// Byte offset in `output` where the current line begins.
     line_start: usize,
-    /// Display width of the current line so far.
     display_column: usize,
     indent_level: usize,
     /// Effective print-mode stack; empty means `Expanded` (top level).
@@ -102,14 +95,11 @@ struct Printer {
     /// Break decision per group id. Pre-seeded with `Expanded` for groups
     /// containing forced breaks; filled in as groups are entered.
     group_modes: Vec<Option<PrintMode>>,
-    /// Queued line-suffix elements, flushed before the next newline.
     suffixes: Vec<FormatElement>,
     is_pending_space: bool,
     is_pending_indent: bool,
 }
 
-/// Mark groups that contain a forced break as `Expanded` before printing.
-///
 /// A forced break marks every group on the stack of enclosing groups. Line
 /// suffixes are boundaries: breaks inside them don't force anything outside.
 fn propagate_expand(elements: &[FormatElement], group_modes: &mut [Option<PrintMode>]) {
@@ -329,7 +319,6 @@ impl Printer {
         remaining
     }
 
-    /// Columns the current line takes up before any measured content.
     fn occupied_width(&self) -> usize {
         // A pending indent hasn't reached `display_column` yet but will occupy the
         // line before any measured content does.
@@ -478,7 +467,7 @@ impl Printer {
             .unwrap_or_default()
             .iter()
             .rev()
-            .take_while(|byte| matches!(byte, b' ' | b'\t'))
+            .take_while(|b| matches!(b, b' ' | b'\t'))
             .count();
         let trimmed_end = bytes.len().saturating_sub(trailing_whitespace_bytes);
         self.output.truncate(trimmed_end);
@@ -505,8 +494,6 @@ const fn is_end_suffix(element: &FormatElement) -> bool {
     matches!(element, FormatElement::Tag(Tag::EndLineSuffix))
 }
 
-/// The elements after the conditional whose body starts `elements`, stepping
-/// over any conditionals nested inside it.
 fn skip_conditional(elements: &[FormatElement]) -> &[FormatElement] {
     let mut remaining = elements;
     while let Some((element, rest)) = remaining.split_first() {
@@ -542,15 +529,15 @@ mod tests {
             indent_width: 4,
             ..FormatOptions::default()
         };
-        let mut formatter = Formatter::new(options, Comments::none());
-        build(&mut formatter);
-        formatter.print("")
+        let mut f = Formatter::new(options, Comments::none());
+        build(&mut f);
+        f.print("")
     }
 
     #[test]
     fn flat_group_stays_on_one_line() {
         let output = print_document(
-            |formatter| {
+            |f| {
                 group((
                     token("{"),
                     soft_line_or_space(),
@@ -558,7 +545,7 @@ mod tests {
                     soft_line_or_space(),
                     token("}"),
                 ))
-                .fmt(formatter);
+                .fmt(f);
             },
             80,
         );
@@ -569,7 +556,7 @@ mod tests {
     fn wide_group_breaks() {
         let long_text = "x".repeat(90);
         let output = print_document(
-            move |formatter| {
+            move |f| {
                 group((
                     token("{"),
                     indent((
@@ -579,7 +566,7 @@ mod tests {
                     soft_line_or_space(),
                     token("}"),
                 ))
-                .fmt(formatter);
+                .fmt(f);
             },
             80,
         );
@@ -590,14 +577,14 @@ mod tests {
     #[test]
     fn hard_line_forces_all_enclosing_groups() {
         let output = print_document(
-            |formatter| {
+            |f| {
                 group((
                     token("a"),
                     group((token("("), soft_line(), hard_line(), token(")"))),
                     soft_line_or_space(),
                     token("b"),
                 ))
-                .fmt(formatter);
+                .fmt(f);
             },
             80,
         );
@@ -608,8 +595,8 @@ mod tests {
     #[test]
     fn if_group_breaks_prints_when_its_group_breaks() {
         let output = print_document(
-            |formatter| {
-                let id = formatter.group_id();
+            |f| {
+                let id = f.group_id();
                 group_with_id(
                     id,
                     (
@@ -621,7 +608,7 @@ mod tests {
                         token("]"),
                     ),
                 )
-                .fmt(formatter);
+                .fmt(f);
             },
             80,
         );
@@ -631,8 +618,8 @@ mod tests {
     #[test]
     fn if_group_breaks_absent_when_flat() {
         let output = print_document(
-            |formatter| {
-                let id = formatter.group_id();
+            |f| {
+                let id = f.group_id();
                 group_with_id(
                     id,
                     (
@@ -644,7 +631,7 @@ mod tests {
                         token("]"),
                     ),
                 )
-                .fmt(formatter);
+                .fmt(f);
             },
             80,
         );
@@ -654,8 +641,8 @@ mod tests {
     #[test]
     fn trailing_whitespace_is_trimmed() {
         let output = print_document(
-            |formatter| {
-                (token("a"), space(), hard_line(), token("b")).fmt(formatter);
+            |f| {
+                (token("a"), space(), hard_line(), token("b")).fmt(f);
             },
             80,
         );
@@ -665,8 +652,8 @@ mod tests {
     #[test]
     fn blank_lines_do_not_stack() {
         let output = print_document(
-            |formatter| {
-                (token("a"), empty_line(), empty_line(), token("b")).fmt(formatter);
+            |f| {
+                (token("a"), empty_line(), empty_line(), token("b")).fmt(f);
             },
             80,
         );
@@ -676,10 +663,10 @@ mod tests {
     #[test]
     fn line_suffix_defers_to_line_end() {
         let output = print_document(
-            |formatter| {
-                token("local x = 1").fmt(formatter);
-                formatter.write_line_suffix("-- trailing".into());
-                (hard_line(), token("local y = 2")).fmt(formatter);
+            |f| {
+                token("local x = 1").fmt(f);
+                f.write_line_suffix("-- trailing".into());
+                (hard_line(), token("local y = 2")).fmt(f);
             },
             80,
         );

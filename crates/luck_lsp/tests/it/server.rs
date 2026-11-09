@@ -1,6 +1,3 @@
-//! Tests that call the `LanguageServer` methods directly, with
-//! `CapturedNotifier` standing in for the client and no transport.
-
 use alloc::sync::Arc;
 use core::str::FromStr as _;
 use std::fs;
@@ -26,13 +23,10 @@ use tower_lsp::lsp_types::{
     WorkspaceSymbolParams,
 };
 
-/// A single captured `publishDiagnostics` notification.
 type PublishedRecord = (Url, Vec<Diagnostic>, Option<i32>);
 
-/// A single captured `showMessage` / `logMessage` notification.
 type MessageRecord = (MessageType, String);
 
-/// A [`Notifier`] that records everything the server sends.
 #[derive(Default, Clone, Debug)]
 struct CapturedNotifier {
     published: Arc<RwLock<Vec<PublishedRecord>>>,
@@ -40,13 +34,8 @@ struct CapturedNotifier {
 }
 
 impl Notifier for CapturedNotifier {
-    async fn publish_diagnostics(
-        &self,
-        uri: Url,
-        diagnostics: Vec<Diagnostic>,
-        version: Option<i32>,
-    ) {
-        self.published.write().await.push((uri, diagnostics, version));
+    async fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i32>) {
+        self.published.write().await.push((uri, diags, version));
     }
 
     async fn show_message(&self, message_type: MessageType, message: String) {
@@ -61,14 +50,13 @@ impl Notifier for CapturedNotifier {
 }
 
 impl CapturedNotifier {
-    /// The diagnostics last published for `uri`.
     async fn diagnostics_for(&self, uri: &Url) -> Vec<Diagnostic> {
         let published = self.published.read().await;
         published
             .iter()
             .rev()
             .find(|(other, _, _)| other == uri)
-            .map(|(_, diagnostics, _)| diagnostics.clone())
+            .map(|(_, diags, _)| diags.clone())
             .unwrap_or_default()
     }
 }
@@ -98,8 +86,6 @@ async fn open(server: &Backend<CapturedNotifier>, uri: &Url, text: &str) {
         .await;
 }
 
-/// The refusal message for renaming the local at the top of `uri` to
-/// `new_name`, or `None` when the rename is accepted.
 async fn rename_refusal(
     server: &Backend<CapturedNotifier>,
     uri: &Url,
@@ -113,11 +99,9 @@ async fn rename_refusal(
         })
         .await
         .err()
-        .map(|error| error.message.into_owned())
+        .map(|e| e.message.into_owned())
 }
 
-/// A project that excludes `gen/` and turns on a fixable rule, with one
-/// fixable document on each side of the exclude, as `(included, excluded)`.
 fn project_with_excluded_directory(directory: &Path) -> (Url, Url) {
     fs::write(
         directory.join("luck.json"),
@@ -620,8 +604,8 @@ async fn code_action_offers_lint_fix() {
     open(&server, &uri, "local x = nil\n").await;
 
     // The enabled rule should have surfaced a diagnostic on open.
-    let diagnostics = notifier.diagnostics_for(&uri).await;
-    assert!(!diagnostics.is_empty(), "the enabled lint rule should publish a diagnostic");
+    let diags = notifier.diagnostics_for(&uri).await;
+    assert!(!diags.is_empty(), "the enabled lint rule should publish a diagnostic");
 
     let actions = server
         .code_action(CodeActionParams {
@@ -630,7 +614,7 @@ async fn code_action_offers_lint_fix() {
                 start: Position { line: 0, character: 0 },
                 end: Position { line: 0, character: 13 },
             },
-            context: CodeActionContext { diagnostics, only: None, trigger_kind: None },
+            context: CodeActionContext { diagnostics: diags, only: None, trigger_kind: None },
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         })

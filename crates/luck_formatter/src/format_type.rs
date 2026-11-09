@@ -1,5 +1,3 @@
-//! Luau type emission.
-//!
 //! Types format from the [`Type`] tree alone, never from source, so synthetic
 //! types format the same as parsed ones.
 
@@ -18,72 +16,68 @@ use crate::ir::{
 use crate::quotes::normalize_quote;
 
 impl Format for Type {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         match self {
-            Self::Name { name, .. } => formatter.write_text(name.clone()),
-            Self::Named(named) => named.fmt(formatter),
-            Self::Typeof(typeof_type) => typeof_type.fmt(formatter),
-            Self::Table(table) => table.fmt(formatter),
-            Self::Function(function) => function.fmt(formatter),
+            Self::Name { name, .. } => f.write_text(name.clone()),
+            Self::Named(named) => named.fmt(f),
+            Self::Typeof(typeof_type) => typeof_type.fmt(f),
+            Self::Table(table) => table.fmt(f),
+            Self::Function(function) => function.fmt(f),
             Self::Optional(optional) => {
-                ensure_sufficient_stack(|| (&optional.type_value, token("?")).fmt(formatter));
+                ensure_sufficient_stack(|| (&optional.type_value, token("?")).fmt(f));
             }
-            Self::Union(union) => union.fmt(formatter),
-            Self::Intersection(intersection) => intersection.fmt(formatter),
+            Self::Union(union) => union.fmt(f),
+            Self::Intersection(intersection) => intersection.fmt(f),
             Self::Parenthesized(parenthesized) => {
-                (token("("), &parenthesized.type_value, token(")")).fmt(formatter);
+                (token("("), &parenthesized.type_value, token(")")).fmt(f);
             }
-            Self::Pack(pack) => write_delimited(formatter, "(", ")", &pack.types.items),
+            Self::Pack(pack) => write_delimited(f, "(", ")", &pack.types.items),
             Self::Singleton(literal) => {
                 if let TokenKind::StringLiteral(text) = &literal.kind {
-                    let quote_style = formatter.options().quote_style;
-                    formatter.write_text(normalize_quote(text, quote_style));
+                    let quote_style = f.options().quote_style;
+                    f.write_text(normalize_quote(text, quote_style));
                 } else {
-                    literal.fmt(formatter);
+                    literal.fmt(f);
                 }
             }
             // Luau: `...T`.
-            Self::Variadic(variadic) => (token("..."), &variadic.type_value).fmt(formatter),
+            Self::Variadic(variadic) => (token("..."), &variadic.type_value).fmt(f),
             // Luau: `T...`.
-            Self::GenericPack(generic_pack) => (&generic_pack.name, token("...")).fmt(formatter),
+            Self::GenericPack(generic_pack) => (&generic_pack.name, token("...")).fmt(f),
             // A parse-recovery placeholder has no text to print.
             Self::Error(_) => {}
         }
     }
 }
 
-/// `Name`, `module.Name`, `Name<args>`. Qualification and generics are tight
-/// against the name.
+/// Qualification and generics are tight against the name.
 impl Format for NamedType {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         if let Some(module) = &self.prefix {
-            (module, token(".")).fmt(formatter);
+            (module, token(".")).fmt(f);
         }
-        (&self.name, &self.generics).fmt(formatter);
+        (&self.name, &self.generics).fmt(f);
     }
 }
 
-/// `typeof(expr)`.
 impl Format for TypeofType {
-    fn fmt(&self, formatter: &mut Formatter) {
-        (token("typeof"), token("("), &self.expr, token(")")).fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        (token("typeof"), token("("), &self.expr, token(")")).fmt(f);
     }
 }
 
-/// `{ name: T, [K]: V }`.
-///
 /// When the group breaks, each field gets its own line and a trailing comma,
 /// except the array shorthand `{ T }`, since Luau's grammar has no `{ T, }`.
 impl Format for TableType {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         if self.fields.is_empty() {
-            (token("{"), token("}")).fmt(formatter);
+            (token("{"), token("}")).fmt(f);
             return;
         }
 
         let is_array_shorthand = matches!(self.fields.items.as_slice(), [TypeField::Array { .. }]);
 
-        let group_id = formatter.group_id();
+        let group_id = f.group_id();
         group_with_id(
             group_id,
             (
@@ -97,77 +91,76 @@ impl Format for TableType {
                 token("}"),
             ),
         )
-        .fmt(formatter);
+        .fmt(f);
     }
 }
 
-/// `<T>(a: T) -> R`. The parameter list breaks like a call argument list.
+/// The parameter list breaks like a call argument list.
 impl Format for FunctionType {
-    fn fmt(&self, formatter: &mut Formatter) {
-        self.generics.fmt(formatter);
-        write_delimited(formatter, "(", ")", &self.params.items);
-        (space(), token("->"), space(), &self.return_type).fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        self.generics.fmt(f);
+        write_delimited(f, "(", ")", &self.params.items);
+        (space(), token("->"), space(), &self.return_type).fmt(f);
     }
 }
 
 impl Format for UnionType {
-    fn fmt(&self, formatter: &mut Formatter) {
-        write_alternation(formatter, &self.types.items, "|");
+    fn fmt(&self, f: &mut Formatter) {
+        write_alternation(f, &self.types.items, "|");
     }
 }
 
 impl Format for IntersectionType {
-    fn fmt(&self, formatter: &mut Formatter) {
-        write_alternation(formatter, &self.types.items, "&");
+    fn fmt(&self, f: &mut Formatter) {
+        write_alternation(f, &self.types.items, "&");
     }
 }
 
-/// Union or intersection.
+/// Flat reads `A | B | C`.
 ///
-/// Flat reads `A | B | C`. Broken, each member gets its own line and a leading
+/// Broken, each member gets its own line and a leading
 /// `| ` (or `& `), as Prettier does for TypeScript unions. The break decision
 /// alone places the leading operator, so the AST's `has_leading_pipe` and
 /// `has_leading_ampersand` are ignored.
-fn write_alternation(formatter: &mut Formatter, items: &[Type], op: &'static str) {
-    let group_id = formatter.group_id();
+fn write_alternation(f: &mut Formatter, items: &[Type], op: &'static str) {
+    let group_id = f.group_id();
     let separator = (soft_line_or_space(), token(op), space());
     group_with_id(
         group_id,
         indent((if_group_breaks(group_id, &separator), separated(items, &separator))),
     )
-    .fmt(formatter);
+    .fmt(f);
 }
 
 impl Format for TypeField {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         match self {
             Self::Named { access, name, value, .. } => {
                 // Luau `read`/`write` access modifier sits before the name.
                 if let Some(modifier) = access {
-                    (modifier, space()).fmt(formatter);
+                    (modifier, space()).fmt(f);
                 }
-                (name, token(":"), space(), value).fmt(formatter);
+                (name, token(":"), space(), value).fmt(f);
             }
             Self::Indexer { access, key, value, .. } => {
                 if let Some(modifier) = access {
-                    (modifier, space()).fmt(formatter);
+                    (modifier, space()).fmt(f);
                 }
-                (token("["), key, token("]"), token(":"), space(), value).fmt(formatter);
+                (token("["), key, token("]"), token(":"), space(), value).fmt(f);
             }
-            // Array shorthand `{ T }` - a bare element type.
             Self::Array { access, value, .. } => {
                 if let Some(modifier) = access {
-                    (modifier, space()).fmt(formatter);
+                    (modifier, space()).fmt(f);
                 }
-                value.fmt(formatter);
+                value.fmt(f);
             }
         }
     }
 }
 
 impl Format for TypeArgs {
-    fn fmt(&self, formatter: &mut Formatter) {
-        write_delimited(formatter, "<", ">", &self.args.items);
+    fn fmt(&self, f: &mut Formatter) {
+        write_delimited(f, "<", ">", &self.args.items);
     }
 }
 
@@ -175,56 +168,48 @@ impl Format for TypeArgs {
 pub(crate) struct ExplicitTypeArgs<'args>(pub &'args TypeArgs);
 
 impl Format for ExplicitTypeArgs<'_> {
-    fn fmt(&self, formatter: &mut Formatter) {
-        write_delimited(formatter, "<<", ">>", &self.0.args.items);
+    fn fmt(&self, f: &mut Formatter) {
+        write_delimited(f, "<<", ">>", &self.0.args.items);
     }
 }
 
 impl Format for GenericTypeList {
-    fn fmt(&self, formatter: &mut Formatter) {
-        write_delimited(formatter, "<", ">", &self.params.items);
+    fn fmt(&self, f: &mut Formatter) {
+        write_delimited(f, "<", ">", &self.params.items);
     }
 }
 
 impl Format for GenericTypeParam {
-    fn fmt(&self, formatter: &mut Formatter) {
-        self.name.fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        self.name.fmt(f);
         // Luau: `T...` marks a generic pack parameter.
         if self.is_pack {
-            token("...").fmt(formatter);
+            token("...").fmt(f);
         }
         // `= T` default - only legal in `type` declarations.
         if let Some(default) = &self.default {
-            (space(), token("="), space(), default).fmt(formatter);
+            (space(), token("="), space(), default).fmt(f);
         }
     }
 }
 
 impl Format for FunctionTypeParam {
-    fn fmt(&self, formatter: &mut Formatter) {
-        // Present when the parameter is named: `x: number`.
+    fn fmt(&self, f: &mut Formatter) {
         if let Some(name) = &self.name {
-            (name, token(":"), space()).fmt(formatter);
+            (name, token(":"), space()).fmt(f);
         }
-        self.type_value.fmt(formatter);
+        self.type_value.fmt(f);
     }
 }
 
-/// Wraps a list in `open` and `close` inside a breakable group, one item per
-/// line when it breaks. Source separators are normalized to `,`.
-///
 /// Nested angle brackets close with adjacent `>` tokens. The lexer reads them
 /// as one `>>`, which the parser splits again.
-fn write_delimited<T>(
-    formatter: &mut Formatter,
-    open: &'static str,
-    close: &'static str,
-    items: &[T],
-) where
+fn write_delimited<T>(f: &mut Formatter, open: &'static str, close: &'static str, items: &[T])
+where
     T: Format,
 {
     if items.is_empty() {
-        (token(open), token(close)).fmt(formatter);
+        (token(open), token(close)).fmt(f);
         return;
     }
     group((
@@ -233,7 +218,7 @@ fn write_delimited<T>(
         soft_line(),
         token(close),
     ))
-    .fmt(formatter);
+    .fmt(f);
 }
 
 #[cfg(test)]

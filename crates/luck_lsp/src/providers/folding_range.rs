@@ -1,6 +1,3 @@
-//! Folds function bodies, do-end blocks, control-flow blocks, and table
-//! constructors.
-
 use luck_ast::{FunctionBody, Statement, TableConstructor, Visitor};
 use luck_token::Span;
 use tower_lsp::lsp_types::FoldingRange;

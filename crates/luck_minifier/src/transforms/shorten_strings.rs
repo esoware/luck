@@ -1,9 +1,6 @@
 use luck_ast::{Block, Expression, Literal, Transform};
 use luck_token::{LuaVersion, Span, decode_string, encode_string};
 
-/// Shortens string literals by re-encoding their decoded bytes as a
-/// double-quoted string and keeping whichever spelling is shorter.
-///
 /// Going through the decoded bytes keeps every escape, UTF-8 sequence, and
 /// arbitrary byte exact.
 pub(crate) fn shorten(block: Block, version: LuaVersion) -> Block {

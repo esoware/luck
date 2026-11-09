@@ -1,6 +1,3 @@
-//! The globals `rename_globals` may rename: those the chunk defines at its
-//! top level before anything reads them.
-
 use luck_ast::{Assignment, Block, Expression, FunctionBody, Statement, Type, Var, Visitor};
 use luck_token::{CompactString, LuaVersion, Token};
 use rustc_hash::FxHashSet;
@@ -46,8 +43,6 @@ pub(super) fn renamable_globals(block: &Block, version: LuaVersion) -> Vec<&str>
     names
 }
 
-/// Every name a Lua 5.5 `global` statement declares, at any depth.
-///
 /// A name declared anywhere is the same variable everywhere, so one
 /// declaration keeps the whole file from renaming it.
 #[derive(Default)]
@@ -223,8 +218,6 @@ fn collect_assign_first_globals(
     assign_first_globals
 }
 
-/// Every local the chunk binds outside nested functions, whose bodies are
-/// separate scopes.
 #[derive(Default)]
 struct ChunkLocals(FxHashSet<CompactString>);
 
@@ -280,7 +273,6 @@ impl<'ast> Visitor<'ast> for ChunkLocals {
 /// outside the locals the enclosing nested blocks have declared so far.
 struct NameReads<'locals> {
     locals: &'locals FxHashSet<CompactString>,
-    /// Locals the nested blocks being visited have declared so far.
     hidden_names: FxHashSet<CompactString>,
     /// What `hidden_names` gained, in order, so each scope can drop its own on exit.
     hidden_log: Vec<CompactString>,
@@ -321,9 +313,6 @@ impl<'locals> NameReads<'locals> {
         }
     }
 
-    /// Visits `block`, hiding each local it declares from the statements
-    /// after it, and returns the mark that `unhide_from` drops them at.
-    ///
     /// A block's own locals don't count as reads. Slot reuse gives nested
     /// locals the names of renamed globals, so on every later round they'd
     /// otherwise look like reads of those globals.
@@ -367,9 +356,6 @@ impl<'locals> NameReads<'locals> {
         mark
     }
 
-    /// Visits the names an assignment reads, skipping plain-name targets,
-    /// which are writes.
-    ///
     /// Every target's prefix and index is evaluated before any store, so
     /// `g, t[g] = 1, 2` reads `g` even though its own target comes first.
     fn visit_assignment_reads(&mut self, assignment: &Assignment) {

@@ -1,6 +1,3 @@
-//! `FormatConfig` projected onto `FormatOptions`, the conversion the CLI and
-//! the LSP share.
-
 use luck_core::{FormatConfig, parse_luck_config};
 use luck_formatter::{FormatOptions, IndentStyle};
 

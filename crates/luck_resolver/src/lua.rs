@@ -4,8 +4,6 @@ use luck_core::{Diagnostic, normalize_path};
 
 use crate::{ResolveRequest, ResolvedModule};
 
-/// Tries each search path template in order, relative to `project_root`.
-///
 /// # Errors
 ///
 /// Returns E004, listing the tried paths, when no template names a file.

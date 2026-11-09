@@ -1,5 +1,3 @@
-//! The traits lint rules implement, and the context their checks read.
-
 use std::sync::OnceLock;
 
 use luck_ast::{Block, Expression, FunctionCall, Statement, TableConstructor};
@@ -12,7 +10,6 @@ use crate::local_flow::LocalFlow;
 use crate::node_type::NodeTypeSet;
 use crate::uninitialized::UninitializedLocals;
 
-/// The parsed document, its analysis, and the config, for one lint pass.
 #[derive(Debug)]
 pub(crate) struct LintContext<'document> {
     pub block: &'document Block,
@@ -30,7 +27,6 @@ pub(crate) struct LintContext<'document> {
 }
 
 impl LintContext<'_> {
-    /// The flow facts about this document's locals, computed on first use.
     pub(crate) fn local_flow(&self) -> &LocalFlow {
         self.local_flow.get_or_init(|| LocalFlow::compute(self))
     }
@@ -49,8 +45,6 @@ pub trait Rule: Send + Sync {
     fn description(&self) -> &'static str;
 }
 
-/// Implements [`Rule`] for a rule struct from its name, [`Category`] variant,
-/// default [`Severity`] variant, and description.
 macro_rules! impl_rule {
     ($rule:ident, $name:literal, $category:ident, $severity:ident, $description:literal) => {
         impl $crate::rule::Rule for $rule {
@@ -79,8 +73,7 @@ pub(crate) trait WholeRule: Rule {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding>;
 }
 
-/// Where a call sits. A fix's replacement must parse as a statement in
-/// statement position.
+/// A fix's replacement must parse as a statement in statement position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CallPosition {
     Statement,
@@ -90,8 +83,6 @@ pub(crate) enum CallPosition {
 /// A rule that gets one callback per node from the bus's shared walk
 /// instead of walking the tree itself.
 pub(crate) trait NodeRule: Rule {
-    /// Node types this rule's hooks act on.
-    ///
     /// Listing an extra type is harmless. Leaving one out silently skips
     /// those nodes, which the driver's debug check catches.
     fn node_types(&self) -> NodeTypeSet;

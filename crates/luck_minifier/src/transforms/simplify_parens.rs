@@ -8,8 +8,6 @@ use crate::expr::{
     parenthesize,
 };
 
-/// Removes parentheses that operator precedence and the operand's expression
-/// kind already make redundant.
 pub(crate) fn simplify(block: Block) -> Block {
     ParenSimplifier.transform_block(block)
 }
@@ -53,24 +51,24 @@ impl Transform for ParenSimplifier {
                 let inner = paren.expr.take();
                 if can_remove_parens(&inner) { inner } else { parenthesize(inner) }
             }
-            Expression::BinaryOp(mut binop) => {
-                if let Expression::Parenthesized(paren) = &mut binop.left {
+            Expression::BinaryOp(mut binary_op) => {
+                if let Expression::Parenthesized(paren) = &mut binary_op.left {
                     let inner = paren.expr.take();
-                    binop.left = if can_unwrap_in_binop_lhs(&inner, binop.op) {
+                    binary_op.left = if can_unwrap_in_binop_lhs(&inner, binary_op.op) {
                         inner
                     } else {
                         parenthesize(inner)
                     };
                 }
-                if let Expression::Parenthesized(paren) = &mut binop.right {
+                if let Expression::Parenthesized(paren) = &mut binary_op.right {
                     let inner = paren.expr.take();
-                    binop.right = if can_unwrap_in_binop_rhs(&inner, binop.op) {
+                    binary_op.right = if can_unwrap_in_binop_rhs(&inner, binary_op.op) {
                         inner
                     } else {
                         parenthesize(inner)
                     };
                 }
-                Expression::BinaryOp(binop)
+                Expression::BinaryOp(binary_op)
             }
             Expression::UnaryOp(mut unop) => {
                 if let Expression::Parenthesized(paren) = &mut unop.operand {
@@ -215,8 +213,8 @@ fn can_unwrap_in_unary(inner: &Expression) -> bool {
         | Expression::FunctionDef(_) => true,
         Expression::UnaryOp(_) => !ends_in_if_expr(inner),
         // Not safe: `-(a+b)` isn't `-a+b`.
-        Expression::BinaryOp(binop) => {
-            !binds_looser_than_unary(binop.op) && !ends_in_if_expr(inner)
+        Expression::BinaryOp(binary_op) => {
+            !binds_looser_than_unary(binary_op.op) && !ends_in_if_expr(inner)
         }
         Expression::FunctionCall(_)
         | Expression::VarArg(_)

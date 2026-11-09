@@ -400,8 +400,6 @@ const NON_RECEIVER_STRING_MEMBERS: &[&str] = &["char", "dump"];
 const STRING_RETURNING_MEMBERS: &[&str] =
     &["format", "gsub", "lower", "pack", "rep", "reverse", "sub", "upper"];
 
-/// Derive the `string` receiver shape from the string namespace.
-///
 /// Every subject-first member becomes a colon-method with the subject param
 /// dropped, mirroring Lua's string metatable. Hand-authored shape members
 /// win over derived ones.
@@ -529,8 +527,6 @@ static LUAU_ROBLOX_LIBRARY: LazyLock<StdlibLibrary> = LazyLock::new(|| {
     )
 });
 
-/// The parsed library for a version and environment.
-///
 /// The environment only matters for Luau; each numbered Lua version has
 /// one library. A library is parsed on first use and shared after that.
 #[must_use]
@@ -560,7 +556,7 @@ fn load_built_in(
     version: LuaVersion,
     environment: StdlibEnvironment,
 ) -> StdlibLibrary {
-    parse_library(sources, version, environment).unwrap_or_else(|error| panic!("{error}"))
+    parse_library(sources, version, environment).unwrap_or_else(|e| panic!("{e}"))
 }
 
 /// # Errors
@@ -575,8 +571,8 @@ pub(crate) fn parse_library(
     let mut raw_libraries = sources
         .iter()
         .map(|toml_source| {
-            toml::from_str::<RawLibrary>(toml_source).map_err(|error| {
-                format!("internal stdlib TOML parse error for {version:?}/{environment:?}: {error}")
+            toml::from_str::<RawLibrary>(toml_source).map_err(|e| {
+                format!("internal stdlib TOML parse error for {version:?}/{environment:?}: {e}")
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -644,9 +640,6 @@ pub(crate) fn parse_library(
     Ok(library)
 }
 
-/// Expand the compact `[enums.<Type>]` section into member namespaces
-/// of the `Enum` global.
-///
 /// Each type is an `Enum`-shaped namespace, each item an `EnumItem`-shaped
 /// read-only constant. The `Enum` global and the `Enums`/`Enum`/`EnumItem`
 /// shapes are hand-authored; only the tree of names is generated.
@@ -737,8 +730,6 @@ fn resolve_shape_extends(
     Ok(())
 }
 
-/// Check that every `returns` and `shape` names a shape the library has.
-///
 /// # Errors
 ///
 /// Fails on the first entry that names a shape the library lacks.

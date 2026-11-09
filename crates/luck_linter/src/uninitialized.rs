@@ -1,6 +1,3 @@
-//! Locals declared without a value and the bare names field writes go
-//! through, for the rules that follow a local before anything assigns it.
-
 use luck_ast::{Expression, Statement, Var, is_multi_value};
 use luck_semantic::{Reference, Symbol, SymbolKind};
 use luck_token::Span;
@@ -81,7 +78,6 @@ impl UninitializedLocals {
         self.field_write_prefix_starts.sort_unstable();
     }
 
-    /// Whether `symbol` is a local declared without a value of its own.
     pub(crate) fn contains(&self, symbol: &Symbol) -> bool {
         symbol.kind == SymbolKind::Local
             && self
@@ -90,8 +86,7 @@ impl UninitializedLocals {
                 .is_ok()
     }
 
-    /// Whether `reference` is the bare name a field or index write goes
-    /// through. The scope tree records that name as a plain read.
+    /// The scope tree records that name as a plain read.
     pub(crate) fn is_field_write_prefix(&self, reference: &Reference) -> bool {
         self.field_write_prefix_starts.binary_search(&reference.span.start).is_ok()
     }

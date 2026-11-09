@@ -1,5 +1,3 @@
-//! Statement emission.
-//!
 //! Block statements mostly share the shape `keyword`,
 //! `indent((hard_line, block))`, `hard_line`, `end`. Comment and verbatim
 //! handling around each statement lives in `format_block`.
@@ -26,40 +24,35 @@ use crate::ir::{
 struct Condition<'expr>(&'expr Expression);
 
 impl Format for Condition<'_> {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         let mut inner = self.0;
         while let Expression::Parenthesized(parenthesized) = inner {
             inner = &parenthesized.expr;
         }
-        inner.fmt(formatter);
+        inner.fmt(f);
     }
 }
 
-/// Comma-separated expressions, such as assignment values and `return` lists.
-///
 /// Two or more share one indented group so they wrap together. A lone item
 /// breaks on its own.
 struct ExprList<'list>(&'list Punctuated<Expression>);
 
 impl Format for ExprList<'_> {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         let list = punctuated(self.0, (token(","), soft_line_or_space()));
         if self.0.len() > 1 {
-            group(indent(list)).fmt(formatter);
+            group(indent(list)).fmt(f);
         } else {
-            list.fmt(formatter);
+            list.fmt(f);
         }
     }
 }
 
-/// Comments between a header's last expression and its closing keyword, as in
-/// `if cond --[[ why ]] then`.
-///
 /// No other emitter owns that gap, and a comment left unprinted there would
 /// send the whole statement, body included, to the verbatim fallback.
 fn header_comments(after: &Expression) -> impl Format {
     let position = after.span().end;
-    format_with(move |formatter| write_inline_comments_after(formatter, position))
+    format_with(move |f| write_inline_comments_after(f, position))
 }
 
 /// The items of `list` with `separator` between them, then the source's
@@ -77,35 +70,35 @@ fn indented_body_then_end(block: &Block) -> impl Format {
 }
 
 impl Format for Statement {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         match self {
-            Self::LocalAssignment(local) => local.fmt(formatter),
-            Self::Assignment(assignment) => assignment.fmt(formatter),
-            Self::FunctionCall(call) => call.fmt(formatter),
-            Self::FunctionDecl(function_decl) => function_decl.fmt(formatter),
-            Self::LocalFunction(local_function) => local_function.fmt(formatter),
+            Self::LocalAssignment(local) => local.fmt(f),
+            Self::Assignment(assignment) => assignment.fmt(f),
+            Self::FunctionCall(call) => call.fmt(f),
+            Self::FunctionDecl(function_decl) => function_decl.fmt(f),
+            Self::LocalFunction(local_function) => local_function.fmt(f),
             // Lua 5.5
-            Self::GlobalFunction(global_function) => global_function.fmt(formatter),
-            Self::DoBlock(do_block) => do_block.fmt(formatter),
-            Self::WhileLoop(while_loop) => while_loop.fmt(formatter),
-            Self::RepeatLoop(repeat_loop) => repeat_loop.fmt(formatter),
-            Self::IfStatement(if_stmt) => if_stmt.fmt(formatter),
-            Self::NumericFor(numeric_for) => numeric_for.fmt(formatter),
-            Self::GenericFor(generic_for) => generic_for.fmt(formatter),
+            Self::GlobalFunction(global_function) => global_function.fmt(f),
+            Self::DoBlock(do_block) => do_block.fmt(f),
+            Self::WhileLoop(while_loop) => while_loop.fmt(f),
+            Self::RepeatLoop(repeat_loop) => repeat_loop.fmt(f),
+            Self::IfStatement(if_stmt) => if_stmt.fmt(f),
+            Self::NumericFor(numeric_for) => numeric_for.fmt(f),
+            Self::GenericFor(generic_for) => generic_for.fmt(f),
             // Lua 5.2+
-            Self::Goto(goto) => goto.fmt(formatter),
+            Self::Goto(goto) => goto.fmt(f),
             // Lua 5.2+
-            Self::Label(label) => label.fmt(formatter),
+            Self::Label(label) => label.fmt(f),
             // Lua 5.5
-            Self::GlobalDeclaration(global) => global.fmt(formatter),
+            Self::GlobalDeclaration(global) => global.fmt(f),
             // Lua 5.5
-            Self::GlobalStar(global_star) => global_star.fmt(formatter),
+            Self::GlobalStar(global_star) => global_star.fmt(f),
             // Luau
-            Self::CompoundAssignment(compound) => compound.fmt(formatter),
+            Self::CompoundAssignment(compound) => compound.fmt(f),
             // Luau
-            Self::TypeDeclaration(declaration) => declaration.fmt(formatter),
+            Self::TypeDeclaration(declaration) => declaration.fmt(f),
             // Lua 5.2+: `break` as a mid-block statement.
-            Self::Break(_) => token("break").fmt(formatter),
+            Self::Break(_) => token("break").fmt(f),
             // The block loop drops `;`, and a parse-recovery placeholder has
             // no text to print.
             Self::EmptyStatement(_) | Self::Error(_) => {}
@@ -114,18 +107,18 @@ impl Format for Statement {
 }
 
 impl Format for LastStatement {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         match self {
             Self::Return(return_stmt) => {
                 if return_stmt.exprs.is_empty() {
-                    token("return").fmt(formatter);
+                    token("return").fmt(f);
                 } else {
-                    group((token("return"), space(), ExprList(&return_stmt.exprs))).fmt(formatter);
+                    group((token("return"), space(), ExprList(&return_stmt.exprs))).fmt(f);
                 }
             }
-            Self::Break(_) => token("break").fmt(formatter),
+            Self::Break(_) => token("break").fmt(f),
             // Luau: `continue`.
-            Self::Continue(_) => token("continue").fmt(formatter),
+            Self::Continue(_) => token("continue").fmt(f),
             // Parse-recovery placeholder: nothing to print.
             Self::Error(_) => {}
         }
@@ -133,9 +126,9 @@ impl Format for LastStatement {
 }
 
 impl Format for LocalAssignment {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         if self.is_exported {
-            (token("export"), space()).fmt(formatter);
+            (token("export"), space()).fmt(f);
         }
         let keyword = if self.is_const { "const" } else { "local" };
         (
@@ -145,30 +138,28 @@ impl Format for LocalAssignment {
             // independently of the value list.
             group(punctuated(&self.names, (token(","), soft_line_or_space()))),
         )
-            .fmt(formatter);
+            .fmt(f);
 
         if let Some(exprs) = &self.exprs {
-            (space(), token("="), space(), ExprList(exprs)).fmt(formatter);
+            (space(), token("="), space(), ExprList(exprs)).fmt(f);
         }
     }
 }
 
-/// A declared name with its optional Luau `: T` annotation and its optional
-/// Lua 5.4+ `<const>`/`<close>` attribute.
 impl Format for AttributedName {
-    fn fmt(&self, formatter: &mut Formatter) {
-        self.name.fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        self.name.fmt(f);
         if let Some(annotation) = &self.type_annotation {
-            (token(":"), space(), annotation).fmt(formatter);
+            (token(":"), space(), annotation).fmt(f);
         }
         if let Some(attribute) = &self.attribute {
-            (space(), token("<"), &attribute.name, token(">")).fmt(formatter);
+            (space(), token("<"), &attribute.name, token(">")).fmt(f);
         }
     }
 }
 
 impl Format for Assignment {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         // Targets are never broken onto multiple lines.
         group((
             punctuated(&self.targets, (token(","), space())),
@@ -177,26 +168,24 @@ impl Format for Assignment {
             space(),
             ExprList(&self.values),
         ))
-        .fmt(formatter);
+        .fmt(f);
     }
 }
 
-/// Luau compound assignment (`x += 1`).
 impl Format for CompoundAssignment {
-    fn fmt(&self, formatter: &mut Formatter) {
-        group((&self.var, space(), token(self.op.static_text()), space(), &self.expr))
-            .fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        group((&self.var, space(), token(self.op.static_text()), space(), &self.expr)).fmt(f);
     }
 }
 
 impl Format for DoBlock {
-    fn fmt(&self, formatter: &mut Formatter) {
-        (token("do"), indented_body_then_end(&self.block)).fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        (token("do"), indented_body_then_end(&self.block)).fmt(f);
     }
 }
 
 impl Format for WhileLoop {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         (
             group((
                 token("while"),
@@ -210,12 +199,12 @@ impl Format for WhileLoop {
             )),
             indented_body_then_end(&self.block),
         )
-            .fmt(formatter);
+            .fmt(f);
     }
 }
 
 impl Format for RepeatLoop {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         // `until <cond>` closes the loop, so no `end` and no line-suffix flush.
         (
             token("repeat"),
@@ -225,23 +214,23 @@ impl Format for RepeatLoop {
             space(),
             Condition(&self.condition),
         )
-            .fmt(formatter);
+            .fmt(f);
     }
 }
 
 impl Format for IfStatement {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         // Collapses to `if cond then stmt end` when the option allows, there's
         // one branch holding one statement that no comment around it would
         // stop from sharing the line, and the whole `if` fits on one line.
         let can_collapse = matches!(
-            formatter.options().collapse_simple_statement,
+            f.options().collapse_simple_statement,
             CollapseSimpleStatement::ConditionalOnly | CollapseSimpleStatement::Always
         ) && self.elseif_clauses.is_empty()
             && self.else_clause.is_none()
             && is_simple_block(&self.block)
             && first_item_span(&self.block).is_some_and(|body_stmt| {
-                !formatter.comments().blocks_if_collapse(
+                !f.comments().blocks_if_collapse(
                     self.condition.span().end,
                     body_stmt,
                     self.span.end,
@@ -271,11 +260,11 @@ impl Format for IfStatement {
                 line_suffix_boundary(),
                 token("end"),
             ))
-            .fmt(formatter);
+            .fmt(f);
             return;
         }
 
-        (&header, IndentedBlock(&self.block)).fmt(formatter);
+        (&header, IndentedBlock(&self.block)).fmt(f);
 
         for clause in &self.elseif_clauses {
             (
@@ -292,14 +281,14 @@ impl Format for IfStatement {
                 )),
                 IndentedBlock(&clause.block),
             )
-                .fmt(formatter);
+                .fmt(f);
         }
 
         if let Some(else_clause) = &self.else_clause {
-            (hard_line(), token("else"), IndentedBlock(&else_clause.block)).fmt(formatter);
+            (hard_line(), token("else"), IndentedBlock(&else_clause.block)).fmt(f);
         }
 
-        (hard_line(), line_suffix_boundary(), token("end")).fmt(formatter);
+        (hard_line(), line_suffix_boundary(), token("end")).fmt(f);
     }
 }
 
@@ -312,16 +301,15 @@ fn is_simple_block(block: &Block) -> bool {
 }
 
 impl Format for NumericFor {
-    fn fmt(&self, formatter: &mut Formatter) {
-        (token("for"), space(), &self.name).fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        (token("for"), space(), &self.name).fmt(f);
         // Luau: `: T` on the loop variable.
         if let Some(annotation) = &self.type_annotation {
-            (token(":"), space(), annotation).fmt(formatter);
+            (token(":"), space(), annotation).fmt(f);
         }
-        (space(), token("="), space(), &self.start, token(","), space(), &self.limit)
-            .fmt(formatter);
+        (space(), token("="), space(), &self.start, token(","), space(), &self.limit).fmt(f);
         if let Some(step) = &self.step {
-            (token(","), space(), step).fmt(formatter);
+            (token(","), space(), step).fmt(f);
         }
         (
             header_comments(self.step.as_ref().unwrap_or(&self.limit)),
@@ -329,12 +317,12 @@ impl Format for NumericFor {
             token("do"),
             indented_body_then_end(&self.block),
         )
-            .fmt(formatter);
+            .fmt(f);
     }
 }
 
 impl Format for GenericFor {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         // The bindings are never broken onto multiple lines.
         (
             token("for"),
@@ -344,7 +332,7 @@ impl Format for GenericFor {
             token("in"),
             space(),
         )
-            .fmt(formatter);
+            .fmt(f);
         (
             ExprList(&self.exprs),
             self.exprs.items.last().map(header_comments),
@@ -352,55 +340,51 @@ impl Format for GenericFor {
             token("do"),
             indented_body_then_end(&self.block),
         )
-            .fmt(formatter);
+            .fmt(f);
     }
 }
 
-/// Lua 5.2+ `goto name`.
 impl Format for GotoStatement {
-    fn fmt(&self, formatter: &mut Formatter) {
-        (token("goto"), space(), &self.name).fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        (token("goto"), space(), &self.name).fmt(f);
     }
 }
 
-/// Lua 5.2+ `::name::`.
 impl Format for LabelStatement {
-    fn fmt(&self, formatter: &mut Formatter) {
-        (token("::"), &self.name, token("::")).fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        (token("::"), &self.name, token("::")).fmt(f);
     }
 }
 
-/// Lua 5.5 `global name, ... [= exprs]`.
 impl Format for GlobalDeclaration {
-    fn fmt(&self, formatter: &mut Formatter) {
-        (token("global"), space(), punctuated(&self.names, (token(","), space()))).fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        (token("global"), space(), punctuated(&self.names, (token(","), space()))).fmt(f);
         if let Some(exprs) = &self.exprs {
-            (space(), token("="), space(), ExprList(exprs)).fmt(formatter);
+            (space(), token("="), space(), ExprList(exprs)).fmt(f);
         }
     }
 }
 
-/// Lua 5.5 `global *`, optionally with an attribute before the `*`.
 impl Format for GlobalStar {
-    fn fmt(&self, formatter: &mut Formatter) {
-        (token("global"), space()).fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        (token("global"), space()).fmt(f);
         if let Some(attribute) = &self.attribute {
-            (token("<"), &attribute.name, token(">"), space()).fmt(formatter);
+            (token("<"), &attribute.name, token(">"), space()).fmt(f);
         }
-        token("*").fmt(formatter);
+        token("*").fmt(f);
     }
 }
 
 impl Format for FunctionDecl {
-    fn fmt(&self, formatter: &mut Formatter) {
-        write_function_attributes(formatter, &self.attributes);
-        (token("function"), space(), &self.name, &self.body).fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        write_function_attributes(f, &self.attributes);
+        (token("function"), space(), &self.name, &self.body).fmt(f);
     }
 }
 
 impl Format for LocalFunction {
-    fn fmt(&self, formatter: &mut Formatter) {
-        write_function_attributes(formatter, &self.attributes);
+    fn fmt(&self, f: &mut Formatter) {
+        write_function_attributes(f, &self.attributes);
         let keyword = if self.is_exported {
             "export"
         } else if self.is_const {
@@ -408,44 +392,37 @@ impl Format for LocalFunction {
         } else {
             "local"
         };
-        (token(keyword), space(), token("function"), space(), &self.name, &self.body)
-            .fmt(formatter);
+        (token(keyword), space(), token("function"), space(), &self.name, &self.body).fmt(f);
     }
 }
 
-/// Lua 5.5 `global function name(...) ... end`.
 impl Format for GlobalFunction {
-    fn fmt(&self, formatter: &mut Formatter) {
-        (token("global"), space(), token("function"), space(), &self.name, &self.body)
-            .fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        (token("global"), space(), token("function"), space(), &self.name, &self.body).fmt(f);
     }
 }
 
-/// Luau attributes such as `@native`, each on its own line above the
-/// declaration.
-fn write_function_attributes(formatter: &mut Formatter, attributes: &[FunctionAttribute]) {
+fn write_function_attributes(f: &mut Formatter, attributes: &[FunctionAttribute]) {
     for attribute in attributes {
-        (attribute, hard_line()).fmt(formatter);
+        (attribute, hard_line()).fmt(f);
     }
 }
 
-/// Dotted name path with an optional `:method` suffix.
 impl Format for FunctionName {
-    fn fmt(&self, formatter: &mut Formatter) {
-        separated(&self.names, token(".")).fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        separated(&self.names, token(".")).fmt(f);
         if let Some(method_name) = &self.method {
-            (token(":"), method_name).fmt(formatter);
+            (token(":"), method_name).fmt(f);
         }
     }
 }
 
-/// Luau type declaration: `type Name = T`, or `type function Name funcbody`.
 impl Format for TypeDeclaration {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         if self.is_exported {
-            (token("export"), space()).fmt(formatter);
+            (token("export"), space()).fmt(f);
         }
-        token("type").fmt(formatter);
+        token("type").fmt(f);
         match &self.type_value {
             TypeDeclarationValue::Alias(annotation) => (
                 space(),
@@ -456,9 +433,9 @@ impl Format for TypeDeclaration {
                 space(),
                 annotation,
             )
-                .fmt(formatter),
+                .fmt(f),
             TypeDeclarationValue::TypeFunction(body) => {
-                (space(), token("function"), space(), &self.name, &**body).fmt(formatter);
+                (space(), token("function"), space(), &self.name, &**body).fmt(f);
             }
         }
     }

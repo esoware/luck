@@ -11,9 +11,6 @@ use crate::limits::{
     parameter_locals,
 };
 
-/// Lifts local declarations to function scope, dropping redundant `local`
-/// keywords.
-///
 /// Runs after rename, which gives same-named bindings non-overlapping
 /// lifetimes. Slot reuse can still give a child local its parent's name, so a
 /// name already bound in an enclosing scope is left alone.
@@ -71,12 +68,11 @@ impl Transform for Lifter {
     }
 }
 
-/// Collects the locals in a function body that can be lifted.
-///
 /// A name qualifies when it isn't already bound in this or an enclosing scope
 /// of the body (rename can give a child local its parent's name) and isn't
-/// ineligible (see `collect_ineligible_names`). A `local` statement also has
-/// to pass `can_lift_assignment`, which rules out attributes such as
+/// ineligible (see `collect_ineligible_names`).
+///
+/// A `local` statement also has to pass `can_lift_assignment`, which rules out attributes such as
 /// `<const>` and `<close>`.
 struct LiftableCollector<'names> {
     scope_names: Vec<FxHashSet<CompactString>>,
@@ -205,15 +201,15 @@ fn can_lift_assignment(local: &LocalAssignment, version: LuaVersion) -> bool {
     local.exprs.is_some()
         && !has_fixed_binding(local, version)
         && local.names.iter().all(|attributed| attributed.type_annotation.is_none())
-        && local.names.iter().enumerate().all(|(index, attributed)| {
-            local.names.iter().take(index).all(|previous| {
+        && local.names.iter().enumerate().all(|(i, attributed)| {
+            local.names.iter().take(i).all(|previous| {
                 identifier_name(&previous.name) != identifier_name(&attributed.name)
             })
         })
 }
 
-/// The names `body`'s parameters bind. A Lua 5.5 `...name` vararg is one too,
-/// and a hoisted declaration sharing its name would capture its references.
+/// A Lua 5.5 `...name` vararg is one too, and a hoisted declaration sharing its name would
+/// capture its references.
 fn param_names(body: &FunctionBody) -> FxHashSet<CompactString> {
     let mut names: FxHashSet<CompactString> =
         body.params.iter().map(|param| identifier_name(&param.name).into()).collect();
@@ -290,7 +286,6 @@ impl IneligibleScanner {
         }
     }
 
-    /// Runs `scan` in a new frame, whose locals it drops afterward.
     fn in_new_frame(&mut self, scan: impl FnOnce(&mut Self)) {
         let outer_active_locals = self.active_locals;
         self.frames.push(FxHashSet::default());
@@ -441,8 +436,6 @@ impl<'ast> Visitor<'ast> for IneligibleScanner {
     fn visit_type(&mut self, _ty: &'ast Type) {}
 }
 
-/// Turns lifted `local` declarations into plain assignments.
-///
 /// Matching is by name, so it tracks every declaration in scope, lifted or
 /// not. A declaration under a same-named binding stays `local`, since its
 /// assignment would write to that binding instead.
@@ -618,15 +611,12 @@ mod tests {
     use crate::fixtures::{assert_reparses, run_pass};
     use crate::transforms::rename_locals::rename;
 
-    /// Lifts `source` without renaming it first, and checks it reparses.
     fn apply(source: &str) -> String {
         let output = run_pass(source, LuaVersion::Lua54, |block| lift(block, LuaVersion::Lua54));
         assert_reparses(&output, LuaVersion::Lua54);
         output
     }
 
-    /// Renames, then lifts, as the pipeline's tail does, and checks the
-    /// result reparses.
     fn rename_and_lift(source: &str) -> String {
         let output = run_pass(source, LuaVersion::Lua54, |block| {
             lift(rename(block, LuaVersion::Lua54, true), LuaVersion::Lua54)

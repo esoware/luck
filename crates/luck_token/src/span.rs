@@ -1,7 +1,6 @@
 use core::ops::Range;
 
-/// Byte range in source text. Offsets are `u32` to keep spans small, which
-/// caps a file at 4 GB.
+/// Offsets are `u32` to keep spans small, which caps a file at 4 GB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Span {
     pub start: u32,
@@ -14,7 +13,6 @@ impl Span {
         Self { start, end }
     }
 
-    /// Span over byte indices `start..end`, narrowed by [`index_to_offset`].
     #[inline]
     #[must_use]
     pub fn from_indices(start: usize, end: usize) -> Self {
@@ -42,8 +40,8 @@ impl Span {
         Self::new(self.start.saturating_add(offset), self.end.saturating_add(offset))
     }
 
-    /// The text of `source` under this span. Empty if the span is out of range
-    /// or splits a character, which a span lexed from `source` never does.
+    /// Empty if the span is out of range or splits a character, which a span lexed from `source`
+    /// never does.
     #[inline]
     #[must_use]
     pub fn text(self, source: &str) -> &str {
@@ -51,7 +49,6 @@ impl Span {
     }
 }
 
-/// Widens a span for APIs that take `usize` ranges, such as ariadne.
 impl From<Span> for Range<usize> {
     #[inline]
     fn from(span: Span) -> Self {
@@ -59,8 +56,7 @@ impl From<Span> for Range<usize> {
     }
 }
 
-/// Widens a `u32` source offset to a `usize` index. Lossless on every target
-/// with at least 32-bit pointers, where the fallback compiles away.
+/// Lossless on every target with at least 32-bit pointers, where the fallback compiles away.
 #[inline]
 #[must_use]
 pub fn offset_to_index(offset: u32) -> usize {

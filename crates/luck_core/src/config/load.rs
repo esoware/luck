@@ -1,6 +1,3 @@
-//! Config file loading: `luck.json` (JSON5) parsing, the `extends` chain with
-//! its cycle and root-boundary checks, and upward discovery.
-
 use std::fs;
 use std::path::{self, Path, PathBuf};
 
@@ -27,8 +24,6 @@ impl ProjectConfig {
     }
 }
 
-/// The directory holding the config file at `config_path`.
-///
 /// A bare file name's parent is the empty path, which can't be canonicalized
 /// or watched, so it maps to `.`.
 #[must_use]
@@ -39,8 +34,6 @@ pub fn config_directory(config_path: &Path) -> PathBuf {
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
-/// Deserializes a `luck.json` (JSON5) string into a [`LuckConfig`].
-///
 /// # Errors
 ///
 /// Returns a message when `contents` isn't a valid config.
@@ -52,12 +45,9 @@ pub fn parse_luck_config(contents: &str) -> Result<LuckConfig, String> {
 ///
 /// Returns a message naming `file_name` when `contents` isn't a valid config.
 fn deserialize_config(contents: &str, file_name: &str) -> Result<LuckConfig, String> {
-    json5::from_str(contents)
-        .map_err(|error| format!("failed to parse `{file_name}` (JSON5): {error}"))
+    json5::from_str(contents).map_err(|e| format!("failed to parse `{file_name}` (JSON5): {e}"))
 }
 
-/// Loads a config file and merges in its `extends` chain.
-///
 /// Later `extends` entries override earlier ones, and the file itself
 /// overrides them all. A file reached more than once is loaded once.
 ///
@@ -95,8 +85,7 @@ fn load_layer(
             path.display()
         ));
     }
-    let canonical =
-        path.canonicalize().map_err(|error| format!("`{}`: {error}", path.display()))?;
+    let canonical = path.canonicalize().map_err(|e| format!("`{}`: {e}", path.display()))?;
     if let Some(root_directory) = root_boundary
         && !canonical.starts_with(root_directory)
     {
@@ -113,16 +102,11 @@ fn load_layer(
     if !walk.chain.insert(canonical.clone()) {
         return Err(format!("circular `extends` chain at `{}`", path.display()));
     }
-    let contents =
-        fs::read_to_string(path).map_err(|error| format!("`{}`: {error}", path.display()))?;
+    let contents = fs::read_to_string(path).map_err(|e| format!("`{}`: {e}", path.display()))?;
     let config = deserialize_config(&contents, &path.to_string_lossy())?;
     let directory = config_directory(path);
     let own_boundary = if config.root == Some(true) {
-        Some(
-            directory
-                .canonicalize()
-                .map_err(|error| format!("`{}`: {error}", directory.display()))?,
-        )
+        Some(directory.canonicalize().map_err(|e| format!("`{}`: {e}", directory.display()))?)
     } else {
         None
     };
@@ -131,16 +115,15 @@ fn load_layer(
     for relative_path in config.extends.iter().flatten() {
         let parent =
             load_layer(&directory.join(relative_path), boundary, depth.saturating_add(1), walk)?;
-        merged = parent.merge_onto(merged); // later extends override earlier
+        merged = parent.merge_onto(merged);
     }
     walk.chain.remove(&canonical);
-    let resolved = config.merge_onto(merged); // current file overrides all parents
+    let resolved = config.merge_onto(merged);
     walk.finished.insert(finished_key, resolved.clone());
     Ok(resolved)
 }
 
-/// Loads the config at `config_path` when given, or else discovers the nearest
-/// one walking up from `start_directory`. `None` means discovery found none.
+/// `None` means discovery found none.
 ///
 /// # Errors
 ///
@@ -155,14 +138,12 @@ pub fn load_or_discover_config(
     }
 }
 
-/// Walks up from `start_directory` to the nearest `luck.json` and loads it.
-///
 /// # Errors
 ///
 /// Returns a message when the discovered config fails to load.
 pub fn discover_config(start_directory: &Path) -> Result<Option<ProjectConfig>, String> {
     let mut directory = path::absolute(start_directory)
-        .map_err(|error| format!("`{}`: {error}", start_directory.display()))?;
+        .map_err(|e| format!("`{}`: {e}", start_directory.display()))?;
     loop {
         let candidate = directory.join(CONFIG_FILE_NAME);
         if candidate.is_file() {

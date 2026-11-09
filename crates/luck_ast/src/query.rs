@@ -1,7 +1,3 @@
-//! Read-only structural queries: how many values an expression yields, where
-//! a reprinted node needs parentheses or a separator, and the names of a
-//! dotted path.
-
 use luck_token::Span;
 
 use crate::expr::{Expression, Var};
@@ -16,8 +12,7 @@ pub struct DottedPath<'ast> {
     pub leaf_span: Span,
 }
 
-/// Splits a `Name(.Name)*` chain into its names. Any other link, such as
-/// indexing or a call, yields `None`.
+/// Any other link, such as indexing or a call, yields `None`.
 #[must_use]
 pub fn dotted_path(var: &Var) -> Option<DottedPath<'_>> {
     let leaf_span = match var {
@@ -47,7 +42,6 @@ pub fn dotted_path(var: &Var) -> Option<DottedPath<'_>> {
     Some(DottedPath { segments, root_span, leaf_span })
 }
 
-/// Walks past any parentheses wrapping `expr`.
 #[must_use]
 pub fn unwrap_parentheses(expr: &Expression) -> &Expression {
     let mut current = expr;
@@ -115,9 +109,7 @@ pub const fn is_prefix_expr(expr: &Expression) -> bool {
     }
 }
 
-/// Whether a reprinted statement's first token is `(`.
-///
-/// Both printers must guard these statements. Printed after a statement that
+/// Both printers must guard a statement starting with `(`. Printed after a statement that
 /// ends in an expression, `(...)` glues onto that expression and re-parses
 /// as a call, silently changing the meaning.
 #[must_use]
@@ -190,8 +182,6 @@ fn var_starts_with_paren(var: &Var) -> bool {
     }
 }
 
-/// Whether a reprinted expression's first token is `{`.
-///
 /// Inside an interpolated string, `{` directly after the interpolation
 /// opener forms `{{`, which Luau rejects, so printers must separate them.
 #[must_use]

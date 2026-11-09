@@ -16,7 +16,6 @@ use crate::require_extraction::{ExtractedRequires, extract_requires};
 const MAX_MODULE_COUNT: usize = 10_000;
 const MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
 
-/// How to find a bundle's modules and what to build it for.
 #[derive(Debug, Clone, Copy)]
 pub struct BundleOptions<'input> {
     pub version: LuaVersion,
@@ -29,7 +28,6 @@ pub struct BundleOptions<'input> {
     pub dynamic_require: DynamicRequire,
 }
 
-/// Every module an entry reaches, and the order the bundle registers them in.
 #[derive(Debug)]
 pub struct DependencyGraph {
     /// In discovery order, so the entry comes first.
@@ -41,9 +39,6 @@ pub struct DependencyGraph {
 }
 
 impl DependencyGraph {
-    /// Discovers all modules reachable from `entry_path`, then topologically
-    /// sorts them.
-    ///
     /// # Errors
     ///
     /// Returns every error found during discovery, such as unreadable,
@@ -73,7 +68,6 @@ impl DependencyGraph {
     }
 }
 
-/// The graph and its diagnostics while modules are still being discovered.
 struct GraphBuilder<'input> {
     version: LuaVersion,
     /// From [`absolute_project_root`].
@@ -90,8 +84,6 @@ struct GraphBuilder<'input> {
 }
 
 impl GraphBuilder<'_> {
-    /// The id of the module at `file_path`, first queueing it for discovery
-    /// if this is the first require to reach it.
     fn module_id(&mut self, file_path: String) -> ModuleId {
         if let Some(&id) = self.path_to_id.get(&file_path) {
             return id;
@@ -149,17 +141,17 @@ impl GraphBuilder<'_> {
         let ExtractedRequires {
             sites,
             dynamic_callees,
-            diagnostics,
+            diags,
             has_vararg_read,
             has_global_arg_read,
             has_env_rebinding,
             max_function_upvalues,
         } = extract_requires(&parsed.block, &file_path, self.version, self.dynamic_require);
-        for diagnostic in diagnostics {
-            if diagnostic.is_error() {
-                self.errors.push(diagnostic);
+        for diag in diags {
+            if diag.is_error() {
+                self.errors.push(diag);
             } else {
-                self.warnings.push(diagnostic);
+                self.warnings.push(diag);
             }
         }
 
@@ -179,7 +171,7 @@ impl GraphBuilder<'_> {
                         call_span: site.call_span,
                     });
                 }
-                Err(diagnostic) => self.errors.push(diagnostic),
+                Err(diag) => self.errors.push(diag),
             }
         }
 
@@ -241,8 +233,8 @@ fn warn_inert_hot_comments(
     entry_id: ModuleId,
     warnings: &mut Vec<Diagnostic>,
 ) {
-    for (index, module) in modules.iter().enumerate() {
-        if ModuleId(index) == entry_id {
+    for (i, module) in modules.iter().enumerate() {
+        if ModuleId(i) == entry_id {
             continue;
         }
         if let Some(span) = module.hot_comments.first() {
@@ -251,12 +243,11 @@ fn warn_inert_hot_comments(
     }
 }
 
-/// Topological order, leaves first.
-///
 /// The loader doesn't depend on registration order, so a cycle only warns
-/// (W003) and falls back to discovery order. A deferred cycle works as in real
-/// Lua, and a load-time cycle fails at runtime the way the target version
-/// fails.
+/// (W003) and falls back to discovery order.
+///
+/// A deferred cycle works as in real Lua, and a load-time cycle fails at
+/// runtime the way the target version fails.
 fn topological_order(modules: &[ModuleInfo], warnings: &mut Vec<Diagnostic>) -> Vec<ModuleId> {
     // Node `i` is `modules[i]`. Insertion order breaks toposort's ties, so the
     // edges go in require order.
@@ -340,7 +331,6 @@ fn find_cycle(graph: &DiGraph<(), ()>, start_node: NodeIndex) -> Vec<ModuleId> {
 mod tests {
     use super::*;
 
-    /// Builds a graph of `node_count` nodes from `(from, to)` edges.
     fn graph(node_count: usize, edges: &[(usize, usize)]) -> DiGraph<(), ()> {
         let mut graph = DiGraph::new();
         for _ in 0..node_count {

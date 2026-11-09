@@ -58,7 +58,6 @@ impl WholeRule for MultipleStatementsPerLine {
     }
 }
 
-/// Maps byte positions to 1-based line numbers in O(log n) per query.
 struct LineIndex {
     /// Byte offset where each line after the first starts, in source order.
     line_starts: Vec<u32>,

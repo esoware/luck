@@ -1,4 +1,3 @@
-//! Document highlights: every read and write of the name under the cursor.
 //! Matching is by name across the whole file, and declarations aren't
 //! included.
 

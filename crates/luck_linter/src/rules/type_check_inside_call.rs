@@ -41,10 +41,10 @@ fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<Findin
     let FunctionArgs::Parenthesized { args, .. } = &call.args else {
         return None;
     };
-    let [Expression::BinaryOp(binary)] = args.items.as_slice() else {
+    let [Expression::BinaryOp(binary_op)] = args.items.as_slice() else {
         return None;
     };
-    matches!(binary.op, BinOp::Eq | BinOp::Ne).then(|| {
+    matches!(binary_op.op, BinOp::Eq | BinOp::Ne).then(|| {
         Finding::new(
             "comparison is inside the `type()` call, did you mean `type(x) == \"string\"`?",
             call.span,

@@ -1,12 +1,9 @@
-//! Edit distance for the rules that suggest a fix for a mistyped name.
-//!
 //! Each rule sets its own threshold, since what counts as a plausible typo
 //! differs by domain.
 
 use core::mem;
 
-/// Byte-wise Levenshtein distance. The inputs are short names, so the
-/// quadratic cost doesn't matter.
+/// The inputs are short names, so the quadratic cost doesn't matter.
 fn levenshtein(left: &str, right: &str) -> usize {
     if left == right {
         return 0;

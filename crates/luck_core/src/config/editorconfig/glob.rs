@@ -1,13 +1,10 @@
-//! `.editorconfig` section globs, compiled to a flat program.
-//!
 //! Matching records every (step, position) pair it has been at, so a section
 //! costs at most program size times path length, however its alternatives
 //! nest.
 
 use core::mem;
 
-/// One instruction of a compiled glob. Each runs and then falls through to the
-/// next, unless it says otherwise.
+/// Each runs and then falls through to the next, unless it says otherwise.
 #[derive(Debug)]
 enum Step {
     Literal(char),
@@ -16,7 +13,7 @@ enum Step {
     /// Matches `*`, or `**` when it crosses `/`. Either consumes one character
     /// and stays put, or falls through.
     AnySequence {
-        crosses_separators: bool,
+        can_cross_separators: bool,
     },
     /// Matches `[seq]` or `[!seq]`.
     Class {
@@ -41,15 +38,14 @@ struct OpenBrace {
     comma_steps: Vec<usize>,
 }
 
-/// A compiled section name.
 #[derive(Debug)]
 pub(super) struct SectionGlob {
     steps: Vec<Step>,
 }
 
 impl SectionGlob {
-    /// Compiles `section_name`. Subjects start with `/`, so a name holding one
-    /// is anchored to the file's directory and any other matches at any depth.
+    /// Subjects start with `/`, so a name holding one is anchored to the file's
+    /// directory and any other matches at any depth.
     pub(super) fn new(section_name: &str) -> Self {
         let prefix = if !section_name.contains('/') {
             "/**/"
@@ -82,16 +78,16 @@ impl SectionGlob {
                             branch_step.saturating_add(1),
                             branch_step.saturating_add(3),
                         ])));
-                        steps.push(Step::AnySequence { crosses_separators: true });
+                        steps.push(Step::AnySequence { can_cross_separators: true });
                         steps.push(Step::Literal('/'));
                     }
                 }
                 '*' => {
-                    let crosses_separators = rest.first() == Some(&'*');
-                    if crosses_separators {
+                    let can_cross_separators = rest.first() == Some(&'*');
+                    if can_cross_separators {
                         rest = rest.get(1..).unwrap_or_default();
                     }
-                    steps.push(Step::AnySequence { crosses_separators });
+                    steps.push(Step::AnySequence { can_cross_separators });
                 }
                 '?' => steps.push(Step::AnyCharacter),
                 '[' => match parse_class(rest) {
@@ -167,21 +163,20 @@ impl SectionGlob {
                     }
                 }
                 Step::AnyCharacter => {
-                    if current.is_some_and(|character| character != '/') {
+                    if current.is_some_and(|c| c != '/') {
                         pending.push(advanced);
                     }
                 }
-                Step::AnySequence { crosses_separators } => {
+                Step::AnySequence { can_cross_separators } => {
                     pending.push((next_step, position));
-                    if current.is_some_and(|character| *crosses_separators || character != '/') {
+                    if current.is_some_and(|c| *can_cross_separators || c != '/') {
                         pending.push((step_index, position.saturating_add(1)));
                     }
                 }
                 Step::Class { ranges, is_negated } => {
-                    let is_in_class = |character: char| {
-                        ranges.iter().any(|(low, high)| (*low..=*high).contains(&character))
-                    };
-                    if current.is_some_and(|character| is_in_class(character) != *is_negated) {
+                    let is_in_class =
+                        |c: char| ranges.iter().any(|(low, high)| (*low..=*high).contains(&c));
+                    if current.is_some_and(|c| is_in_class(c) != *is_negated) {
                         pending.push(advanced);
                     }
                 }
@@ -246,8 +241,7 @@ fn parse_class(rest: &[char]) -> Option<(Step, &[char])> {
 
 /// The `num1..num2}` after a `{`, in written order, with what follows it.
 fn parse_integer_range(rest: &[char]) -> Option<(i64, i64, &[char])> {
-    let body_length =
-        rest.iter().position(|character| !matches!(character, '0'..='9' | '.' | '-'))?;
+    let body_length = rest.iter().position(|c| !matches!(c, '0'..='9' | '.' | '-'))?;
     let (body, closer) = rest.split_at_checked(body_length)?;
     let after_range = closer.strip_prefix(['}'].as_slice())?;
     let body_text: String = body.iter().collect();

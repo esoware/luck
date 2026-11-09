@@ -11,14 +11,12 @@ use crate::stmt::{
 };
 use crate::types::{GenericTypeList, Type, TypeArgs, TypeField};
 
-/// Ownership-based AST rewrite: each node goes in by value and its
-/// replacement comes out.
-///
 /// Each `transform_*` hook defaults to its `walk_*`, which rebuilds the node
-/// from its transformed children. Override the hooks you need and call
-/// `self.walk_*` from them to recurse. The `walk_*` methods are the default
-/// recursion, so overriding one instead of its hook would leave nothing to
-/// fall back on.
+/// from its transformed children.
+///
+/// Override the hooks you need and call `self.walk_*` from them to recurse. The `walk_*` methods
+/// are the default recursion, so overriding one instead of its hook would leave nothing to fall
+/// back on.
 pub trait Transform {
     fn transform_block(&mut self, block: Block) -> Block {
         self.walk_block(block)
@@ -518,7 +516,6 @@ mod tests {
         }
     }
 
-    /// Runs [`NilToFalse`] over `stmts` and counts what it leaves.
     fn rewrite_counts(stmts: Vec<Statement>) -> NilFalseCounts {
         let synth = Synth::new();
         let transformed = NilToFalse.transform_block(synth.block(stmts, None));

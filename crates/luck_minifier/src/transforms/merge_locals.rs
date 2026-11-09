@@ -14,8 +14,6 @@ use crate::limits::{
     GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, assignment_target_limit, parameter_locals,
 };
 
-/// Merges consecutive single-assignment locals, or assignments to proven
-/// locals, into multi-assignment statements.
 pub(crate) fn merge(block: Block, version: LuaVersion) -> Block {
     LocalMerger {
         version,
@@ -28,7 +26,6 @@ pub(crate) fn merge(block: Block, version: LuaVersion) -> Block {
 
 struct LocalMerger {
     version: LuaVersion,
-    /// Registers the locals in scope hold in the current function.
     live_registers: usize,
     /// Declared locals and parameters in scope, upvalues included.
     locals: Vec<CompactString>,
@@ -76,8 +73,6 @@ impl LocalMerger {
         self.live_registers = self.live_registers.saturating_add(1);
     }
 
-    /// The name and value of a lone `name = value` a group can take.
-    ///
     /// A group stores right to left, so only a proven local may join, since
     /// any other store can run `__newindex`. A group also holds one register
     /// per value until the stores run, and only a leaf value needs exactly
@@ -112,7 +107,7 @@ impl LocalMerger {
                 return false;
             };
             single_local(local, self.version)
-                .is_some_and(|(name, value)| can_join_group(name, value, &mut group_names))
+                .is_some_and(|(name, v)| can_join_group(name, v, &mut group_names))
         }) {
             followers.push(next);
         }
@@ -150,11 +145,11 @@ impl LocalMerger {
                 return false;
             };
             followers.len() < follower_limit
-                && self.single_assignment(assignment).is_some_and(|(name, value)| {
+                && self.single_assignment(assignment).is_some_and(|(name, v)| {
                     // PUC Lua stores a multiple assignment right to left, so a
                     // repeated target would keep its first value.
                     !group_names.contains(identifier_name(name))
-                        && can_join_group(name, value, &mut group_names)
+                        && can_join_group(name, v, &mut group_names)
                 })
         }) {
             followers.push(next);
@@ -176,7 +171,6 @@ impl LocalMerger {
         })))
     }
 
-    /// Merges consecutive bare locals: `local a\nlocal b` becomes `local a,b`.
     fn merge_bare_locals(
         &mut self,
         first: Box<LocalAssignment>,
@@ -348,7 +342,7 @@ fn can_fuse_assignment(local: &LocalAssignment, stmt: &Statement) -> bool {
     // `local a, a; a, a = 1, 2` stores both values in the second `a`, right to
     // left, but `local a, a = 1, 2` gives it the last.
     declared_names.len() == local.names.len()
-        && !assignment.values.iter().any(|value| references_any_in_expr(value, &declared_names))
+        && !assignment.values.iter().any(|v| references_any_in_expr(v, &declared_names))
 }
 
 fn fuse_bare_locals(stmts: Vec<Statement>, version: LuaVersion) -> Vec<Statement> {
@@ -371,9 +365,6 @@ fn fuse_bare_locals(stmts: Vec<Statement>, version: LuaVersion) -> Vec<Statement
     fused_stmts
 }
 
-/// Reports whether any `Var::Name` or function declaration root in `names`
-/// appears in the visited subtree.
-///
 /// `Visitor` reaches every node, closure bodies included. Assignment targets
 /// go through `visit_var` too, so writes count as well as reads.
 struct ReferenceFinder<'names> {

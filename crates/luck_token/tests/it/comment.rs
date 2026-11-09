@@ -1,6 +1,5 @@
 use luck_token::{Comment, CommentKind, CommentPosition, Span, leading_hot_comments};
 
-/// The comment spanning the first occurrence of `text` in `source`.
 fn comment_at(source: &str, text: &str, kind: CommentKind) -> Comment {
     let start = source.find(text).unwrap_or_default();
     let span = Span::from_indices(start, start.saturating_add(text.len()));

@@ -1,5 +1,3 @@
-//! `luck check` - parse every target file and report syntax errors.
-
 use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 
@@ -22,9 +20,6 @@ pub(crate) struct CheckArgs {
 }
 
 impl CheckArgs {
-    /// Parse and validate every target file and report errors, without writing
-    /// any files.
-    ///
     /// # Errors
     ///
     /// Returns [`Exit::Failure`] if any file can't be read or has errors, and
@@ -55,8 +50,6 @@ impl CheckArgs {
     }
 }
 
-/// Parse and validate one file. Returns its rendered errors, or `None` when
-/// it's clean.
 fn check_file(file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
     let source = match read_source_file(file_path) {
         Ok(text) => text,

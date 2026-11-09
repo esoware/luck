@@ -18,8 +18,6 @@ use crate::{ParseError, ParseResult};
 
 const MAX_NESTING_DEPTH: u32 = 256;
 
-/// Parse `source` as a chunk of `version`.
-///
 /// An owned `String` moves into `ParseResult::source` without a copy; a
 /// `&str` is copied once.
 #[must_use]
@@ -42,8 +40,6 @@ fn parse_owned(source: String, version: LuaVersion) -> ParseResult {
     ParseResult { block, comments, errors, source }
 }
 
-/// Recursive descent parser that pulls tokens straight from the lexer.
-///
 /// Lua needs only one token of lookahead, so `current` and `next` stand in
 /// for a materialized token stream.
 struct Parser<'source> {
@@ -54,7 +50,7 @@ struct Parser<'source> {
     previous_span: Span,
     version: LuaVersion,
     nesting_depth: u32,
-    /// Lexical block depth. The chunk's own block is 1.
+    /// The chunk's own block is 1.
     block_depth: u32,
     function_scope: FunctionScope,
     has_module_return: bool,
@@ -106,8 +102,6 @@ impl<'source> Parser<'source> {
         })
     }
 
-    /// Parse the whole source as one chunk. Returns its block, every comment,
-    /// and every lex and parse error sorted by position.
     fn parse_chunk(mut self) -> (Block, Vec<Comment>, Vec<ParseError>) {
         let block = self.parse_block();
         // `parse_block` stops at a block boundary such as `return` or a stray
@@ -126,7 +120,7 @@ impl<'source> Parser<'source> {
         if self.has_type_function && errors.is_empty() {
             errors = check_type_functions(&block, self.version);
         }
-        errors.sort_by_key(|error| error.span.start);
+        errors.sort_by_key(|e| e.span.start);
         (block, comments, errors)
     }
 

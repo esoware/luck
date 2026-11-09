@@ -11,8 +11,6 @@ use self::analyzer::Analyzer;
 use self::globals::renamable_globals;
 use self::renamer::Renamer;
 
-/// Renames every local to the shortest name its scopes allow, and with
-/// `rename_globals` the globals the chunk defines before reading them too.
 pub(crate) fn rename(block: Block, version: LuaVersion, rename_globals: bool) -> Block {
     // Opt-in, since renamed globals end up under new `_G` keys.
     let root_globals = if rename_globals { renamable_globals(&block, version) } else { Vec::new() };
@@ -39,7 +37,6 @@ mod tests {
         apply_version(source, LuaVersion::Lua54)
     }
 
-    /// Renames `source`, globals included, and checks the result reparses.
     fn apply_version(source: &str, version: LuaVersion) -> String {
         let output = run_pass(source, version, |block| rename(block, version, true));
         assert_reparses(&output, version);

@@ -3,15 +3,12 @@ use luck_token::Span;
 
 use crate::binding::{identifier_name, identifier_token};
 
-/// Rewrites `function X:Y(params)` to `function X.Y(self, params)` when the
-/// body uses `self` at least twice, so the renamer can shorten it.
 pub(crate) fn rewrite(block: Block) -> Block {
     ExplicitSelfRewriter.transform_block(block)
 }
 
 struct ExplicitSelfRewriter;
 
-/// How many times `body` reads `self`, outside nested functions.
 fn count_self_references(body: &FunctionBody) -> usize {
     let mut counter = SelfCounter(0);
     counter.visit_block(&body.block);

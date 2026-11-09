@@ -1,6 +1,3 @@
-//! Stdlib parameter rendering, shared so hover, completion, and signature
-//! help render a parameter the same way.
-
 use luck_semantic::{StdlibArgKind, StdlibConstant, StdlibParam};
 
 /// How many values of a constant set hover and signature help list. Large
@@ -8,8 +5,6 @@ use luck_semantic::{StdlibArgKind, StdlibConstant, StdlibParam};
 /// they show a prefix and the total.
 const CONSTANT_PREVIEW_LIMIT: usize = 8;
 
-/// A parameter's label: its type word, suffixed with `?` when optional.
-///
 /// Varargs are always `"..."` (never suffixed), and constrained constants
 /// render as `"constant"` (callers that want the value set add
 /// [`constant_preview`]).

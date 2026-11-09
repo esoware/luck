@@ -7,9 +7,6 @@ use tempfile::TempDir;
 
 use crate::common::{luau_project, normalized, request, write_files};
 
-/// Resolves `module` as required from `requiring_file`, a path relative to
-/// `project`.
-///
 /// # Errors
 ///
 /// Returns the resolver's diagnostic when `module` doesn't resolve.

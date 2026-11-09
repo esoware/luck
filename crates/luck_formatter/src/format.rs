@@ -15,19 +15,18 @@ pub struct FormatResult {
     pub errors: Vec<FormatError>,
 }
 
-/// A parse error in the input. Formatting itself reports no errors.
+/// Formatting itself reports no errors.
 pub type FormatError = luck_token::SourceError;
 
-/// Lay out `block` as text, the tail every entry point shares.
 fn print_block(block: &Block, comments: Comments, options: &FormatOptions) -> String {
-    let mut formatter = Formatter::new(*options, comments);
-    write_shebang(&mut formatter);
-    block.fmt(&mut formatter);
+    let mut f = Formatter::new(*options, comments);
+    write_shebang(&mut f);
+    block.fmt(&mut f);
     // Empty and error statements print nothing, so a block holding only
     // those must not open a line before the trailing comment flush.
     let has_stmts = first_item_start(block).is_some();
-    write_remaining_comments(&mut formatter, has_stmts);
-    let mut output = formatter.print("");
+    write_remaining_comments(&mut f, has_stmts);
+    let mut output = f.print("");
 
     let trimmed = output.trim_end();
     output.truncate(trimmed.len());
@@ -38,8 +37,6 @@ fn print_block(block: &Block, comments: Comments, options: &FormatOptions) -> St
     output
 }
 
-/// `text` with a CR before each LF that isn't half of a line break already.
-///
 /// Verbatim text can already hold CRLF or LFCR, from CRLF input or an earlier
 /// pass, and a second CR would be another line break in a long string.
 fn with_windows_line_endings(text: &str) -> String {
@@ -60,20 +57,16 @@ fn with_windows_line_endings(text: &str) -> String {
     converted
 }
 
-/// Format an AST, with or without source text behind it.
+/// Trees built with `luck_ast::Synth` work as they are.
 ///
-/// Trees built with `luck_ast::Synth` work as they are. Pass
-/// [`Comments::synthetic`] to attach generated comments (chain
-/// [`Comments::with_blank_before`] for blank lines between statements),
-/// [`Comments::from_source`] to keep a parsed file's comments and blank lines,
-/// or [`Comments::none`].
+/// Pass [`Comments::synthetic`] to attach generated comments (chain [`Comments::with_blank_before`]
+/// for blank lines between statements), [`Comments::from_source`] to keep a parsed file's comments
+/// and blank lines, or [`Comments::none`].
 #[must_use]
 pub fn format_block(block: &Block, comments: Comments, options: &FormatOptions) -> String {
     print_block(block, comments, options)
 }
 
-/// Format Lua source text.
-///
 /// Input that fails to parse returns empty output with its parse errors in
 /// `FormatResult::errors`.
 #[must_use]
@@ -121,11 +114,10 @@ pub fn format_range(
     FormatResult { output, errors: Vec::new() }
 }
 
-/// Shared body of [`format()`] and
-/// [`format_and_verify`](crate::format_and_verify).
+/// Returns the parse the output came from too, so verification needn't
+/// repeat it.
 ///
-/// Also returns the parse the output came from, so verification needn't
-/// repeat it. When `sort_requires` reordered the text, it's the parse of the
+/// When `sort_requires` reordered the text, it's the parse of the
 /// sorted text. Input that fails to parse returns only errors and no parse.
 pub(crate) fn format_source(
     source: &str,

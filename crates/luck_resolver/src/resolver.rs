@@ -8,7 +8,6 @@ use crate::luau::ModuleProbes;
 use crate::luaurc::AliasCache;
 use crate::{lua, luau};
 
-/// A resolved module path, with any warnings raised while resolving it.
 #[derive(Debug)]
 pub struct ResolvedModule {
     /// In the [`normalize_path`](luck_core::normalize_path) form.
@@ -16,20 +15,15 @@ pub struct ResolvedModule {
     pub warnings: Vec<Diagnostic>,
 }
 
-/// One `require()` to resolve.
 #[derive(Debug, Clone, Copy)]
 pub struct ResolveRequest<'request> {
     /// The require string, e.g. `"foo.bar"`, `"./sibling"`, or `"@alias/mod"`.
     pub module: &'request str,
-    /// The file containing the require, in the
-    /// [`normalize_path`](luck_core::normalize_path) form.
+    /// In the [`normalize_path`](luck_core::normalize_path) form.
     pub from_file: &'request str,
-    /// Byte span of the require call, for diagnostics.
     pub span: Span,
 }
 
-/// Resolves the `require()` strings of one build.
-///
 /// Luau caches the `.luaurc` alias tables it discovers and what each module
 /// path holds on disk. Cached data, including a missing or malformed file, is
 /// never reread, so make a fresh resolver per build.
@@ -45,8 +39,6 @@ enum Scheme<'config> {
 }
 
 impl<'config> Resolver<'config> {
-    /// A resolver for `version` source.
-    ///
     /// Lua 5.x tries each of `search_paths`, or [`DEFAULT_SEARCH_PATHS`] when
     /// it's empty, against `project_root`. Luau ignores both and resolves from
     /// the requiring file.
@@ -67,8 +59,6 @@ impl<'config> Resolver<'config> {
         Self { scheme }
     }
 
-    /// Resolves one `require()`.
-    ///
     /// # Errors
     ///
     /// Returns the diagnostic explaining why `request` names no module, or more

@@ -10,8 +10,6 @@ use rustc_hash::FxHashSet;
 use crate::binding::{has_attributed_or_env_name, identifier_name, is_env_binding};
 use crate::expr::{binds_looser_than_unary, extract_boolean, is_nil, is_pure_expr, parenthesize};
 
-/// Removes unused locals, dead branches, and trivial statements, looping to a
-/// fixpoint.
 pub(crate) fn remove(mut block: Block, version: LuaVersion) -> Block {
     loop {
         let mut remover = DeadCodeRemover {
@@ -26,9 +24,6 @@ pub(crate) fn remove(mut block: Block, version: LuaVersion) -> Block {
     }
 }
 
-/// Whether a block contains a `break`/`continue` that binds to the loop
-/// directly enclosing it.
-///
 /// Nested loops and function bodies aren't searched, since their exits can't
 /// reach this loop.
 fn has_loop_exit(block: &Block) -> bool {
@@ -107,6 +102,7 @@ impl<'ast> Visitor<'ast> for ReferenceCollector {
 /// The two rewrites compose per statement, and both `remove()`'s loop and
 /// the pipeline's outer loop run to a fixpoint, so interleaving them reaches
 /// the same result as separate rebuilds in half the traversals.
+///
 struct DeadCodeRemover {
     referenced_names: FxHashSet<CompactString>,
     version: LuaVersion,
@@ -127,7 +123,6 @@ fn constant_truthiness(expr: &Expression) -> Option<bool> {
     None
 }
 
-/// Whether a rewritten statement can never run or has nothing left to run.
 fn is_dead_branch(stmt: &Statement) -> bool {
     match stmt {
         Statement::WhileLoop(while_loop) => {
@@ -168,7 +163,6 @@ fn is_dead_branch(stmt: &Statement) -> bool {
     }
 }
 
-/// Whether `outer` is `cond and X or X` with `cond` and `X` both pure.
 fn is_redundant_ternary(outer: &BinaryOp) -> bool {
     matches!(
         &outer.left,
@@ -407,7 +401,7 @@ fn negate_expr(expr: Expression) -> Expression {
     // Only wrap in `not`. Inverting a comparison operator would change which
     // metamethod is called, __lt instead of __le and so on.
     let needs_parens =
-        matches!(&expr, Expression::BinaryOp(binop) if binds_looser_than_unary(binop.op));
+        matches!(&expr, Expression::BinaryOp(binary_op) if binds_looser_than_unary(binary_op.op));
     let operand = if needs_parens { parenthesize(expr) } else { expr };
     Expression::UnaryOp(Box::new(UnaryOp { span: Span::default(), op: UnOp::Not, operand }))
 }
@@ -492,7 +486,6 @@ fn classify_dead_local(
     }
 }
 
-/// The calls among an unused local's initializers, as call statements.
 fn call_stmts(local: LocalAssignment) -> impl Iterator<Item = Statement> {
     local.exprs.into_iter().flat_map(Punctuated::into_items).filter_map(|expr| {
         if let Expression::FunctionCall(call) = expr {
@@ -666,11 +659,11 @@ mod tests {
 
     #[test]
     fn keeps_unused_table_whose_constructor_raises() {
-        for key in ["nil", "0/0"] {
-            let result = apply(&format!("local unused = {{[{key}] = 1}}\nreturn 1\n"));
+        for k in ["nil", "0/0"] {
+            let result = apply(&format!("local unused = {{[{k}] = 1}}\nreturn 1\n"));
             assert!(
                 result.contains("local unused"),
-                "a table key of `{key}` raises at runtime, so it must stay: {result}"
+                "a table key of `{k}` raises at runtime, so it must stay: {result}"
             );
         }
     }

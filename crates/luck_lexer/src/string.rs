@@ -11,12 +11,12 @@ use crate::search::{ByteMatchTable, byte_match_table, find_match};
 // non-delimiter quote falls through as ordinary content), escapes, and
 // the line breaks that make a string unterminated.
 static SHORT_STRING_STOP: ByteMatchTable =
-    byte_match_table!(|byte| matches!(byte, b'"' | b'\'' | b'\\' | b'\n' | b'\r'));
+    byte_match_table!(|b| matches!(b, b'"' | b'\'' | b'\\' | b'\n' | b'\r'));
 
 // Stop bytes for raw interpolated-string text: escape lead, interpolation
 // opener, closing backtick, and the line breaks Luau rejects.
 static INTERPOLATED_STRING_STOP: ByteMatchTable =
-    byte_match_table!(|byte| matches!(byte, b'\\' | b'{' | b'`' | b'\n' | b'\r'));
+    byte_match_table!(|b| matches!(b, b'\\' | b'{' | b'`' | b'\n' | b'\r'));
 
 /// Scan a single- or double-quoted string, with the cursor on the opening
 /// `quote`.
@@ -44,7 +44,7 @@ pub(crate) fn scan_short_string(
                 };
                 scan_escape(cursor, version, escaped)?;
             }
-            Some(character) if character == quote => {
+            Some(c) if c == quote => {
                 cursor.advance();
                 return Ok(TokenKind::StringLiteral(cursor.text_since(start).into()));
             }
@@ -68,11 +68,8 @@ pub(crate) fn scan_short_string(
     }
 }
 
-/// How a raw interpolated-string segment ended.
 pub(crate) enum InterpolatedSegmentEnd {
-    /// `{`, so an interpolation expression follows.
     OpenBrace,
-    /// `` ` ``, so the string is complete.
     Backtick,
 }
 
@@ -163,7 +160,7 @@ fn scan_escape(cursor: &mut Cursor<'_>, version: LuaVersion, escaped: u8) -> Res
                 cursor.advance();
             }
         }
-        character if character.is_ascii_digit() => scan_decimal_escape(cursor)?,
+        c if c.is_ascii_digit() => scan_decimal_escape(cursor)?,
         b'x' if version.has_hex_escape() => scan_hex_escape(cursor)?,
         b'z' if version.has_whitespace_escape() => {
             cursor.advance();
@@ -178,7 +175,7 @@ fn scan_escape(cursor: &mut Cursor<'_>, version: LuaVersion, escaped: u8) -> Res
         _ if !version.has_strict_escapes() => {
             cursor.advance();
         }
-        character => return Err(invalid_escape(cursor, character)),
+        c => return Err(invalid_escape(cursor, c)),
     }
     Ok(())
 }
@@ -190,7 +187,7 @@ fn scan_escape(cursor: &mut Cursor<'_>, version: LuaVersion, escaped: u8) -> Res
 /// Returns a [`LexError`] when the value doesn't fit a byte.
 fn scan_decimal_escape(cursor: &mut Cursor<'_>) -> Result<(), LexError> {
     let digits_start = cursor.position();
-    let digit_count = cursor.rest().iter().take(3).take_while(|byte| byte.is_ascii_digit()).count();
+    let digit_count = cursor.rest().iter().take(3).take_while(|b| b.is_ascii_digit()).count();
     cursor.advance_by(digit_count);
     let value = cursor.text_since(digits_start).parse::<u16>().unwrap_or_default();
     if value > 255 {
@@ -239,7 +236,7 @@ fn scan_unicode_escape(cursor: &mut Cursor<'_>, version: LuaVersion) -> Result<(
         return Err(lex_error(cursor.span_since(escape_start), "`\\u` escape requires `{`"));
     }
     let hex_start = cursor.position();
-    cursor.eat_while(|byte| byte.is_ascii_hexdigit());
+    cursor.eat_while(|b| b.is_ascii_hexdigit());
     let hex_digits = cursor.text_since(hex_start);
     if hex_digits.is_empty() {
         return Err(lex_error(
@@ -277,7 +274,7 @@ fn invalid_escape(cursor: &mut Cursor<'_>, character: u8) -> LexError {
 /// isn't at one.
 pub(crate) fn eat_long_bracket_open(cursor: &mut Cursor<'_>) -> Option<usize> {
     let after_bracket = cursor.rest().strip_prefix(b"[")?;
-    let level = after_bracket.iter().take_while(|&&byte| byte == b'=').count();
+    let level = after_bracket.iter().take_while(|&&b| b == b'=').count();
     if after_bracket.get(level) != Some(&b'[') {
         return None;
     }
@@ -311,7 +308,7 @@ pub(crate) fn advance_past_long_bracket_close(
         cursor.advance_by(bracket_offset);
         cursor.advance();
         let after_bracket = cursor.rest();
-        let closing_level = after_bracket.iter().take_while(|&&byte| byte == b'=').count();
+        let closing_level = after_bracket.iter().take_while(|&&b| b == b'=').count();
         if closing_level == level && after_bracket.get(level) == Some(&b']') {
             cursor.advance_by(level);
             cursor.advance();

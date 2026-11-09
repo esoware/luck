@@ -14,12 +14,12 @@ const LUA51_MAX_UPVALUES: usize = 60;
 /// Upvalues a rewritten function can gain: the loader and its dynamic entry.
 const LOADER_UPVALUES: usize = 2;
 
-/// One contiguous run of bundle lines that came from a single module.
-///
 /// Line 1 of the module's source lands on `bundle_start_line`, so a
 /// runtime traceback line `L` inside the range maps back to source line
-/// `L - bundle_start_line + 1`. Require rewrites preserve the newline
-/// count of the call they replace, so the correspondence is 1:1.
+/// `L - bundle_start_line + 1`.
+///
+/// Require rewrites preserve the newline count of the call they replace, so
+/// the correspondence is 1:1.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineMapEntry {
     /// 1-based first bundle line of the module body (inclusive).
@@ -31,9 +31,6 @@ pub struct LineMapEntry {
     pub path: String,
 }
 
-/// Generates the bundled Lua output from a resolved dependency graph, with
-/// the module->bundle line map for it.
-///
 /// Modules register as functions in a table and load lazily on first
 /// require, through a loader that mirrors the target version's own
 /// `require` (`ll_require` in `loadlib.c`):
@@ -135,7 +132,6 @@ pub(crate) fn emit(graph: &DependencyGraph, version: LuaVersion) -> (String, Vec
     (writer.output, writer.line_map)
 }
 
-/// What a bundled require hands the loader to name its module.
 #[derive(Clone, Copy)]
 enum ModuleKeys<'slots> {
     /// Lua: the require string, as `package.loaded` keys its cache.
@@ -159,7 +155,6 @@ impl ModuleKeys<'_> {
     }
 }
 
-/// The bundle being written, plus the bookkeeping behind its line map.
 struct BundleWriter<'prefix> {
     output: String,
     /// 1-based line the next pushed character lands on.
@@ -315,7 +310,6 @@ impl BundleWriter<'_> {
         has_exported_values
     }
 
-    /// The text opening and closing `module`'s wrapper function.
     fn wrapper_text(&self, module: &ModuleInfo) -> (String, &'static str) {
         // 5.1's hidden `arg` and 5.5's `(vararg table)` each take a local
         // slot in a vararg function, so a body that reads no `...` gets none.
@@ -342,11 +336,6 @@ impl BundleWriter<'_> {
         )
     }
 
-    /// Writes `module`'s source with a loader call spliced over each require
-    /// the scan recorded, its dynamic requires retargeted, and its Luau
-    /// `export` declarations lowered, ending with `closing`, and maps the
-    /// lines it took.
-    ///
     /// A loader call keeps the newline count of the call it replaces, so the
     /// line map stays 1:1 for multiline requires too.
     fn push_body(
@@ -433,8 +422,6 @@ fn non_entry_modules(graph: &DependencyGraph) -> impl Iterator<Item = (ModuleId,
         .filter_map(|id| graph.modules.get(id.0).map(|module| (*id, module)))
 }
 
-/// Prefix for every generated name, picked so it appears in no module
-/// source.
 fn choose_prefix(modules: &[ModuleInfo]) -> String {
     let mut candidate = "__luck_".to_owned();
     let mut counter = 0usize;
@@ -455,15 +442,11 @@ mod tests {
     use super::*;
     use crate::require_extraction::extract_requires;
 
-    /// A module whose dependencies' targets [`graph`] fills in.
     struct ModuleFixture {
         info: ModuleInfo,
-        /// The file each of `info.dependencies` resolves to.
         resolved_paths: Vec<String>,
     }
 
-    /// Builds a module with the real require extraction, resolving each
-    /// extracted string through `resolutions`.
     fn module(
         path: &str,
         source: &str,
@@ -526,7 +509,7 @@ mod tests {
         let ids_by_path: FxHashMap<String, ModuleId> = fixtures
             .iter()
             .enumerate()
-            .map(|(index, fixture)| (fixture.info.path.clone(), ModuleId(index)))
+            .map(|(i, fixture)| (fixture.info.path.clone(), ModuleId(i)))
             .collect();
         let modules: Vec<ModuleInfo> = fixtures
             .into_iter()
@@ -543,7 +526,6 @@ mod tests {
         DependencyGraph { modules, topological_order, entry_id: ModuleId(0), warnings: vec![] }
     }
 
-    /// The bundle for `fixtures`, with the last one as entry.
     fn bundle(fixtures: Vec<ModuleFixture>, version: LuaVersion) -> String {
         emit(&graph(fixtures), version).0
     }

@@ -16,8 +16,7 @@ pub enum InterpolatedStringPart<'text> {
     reason = "the synthesizer is one type with its constructors split by node family"
 )]
 impl Synth {
-    /// A number from already-formatted literal text. Prefer
-    /// [`Synth::number_f64`] / [`Synth::number_i64`] for runtime values.
+    /// Prefer [`Synth::number_f64`] / [`Synth::number_i64`] for runtime values.
     #[must_use]
     pub fn number(&self, text: &str) -> Expression {
         Expression::Number(Literal { text: CompactString::from(text), span: self.next_span() })
@@ -34,8 +33,7 @@ impl Synth {
         Expression::Integer(Literal { text: CompactString::from(text), span: self.next_span() })
     }
 
-    /// An exact Luau 64-bit integer. A literal can't carry a sign, so
-    /// negative values use their two's-complement hex form.
+    /// A literal can't carry a sign, so negative values use their two's-complement hex form.
     #[must_use]
     pub fn integer_i64(&self, value: i64) -> Expression {
         if value < 0 {
@@ -86,8 +84,6 @@ impl Synth {
         self.number(&text)
     }
 
-    /// An `i64` as an ordinary Lua number.
-    ///
     /// Exact on Lua 5.3+ with 64-bit integers, which is also what an
     /// unpinned synthesizer assumes. On single-number dialects (5.1, 5.2,
     /// Luau), integers outside `[-2^53, 2^53]` can round to the nearest
@@ -215,16 +211,16 @@ impl Synth {
 /// as written, escapes included, so synthesized text needs them too.
 fn escape_interpolated_text(text: &str) -> CompactString {
     let mut raw = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
+    for c in text.chars() {
+        match c {
             '\\' => raw.push_str("\\\\"),
             '`' => raw.push_str("\\`"),
             '{' => raw.push_str("\\{"),
             '\n' => raw.push_str("\\n"),
             '\r' => raw.push_str("\\r"),
             '\t' => raw.push_str("\\t"),
-            '\0'..='\x1f' | '\x7f' => raw.push_str(&decimal_escape(u32::from(character))),
-            _ => raw.push(character),
+            '\0'..='\x1f' | '\x7f' => raw.push_str(&decimal_escape(u32::from(c))),
+            _ => raw.push(c),
         }
     }
     CompactString::from(raw)
@@ -311,8 +307,8 @@ mod tests {
             (1.5, "1.5"),
             (1e300, "1e300"),
         ];
-        for (value, expected) in renderings {
-            assert_eq!(number_text(luau.number_f64(value)), expected);
+        for (v, expected) in renderings {
+            assert_eq!(number_text(luau.number_f64(v)), expected);
         }
         assert!(matches!(luau.number_f64(-0.0), Expression::UnaryOp(_)));
 

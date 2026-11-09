@@ -15,7 +15,6 @@ pub enum DynamicRequire {
     Allow,
 }
 
-/// Parses the `--dynamic-require` flag value, case-insensitively.
 impl FromStr for DynamicRequire {
     type Err = String;
 

@@ -1,5 +1,3 @@
-//! `luck minify` - minify a single source file (or stdin).
-
 use std::path::PathBuf;
 
 use clap::Args;
@@ -52,9 +50,8 @@ impl MinifyArgs {
         let (source, file_path) = if self.input == "-" {
             (read_stdin_source()?, "<stdin>".to_owned())
         } else {
-            let source = read_source_file(existing_file(&self.input)?).map_err(|error| {
-                operation_error(format!("failed to read `{}`: {error}", self.input))
-            })?;
+            let source = read_source_file(existing_file(&self.input)?)
+                .map_err(|e| operation_error(format!("failed to read `{}`: {e}", self.input)))?;
             (source, self.input)
         };
 

@@ -1,5 +1,3 @@
-//! Exit codes, and the failure reports that end a run with one.
-
 use core::fmt::Display;
 use std::process::ExitCode;
 
@@ -35,26 +33,21 @@ fn report_error(message: impl Display, exit: Exit) -> Exit {
     exit
 }
 
-/// Report a bad argument or config and return [`Exit::Usage`].
 pub(crate) fn usage_error(message: impl Display) -> Exit {
     report_error(message, Exit::Usage)
 }
 
-/// Report an operation that ran and failed, and return [`Exit::Failure`].
 pub(crate) fn operation_error(message: impl Display) -> Exit {
     report_error(message, Exit::Failure)
 }
 
-/// Render the diagnostics to stderr, reading the files they point into from
-/// disk, and return [`Exit::Failure`].
 pub(crate) fn fail_with_diags(diags: &[Diagnostic], version: LuaVersion) -> Exit {
     print_diags(diags, version);
     Exit::Failure
 }
 
-/// Render a document's parse errors to stderr, each as an E008, and return
-/// [`Exit::Failure`]. `source` is a document that isn't on disk, such as a
-/// bundle being minified or stdin.
+/// `source` is a document that isn't on disk, such as a bundle being minified
+/// or stdin.
 pub(crate) fn fail_with_source_errors(
     path: String,
     source: &str,

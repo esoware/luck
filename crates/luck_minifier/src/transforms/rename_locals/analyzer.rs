@@ -1,6 +1,3 @@
-//! Scope resolution for the renamer: which binding each name reads, where
-//! each binding is live, and which short name each slot of bindings wears.
-
 use core::mem;
 
 use luck_ast::{Block, Expression, FunctionBody, Punctuated, Statement, Type, Var, Visitor};
@@ -23,7 +20,6 @@ struct ScopeNode {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BindingKind {
-    /// Gets a slot, and with it a short name.
     Renamable,
     /// Keeps its name: a function's implicit `self` or 5.1 `arg`, a 5.2+
     /// `_ENV`, or a Luau export.
@@ -45,12 +41,10 @@ struct BindingInfo {
     live_scopes: ScopeSet,
 }
 
-/// Resolves every name in one walk, in the order the renamer later visits
-/// the same bindings.
-///
 /// The walk is `Visitor`'s, which reaches nodes in the same order as the
-/// renamer's `Transform` walk, so binding ids line up. Both sides walk
-/// function bodies and the statements that bind or open a scope by hand, so
+/// renamer's `Transform` walk, so binding ids line up.
+///
+/// Both sides walk function bodies and the statements that bind or open a scope by hand, so
 /// annotations and the names they bind come in the same order on each.
 pub(super) struct Analyzer {
     scopes: Vec<ScopeNode>,
@@ -89,7 +83,6 @@ impl Analyzer {
         }
     }
 
-    /// The name each binding wears after renaming, by binding id.
     pub(super) fn binding_names(mut self) -> Vec<CompactString> {
         self.propagate_globals();
         let live_scopes_by_slot = self.assign_slots();
@@ -163,7 +156,6 @@ impl Analyzer {
         }
     }
 
-    /// Declares a name a local statement, parameter list, or `for` loop binds.
     fn declare_local(&mut self, name: &str, is_exported: bool) {
         let is_fixed = is_env_binding(name, self.version) || is_exported;
         let kind = if is_fixed { BindingKind::Fixed } else { BindingKind::Renamable };
@@ -256,7 +248,6 @@ impl Analyzer {
         self.exit_scope();
     }
 
-    /// Gives every renamable binding a slot and returns each slot's liveness.
     fn assign_slots(&mut self) -> Vec<ScopeSet> {
         let mut live_scopes_by_slot: Vec<ScopeSet> = Vec::new();
         let Self { scopes, bindings, .. } = self;
@@ -333,8 +324,7 @@ impl Analyzer {
             .enumerate()
             .map(|(slot, (&frequency, live_scopes))| (slot, frequency, live_scopes))
             .collect();
-        slots_by_frequency
-            .sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        slots_by_frequency.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
         let mut pool = CandidatePool::new(self.version);
         let mut slot_names = vec![CompactString::default(); live_scopes_by_slot.len()];

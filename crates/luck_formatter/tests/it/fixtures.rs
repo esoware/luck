@@ -1,5 +1,3 @@
-//! The shared fixtures at `tests/fixtures/`, run through `format_and_verify`.
-//!
 //! This covers what the hand-written cases pin one at a time (AST
 //! equivalence, comment text and placement, and idempotency) over real files
 //! in every dialect.

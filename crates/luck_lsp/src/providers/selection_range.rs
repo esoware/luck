@@ -1,6 +1,3 @@
-//! For each requested position, return the chain of enclosing AST node spans
-//! so the editor can expand selection in semantic increments.
-
 use luck_ast::{Expression, LastStatement, Statement, Visitor};
 use luck_token::Span;
 use tower_lsp::lsp_types::{Position, SelectionRange};

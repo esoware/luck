@@ -1,12 +1,8 @@
-//! The project-relative paths a bundle carries in place of host paths.
-
 use std::env;
 use std::path::Path;
 
 use luck_core::normalize_path;
 
-/// The project root as a normalized absolute path.
-///
 /// An empty or relative root resolves against the working directory. If that's
 /// unavailable too, the input comes back unchanged and the build goes on, even
 /// though host paths can then reach the output.

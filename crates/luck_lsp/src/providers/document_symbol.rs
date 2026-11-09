@@ -1,7 +1,3 @@
-//! Document symbols for the outline: functions, methods, locals, and
-//! function-valued assignments, with each function's own declarations nested
-//! under it.
-
 #![expect(
     deprecated,
     reason = "`DocumentSymbol` has no constructor, so building one names its deprecated field"
@@ -15,14 +11,11 @@ use luck_token::{Span, Token};
 use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
 
 use crate::document::DocumentState;
-use crate::providers::cursor::token_name;
 
 pub(crate) fn document_symbols(document: &DocumentState) -> Vec<DocumentSymbol> {
     outline(document, &document.parsed.block)
 }
 
-/// The symbols declared in `block` and in the control-flow blocks nested in
-/// it. A function's declarations nest under the function's own symbol.
 fn outline(document: &DocumentState, block: &Block) -> Vec<DocumentSymbol> {
     let mut emitter = SymbolEmitter { document, symbols: Vec::new() };
     emitter.visit_block(block);
@@ -68,7 +61,7 @@ impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
             }
             Statement::LocalAssignment(local) => {
                 for (index, name_token) in local.names.iter().enumerate() {
-                    let Some(name) = token_name(&name_token.name) else {
+                    let Some(name) = name_token.name.identifier() else {
                         continue;
                     };
                     let initializer =
@@ -120,7 +113,6 @@ impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
 }
 
 impl SymbolEmitter<'_> {
-    /// Function-table assignments: `Module.thing = function() ... end`.
     fn push_assigned_functions(&mut self, assignment: &Assignment) {
         for (index, var) in assignment.targets.iter().enumerate() {
             let Some(Expression::FunctionDef(function)) = assignment.values.iter().nth(index)
@@ -128,9 +120,9 @@ impl SymbolEmitter<'_> {
                 continue;
             };
             let (label, selection_span) = match var {
-                Var::Name(token) => (token_name(token), token.span),
+                Var::Name(token) => (token.identifier(), token.span),
                 Var::FieldAccess(access) => (
-                    token_name(&access.name).map(|_| access.span.text(self.document.text())),
+                    access.name.identifier().map(|_| access.span.text(self.document.text())),
                     access.span,
                 ),
                 Var::Index(_) => continue,
@@ -148,7 +140,7 @@ impl SymbolEmitter<'_> {
     }
 
     fn push_named_function(&mut self, name: &Token, body: &FunctionBody, span: Span) {
-        if let Some(label) = token_name(name) {
+        if let Some(label) = name.identifier() {
             self.push_function(label, SymbolKind::FUNCTION, body, span, name.span);
         }
     }
@@ -180,13 +172,13 @@ impl SymbolEmitter<'_> {
 /// The label for `name`, empty when recovery left no real name in it.
 fn function_name_label(name: &FunctionName) -> (String, SymbolKind) {
     let mut label = String::new();
-    for identifier in name.names.iter().filter_map(token_name) {
+    for identifier in name.names.iter().filter_map(Token::identifier) {
         if !label.is_empty() {
             label.push('.');
         }
         label.push_str(identifier);
     }
-    if let Some(method) = name.method.as_ref().and_then(token_name) {
+    if let Some(method) = name.method.as_ref().and_then(Token::identifier) {
         label.push(':');
         label.push_str(method);
     }
@@ -200,7 +192,7 @@ fn function_name_label(name: &FunctionName) -> (String, SymbolKind) {
 
 fn format_params(body: &FunctionBody) -> String {
     let mut parts: Vec<&str> =
-        body.params.iter().filter_map(|param| token_name(&param.name)).collect();
+        body.params.iter().filter_map(|param| param.name.identifier()).collect();
     if body.vararg.is_some() {
         parts.push("...");
     }

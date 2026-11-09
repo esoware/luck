@@ -14,8 +14,6 @@ pub struct BundleResult {
     pub line_map: Vec<LineMapEntry>,
 }
 
-/// Bundles `entry_path` and everything it requires into one Lua file.
-///
 /// # Errors
 ///
 /// Returns every diagnostic that stopped the graph from building, as

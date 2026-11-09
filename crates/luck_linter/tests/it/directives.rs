@@ -1,9 +1,6 @@
-//! `-- luck:` directives, applied by the driver after the rules run.
-
 use luck_linter::{LintConfig, LintDiagnostic, RuleSetting, Severity, lint};
 use luck_token::LuaVersion;
 
-/// The default config with `name` on at `severity`.
 fn with_severity(name: &str, severity: Severity) -> LintConfig {
     let mut config = LintConfig::default();
     config

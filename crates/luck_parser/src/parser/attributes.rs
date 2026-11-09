@@ -1,8 +1,7 @@
-//! Attribute grammar for both dialects.
-//!
 //! Covers Lua `<const>`/`<close>` variable attributes (5.4+) and Luau
-//! `@native`/`@[deprecated(...)]` function attributes. Both are validated as
-//! they're parsed, since Lua and Luau reject unknown attributes as syntax
+//! `@native`/`@[deprecated(...)]` function attributes.
+//!
+//! Both are validated as they're parsed, since Lua and Luau reject unknown attributes as syntax
 //! errors.
 
 use luck_ast::{Attribute, Expression, Field, FunctionAttribute, Punctuated};
@@ -55,7 +54,6 @@ fn is_attribute_literal(expr: &Expression) -> bool {
 }
 
 impl Parser<'_> {
-    /// Parse a `< Name >` attribute if the version has them and `<` is next.
     pub(super) fn try_parse_attribute(&mut self) -> Option<Attribute> {
         (self.version.has_attributes() && matches!(self.peek(), TokenKind::Less))
             .then(|| self.parse_attribute())
@@ -79,9 +77,6 @@ impl Parser<'_> {
         Attribute { span, name }
     }
 
-    /// Parse the Luau attributes before a function, as in `@native` or
-    /// `@[checked, deprecated { use = "g" }]`.
-    ///
     /// Grammar: `attribute ::= '@' NAME | '@[' parattr {',' parattr} ']'`
     /// with `parattr ::= NAME [pars]` and literal-only arguments. The AST
     /// keeps them because `@native` and friends change how Luau compiles the
@@ -89,7 +84,7 @@ impl Parser<'_> {
     pub(super) fn parse_function_attributes(&mut self) -> Vec<FunctionAttribute> {
         let mut attributes = Vec::new();
         while matches!(self.peek(), TokenKind::At) {
-            let at_span = self.advance_span(); // `@`
+            let at_span = self.advance_span();
             // Luau lexes `@name` and `@[` as single tokens.
             if self.current_span().start != at_span.end {
                 self.error(at_span, "attribute name must directly follow `@`");
@@ -127,8 +122,6 @@ impl Parser<'_> {
         attributes
     }
 
-    /// Parse the optional arguments of an attribute inside `@[...]`.
-    ///
     /// Grammar: `pars ::= '(' [litlist] ')' | littable | STRING`. A string or
     /// table argument becomes a one-element argument list.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]

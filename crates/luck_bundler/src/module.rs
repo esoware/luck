@@ -1,19 +1,14 @@
-//! Module identity for the dependency graph.
-
 use luck_ast::Block;
 use luck_token::Span;
 
-/// Index into the dependency graph's `modules` list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ModuleId(pub usize);
 
-/// A resolved `require()` edge out of a module.
 #[derive(Debug, Clone)]
 pub struct Dependency {
     /// The require string with escapes decoded, as real `require` would
     /// receive it.
     pub require_string: String,
-    /// The module the require resolved to.
     pub target: ModuleId,
     /// The `require(...)` call in source. The emitter splices the loader call
     /// over it, and cycle warnings point at it.

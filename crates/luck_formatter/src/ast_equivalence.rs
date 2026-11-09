@@ -1,9 +1,7 @@
-//! Structural AST equivalence for `luck fmt --verify` and
-//! `format_and_verify`.
+//! Spans, comments, and trivia are ignored.
 //!
-//! Spans, comments, and trivia are ignored. Shape, names, and literal values
-//! have to match, apart from the rewrites the formatter is allowed to make,
-//! such as dropping redundant parens or swapping quote style.
+//! Shape, names, and literal values have to match, apart from the rewrites the formatter is allowed
+//! to make, such as dropping redundant parens or swapping quote style.
 //!
 //! A divergence starts with an empty path, and each level it unwinds through
 //! prepends its own segment, so a comparison that matches builds no path.
@@ -18,7 +16,6 @@ use core::ops::ControlFlow::{self, Break, Continue};
 use luck_ast::{Block, Punctuated};
 use luck_token::{LuaVersion, Token, decode_string};
 
-/// First point of divergence between two ASTs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AstDiff {
     /// Slash-separated path into the tree, e.g.
@@ -32,7 +29,6 @@ impl AstDiff {
         Self { path: path.into(), reason: reason.into() }
     }
 
-    /// This diff as seen from the node that holds `segment`.
     fn within(mut self, segment: &str) -> Self {
         self.path = if self.path.is_empty() {
             segment.to_owned()
@@ -43,8 +39,6 @@ impl AstDiff {
     }
 }
 
-/// Compare two blocks parsed as `version` structurally.
-///
 /// String literals compare by the bytes they decode to in that dialect.
 ///
 /// # Errors
@@ -57,27 +51,22 @@ pub fn blocks_equivalent(left: &Block, right: &Block, version: LuaVersion) -> Re
     }
 }
 
-/// A divergence at the node being compared.
 fn differ(reason: impl Into<String>) -> ControlFlow<AstDiff> {
     Break(AstDiff::new(String::new(), reason))
 }
 
-/// `check`, which compared the children at `segment`.
 fn at(segment: &str, check: ControlFlow<AstDiff>) -> ControlFlow<AstDiff> {
     check.map_break(|diff| diff.within(segment))
 }
 
-/// `check`, which compared child `index` of the list `name`.
 fn at_index(name: &str, index: usize, check: ControlFlow<AstDiff>) -> ControlFlow<AstDiff> {
     check.map_break(|diff| diff.within(&format!("{name}[{index}]")))
 }
 
-/// Continue when `is_satisfied`, and diverge for `reason` otherwise.
 fn require(is_satisfied: bool, reason: &str) -> ControlFlow<AstDiff> {
     if is_satisfied { Continue(()) } else { differ(reason) }
 }
 
-/// Both absent, or both present and equivalent under `item_eq`.
 fn presence_eq<T>(
     left: Option<&T>,
     right: Option<&T>,
@@ -105,8 +94,8 @@ fn punctuated_eq<T>(
     if left_count != right_count {
         return differ(format!("punctuated length differs: {left_count} vs {right_count}"));
     }
-    for (index, (lhs, rhs)) in left.iter().zip(right.iter()).enumerate() {
-        at_index("", index, item_eq(lhs, rhs, version))?;
+    for (i, (lhs, rhs)) in left.iter().zip(right.iter()).enumerate() {
+        at_index("", i, item_eq(lhs, rhs, version))?;
     }
     Continue(())
 }

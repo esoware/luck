@@ -6,15 +6,14 @@ pub enum Associativity {
     Right,
 }
 
-/// Which operand of a binary operator an expression fills.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperandSide {
     Left,
     Right,
 }
 
-/// Binary operator as stored in the AST. The spelling is fixed per variant, so
-/// a node holds this one-byte enum instead of a 40-byte `Token`.
+/// The spelling is fixed per variant, so a node holds this one-byte enum instead of a 40-byte
+/// `Token`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
     Add,
@@ -66,9 +65,6 @@ impl BinOp {
         }
     }
 
-    /// The operator a binary operator token denotes, or `None` for any other
-    /// token.
-    ///
     /// Version-gated operators (bitwise, floor div) map unconditionally. The
     /// lexer only produces them for versions that have them, except Luau's
     /// `&` and `|`, which belong to its type syntax (see [`Self::is_bitwise`]).
@@ -104,7 +100,6 @@ impl BinOp {
         })
     }
 
-    /// The exact source spelling.
     #[must_use]
     pub const fn static_text(self) -> &'static str {
         match self {
@@ -194,7 +189,6 @@ impl BinOp {
     }
 }
 
-/// Unary operator (`not`, `-`, `#`, `~`) as stored in the AST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnOp {
     Not,
@@ -204,8 +198,7 @@ pub enum UnOp {
 }
 
 impl UnOp {
-    /// The level every unary operator binds at. Sits between multiplicative
-    /// (10) and `^` (12), per the Lua reference manual.
+    /// Sits between multiplicative (10) and `^` (12), per the Lua reference manual.
     pub const PRECEDENCE: u8 = 11;
 
     #[must_use]
@@ -223,7 +216,6 @@ impl UnOp {
         })
     }
 
-    /// The exact source spelling.
     #[must_use]
     pub const fn static_text(self) -> &'static str {
         match self {
@@ -235,7 +227,6 @@ impl UnOp {
     }
 }
 
-/// Luau compound-assignment operator as stored in the AST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CompoundOp {
     Add,
@@ -268,7 +259,6 @@ impl CompoundOp {
         })
     }
 
-    /// The exact source spelling.
     #[must_use]
     pub const fn static_text(self) -> &'static str {
         match self {

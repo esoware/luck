@@ -1,6 +1,3 @@
-//! Function statements and function expressions as one view, for the node
-//! rules that check every function.
-
 use luck_ast::{Expression, FunctionBody, Statement, TypeDeclarationValue};
 use luck_token::Span;
 
@@ -15,12 +12,10 @@ pub(crate) struct FunctionNode<'ast> {
     pub span: Span,
     /// The declared name, such as `a.b:c`. `None` for a function expression.
     pub name_span: Option<Span>,
-    /// Whether it's declared as `function a:b()`, with an implicit `self`.
     pub is_method: bool,
 }
 
 impl<'ast> FunctionNode<'ast> {
-    /// The node types that hold a function.
     pub(crate) const NODE_TYPES: NodeTypeSet = NodeTypeSet::from_types(&[
         NodeType::FunctionDecl,
         NodeType::LocalFunction,

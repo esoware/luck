@@ -1,6 +1,3 @@
-//! Helpers for the rules that match a call: which global it calls, and what
-//! it passes.
-
 use luck_ast::{Expression, FunctionArgs, FunctionCall, Var, is_multi_value};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, Token, short_string_body};
@@ -17,8 +14,7 @@ pub(crate) fn is_global_call(call: &FunctionCall, name: &str, semantic: &Semanti
         )
 }
 
-/// The root token and field name of a `root.field(...)` callee. `None` for a
-/// method call.
+/// `None` for a method call.
 pub(crate) fn dotted_callee(call: &FunctionCall) -> Option<(&Token, &str)> {
     if call.method.is_some() {
         return None;
@@ -32,8 +28,7 @@ pub(crate) fn dotted_callee(call: &FunctionCall) -> Option<(&Token, &str)> {
     Some((root, field_access.name.identifier()?))
 }
 
-/// A call's positional argument expressions, and how many arguments it
-/// passes. `f"..."` and `f{...}` pass one argument, which isn't in the list.
+/// `f"..."` and `f{...}` pass one argument, which isn't in the list.
 pub(crate) const fn positional_args(function_args: &FunctionArgs) -> (&[Expression], usize) {
     match function_args {
         FunctionArgs::Parenthesized { args, .. } => (args.items.as_slice(), args.len()),
@@ -47,8 +42,6 @@ pub(crate) const fn has_multi_value_tail(args: &[Expression]) -> bool {
     matches!(args.last(), Some(last) if is_multi_value(last))
 }
 
-/// The text between a quoted string argument's quotes, and its span.
-///
 /// Escapes stay undecoded, so a value spelled with escapes won't match a
 /// catalog constant. Long-bracket strings return `None`.
 pub(crate) fn string_literal_value(expr: &Expression) -> Option<(&str, Span)> {

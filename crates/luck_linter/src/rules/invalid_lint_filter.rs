@@ -60,9 +60,6 @@ impl WholeRule for InvalidLintFilter {
     }
 }
 
-/// Returns the candidate closest to `needle` by Levenshtein distance, if
-/// it's close enough to be a likely typo.
-///
 /// A far-off "did you mean" is worse than none.
 fn closest_match(
     needle: &str,

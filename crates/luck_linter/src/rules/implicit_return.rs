@@ -7,9 +7,6 @@ use crate::function_node::FunctionNode;
 use crate::node_type::NodeTypeSet;
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
-/// Flags functions that return a value on some paths but fall off the end on
-/// others.
-///
 /// A function that never returns a value is a procedure and isn't flagged,
 /// so a bare `return` used as a guard clause doesn't count.
 #[derive(Debug, Clone, Copy)]

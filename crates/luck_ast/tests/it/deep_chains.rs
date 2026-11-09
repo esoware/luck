@@ -19,7 +19,6 @@ fn long_left_associative_sum(synth: &Synth) -> Expression {
     chain
 }
 
-/// `f()()()...`, a long left-deep chain of call suffixes.
 fn long_call_chain_statement(synth: &Synth) -> Statement {
     let mut chain = synth.call(synth.name_expr("f"), vec![]);
     for _ in 0..TERMS {

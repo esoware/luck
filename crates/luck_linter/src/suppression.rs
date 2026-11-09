@@ -1,13 +1,8 @@
-//! `-- luck:` directive comments, and what they do to the diagnostics they
-//! cover.
-
 use luck_token::{Comment, LuaVersion, Span, has_line_break, index_to_offset};
 
 use crate::diagnostic::{LintDiagnostic, Severity};
 use crate::nodes::{NodeKind, Nodes};
 
-/// Verb of a `-- luck:` directive.
-///
 /// `Allow` drops diagnostics, `Deny` makes them errors, and `Warn` makes them
 /// warnings. Selene uses the same three.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +27,6 @@ pub(crate) enum Extent {
     RegionEnd,
 }
 
-/// One entry of a directive's rule list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DirectiveRule<'source> {
     /// `*`, which matches every rule.
@@ -50,19 +44,15 @@ impl DirectiveRule<'_> {
     }
 }
 
-/// A `-- luck:` or `-- #luck:` comment, before resolution to what it covers.
 #[derive(Debug)]
 pub(crate) struct DirectiveComment<'source> {
     pub verb: Verb,
     /// `None` when the word after `)` is anything else, which disables the
     /// directive.
     pub extent: Option<Extent>,
-    /// Each entry of the rule list, with its span in the source.
     pub rules: Vec<(DirectiveRule<'source>, Span)>,
 }
 
-/// Parses `-- luck: <verb>(rule, ...)` or `-- #luck: <verb>(rule, ...)`.
-///
 /// `comment_start` is the comment's offset in the source, so name spans come
 /// out absolute.
 pub(crate) fn parse_directive(text: &str, comment_start: u32) -> Option<DirectiveComment<'_>> {
@@ -121,7 +111,6 @@ pub(crate) fn parse_directive(text: &str, comment_start: u32) -> Option<Directiv
     Some(DirectiveComment { verb, extent, rules })
 }
 
-/// A directive resolved to the byte range it covers.
 #[derive(Debug)]
 struct Directive<'source> {
     rule: DirectiveRule<'source>,
@@ -137,8 +126,6 @@ impl Directive<'_> {
     }
 }
 
-/// Drops the diagnostics an `allow` covers and sets the severity of those a
-/// `deny` or `warn` covers.
 pub(crate) fn apply(
     diags: &mut Vec<LintDiagnostic>,
     comments: &[Comment],
@@ -149,8 +136,7 @@ pub(crate) fn apply(
     apply_directives(&resolve(comments, source, nodes, version), diags);
 }
 
-/// Resolves every directive in `comments`. Regions appear where they close,
-/// and unclosed ones come last.
+/// Regions appear where they close, and unclosed ones come last.
 fn resolve<'source>(
     comments: &[Comment],
     source: &'source str,
@@ -214,7 +200,6 @@ fn resolve<'source>(
     directives
 }
 
-/// Every statement's span, nested ones included, sorted by start.
 fn sorted_stmt_spans(nodes: &Nodes<'_>) -> Vec<Span> {
     let mut stmt_spans: Vec<Span> = nodes
         .as_slice()
@@ -229,8 +214,6 @@ fn sorted_stmt_spans(nodes: &Nodes<'_>) -> Vec<Span> {
     stmt_spans
 }
 
-/// The range a directive without `start` or `end` covers.
-///
 /// A directive trailing a statement on the same line
 /// (`local x = 1 -- luck: allow(...)`) covers that statement. Otherwise it
 /// covers the next one.

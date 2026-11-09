@@ -1,7 +1,3 @@
-//! One module per LSP feature, each working from the cached `DocumentState`.
-//! `cursor` holds the position lookups they share, and `stdlib_render` the
-//! stdlib rendering.
-
 pub(crate) mod code_action;
 pub(crate) mod completion;
 mod cursor;

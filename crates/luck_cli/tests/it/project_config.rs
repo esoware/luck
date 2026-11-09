@@ -1,5 +1,3 @@
-//! How a `-c` path that is a bare file name roots the project.
-
 use std::fs;
 
 use predicates::prelude::*;
@@ -7,7 +5,6 @@ use tempfile::TempDir;
 
 use crate::common::{luck_in, write_file};
 
-/// A project with a valid `src/main.lua` and an invalid `gen/bad.lua`.
 fn project_with_generated_code(config: &str) -> TempDir {
     let project = TempDir::new().expect("project");
     fs::create_dir_all(project.path().join("src")).expect("create src");

@@ -5,16 +5,13 @@ use crate::stmt::Block;
 use crate::synth::Synth;
 use crate::types::{GenericTypeList, Type};
 
-/// A full function signature. `Default` is an empty, untyped `()`, so set
-/// only the fields you need.
+/// `Default` is an empty, untyped `()`, so set only the fields you need.
 #[derive(Debug, Default)]
 pub struct FunctionSignature {
-    /// Luau `<T, U...>` list before the parameter parens.
     pub generics: Option<GenericTypeList>,
     pub params: Vec<Parameter>,
     /// Trailing `...`, optionally typed. See [`Synth::vararg_param`].
     pub vararg: Option<VarArgParam>,
-    /// Luau `: T` return annotation.
     pub return_type: Option<Type>,
 }
 
@@ -59,7 +56,6 @@ impl Synth {
         Parameter { span: self.next_span(), name: self.identifier(name), type_annotation: Some(ty) }
     }
 
-    /// A trailing `...` parameter, optionally with a Luau type annotation.
     /// Lua 5.5's named `...name` form isn't supported, so `name` is `None`.
     #[must_use]
     pub fn vararg_param(&self, type_annotation: Option<Type>) -> VarArgParam {

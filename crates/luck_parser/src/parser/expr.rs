@@ -13,9 +13,6 @@ use super::Parser;
     reason = "the parser is one type with its grammar split by file"
 )]
 impl Parser<'_> {
-    /// Pratt expression parser over binary operators of at least
-    /// `min_precedence`.
-    ///
     /// Left-associative chains grow in a loop; only right operands recurse.
     #[inline]
     pub(super) fn parse_expr(&mut self, min_precedence: u8) -> Expression {
@@ -67,7 +64,6 @@ impl Parser<'_> {
         Punctuated::from_items(exprs)
     }
 
-    /// Parse a prefix expression: unary operator or primary.
     fn parse_prefix(&mut self) -> Expression {
         if let Some(op) = UnOp::from_token_kind(self.peek()) {
             let op_span = self.advance_span();
@@ -87,8 +83,6 @@ impl Parser<'_> {
         self.parse_type_cast(primary)
     }
 
-    /// Wrap a just-parsed primary in a trailing Luau `:: Type` cast, if any.
-    ///
     /// Luau's grammar is `asexp ::= simpleexp ['::' Type]`, so `x :: A :: B`
     /// is a parse error there. A second `::` is left in place to fail as an
     /// unexpected token.
@@ -101,7 +95,6 @@ impl Parser<'_> {
         expr
     }
 
-    /// Parse a primary expression and then any suffix chain.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_primary_expr(&mut self) -> Expression {
         match self.peek() {
@@ -164,8 +157,6 @@ impl Parser<'_> {
         }
     }
 
-    /// Consume a number token, an exact Luau integer when it has the `i`
-    /// suffix.
     // Its own frame keeps these temporaries off that of
     // `parse_primary_expr`, which every level of nesting pays for in an
     // unoptimized build.
@@ -178,8 +169,6 @@ impl Parser<'_> {
         }
     }
 
-    /// Parse a suffix chain: `.name`, `[expr]`, `:name(args)`, `(args)`,
-    /// `{table}`, `"string"`, and Luau's `<<T>>`.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_suffixes(&mut self, mut expr: Expression) -> Expression {
         loop {
@@ -253,7 +242,6 @@ impl Parser<'_> {
         expr
     }
 
-    /// Whether a Luau `<<T>>` instantiation starts here.
     const fn is_at_type_instantiation(&self) -> bool {
         self.version.has_explicit_type_instantiation()
             && matches!(self.peek(), TokenKind::Less)
@@ -269,10 +257,8 @@ impl Parser<'_> {
         (type_args, close)
     }
 
-    /// Parse a Luau if-expression:
-    /// `if cond then expr {elseif cond then expr} else expr`.
     fn parse_if_expr(&mut self) -> Expression {
-        let if_span = self.advance_span(); // `if`
+        let if_span = self.advance_span();
         if !self.enter_depth() {
             return Expression::Error(if_span);
         }
@@ -308,11 +294,9 @@ impl Parser<'_> {
         }))
     }
 
-    /// Parse a Luau interpolated string:
-    /// `InterpolatedStringBegin` {expr `InterpolatedStringMiddle`} expr `InterpolatedStringEnd`.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_interpolated_string(&mut self) -> Expression {
-        let begin_token = self.advance(); // InterpolatedStringBegin
+        let begin_token = self.advance();
         let start_span = begin_token.span;
         let mut segments = Vec::new();
 
@@ -380,7 +364,6 @@ impl Parser<'_> {
         expr
     }
 
-    /// Parse function call arguments: `(explist)`, `{table}`, or `"string"`.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_function_args(&mut self) -> FunctionArgs {
         match self.peek() {
@@ -423,8 +406,6 @@ impl Parser<'_> {
         }
     }
 
-    /// Parse `function(params) block end`, optionally preceded by Luau
-    /// `@attr` attributes (`simpleexp ::= attributes 'function' funcbody`).
     fn parse_function_def(&mut self) -> Expression {
         let attributes = self.parse_function_attributes();
         let start_span =
@@ -440,7 +421,6 @@ impl Parser<'_> {
         Expression::FunctionDef(Box::new(FunctionDef { span, attributes, body }))
     }
 
-    /// Parse a table constructor: `{ [fieldlist] }`.
     pub(super) fn parse_table_constructor(&mut self) -> TableConstructor {
         let start_span = self.advance_span(); // `{`
 

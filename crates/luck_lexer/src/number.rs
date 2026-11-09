@@ -24,7 +24,7 @@ pub(crate) fn scan_number(
         [b'0', after_zero @ ..] => {
             // Luau strips every `_` before conversion, so `0_x1` is hex.
             let underscore_count = if version.has_underscore_separators() {
-                after_zero.iter().take_while(|&&byte| byte == b'_').count()
+                after_zero.iter().take_while(|&&b| b == b'_').count()
             } else {
                 0
             };
@@ -119,7 +119,7 @@ fn scan_binary_number(
 ) -> Result<(), LexError> {
     cursor.advance_by(prefix_length);
 
-    if !eat_digits(cursor, version, |byte| matches!(byte, b'0' | b'1')) {
+    if !eat_digits(cursor, version, |b| matches!(b, b'0' | b'1')) {
         return Err(lex_error(
             cursor.span_since(start),
             "binary literal requires at least one digit",
@@ -183,17 +183,15 @@ fn scan_decimal_number(
 /// scanner and leave it unconvertible. 5.2 and 5.3 only read on through hex
 /// digits, so any other letter starts a new token there.
 fn is_touching_numeral(cursor: &Cursor<'_>, version: LuaVersion) -> bool {
-    cursor.peek().is_some_and(|byte| {
+    cursor.peek().is_some_and(|b| {
         if version.has_strict_numeral_end() {
-            byte.is_ascii_alphanumeric() || byte == b'_'
+            b.is_ascii_alphanumeric() || b == b'_'
         } else {
-            byte.is_ascii_hexdigit()
+            b.is_ascii_hexdigit()
         }
     })
 }
 
-/// A malformed-number error spanning the numeral through the letter at the
-/// cursor.
 fn touching_letter_error(cursor: &Cursor<'_>, start: usize) -> LexError {
     lex_error(
         Span::from_indices(start, cursor.position().saturating_add(1)),
@@ -214,10 +212,10 @@ fn eat_digits(
 ) -> bool {
     let digits_start = cursor.position();
     if version.has_underscore_separators() {
-        cursor.eat_while(|byte| is_digit(&byte) || byte == b'_');
-        cursor.text_since(digits_start).bytes().any(|byte| byte != b'_')
+        cursor.eat_while(|b| is_digit(&b) || b == b'_');
+        cursor.text_since(digits_start).bytes().any(|b| b != b'_')
     } else {
-        cursor.eat_while(|byte| is_digit(&byte));
+        cursor.eat_while(|b| is_digit(&b));
         cursor.position() > digits_start
     }
 }
@@ -246,13 +244,11 @@ fn eat_integer_suffix(
 ) -> Result<(), LexError> {
     if version.has_luau_integer_literals() && cursor.eat(b'i') {
         validate_integer_range(cursor, start, radix)?;
-        cursor.eat_while(|byte| byte == b'_');
+        cursor.eat_while(|b| b == b'_');
     }
     Ok(())
 }
 
-/// Reject a decimal numeral running straight into `..`.
-///
 /// Every reference scanner consumes `.` greedily up to an exponent, so that
 /// is "malformed number", never a concat (`1 ..2` needs the space). Past an
 /// exponent only the 5.2+ scanners still do.

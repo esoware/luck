@@ -81,7 +81,6 @@ impl LuaTarget {
 mod tests {
     use super::*;
 
-    /// Every target with every name it parses from, in lowercase.
     const ALIASES: [(LuaTarget, &[&str]); 7] = [
         (LuaTarget::Lua51, &["lua51", "5.1", "51"]),
         (LuaTarget::Lua52, &["lua52", "5.2", "52"]),

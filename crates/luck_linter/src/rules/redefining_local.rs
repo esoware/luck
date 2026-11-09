@@ -39,8 +39,6 @@ impl WholeRule for RedefiningLocal {
 struct RedefineChecker<'ast> {
     source: &'ast str,
     version: LuaVersion,
-    /// Each local declared so far in the block being checked, with its
-    /// name's span.
     declarations: Vec<(&'ast str, Span)>,
     findings: Vec<Finding>,
 }

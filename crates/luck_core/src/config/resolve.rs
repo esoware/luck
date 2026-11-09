@@ -1,7 +1,3 @@
-//! Turning a loaded [`LuckConfig`] into [`BuildConfig`]s: applying the
-//! selected profile, resolving entry and output paths, and expanding the
-//! single-entry or multi-entry (`entries`) form.
-
 use std::path::{Path, PathBuf};
 
 use rustc_hash::FxHashSet;
@@ -14,7 +10,6 @@ use super::transform_config::TransformConfig;
 use crate::lua_target::LuaTarget;
 use crate::path::canonicalize_existing;
 
-/// The resolved settings for building one entry.
 #[derive(Debug, Clone)]
 pub struct BuildConfig {
     pub target: LuaTarget,
@@ -29,9 +24,6 @@ pub struct BuildConfig {
     pub luck_preamble: bool,
 }
 
-/// Applies `profile` to a loaded project and resolves one [`BuildConfig`] per
-/// entry.
-///
 /// # Errors
 ///
 /// Returns a message when `profile` isn't defined, when the entry, output, or
@@ -154,8 +146,6 @@ where
     Ok(())
 }
 
-/// Looks up the overrides for `profile`, if one was requested.
-///
 /// # Errors
 ///
 /// Returns a message when the config doesn't define `profile`.

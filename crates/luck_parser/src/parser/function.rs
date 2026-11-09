@@ -1,6 +1,3 @@
-//! Function bodies and their parameter lists, which function statements and
-//! function expressions share.
-
 use core::mem;
 
 use luck_ast::{Block, FunctionBody, Parameter, Punctuated, Type, VarArgParam};
@@ -14,7 +11,6 @@ use super::{FunctionScope, Parser};
     reason = "the parser is one type with its grammar split by file"
 )]
 impl Parser<'_> {
-    /// Parse a function body: `[<generics>] (params) block end`.
     pub(super) fn parse_function_body(&mut self) -> FunctionBody {
         // Luau puts the generic list before the parens: `function f<T>(x: T)`.
         let generics = (self.version.has_type_syntax() && matches!(self.peek(), TokenKind::Less))

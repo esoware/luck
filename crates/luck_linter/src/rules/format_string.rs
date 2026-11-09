@@ -12,9 +12,6 @@ use crate::format_pattern::{
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
-/// Validates a literal format string, Lua pattern, or pack format passed to
-/// a `string` function, and checks the argument count where one applies.
-///
 /// Both `string.format("...", ...)` and `("..."):format(...)` are checked.
 /// So are literal `string.gsub` replacements and `os.date` formats.
 #[derive(Debug, Clone, Copy)]
@@ -54,12 +51,9 @@ impl NodeRule for FormatString {
     }
 }
 
-/// Which validator applies to a stdlib call's literal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DslKind {
-    /// `string.format`, with `%`-style printf specifiers.
     Format,
-    /// `string.match` and `gmatch`, in the Lua pattern grammar.
     Match,
     /// `string.find`, which may search its pattern as plain text.
     Find,
@@ -69,7 +63,6 @@ enum DslKind {
     Pack,
     /// `string.packsize`, whose format can't hold a variable-length option.
     PackSize,
-    /// `string.unpack`.
     Unpack,
     /// `os.date`, with strftime-style specifiers.
     OsDate,
@@ -88,8 +81,7 @@ impl DslKind {
         }
     }
 
-    /// The DSL of the `string` function `name`. `os.date` has no method
-    /// form, so it never comes from here.
+    /// `os.date` has no method form, so it never comes from here.
     fn of_string_function(name: &str) -> Option<Self> {
         match name {
             "format" => Some(Self::Format),
@@ -142,7 +134,6 @@ fn dsl_literal(call: &FunctionCall, dsl: DslKind) -> Option<(&Literal, Option<&[
     }
 }
 
-/// Validates the DSL literal of a resolved stdlib call.
 fn check_dsl_literal(call: &FunctionCall, dsl: DslKind, version: LuaVersion) -> Option<Finding> {
     let (literal, trailing_args) = dsl_literal(call, dsl)?;
     let body = checkable_body(literal)?;
@@ -200,8 +191,6 @@ fn is_plain_find(pattern: &str, after_pattern: &[Expression]) -> bool {
     is_maybe_plain || !pattern.contains(['^', '$', '*', '+', '?', '.', '(', '[', '%', '-'])
 }
 
-/// Flags a call whose argument count after the literal differs from
-/// `expected`.
 fn check_arg_count(args: &[Expression], literal_span: Span, expected: usize) -> Option<Finding> {
     // A `...` or call could expand to any number of values.
     if args.iter().any(is_multi_value) {
@@ -216,8 +205,6 @@ fn check_arg_count(args: &[Expression], literal_span: Span, expected: usize) -> 
     })
 }
 
-/// Validates a literal `gsub` replacement string.
-///
 /// Capture indices are only checked when the pattern is a valid literal too.
 fn check_gsub_replacement(call: &FunctionCall, version: LuaVersion) -> Option<Finding> {
     let pattern_index = usize::from(call.method.is_none());
@@ -236,7 +223,7 @@ fn check_gsub_replacement(call: &FunctionCall, version: LuaVersion) -> Option<Fi
     };
     validate_gsub_replacement(replacement_body, capture_count, version)
         .err()
-        .map(|error| literal_error(error, replacement, replacement_body, "replacement"))
+        .map(|e| literal_error(e, replacement, replacement_body, "replacement"))
 }
 
 /// Reports `error` at its offset in the quoted `literal`, whose `body` the

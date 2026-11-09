@@ -1,6 +1,3 @@
-//! Control flow over a `Block`: the graph of what can run after what, and the
-//! decision points `cyclomatic_complexity` counts.
-//!
 //! Each graph covers one block and stops at nested function bodies, whose
 //! flow is their own.
 
@@ -16,7 +13,6 @@ use luck_token::{BinOp, Span, Token};
 
 use crate::call::is_global_call;
 
-/// How control can leave a block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Exit {
     /// Off the block's end, which in a loop body starts the next iteration,
@@ -24,9 +20,7 @@ pub(crate) enum Exit {
     End,
     /// `break`, or a `goto` to a label outside the block.
     Break,
-    /// `return` with at least one value.
     ReturnValue,
-    /// `return` with no values.
     ReturnEmpty,
     /// A call to the host's `error`.
     Error,
@@ -47,8 +41,6 @@ impl Exit {
 /// How many nodes the [`Exit`]s take, at the start of every graph.
 const EXIT_NODE_COUNT: usize = 5;
 
-/// What can run after what in one block.
-///
 /// A node is one piece of code that runs as a unit: a simple statement, a
 /// condition, or a loop header. No node has more than two successors.
 #[derive(Debug)]
@@ -62,11 +54,9 @@ pub(crate) struct FlowGraph {
     is_reachable: Vec<bool>,
 }
 
-/// One name a `local` statement declares.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LocalDeclaration {
     pub name_span: Span,
-    /// The node of the `local` statement.
     pub node: usize,
     /// Where the name's scope ends. Code past this can't reference it, and
     /// Lua can only re-enter a scope through the `local` statement itself.
@@ -138,7 +128,6 @@ impl FlowGraph {
         &self.locals
     }
 
-    /// Whether `node`'s code starts at or after `offset`.
     pub(crate) fn starts_at_or_after(&self, node: usize, offset: u32) -> bool {
         self.code_starts.get(node).is_some_and(|start| *start >= offset)
     }
@@ -149,7 +138,6 @@ struct GraphBuilder<'ast, 'analysis> {
     semantic: &'analysis SemanticAnalysis,
     /// The node the next code runs after, or `None` right after a jump.
     cursor: Option<usize>,
-    /// Where the scope of a `local` declared here ends.
     scope_end: u32,
     break_target: usize,
     continue_target: usize,
@@ -172,7 +160,6 @@ impl<'ast> GraphBuilder<'ast, '_> {
         }
     }
 
-    /// Runs `node` after the cursor and moves the cursor onto it.
     fn advance_to(&mut self, node: usize) {
         if let Some(cursor) = self.cursor {
             self.connect(cursor, node);
@@ -180,7 +167,6 @@ impl<'ast> GraphBuilder<'ast, '_> {
         self.cursor = Some(node);
     }
 
-    /// Adds the code at `span` after the cursor.
     fn code(&mut self, span: Span) -> usize {
         let node = self.new_node();
         if let Some(code_start) = self.graph.code_starts.get_mut(node) {
@@ -191,14 +177,12 @@ impl<'ast> GraphBuilder<'ast, '_> {
         node
     }
 
-    /// Adds the code at `span`, after which control goes to `target` alone.
     fn jump(&mut self, span: Span, target: usize) {
         let node = self.code(span);
         self.connect(node, target);
         self.cursor = None;
     }
 
-    /// Ends the path at the cursor by sending it to `target`.
     fn close_into(&mut self, target: usize) {
         if let Some(cursor) = self.cursor.take() {
             self.connect(cursor, target);
@@ -209,7 +193,6 @@ impl<'ast> GraphBuilder<'ast, '_> {
         self.scoped_block(block, block.span.end);
     }
 
-    /// Builds `block`, whose locals stay in scope up to `scope_end`.
     fn scoped_block(&mut self, block: &'ast Block, scope_end: u32) {
         let outer_scope_end = mem::replace(&mut self.scope_end, scope_end);
         let outer_label_count = self.labels.len();
@@ -310,8 +293,6 @@ impl<'ast> GraphBuilder<'ast, '_> {
         }
     }
 
-    /// Builds a loop's body, whose locals stay in scope up to `scope_end` and
-    /// whose iterations end at `continue_target`.
     fn loop_body(
         &mut self,
         block: &'ast Block,
@@ -390,8 +371,6 @@ impl<'ast> GraphBuilder<'ast, '_> {
     }
 }
 
-/// Whether a loop condition is always truthy or always falsy, by its literal
-/// value alone.
 fn literal_truth(condition: &Expression) -> Option<bool> {
     match unwrap_parentheses(condition) {
         Expression::Nil(_) | Expression::False(_) => Some(false),
@@ -415,7 +394,6 @@ fn literal_truth(condition: &Expression) -> Option<bool> {
     }
 }
 
-/// How many decision points `block` has, without its nested functions'.
 pub(crate) fn decision_points(block: &Block) -> u32 {
     let mut points = DecisionPoints::default();
     points.visit_block(block);

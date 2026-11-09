@@ -1,6 +1,3 @@
-//! Expression predicates and builders, and the integer-to-float conversion,
-//! that the passes share.
-
 use luck_ast::{
     BinaryOp, Expression, Field, Literal, ParenthesizedExpression, Var, ensure_sufficient_stack,
     unwrap_parentheses,
@@ -95,7 +92,9 @@ fn literal_kind(expr: &Expression) -> Option<LiteralKind> {
             let operand = literal_kind(&unop.operand)?;
             unary_literal_kind(unop.op, operand)
         }),
-        Expression::BinaryOp(binop) => ensure_sufficient_stack(|| binary_literal_kind(binop)),
+        Expression::BinaryOp(binary_op) => {
+            ensure_sufficient_stack(|| binary_literal_kind(binary_op))
+        }
         // Luau: casts and type arguments are erased before evaluation.
         Expression::TypeCast(cast) => ensure_sufficient_stack(|| literal_kind(&cast.expr)),
         // Luau
@@ -149,13 +148,13 @@ const fn unary_literal_kind(op: UnOp, operand: LiteralKind) -> Option<LiteralKin
     }
 }
 
-fn binary_literal_kind(binop: &BinaryOp) -> Option<LiteralKind> {
-    let left = literal_kind(&binop.left)?;
-    let right = literal_kind(&binop.right)?;
+fn binary_literal_kind(binary_op: &BinaryOp) -> Option<LiteralKind> {
+    let left = literal_kind(&binary_op.left)?;
+    let right = literal_kind(&binary_op.right)?;
     let are_numbers = left.is_number() && right.is_number();
     let are_integers = left == LiteralKind::Integer && right == LiteralKind::Integer;
     let arithmetic_kind = if are_integers { LiteralKind::Integer } else { LiteralKind::Float };
-    match binop.op {
+    match binary_op.op {
         BinOp::And | BinOp::Or => Some(if left == right { left } else { LiteralKind::Other }),
         BinOp::Eq | BinOp::Ne => Some(LiteralKind::Other),
         BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
@@ -169,7 +168,7 @@ fn binary_literal_kind(binop: &BinaryOp) -> Option<LiteralKind> {
         BinOp::Div | BinOp::Pow => are_numbers.then_some(LiteralKind::Float),
         // `%` and `//` raise on a zero integer divisor in 5.3+.
         BinOp::Mod | BinOp::FloorDiv => {
-            (are_numbers && is_nonzero_number_literal(&binop.right)).then_some(arithmetic_kind)
+            (are_numbers && is_nonzero_number_literal(&binary_op.right)).then_some(arithmetic_kind)
         }
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
             are_integers.then_some(LiteralKind::Integer)
@@ -188,8 +187,6 @@ fn is_nonzero_number_literal(expr: &Expression) -> bool {
     }
 }
 
-/// Whether evaluating `expr` can't raise or call a metamethod.
-///
 /// A name read may be a global's, which fires `__index` on a metatabled
 /// environment, so only literals, closures, `...`, and tables built from them
 /// qualify.
@@ -219,13 +216,13 @@ fn is_effect_free(expr: &Expression, can_read_names: bool) -> bool {
             is_effect_free(unwrap_parentheses(&paren.expr), can_read_names)
         }
         Expression::UnaryOp(_) => literal_kind(expr).is_some(),
-        Expression::BinaryOp(binop) => {
-            if matches!(binop.op, BinOp::And | BinOp::Or) {
+        Expression::BinaryOp(binary_op) => {
+            if matches!(binary_op.op, BinOp::And | BinOp::Or) {
                 // and/or never invoke metamethods, so they are pure whenever
                 // both operands are.
                 ensure_sufficient_stack(|| {
-                    is_effect_free(&binop.left, can_read_names)
-                        && is_effect_free(&binop.right, can_read_names)
+                    is_effect_free(&binary_op.left, can_read_names)
+                        && is_effect_free(&binary_op.right, can_read_names)
                 })
             } else {
                 literal_kind(expr).is_some()
@@ -360,7 +357,6 @@ pub(crate) const fn int_to_float(value: i64) -> f64 {
     value as f64
 }
 
-/// Wraps `expr` in span-less parentheses.
 pub(crate) fn parenthesize(expr: Expression) -> Expression {
     Expression::Parenthesized(Box::new(ParenthesizedExpression { span: Span::default(), expr }))
 }
@@ -378,7 +374,7 @@ pub(crate) fn ends_in_if_expr(expr: &Expression) -> bool {
     loop {
         current = match current {
             Expression::IfExpression(_) => return true,
-            Expression::BinaryOp(binop) => &binop.right,
+            Expression::BinaryOp(binary_op) => &binary_op.right,
             Expression::UnaryOp(unop) => &unop.operand,
             Expression::Nil(_)
             | Expression::False(_)
@@ -415,8 +411,8 @@ pub(crate) fn can_unwrap_in_binop_lhs(inner: &Expression, outer: BinOp) -> bool 
         | Expression::FunctionDef(_) => true,
         // Unary ops bind looser than ^, so (-a)^b needs its parens.
         Expression::UnaryOp(_) => outer != BinOp::Pow && !ends_in_if_expr(inner),
-        Expression::BinaryOp(binop) => {
-            binop.op.can_nest_bare(outer, OperandSide::Left) && !ends_in_if_expr(inner)
+        Expression::BinaryOp(binary_op) => {
+            binary_op.op.can_nest_bare(outer, OperandSide::Left) && !ends_in_if_expr(inner)
         }
         Expression::FunctionCall(_)
         | Expression::VarArg(_)
@@ -443,8 +439,8 @@ pub(crate) fn can_unwrap_in_binop_rhs(inner: &Expression, outer: BinOp) -> bool 
         | Expression::TableConstructor(_)
         | Expression::FunctionDef(_) => true,
         Expression::UnaryOp(_) => !ends_in_if_expr(inner),
-        Expression::BinaryOp(binop) => {
-            binop.op.can_nest_bare(outer, OperandSide::Right) && !ends_in_if_expr(inner)
+        Expression::BinaryOp(binary_op) => {
+            binary_op.op.can_nest_bare(outer, OperandSide::Right) && !ends_in_if_expr(inner)
         }
         Expression::FunctionCall(_)
         | Expression::VarArg(_)

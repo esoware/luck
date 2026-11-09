@@ -170,8 +170,6 @@ fn type_cast_expr() {
     assert!(matches!(expr, Expression::TypeCast(_)));
 }
 
-/// `::` applies to any simpleexp, not just prefix expressions.
-///
 /// Luau's grammar is `asexp ::= simpleexp ['::' Type]`, so literals, tables,
 /// and call results take a cast too. The minifier emits forms like
 /// `print(1::number)`, which have to parse back.
@@ -190,8 +188,6 @@ fn type_cast_on_literals_and_tables() {
     }
 }
 
-/// A cast binds to the simpleexp, tighter than binary operators:
-/// `a + b :: number` is `a + (b :: number)`.
 #[test]
 fn type_cast_binds_tighter_than_binary_op() {
     let result = parse_luau("local x = a + b :: number");

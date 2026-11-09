@@ -1,6 +1,3 @@
-//! Per-variant node discriminants, which key the bus's buckets and the node
-//! types each node rule declares.
-
 use luck_ast::{Expression, LastStatement, Statement};
 
 /// One variant per `Statement`, `LastStatement`, and `Expression` variant.
@@ -61,7 +58,6 @@ impl NodeType {
     /// `ErrorLastStmt` must stay the last variant for this to count them all.
     pub(crate) const COUNT: usize = Self::ErrorLastStmt.index() + 1;
 
-    /// Discriminant value, for indexing bucket arrays.
     #[expect(
         clippy::as_conversions,
         reason = "a const fn has no other way to read a fieldless enum discriminant"
@@ -166,7 +162,6 @@ impl NodeTypeSet {
         set
     }
 
-    /// Membership by [`NodeType::index`], for walking bucket arrays.
     pub(crate) const fn has_index(self, type_index: usize) -> bool {
         self.0 & (1u64 << type_index) != 0
     }

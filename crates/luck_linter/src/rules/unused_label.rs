@@ -4,8 +4,6 @@ use luck_token::Span;
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
-/// Flags labels (`::name::`) that no `goto` in the same function targets.
-///
 /// A `goto` can't leave its function, so each function body, and the chunk
 /// itself, is checked on its own.
 #[derive(Debug, Clone, Copy)]
@@ -27,7 +25,6 @@ impl WholeRule for UnusedLabel {
     }
 }
 
-/// Checks one function body, then each function nested in it.
 fn check_scope(block: &Block, findings: &mut Vec<Finding>) {
     let mut scope = LabelScope::default();
     scope.visit_block(block);
@@ -49,8 +46,6 @@ fn check_scope(block: &Block, findings: &mut Vec<Finding>) {
     }
 }
 
-/// The labels and `goto`s of one function, with the functions nested in it
-/// left for their own pass.
 #[derive(Default)]
 struct LabelScope<'ast> {
     labels: Vec<(&'ast str, Span)>,

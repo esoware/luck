@@ -1,6 +1,4 @@
-//! Local symbols jump to their declaration through the scope tree;
-//! `require("path")` strings jump to the resolved module file. Globals have
-//! no definition site in a single-file view and return `None`.
+//! Globals have no definition site in a single-file view and return `None`.
 
 use tower_lsp::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location, Range};
 

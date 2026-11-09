@@ -1,6 +1,3 @@
-//! Constructors for every numbered diagnostic, the only place their codes and
-//! wording are written.
-//!
 //! E001, E003, E005, E011, and W002 are never emitted, and their numbers stay
 //! reserved.
 
@@ -27,7 +24,6 @@ impl Diagnostic {
         Self::module_not_found(file_path, span, module_name, &quoted_paths.join("\n  - "))
     }
 
-    /// An `@alias` require whose alias no `.luaurc` declares.
     #[must_use]
     pub fn e004_unknown_alias(
         file_path: &str,
@@ -43,7 +39,6 @@ impl Diagnostic {
         )
     }
 
-    /// An `@alias` require stopped by a `.luaurc` that doesn't parse.
     #[must_use]
     pub fn e004_malformed_luaurc(
         file_path: &str,
@@ -59,8 +54,7 @@ impl Diagnostic {
         )
     }
 
-    /// An `@alias` require whose aliases lead back to themselves. `cycle`
-    /// holds the alias names in order, without their `@`.
+    /// `cycle` holds the alias names in order, without their `@`.
     #[must_use]
     pub fn e004_alias_cycle(
         file_path: &str,
@@ -82,7 +76,6 @@ impl Diagnostic {
             .with_help(format!("searched paths:\n  - {searched}"))
     }
 
-    /// A Luau require string that doesn't begin with `./`, `../`, or `@`.
     #[must_use]
     pub fn e004_luau_scheme(file_path: &str, span: Span, module_name: &str) -> Self {
         Self::error_at(
@@ -99,7 +92,6 @@ impl Diagnostic {
         )
     }
 
-    /// A bare `@self` require with no subpath.
     #[must_use]
     pub fn e004_self_needs_subpath(file_path: &str, span: Span) -> Self {
         Self::error_at(
@@ -119,7 +111,6 @@ impl Diagnostic {
             )
     }
 
-    /// A module that exists as both a `.luau` and a `.lua` file.
     #[must_use]
     pub fn e007_both_extensions(
         file_path: &str,
@@ -134,7 +125,6 @@ impl Diagnostic {
         )
     }
 
-    /// A module that exists as both a file and a directory's init file.
     #[must_use]
     pub fn e007_file_and_directory(
         file_path: &str,
@@ -149,7 +139,6 @@ impl Diagnostic {
         )
     }
 
-    /// A module file beside a same-named directory that has no init file.
     #[must_use]
     pub fn e007_file_beside_directory(
         file_path: &str,
@@ -261,7 +250,6 @@ impl Diagnostic {
         )
     }
 
-    /// The global `require` referenced without being directly called.
     #[must_use]
     pub fn w005_aliased(file_path: &str, span: Span) -> Self {
         Self::warning_at(
@@ -291,8 +279,6 @@ impl Diagnostic {
         )
     }
 
-    /// A `require(expr)` routed through the bundle's loader.
-    ///
     /// Lua targets only: the cache is keyed by module name, so a name computed at
     /// runtime can still find a bundled module.
     #[must_use]
@@ -310,8 +296,6 @@ impl Diagnostic {
         )
     }
 
-    /// A `require(expr)` left exactly as written.
-    ///
     /// Luau targets only: the bundle's cache is keyed by resolved file, and Roblox
     /// requires take an Instance, so a runtime argument can't name a bundled
     /// module.

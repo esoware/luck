@@ -10,13 +10,10 @@ use crate::rule::{LintContext, Rule};
 use crate::rules::{RULES, RuleEntry};
 use crate::{bus, driver, fix};
 
-/// Parses `source` and runs one rule with the default config.
 pub(crate) fn run_rule(rule: &dyn Rule, source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
     run_rule_with_config(rule, source, version, &LintConfig::default())
 }
 
-/// Like [`run_rule`] but parses as Luau and analyzes with the Roblox
-/// stdlib environment, for the Roblox-only rules.
 pub(crate) fn run_rule_roblox(rule: &dyn Rule, source: &str) -> Vec<LintDiagnostic> {
     let version = LuaVersion::Luau;
     check(
@@ -57,8 +54,6 @@ fn parse_cleanly(source: &str, version: LuaVersion) -> ParseResult {
     parse
 }
 
-/// Runs `rule` alone through the same analysis, dispatch, and diagnostic
-/// stamping as the driver.
 fn check(
     rule: &dyn Rule,
     parse: &ParseResult,
@@ -92,8 +87,6 @@ fn check(
     driver::into_diagnostics(entry.rule(), findings, config).collect()
 }
 
-/// A diagnostic of `rule` at `span`, for tests of what happens to
-/// diagnostics after the rules run.
 pub(crate) fn diagnostic(rule: &'static str, span: Span) -> LintDiagnostic {
     Finding::new("test", span).into_diagnostic(rule, Category::Correctness, Severity::Warning)
 }

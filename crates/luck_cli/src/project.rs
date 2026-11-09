@@ -1,9 +1,3 @@
-//! Project resolution and the walk over a project's files.
-//!
-//! Picks a target for a one-shot input, loads `luck.json`, expands path
-//! arguments into the set of files to process, and runs the path-oriented
-//! commands over them in parallel.
-
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -22,12 +16,9 @@ use crate::exit::{Exit, operation_error, usage_error};
 /// Reports the failure and returns [`Exit::Usage`] when the working
 /// directory can't be read.
 pub(crate) fn current_directory() -> Result<PathBuf, Exit> {
-    env::current_dir()
-        .map_err(|error| usage_error(format!("failed to get current directory: {error}")))
+    env::current_dir().map_err(|e| usage_error(format!("failed to get current directory: {e}")))
 }
 
-/// `input` as a path, once it's known to name a file.
-///
 /// # Errors
 ///
 /// Reports the failure and returns [`Exit::Usage`] when it doesn't.
@@ -50,8 +41,6 @@ pub(crate) fn entry_and_root(entry: &str) -> Result<(&Path, &Path), Exit> {
     Ok((entry_path, entry_path.parent().unwrap_or_else(|| Path::new(""))))
 }
 
-/// Resolve the target for the one-shot `bundle`/`minify`/`graph` commands.
-///
 /// An explicit `-t/--target` wins. Otherwise `config` picks by extension,
 /// since a `.lua` file can hold any dialect. With no config, `.luau` is Luau
 /// and everything else is Lua 5.4.
@@ -68,9 +57,8 @@ pub(crate) fn resolve_configured_target(
     target.map_or_else(|| config.target_for_path(Path::new(input_path)).map_err(usage_error), Ok)
 }
 
-/// Resolve how the one-shot commands treat `require(expr)`. An explicit
-/// `--dynamic-require` wins over the project's setting, which defaults to
-/// warning and keeping the call.
+/// An explicit `--dynamic-require` wins over the project's setting, which
+/// defaults to warning and keeping the call.
 pub(crate) fn resolve_dynamic_require(
     config: &LuckConfig,
     flag: Option<DynamicRequire>,
@@ -78,14 +66,14 @@ pub(crate) fn resolve_dynamic_require(
     flag.or(config.dynamic_require).unwrap_or_default()
 }
 
-/// The config for a one-shot `bundle`, `minify`, or `graph` run.
+/// That's `-c` resolved through `extends` when given.
 ///
-/// That's `-c` resolved through `extends` when given. Otherwise it's the
-/// `luck.json` governing the input, or defaults if there's none, and discovery
-/// starts in the input's own directory, not cwd, so
-/// `luck bundle path/to/project/src/main.lua` sees that project's config. The
-/// config directory isn't returned, since a one-shot run names its input and
-/// applies no include/exclude filter.
+/// Otherwise it's the `luck.json` governing the input, or defaults if there's
+/// none, and discovery starts in the input's own directory, not cwd, so
+/// `luck bundle path/to/project/src/main.lua` sees that project's config.
+///
+/// The config directory isn't returned, since a one-shot run names its input
+/// and applies no include/exclude filter.
 ///
 /// # Errors
 ///
@@ -130,12 +118,11 @@ pub(crate) fn resolve_project(config_path: Option<&Path>) -> Result<ProjectConfi
     }))
 }
 
-/// Expand the user's path arguments into the files of `project` to process,
-/// each with its target.
+/// Empty args default to the current directory.
 ///
-/// Empty args default to the current directory. Directories are walked and
-/// gated by the include/exclude filter; explicit file args are included
-/// unconditionally. A file several arguments reach is processed once.
+/// Directories are walked and gated by the include/exclude filter; explicit
+/// file args are included unconditionally. A file several arguments reach is
+/// processed once.
 ///
 /// Every target resolves here, before the parallel commands' locked output
 /// sections. Those hold the stdio locks on the main thread while rayon
@@ -219,8 +206,7 @@ fn collect_lua_files(directory: &Path, filter: &ProjectFilter) -> Result<Vec<Pat
         .build();
     let mut files: Vec<PathBuf> = Vec::new();
     for walked in walker {
-        let entry =
-            walked.map_err(|error| operation_error(format!("cannot walk directory: {error}")))?;
+        let entry = walked.map_err(|e| operation_error(format!("cannot walk directory: {e}")))?;
         let path = entry.path();
         if path.extension().is_some_and(|extension| extension == "lua" || extension == "luau")
             && path.is_file()
@@ -245,8 +231,6 @@ mod tests {
         files.iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect()
     }
 
-    /// Discovers the governing config and resolves against it, as the
-    /// one-shot commands do.
     fn target_for(target: Option<LuaTarget>, input_path: &str) -> LuaTarget {
         let config = config_for_one_shot(None, input_path).expect("config resolves");
         resolve_configured_target(&config, target, input_path).expect("target resolves")

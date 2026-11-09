@@ -1,6 +1,4 @@
-//! The top-level `luck.json` type, its dialect and build keys, and how
-//! `extends` merges one config over another. Nothing here touches the
-//! filesystem.
+//! Nothing here touches the filesystem.
 
 use core::hash::Hash;
 use std::path::Path;
@@ -38,8 +36,6 @@ impl DialectKey {
         }
     }
 
-    /// The dialect when `luck.json` leaves the key unset: Lua 5.4 for `lua`,
-    /// standalone Luau for `luau`.
     #[must_use]
     pub const fn default_target(self) -> LuaTarget {
         match self {
@@ -101,9 +97,6 @@ pub struct LuckConfig {
 }
 
 impl LuckConfig {
-    /// Resolves the dialect `key` names, or [`DialectKey::default_target`]
-    /// when it's unset.
-    ///
     /// # Errors
     ///
     /// Returns a message when `key` names no known target.
@@ -114,12 +107,11 @@ impl LuckConfig {
         };
         setting.as_ref().map_or_else(
             || Ok(key.default_target()),
-            |dialect| dialect.parse::<LuaTarget>().map_err(|error| format!("`{name}`: {error}")),
+            |dialect| dialect.parse::<LuaTarget>().map_err(|e| format!("`{name}`: {e}")),
         )
     }
 
-    /// Resolves the dialect of the file at `path` from the key its extension
-    /// selects. Only that key is validated.
+    /// Only that key is validated.
     ///
     /// # Errors
     ///
@@ -128,8 +120,6 @@ impl LuckConfig {
         self.target(DialectKey::for_path(path))
     }
 
-    /// The filter `include` and `exclude` make for a project rooted at `root`.
-    ///
     /// # Errors
     ///
     /// Returns a message naming the first invalid glob pattern.
@@ -137,9 +127,7 @@ impl LuckConfig {
         ProjectFilter::new(root, self.include.as_deref(), self.exclude.as_deref())
     }
 
-    /// The Lua search path templates: `search_paths` when it's set and
-    /// [`DEFAULT_SEARCH_PATHS`] otherwise. An empty list reaches the resolver,
-    /// which treats it as the defaults too.
+    /// An empty list reaches the resolver, which treats it as the defaults too.
     #[must_use]
     pub fn search_paths_or_default(&self) -> Vec<String> {
         self.search_paths
@@ -147,8 +135,6 @@ impl LuckConfig {
             .unwrap_or_else(|| DEFAULT_SEARCH_PATHS.iter().map(ToString::to_string).collect())
     }
 
-    /// Merges `self` over `base`, with `self` winning.
-    ///
     /// `include`, `exclude`, and `search_paths` concatenate base-first without
     /// repeats, `format` and `lint` merge field by field, and `extends` is
     /// cleared.

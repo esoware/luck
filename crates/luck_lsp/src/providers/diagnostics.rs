@@ -1,5 +1,3 @@
-//! Convert `luck_linter::LintDiagnostic` values into LSP `Diagnostic`s.
-
 use luck_linter::{LintDiagnostic, Severity};
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString};
 
@@ -43,14 +41,14 @@ mod tests {
     fn convert(lint: LintDiagnostic) -> Diagnostic {
         let document =
             DocumentState::new("local x = 1".to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
-        let mut diagnostics = to_lsp(&document, &[lint]);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        diagnostics.remove(0)
+        let mut diags = to_lsp(&document, &[lint]);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        diags.remove(0)
     }
 
     #[test]
     fn maps_error_severity() {
-        let diagnostic = convert(LintDiagnostic {
+        let diag = convert(LintDiagnostic {
             rule: "test_rule",
             category: Category::Correctness,
             severity: Severity::Error,
@@ -59,14 +57,14 @@ mod tests {
             help: None,
             fix: None,
         });
-        assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::ERROR));
-        assert_eq!(diagnostic.message, "bad");
-        assert_eq!(diagnostic.code, Some(NumberOrString::String("test_rule".to_owned())));
+        assert_eq!(diag.severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(diag.message, "bad");
+        assert_eq!(diag.code, Some(NumberOrString::String("test_rule".to_owned())));
     }
 
     #[test]
     fn maps_warning_severity_and_appends_help() {
-        let diagnostic = convert(LintDiagnostic {
+        let diag = convert(LintDiagnostic {
             rule: "warn_rule",
             category: Category::Style,
             severity: Severity::Warning,
@@ -75,7 +73,7 @@ mod tests {
             help: Some("rename it".to_owned()),
             fix: None,
         });
-        assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::WARNING));
-        assert_eq!(diagnostic.message, "stylistic issue\n\nhelp: rename it");
+        assert_eq!(diag.severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(diag.message, "stylistic issue\n\nhelp: rename it");
     }
 }

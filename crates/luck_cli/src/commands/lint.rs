@@ -1,6 +1,3 @@
-//! `luck lint` - config-driven, oxlint-style linting with `-A`/`-W`/`-D`
-//! overrides, `--fix`, JSON output, and stdin mode.
-
 use std::fs;
 use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
@@ -85,7 +82,6 @@ pub(crate) struct LintArgs {
     stdin_filepath: Option<String>,
 }
 
-/// One document's rendered diagnostics, in the stream their format writes to.
 enum Rendered {
     /// ariadne output, for stderr.
     Pretty(Vec<u8>),
@@ -170,8 +166,6 @@ impl LintArgs {
         self.exit_status(total_errors, total_warnings)
     }
 
-    /// Lint one document from stdin as if it were the `--stdin-filepath` file.
-    ///
     /// `--fix` writes the fixed source to stdout, never to disk, and findings
     /// to stderr whatever their format, because stdout is the new file content.
     /// Otherwise output formats and the exit-code policy match the file walk.
@@ -219,8 +213,6 @@ impl LintArgs {
         self.exit_status(total_errors, total_warnings)
     }
 
-    /// Shared lint exit-code policy.
-    ///
     /// # Errors
     ///
     /// Returns [`Exit::Failure`] on any error, and on warnings under
@@ -235,8 +227,6 @@ impl LintArgs {
         }
     }
 
-    /// Lint one file, applying and writing fixes if asked, and render its
-    /// diagnostics in the requested format.
     fn lint_file(
         &self,
         file_path: &Path,
@@ -286,7 +276,6 @@ impl LintArgs {
         LintOutcome { error_count, warning_count, is_fixed, note, rendered }
     }
 
-    /// Renders one document's diagnostics in the requested format.
     fn render(
         &self,
         file_label: &str,
@@ -334,9 +323,6 @@ impl LintArgs {
         }
     }
 
-    /// The effective `LintConfig`: the project's, with the CLI overrides on
-    /// top.
-    ///
     /// # Errors
     ///
     /// Reports the failure and returns [`Exit::Usage`] on an unknown rule
@@ -394,7 +380,6 @@ fn severity_counts(diags: &[LintDiagnostic]) -> (usize, usize) {
     (count(Severity::Error), count(Severity::Warning))
 }
 
-/// Print every registered rule with its category, sorted by name.
 fn print_lint_rules() {
     let mut rules: Vec<(&str, &str)> =
         luck_linter::rules().map(|rule| (rule.name(), rule.category().name())).collect();
@@ -404,7 +389,6 @@ fn print_lint_rules() {
     }
 }
 
-/// Print the resolved effective lint configuration as JSON.
 fn print_lint_config(lint_config: &LintConfig) {
     let overrides: serde_json::Map<String, serde_json::Value> = lint_config
         .rule_overrides
@@ -437,7 +421,6 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Command};
 
-    /// `luck lint` parsed with `flags`, as clap builds it.
     fn lint_args(flags: &[&str]) -> LintArgs {
         let command_line = ["luck", "lint"].iter().chain(flags);
         let Command::Lint(args) = Cli::try_parse_from(command_line).expect("lint parses").command
@@ -447,8 +430,6 @@ mod tests {
         args
     }
 
-    /// A project whose `luck.json` holds `config`, and its path as a
-    /// command-line argument.
     fn project_with_config(config: &str) -> (tempfile::TempDir, String) {
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
@@ -457,7 +438,6 @@ mod tests {
         (directory, config_arg)
     }
 
-    /// The lint config `args` resolve to, through the project config they name.
     fn resolved_lint_config(args: &LintArgs) -> LintConfig {
         let project = resolve_project(args.config.as_deref()).expect("config resolves");
         args.lint_config(&project.config).expect("lint config resolves")

@@ -8,11 +8,6 @@ use crate::nodes::adjacent_stmts;
 use crate::number::is_number_literal;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
-/// Flags the two common hand-written table copies:
-///
-/// 1. `local out = {}; for k, v in pairs(src) do out[k] = v end`
-/// 2. `local out = {}; for i = 1, #src do out[i] = src[i] end`
-///
 /// The help suggests `table.clone(src)` where the target's stdlib has it, and
 /// `table.move(src, 1, #src, 1, {})` otherwise. A target with neither gets no
 /// finding.
@@ -47,7 +42,6 @@ impl WholeRule for ManualTableClone {
     }
 }
 
-/// The stdlib call the help suggests.
 #[derive(Debug, Clone, Copy)]
 enum Suggestion {
     TableClone,
@@ -121,7 +115,6 @@ fn manual_copy_span(
     is_copy.then(|| Span::new(local.span.start, next.span().end))
 }
 
-/// If the local assignment is `local NAME = {}`, return `NAME`.
 fn single_empty_table_local(local: &LocalAssignment) -> Option<&Token> {
     let [attributed] = local.names.items.as_slice() else {
         return None;
@@ -192,8 +185,7 @@ fn copied_value<'ast>(
     .then_some(value)
 }
 
-/// Matches a call to the global `pairs` or `ipairs`. A shadowed one is a
-/// user iterator, not a table walk.
+/// A shadowed one is a user iterator, not a table walk.
 fn is_pairs_call(expr: &Expression, semantic: &SemanticAnalysis) -> bool {
     let Expression::FunctionCall(call) = expr else {
         return false;
@@ -201,7 +193,6 @@ fn is_pairs_call(expr: &Expression, semantic: &SemanticAnalysis) -> bool {
     is_global_call(call, "pairs", semantic) || is_global_call(call, "ipairs", semantic)
 }
 
-/// Recognize `#name` and return that name.
 fn length_of_name(expr: &Expression) -> Option<&Token> {
     let Expression::UnaryOp(unary) = expr else {
         return None;
@@ -215,14 +206,11 @@ fn length_of_name(expr: &Expression) -> Option<&Token> {
     Some(token)
 }
 
-/// The span of the declaration that `name` resolves to, or `None` for a
-/// global.
 fn declaration_of(name: &Token, tree: &ScopeTree) -> Option<Span> {
     let reference = tree.reference(*tree.references_by_span.get(&name.span)?);
     Some(tree.symbol(reference.resolved?).definition_span)
 }
 
-/// Whether `expr` is a name that resolves to the local `declaration` declares.
 fn is_read_of_local(expr: &Expression, declaration: &Token, tree: &ScopeTree) -> bool {
     matches!(expr, Expression::Var(Var::Name(token))
         if declaration_of(token, tree) == Some(declaration.span))

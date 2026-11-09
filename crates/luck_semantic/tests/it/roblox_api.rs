@@ -259,8 +259,6 @@ fn has_deprecated_tag(node: &serde_json::Value) -> bool {
         .is_some_and(|tags| tags.iter().any(|tag| tag.as_str() == Some("Deprecated")))
 }
 
-/// Checks the committed `roblox_enums.toml` offline: generated header and
-/// pinned sentinels.
 #[test]
 fn committed_roblox_enums_file_is_plausible() {
     let committed =

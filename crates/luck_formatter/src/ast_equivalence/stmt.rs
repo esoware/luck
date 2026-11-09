@@ -26,8 +26,8 @@ pub(super) fn block_eq(left: &Block, right: &Block, version: LuaVersion) -> Cont
     }
     let left_stmts = left.stmts.iter().filter(is_counted);
     let right_stmts = right.stmts.iter().filter(is_counted);
-    for (index, (lhs, rhs)) in left_stmts.zip(right_stmts).enumerate() {
-        at_index("stmts", index, stmt_eq(lhs, rhs, version))?;
+    for (i, (lhs, rhs)) in left_stmts.zip(right_stmts).enumerate() {
+        at_index("stmts", i, stmt_eq(lhs, rhs, version))?;
     }
     presence_eq(
         left.last_stmt.as_deref(),
@@ -186,8 +186,8 @@ fn if_stmt_eq(
         at("block", block_eq(&lhs.block, &rhs.block, version))
     };
     let clauses = left.elseif_clauses.iter().zip(&right.elseif_clauses);
-    for (index, (lhs, rhs)) in clauses.enumerate() {
-        at_index("elseif_clauses", index, clause_eq(lhs, rhs))?;
+    for (i, (lhs, rhs)) in clauses.enumerate() {
+        at_index("elseif_clauses", i, clause_eq(lhs, rhs))?;
     }
     presence_eq(
         left.else_clause.as_ref(),
@@ -234,8 +234,8 @@ fn function_decl_eq(
     version: LuaVersion,
 ) -> ControlFlow<AstDiff> {
     require(left.name.names.len() == right.name.names.len(), "`FunctionDecl` name length differs")?;
-    for (index, (lhs, rhs)) in left.name.names.iter().zip(&right.name.names).enumerate() {
-        at_index("FunctionDecl/name/names", index, token_text_eq(lhs, rhs))?;
+    for (i, (lhs, rhs)) in left.name.names.iter().zip(&right.name.names).enumerate() {
+        at_index("FunctionDecl/name/names", i, token_text_eq(lhs, rhs))?;
     }
     presence_eq(
         left.name.method.as_ref(),

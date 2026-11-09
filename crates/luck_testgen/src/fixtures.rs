@@ -1,6 +1,3 @@
-//! The shared fixture tree at `tests/fixtures/`: walking it and reading each
-//! fixture's dialect from its path.
-
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
@@ -25,8 +22,6 @@ pub fn detect_version(relative: &Path) -> LuaVersion {
     }
 }
 
-/// Whether the fixture at `relative` under the fixtures root sits in an
-/// `errors/` tree of deliberately invalid input.
 #[must_use]
 pub fn is_error_fixture(relative: &Path) -> bool {
     relative.components().any(|component| component.as_os_str() == "errors")

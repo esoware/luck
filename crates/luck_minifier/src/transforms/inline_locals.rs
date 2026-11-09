@@ -16,9 +16,6 @@ use crate::expr::{
     is_closed_literal_expr, parenthesize,
 };
 
-/// Inlines single-use locals whose initializer is a closed literal
-/// expression, removing the declaration.
-///
 /// This pass works on names, not bindings, so every candidate must be
 /// position-insensitive:
 /// - the name must not be bound anywhere else in the file (by another local,
@@ -43,7 +40,6 @@ pub(crate) fn inline(mut block: Block, version: LuaVersion) -> Block {
     block
 }
 
-/// Each inlinable local's name, mapped to its initializer.
 fn find_inline_candidates(
     block: &Block,
     version: LuaVersion,
@@ -68,8 +64,6 @@ fn find_inline_candidates(
         .collect()
 }
 
-/// Gathers literal declarations, disqualifying binders, and per-name reference
-/// counts for `find_inline_candidates` in one walk.
 struct CandidateScanner {
     declarations: FxHashMap<CompactString, Expression>,
     // Every single-name local with one initializer, literal or not, so a
@@ -91,8 +85,6 @@ impl CandidateScanner {
         self.opened_in_scope.push(name.into());
     }
 
-    /// Closes every declaration opened since `opened_in_scope` was
-    /// `scope_start` long.
     fn close_scope(&mut self, scope_start: usize) {
         for name in self.opened_in_scope.drain(scope_start..) {
             self.open_declarations.remove(&name);
@@ -309,8 +301,6 @@ impl Transform for Inliner {
     }
 }
 
-/// Parenthesizes an inlined literal that landed in a prefix position.
-///
 /// `x["k"]` with `x = 37.5` has to become `(37.5)["k"]`.
 fn ensure_prefix(expr: Expression) -> Expression {
     if is_prefix_expr(&expr) { expr } else { parenthesize(expr) }
@@ -324,8 +314,6 @@ enum OperandPosition {
     Cast,
 }
 
-/// Whether `expr` printed bare in `position` reparses as that same operand.
-///
 /// Grouping lives in `Parenthesized` nodes and codegen prints the tree flat, so
 /// an operand that binds looser than its position silently regroups on reparse.
 fn keeps_grouping(expr: &Expression, position: OperandPosition) -> bool {
@@ -335,7 +323,7 @@ fn keeps_grouping(expr: &Expression, position: OperandPosition) -> bool {
             OperandPosition::Right(op) => can_unwrap_in_binop_rhs(expr, op),
             OperandPosition::Unary => !matches!(
                 expr,
-                Expression::BinaryOp(binop) if binds_looser_than_unary(binop.op)
+                Expression::BinaryOp(binary_op) if binds_looser_than_unary(binary_op.op)
             ),
             OperandPosition::Cast => false,
         },
@@ -367,8 +355,8 @@ fn keeps_grouping(expr: &Expression, position: OperandPosition) -> bool {
 /// The operand `expr` prints last, which is what a following token lands on.
 fn last_operand(expr: &mut Expression) -> &mut Expression {
     match expr {
-        Expression::BinaryOp(binop) => {
-            ensure_sufficient_stack(move || last_operand(&mut binop.right))
+        Expression::BinaryOp(binary_op) => {
+            ensure_sufficient_stack(move || last_operand(&mut binary_op.right))
         }
         Expression::UnaryOp(unop) => {
             ensure_sufficient_stack(move || last_operand(&mut unop.operand))
@@ -403,19 +391,17 @@ impl Inliner {
         false
     }
 
-    /// Inlines the candidates `expr` reads directly as operands.
-    ///
     /// Only in an operand position can a replacement regroup, so only there does it
     /// gain parens. Anywhere else it stays bare, since `return (1+2)` is longer
     /// than `return 1+2` and `simplify_parens` wouldn't strip those parens.
     fn inline_operands(&mut self, expr: &mut Expression) {
         match expr {
-            Expression::BinaryOp(binop) => {
-                if binop.op == BinOp::Lt {
-                    self.close_cast_before_less_than(&mut binop.left);
+            Expression::BinaryOp(binary_op) => {
+                if binary_op.op == BinOp::Lt {
+                    self.close_cast_before_less_than(&mut binary_op.left);
                 }
-                self.inline_operand(&mut binop.left, OperandPosition::Left(binop.op));
-                self.inline_operand(&mut binop.right, OperandPosition::Right(binop.op));
+                self.inline_operand(&mut binary_op.left, OperandPosition::Left(binary_op.op));
+                self.inline_operand(&mut binary_op.right, OperandPosition::Right(binary_op.op));
             }
             Expression::UnaryOp(unop) => {
                 self.inline_operand(&mut unop.operand, OperandPosition::Unary);

@@ -1,5 +1,3 @@
-//! The `tower_lsp::LanguageServer` implementation.
-//!
 //! Open documents live in memory and take incremental changes, so the server
 //! never reads an open file from disk.
 
@@ -50,7 +48,7 @@ pub trait Notifier: Send + Sync + 'static {
     fn publish_diagnostics(
         &self,
         uri: Url,
-        diagnostics: Vec<Diagnostic>,
+        diags: Vec<Diagnostic>,
         version: Option<i32>,
     ) -> impl Future<Output = ()> + Send;
     fn show_message(
@@ -70,13 +68,8 @@ pub trait Notifier: Send + Sync + 'static {
 }
 
 impl Notifier for Client {
-    async fn publish_diagnostics(
-        &self,
-        uri: Url,
-        diagnostics: Vec<Diagnostic>,
-        version: Option<i32>,
-    ) {
-        Self::publish_diagnostics(self, uri, diagnostics, version).await;
+    async fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i32>) {
+        Self::publish_diagnostics(self, uri, diags, version).await;
     }
 
     async fn show_message(&self, message_type: MessageType, message: String) {
@@ -101,7 +94,6 @@ struct OpenDocument {
     published_lints: Option<Arc<[LintDiagnostic]>>,
 }
 
-/// The LSP server state shared across requests.
 #[derive(Debug)]
 pub struct Backend<N: Notifier = Client> {
     notifier: N,
@@ -144,7 +136,6 @@ impl<N: Notifier> Backend<N> {
         documents.iter().map(|(uri, open)| (uri.clone(), Arc::clone(&open.state))).collect()
     }
 
-    /// The target and extra globals a document at `uri` is analyzed with.
     async fn document_settings(&self, uri: &Url) -> (LuaTarget, FxHashSet<String>) {
         let file_path = uri.to_file_path().ok();
         let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
@@ -185,7 +176,7 @@ impl<N: Notifier> Backend<N> {
             Some(settings) => lint_off_the_serve_loop(&document, settings).await,
             None => Vec::new().into(),
         };
-        let diagnostics = diagnostics::to_lsp(&document, &lints);
+        let diags = diagnostics::to_lsp(&document, &lints);
         // Through the send, so nothing newer can reach the client before it.
         let _ordered = self.sync.lock().await;
         if !self.is_open(&uri, &document).await {
@@ -194,10 +185,9 @@ impl<N: Notifier> Backend<N> {
         if let Some(open) = self.documents.write().await.get_mut(&uri) {
             open.published_lints = Some(lints);
         }
-        self.notifier.publish_diagnostics(uri, diagnostics, Some(document.version)).await;
+        self.notifier.publish_diagnostics(uri, diags, Some(document.version)).await;
     }
 
-    /// Whether `document` is still the state open at `uri`.
     async fn is_open(&self, uri: &Url, document: &Arc<DocumentState>) -> bool {
         self.documents.read().await.get(uri).is_some_and(|open| Arc::ptr_eq(&open.state, document))
     }
@@ -244,9 +234,6 @@ impl<N: Notifier> Backend<N> {
         Some(vec![TextEdit { range: document.full_range(), new_text: result.output }])
     }
 
-    /// Serves `luck/syntaxTree` with a pretty-printed AST dump of the
-    /// requested document, or an empty string when it isn't open.
-    ///
     /// # Errors
     ///
     /// Returns an invalid-params error when `params` carries no parseable
@@ -267,10 +254,6 @@ impl<N: Notifier> Backend<N> {
         Ok(serde_json::Value::String(syntax_tree::syntax_tree(&document)))
     }
 
-    /// Serves `luck/fixAllWorkspace` with one `WorkspaceEdit` holding every
-    /// available fix in every open document the project's include/exclude set
-    /// covers, for the client to apply.
-    ///
     /// # Errors
     ///
     /// Never fails; `custom_method` requires a `Result`.

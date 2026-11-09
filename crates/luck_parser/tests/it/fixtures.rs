@@ -50,8 +50,8 @@ fn fixtures_outside_errors_parse_cleanly() {
         let mut report = format!("{} fixture(s) failed to parse:\n", failures.len());
         for (path, errors) in &failures {
             writeln!(report, "  {}:", path.display()).unwrap();
-            for error in errors {
-                writeln!(report, "    - {}", error.message).unwrap();
+            for e in errors {
+                writeln!(report, "    - {}", e.message).unwrap();
             }
         }
         panic!("{report}{success_count} fixture(s) parsed successfully");

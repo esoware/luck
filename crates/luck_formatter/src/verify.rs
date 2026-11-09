@@ -1,5 +1,3 @@
-//! Verified formatting: the checks `luck fmt --verify` runs on a format.
-//!
 //! The output has to re-parse to an equivalent AST, keep every comment's text
 //! and place among the tokens, and come back unchanged from a second format.
 
@@ -13,9 +11,6 @@ use crate::ast_equivalence::{AstDiff, blocks_equivalent};
 use crate::comments::unix_line_breaks;
 use crate::format::{FormatResult, format, format_source};
 
-/// Format, then check that the output re-parses to an equivalent AST, keeps
-/// every comment's text and place among the tokens, and is idempotent.
-///
 /// This doesn't compile the output for any target VM. Input that fails to
 /// parse returns `Ok` with its errors in `FormatResult::errors`, as with
 /// [`format()`].
@@ -43,7 +38,7 @@ pub fn format_and_verify(
             "<root>",
             format!(
                 "formatted output failed to re-parse: {}",
-                reformatted.errors.first().map_or("<unknown>", |error| error.message.as_str())
+                reformatted.errors.first().map_or("<unknown>", |e| e.message.as_str())
             ),
         );
         return Err((result, diff));
@@ -72,17 +67,14 @@ pub fn format_and_verify(
     Ok(result)
 }
 
-/// Whether every comment of `original` survives in `formatted` with the same
-/// text, between the same two tokens.
+/// Both texts parse to the same AST but not the same tokens.
 ///
-/// Both texts parse to the same AST but not the same tokens. The formatter
-/// writes `;` and `,` as it sees fit (a broken table gains a trailing comma,
-/// and a `;` field separator becomes one), and a claimed list prints a
-/// comment after an item's separator even when the source had it before, so
-/// separators are left out of the comparison. Grouping parens come and go
-/// too (`f"s"` gains them under `call_parentheses = "always"`, and a condition
-/// loses them), so a pair only one side has is skipped. A pair both sides
-/// keep is a real boundary, which catches a comment pulled through a `(`.
+/// The formatter writes `;` and `,` as it sees fit (a broken table gains a trailing comma, and a
+/// `;` field separator becomes one), and a claimed list prints a comment after an item's separator
+/// even when the source had it before, so separators are left out of the comparison. Grouping
+/// parens come and go too (`f"s"` gains them under `call_parentheses = "always"`, and a condition
+/// loses them), so a pair only one side has is skipped. A pair both sides keep is a real boundary,
+/// which catches a comment pulled through a `(`.
 fn comments_kept_in_place(original: &str, formatted: &str, version: LuaVersion) -> bool {
     let before = luck_lexer::lex(original, version);
     let after = luck_lexer::lex(formatted, version);
@@ -104,12 +96,10 @@ fn significant_tokens(tokens: &[Token]) -> Vec<&Token> {
         .collect()
 }
 
-/// The span ends of the tokens present in both streams, one list per stream.
+/// The walk goes in lockstep and skips a paren only one side has.
 ///
-/// The walk goes in lockstep and skips a paren only one side has. Any other
-/// mismatch ends it, and every comment past that point then counts as
-/// following the last aligned token on both sides, so only its text and
-/// order are still compared.
+/// Any other mismatch ends it, and every comment past that point then counts as following the last
+/// aligned token on both sides, so only its text and order are still compared.
 fn aligned_token_ends(left: &[&Token], right: &[&Token]) -> (Vec<u32>, Vec<u32>) {
     let is_paren =
         |token: &Token| matches!(token.kind, TokenKind::LeftParen | TokenKind::RightParen);
@@ -136,7 +126,6 @@ fn aligned_token_ends(left: &[&Token], right: &[&Token]) -> (Vec<u32>, Vec<u32>)
     (left_ends, right_ends)
 }
 
-/// Each comment's text, keyed by how many aligned tokens precede it.
 fn comment_positions<'source>(
     source: &'source str,
     aligned_ends: &[u32],

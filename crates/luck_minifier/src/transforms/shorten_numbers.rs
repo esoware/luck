@@ -3,9 +3,6 @@ use luck_token::{LuaVersion, NumberSubtypes, Span};
 
 use crate::expr::int_to_float;
 
-/// Shortens numeric literals using scientific notation, decimal trimming, and
-/// hex-to-decimal.
-///
 /// On Lua 5.3+ every literal keeps its integer/float subtype (`1.0` never
 /// becomes `1`, an integer never becomes `1e6`), and a candidate is only used
 /// if it parses back to the same value.
@@ -60,9 +57,6 @@ impl Transform for NumberShortener {
     }
 }
 
-/// A shorter spelling of a Luau integer literal (`i` suffix), if there is
-/// one.
-///
 /// The value is an exact 64-bit pattern, so respelling is lossless. Hex covers
 /// every pattern; decimal only up to `i64::MAX`, since larger values would
 /// need a unary minus, which is a different AST shape.
@@ -74,7 +68,7 @@ fn shorten_integer(text: &str) -> Option<String> {
         (None, Some(binary)) => (binary, 2),
         (None, None) => (body, 10),
     };
-    let digits: String = digit_text.chars().filter(|character| *character != '_').collect();
+    let digits: String = digit_text.chars().filter(|c| *c != '_').collect();
     let value = u64::from_str_radix(&digits, radix).ok()?;
 
     let mut best = format!("0x{value:x}i");
@@ -88,7 +82,6 @@ fn shorten_integer(text: &str) -> Option<String> {
     (best.len() < text.len()).then_some(best)
 }
 
-/// The digits after a `0x` or `0X` prefix, if there are any.
 fn hex_digits(text: &str) -> Option<&str> {
     text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")).filter(|digits| !digits.is_empty())
 }
@@ -99,14 +92,11 @@ fn is_float_form(text: &str) -> bool {
         .map_or_else(|| text.contains(['.', 'e', 'E']), |digits| digits.contains(['.', 'p', 'P']))
 }
 
-/// Whether `candidate` parses to exactly `value`. Rust's float parser accepts
-/// Lua's `.5` and `5.` spellings.
+/// Rust's float parser accepts Lua's `.5` and `5.` spellings.
 fn roundtrips(candidate: &str, value: f64) -> bool {
     candidate.parse::<f64>() == Ok(value)
 }
 
-/// A shorter spelling of a number literal, with the same value and subtype,
-/// if there is one.
 fn shorten_number(text: &str, subtypes: NumberSubtypes) -> Option<String> {
     // A one-character literal can never shrink, and single digits are the
     // most common literals in already-minified rounds.

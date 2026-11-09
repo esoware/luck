@@ -1,6 +1,3 @@
-//! Runtime-safe generator: programs that parse and run without error and
-//! print what they compute.
-
 use luck_token::LuaVersion;
 
 use crate::rng::Rng;
@@ -42,7 +39,6 @@ struct RuntimeGenerator {
     output: String,
     scopes: Vec<Vec<Binding>>,
     next_id: usize,
-    /// `local` lines written at module scope.
     module_locals: usize,
 }
 
@@ -66,8 +62,8 @@ impl RuntimeGenerator {
         // wrongly eliminate or reorder assignments change stdout. A binding a
         // later one hides can't be named any more.
         let bindings = self.scopes.pop().unwrap_or_default();
-        for (index, Binding { name, kind, .. }) in bindings.iter().enumerate() {
-            if bindings.iter().skip(index.saturating_add(1)).any(|later| later.name == *name) {
+        for (i, Binding { name, kind, .. }) in bindings.iter().enumerate() {
+            if bindings.iter().skip(i.saturating_add(1)).any(|later| later.name == *name) {
                 continue;
             }
             match kind {
@@ -108,7 +104,6 @@ impl RuntimeGenerator {
         if self.rng.chance(30) { stem.to_owned() } else { numbered }
     }
 
-    /// A name in scope that refers to a binding of `kind`.
     fn visible_name(&mut self, kind: ValueKind) -> Option<String> {
         self.pick_name(kind, |_| true)
     }
@@ -435,8 +430,6 @@ impl RuntimeGenerator {
     }
 }
 
-/// One deterministic runtime-safe program per (seed, version, budget), with
-/// roughly `statement_budget` top-level statements.
 #[must_use]
 pub fn generate_runtime_safe(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
     RuntimeGenerator::new(seed, version).program(statement_budget)

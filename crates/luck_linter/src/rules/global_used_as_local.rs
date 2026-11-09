@@ -18,7 +18,7 @@ impl WholeRule for GlobalUsedAsLocal {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let tree = &context.semantic.scope_tree;
         let mut unresolved_references: Vec<&Reference> = tree.unresolved_references().collect();
-        unresolved_references.sort_by(|left, right| left.name.cmp(&right.name));
+        unresolved_references.sort_by(|a, b| a.name.cmp(&b.name));
 
         let mut findings = Vec::new();
         for references in unresolved_references.chunk_by(|left, right| left.name == right.name) {
@@ -55,8 +55,6 @@ impl WholeRule for GlobalUsedAsLocal {
     }
 }
 
-/// The innermost `Function`-kind scope containing `scope`, or `None`
-/// for module-level references.
 fn enclosing_function(tree: &ScopeTree, scope: ScopeId) -> Option<ScopeId> {
     let mut current = Some(scope);
     while let Some(scope_id) = current {

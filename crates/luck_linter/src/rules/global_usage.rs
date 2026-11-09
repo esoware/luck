@@ -1,8 +1,6 @@
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
-/// Flags reads and writes of `_G`, and of `shared` under the Roblox stdlib.
-///
 /// Outside Roblox, `shared` is an ordinary name.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GlobalUsage;

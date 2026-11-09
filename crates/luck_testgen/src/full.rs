@@ -1,6 +1,3 @@
-//! Full-grammar generator: parse-only programs that exercise every
-//! construct the requested `LuaVersion` accepts.
-//!
 //! Programs are shaped like real code (module prelude, OOP class table,
 //! call- and table-heavy bodies) rather than statement soup.
 //!
@@ -45,7 +42,6 @@ enum Placement {
     Embedded,
 }
 
-/// Whether a function's body may use `...`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Varargs {
     Allowed,
@@ -288,9 +284,6 @@ impl FullGenerator {
     }
 }
 
-/// One deterministic full-grammar program per (seed, version, budget), with
-/// `statement_budget` top-level statements between the class and the module
-/// return.
 #[must_use]
 pub fn generate_full(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
     FullGenerator::new(seed, version, Placement::Module).program(statement_budget)

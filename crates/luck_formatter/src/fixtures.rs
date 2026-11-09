@@ -1,5 +1,3 @@
-//! Helpers the unit tests share.
-
 use luck_ast::{Expression, LastStatement};
 use luck_token::LuaVersion;
 
@@ -7,14 +5,12 @@ use crate::FormatOptions;
 use crate::comments::Comments;
 use crate::ir::{Format, Formatter};
 
-/// Lay out `node` on its own, with no comments.
 pub(crate) fn render(node: &dyn Format, options: FormatOptions) -> String {
-    let mut formatter = Formatter::new(options, Comments::none());
-    node.fmt(&mut formatter);
-    formatter.print("")
+    let mut f = Formatter::new(options, Comments::none());
+    node.fmt(&mut f);
+    f.print("")
 }
 
-/// The expression `source` parses to, read as Luau.
 pub(crate) fn parse_expr(source: &str) -> Expression {
     let parsed = luck_parser::parse(format!("return {source}\n"), LuaVersion::Luau);
     assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);

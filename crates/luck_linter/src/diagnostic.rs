@@ -2,12 +2,9 @@ use luck_token::{LuaVersion, Span, chunk_start, index_to_offset, line_breaks, of
 
 use crate::fix::Fix;
 
-/// Severity of a lint diagnostic, shared with the toolchain-wide
-/// severity in `luck_core`.
 pub type Severity = luck_core::DiagnosticSeverity;
 
-/// Category of a lint rule. Defined in `luck_core` so the config can
-/// deserialize it.
+/// Defined in `luck_core` so the config can deserialize it.
 pub use luck_core::Category;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,8 +18,6 @@ pub struct LintDiagnostic {
     pub fix: Option<Fix>,
 }
 
-/// What a rule reports at one span.
-///
 /// The driver makes each one a [`LintDiagnostic`] carrying the reporting
 /// rule's name and category and its resolved severity.
 #[derive(Debug, Clone, PartialEq, Eq)]

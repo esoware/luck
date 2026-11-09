@@ -5,9 +5,6 @@ use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
-/// Flags chained comparisons like `a < b == c`, and a `not` on the left of
-/// a comparison, as in `not a == b`.
-///
 /// Lua's comparison operators share one precedence and associate left, so
 /// `a < b == c` parses as `(a < b) == c`. Unary `not` binds tighter than
 /// any of them, so `not a == b` parses as `(not a) == b`.
@@ -93,14 +90,12 @@ impl NodeRule for ComparisonPrecedence {
     }
 }
 
-/// Whether `expr` is a comparison with no parentheses around it. The author
-/// of `(a < b) == c` was explicit.
+/// The author of `(a < b) == c` was explicit.
 fn is_unparenthesized_comparison(expr: &Expression) -> bool {
-    matches!(expr, Expression::BinaryOp(binary) if binary.op.is_comparison())
+    matches!(expr, Expression::BinaryOp(binary_op) if binary_op.op.is_comparison())
 }
 
-/// Whether `expr` is a `not` with no parentheses around it. The author of
-/// `(not x) == y` was explicit.
+/// The author of `(not x) == y` was explicit.
 fn is_unparenthesized_not(expr: &Expression) -> bool {
     matches!(expr, Expression::UnaryOp(unary) if unary.op == UnOp::Not)
 }

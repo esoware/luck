@@ -189,9 +189,8 @@ fn replacement_fix(
 /// Whether the name `expanded` starts with may not be the host's global at
 /// `offset`, because a local before it or a write in the chunk rebinds it.
 fn starts_with_rebound_name(expanded: &str, offset: u32, semantic: &SemanticAnalysis) -> bool {
-    let name_length = expanded
-        .find(|character: char| !character.is_alphanumeric() && character != '_')
-        .unwrap_or(expanded.len());
+    let name_length =
+        expanded.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(expanded.len());
     let name = expanded.get(..name_length).unwrap_or_default();
     !name.is_empty()
         && (semantic.nearest_local(name, offset).is_some()
@@ -238,7 +237,7 @@ fn is_followed_by_tighter_binding(offset: u32, context: &LintContext<'_>) -> boo
                 .get(index..)
                 .unwrap_or_default()
                 .iter()
-                .take_while(|&&byte| is_lua_whitespace(byte))
+                .take_while(|&&b| is_lua_whitespace(b))
                 .count(),
         );
         let found = context
@@ -259,7 +258,6 @@ fn is_followed_by_tighter_binding(offset: u32, context: &LintContext<'_>) -> boo
     }
 }
 
-/// The source text of each argument, as a replacement template takes it.
 fn arg_texts<'source>(function_args: &FunctionArgs, source: &'source str) -> Vec<&'source str> {
     match function_args {
         FunctionArgs::Parenthesized { args, .. } => {
@@ -304,8 +302,6 @@ mod tests {
     use super::Deprecated;
     use crate::fixtures::{fix_and_reparse, run_rule, run_rule_roblox};
 
-    /// Applies the first fix and returns its description and the new
-    /// source, or `None` if there's no fix.
     fn run_fix(source: &str, version: LuaVersion) -> Option<(String, String)> {
         let diags = run_rule(&Deprecated, source, version);
         let diag = diags.into_iter().find(|diag| diag.fix.is_some())?;

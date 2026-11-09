@@ -1,9 +1,3 @@
-//! The options that shape output beyond basic layout.
-//!
-//! Number case, `block_newline_gaps`, `sort_requires`,
-//! `space_after_function_names`, `CallParentheses::Input`, format ignore,
-//! `magic_trailing_comma`, and verification.
-
 use luck_formatter::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,
     SpaceAfterFunction, format, format_and_verify,

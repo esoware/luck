@@ -1,5 +1,3 @@
-//! The `format` section and the formatter option enums it deserializes into.
-//!
 //! The enums live here so [`FormatConfig`] can deserialize straight into
 //! them. `luck_formatter` re-exports every one, and its `FormatOptions`
 //! holds the default each one takes when no config sets it.

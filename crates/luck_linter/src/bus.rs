@@ -1,10 +1,3 @@
-//! Bucketed dispatch for node rules.
-//!
-//! One pass over the flat node table calls each [`NodeRule`]'s hooks for
-//! the node types it declares in [`NodeRule::node_types`]. Each rule
-//! collects into its own list, so its findings come out in the order a
-//! walk of its own would give.
-
 use core::cell::RefCell;
 
 use luck_ast::{Expression, Statement};
@@ -47,9 +40,6 @@ fn dispatch(
     }
 }
 
-/// Runs `rules` over `nodes` and returns one findings list per rule, in
-/// the order of `rules`.
-///
 /// Large tables are split into contiguous chunks across the rayon pool.
 /// Chunk results concatenate in order, so each rule's findings come out
 /// as a sequential pass would give them.
@@ -147,7 +137,6 @@ pub(crate) fn assert_dispatch_is_pure(
     }
 }
 
-/// Runs every rule on every node, ignoring `node_types()`.
 #[cfg(debug_assertions)]
 fn run_every_node(
     rules: &[&dyn NodeRule],

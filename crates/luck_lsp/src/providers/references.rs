@@ -1,9 +1,6 @@
-//! Find references.
-//!
-//! Resolves the local at the cursor through the scope tree and returns every
-//! reference to it. Matching is by span, so shadowed names never bleed into
-//! each other, and a local can't be referenced from another file, so one
-//! document is the whole answer.
+//! Matching is by span, so shadowed names never bleed into each other, and
+//! a local can't be referenced from another file, so one document is the
+//! whole answer.
 
 use luck_semantic::SymbolKind;
 use luck_token::Span;

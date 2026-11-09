@@ -1,6 +1,3 @@
-//! Helpers shared by the command handlers: output and stdin I/O, and size
-//! display.
-
 use std::path::Path;
 use std::{fs, io};
 
@@ -22,8 +19,6 @@ pub(crate) fn format_size(bytes: usize) -> String {
     }
 }
 
-/// Writes `content` to the `output_path` file, or to stdout without one.
-///
 /// # Errors
 ///
 /// Reports the failure and returns [`Exit::Failure`] when `output_path` can't
@@ -44,21 +39,17 @@ pub(crate) fn write_output_file(path: &Path, content: &str) -> Result<(), Exit> 
     if let Some(parent) = path.parent()
         && !parent.exists()
     {
-        fs::create_dir_all(parent).map_err(|error| {
-            operation_error(format!("failed to create output directory: {error}"))
-        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| operation_error(format!("failed to create output directory: {e}")))?;
     }
-    fs::write(path, content)
-        .map_err(|error| operation_error(format!("failed to write output: {error}")))
+    fs::write(path, content).map_err(|e| operation_error(format!("failed to write output: {e}")))
 }
 
-/// Read the whole of stdin as UTF-8 text.
-///
 /// # Errors
 ///
 /// Reports the failure and returns [`Exit::Failure`] when stdin can't be
 /// read.
 pub(crate) fn read_stdin_source() -> Result<String, Exit> {
     io::read_to_string(io::stdin())
-        .map_err(|error| operation_error(format!("failed to read stdin: {error}")))
+        .map_err(|e| operation_error(format!("failed to read stdin: {e}")))
 }

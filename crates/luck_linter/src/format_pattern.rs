@@ -1,9 +1,5 @@
-//! Validators for the string DSLs of Lua's stdlib.
-//!
-//! They cover `string.format` specifiers, Lua patterns
-//! (`string.match`/`gmatch`/`find`/`gsub`), `string.pack`/`string.unpack`
-//! format strings, `gsub` replacement strings, and `os.date` formats, each as
-//! the target's `lstrlib.c` and `loslib.c` read them.
+//! Each validator reads its format the way the target's `lstrlib.c` and
+//! `loslib.c` do.
 //!
 //! Each validator takes a literal's body without its quotes and returns a
 //! count (specifiers, captures, or values consumed) where one applies, or
@@ -24,59 +20,104 @@ const MAX_PACK_INT_SIZE: u32 = 16;
 /// The smallest alignment a bare `!` can mean.
 const MIN_NATIVE_ALIGNMENT: u32 = 8;
 
-/// The first malformed construct a validator finds. Each `offset` is a
-/// byte index into the body the validator was given.
+/// Each `offset` is a byte index into the body the validator was given.
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub(crate) enum PatternError {
-    /// A `%` construct cut off by the end of the body.
-    TruncatedSpecifier { offset: usize },
-    /// A `string.format` conversion the target doesn't have.
-    UnknownSpecifier { offset: usize, character: char },
+    TruncatedSpecifier {
+        offset: usize,
+    },
+    UnknownSpecifier {
+        offset: usize,
+        character: char,
+    },
     /// More flags in one `string.format` specifier than Lua allows.
-    BadFlag { offset: usize, character: char },
+    BadFlag {
+        offset: usize,
+        character: char,
+    },
     /// A width longer than the two digits Lua allows.
-    BadWidth { offset: usize },
+    BadWidth {
+        offset: usize,
+    },
     /// A precision longer than the two digits Lua allows.
-    BadPrecision { offset: usize },
+    BadPrecision {
+        offset: usize,
+    },
     /// A flag, width, or precision a Lua 5.4+ conversion rejects.
-    BadModifier { offset: usize, modifier: char, conversion: char },
+    BadModifier {
+        offset: usize,
+        modifier: char,
+        conversion: char,
+    },
     /// A Lua 5.4+ specifier longer than the bound `getformat` enforces.
-    LongSpecifier { offset: usize },
-    /// A `[set]` with no closing `]`.
-    UnterminatedSet { offset: usize },
+    LongSpecifier {
+        offset: usize,
+    },
+    UnterminatedSet {
+        offset: usize,
+    },
     /// A `[]` or `[^]` ending the body, whose `]` is a member, so nothing
     /// closes the set.
-    EmptySet { offset: usize },
+    EmptySet {
+        offset: usize,
+    },
     /// A `%f` with no `[set]` after it.
-    BadEscape { offset: usize, character: char },
+    BadEscape {
+        offset: usize,
+        character: char,
+    },
     /// A `)` with no open capture, or a `(` that never closes.
-    UnmatchedCapture { offset: usize },
-    /// A `(` past the limit on captures.
-    TooManyCaptures { offset: usize },
+    UnmatchedCapture {
+        offset: usize,
+    },
+    TooManyCaptures {
+        offset: usize,
+    },
     /// A `%0`, or a `%n` naming a capture that hasn't closed.
-    BadBackReference { offset: usize },
+    BadBackReference {
+        offset: usize,
+    },
     /// An unknown `string.pack` option, or an option `X` can't align to.
-    InvalidPackOption { offset: usize, character: char },
+    InvalidPackOption {
+        offset: usize,
+        character: char,
+    },
     /// A `c` with no size, or an `X` with no option after it.
-    TruncatedPackSize { offset: usize },
+    TruncatedPackSize {
+        offset: usize,
+    },
     /// An `i`, `I`, `s`, or `!` size outside 1 to 16.
-    PackSizeOutOfLimits { offset: usize },
+    PackSizeOutOfLimits {
+        offset: usize,
+    },
     /// A size whose alignment isn't a power of two under the current `!`.
-    BadPackAlignment { offset: usize },
+    BadPackAlignment {
+        offset: usize,
+    },
     /// An `s` or `z` option in a `string.packsize` format.
-    VariableLengthPackOption { offset: usize, character: char },
+    VariableLengthPackOption {
+        offset: usize,
+        character: char,
+    },
     /// A `gsub` replacement or `os.date` format ending in a single `%`.
-    LonePercent { offset: usize },
+    LonePercent {
+        offset: usize,
+    },
     /// A `gsub` replacement `%` before something other than a digit or `%`.
-    BadReplacementEscape { offset: usize },
+    BadReplacementEscape {
+        offset: usize,
+    },
     /// A `gsub` replacement `%n` above the pattern's capture count.
-    CaptureIndexOutOfRange { offset: usize },
+    CaptureIndexOutOfRange {
+        offset: usize,
+    },
     /// An `os.date` `%` before something other than a date specifier or `%`.
-    BadDateSpecifier { offset: usize },
+    BadDateSpecifier {
+        offset: usize,
+    },
 }
 
 impl PatternError {
-    /// Byte index into the validated body where the error was found.
     pub(crate) const fn offset(&self) -> usize {
         match *self {
             Self::TruncatedSpecifier { offset }
@@ -172,8 +213,8 @@ impl fmt::Display for PatternError {
 
 impl Error for PatternError {}
 
-/// Forward-only reader over a pattern body. Offsets count bytes from the
-/// start of the body, matching what [`PatternError`] reports.
+/// Offsets count bytes from the start of the body, matching what
+/// [`PatternError`] reports.
 struct Cursor<'pattern> {
     pattern: &'pattern str,
     offset: usize,
@@ -188,7 +229,6 @@ impl<'pattern> Cursor<'pattern> {
         self.offset
     }
 
-    /// How many bytes follow the cursor.
     const fn remaining_length(&self) -> usize {
         self.pattern.len().saturating_sub(self.offset)
     }
@@ -197,7 +237,6 @@ impl<'pattern> Cursor<'pattern> {
         self.pattern.as_bytes().get(self.offset).copied()
     }
 
-    /// The whole character at the cursor, for an error that shows it.
     fn peek_char(&self) -> char {
         self.pattern
             .get(self.offset..)
@@ -205,12 +244,10 @@ impl<'pattern> Cursor<'pattern> {
             .unwrap_or(char::REPLACEMENT_CHARACTER)
     }
 
-    /// Skips `count` bytes, stopping at the end of the body.
     fn skip_bytes(&mut self, count: usize) {
         self.offset = self.offset.saturating_add(count).min(self.pattern.len());
     }
 
-    /// Skips the run of bytes that `is_included` accepts and returns it.
     fn take_while(&mut self, mut is_included: impl FnMut(u8) -> bool) -> &'pattern str {
         let start = self.offset;
         while self.peek().is_some_and(&mut is_included) {
@@ -219,9 +256,8 @@ impl<'pattern> Cursor<'pattern> {
         self.pattern.get(start..self.offset).unwrap_or_default()
     }
 
-    /// Skips a run of ASCII digits and returns its length.
     fn skip_digits(&mut self) -> usize {
-        self.take_while(|byte| byte.is_ascii_digit()).len()
+        self.take_while(|b| b.is_ascii_digit()).len()
     }
 
     /// Skips one UTF-8 sequence so error offsets land on char boundaries.
@@ -239,9 +275,6 @@ impl<'pattern> Cursor<'pattern> {
     }
 }
 
-/// Validates a `string.format` string and returns how many arguments its
-/// specifiers consume.
-///
 /// # Errors
 ///
 /// The first malformed specifier, as a [`PatternError`].
@@ -287,9 +320,8 @@ fn scan_format_modifiers<'pattern>(
 ) -> Result<&'pattern str, PatternError> {
     let start = cursor.offset();
     if version.has_checked_format_modifiers() {
-        let modifiers = cursor.take_while(|byte| {
-            matches!(byte, b'-' | b'+' | b'#' | b'0' | b' ' | b'1'..=b'9' | b'.')
-        });
+        let modifiers = cursor
+            .take_while(|b| matches!(b, b'-' | b'+' | b'#' | b'0' | b' ' | b'1'..=b'9' | b'.'));
         // `MAX_FORMAT - 10`, less the conversion character.
         if modifiers.len() >= 21 {
             return Err(PatternError::LongSpecifier { offset: start });
@@ -297,7 +329,7 @@ fn scan_format_modifiers<'pattern>(
         return Ok(modifiers);
     }
 
-    let flags = cursor.take_while(|byte| matches!(byte, b'-' | b'+' | b' ' | b'#' | b'0'));
+    let flags = cursor.take_while(|b| matches!(b, b'-' | b'+' | b' ' | b'#' | b'0'));
     // `scanformat` rejects `sizeof(FLAGS)`, six, or more flag bytes.
     if let Some(character) = flags.chars().nth(5) {
         return Err(PatternError::BadFlag { offset: start.saturating_add(5), character });
@@ -379,12 +411,12 @@ fn rejected_modifier(modifiers: &[u8], conversion: u8) -> Option<usize> {
             .unwrap_or_default()
             .iter()
             .take(2)
-            .take_while(|byte| byte.is_ascii_digit())
+            .take_while(|b| b.is_ascii_digit())
             .count();
         from.saturating_add(digit_count)
     };
 
-    let mut index = modifiers.iter().take_while(|byte| flags.contains(byte)).count();
+    let mut index = modifiers.iter().take_while(|b| flags.contains(b)).count();
     // A width can't start with `0`.
     if modifiers.get(index) != Some(&b'0') {
         index = after_two_digits(index);
@@ -395,9 +427,6 @@ fn rejected_modifier(modifiers: &[u8], conversion: u8) -> Option<usize> {
     (index < modifiers.len()).then_some(index)
 }
 
-/// Validates a Lua pattern, as taken by `string.match`, `gmatch`, `find`,
-/// and `gsub`, and returns how many captures it has.
-///
 /// # Errors
 ///
 /// The first malformed construct, as a [`PatternError`].
@@ -457,7 +486,7 @@ fn scan_escape(cursor: &mut Cursor<'_>, captures: &[bool]) -> Result<(), Pattern
         b'0'..=b'9' => {
             let capture = usize::from(escape.saturating_sub(b'0'))
                 .checked_sub(1)
-                .and_then(|index| captures.get(index));
+                .and_then(|i| captures.get(i));
             if capture.is_some_and(|&is_closed| is_closed) {
                 Ok(())
             } else {
@@ -530,7 +559,6 @@ fn scan_set(cursor: &mut Cursor<'_>) -> Result<(), PatternError> {
     Err(PatternError::UnterminatedSet { offset: start })
 }
 
-/// What one `string.pack` option does.
 #[derive(Debug, Clone, Copy)]
 enum PackOption {
     /// An integer or float of `size` bytes, or an `s` string with a
@@ -550,9 +578,6 @@ enum PackOption {
     Control,
 }
 
-/// Validates a `string.pack`, `unpack`, or `packsize` format and returns
-/// how many values it packs.
-///
 /// `is_packsize` also rejects the variable-length options, whose size
 /// `string.packsize` can't know.
 ///
@@ -673,7 +698,7 @@ const fn fixed_size(size: u32) -> PackOption {
 /// A [`PatternError`] for a size outside those limits.
 fn scan_limited_size(cursor: &mut Cursor<'_>, default: u32) -> Result<u32, PatternError> {
     let start = cursor.offset();
-    let digits = cursor.take_while(|byte| byte.is_ascii_digit());
+    let digits = cursor.take_while(|b| b.is_ascii_digit());
     if digits.is_empty() {
         return Ok(default);
     }
@@ -684,8 +709,6 @@ fn scan_limited_size(cursor: &mut Cursor<'_>, default: u32) -> Result<u32, Patte
         .ok_or(PatternError::PackSizeOutOfLimits { offset: start })
 }
 
-/// Validates a `gsub` replacement string.
-///
 /// `capture_count` is `None` when the pattern isn't a literal, which
 /// disables the index check. `%0` is the whole match, and with zero captures
 /// so is `%1`, so only indices above `max(captures, 1)` are flagged.
@@ -729,11 +752,11 @@ pub(crate) fn validate_gsub_replacement(
     Ok(())
 }
 
-/// Validates an `os.date` format string.
-///
 /// After an optional leading `!` (UTC), it's either exactly `*t` or text
-/// with conversion specifiers. Builds differ in the set they accept, so
-/// every specifier that exists on any platform of the dialect passes.
+/// with conversion specifiers.
+///
+/// Builds differ in the set they accept, so every specifier that exists on
+/// any platform of the dialect passes.
 ///
 /// # Errors
 ///
@@ -884,7 +907,7 @@ mod tests {
     #[test]
     fn pattern_reads_a_quantifier_with_nothing_to_repeat_as_a_literal() {
         for pattern in ["*", "+a", "-", "?", "^-?%d+$", "(*)", "(a)%1*", "%f[a]*", "a**"] {
-            validate_lua_pattern(pattern).unwrap_or_else(|error| panic!("{pattern}: {error}"));
+            validate_lua_pattern(pattern).unwrap_or_else(|e| panic!("{pattern}: {e}"));
         }
     }
 

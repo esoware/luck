@@ -1,5 +1,3 @@
-/// Target Lua dialect. Its predicates gate syntax and version-specific runtime
-/// behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LuaVersion {
     Lua51,
@@ -15,7 +13,6 @@ impl LuaVersion {
     pub const ALL: [Self; 6] =
         [Self::Lua51, Self::Lua52, Self::Lua53, Self::Lua54, Self::Lua55, Self::Luau];
 
-    /// Whether `goto` and labels are supported.
     #[must_use]
     pub const fn has_goto(self) -> bool {
         match self {
@@ -24,8 +21,7 @@ impl LuaVersion {
         }
     }
 
-    /// Whether a label may reuse the name of a label visible in an enclosing
-    /// block. 5.4 made labels unique among the visible labels of a function.
+    /// 5.4 made labels unique among the visible labels of a function.
     #[must_use]
     pub const fn has_label_shadowing(self) -> bool {
         match self {
@@ -34,7 +30,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether `//` floor division is supported.
     #[must_use]
     pub const fn has_floor_div(self) -> bool {
         match self {
@@ -43,7 +38,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether bitwise operators (`&`, `|`, `~`, `<<`, `>>`) are supported.
     #[must_use]
     pub const fn has_bitwise_ops(self) -> bool {
         match self {
@@ -52,7 +46,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether local variable attributes (`<const>`, `<close>`) are supported.
     #[must_use]
     pub const fn has_attributes(self) -> bool {
         match self {
@@ -61,8 +54,7 @@ impl LuaVersion {
         }
     }
 
-    /// Whether `global` declarations are supported (Lua 5.5). `global` stays
-    /// an ordinary name, as in stock builds (`LUA_COMPAT_GLOBAL`), and the
+    /// `global` stays an ordinary name, as in stock builds (`LUA_COMPAT_GLOBAL`), and the
     /// parser recognizes a declaration by the token after it.
     #[must_use]
     pub const fn has_global(self) -> bool {
@@ -83,7 +75,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether numbers have distinct integer/float subtypes (Lua 5.3+).
     /// Observable via `math.type`, `tostring` (`1` vs `1.0`), and `//`.
     /// Luau keeps a single f64 number type, like 5.1 and 5.2.
     #[must_use]
@@ -95,7 +86,7 @@ impl LuaVersion {
     }
 
     /// Whether an attribute may precede the first name in an attnamelist
-    /// (`local <const> x`, `global <const> y`). Lua 5.5 syntax.
+    /// (`local <const> x`, `global <const> y`).
     #[must_use]
     pub const fn has_leading_attributes(self) -> bool {
         match self {
@@ -104,7 +95,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether `break` is a last statement, valid only at the end of a block.
     /// Lua 5.1's grammar has `laststat ::= return | break`; Luau extends it
     /// with `continue` but keeps the last-statement restriction. 5.2+
     /// allows `break` anywhere.
@@ -126,7 +116,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether `;` is a valid empty statement (Lua 5.2+, not Luau).
     #[must_use]
     pub const fn has_empty_stmt(self) -> bool {
         match self {
@@ -135,8 +124,7 @@ impl LuaVersion {
         }
     }
 
-    /// Whether undefined escape sequences are lexer errors. Lua 5.1 and Luau
-    /// treat any escaped non-digit character as that literal character
+    /// Lua 5.1 and Luau treat any escaped non-digit character as that literal character
     /// (`"\m"` is `"m"`); 5.2+ reject them.
     #[must_use]
     pub const fn has_strict_escapes(self) -> bool {
@@ -146,7 +134,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether `\x` hex escape is supported in strings.
     #[must_use]
     pub const fn has_hex_escape(self) -> bool {
         match self {
@@ -155,7 +142,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether `\z` whitespace-skip escape is supported in strings.
     #[must_use]
     pub const fn has_whitespace_escape(self) -> bool {
         match self {
@@ -164,7 +150,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether `\u{XXXX}` unicode escape is supported in strings.
     #[must_use]
     pub const fn has_unicode_escape(self) -> bool {
         match self {
@@ -173,7 +158,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether hex float literals (`0x1.Fp10`) are supported.
     #[must_use]
     pub const fn has_hex_floats(self) -> bool {
         match self {
@@ -182,7 +166,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether binary literals (`0b1010`) are supported.
     #[must_use]
     pub const fn has_binary_literals(self) -> bool {
         match self {
@@ -191,7 +174,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether underscore separators in numbers (`1_000`) are supported.
     #[must_use]
     pub const fn has_underscore_separators(self) -> bool {
         match self {
@@ -231,7 +213,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether explicit type-parameter instantiation (`f<<T>>`) is supported.
     #[must_use]
     pub const fn has_explicit_type_instantiation(self) -> bool {
         match self {
@@ -240,7 +221,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether `export` applies to runtime values as well as types (Luau).
     #[must_use]
     pub const fn has_value_exports(self) -> bool {
         match self {
@@ -249,7 +229,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether type annotations, casts, and declarations are supported.
     #[must_use]
     pub const fn has_type_syntax(self) -> bool {
         match self {
@@ -258,7 +237,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether `@attr` is supported on functions.
     #[must_use]
     pub const fn has_function_attributes(self) -> bool {
         match self {
@@ -267,7 +245,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether `if` can begin an expression.
     #[must_use]
     pub const fn has_if_exprs(self) -> bool {
         match self {
@@ -306,8 +283,7 @@ impl LuaVersion {
         }
     }
 
-    /// Whether loading a file skips a leading UTF-8 BOM (5.2+). 5.1 and Luau
-    /// read it as a malformed first token.
+    /// 5.1 and Luau read it as a malformed first token.
     #[must_use]
     pub const fn has_bom_skip(self) -> bool {
         match self {
@@ -326,8 +302,7 @@ impl LuaVersion {
         }
     }
 
-    /// Whether a raw NUL byte ends the source. Luau's lexer reads 0 as the
-    /// end of input, and PUC Lua lexes a NUL like any other byte.
+    /// Luau's lexer reads 0 as the end of input, and PUC Lua lexes a NUL like any other byte.
     #[must_use]
     pub const fn has_nul_source_end(self) -> bool {
         match self {
@@ -336,8 +311,7 @@ impl LuaVersion {
         }
     }
 
-    /// Whether a `[[` inside a level-0 long bracket is an error. Lua 5.1's
-    /// default `LUA_COMPAT_LSTR` rejects the nesting.
+    /// Lua 5.1's default `LUA_COMPAT_LSTR` rejects the nesting.
     #[must_use]
     pub const fn has_long_bracket_nesting_error(self) -> bool {
         match self {
@@ -371,8 +345,6 @@ impl LuaVersion {
         matches!(self, Self::Luau)
     }
 
-    /// Whether for-loop control variables are read-only, so assigning one is a
-    /// compile error (Lua 5.5).
     #[must_use]
     pub const fn has_const_for_variables(self) -> bool {
         match self {
@@ -381,7 +353,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether named varargs (`...name`) are supported.
     #[must_use]
     pub const fn has_named_varargs(self) -> bool {
         match self {
@@ -410,7 +381,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether compound assignment operators (`+=`, `-=`, etc.) are supported.
     #[must_use]
     pub const fn has_compound_assignment(self) -> bool {
         match self {
@@ -419,7 +389,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether interpolated strings (`` `text{expr}` ``) are supported.
     #[must_use]
     pub const fn has_interpolated_strings(self) -> bool {
         match self {
@@ -555,8 +524,7 @@ impl LuaVersion {
     }
 }
 
-/// The standard-library environment a Luau program targets. Only meaningful
-/// for Luau; vanilla Lua versions always use `Standalone`.
+/// Only meaningful for Luau; vanilla Lua versions always use `Standalone`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StdlibEnvironment {
     #[default]

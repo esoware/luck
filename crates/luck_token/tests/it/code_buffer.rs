@@ -62,11 +62,11 @@ fn ascii_pushes_reject_non_ascii_bytes_without_changing_output() {
             payload.downcast_ref::<String>().is_some_and(|message| message.contains("not ASCII"))
         })
     };
-    for byte in [0x80, 0xC3, 0xFF] {
+    for b in [0x80, 0xC3, 0xFF] {
         let mut buffer = CodeBuffer::default();
         buffer.print_str("ok");
-        assert!(rejects_as_not_ascii(&mut || buffer.print_ascii_byte(byte)), "byte {byte}");
-        assert!(rejects_as_not_ascii(&mut || buffer.print_ascii_repeat(byte, 2)), "byte {byte}");
+        assert!(rejects_as_not_ascii(&mut || buffer.print_ascii_byte(b)), "byte {b}");
+        assert!(rejects_as_not_ascii(&mut || buffer.print_ascii_repeat(b, 2)), "byte {b}");
         assert_eq!(buffer.into_string(), "ok");
     }
 }

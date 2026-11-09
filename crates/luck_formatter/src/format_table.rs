@@ -1,7 +1,7 @@
-//! Table constructor layout.
-//!
 //! A table of simple positional values packs with `fill`, as many per line as
-//! fit. Any other table stays flat if it fits and otherwise breaks one field
+//! fit.
+//!
+//! Any other table stays flat if it fits and otherwise breaks one field
 //! per line. A table whose comments all sit between fields claims them and
 //! breaks one field per line; any other comments are left to the block level.
 
@@ -32,13 +32,11 @@ fn is_fillable(table: &TableConstructor) -> bool {
 }
 
 impl Format for TableConstructor {
-    fn fmt(&self, formatter: &mut Formatter) {
-        if formatter
-            .comments()
-            .has_claimable_comments(self.span, self.fields.items.iter().map(Field::span))
+    fn fmt(&self, f: &mut Formatter) {
+        if f.comments().has_claimable_comments(self.span, self.fields.items.iter().map(Field::span))
         {
             write_commented_list(
-                formatter,
+                f,
                 ("{", "}"),
                 self.span,
                 &self.fields.items,
@@ -49,18 +47,18 @@ impl Format for TableConstructor {
         }
 
         if self.fields.is_empty() {
-            token("{}").fmt(formatter);
+            token("{}").fmt(f);
             return;
         }
 
-        let is_magic = formatter.options().magic_trailing_comma;
+        let is_magic = f.options().magic_trailing_comma;
         // A trailing `,` or `;` after the last field asks for the expanded
         // layout.
         let should_force_expand = is_magic && self.fields.has_trailing_separator;
         let should_fill = is_fillable(self) && !should_force_expand;
         let last_index = self.fields.len().saturating_sub(1);
 
-        let group_id = formatter.group_id();
+        let group_id = f.group_id();
         group_with_id(
             group_id,
             (
@@ -75,9 +73,7 @@ impl Format for TableConstructor {
                             .fields
                             .iter()
                             .enumerate()
-                            .map(|(index, field)| {
-                                (field, (index < last_index).then_some(token(",")))
-                            })
+                            .map(|(i, field)| (field, (i < last_index).then_some(token(","))))
                             .collect();
                         fill(&entries).fmt(indented);
                     } else {
@@ -99,20 +95,20 @@ impl Format for TableConstructor {
                 token("}"),
             ),
         )
-        .fmt(formatter);
+        .fmt(f);
     }
 }
 
 impl Format for Field {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         match self {
             Self::Named { name, value, .. } => {
-                (name, space(), token("="), space(), value).fmt(formatter);
+                (name, space(), token("="), space(), value).fmt(f);
             }
             Self::Bracketed { key, value, .. } => {
-                (BracketedKey(key), space(), token("="), space(), value).fmt(formatter);
+                (BracketedKey(key), space(), token("="), space(), value).fmt(f);
             }
-            Self::Positional { value, .. } => value.fmt(formatter),
+            Self::Positional { value, .. } => value.fmt(f),
         }
     }
 }

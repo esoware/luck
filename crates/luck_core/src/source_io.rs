@@ -1,12 +1,8 @@
-//! Shared source-file loading with SIMD UTF-8 validation.
-
 use std::path::Path;
 use std::{fs, io};
 
 use simdutf8::basic::from_utf8;
 
-/// Reads a source file to a `String`, validating UTF-8 with `simdutf8`.
-///
 /// Fails like `fs::read_to_string`: invalid UTF-8 is an `InvalidData` error
 /// with the same message.
 ///

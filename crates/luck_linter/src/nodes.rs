@@ -1,6 +1,3 @@
-//! Flat tables of every `Statement`, `LastStatement`, and `Expression` node,
-//! and of every `Block`, each in the default visitor's pre-order.
-//!
 //! The bus iterates the node table once, and rules that check each block
 //! read the block table, instead of each rule re-walking the tree.
 
@@ -11,7 +8,6 @@ use luck_ast::{
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::uninitialized::UninitializedLocals;
 
-/// Borrowed view of one AST node, as dispatched to node rules.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum NodeKind<'ast> {
     Statement(&'ast Statement),
@@ -22,14 +18,12 @@ pub(crate) enum NodeKind<'ast> {
     Table(&'ast TableConstructor),
 }
 
-/// One AST node, with its type computed once for the bus's buckets.
 #[derive(Debug)]
 pub(crate) struct AstNode<'ast> {
     pub kind: NodeKind<'ast>,
     pub node_type: NodeType,
 }
 
-/// The flat node and block tables for one chunk.
 #[derive(Debug)]
 pub(crate) struct Nodes<'ast> {
     table: Vec<AstNode<'ast>>,
@@ -40,7 +34,6 @@ pub(crate) struct Nodes<'ast> {
 }
 
 impl<'ast> Nodes<'ast> {
-    /// Collects the tables for `block`, in default [`Visitor`] order.
     pub(crate) fn collect(block: &'ast Block) -> Self {
         let mut collector = NodeCollector {
             nodes: Self {

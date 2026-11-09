@@ -18,7 +18,6 @@ pub enum TypeFieldSpec<'name> {
     Array(Type),
 }
 
-/// Luau `read`/`write` access modifier on a table-type field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeFieldAccess {
     Read,
@@ -55,7 +54,6 @@ impl Synth {
         }))
     }
 
-    /// `typeof(expr)`.
     #[must_use]
     pub fn ty_typeof(&self, expr: Expression) -> Type {
         Type::Typeof(Box::new(TypeofType { span: self.next_span(), expr }))
@@ -123,7 +121,6 @@ impl Synth {
         }))
     }
 
-    /// `(T)`.
     #[must_use]
     pub fn ty_parenthesized(&self, inner: Type) -> Type {
         Type::Parenthesized(Box::new(ParenthesizedType {
@@ -132,24 +129,21 @@ impl Synth {
         }))
     }
 
-    /// `{ T }` array shorthand.
     #[must_use]
     pub fn ty_table_array(&self, element: Type) -> Type {
         self.ty_table(vec![TypeFieldSpec::Array(element)])
     }
 
-    /// `{ name: T, ... }` named-field table type.
     #[must_use]
     pub fn ty_record(&self, fields: Vec<(&str, Type)>) -> Type {
         self.ty_table(
             fields
                 .into_iter()
-                .map(|(name, value)| TypeFieldSpec::Named { access: None, name, value })
+                .map(|(name, v)| TypeFieldSpec::Named { access: None, name, value: v })
                 .collect(),
         )
     }
 
-    /// A full table type mixing named fields, indexers, and an array element.
     /// Named fields and indexers can take a `read`/`write` access modifier.
     /// Luau allows the `{ T }` shorthand only alone, so an array element
     /// beside other fields becomes its `[number]: T` long form.
@@ -193,15 +187,13 @@ impl Synth {
         })
     }
 
-    /// `(T, U) -> R` with unnamed parameters. For generics or named
-    /// parameters, use [`Synth::ty_function_full`].
+    /// For generics or named parameters, use [`Synth::ty_function_full`].
     #[must_use]
     pub fn ty_function(&self, params: Vec<Type>, return_type: Type) -> Type {
         self.ty_function_full(None, params.into_iter().map(|ty| (None, ty)).collect(), return_type)
     }
 
-    /// `<T...>(name: T, U) -> R`. Each parameter is `(optional name, type)`.
-    /// For a pack return, pass a [`Synth::ty_pack`].
+    /// Each parameter is `(optional name, type)`. For a pack return, pass a [`Synth::ty_pack`].
     #[must_use]
     pub fn ty_function_full(
         &self,
@@ -248,13 +240,11 @@ impl Synth {
         Type::Pack(Box::new(TypePack { span, types: Punctuated::from_items(types) }))
     }
 
-    /// `...T` variadic pack element.
     #[must_use]
     pub fn ty_variadic(&self, element: Type) -> Type {
         Type::Variadic(Box::new(VariadicType { span: self.next_span(), type_value: element }))
     }
 
-    /// `T...` generic pack reference.
     #[must_use]
     pub fn ty_generic_pack(&self, name: &str) -> Type {
         Type::GenericPack(Box::new(GenericPackType {
@@ -263,8 +253,7 @@ impl Synth {
         }))
     }
 
-    /// A generic parameter list at a declaration site: `<T, U...>`. Each pair
-    /// is a name and whether it's a pack (`T...`). Defaults aren't supported.
+    /// Each pair is a name and whether it's a pack (`T...`). Defaults aren't supported.
     #[must_use]
     pub fn generic_type_list(&self, params: Vec<(&str, bool)>) -> GenericTypeList {
         let span = self.next_span();

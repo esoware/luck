@@ -12,7 +12,6 @@ pub(crate) struct RequireSite {
     /// The require string with escapes decoded, as real `require` would
     /// receive it.
     pub require_string: String,
-    /// The whole `require(...)` call.
     pub call_span: Span,
 }
 
@@ -23,7 +22,7 @@ pub(crate) struct ExtractedRequires {
     /// literal. The emitter retargets just this token, so a static require
     /// nested in the argument still gets its own rewrite.
     pub dynamic_callees: Vec<Span>,
-    pub diagnostics: Vec<Diagnostic>,
+    pub diags: Vec<Diagnostic>,
     /// The module's own chunk reads `...`.
     pub has_vararg_read: bool,
     /// Lua 5.1: the module reads the global `arg`.
@@ -34,14 +33,14 @@ pub(crate) struct ExtractedRequires {
     pub max_function_upvalues: usize,
 }
 
-/// Finds every `require()` call in the module, at any depth.
-///
 /// A call that doesn't reach the global `require`, through a local binding
 /// named `require`, a local `_ENV`, or a global the file replaced, keeps its
-/// meaning and gets W005. So does a reference to the global `require` that
-/// isn't a direct call, since calls through it escape bundling, like
-/// `_G.require`. A standard library's name is served from `package.loaded`, so
-/// it stays the host's. On Luau, writes to `package.loaded` get E006.
+/// meaning and gets W005.
+///
+/// So does a reference to the global `require` that isn't a direct call,
+/// since calls through it escape bundling, like `_G.require`. A standard
+/// library's name is served from `package.loaded`, so it stays the host's. On
+/// Luau, writes to `package.loaded` get E006.
 ///
 /// `dynamic_require` decides whether a `require(expr)` aborts the bundle or
 /// stays for the runtime.
@@ -59,7 +58,7 @@ pub(crate) fn extract_requires(
         scope_tree: &scope_tree,
         sites: Vec::new(),
         dynamic_callees: Vec::new(),
-        diagnostics: Vec::new(),
+        diags: Vec::new(),
         package_loaded_writes: Vec::new(),
         seen_require_strings: FxHashSet::default(),
         direct_callee_spans: FxHashSet::default(),
@@ -73,7 +72,7 @@ pub(crate) fn extract_requires(
     let RequireFinder {
         mut sites,
         dynamic_callees,
-        mut diagnostics,
+        mut diags,
         package_loaded_writes,
         direct_callee_spans,
         has_vararg_read,
@@ -81,7 +80,7 @@ pub(crate) fn extract_requires(
         ..
     } = finder;
 
-    diagnostics.extend(
+    diags.extend(
         scope_tree
             .unresolved_references()
             .filter(|reference| {
@@ -93,7 +92,7 @@ pub(crate) fn extract_requires(
     );
 
     sites.sort_by_key(|site| site.call_span.start);
-    diagnostics.extend(package_loaded_writes);
+    diags.extend(package_loaded_writes);
 
     let has_env_rebinding = version.has_env_upvalue()
         && (scope_tree.is_env_assigned
@@ -108,7 +107,7 @@ pub(crate) fn extract_requires(
     ExtractedRequires {
         sites,
         dynamic_callees,
-        diagnostics,
+        diags,
         has_vararg_read,
         has_global_arg_read,
         has_env_rebinding,
@@ -147,7 +146,7 @@ struct RequireFinder<'input> {
     scope_tree: &'input ScopeTree,
     sites: Vec<RequireSite>,
     dynamic_callees: Vec<Span>,
-    diagnostics: Vec<Diagnostic>,
+    diags: Vec<Diagnostic>,
     /// E006s, which follow every other diagnostic.
     package_loaded_writes: Vec<Diagnostic>,
     seen_require_strings: FxHashSet<String>,
@@ -167,7 +166,7 @@ impl RequireFinder<'_> {
         };
         self.direct_callee_spans.insert(callee_span);
         if !self.scope_tree.reaches_host_global("require", callee_span) {
-            self.diagnostics.push(Diagnostic::w005_shadowed(self.file_path, call.span));
+            self.diags.push(Diagnostic::w005_shadowed(self.file_path, call.span));
             return;
         }
 
@@ -177,11 +176,7 @@ impl RequireFinder<'_> {
             Some(require_string) if is_standard_library(&require_string, self.version) => {}
             Some(require_string) => {
                 if !self.seen_require_strings.insert(require_string.clone()) {
-                    self.diagnostics.push(Diagnostic::w001(
-                        self.file_path,
-                        call.span,
-                        &require_string,
-                    ));
+                    self.diags.push(Diagnostic::w001(self.file_path, call.span, &require_string));
                 }
                 self.sites.push(RequireSite { require_string, call_span: call.span });
             }
@@ -195,14 +190,14 @@ impl RequireFinder<'_> {
     fn handle_dynamic_call(&mut self, call: &FunctionCall, callee_span: Span) {
         match self.dynamic_require {
             DynamicRequire::Error => {
-                self.diagnostics.push(Diagnostic::e002(self.file_path, call.span));
+                self.diags.push(Diagnostic::e002(self.file_path, call.span));
                 return;
             }
             DynamicRequire::Warn if self.version.is_luau() => {
-                self.diagnostics.push(Diagnostic::w007_runtime(self.file_path, call.span));
+                self.diags.push(Diagnostic::w007_runtime(self.file_path, call.span));
             }
             DynamicRequire::Warn => {
-                self.diagnostics.push(Diagnostic::w007_loader_fallback(self.file_path, call.span));
+                self.diags.push(Diagnostic::w007_loader_fallback(self.file_path, call.span));
             }
             DynamicRequire::Allow => {}
         }
@@ -214,8 +209,7 @@ impl RequireFinder<'_> {
         }
     }
 
-    /// Records E006 for a write to the global `package.loaded`. A local named
-    /// `package` is no concern of the bundle's.
+    /// A local named `package` is no concern of the bundle's.
     fn flag_package_loaded_write(&mut self, target: &Var) {
         if let Some(package_span) = package_loaded_root(target, self.version)
             && self.scope_tree.reaches_host_global("package", package_span)
@@ -230,7 +224,7 @@ impl RequireFinder<'_> {
         if let Some((table_name, table_span)) = global_table_require(var, self.version)
             && self.scope_tree.reaches_host_global(table_name, table_span)
         {
-            self.diagnostics.push(Diagnostic::w005_aliased(self.file_path, var.span()));
+            self.diags.push(Diagnostic::w005_aliased(self.file_path, var.span()));
         }
     }
 }
@@ -315,7 +309,7 @@ fn global_table_require(var: &Var, version: LuaVersion) -> Option<(&str, Span)> 
             let is_require_string = matches!(
                 &index_expr.index,
                 Expression::StringLiteral(literal)
-                    if decode_string(&literal.text, version).is_some_and(|value| *value == *b"require")
+                    if decode_string(&literal.text, version).is_some_and(|v| *v == *b"require")
             );
             (&index_expr.prefix, is_require_string)
         }
@@ -344,9 +338,6 @@ fn require_callee_span(call: &FunctionCall) -> Option<Span> {
     (token.identifier() == Some("require")).then_some(token.span)
 }
 
-/// The string real `require` would receive from a call whose only argument
-/// is a string literal.
-///
 /// Escapes are resolved and a long string's leading newline is stripped.
 /// `None` if it doesn't decode or the result isn't UTF-8.
 fn literal_require_string(call: &FunctionCall, version: LuaVersion) -> Option<String> {
@@ -376,7 +367,7 @@ fn package_loaded_root(target: &Var, version: LuaVersion) -> Option<Span> {
                 let is_loaded_string = matches!(
                     &index_expr.index,
                     Expression::StringLiteral(literal)
-                        if decode_string(&literal.text, version).is_some_and(|value| *value == *b"loaded")
+                        if decode_string(&literal.text, version).is_some_and(|v| *v == *b"loaded")
                 );
                 (&index_expr.prefix, is_loaded_string)
             }
@@ -435,14 +426,14 @@ mod tests {
         result: &'result ExtractedRequires,
         code: &str,
     ) -> Vec<&'result Diagnostic> {
-        result.diagnostics.iter().filter(|diagnostic| diagnostic.code == code).collect()
+        result.diags.iter().filter(|diag| diag.code == code).collect()
     }
 
     #[test]
     fn extracts_single_require() {
         let result = extract("local utils = require(\"utils\")\nprint(utils.foo())\n");
         assert_eq!(require_strings(&result), ["utils"]);
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
     }
 
     #[test]
@@ -451,7 +442,7 @@ mod tests {
             "local a = require(\"mod_a\")\nlocal b = require(\"mod_b\")\nlocal c = require(\"mod_c\")\nprint(a, b, c)\n",
         );
         assert_eq!(require_strings(&result), ["mod_a", "mod_b", "mod_c"]);
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
     }
 
     #[test]
@@ -459,7 +450,7 @@ mod tests {
         // Requires are position-independent with the lazy loader.
         let result = extract("print(\"hello\")\nlocal x = require(\"x\")\n");
         assert_eq!(result.sites.len(), 1);
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
     }
 
     #[test]
@@ -467,7 +458,7 @@ mod tests {
         let result = extract_with("local x = require(varname)\n", DynamicRequire::Error);
         assert!(result.sites.is_empty());
         assert_eq!(result.dynamic_callees, Vec::<Span>::new());
-        assert_eq!(with_code(&result, "E002").len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(with_code(&result, "E002").len(), 1, "{:?}", result.diags);
     }
 
     /// The default: one runtime-resolved require must not abort the bundle.
@@ -475,8 +466,8 @@ mod tests {
     fn non_literal_require_warns_and_is_kept_by_default() {
         let result = extract("local x = require(varname)\n");
         assert!(result.sites.is_empty());
-        assert!(with_code(&result, "E002").is_empty(), "{:?}", result.diagnostics);
-        assert_eq!(with_code(&result, "W007").len(), 1, "{:?}", result.diagnostics);
+        assert!(with_code(&result, "E002").is_empty(), "{:?}", result.diags);
+        assert_eq!(with_code(&result, "W007").len(), 1, "{:?}", result.diags);
         // The callee token alone, so the argument expression is left intact.
         assert_eq!(result.dynamic_callees, [Span::new(10, 17)]);
     }
@@ -484,7 +475,7 @@ mod tests {
     #[test]
     fn allow_mode_keeps_the_call_without_warning() {
         let result = extract_with("local x = require(varname)\n", DynamicRequire::Allow);
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
         assert_eq!(result.dynamic_callees, [Span::new(10, 17)]);
     }
 
@@ -494,7 +485,7 @@ mod tests {
     #[test]
     fn luau_dynamic_require_is_warned_but_not_retargeted() {
         let result = extract_luau("local x = require(varname)\n");
-        assert_eq!(with_code(&result, "W007").len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(with_code(&result, "W007").len(), 1, "{:?}", result.diags);
         assert_eq!(result.dynamic_callees, Vec::<Span>::new());
     }
 
@@ -511,7 +502,7 @@ mod tests {
     fn bare_require_stmt_is_extracted() {
         let result = extract("require(\"something\")\n");
         assert_eq!(require_strings(&result), ["something"]);
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
     }
 
     #[test]
@@ -521,7 +512,7 @@ mod tests {
         let result = extract("local a = require(\"a\\46b\")\nlocal b = require(\"a.b\")\n");
         assert_eq!(require_strings(&result), ["a.b", "a.b"]);
         // Same decoded module twice: the duplicate-require warning fires.
-        assert_eq!(with_code(&result, "W001").len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(with_code(&result, "W001").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
@@ -539,8 +530,8 @@ mod tests {
             "shadowed require must not be bundled: {:?}",
             result.sites
         );
-        assert_eq!(with_code(&result, "W005").len(), 1, "{:?}", result.diagnostics);
-        assert!(with_code(&result, "E002").is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(with_code(&result, "W005").len(), 1, "{:?}", result.diags);
+        assert!(with_code(&result, "E002").is_empty(), "{:?}", result.diags);
     }
 
     #[test]
@@ -548,21 +539,21 @@ mod tests {
         let source = "local a = require(\"real\")\nlocal function f()\n    local require = print\n    require(\"fake\")\nend\n";
         let result = extract(source);
         assert_eq!(require_strings(&result), ["real"]);
-        assert_eq!(with_code(&result, "W005").len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(with_code(&result, "W005").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn aliased_require_flags_w005() {
         let result = extract("local r = require\nlocal x = r(\"dep\")\n");
         assert!(result.sites.is_empty());
-        assert_eq!(with_code(&result, "W005").len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(with_code(&result, "W005").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn direct_calls_do_not_flag_w005() {
         let result = extract("local a = require(\"x\")\nrequire(\"y\")\n");
         assert_eq!(result.sites.len(), 2);
-        assert!(with_code(&result, "W005").is_empty(), "{:?}", result.diagnostics);
+        assert!(with_code(&result, "W005").is_empty(), "{:?}", result.diags);
     }
 
     #[test]
@@ -570,37 +561,37 @@ mod tests {
         // On Lua targets the bundle cache is package.loaded itself, so
         // writes to it behave as in real Lua and need no E006.
         let result = extract("package.loaded[\"mymod\"] = {}\npackage.loaded.other = {}\n");
-        assert!(with_code(&result, "E006").is_empty(), "{:?}", result.diagnostics);
+        assert!(with_code(&result, "E006").is_empty(), "{:?}", result.diags);
     }
 
     #[test]
     fn package_loaded_index_write_flags_e006_on_luau() {
         let result = extract_luau("package.loaded[\"mymod\"] = {}\n");
-        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn package_loaded_field_write_flags_e006_on_luau() {
         let result = extract_luau("package.loaded.mymod = {}\n");
-        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn package_loaded_compound_assignment_flags_e006_on_luau() {
         let result = extract_luau("package.loaded.x ..= \"a\"\n");
-        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn nested_package_loaded_compound_assignment_flags_e006_on_luau() {
         let result = extract_luau("package.loaded[\"x\"].y += 1\n");
-        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn compound_assignment_to_another_table_is_not_flagged_on_luau() {
         let result = extract_luau("loaded.x ..= \"a\"\n");
-        assert!(with_code(&result, "E006").is_empty(), "{:?}", result.diagnostics);
+        assert!(with_code(&result, "E006").is_empty(), "{:?}", result.diags);
     }
 
     #[test]
@@ -608,20 +599,20 @@ mod tests {
         let result = extract_luau(
             "local package = { loaded = {} }\npackage.loaded.x = 1\npackage.loaded.y ..= \"a\"\n",
         );
-        assert!(with_code(&result, "E006").is_empty(), "{:?}", result.diagnostics);
+        assert!(with_code(&result, "E006").is_empty(), "{:?}", result.diags);
     }
 
     #[test]
     fn package_write_outside_a_local_named_package_is_flagged_on_luau() {
         let result = extract_luau("do local package = {} end\npackage.loaded.x = 1\n");
-        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn duplicate_require_flags_w001() {
         let result = extract("local a = require(\"utils\")\nlocal b = require(\"utils\")\n");
         assert_eq!(result.sites.len(), 2);
-        assert_eq!(with_code(&result, "W001").len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(with_code(&result, "W001").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
@@ -629,7 +620,7 @@ mod tests {
         // The loader passes each module its real name, so the
         // `local modname = ...` idiom works and needs no warning.
         let result = extract("local modname = ...\nreturn modname\n");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
     }
 
     #[test]
@@ -656,7 +647,7 @@ mod tests {
     fn no_requires_yields_empty_result() {
         let result = extract("print(\"hello world\")\n");
         assert!(result.sites.is_empty());
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
     }
 
     #[test]
@@ -693,6 +684,6 @@ mod tests {
     fn field_function_named_require_is_ignored() {
         let result = extract("local obj = {}\nfunction obj.require(s) end\nobj.require(\"x\")\n");
         assert!(result.sites.is_empty());
-        assert!(with_code(&result, "W005").is_empty(), "{:?}", result.diagnostics);
+        assert!(with_code(&result, "W005").is_empty(), "{:?}", result.diags);
     }
 }

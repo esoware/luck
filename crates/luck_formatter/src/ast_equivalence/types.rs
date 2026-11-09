@@ -12,8 +12,7 @@ use super::{
     token_text_eq,
 };
 
-/// Compare optional `: Type` annotations. A dropped annotation is data loss,
-/// so presence has to match too.
+/// A dropped annotation is data loss, so presence has to match too.
 pub(super) fn type_annotation_eq(
     left: Option<&Type>,
     right: Option<&Type>,
@@ -91,8 +90,6 @@ pub(super) fn type_eq(left: &Type, right: &Type, version: LuaVersion) -> Control
     }
 }
 
-/// Strip the wrappers that say nothing about the type.
-///
 /// Redundant parens can come and go, and a lone union or intersection member
 /// is how a `| T` the formatter writes as `T` parses.
 fn unwrap_redundant_type(ty: &Type) -> &Type {
@@ -157,8 +154,8 @@ fn table_type_eq(left: &TableType, right: &TableType, version: LuaVersion) -> Co
         ));
     }
     // Field separators (`,` or `;`) are trivia; only the fields matter.
-    for (index, (lhs, rhs)) in left.fields.iter().zip(right.fields.iter()).enumerate() {
-        at_index("fields", index, type_field_eq(lhs, rhs, version))?;
+    for (i, (lhs, rhs)) in left.fields.iter().zip(right.fields.iter()).enumerate() {
+        at_index("fields", i, type_field_eq(lhs, rhs, version))?;
     }
     Continue(())
 }

@@ -1,9 +1,8 @@
-//! Document links.
-//!
 //! A `require("path")` string becomes a clickable link resolved through
-//! [`luck_resolver`], the resolver the bundler uses, so links follow Lua
-//! template search paths, Luau relative and `@alias` imports, and the `init`
-//! parent-parent rule exactly as a build does.
+//! [`luck_resolver`], the resolver the bundler uses.
+//!
+//! Links follow Lua template search paths, Luau relative and `@alias` imports,
+//! and the `init` parent-parent rule exactly as a build does.
 
 use std::path::Path;
 
@@ -24,8 +23,6 @@ pub(crate) fn document_links(
     collect_links(document, document_uri, settings, None)
 }
 
-/// The file the `require` string at `position` resolves to, either end of
-/// the string included.
 pub(crate) fn target_at(
     document: &DocumentState,
     document_uri: &Url,
@@ -37,9 +34,6 @@ pub(crate) fn target_at(
         .find_map(|link| link.target)
 }
 
-/// The links of every resolvable `require` string, or only of those at
-/// `position` when it's given, so a lookup at the cursor resolves no other
-/// module.
 fn collect_links(
     document: &DocumentState,
     document_uri: &Url,
@@ -214,7 +208,6 @@ mod tests {
         assert_eq!(target_at(&document, &uri, &settings, Position::new(1, 6)), None);
     }
 
-    /// The links for `text`, opened as `main.lua` beside a `foo.lua` module.
     fn links_beside_foo(text: &str) -> Vec<DocumentLink> {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");

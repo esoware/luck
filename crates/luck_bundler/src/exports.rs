@@ -1,5 +1,3 @@
-//! Luau `export` declarations, lowered for bodies inside loader functions.
-
 use luck_ast::{Block, LocalAssignment, LocalFunction, Statement};
 use luck_semantic::{ScopeId, ScopeKind, ScopeTree, Symbol, SymbolId};
 use luck_token::{LuaVersion, Span, line_breaks, offset_to_index};
@@ -99,10 +97,8 @@ pub(crate) fn lower_exports(
     lowering.finish(edits)
 }
 
-/// Lowers the module's value exports statement by statement.
 struct ValueLowering<'input> {
     tree: Option<&'input ScopeTree>,
-    /// The symbol of each exported name, by its definition span.
     exported_symbols: FxHashMap<Span, &'input Symbol>,
     /// Exports a later module-level local hides, by id.
     shadowed: FxHashSet<SymbolId>,
@@ -140,7 +136,6 @@ impl<'input> ValueLowering<'input> {
         }
     }
 
-    /// Whether `symbol` can't stay a plain local read at the module's end.
     fn needs_table(&self, symbol: &Symbol) -> bool {
         self.shadowed.contains(&symbol.id)
             || self.tree.is_some_and(|tree| is_written_from_a_closure(tree, symbol))
@@ -267,7 +262,6 @@ impl<'input> ValueLowering<'input> {
     }
 }
 
-/// Exports a later local at their own (module) scope hides, by id.
 fn module_level_shadows(tree: &ScopeTree) -> FxHashSet<SymbolId> {
     tree.symbols
         .iter()
@@ -299,7 +293,6 @@ fn is_inside_a_function(tree: &ScopeTree, start: ScopeId) -> bool {
     false
 }
 
-/// The `export` keyword opening a statement that starts at `stmt_span`.
 fn export_keyword_span(stmt_span: Span) -> Span {
     let start = offset_to_index(stmt_span.start);
     Span::from_indices(start, start.saturating_add("export".len()))

@@ -6,8 +6,6 @@ use luck_token::{LuaVersion, Span, short_string_body};
 
 use crate::binding::identifier_token;
 
-/// Converts bracket indexing to dot notation and simplifies table
-/// constructors.
 pub(crate) fn simplify(block: Block, version: LuaVersion) -> Block {
     IndexSimplifier { version }.transform_block(block)
 }
@@ -17,8 +15,7 @@ struct IndexSimplifier {
 }
 
 impl IndexSimplifier {
-    /// `{["foo"] = val}` becomes `{foo = val}`. A key that isn't a plain
-    /// quoted string, such as a long-bracket one, leaves the field as it is.
+    /// A key that isn't a plain quoted string, such as a long-bracket one, leaves the field as it is.
     fn simplify_string_key(&mut self, span: Span, literal: Literal, value: Expression) -> Field {
         let Some(name) = short_string_body(&literal.text) else {
             return Field::Bracketed { span, key: Expression::StringLiteral(literal), value };
@@ -122,12 +119,12 @@ mod tests {
 
     #[test]
     fn identifier_keys_become_fields_and_other_keys_stay_bracketed() {
-        for key in ["foo", "_bar", "x1", "_", "camelCase"] {
-            assert_eq!(apply(&format!("return t[\"{key}\"]\n")), format!("return t.{key}"));
+        for k in ["foo", "_bar", "x1", "_", "camelCase"] {
+            assert_eq!(apply(&format!("return t[\"{k}\"]\n")), format!("return t.{k}"));
         }
-        for key in ["if", "end", "and", "or", "a-b", "123abc", "", "foo bar"] {
-            let source = format!("return t[\"{key}\"]\n");
-            assert_eq!(apply(&source), format!("return t[\"{key}\"]"), "source: {source}");
+        for k in ["if", "end", "and", "or", "a-b", "123abc", "", "foo bar"] {
+            let source = format!("return t[\"{k}\"]\n");
+            assert_eq!(apply(&source), format!("return t[\"{k}\"]"), "source: {source}");
         }
     }
 

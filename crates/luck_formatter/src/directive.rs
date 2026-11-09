@@ -1,12 +1,8 @@
-//! The formatter's `-- luck:` directives.
-
 use luck_token::{Comment, Span};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Directive {
-    /// `luck: format off`, which opens a region kept as written.
     FormatOff,
-    /// `luck: format on`, which closes it.
     FormatOn,
     /// `luck: ignore` or `luck: format ignore`, which keeps the next
     /// statement as written.
@@ -35,8 +31,6 @@ fn opens_with_words(body: &str, words: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
 }
 
-/// The `-- luck: format off` regions, as directive spans.
-///
 /// Each `off` comment's span is paired with the span of the `on` that closes
 /// its region, or `None` when the region runs to end of file. An `off` inside
 /// an open region changes nothing.

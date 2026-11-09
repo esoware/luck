@@ -1,5 +1,3 @@
-//! How `LintConfig` decides which rules run and what they see.
-
 use luck_core::LuaTarget;
 use luck_linter::{
     Category, LintConfig, LintDiagnostic, RuleSetting, lint, lint_analyzed, lint_target,

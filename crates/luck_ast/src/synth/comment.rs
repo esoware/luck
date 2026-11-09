@@ -2,10 +2,9 @@ use luck_token::{CommentPosition, CompactString};
 
 use crate::stmt::{Block, Statement};
 
-/// A comment for the formatter to attach to a synthesized node.
-///
 /// Comments live outside the AST, keyed by `attached_to` (the anchor node's
 /// span start), so this is plain data that only the formatter interprets.
+///
 /// The formatter adds `-- ` when `text` doesn't already start with `--`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyntheticComment {
@@ -15,7 +14,6 @@ pub struct SyntheticComment {
 }
 
 impl SyntheticComment {
-    /// A comment printed on its own line before `stmt`.
     #[must_use]
     pub fn leading(stmt: &Statement, text: &str) -> Self {
         Self {
@@ -25,7 +23,6 @@ impl SyntheticComment {
         }
     }
 
-    /// A comment printed after `stmt` on the same line.
     #[must_use]
     pub fn trailing(stmt: &Statement, text: &str) -> Self {
         Self {

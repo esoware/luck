@@ -1,5 +1,3 @@
-//! The fix the unused-binding rules share: renaming `name` to `_name`.
-
 use core::cell::OnceCell;
 
 use luck_semantic::{SemanticAnalysis, Symbol};

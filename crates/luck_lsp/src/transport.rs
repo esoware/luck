@@ -1,5 +1,3 @@
-//! LSP transport entry points, callable from the `luck` CLI.
-
 use std::io::{self, Write as _};
 
 use tokio::io::{AsyncRead, AsyncWrite, split, stdin, stdout};
@@ -8,13 +6,10 @@ use tower_lsp::{Client, LspService, Server};
 
 use crate::backend::Backend;
 
-/// Serves LSP over stdin and stdout until the client exits.
 pub async fn serve_stdio() {
     serve(stdin(), stdout()).await;
 }
 
-/// Binds `127.0.0.1` on `port`, accepts one client, and serves LSP to it.
-///
 /// # Errors
 ///
 /// Returns the I/O error from binding the port, accepting the client, or
@@ -29,8 +24,6 @@ pub async fn serve_socket(port: u16) -> io::Result<()> {
     Ok(())
 }
 
-/// Serves the backend over the real `tower_lsp::Client`, with the
-/// `luck/syntaxTree` and `luck/fixAllWorkspace` custom requests.
 async fn serve<R, W>(reader: R, writer: W)
 where
     R: AsyncRead + Unpin,

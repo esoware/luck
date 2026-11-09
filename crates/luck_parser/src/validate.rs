@@ -1,5 +1,3 @@
-//! Post-parse validations that need scope context.
-
 mod continue_until;
 mod gotos;
 mod scope;

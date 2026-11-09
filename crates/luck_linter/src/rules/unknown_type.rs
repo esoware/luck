@@ -24,13 +24,13 @@ impl NodeRule for UnknownType {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
     fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let Expression::BinaryOp(binary) = expr else {
+        let Expression::BinaryOp(binary_op) = expr else {
             return;
         };
-        if !matches!(binary.op, BinOp::Eq | BinOp::Ne) {
+        if !matches!(binary_op.op, BinOp::Eq | BinOp::Ne) {
             return;
         }
-        let Some((callee, literal)) = classify_comparison(binary, context.semantic) else {
+        let Some((callee, literal)) = classify_comparison(binary_op, context.semantic) else {
             return;
         };
         // An escape could spell a valid name, so only plain text is checked.
@@ -64,13 +64,11 @@ impl NodeRule for UnknownType {
     }
 }
 
-/// Matches `type(x) == "literal"` with the operands in either order, and
-/// returns the callee name and the literal.
 fn classify_comparison<'ast>(
-    binary: &'ast BinaryOp,
+    binary_op: &'ast BinaryOp,
     semantic: &SemanticAnalysis,
 ) -> Option<(&'static str, &'ast Literal)> {
-    let sides = [(&binary.left, &binary.right), (&binary.right, &binary.left)];
+    let sides = [(&binary_op.left, &binary_op.right), (&binary_op.right, &binary_op.left)];
     for (call_side, literal_side) in sides {
         let Expression::FunctionCall(call) = call_side else {
             continue;

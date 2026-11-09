@@ -15,8 +15,6 @@ use crate::scope::{
 /// The `bindings` key of a live `global *`, which no identifier can equal.
 const GLOBAL_STAR_KEY: &str = "*";
 
-/// Builds the scope tree for `block`, declaring and resolving names in the
-/// order `version` makes them visible.
 #[must_use]
 pub fn build(block: &Block, version: LuaVersion) -> ScopeTree {
     let mut builder = ScopeTreeBuilder {
@@ -66,7 +64,6 @@ struct ScopeTreeBuilder {
     /// Set by the first local `_ENV` or `global` statement, so ordinary free
     /// names skip the lookups those need.
     has_free_name_bindings: bool,
-    /// Luau: inside a `type function` body.
     is_in_type_function: bool,
     /// Luau: every type declared by a block entered so far.
     type_names: FxHashSet<CompactString>,
@@ -156,8 +153,8 @@ impl ScopeTreeBuilder {
         }
         let (env, is_declared_global) = match resolved {
             None if self.has_free_name_bindings => {
-                let is_declared = |key: &str| {
-                    matches!(self.bindings.get(key).and_then(|stack| stack.last()), Some(None))
+                let is_declared = |k: &str| {
+                    matches!(self.bindings.get(k).and_then(|stack| stack.last()), Some(None))
                 };
                 (self.resolve("_ENV"), is_declared(name) || is_declared(GLOBAL_STAR_KEY))
             }

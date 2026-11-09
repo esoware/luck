@@ -50,11 +50,11 @@ fn strip_line_break_takes_one_whole_break_or_none() {
 
 #[test]
 fn only_c_locale_isspace_bytes_are_lua_whitespace() {
-    for byte in [b' ', b'\t', b'\n', b'\r', 0x0B, 0x0C] {
-        assert!(is_lua_whitespace(byte), "{byte:#x}");
+    for b in [b' ', b'\t', b'\n', b'\r', 0x0B, 0x0C] {
+        assert!(is_lua_whitespace(b), "{b:#x}");
     }
-    for byte in [b'a', 0x00, 0x08, 0xA0, 0xFE] {
-        assert!(!is_lua_whitespace(byte), "{byte:#x}");
+    for b in [b'a', 0x00, 0x08, 0xA0, 0xFE] {
+        assert!(!is_lua_whitespace(b), "{b:#x}");
     }
 }
 

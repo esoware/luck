@@ -1,9 +1,7 @@
-//! Token -> IR emission.
+//! Leaf text never comes from source.
 //!
-//! Leaf text never comes from source. Fixed-spelling kinds map to static
-//! strings, and literal kinds (identifiers, numbers, strings, interpolation
-//! parts) carry their text in the `TokenKind`, so synthetic ASTs stay
-//! formattable.
+//! Fixed-spelling kinds map to static strings, and literal kinds (identifiers, numbers, strings,
+//! interpolation parts) carry their text in the `TokenKind`, so synthetic ASTs stay formattable.
 
 use luck_token::{Token, TokenKind};
 
@@ -14,7 +12,7 @@ impl Format for Token {
         clippy::wildcard_enum_match_arm,
         reason = "every other kind has a fixed spelling, which static_text matches exhaustively"
     )]
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         match &self.kind {
             // Interpolated-string parts don't reach this in practice.
             // `InterpolatedString::fmt` writes them itself, since their braces
@@ -24,9 +22,9 @@ impl Format for Token {
             | TokenKind::StringLiteral(text)
             | TokenKind::InterpolatedStringBegin(text)
             | TokenKind::InterpolatedStringMiddle(text)
-            | TokenKind::InterpolatedStringEnd(text) => formatter.write_text(text.clone()),
+            | TokenKind::InterpolatedStringEnd(text) => f.write_text(text.clone()),
             // `Eof` has no spelling, so it prints nothing.
-            fixed => token(fixed.static_text().unwrap_or_default()).fmt(formatter),
+            fixed => token(fixed.static_text().unwrap_or_default()).fmt(f),
         }
     }
 }

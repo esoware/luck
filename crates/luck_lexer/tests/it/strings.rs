@@ -73,10 +73,7 @@ fn short_string_scan_boundaries_preserve_spelling_and_errors() {
                     let broken_source = format!("{quote}{text}{newline}{text}{quote}");
                     let broken_result = lex(&broken_source, version);
                     assert!(
-                        broken_result
-                            .errors
-                            .iter()
-                            .any(|error| error.message == "unterminated string"),
+                        broken_result.errors.iter().any(|e| e.message == "unterminated string"),
                         "{broken_source:?}: {:?}",
                         broken_result.errors
                     );

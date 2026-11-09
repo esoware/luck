@@ -1,5 +1,3 @@
-//! Temporary project trees for the crate's public-API tests.
-
 use core::time::Duration;
 use std::path::Path;
 use std::sync::mpsc;
@@ -8,8 +6,6 @@ use std::{env, fs};
 
 use tempfile::TempDir;
 
-/// A temporary directory holding `files`, each a `/`-separated path relative
-/// to it and that file's contents.
 pub(crate) fn project_with(files: &[(&str, &str)]) -> TempDir {
     let project = TempDir::new().expect("create temp dir");
     for (relative_path, contents) in files {
@@ -22,8 +18,6 @@ pub(crate) fn project_with(files: &[(&str, &str)]) -> TempDir {
     project
 }
 
-/// Runs `body` with the working directory at `directory`.
-///
 /// nextest gives each test its own process, so this can't race another test.
 pub(crate) fn in_directory<Output>(directory: &Path, body: impl FnOnce() -> Output) -> Output {
     let original = env::current_dir().expect("read working directory");
@@ -33,7 +27,6 @@ pub(crate) fn in_directory<Output>(directory: &Path, body: impl FnOnce() -> Outp
     output
 }
 
-/// Runs `body` on its own thread and reports whether it finished in time.
 pub(crate) fn finishes_within<Body, Output>(limit: Duration, body: Body) -> bool
 where
     Body: FnOnce() -> Output + Send + 'static,

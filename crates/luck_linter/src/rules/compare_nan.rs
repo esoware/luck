@@ -23,14 +23,14 @@ impl NodeRule for CompareNan {
     }
     fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let version = context.semantic.version;
-        if let Expression::BinaryOp(binary) = expr
-            && matches!(binary.op, BinOp::Eq | BinOp::Ne)
-            && (is_nan_expr(&binary.left, version) || is_nan_expr(&binary.right, version))
+        if let Expression::BinaryOp(binary_op) = expr
+            && matches!(binary_op.op, BinOp::Eq | BinOp::Ne)
+            && (is_nan_expr(&binary_op.left, version) || is_nan_expr(&binary_op.right, version))
         {
             findings.push(
                 Finding::new(
                     "NaN (`0/0`) equals nothing, so this comparison always has the same result",
-                    binary.span,
+                    binary_op.span,
                 )
                 .with_help("use `x ~= x` to check for NaN"),
             );
@@ -41,12 +41,12 @@ impl NodeRule for CompareNan {
 /// Whether `expr` divides a zero literal by a zero literal, each in any
 /// spelling, parentheses aside.
 fn is_nan_expr(expr: &Expression, version: LuaVersion) -> bool {
-    let Expression::BinaryOp(binary) = unwrap_parentheses(expr) else {
+    let Expression::BinaryOp(binary_op) = unwrap_parentheses(expr) else {
         return false;
     };
-    binary.op == BinOp::Div
-        && is_number_literal(&binary.left, 0.0, version)
-        && is_number_literal(&binary.right, 0.0, version)
+    binary_op.op == BinOp::Div
+        && is_number_literal(&binary_op.left, 0.0, version)
+        && is_number_literal(&binary_op.right, 0.0, version)
 }
 
 #[cfg(test)]

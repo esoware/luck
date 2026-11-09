@@ -1,6 +1,5 @@
 use luck_token::{LuaVersion, Span, strip_line_break};
 
-/// Zero-copy, forward-only byte cursor over source text.
 #[derive(Debug)]
 pub(crate) struct Cursor<'source> {
     source: &'source str,
@@ -29,12 +28,11 @@ impl<'source> Cursor<'source> {
 
     #[inline]
     pub(crate) fn advance(&mut self) -> Option<u8> {
-        let byte = self.peek()?;
+        let b = self.peek()?;
         self.advance_by(1);
-        Some(byte)
+        Some(b)
     }
 
-    /// Consume the next byte if it is `byte`.
     #[inline]
     pub(crate) fn eat(&mut self, byte: u8) -> bool {
         let is_next = self.peek() == Some(byte);
@@ -49,13 +47,11 @@ impl<'source> Cursor<'source> {
         self.source.as_bytes().get(self.position..).unwrap_or_default()
     }
 
-    /// Source text from byte index `start` up to the cursor.
     #[inline]
     pub(crate) fn text_since(&self, start: usize) -> &'source str {
         self.source.get(start..self.position).unwrap_or_default()
     }
 
-    /// Span from byte index `start` up to the cursor.
     #[inline]
     pub(crate) fn span_since(&self, start: usize) -> Span {
         Span::from_indices(start, self.position)
@@ -69,7 +65,6 @@ impl<'source> Cursor<'source> {
         self.position = self.position.wrapping_add(count);
     }
 
-    /// Advance to the next line break, or EOF.
     pub(crate) fn advance_to_line_break(&mut self) {
         let rest = self.rest();
         self.advance_by(memchr::memchr2(b'\n', b'\r', rest).unwrap_or(rest.len()));
@@ -86,7 +81,7 @@ impl<'source> Cursor<'source> {
     /// and lexing resumes on a char boundary.
     pub(crate) fn eat_rest_of_char(&mut self, start: usize) -> Option<char> {
         // Continuation bytes are 0b10xxxxxx.
-        self.eat_while(|byte| (byte & 0xC0) == 0x80);
+        self.eat_while(|b| (b & 0xC0) == 0x80);
         self.text_since(start).chars().next()
     }
 
@@ -94,7 +89,7 @@ impl<'source> Cursor<'source> {
     /// or EOF.
     pub(crate) fn is_at_line_end(&self, version: LuaVersion) -> bool {
         let rest = self.rest();
-        let blank_length = rest.iter().take_while(|byte| matches!(byte, b' ' | b'\t')).count();
+        let blank_length = rest.iter().take_while(|b| matches!(b, b' ' | b'\t')).count();
         let after_blanks = rest.get(blank_length..).unwrap_or_default();
         after_blanks.is_empty() || strip_line_break(after_blanks, version).is_some()
     }

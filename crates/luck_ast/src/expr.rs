@@ -30,13 +30,11 @@ pub enum Expression {
     IfExpression(Box<IfExpression>),
     InterpolatedString(Box<InterpolatedString>),
     TypeCast(Box<TypeCast>),
-    /// Luau: explicit type-parameter instantiation (`f<<T>>`).
     TypeInstantiation(Box<TypeInstantiation>),
     Error(Span),
 }
 
-/// A literal leaf: its exact spelling plus its span. The owning variant
-/// implies the token kind, so none is stored.
+/// The owning variant implies the token kind, so none is stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Literal {
     pub text: CompactString,
@@ -121,7 +119,6 @@ pub struct FieldAccess {
     pub name: Token,
 }
 
-/// Anonymous function definition: `function(params) body end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionDef {
     pub span: Span,
@@ -130,7 +127,6 @@ pub struct FunctionDef {
     pub body: FunctionBody,
 }
 
-/// Luau if-expression: `if cond then expr {elseif cond then expr} else expr`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IfExpression {
     pub span: Span,
@@ -140,7 +136,6 @@ pub struct IfExpression {
     pub else_expr: Expression,
 }
 
-/// An `elseif` clause within a Luau if-expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElseIfExprClause {
     pub span: Span,
@@ -148,7 +143,6 @@ pub struct ElseIfExprClause {
     pub expr: Expression,
 }
 
-/// Luau interpolated string: `` `text{expr}text` ``.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterpolatedString {
     pub span: Span,
@@ -161,7 +155,6 @@ pub struct InterpolatedStringSegment {
     pub expr: Option<Expression>,
 }
 
-/// Luau type cast (`expr :: Type`).
 #[derive(Eq)]
 pub struct TypeCast {
     pub span: Span,
@@ -169,7 +162,6 @@ pub struct TypeCast {
     pub type_annotation: Type,
 }
 
-/// Luau explicit type-parameter instantiation (`expr<<T, U>>`).
 #[derive(Eq)]
 pub struct TypeInstantiation {
     pub span: Span,

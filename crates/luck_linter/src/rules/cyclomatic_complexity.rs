@@ -34,7 +34,6 @@ impl NodeRule for CyclomaticComplexity {
     }
 }
 
-/// Flags `function` when its complexity is over the configured threshold.
 fn check_function(function: FunctionNode<'_>, context: &LintContext<'_>) -> Option<Finding> {
     let threshold = context.config.max_cyclomatic_complexity?;
     // McCabe: one straight-line path plus one per decision point.

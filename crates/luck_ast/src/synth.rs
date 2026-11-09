@@ -200,8 +200,6 @@ impl Synth {
         Token::new(kind, self.next_span())
     }
 
-    /// An identifier token.
-    ///
     /// Asserts validity in release builds too, so an untrusted name fails
     /// loudly instead of producing output that won't re-parse. Names that may
     /// not be identifiers belong in [`Synth::field_or_index`],

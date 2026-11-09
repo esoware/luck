@@ -1,7 +1,3 @@
-//! The separators compact output keeps: a space where two pieces would merge
-//! into another token, and a `;` where a statement would extend the one
-//! before it.
-
 use luck_token::LuaVersion;
 
 use crate::common::assert_compacts_to;

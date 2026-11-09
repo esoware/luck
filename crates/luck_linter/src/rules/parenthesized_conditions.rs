@@ -76,8 +76,7 @@ impl NodeRule for ParenthesizedConditions {
     }
 }
 
-/// Flags `span` when `condition` is wrapped in parentheses. The fix deletes
-/// just those two tokens, so anything between them stays.
+/// The fix deletes just those two tokens, so anything between them stays.
 fn check_condition(
     condition: &Expression,
     message: &str,
@@ -89,7 +88,7 @@ fn check_condition(
     };
     let Span { start, end } = parenthesized.span;
     let bytes = source.as_bytes();
-    let before = offset_to_index(start).checked_sub(1).and_then(|index| bytes.get(index));
+    let before = offset_to_index(start).checked_sub(1).and_then(|i| bytes.get(i));
     let after = bytes.get(offset_to_index(end));
     Some(Finding::new(message, span).with_fix(Fix {
         description: "remove unnecessary parentheses".to_owned(),
@@ -109,7 +108,7 @@ fn check_condition(
 /// What a deleted parenthesis leaves: a space if the byte beside it would
 /// otherwise run into the condition.
 fn replacement_beside(neighbor: Option<&u8>) -> String {
-    let is_word_byte = neighbor.is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+    let is_word_byte = neighbor.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
     if is_word_byte { " ".to_owned() } else { String::new() }
 }
 

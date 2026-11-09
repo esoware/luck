@@ -6,8 +6,6 @@ use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::is_number_literal;
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
-/// Flags `/`, `%`, and `//` with a literal zero divisor.
-///
 /// Float division by zero gives `inf` or `nan`, and from Lua 5.3 integer
 /// `%` and `//` by zero raise an error. Either way a literal zero divisor is
 /// a mistake.
@@ -27,11 +25,11 @@ impl NodeRule for DivideByZero {
         NodeTypeSet::from_types(&[NodeType::BinaryOp, NodeType::CompoundAssignment])
     }
     fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        if let Expression::BinaryOp(binary) = expr
-            && let Some(op_name) = divisive_op_name(binary.op)
-            && is_number_literal(&binary.right, 0.0, context.semantic.version)
+        if let Expression::BinaryOp(binary_op) = expr
+            && let Some(op_name) = divisive_op_name(binary_op.op)
+            && is_number_literal(&binary_op.right, 0.0, context.semantic.version)
         {
-            findings.push(zero_divisor_finding(op_name, binary.span));
+            findings.push(zero_divisor_finding(op_name, binary_op.span));
         }
     }
     fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {

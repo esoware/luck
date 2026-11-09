@@ -1,6 +1,3 @@
-//! How `luck.json` transforms and the per-pass flags layer for `minify` and
-//! `bundle`.
-
 use predicates::prelude::*;
 use tempfile::TempDir;
 

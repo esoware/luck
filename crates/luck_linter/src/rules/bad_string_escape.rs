@@ -75,8 +75,6 @@ fn check_segment(literal: &Token, version: LuaVersion, findings: &mut Vec<Findin
     check_escapes(text, body_start, true, version, findings);
 }
 
-/// Returns how many bytes after the `\` an escape spans, or `None` if
-/// `version` doesn't define it.
 fn escape_length(rest: &[u8], is_interpolated: bool, version: LuaVersion) -> Option<usize> {
     match rest {
         [b'\r', b'\n', ..] => Some(2),
@@ -93,15 +91,13 @@ fn escape_length(rest: &[u8], is_interpolated: bool, version: LuaVersion) -> Opt
         // `\ddd` takes up to three decimal digits.
         [b'0'..=b'9', after_first @ ..] => {
             let extra_digit_count =
-                after_first.iter().take(2).take_while(|byte| byte.is_ascii_digit()).count();
+                after_first.iter().take(2).take_while(|b| b.is_ascii_digit()).count();
             Some(extra_digit_count.saturating_add(1))
         }
         _ => None,
     }
 }
 
-/// Flags the undefined escapes in the short-string `body` that starts at
-/// `body_start`.
 fn check_escapes(
     body: &str,
     body_start: u32,

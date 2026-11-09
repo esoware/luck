@@ -1,5 +1,3 @@
-//! Tests for the exit codes documented on `Exit` in `src/exit.rs`.
-//!
 //! These spawn the real `luck` binary, so they reach `main.rs`'s worker thread
 //! and clap's own usage-error exit, which unit tests can't.
 
@@ -108,12 +106,11 @@ fn invalid_config_unknown_key_exits_usage() {
         .stderr(predicate::str::contains("error: "));
 }
 
-/// Populate `directory` with a config naming a nonexistent dialect and enough
-/// sources for rayon to spread across threads.
-///
 /// Target resolution has to happen before the parallel section, because a
 /// worker reporting the error would deadlock on the stdio locks the main
-/// thread holds there. The timeout turns that hang into a failure.
+/// thread holds there.
+///
+/// The timeout turns that hang into a failure.
 fn write_bad_dialect_project(directory: &Path) {
     write_file(directory, "luck.json", "{ \"lua\": \"lua99\" }\n");
     for name in ["a.lua", "b.lua", "c.lua", "d.lua"] {
@@ -162,9 +159,8 @@ fn check_bad_dialect_with_multiple_files_exits_usage() {
 
 /// `--fix` over stdin re-lints the fixed text, so spans index that text.
 ///
-/// A fix that grows the file pushes them past the end of the original, which
-/// used to panic the renderer. A panic also exits 1, so the rendered location
-/// is the proof.
+/// A fix that grows the file pushes spans past the end of the original, and a
+/// renderer panic also exits 1, so the rendered location is the proof.
 #[test]
 fn lint_stdin_fix_renders_spans_past_the_end_of_the_original() {
     let directory = TempDir::new().unwrap();
@@ -194,9 +190,7 @@ fn lint_stdin_fix_renders_spans_against_the_shortened_text() {
         .stderr(predicate::str::contains("buffer.lua:2:11"));
 }
 
-/// An empty `entries` list is a config error. It used to panic where the
-/// header indexed the first config, or with `--quiet` exit 0 having built
-/// nothing.
+/// An empty `entries` list is a config error, not a panic or a silent exit 0.
 #[test]
 fn build_empty_entries_exits_usage() {
     let directory = TempDir::new().unwrap();
@@ -302,9 +296,8 @@ fn bad_dynamic_require_flag_is_reported_before_the_config() {
     }
 }
 
-/// A `require(expr)` used to abort the whole bundle. It now warns, emits a
-/// bundle that resolves the call at runtime, and only fails when the project
-/// (or the flag) asks for strictness.
+/// A `require(expr)` warns and emits a bundle that resolves the call at runtime,
+/// and only fails when the project (or the flag) asks for strictness.
 #[test]
 fn bundle_with_dynamic_require_succeeds_and_warns() {
     let directory = TempDir::new().unwrap();
@@ -351,8 +344,8 @@ fn bundle_with_dynamic_require_fails_in_error_mode() {
 
 /// `luck bundle main.lua` passes the entry's parent as the project root.
 ///
-/// For a bare file name that root is empty, which used to leave every emitted
-/// path absolute, shipping the build host's directory layout inside the bundle.
+/// For a bare file name that root is empty, and no emitted path may then be
+/// absolute, or the bundle would ship the build host's directory layout.
 #[test]
 fn bundle_of_a_bare_entry_name_emits_no_absolute_paths() {
     let directory = TempDir::new().unwrap();

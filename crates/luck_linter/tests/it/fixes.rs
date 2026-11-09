@@ -1,5 +1,3 @@
-//! Rule fixes applied end to end through `lint` and `apply_fixes`.
-
 use luck_linter::{LintConfig, apply_fixes, lint};
 use luck_token::{LuaVersion, SourceError};
 

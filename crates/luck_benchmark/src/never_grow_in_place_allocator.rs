@@ -5,8 +5,6 @@ use mimalloc_safe::MiMalloc;
 #[global_allocator]
 static GLOBAL: NeverGrowInPlaceAllocator = NeverGrowInPlaceAllocator;
 
-/// Global allocator for the benchmarks.
-///
 /// A thin wrapper around [`MiMalloc`], the CLI's production allocator, so
 /// bench numbers reflect the allocation paths users run. It passes through
 /// `alloc` and `dealloc` but leaves out [`GlobalAlloc::realloc`].

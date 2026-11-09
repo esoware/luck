@@ -73,7 +73,7 @@ fn backtick_is_an_unexpected_character_outside_luau() {
         for source in ["`hello`", "`a \\\r\n{n}`"] {
             let result = lex(source, version);
             assert!(
-                result.errors.iter().any(|error| error.message == "unexpected character ```"),
+                result.errors.iter().any(|e| e.message == "unexpected character ```"),
                 "{version:?} {source:?}: {:?}",
                 result.errors
             );
@@ -140,10 +140,10 @@ fn interpolated_segments_preserve_raw_escapes_and_spans() {
             TokenKind::InterpolatedStringMiddle(text.as_str().into())
         );
         assert_eq!(result.tokens[4].kind, TokenKind::InterpolatedStringEnd(text.as_str().into()));
-        for (index, expected) in
+        for (i, expected) in
             [(0, format!("`{text}{{")), (2, format!("}}{text}{{")), (4, format!("}}{text}`"))]
         {
-            let span = result.tokens[index].span;
+            let span = result.tokens[i].span;
             assert_eq!(span.text(&source), expected);
         }
         let mut lexer = Lexer::new(&source, LuaVersion::Luau).expect("source fits u32 spans");
@@ -203,10 +203,7 @@ fn interpolated_string_rejects_unescaped_line_breaks() {
         ] {
             let result = lex(&source, LuaVersion::Luau);
             assert!(
-                result
-                    .errors
-                    .iter()
-                    .any(|error| error.message == "unterminated interpolated string"),
+                result.errors.iter().any(|e| e.message == "unterminated interpolated string"),
                 "{source:?}: {:?}",
                 result.errors
             );

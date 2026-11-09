@@ -1,6 +1,3 @@
-//! Formatting known-tricky inputs twice, through `formatted`, which checks
-//! that the output formats to itself and re-parses clean.
-
 use crate::common::formatted;
 
 #[test]

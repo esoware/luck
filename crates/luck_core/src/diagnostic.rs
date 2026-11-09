@@ -2,7 +2,6 @@ mod codes;
 
 use luck_token::Span;
 
-/// An error or warning with a code, source span, and optional help.
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
     /// An `E`/`W` code from a numbered constructor such as

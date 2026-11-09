@@ -1,5 +1,3 @@
-//! Black-box tests of the real `luck` binary.
-
 // Lets clippy.toml's allow-*-in-tests settings cover the shared helpers, not
 // just the `#[test]` functions.
 #![cfg(test)]

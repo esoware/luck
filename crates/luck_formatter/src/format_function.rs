@@ -1,5 +1,3 @@
-//! Function bodies, calls, and their argument and parameter lists.
-
 use luck_ast::{
     Expression, FunctionArgs, FunctionAttribute, FunctionBody, FunctionCall, Literal, Parameter,
     Punctuated, TypeArgs, VarArgParam, ensure_sufficient_stack,
@@ -16,34 +14,32 @@ use crate::ir::{
 use crate::quotes::normalize_quote;
 use crate::{CallParentheses, SpaceAfterFunction};
 
-/// Everything after the `function` keyword or name: generics, parameters,
-/// return type, block, and `end`.
 impl Format for FunctionBody {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         // Luau: `<T, U...>` generic list before the parameter parens.
-        self.generics.as_deref().fmt(formatter);
+        self.generics.as_deref().fmt(f);
 
-        write_param_list(formatter, self);
+        write_param_list(f, self);
 
         // Luau: `: T` return annotation after `)`.
         if let Some(return_type) = &self.return_type {
-            (token(":"), space(), return_type).fmt(formatter);
+            (token(":"), space(), return_type).fmt(f);
         }
 
-        IndentedBlock(&self.block).fmt(formatter);
+        IndentedBlock(&self.block).fmt(f);
         // Even an empty body puts `end` on its own line.
-        (hard_line(), token("end")).fmt(formatter);
+        (hard_line(), token("end")).fmt(f);
     }
 }
 
-fn write_param_list(formatter: &mut Formatter, body: &FunctionBody) {
+fn write_param_list(f: &mut Formatter, body: &FunctionBody) {
     // The body owns the `(`, so the definition-side `space_after_function_names`
     // space goes here instead of in every caller.
-    space_before_definition_paren(formatter);
+    space_before_definition_paren(f);
 
     let has_params = !body.params.is_empty() || body.vararg.is_some();
     if !has_params {
-        token("()").fmt(formatter);
+        token("()").fmt(f);
         return;
     }
 
@@ -62,35 +58,34 @@ fn write_param_list(formatter: &mut Formatter, body: &FunctionBody) {
         soft_line(),
         token(")"),
     ))
-    .fmt(formatter);
+    .fmt(f);
 }
 
 impl Format for Parameter {
-    fn fmt(&self, formatter: &mut Formatter) {
-        self.name.fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        self.name.fmt(f);
         // Luau: `: T` annotation.
         if let Some(type_annotation) = &self.type_annotation {
-            (token(":"), space(), type_annotation).fmt(formatter);
+            (token(":"), space(), type_annotation).fmt(f);
         }
     }
 }
 
 impl Format for VarArgParam {
-    fn fmt(&self, formatter: &mut Formatter) {
-        token("...").fmt(formatter);
+    fn fmt(&self, f: &mut Formatter) {
+        token("...").fmt(f);
         // Lua 5.5: `...name`.
-        self.name.fmt(formatter);
+        self.name.fmt(f);
         // Luau: `: T` annotation (may be a pack, e.g. `...number`).
         if let Some(type_annotation) = &self.type_annotation {
-            (token(":"), space(), type_annotation).fmt(formatter);
+            (token(":"), space(), type_annotation).fmt(f);
         }
     }
 }
 
-/// A Luau attribute such as `@native` or `@[deprecated({ use = "y" })]`. Arguments
-/// only exist on the bracketed form.
+/// Arguments only exist on the bracketed form.
 impl Format for FunctionAttribute {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         match &self.args {
             Some(args) => (
                 token("@"),
@@ -101,13 +96,12 @@ impl Format for FunctionAttribute {
                 token(")"),
                 token("]"),
             )
-                .fmt(formatter),
-            None => (token("@"), &self.name).fmt(formatter),
+                .fmt(f),
+            None => (token("@"), &self.name).fmt(f),
         }
     }
 }
 
-/// A single link in a method/call chain: optional `:method` accessor + args.
 struct ChainSegment<'chain> {
     accessor: Option<&'chain Token>,
     explicit_type_args: Option<&'chain TypeArgs>,
@@ -115,21 +109,20 @@ struct ChainSegment<'chain> {
 }
 
 impl Format for ChainSegment<'_> {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         let type_args = self.explicit_type_args.map(ExplicitTypeArgs);
         if let Some(name) = self.accessor {
-            (token(":"), name).fmt(formatter);
+            (token(":"), name).fmt(f);
             // Luau rejects a method call whose `(` is on a later line than
             // its name.
-            flat(type_args).fmt(formatter);
+            flat(type_args).fmt(f);
         } else {
-            type_args.fmt(formatter);
+            type_args.fmt(f);
         }
-        self.args.fmt(formatter);
+        self.args.fmt(f);
     }
 }
 
-/// Collect a left-recursive chain of function calls into (root, segments).
 fn collect_call_chain(call: &FunctionCall) -> (&Expression, Vec<ChainSegment<'_>>) {
     let mut segments = Vec::new();
     let mut current = call;
@@ -154,7 +147,7 @@ fn is_method_chain(segments: &[ChainSegment<'_>]) -> bool {
 }
 
 impl Format for FunctionCall {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         let (root, segments) = collect_call_chain(self);
 
         ensure_sufficient_stack(|| {
@@ -171,32 +164,29 @@ impl Format for FunctionCall {
                         }
                     })),
                 ))
-                .fmt(formatter);
+                .fmt(f);
             } else {
-                root.fmt(formatter);
+                root.fmt(f);
                 for segment in &segments {
-                    segment.fmt(formatter);
+                    segment.fmt(f);
                 }
             }
         });
     }
 }
 
-/// Emits call arguments, adding or dropping the parentheses around a lone
-/// string or table as `call_parentheses` asks.
 impl Format for FunctionArgs {
-    fn fmt(&self, formatter: &mut Formatter) {
+    fn fmt(&self, f: &mut Formatter) {
         match self {
             Self::Parenthesized { span, args } => {
                 // A comment between the parens has to keep them: dropping the
                 // parens or hugging a lone argument leaves nowhere to print it.
-                if formatter
-                    .comments()
+                if f.comments()
                     .has_claimable_comments(*span, args.items.iter().map(Expression::span))
                 {
-                    space_before_call_paren(formatter);
+                    space_before_call_paren(f);
                     write_commented_list(
-                        formatter,
+                        f,
                         ("(", ")"),
                         *span,
                         &args.items,
@@ -206,7 +196,7 @@ impl Format for FunctionArgs {
                     return;
                 }
 
-                let can_omit = match formatter.options().call_parentheses {
+                let can_omit = match f.options().call_parentheses {
                     // `Input` preserves the source's choice, which had
                     // parentheses.
                     CallParentheses::Always | CallParentheses::Input => false,
@@ -218,14 +208,14 @@ impl Format for FunctionArgs {
                 };
 
                 if can_omit && let Some(expr) = args.first() {
-                    (space(), expr).fmt(formatter);
+                    (space(), expr).fmt(f);
                 } else {
-                    space_before_call_paren(formatter);
-                    write_args_list(formatter, args);
+                    space_before_call_paren(f);
+                    write_args_list(f, args);
                 }
             }
             Self::TableConstructor(table) => {
-                let should_keep_bare = match formatter.options().call_parentheses {
+                let should_keep_bare = match f.options().call_parentheses {
                     CallParentheses::Always | CallParentheses::NoSingleString => false,
                     // `Input` preserves the source's choice, which had none.
                     CallParentheses::NoSingleTable
@@ -233,14 +223,14 @@ impl Format for FunctionArgs {
                     | CallParentheses::Input => true,
                 };
                 if should_keep_bare {
-                    (space(), &**table).fmt(formatter);
+                    (space(), &**table).fmt(f);
                 } else {
-                    space_before_call_paren(formatter);
-                    (token("("), &**table, token(")")).fmt(formatter);
+                    space_before_call_paren(f);
+                    (token("("), &**table, token(")")).fmt(f);
                 }
             }
             Self::StringLiteral(literal) => {
-                let should_keep_bare = match formatter.options().call_parentheses {
+                let should_keep_bare = match f.options().call_parentheses {
                     CallParentheses::Always | CallParentheses::NoSingleTable => false,
                     // `Input` preserves the source's choice, which had none.
                     CallParentheses::NoSingleString
@@ -248,10 +238,10 @@ impl Format for FunctionArgs {
                     | CallParentheses::Input => true,
                 };
                 if should_keep_bare {
-                    space().fmt(formatter);
-                    write_normalized_string(formatter, literal);
+                    space().fmt(f);
+                    write_normalized_string(f, literal);
                 } else {
-                    space_before_call_paren(formatter);
+                    space_before_call_paren(f);
                     group((
                         token("("),
                         indent((
@@ -261,26 +251,23 @@ impl Format for FunctionArgs {
                         soft_line(),
                         token(")"),
                     ))
-                    .fmt(formatter);
+                    .fmt(f);
                 }
             }
         }
     }
 }
 
-/// Emits a parenthesized argument list, hugging a lone table or function
-/// argument as `({...})`.
-///
 /// No dialect allows a comma after the last argument, so the list never gets
 /// a trailing comma and `magic_trailing_comma` only affects tables inside it.
-fn write_args_list(formatter: &mut Formatter, args: &Punctuated<Expression>) {
+fn write_args_list(f: &mut Formatter, args: &Punctuated<Expression>) {
     if args.is_empty() {
-        token("()").fmt(formatter);
+        token("()").fmt(f);
         return;
     }
 
     if is_single_huggable_arg(args) {
-        (token("("), args.first(), token(")")).fmt(formatter);
+        (token("("), args.first(), token(")")).fmt(f);
         return;
     }
 
@@ -290,7 +277,7 @@ fn write_args_list(formatter: &mut Formatter, args: &Punctuated<Expression>) {
         soft_line(),
         token(")"),
     ))
-    .fmt(formatter);
+    .fmt(f);
 }
 
 fn is_single_string_arg(args: &Punctuated<Expression>) -> bool {
@@ -309,29 +296,29 @@ fn is_single_huggable_arg(args: &Punctuated<Expression>) -> bool {
         )
 }
 
-fn space_before_call_paren(formatter: &mut Formatter) {
+fn space_before_call_paren(f: &mut Formatter) {
     if matches!(
-        formatter.options().space_after_function_names,
+        f.options().space_after_function_names,
         SpaceAfterFunction::Calls | SpaceAfterFunction::Always
     ) {
-        space().fmt(formatter);
+        space().fmt(f);
     }
 }
 
-fn space_before_definition_paren(formatter: &mut Formatter) {
+fn space_before_definition_paren(f: &mut Formatter) {
     if matches!(
-        formatter.options().space_after_function_names,
+        f.options().space_after_function_names,
         SpaceAfterFunction::Definitions | SpaceAfterFunction::Always
     ) {
-        space().fmt(formatter);
+        space().fmt(f);
     }
 }
 
 /// Re-quotes a string argument written without parentheses, which the AST
 /// holds as a bare [`Literal`] instead of an expression.
-fn write_normalized_string(formatter: &mut Formatter, literal: &Literal) {
-    let normalized = normalize_quote(&literal.text, formatter.options().quote_style);
-    formatter.write_text(normalized);
+fn write_normalized_string(f: &mut Formatter, literal: &Literal) {
+    let normalized = normalize_quote(&literal.text, f.options().quote_style);
+    f.write_text(normalized);
 }
 
 #[cfg(test)]

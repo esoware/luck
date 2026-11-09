@@ -1,9 +1,8 @@
-//! Numeric-literal normalization.
-//!
 //! The base prefix (`0x`/`0b`) and exponent marker (`e`/`p`) are always
-//! lowercased, and a bare leading dot gains a zero (`.5` -> `0.5`). Neither
-//! is a style option. Hex digit case follows [`HexCase`]. Digit separators
-//! (`_`, Luau) stay, and the value never changes.
+//! lowercased, and a bare leading dot gains a zero (`.5` -> `0.5`).
+//!
+//! Neither is a style option. Hex digit case follows [`HexCase`]. Digit separators (`_`, Luau)
+//! stay, and the value never changes.
 
 use alloc::borrow::Cow;
 
@@ -19,16 +18,16 @@ pub(crate) fn normalize_number(text: &str, hex_case: HexCase) -> Cow<'_, str> {
     let mut normalized = String::with_capacity(text.len());
     normalized.push_str(if is_hex { "0x" } else { "0b" });
 
-    for &byte in digits {
-        let character = char::from(byte);
-        match byte {
+    for &b in digits {
+        let c = char::from(b);
+        match b {
             // Hex-float exponent. Its sign and decimal digits fall through
             // unchanged.
             b'p' | b'P' if is_hex => normalized.push('p'),
             b'a'..=b'f' | b'A'..=b'F' if is_hex => {
-                normalized.push(apply_hex_case(character, hex_case));
+                normalized.push(apply_hex_case(c, hex_case));
             }
-            _ => normalized.push(character),
+            _ => normalized.push(c),
         }
     }
     Cow::Owned(normalized)
@@ -36,14 +35,14 @@ pub(crate) fn normalize_number(text: &str, hex_case: HexCase) -> Cow<'_, str> {
 
 fn normalize_decimal(text: &str) -> Cow<'_, str> {
     let should_add_leading_zero = text.starts_with('.');
-    if !should_add_leading_zero && !text.bytes().any(|byte| byte == b'E') {
+    if !should_add_leading_zero && !text.bytes().any(|b| b == b'E') {
         return Cow::Borrowed(text);
     }
     let mut normalized = String::with_capacity(text.len().saturating_add(1));
     if should_add_leading_zero {
         normalized.push('0');
     }
-    normalized.extend(text.chars().map(|character| if character == 'E' { 'e' } else { character }));
+    normalized.extend(text.chars().map(|c| if c == 'E' { 'e' } else { c }));
     Cow::Owned(normalized)
 }
 

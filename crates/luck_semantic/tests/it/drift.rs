@@ -1,7 +1,7 @@
-//! Drift guards for the stdlib data files.
-//!
 //! The seven files don't inherit from each other, so copies of a shared
-//! entry can drift apart. The two Luau files must agree on every shared
+//! entry can drift apart.
+//!
+//! The two Luau files must agree on every shared
 //! entry, and so must each pair of adjacent Lua versions, unless an
 //! allowlist below names the difference and the reason for it. The other
 //! tests check each library's internal consistency.
@@ -15,7 +15,6 @@ use luck_token::{LuaVersion, offset_to_index};
 
 use crate::common::{NUMBERED_VERSIONS, all_libraries, luau, roblox, standalone_library};
 
-/// Flatten a library's globals into dotted paths: `("math.floor", entry)`.
 fn global_paths(library: &'static StdlibLibrary) -> BTreeMap<String, &'static StdlibEntry> {
     let mut paths = BTreeMap::new();
     for (name, entry) in &library.globals {
@@ -24,7 +23,6 @@ fn global_paths(library: &'static StdlibLibrary) -> BTreeMap<String, &'static St
     paths
 }
 
-/// Flatten a library's shape members: `("file:read", entry)`.
 fn shape_paths(library: &'static StdlibLibrary) -> BTreeMap<String, &'static StdlibEntry> {
     let mut paths = BTreeMap::new();
     for (shape_name, shape) in &library.shapes {
@@ -83,7 +81,6 @@ fn signature_fingerprint(signature: &StdlibSignature) -> String {
     format!(" [{}..{max_args}]({params})", signature.min_args)
 }
 
-/// Render an entry's kind, flags, and signatures for comparison.
 /// Deprecation has its own fingerprint, since it legitimately changes as
 /// APIs age.
 fn fingerprint(entry: &StdlibEntry) -> String {
@@ -137,8 +134,6 @@ fn deprecation_fingerprint(entry: &StdlibEntry) -> String {
     )
 }
 
-/// Entries present in both Luau environments must be identical, except for
-/// the allowlists below.
 #[test]
 fn luau_and_roblox_shared_surface_agrees() {
     // Signature divergence: Roblox vectors are 3-wide, while standalone Luau
@@ -200,9 +195,6 @@ fn luau_and_roblox_shared_surface_agrees() {
     );
 }
 
-/// Entries shared by adjacent numbered versions must be identical unless
-/// the manual changed them.
-///
 /// Each allowlist entry cites its manual change. Deprecation isn't
 /// compared, since APIs routinely age into it and its policy has its own
 /// tests.
@@ -304,7 +296,6 @@ fn numbered_lua_adjacent_versions_agree() {
     );
 }
 
-/// Highest `%n` placeholder in a replace template.
 fn max_placeholder(template: &str) -> usize {
     let mut max = 0;
     let mut chars = template.chars().peekable();
@@ -385,11 +376,11 @@ fn signature_shapes_are_internally_consistent() {
                             violations.push(format!("{file} {path}: empty constant set"));
                         }
                         let mut seen_values = BTreeSet::new();
-                        for value in values {
-                            if !seen_values.insert(value.value.as_str()) {
+                        for v in values {
+                            if !seen_values.insert(v.value.as_str()) {
                                 violations.push(format!(
                                     "{file} {path}: duplicate constant value '{}'",
-                                    value.value
+                                    v.value
                                 ));
                             }
                         }
@@ -452,8 +443,8 @@ fn shape_references_resolve_and_templates_fit_arity() {
                             check_template(" (param)", deprecation, template_budget);
                         }
                         if let StdlibArgKind::Constant(values) = &param.kind {
-                            for value in values {
-                                if let Some(deprecation) = &value.deprecated {
+                            for v in values {
+                                if let Some(deprecation) = &v.deprecated {
                                     check_template(" (constant)", deprecation, template_budget);
                                 }
                             }

@@ -1,6 +1,3 @@
-//! Helpers for the Roblox rules that check `<Global>.new(...)` calls with
-//! literal numeric arguments.
-
 use luck_ast::{Expression, FunctionArgs, FunctionCall, Punctuated};
 use luck_semantic::SemanticAnalysis;
 

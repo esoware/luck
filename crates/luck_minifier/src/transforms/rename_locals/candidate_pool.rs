@@ -1,5 +1,3 @@
-//! Short names for the renamer's slots, shortest first.
-
 use luck_token::{CompactString, LuaVersion, TokenKind};
 use rustc_hash::FxHashSet;
 
@@ -8,13 +6,11 @@ use super::scope_set::ScopeSet;
 const FIRST_CHARS: &[u8] = b"luckLUCKabdefghijmnopqrstvwxyzABDEFGHIJMNOPQRSTVWXYZ_";
 const REST_CHARS: &[u8] = b"luckLUCKabdefghijmnopqrstvwxyz_ABDEFGHIJMNOPQRSTVWXYZ0123456789";
 
-/// The `index`-th candidate identifier, shortest first.
-///
 /// The first character comes from `FIRST_CHARS` (53 of them) and each later
-/// one from `REST_CHARS` (63, digits included). Indices 0 through 52 are one
-/// character, the next 53 * 63 are two, the next 53 * 63^2 are three, and so
-/// on. Past the first 53, index `53 + n` is name `n / 63` followed by
-/// `REST_CHARS[n % 63]`.
+/// one from `REST_CHARS` (63, digits included).
+///
+/// Indices 0 through 52 are one character, the next 53 * 63 are two, the next 53 * 63^2 are three,
+/// and so on. Past the first 53, index `53 + n` is name `n / 63` followed by `REST_CHARS[n % 63]`.
 ///
 /// The sequence includes keywords. Skipping keywords and names already in use
 /// is `CandidatePool`'s job.
@@ -53,8 +49,6 @@ impl Candidate {
     }
 }
 
-/// Shared candidate-name state for `Analyzer::generate_names`.
-///
 /// Every slot scans candidates from index 0, so each name and its keyword
 /// check are computed once and shared.
 pub(super) struct CandidatePool {
@@ -117,8 +111,8 @@ mod tests {
     #[test]
     fn is_injective_over_the_low_range() {
         let mut seen_names = FxHashSet::default();
-        for index in 0..10_000 {
-            assert!(seen_names.insert(name_for_index(index)), "collision at {index}");
+        for i in 0..10_000 {
+            assert!(seen_names.insert(name_for_index(i)), "collision at {i}");
         }
     }
 

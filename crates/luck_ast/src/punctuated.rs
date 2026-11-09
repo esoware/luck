@@ -1,9 +1,8 @@
-/// A sequence of items separated by a fixed token, usually a comma.
-///
 /// Interior separators are implied by position; `has_trailing_separator`
 /// records one after the final item (a trailing comma in a table
-/// constructor, or a dangling separator kept through parse recovery). The
-/// owning node implies the separator's spelling, so none is stored.
+/// constructor, or a dangling separator kept through parse recovery).
+///
+/// The owning node implies the separator's spelling, so none is stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Punctuated<T> {
     pub items: Vec<T>,

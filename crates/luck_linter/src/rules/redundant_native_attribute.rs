@@ -107,7 +107,7 @@ fn removal_fix(
             .get(edit_end..)
             .unwrap_or_default()
             .iter()
-            .take_while(|byte| byte.is_ascii_whitespace())
+            .take_while(|b| b.is_ascii_whitespace())
             .count();
         let close_index = edit_end.saturating_add(whitespace_length);
         if bytes.get(close_index) != Some(&b']') {

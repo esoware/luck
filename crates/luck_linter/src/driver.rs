@@ -32,8 +32,6 @@ pub fn lint_target(source: &str, target: LuaTarget, config: &LintConfig) -> Vec<
     lint_parsed(&luck_parser::parse(source, version), version, target.stdlib_environment(), config)
 }
 
-/// Lints an existing parse with the given dialect and config.
-///
 /// A parse with errors yields one `parse_error` diagnostic per error, and no
 /// rules run.
 ///
@@ -95,7 +93,6 @@ pub fn lint_analyzed(
     diags
 }
 
-/// Runs semantic analysis with the config's extra globals seeded in.
 pub(crate) fn analyze(
     block: &luck_ast::Block,
     version: LuaVersion,
@@ -119,13 +116,12 @@ fn parse_error_diag(error: &SourceError) -> LintDiagnostic {
     }
 }
 
-/// Runs every enabled rule and returns the rules' findings as diagnostics, in
-/// registry order.
-///
 /// Node rules share one bus pass while whole-tree rules run in parallel
-/// beside it. Results go back into registry order, so the caller's stable
-/// sort breaks ties the way a sequential run would. A node rule is skipped
-/// when none of its node types occur in this file.
+/// beside it.
+///
+/// Results go back into registry order, so the caller's stable sort breaks
+/// ties the way a sequential run would. A node rule is skipped when none of
+/// its node types occur in this file.
 fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic> {
     let config = context.config;
     let mut whole_rules: Vec<(usize, &dyn WholeRule)> = Vec::new();
@@ -188,8 +184,6 @@ fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic
     diags
 }
 
-/// `rule`'s findings as diagnostics, carrying its name and category and the
-/// severity `config` resolves for it.
 pub(crate) fn into_diagnostics(
     rule: &dyn Rule,
     findings: Vec<Finding>,

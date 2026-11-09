@@ -21,7 +21,6 @@ struct PendingGoto<'ast> {
     active_vars: usize,
 }
 
-/// A block's entry state, which closing it restores.
 #[derive(Clone, Copy)]
 pub(super) struct BlockStart {
     active_vars: usize,
@@ -30,7 +29,6 @@ pub(super) struct BlockStart {
 }
 
 impl BlockStart {
-    /// Active variables outside the block.
     pub(super) const fn active_vars(self) -> usize {
         self.active_vars
     }

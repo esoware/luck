@@ -71,9 +71,6 @@ fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, findings: &mut V
     }
 }
 
-/// Flags each literal string argument that isn't one of the constants its
-/// parameter allows.
-///
 /// With overloads, a value passes if any signature matching the arg count
 /// allows it, and a position some matching signature leaves unconstrained
 /// isn't checked.

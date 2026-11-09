@@ -44,7 +44,7 @@ impl NodeRule for RobloxSuspiciousUdim2New {
         if values.len() != args.len() {
             return;
         }
-        let is_scale_sized = values.iter().all(|value| (-1.0f64..=1.0f64).contains(value));
+        let is_scale_sized = values.iter().all(|v| (-1.0f64..=1.0f64).contains(v));
         let suggestion = if is_scale_sized { "UDim2.fromScale" } else { "UDim2.fromOffset" };
         findings.push(
             Finding::new(
