@@ -21,7 +21,7 @@ Determinism matters most. A single xorshift64\* `Rng` (`rng.rs`) drives every ch
 
 ### Full-grammar (`generate_full`)
 
-`FullGenerator` (`full.rs`) emits module-shaped code (a prelude, an OOP class table with a constructor and a method, then a call- and table-heavy body, then a module return) rather than statement soup. Output is **not** runtime-safe: it may index nil, divide strings, or call numbers. In exchange it reaches constructs the runtime profile can't: `goto`/labels, Luau type annotations and casts, named varargs, string interpolation, every compound assignment operator, attributes, and hex-float and binary literals. Each is gated behind the matching `LuaVersion` predicate, so a program never contains a construct its version rejects.
+`FullGenerator` (`full.rs`, with its statements, expressions, and types under `full/`) emits module-shaped code (a prelude, an OOP class table with a constructor and a method, then a call- and table-heavy body, then a module return) rather than statement soup. Output is **not** runtime-safe: it may index nil, divide strings, or call numbers. In exchange it reaches constructs the runtime profile can't: `goto`/labels, Luau type annotations and casts, named varargs, string interpolation, every compound assignment operator, attributes, and hex-float and binary literals. Each is gated behind the matching `LuaVersion` predicate, so a program never contains a construct its version rejects.
 
 `generate_full_embeddable` never picks the Luau shape that exports values instead of returning a table, since exports are only valid at module scope. Its output can sit inside a `do ... end` block, which is how the bench corpus concatenates programs.
 

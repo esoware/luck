@@ -1,7 +1,8 @@
 use core::mem;
 
 use luck_benchmark::{
-    BenchmarkId, Criterion, black_box, criterion_group, criterion_main, test_files, test_projects,
+    BenchmarkId, Criterion, ProjectFile, black_box, criterion_group, criterion_main, test_files,
+    test_projects,
 };
 
 fn bench_parser(criterion: &mut Criterion) {
@@ -22,8 +23,8 @@ fn bench_parser(criterion: &mut Criterion) {
         let files = project.files;
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
-                for (_, source_text) in &files {
-                    black_box(luck_parser::parse(black_box(source_text.as_str()), version));
+                for file in &files {
+                    black_box(luck_parser::parse(black_box(file.source_text.as_str()), version));
                 }
             });
         });
@@ -54,7 +55,7 @@ fn bench_parser_owned_source(criterion: &mut Criterion) {
         let mut files = project.files;
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
-                for (_, source_text) in &mut files {
+                for ProjectFile { source_text, .. } in &mut files {
                     let parsed =
                         black_box(luck_parser::parse(black_box(mem::take(source_text)), version));
                     *source_text = parsed.source;

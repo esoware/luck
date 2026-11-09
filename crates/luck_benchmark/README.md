@@ -38,7 +38,7 @@ Criterion benchmark IDs (`parser/roact`, `minifier/gen_full_lua54.lua`, ...) are
 - **Real single files.** Mirrored in `esoware/luck-bench-corpus`, fetched by pinned commit SHA (a 13k-line Roblox admin script, and a 2.2 MB single-line obfuscated VM as an adversarial case).
 - **Real projects.** Roact (~80 Luau files) and Penlight (~40 Lua 5.1 files), fetched as pinned upstream tarballs.
 
-Everything network-fetched lands in the gitignored `corpus/` cache and is pinned to a SHA, so inputs are immutable run to run. `test_files()`, `test_projects()`, and `bundle_project_root()` are the entry points the benches and `metrics` test consume. Each input carries its `LuaTarget`, and `TestFile::parse` and `TestProject::parse_files` parse it outside the measured section, failing on any parse error.
+Everything network-fetched lands in the gitignored `corpus/` cache (`corpus_cache.rs`) and is pinned to a SHA, so inputs are immutable run to run. `test_files()`, `test_projects()`, and `bundle_project_root()` are the entry points the benches and `metrics` test consume. Each input carries its `LuaTarget`, and `TestFile::parse` and `TestProject::parse_files` parse it outside the measured section, failing on any parse error.
 
 ## Size tracking
 

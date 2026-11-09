@@ -2,12 +2,11 @@
 //! The lexer must never panic; every failure is a `SourceError`.
 
 use libfuzzer_sys::fuzz_target;
-use luck_token::LuaVersion;
+use luck_fuzz::decode_input;
 
 fuzz_target!(|data: &[u8]| {
-    let Ok(source) = std::str::from_utf8(data) else {
+    let Some((source, version)) = decode_input(data) else {
         return;
     };
-    let version = LuaVersion::ALL[data.len() % LuaVersion::ALL.len()];
     let _ = luck_lexer::lex(source, version);
 });

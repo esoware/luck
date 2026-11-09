@@ -5,10 +5,13 @@
 //! runs the same binaries under `CodSpeed` with the `codspeed` feature.
 
 mod corpus;
+mod corpus_cache;
 mod never_grow_in_place_allocator;
 
 // Every bench imports criterion from here, which links this crate, and with
 // it the global allocator, into benches that use nothing else of it.
 pub use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 
-pub use corpus::{TestFile, TestProject, bundle_project_root, test_files, test_projects};
+pub use corpus::{
+    ProjectFile, TestFile, TestProject, bundle_project_root, test_files, test_projects,
+};

@@ -4,13 +4,12 @@
 
 use libfuzzer_sys::fuzz_target;
 use luck_core::TransformConfig;
-use luck_token::LuaVersion;
+use luck_fuzz::decode_input;
 
 fuzz_target!(|data: &[u8]| {
-    let Ok(source) = std::str::from_utf8(data) else {
+    let Some((source, version)) = decode_input(data) else {
         return;
     };
-    let version = LuaVersion::ALL[data.len() % LuaVersion::ALL.len()];
     if !luck_parser::parse(source, version).errors.is_empty() {
         return;
     }

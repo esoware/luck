@@ -4,7 +4,8 @@
 )]
 
 use luck_benchmark::{
-    BenchmarkId, Criterion, black_box, criterion_group, criterion_main, test_files, test_projects,
+    BenchmarkId, Criterion, ProjectFile, black_box, criterion_group, criterion_main, test_files,
+    test_projects,
 };
 use luck_core::TransformConfig;
 
@@ -32,18 +33,19 @@ fn bench_minifier(criterion: &mut Criterion) {
         let version = project.target.lua_version();
         let config = TransformConfig::default();
         let files = project.files;
-        for (name, source_text) in &files {
-            let minified = luck_minifier::minify(source_text.as_str(), version, &config, name);
-            assert!(minified.is_ok(), "{name}: {:?}", minified.err());
+        for ProjectFile { relative_path, source_text } in &files {
+            let minified =
+                luck_minifier::minify(source_text.as_str(), version, &config, relative_path);
+            assert!(minified.is_ok(), "{relative_path}: {:?}", minified.err());
         }
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
-                for (name, source_text) in &files {
+                for ProjectFile { relative_path, source_text } in &files {
                     let _unused = black_box(luck_minifier::minify(
                         black_box(source_text.as_str()),
                         version,
                         &config,
-                        name,
+                        relative_path,
                     ));
                 }
             });

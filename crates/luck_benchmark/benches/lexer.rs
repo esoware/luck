@@ -22,8 +22,8 @@ fn bench_lexer(criterion: &mut Criterion) {
         let files = project.files;
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
-                for (_, source_text) in &files {
-                    black_box(luck_lexer::lex(black_box(source_text.as_str()), version));
+                for file in &files {
+                    black_box(luck_lexer::lex(black_box(file.source_text.as_str()), version));
                 }
             });
         });

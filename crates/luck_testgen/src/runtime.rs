@@ -75,12 +75,18 @@ impl RuntimeGenerator {
         self.output.push('\n');
     }
 
+    /// A stem and that stem numbered, which never repeats.
+    fn numbered_stem(&mut self) -> (&'static str, String) {
+        let stem = self.rng.pick(&NAME_STEMS);
+        self.next_id = self.next_id.saturating_add(1);
+        (stem, format!("{stem}{}", self.next_id))
+    }
+
     /// A numbered stem, or 30% of the time the bare stem, which shadows any
     /// earlier binding of it.
     fn fresh_name(&mut self) -> String {
-        let stem = self.rng.pick(&NAME_STEMS);
-        self.next_id = self.next_id.saturating_add(1);
-        if self.rng.chance(30) { stem.to_owned() } else { format!("{stem}{}", self.next_id) }
+        let (stem, numbered) = self.numbered_stem();
+        if self.rng.chance(30) { stem.to_owned() } else { numbered }
     }
 
     /// A name in scope that refers to a binding of `kind`.
@@ -99,8 +105,7 @@ impl RuntimeGenerator {
         if candidates.is_empty() {
             return None;
         }
-        let index = self.rng.below(candidates.len());
-        candidates.get(index).map(|name| (*name).to_owned())
+        Some(self.rng.pick(&candidates).to_owned())
     }
 
     fn innermost_kind(&self, name: &str) -> Option<ValueKind> {
@@ -151,10 +156,10 @@ impl RuntimeGenerator {
 
     fn number_leaf(&mut self) -> String {
         match self.rng.below(5) {
-            0 => format!("{}", self.rng.below(1000)),
+            0 => self.rng.below(1000).to_string(),
             1 => format!("{}.5", self.rng.below(100)),
             2 => format!("0x{:x}", self.rng.below(4096)),
-            3 => format!("{}", self.rng.below(10)),
+            3 => self.rng.below(10).to_string(),
             _ => format!("{}e{}", self.rng.one_through(9), self.rng.below(4)),
         }
     }
@@ -172,14 +177,15 @@ impl RuntimeGenerator {
             };
             return format!("({lhs} .. {rhs})");
         }
-        match self.rng.below(6) {
-            0 => "\"plain\"".to_owned(),
-            1 => "'single'".to_owned(),
-            2 => "\"esc\\ttab\\n\"".to_owned(),
-            3 => "\"d\\101c\"".to_owned(), // decimal escape
-            4 => "[[long bracket]]".to_owned(),
-            _ => "\"uni-h\u{e9}llo\"".to_owned(),
-        }
+        let literal = match self.rng.below(6) {
+            0 => "\"plain\"",
+            1 => "'single'",
+            2 => "\"esc\\ttab\\n\"",
+            3 => "\"d\\101c\"", // decimal escape
+            4 => "[[long bracket]]",
+            _ => "\"uni-h\u{e9}llo\"",
+        };
+        literal.to_owned()
     }
 
     fn boolean_expr(&mut self, depth: usize) -> String {
@@ -276,12 +282,12 @@ impl RuntimeGenerator {
         }
     }
 
-    fn block<F>(&mut self, body: F)
+    fn block<F>(&mut self, fill: F)
     where
         F: FnOnce(&mut Self),
     {
         self.scopes.push(Vec::new());
-        body(self);
+        fill(self);
         self.scopes.pop();
     }
 
@@ -313,13 +319,7 @@ impl RuntimeGenerator {
         // unique (a bare-stem shadow would make later writes resolve to
         // the loop var) and never offer it as an assignment target.
         let is_readonly = self.version.has_const_for_variables();
-        let loop_variable = if is_readonly {
-            let stem = self.rng.pick(&NAME_STEMS);
-            self.next_id = self.next_id.saturating_add(1);
-            format!("{stem}{}", self.next_id)
-        } else {
-            self.fresh_name()
-        };
+        let loop_variable = if is_readonly { self.numbered_stem().1 } else { self.fresh_name() };
         let stop = self.rng.one_through(4);
         self.line(&format!("for {loop_variable} = 1, {stop} do"));
         self.block(|generator| {
