@@ -146,8 +146,15 @@ impl GraphBuilder<'_> {
             self.errors.push(Diagnostic::e008(&file_path, error));
         }
 
-        let ExtractedRequires { sites, dynamic_callees, diagnostics } =
-            extract_requires(&parsed.block, &file_path, self.version, self.dynamic_require);
+        let ExtractedRequires {
+            sites,
+            dynamic_callees,
+            diagnostics,
+            has_vararg_read,
+            has_global_arg_read,
+            has_env_rebinding,
+            max_function_upvalues,
+        } = extract_requires(&parsed.block, &file_path, self.version, self.dynamic_require);
         for diagnostic in diagnostics {
             if diagnostic.is_error() {
                 self.errors.push(diagnostic);
@@ -197,6 +204,10 @@ impl GraphBuilder<'_> {
             dynamic_callees,
             hot_comments,
             shebang,
+            has_vararg_read,
+            has_global_arg_read,
+            has_env_rebinding,
+            max_function_upvalues,
             block: parsed.block,
         };
         if let Some(slot) = self.modules.get_mut(id.0) {

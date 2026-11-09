@@ -41,6 +41,17 @@ pub struct ModuleInfo {
     /// The `#` first line, which Lua and Luau skip only at the start of a
     /// chunk.
     pub shebang: Option<Span>,
+    /// The module's own chunk reads `...`.
+    pub has_vararg_read: bool,
+    /// Lua 5.1: the module reads the global `arg`, which a vararg wrapper's
+    /// hidden local shadows.
+    pub has_global_arg_read: bool,
+    /// Lua 5.2+: the module can rebind `_ENV`, by assigning it or calling
+    /// `module`, so its wrapper keeps a private `_ENV`.
+    pub has_env_rebinding: bool,
+    /// Lua 5.1: the most locals any one of the module's functions captures,
+    /// which decides whether the loader fits as an upvalue. Zero elsewhere.
+    pub max_function_upvalues: usize,
     /// The AST from graph construction, kept so the emitter doesn't reparse.
     pub block: Block,
 }

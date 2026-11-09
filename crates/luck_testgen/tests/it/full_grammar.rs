@@ -24,7 +24,7 @@ fn module_declarations(line: &str) -> Vec<&str> {
 }
 
 #[test]
-fn bug_full_lua55_assigns_no_name_the_const_wildcard_makes_read_only() {
+fn full_lua55_assigns_no_name_the_const_wildcard_makes_read_only() {
     let program = generate_full(42, LuaVersion::Lua55, 30);
     if !program.lines().any(|line| line == "global <const> *") {
         return;
@@ -48,7 +48,7 @@ fn bug_full_lua55_assigns_no_name_the_const_wildcard_makes_read_only() {
 }
 
 #[test]
-fn bug_full_lua54_reaches_the_close_attribute() {
+fn full_lua54_reaches_the_close_attribute() {
     let program = generate_full(42, LuaVersion::Lua54, 200);
     assert!(
         program.contains("<close>"),

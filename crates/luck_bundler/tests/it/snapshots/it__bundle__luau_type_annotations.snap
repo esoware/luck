@@ -5,20 +5,15 @@ expression: output
 do
 local __luck_modules={}
 local __luck_loaded={}
-local __luck_loading={}
 local function __luck_result(...)
-if select("#",...)~=1 or (...)==nil then
-error("luck bundle: module must return exactly one non-nil value",0)
+if select("#",...)~=1 then
+error("luck bundle: module must return a single value",0)
 end
 return ...
 end
 local function __luck_require(id)
 local value=__luck_loaded[id]
-if value~=nil then
-if value==__luck_loading then error("luck bundle: require cycle hit while loading module #"..id,2)end
-return value
-end
-__luck_loaded[id]=__luck_loading
+if value~=nil then return value end
 value=__luck_result(__luck_modules[id]())
 __luck_loaded[id]=value
 return value

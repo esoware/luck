@@ -7,6 +7,11 @@ use crate::rng::Rng;
 
 const MAX_STMT_DEPTH: usize = 4;
 
+/// Module-scope locals to stop at. PUC-Rio Lua rejects a function with more
+/// than 200 active locals, and the blocks nested below module scope add
+/// their own on top.
+const MAX_MODULE_LOCALS: usize = 150;
+
 /// A small pool of stems forces shadowing, the bug class a flat name-based
 /// analysis gets wrong.
 const NAME_STEMS: [&str; 6] = ["alpha", "beta", "gamma", "delta", "value", "item"];
@@ -25,6 +30,9 @@ enum ValueKind {
 struct Binding {
     name: String,
     kind: ValueKind,
+    /// A loop's counter or control variable, which a generated assignment
+    /// must leave alone so the loop stays bounded and, on 5.5, compiles.
+    is_read_only: bool,
 }
 
 #[derive(Debug)]
@@ -34,6 +42,8 @@ struct RuntimeGenerator {
     output: String,
     scopes: Vec<Vec<Binding>>,
     next_id: usize,
+    /// `local` lines written at module scope.
+    module_locals: usize,
 }
 
 impl RuntimeGenerator {
@@ -44,6 +54,7 @@ impl RuntimeGenerator {
             output: String::new(),
             scopes: vec![Vec::new()],
             next_id: 0,
+            module_locals: 0,
         }
     }
 
@@ -52,8 +63,13 @@ impl RuntimeGenerator {
             self.stmt();
         }
         // Print every top-level binding at the end so transforms that
-        // wrongly eliminate or reorder assignments change stdout.
-        for Binding { name, kind } in self.scopes.pop().unwrap_or_default() {
+        // wrongly eliminate or reorder assignments change stdout. A binding a
+        // later one hides can't be named any more.
+        let bindings = self.scopes.pop().unwrap_or_default();
+        for (index, Binding { name, kind, .. }) in bindings.iter().enumerate() {
+            if bindings.iter().skip(index.saturating_add(1)).any(|later| later.name == *name) {
+                continue;
+            }
             match kind {
                 ValueKind::Table => {
                     self.line(&format!("print(\"{name}\", #{name})"));
@@ -67,6 +83,9 @@ impl RuntimeGenerator {
     }
 
     fn line(&mut self, text: &str) {
+        if self.scopes.len() == 1 && text.starts_with("local ") {
+            self.module_locals = self.module_locals.saturating_add(1);
+        }
         // The module scope adds no indentation.
         for _ in 1..self.scopes.len() {
             self.output.push('\t');
@@ -91,6 +110,16 @@ impl RuntimeGenerator {
 
     /// A name in scope that refers to a binding of `kind`.
     fn visible_name(&mut self, kind: ValueKind) -> Option<String> {
+        self.pick_name(kind, |_| true)
+    }
+
+    /// Like [`Self::visible_name`], keeping to bindings a generated
+    /// assignment may overwrite.
+    fn assignable_name(&mut self, kind: ValueKind) -> Option<String> {
+        self.pick_name(kind, |binding| !binding.is_read_only)
+    }
+
+    fn pick_name(&mut self, kind: ValueKind, is_offered: fn(&Binding) -> bool) -> Option<String> {
         // A name refers to its innermost binding, which may be a different
         // kind, so a binding shadowed by another kind isn't offered.
         let candidates: Vec<&str> = self
@@ -98,7 +127,9 @@ impl RuntimeGenerator {
             .iter()
             .flatten()
             .filter(|binding| {
-                binding.kind == kind && self.innermost_kind(&binding.name) == Some(kind)
+                binding.kind == kind
+                    && is_offered(binding)
+                    && self.innermost_kind(&binding.name) == Some(kind)
             })
             .map(|binding| binding.name.as_str())
             .collect();
@@ -119,7 +150,13 @@ impl RuntimeGenerator {
 
     fn declare(&mut self, name: String, kind: ValueKind) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.push(Binding { name, kind });
+            scope.push(Binding { name, kind, is_read_only: false });
+        }
+    }
+
+    fn declare_read_only(&mut self, name: String, kind: ValueKind) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.push(Binding { name, kind, is_read_only: true });
         }
     }
 
@@ -236,6 +273,10 @@ impl RuntimeGenerator {
     }
 
     fn stmt(&mut self) {
+        if self.scopes.len() == 1 && self.module_locals >= MAX_MODULE_LOCALS {
+            self.print_stmt();
+            return;
+        }
         // The module scope isn't a nesting level.
         let can_nest = self.scopes.len() <= MAX_STMT_DEPTH;
         match self.rng.below(12) {
@@ -260,7 +301,7 @@ impl RuntimeGenerator {
     }
 
     fn assignment(&mut self) {
-        if let Some(name) = self.visible_name(ValueKind::Number) {
+        if let Some(name) = self.assignable_name(ValueKind::Number) {
             let value = self.number_expr(2);
             if self.version.has_compound_assignment() && self.rng.chance(30) {
                 self.line(&format!("{name} += {value}"));
@@ -274,12 +315,16 @@ impl RuntimeGenerator {
 
     fn print_stmt(&mut self) {
         let kind = self.random_kind();
-        if let Some(name) = self.visible_name(kind) {
-            self.line(&format!("print({name})"));
-        } else {
-            let value = self.expr_of(kind, 1);
-            self.line(&format!("print({value})"));
-        }
+        let value = match (kind, self.visible_name(kind)) {
+            // A table prints as its address, which differs between runs.
+            (ValueKind::Table, Some(name)) => format!("#{name}"),
+            (ValueKind::Table, None) => self.number_expr(1),
+            (ValueKind::Number | ValueKind::String | ValueKind::Boolean, Some(name)) => name,
+            (ValueKind::Number | ValueKind::String | ValueKind::Boolean, None) => {
+                self.expr_of(kind, 1)
+            }
+        };
+        self.line(&format!("print({value})"));
     }
 
     fn block<F>(&mut self, fill: F)
@@ -318,12 +363,14 @@ impl RuntimeGenerator {
         // 5.5 control variables are read-only: keep the name globally
         // unique (a bare-stem shadow would make later writes resolve to
         // the loop var) and never offer it as an assignment target.
-        let is_readonly = self.version.has_const_for_variables();
-        let loop_variable = if is_readonly { self.numbered_stem().1 } else { self.fresh_name() };
+        let is_read_only = self.version.has_const_for_variables();
+        let loop_variable = if is_read_only { self.numbered_stem().1 } else { self.fresh_name() };
         let stop = self.rng.one_through(4);
         self.line(&format!("for {loop_variable} = 1, {stop} do"));
         self.block(|generator| {
-            if !is_readonly {
+            if is_read_only {
+                generator.declare_read_only(loop_variable, ValueKind::Number);
+            } else {
                 generator.declare(loop_variable, ValueKind::Number);
             }
             generator.small_body();
@@ -331,11 +378,18 @@ impl RuntimeGenerator {
         self.line("end");
     }
 
-    fn while_stmt(&mut self) {
-        let counter = self.fresh_name();
-        let limit = self.rng.one_through(4);
+    /// Declares a loop's numbered counter, which nothing can shadow and no
+    /// generated assignment touches, so the loop stays bounded.
+    fn loop_counter(&mut self) -> String {
+        let counter = self.numbered_stem().1;
         self.line(&format!("local {counter} = 0"));
-        self.declare(counter.clone(), ValueKind::Number);
+        self.declare_read_only(counter.clone(), ValueKind::Number);
+        counter
+    }
+
+    fn while_stmt(&mut self) {
+        let counter = self.loop_counter();
+        let limit = self.rng.one_through(4);
         self.line(&format!("while {counter} < {limit} do"));
         self.block(|generator| {
             generator.line(&format!("{counter} = {counter} + 1"));
@@ -345,10 +399,8 @@ impl RuntimeGenerator {
     }
 
     fn repeat_stmt(&mut self) {
-        let counter = self.fresh_name();
+        let counter = self.loop_counter();
         let limit = self.rng.one_through(3);
-        self.line(&format!("local {counter} = 0"));
-        self.declare(counter.clone(), ValueKind::Number);
         self.line("repeat");
         self.block(|generator| {
             generator.line(&format!("{counter} = {counter} + 1"));
@@ -364,8 +416,10 @@ impl RuntimeGenerator {
     }
 
     fn local_function(&mut self) {
-        let name = self.fresh_name();
-        let param = self.fresh_name();
+        // Numbered, so the untracked function name takes over no tracked
+        // binding and no local hides the parameter from the closing `return`.
+        let name = self.numbered_stem().1;
+        let param = self.numbered_stem().1;
         self.line(&format!("local function {name}({param})"));
         self.block(|generator| {
             generator.declare(param.clone(), ValueKind::Number);

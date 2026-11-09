@@ -4,7 +4,11 @@
 use luck_token::LuaVersion;
 
 /// The loader, with every generated name starting with `prefix`.
-pub(crate) fn loader_text(prefix: &str, version: LuaVersion) -> String {
+///
+/// `is_loader_global` is true only for a 5.1 bundle with a function that has
+/// no upvalue left for a local loader. A global read costs none, but two
+/// bundles in one Lua state then overwrite each other's loader.
+pub(crate) fn loader_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -> String {
     if version.is_luau() {
         return luau_loader_text(prefix);
     }
@@ -23,30 +27,32 @@ pub(crate) fn loader_text(prefix: &str, version: LuaVersion) -> String {
     } else {
         String::new()
     };
-    [cache_tables, paths_table, lua_require_text(prefix, version)].concat()
+    [cache_tables, paths_table, lua_require_text(prefix, version, is_loader_global)].concat()
 }
 
-/// Luau/Roblox require: private cache keyed by file, cycles and repeated
-/// failures raise, modules must return exactly one non-nil value, chunks
-/// receive no arguments.
+const fn entry_point_keyword(is_loader_global: bool) -> &'static str {
+    if is_loader_global { "function" } else { "local function" }
+}
+
+/// Luau/Roblox require, with a private cache keyed by file.
+///
+/// The cache holds only a non-nil result, so a raising or nil-returning
+/// module runs again on the next require. Chunks receive no arguments and
+/// must return exactly one value (`Require/src/RequireImpl.cpp`,
+/// `CLI/src/ReplRequirer.cpp`).
 fn luau_loader_text(prefix: &str) -> String {
     format!(
         "local {prefix}modules={{}}\n\
          local {prefix}loaded={{}}\n\
-         local {prefix}loading={{}}\n\
          local function {prefix}result(...)\n\
-         if select(\"#\",...)~=1 or (...)==nil then\n\
-         error(\"luck bundle: module must return exactly one non-nil value\",0)\n\
+         if select(\"#\",...)~=1 then\n\
+         error(\"luck bundle: module must return a single value\",0)\n\
          end\n\
          return ...\n\
          end\n\
          local function {prefix}require(id)\n\
          local value={prefix}loaded[id]\n\
-         if value~=nil then\n\
-         if value=={prefix}loading then error(\"luck bundle: require cycle hit while loading module #\"..id,2)end\n\
-         return value\n\
-         end\n\
-         {prefix}loaded[id]={prefix}loading\n\
+         if value~=nil then return value end\n\
          value={prefix}result({prefix}modules[id]())\n\
          {prefix}loaded[id]=value\n\
          return value\n\
@@ -54,14 +60,42 @@ fn luau_loader_text(prefix: &str) -> String {
     )
 }
 
-fn lua_require_text(prefix: &str, version: LuaVersion) -> String {
+/// The runtime behind Luau value-export modules, which a bundle needs only
+/// when one of its modules exports a value.
+///
+/// `{prefix}exporting` hands a cyclic requirer a placeholder whose field
+/// accesses error until the module finishes, then fills and freezes it
+/// (`populatePlaceholder` in `Require/src/RequireImpl.cpp`).
+pub(crate) fn export_runtime_text(prefix: &str) -> String {
+    format!(
+        "local {prefix}freeze=table.freeze\n\
+         local {prefix}lock={{\n\
+         __index=function(_,key)error(\"luck bundle: cannot read exported field '\"..tostring(key)..\"' of a module still loading in a require cycle\",2)end,\n\
+         __newindex=function(_,key)error(\"luck bundle: cannot set exported field '\"..tostring(key)..\"' of a module still loading in a require cycle\",2)end,\n\
+         }}\n\
+         local function {prefix}exporting(id,body)\n\
+         return function()\n\
+         local placeholder=setmetatable({{}},{prefix}lock)\n\
+         {prefix}loaded[id]=placeholder\n\
+         local exports=body()\n\
+         setmetatable(placeholder,nil)\n\
+         for key,value in exports do placeholder[key]=value end\n\
+         return {prefix}freeze(placeholder)\n\
+         end\n\
+         end\n"
+    )
+}
+
+fn lua_require_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -> String {
     if !version.has_require_error_retry() {
-        // 5.1: a sentinel marks in-progress loads; hitting it (a cycle,
-        // or a module whose load previously raised) reproduces 5.1's
-        // "loop or previous error" failure.
+        // 5.1: a sentinel marks in-progress loads, and hitting it (a cycle, or
+        // a module whose load previously raised) reproduces 5.1's "loop or
+        // previous error" failure. It's a function because `module()` adopts
+        // a table it finds in `package.loaded`.
+        let keyword = entry_point_keyword(is_loader_global);
         return format!(
-            "local {prefix}loading={{}}\n\
-             local function {prefix}require(name)\n\
+            "local {prefix}loading=function()end\n\
+             {keyword} {prefix}require(name)\n\
              local value={prefix}loaded[name]\n\
              if value then\n\
              if value=={prefix}loading then error(\"loop or previous error loading module '\"..name..\"'\",2)end\n\
@@ -90,7 +124,7 @@ fn lua_require_text(prefix: &str, version: LuaVersion) -> String {
              if value then return value end\n\
              local preloader={prefix}preload[name]\n\
              if preloader then\n\
-             value=preloader(name)\n\
+             value=preloader(name,nil)\n\
              else\n\
              value={prefix}modules[name](name,{prefix}paths[name])\n\
              end\n\
@@ -136,9 +170,10 @@ fn lua_require_text(prefix: &str, version: LuaVersion) -> String {
 ///
 /// Anything else goes to the host's own `require`, looked up at call time so
 /// one the host installs later still counts.
-pub(crate) fn dynamic_entry_text(prefix: &str) -> String {
+pub(crate) fn dynamic_entry_text(prefix: &str, is_loader_global: bool) -> String {
+    let keyword = entry_point_keyword(is_loader_global);
     format!(
-        "local function {prefix}dynamic(name)\n\
+        "{keyword} {prefix}dynamic(name)\n\
          if {prefix}modules[name]~=nil or {prefix}preload[name]~=nil then return {prefix}require(name)end\n\
          if type(require)==\"function\" then return require(name)end\n\
          error(\"luck bundle: dynamic require of '\"..tostring(name)..\"' is not in the bundle and this runtime has no require\",2)\n\

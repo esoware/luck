@@ -1025,6 +1025,7 @@ dependencies = [
  "insta",
  "luck_ast",
  "luck_core",
+ "luck_lexer",
  "luck_parser",
  "luck_resolver",
  "luck_semantic",

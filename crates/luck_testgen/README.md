@@ -17,7 +17,7 @@ Determinism matters most. A single xorshift64\* `Rng` (`rng.rs`) drives every ch
 
 ### Runtime-safe (`generate_runtime_safe`)
 
-`RuntimeGenerator` (`runtime.rs`) tracks a scope stack of typed bindings (`Number`/`String`/`Boolean`/`Table`) so every emitted operation is type-safe at runtime: no `"a" + 1`, no calling a number, no division by a literal zero, no reads of an uninitialized variable. Loops are counter-bounded and library calls avoid observable nondeterminism (`pairs` order, time, GC). Every top-level binding is `print`ed at the end, so a transform that wrongly eliminates or reorders an assignment changes stdout, which is what a differential run compares. A small name pool with a deliberate 30% bare-stem shadowing rate exercises the shadowing bug class that flat analyses miss.
+`RuntimeGenerator` (`runtime.rs`) tracks a scope stack of typed bindings (`Number`/`String`/`Boolean`/`Table`) so every emitted operation is type-safe at runtime: no `"a" + 1`, no calling a number, no division by a literal zero, no reads of an uninitialized variable. Loops are counter-bounded and library calls avoid observable nondeterminism (`pairs` order, time, GC). Every top-level binding still visible at the end is `print`ed, so a transform that wrongly eliminates or reorders an assignment changes stdout, which is what a differential run compares. A small name pool with a deliberate 30% bare-stem shadowing rate exercises the shadowing bug class that flat analyses miss.
 
 ### Full-grammar (`generate_full`)
 

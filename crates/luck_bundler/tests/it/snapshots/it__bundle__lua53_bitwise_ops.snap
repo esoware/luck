@@ -12,7 +12,7 @@ local value=__luck_loaded[name]
 if value then return value end
 local preloader=__luck_preload[name]
 if preloader then
-value=preloader(name)
+value=preloader(name,nil)
 else
 value=__luck_modules[name](name,__luck_paths[name])
 end

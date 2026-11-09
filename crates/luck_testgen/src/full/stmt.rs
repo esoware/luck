@@ -42,12 +42,13 @@ impl FullGenerator {
         let semicolon = if self.rng.chance(15) { ";" } else { "" };
         if self.version.has_attributes() && self.rng.chance(10) {
             self.readonly_names.push(name.clone());
+            let attribute = self.rng.pick(&["const", "close"]);
             if self.version.has_leading_attributes() && self.rng.chance(50) {
                 // Lua 5.5
-                self.line(&format!("local <const> {name} = {value}{semicolon}"));
+                self.line(&format!("local <{attribute}> {name} = {value}{semicolon}"));
             } else {
                 // Lua 5.4+
-                self.line(&format!("local {name} <const> = {value}{semicolon}"));
+                self.line(&format!("local {name} <{attribute}> = {value}{semicolon}"));
             }
         } else if self.version.is_luau() && self.rng.chance(10) {
             // Luau const binding

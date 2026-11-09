@@ -91,12 +91,8 @@ fn max_function_upvalues(output: &str, version: LuaVersion) -> usize {
     upvalues.values().map(FxHashSet::len).max().unwrap_or(0)
 }
 
-// Lua 5.1's `module()` reuses `package.loaded[name]` whenever it's a table,
-// and real `require` keeps a userdata sentinel there during a load. A table
-// sentinel becomes the module, shared by every `module()` caller, and
-// `require` then returns `true`.
 #[test]
-fn bug_lua51_loading_sentinel_is_not_a_table() {
+fn lua51_loading_sentinel_is_not_a_table() {
     let result = bundle_files(
         &[
             ("main.lua", b"local a = require(\"a\")\nprint(a.name)\n"),
@@ -112,11 +108,8 @@ fn bug_lua51_loading_sentinel_is_not_a_table() {
     );
 }
 
-// With `LUA_COMPAT_VARARG`, 5.1 gives every `function(...)` a hidden local
-// `arg`, which a main chunk doesn't have, so a body's read of the global
-// `arg` no longer sees the script arguments.
 #[test]
-fn bug_lua51_wrapper_does_not_shadow_the_global_arg() {
+fn lua51_wrapper_does_not_shadow_the_global_arg() {
     let result = bundle_files(
         &[
             ("main.lua", b"local util = require(\"util\")\nprint(arg[0], util)\n"),
@@ -134,11 +127,8 @@ fn bug_lua51_wrapper_does_not_shadow_the_global_arg() {
     );
 }
 
-// 5.1's hidden `arg` and 5.5's `(vararg table)` each take a local slot in a
-// `function(...)`, so an entry with 200 locals stops compiling. The crate
-// README promises the entry keeps its full 200-local budget.
 #[test]
-fn bug_entry_keeps_its_200_local_budget_on_vararg_slot_versions() {
+fn entry_keeps_its_200_local_budget_on_vararg_slot_versions() {
     let locals = (0..199usize)
         .map(|index| format!("local v{index} = {index}\n"))
         .collect::<Vec<_>>()
@@ -157,10 +147,8 @@ fn bug_entry_keeps_its_200_local_budget_on_vararg_slot_versions() {
     }
 }
 
-// A global read costs 5.1 no upvalue, but the rewritten call captures the
-// loader, so a function already at the limit stops compiling.
 #[test]
-fn bug_lua51_rewritten_require_stays_within_the_upvalue_limit() {
+fn lua51_rewritten_require_stays_within_the_upvalue_limit() {
     let locals = (0..60usize)
         .map(|index| format!("local u{index} = {index}\n"))
         .collect::<Vec<_>>()
@@ -178,11 +166,8 @@ fn bug_lua51_rewritten_require_stays_within_the_upvalue_limit() {
     assert!(upvalues <= 60, "Lua 5.1 allows 60 upvalues per function, the bundle has {upvalues}");
 }
 
-// Each real chunk has its own `_ENV` upvalue, but every wrapper shares the
-// bundle chunk's, so one module's `_ENV = t` rebinds the globals of the
-// loader and of every other module.
 #[test]
-fn bug_module_assigning_env_rebinds_only_its_own_env() {
+fn module_assigning_env_rebinds_only_its_own_env() {
     let result = bundle_files(
         &[("main.lua", LUA_REQUIRE_UTIL), ("util.lua", b"_ENV = {}\nreturn 1\n")],
         "main.lua",
@@ -202,12 +187,8 @@ fn bug_module_assigning_env_rebinds_only_its_own_env() {
     );
 }
 
-// 5.2's `module()` sets upvalue 1 of its caller, assuming that's `_ENV`, as
-// it is in a chunk. In a wrapper, a require before `module()` makes upvalue 1
-// the loader, and the bundle dies with `attempt to call upvalue
-// '__luck_require' (a table value)`.
 #[test]
-fn bug_lua52_module_call_does_not_replace_the_loader_upvalue() {
+fn lua52_module_call_does_not_replace_the_loader_upvalue() {
     let result = bundle_files(
         &[
             ("main.lua", b"local b = require(\"b\")\nprint(b.name)\n"),
@@ -242,10 +223,8 @@ fn bug_lua52_module_call_does_not_replace_the_loader_upvalue() {
     );
 }
 
-// `local _ENV = t` makes `require` mean `t.require`, which isn't the global,
-// and only calls that reach the global may be bundled.
 #[test]
-fn bug_ignores_require_under_a_local_env_binding() {
+fn ignores_require_under_a_local_env_binding() {
     let main = b"local _ENV = { require = function(name) return name end, print = print }\nprint(require(\"util\"))\n";
     let result = bundle_files(
         &[("main.lua", main), ("util.lua", RETURN_ONE)],
@@ -259,10 +238,8 @@ fn bug_ignores_require_under_a_local_env_binding() {
     );
 }
 
-// After `function require` in the same file, the global is the user's, and
-// real Lua calls it.
 #[test]
-fn bug_ignores_require_after_the_file_replaces_the_global() {
+fn ignores_require_after_the_file_replaces_the_global() {
     let main = b"function require(name) return \"custom:\" .. name end\nprint(require(\"util\"))\n";
     let result = bundle_files(
         &[("main.lua", main), ("util.lua", RETURN_ONE)],
@@ -276,10 +253,8 @@ fn bug_ignores_require_after_the_file_replaces_the_global() {
     );
 }
 
-// `global require` hides an outer local of that name, so this call reaches
-// the real `require` and its module has to be in the bundle.
 #[test]
-fn bug_lua55_global_declaration_reaches_require_past_a_local() {
+fn lua55_global_declaration_reaches_require_past_a_local() {
     let main = b"local require = print\ndo\n    global require\n    local util = require(\"util\")\n    _ENV.print(util)\nend\n";
     let result = bundle_files(
         &[("main.lua", main), ("util.lua", RETURN_ONE)],
@@ -293,10 +268,8 @@ fn bug_lua55_global_declaration_reaches_require_past_a_local() {
     );
 }
 
-// `_G.require` is a reference to the global that isn't a direct call, which
-// W005 exists for. Today it's neither bundled nor reported.
 #[test]
-fn bug_flags_w005_for_a_call_through_g_require() {
+fn flags_w005_for_a_call_through_g_require() {
     let result = bundle_files(
         &[("main.lua", b"local util = _G.require(\"util\")\nlocal other = require(\"other\")\nprint(util, other)\n"), ("util.lua", RETURN_ONE), ("other.lua", RETURN_ONE)],
         "main.lua",
@@ -310,10 +283,8 @@ fn bug_flags_w005_for_a_call_through_g_require() {
     );
 }
 
-// `require("string")` works on every PUC version because the standard
-// libraries sit in `package.loaded`, so no file is needed.
 #[test]
-fn bug_standard_library_require_is_not_an_unresolved_module() {
+fn standard_library_require_is_not_an_unresolved_module() {
     let main = b"local text = require(\"string\")\nprint(text.upper(\"x\"))\n";
     let directory = write_project(&[("main.lua", main)]);
     let result = bundle_project(directory.path(), "main.lua", LuaVersion::Lua54);
@@ -323,10 +294,8 @@ fn bug_standard_library_require_is_not_an_unresolved_module() {
     );
 }
 
-// 5.2 and 5.3 call every loader with two arguments, and a preload loader's
-// second is nil, so `select("#", ...)` is 2 there.
 #[test]
-fn bug_lua52_preload_loader_receives_two_arguments() {
+fn lua52_preload_loader_receives_two_arguments() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
         let result = bundle_files(
             &[("main.lua", LUA_REQUIRE_UTIL), ("util.lua", RETURN_ONE)],
@@ -341,10 +310,8 @@ fn bug_lua52_preload_loader_receives_two_arguments() {
     }
 }
 
-// The official runtime hands a value-export module caught in a cycle a
-// placeholder, as the cyclic require RFC specifies, so this program runs.
 #[test]
-fn bug_luau_value_export_cycle_does_not_raise() {
+fn luau_value_export_cycle_does_not_raise() {
     let result = bundle_files(
         &[
             ("main.luau", b"local a = require(\"./a\")\nprint(a.fa())\n"),
@@ -364,11 +331,8 @@ fn bug_luau_value_export_cycle_does_not_raise() {
     );
 }
 
-// A load that raises leaves the in-progress mark, so the next require says
-// "require cycle hit" although no cycle exists. The official runtime runs
-// the module again.
 #[test]
-fn bug_luau_failed_load_does_not_leave_the_cycle_marker() {
+fn luau_failed_load_does_not_leave_the_cycle_marker() {
     let result = bundle_files(
         &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", b"error(\"boom\")\n")],
         "main.luau",
@@ -382,10 +346,8 @@ fn bug_luau_failed_load_does_not_leave_the_cycle_marker() {
     );
 }
 
-// The runtime only checks the result count, so `return nil` is one valid
-// result.
 #[test]
-fn bug_luau_module_returning_nil_is_accepted() {
+fn luau_module_returning_nil_is_accepted() {
     let result = bundle_files(
         &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", b"return nil\n")],
         "main.luau",
@@ -398,10 +360,8 @@ fn bug_luau_module_returning_nil_is_accepted() {
     );
 }
 
-// The RFC's example: a later `local` shadows the exported name, and the
-// export keeps `"dog"`.
 #[test]
-fn bug_luau_export_table_reads_the_export_not_a_later_shadow() {
+fn luau_export_table_reads_the_export_not_a_later_shadow() {
     let util = b"export local animal = \"dog\"\nlocal animal = \"cat\"\nanimal = \"bird\"\n";
     let result = bundle_files(
         &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", util)],
@@ -422,10 +382,8 @@ fn bug_luau_export_table_reads_the_export_not_a_later_shadow() {
     assert!(!reads_shadow, "the export must read the exported binding:\n{}", result.output);
 }
 
-// `return table.freeze(...)` lands in the module's own scope, so a
-// module-level local named `table` turns it into an index of that local.
 #[test]
-fn bug_luau_export_table_survives_a_module_local_named_table() {
+fn luau_export_table_survives_a_module_local_named_table() {
     let util = b"local table = 5\nexport local value = table\n";
     let result = bundle_files(
         &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", util)],
@@ -442,11 +400,8 @@ fn bug_luau_export_table_survives_a_module_local_named_table() {
     assert!(!is_captured, "freeze must reach the library table:\n{}", result.output);
 }
 
-// Exports live in the frozen table, so a closure's write after the module
-// returns raises "attempt to modify a readonly table". As a plain local it
-// succeeds and the module disagrees with its own export.
 #[test]
-fn bug_luau_closure_write_to_an_export_does_not_silently_succeed() {
+fn luau_closure_write_to_an_export_does_not_silently_succeed() {
     let util = b"export local count = 0\nexport function increment() count += 1 end\n";
     let result = bundle_files(
         &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", util)],
@@ -464,10 +419,8 @@ fn bug_luau_closure_write_to_an_export_does_not_silently_succeed() {
     );
 }
 
-// The rewrite starts at the attribute's end, which is before the `]` of the
-// bracketed form, so the `]` is deleted and the bundle doesn't parse.
 #[test]
-fn bug_luau_bracketed_attribute_on_an_export_function_survives_lowering() {
+fn luau_bracketed_attribute_on_an_export_function_survives_lowering() {
     let result = bundle_files(
         &[
             ("main.luau", LUAU_REQUIRE_UTIL),
@@ -485,10 +438,8 @@ fn bug_luau_bracketed_attribute_on_an_export_function_survives_lowering() {
     );
 }
 
-// The attribute rewrite always yields exactly one line break, whatever it
-// replaced, so the module's later lines drift from the line map.
 #[test]
-fn bug_luau_export_function_attribute_lowering_keeps_lines_one_to_one() {
+fn luau_export_function_attribute_lowering_keeps_lines_one_to_one() {
     for (util, marker_line) in [
         ("@native export function f() return 1 end\nlocal marker = 1\n", 2usize),
         ("@native\n-- note\n\nexport function f() return 1 end\nlocal marker = 1\n", 5),
@@ -507,6 +458,32 @@ fn bug_luau_export_function_attribute_lowering_keeps_lines_one_to_one() {
             result.output
         );
     }
+}
+
+#[test]
+fn luau_export_table_storage_handles_every_declaration_shape() {
+    let util = b"export local a, b: number = 1, 2\nexport local blank;\nlocal function poke() a = 3 blank = 4 end\n@native\n-- export mention\nexport function keep() return a end\nlocal keep = 5\nprint(keep, b)\n";
+    let result = bundle_files(
+        &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", util)],
+        "main.luau",
+        LuaVersion::Luau,
+    );
+    let output = result.output.as_str();
+    let parsed = luck_parser::parse(output, LuaVersion::Luau);
+    assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
+    for needle in [
+        "__luck_exports.a,__luck_exports.b = 1, 2\n",
+        "__luck_exports.blank = nil;\n",
+        "local function poke() __luck_exports.a = 3 __luck_exports.blank = 4 end\n",
+        "@native\n-- export mention\nfunction __luck_exports.keep() return __luck_exports.a end\n",
+        "print(keep, __luck_exports.b)\n",
+        "return __luck_freeze(__luck_exports)\n",
+    ] {
+        assert!(output.contains(needle), "expected {needle:?}:\n{output}");
+    }
+    let entry = line_map_entry(&result, "util.luau");
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines[entry.bundle_start_line + 5], "local keep = 5", "{output}");
 }
 
 #[test]

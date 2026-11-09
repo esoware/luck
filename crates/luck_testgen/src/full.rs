@@ -171,7 +171,13 @@ impl FullGenerator {
         }
         if self.version.has_global() {
             self.line("global registry, dispatch");
-            self.line("global <const> *");
+            // `global <const> *` would make every later write to a global a
+            // compile error, so it stays in a block that writes none.
+            self.line("global *");
+            self.line("do");
+            self.line("\tglobal <const> *");
+            self.line("\tprint(registry, dispatch)");
+            self.line("end");
         }
         self.line("");
     }

@@ -3,10 +3,16 @@ use core::ops::Range;
 use luck_token::{LuaVersion, Span, chunk_start, encode_string, ends_with_line_break, line_breaks};
 use rustc_hash::FxHashSet;
 
-use crate::exports::lower_exports;
+use crate::exports::{ExportLowering, has_value_exports, lower_exports};
 use crate::graph::DependencyGraph;
-use crate::loader::{dynamic_entry_text, loader_text};
+use crate::loader::{dynamic_entry_text, export_runtime_text, loader_text};
 use crate::module::{Dependency, ModuleId, ModuleInfo};
+
+/// `LUAI_MAXUPVALUES` in Lua 5.1.
+const LUA51_MAX_UPVALUES: usize = 60;
+
+/// Upvalues a rewritten function can gain: the loader and its dynamic entry.
+const LOADER_UPVALUES: usize = 2;
 
 /// One contiguous run of bundle lines that came from a single module.
 ///
@@ -40,8 +46,9 @@ pub struct LineMapEntry {
 ///   on the next require, and 5.4+ returns the loader data as a second
 ///   result on first load.
 /// - Luau keys the cache by resolved file, calls chunks with no
-///   arguments, and errors unless a module returns exactly one non-nil
-///   value, as Roblox and the Luau CLI do.
+///   arguments, and errors unless a module returns exactly one value, as
+///   the Luau runtime does. A value-export module in a cycle hands out a
+///   placeholder.
 ///
 /// The entry body is wrapped in a function called with the chunk's
 /// varargs, so CLI args pass straight through, and a module that requires
@@ -102,11 +109,18 @@ pub(crate) fn emit(graph: &DependencyGraph, version: LuaVersion) -> (String, Vec
     }
 
     writer.push("do\n");
-    writer.push(&loader_text(&prefix, version));
+    let is_loader_global = modules.iter().any(|module| {
+        module.max_function_upvalues.saturating_add(LOADER_UPVALUES) > LUA51_MAX_UPVALUES
+    });
+    writer.push(&loader_text(&prefix, version, is_loader_global));
     // Only Lua targets record dynamic callees, so only a Lua loader gets the
     // entry point they're retargeted at.
     if modules.iter().any(|module| !module.dynamic_callees.is_empty()) {
-        writer.push(&dynamic_entry_text(&prefix));
+        writer.push(&dynamic_entry_text(&prefix, is_loader_global));
+    }
+    if version.has_value_exports() && modules.iter().any(|module| has_value_exports(&module.block))
+    {
+        writer.push(&export_runtime_text(&prefix));
     }
 
     if version.is_luau() {
@@ -184,17 +198,21 @@ impl BundleWriter<'_> {
         let keys = ModuleKeys::Slot(&slots);
 
         for (slot, (_, module)) in (1usize..).zip(non_entry_modules(graph)) {
-            self.push(&format!("-- module #{slot}: {}\n", module.relative_path));
-            self.push(&format!("{prefix}modules[{slot}]=function(...)\n"));
-            self.push_body(module, keys);
-            self.push("end\n");
+            self.push_provenance(&format!("#{slot}"), &module.relative_path);
+            let module_slot = format!("{prefix}modules[{slot}]");
+            if self.push_wrapped(&format!("{module_slot}="), module, keys) {
+                self.push(&format!("{module_slot}={prefix}exporting({slot},{module_slot})\n"));
+            }
         }
 
-        self.push(&format!("local {prefix}entry=function(...)\n"));
-        self.push_body(entry, keys);
-        self.push("end\n");
+        let has_entry_exports = self.push_wrapped(&format!("local {prefix}entry="), entry, keys);
         if let Some(slot) = entry_slot {
-            self.push(&format!("{prefix}modules[{slot}]={prefix}entry\n"));
+            let registered = if has_entry_exports {
+                format!("{prefix}exporting({slot},{prefix}entry)")
+            } else {
+                format!("{prefix}entry")
+            };
+            self.push(&format!("{prefix}modules[{slot}]={registered}\n"));
         }
     }
 
@@ -227,10 +245,12 @@ impl BundleWriter<'_> {
                 continue;
             };
             let first = encode_string(primary.as_bytes());
-            self.push(&format!("-- module {first}: {}\n", module.relative_path));
-            self.push(&format!("{prefix}modules[{first}]=function(...)\n"));
-            self.push_body(module, ModuleKeys::RequireString);
-            self.push("end\n");
+            self.push_provenance(&first, &module.relative_path);
+            self.push_wrapped(
+                &format!("{prefix}modules[{first}]="),
+                module,
+                ModuleKeys::RequireString,
+            );
             for alias in aliases {
                 self.push(&format!(
                     "{prefix}modules[{}]={prefix}modules[{first}]\n",
@@ -240,9 +260,7 @@ impl BundleWriter<'_> {
             self.push_path_registrations(strings, &module.relative_path);
         }
 
-        self.push(&format!("local {prefix}entry=function(...)\n"));
-        self.push_body(entry, ModuleKeys::RequireString);
-        self.push("end\n");
+        self.push_wrapped(&format!("local {prefix}entry="), entry, ModuleKeys::RequireString);
         if let Some(entry_strings) =
             strings_by_module.get(graph.entry_id.0).filter(|strings| !strings.is_empty())
         {
@@ -254,6 +272,13 @@ impl BundleWriter<'_> {
             }
             self.push_path_registrations(entry_strings, &entry.relative_path);
         }
+    }
+
+    /// A line break in a file name would end the comment and turn the rest
+    /// of the name into code, so it's written as an escape.
+    fn push_provenance(&mut self, label: &str, relative_path: &str) {
+        let path = relative_path.replace('\n', "\\n").replace('\r', "\\r");
+        self.push(&format!("-- module {label}: {path}\n"));
     }
 
     fn push_path_registrations(&mut self, strings: &[&str], relative_path: &str) {
@@ -270,13 +295,67 @@ impl BundleWriter<'_> {
         }
     }
 
+    /// Writes `target` bound to `module` wrapped in a function, and reports
+    /// whether the module exports values, so it registers through
+    /// `{prefix}exporting`.
+    fn push_wrapped(&mut self, target: &str, module: &ModuleInfo, keys: ModuleKeys<'_>) -> bool {
+        let lowering = if self.version.has_value_exports() {
+            lower_exports(&module.block, &module.source, self.version, self.prefix)
+        } else {
+            ExportLowering::default()
+        };
+        let (opening, closing) = self.wrapper_text(module);
+        self.push(target);
+        self.push(&opening);
+        self.push(lowering.table_declaration.as_deref().unwrap_or_default());
+        self.push("\n");
+        let has_exported_values = lowering.closing.is_some();
+        self.push_body(module, keys, lowering.edits, lowering.closing.as_deref());
+        self.push(closing);
+        has_exported_values
+    }
+
+    /// The text opening and closing `module`'s wrapper function.
+    fn wrapper_text(&self, module: &ModuleInfo) -> (String, &'static str) {
+        // 5.1's hidden `arg` and 5.5's `(vararg table)` each take a local
+        // slot in a vararg function, so a body that reads no `...` gets none.
+        let params = if module.has_vararg_read
+            || !(self.version.has_implicit_vararg_table() || self.version.has_named_varargs())
+        {
+            "..."
+        } else {
+            ""
+        };
+        if module.has_env_rebinding {
+            // A real chunk's `_ENV` is its own and its upvalue 1, which
+            // 5.2's `module()` sets.
+            return (
+                format!("(function(_ENV)return function({params})_ENV=_ENV"),
+                "end end)(_ENV)\n",
+            );
+        }
+        // 5.1: `function(...)` hides the global `arg` behind its hidden local.
+        let should_restore_arg = module.has_vararg_read && module.has_global_arg_read;
+        (
+            format!("function({params}){}", if should_restore_arg { "arg=_G.arg" } else { "" }),
+            "end\n",
+        )
+    }
+
     /// Writes `module`'s source with a loader call spliced over each require
     /// the scan recorded, its dynamic requires retargeted, and its Luau
-    /// `export` declarations lowered, and maps the lines it took.
+    /// `export` declarations lowered, ending with `closing`, and maps the
+    /// lines it took.
     ///
     /// A loader call keeps the newline count of the call it replaces, so the
     /// line map stays 1:1 for multiline requires too.
-    fn push_body(&mut self, module: &ModuleInfo, keys: ModuleKeys<'_>) {
+    fn push_body(
+        &mut self,
+        module: &ModuleInfo,
+        keys: ModuleKeys<'_>,
+        export_edits: Vec<(Span, String)>,
+        closing: Option<&str>,
+    ) {
         let source = module.source.as_str();
         let mut edits: Vec<(Span, String)> = module
             .dependencies
@@ -302,13 +381,7 @@ impl BundleWriter<'_> {
                 .map(|callee| (*callee, format!("{}dynamic", self.prefix))),
         );
 
-        let value_exports = if self.version.has_value_exports() {
-            let (export_edits, names) = lower_exports(&module.block);
-            edits.extend(export_edits);
-            names
-        } else {
-            Vec::new()
-        };
+        edits.extend(export_edits);
         // Only a chunk may open with a shebang or a BOM, and this body is
         // inside a function. The shebang's line break stays for the line map.
         edits.extend(module.shebang.map(|span| (span, String::new())));
@@ -332,14 +405,12 @@ impl BundleWriter<'_> {
         }
         self.push(source.get(cursor..).unwrap_or_default());
 
-        if !value_exports.is_empty() {
+        if let Some(closing_lines) = closing {
             if self.output.len() == body_start || !ends_with_line_break(&self.output, self.version)
             {
                 self.push("\n");
             }
-            let fields: Vec<String> =
-                value_exports.iter().map(|name| format!("{name}={name}")).collect();
-            self.push(&format!("return table.freeze({{{}}})\n", fields.join(",")));
+            self.push(closing_lines);
         }
         if self.output.len() > body_start && !ends_with_line_break(&self.output, self.version) {
             self.push("\n");
@@ -439,6 +510,10 @@ mod tests {
             dynamic_callees: extracted.dynamic_callees,
             hot_comments,
             shebang,
+            has_vararg_read: extracted.has_vararg_read,
+            has_global_arg_read: extracted.has_global_arg_read,
+            has_env_rebinding: extracted.has_env_rebinding,
+            max_function_upvalues: extracted.max_function_upvalues,
             block: parsed.block,
         };
         ModuleFixture { info, resolved_paths }
@@ -669,6 +744,44 @@ mod tests {
     }
 
     #[test]
+    fn lua51_bundle_writes_no_global_by_default() {
+        let source = "local d = require(\"dep\")\nlocal name = \"dep\"\nprint(d, require(name))\n";
+        let modules = vec![
+            module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua51),
+            module("src/main.lua", source, &[("dep", "src/dep.lua")], LuaVersion::Lua51),
+        ];
+        let output = bundle(modules, LuaVersion::Lua51);
+        assert!(output.contains("local function __luck_require(name)"), "{output}");
+        assert!(output.contains("local function __luck_dynamic(name)"), "{output}");
+        assert!(!output.contains("\nfunction __luck_"), "{output}");
+        assert_reparses(&output, LuaVersion::Lua51);
+    }
+
+    fn lua51_bundle_capturing(captures: usize) -> String {
+        let locals =
+            (0..captures).map(|i| format!("local u{i} = {i}\n")).collect::<Vec<_>>().concat();
+        let sum = (0..captures).map(|i| format!("u{i}")).collect::<Vec<_>>().join(" + ");
+        let source = format!(
+            "{locals}local function f()\n    return require(\"dep\"), {sum}\nend\nprint(f())\n"
+        );
+        let modules = vec![
+            module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua51),
+            module("src/main.lua", &source, &[("dep", "src/dep.lua")], LuaVersion::Lua51),
+        ];
+        bundle(modules, LuaVersion::Lua51)
+    }
+
+    #[test]
+    fn lua51_loader_goes_global_only_without_room_for_its_upvalues() {
+        let with_room = lua51_bundle_capturing(58);
+        assert!(with_room.contains("local function __luck_require(name)"), "{with_room}");
+
+        let without_room = lua51_bundle_capturing(59);
+        assert!(without_room.contains("\nfunction __luck_require(name)"), "{without_room}");
+        assert!(!without_room.contains("local function __luck_require"), "{without_room}");
+    }
+
+    #[test]
     fn lua52_loader_retries_after_error_and_passes_path() {
         let modules = vec![
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua52),
@@ -773,7 +886,7 @@ end
         assert!(output.contains("const LIMIT = 0xffffffffffffffffi"), "{output}");
         assert!(output.contains("@native\nlocal function get()"), "{output}");
         assert!(
-            output.contains("return table.freeze({value=value,LIMIT=LIMIT,get=get})"),
+            output.contains("return __luck_freeze({value=value,LIMIT=LIMIT,get=get})"),
             "{output}"
         );
         assert_reparses(&output, LuaVersion::Luau);
@@ -918,10 +1031,8 @@ print(field, lazy())
         );
     }
 
-    /// A file name may hold a line break on Unix, and the provenance comment
-    /// writes it raw, so the rest of the name runs as code at bundle load.
     #[test]
-    fn bug_line_break_in_a_module_path_stays_inside_the_provenance_comment() {
+    fn line_break_in_a_module_path_stays_inside_the_provenance_comment() {
         let path = "src/a\nerror(1)--.lua";
         let modules = vec![
             module(path, "return 1\n", &[], LuaVersion::Lua54),

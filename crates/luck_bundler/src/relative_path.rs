@@ -50,7 +50,10 @@ pub(crate) fn make_relative(path: &str, root: &str) -> String {
         .take_while(|(from_path, from_root)| from_path == from_root)
         .count();
 
-    if shared == 0 {
+    // A UNC root is `//server/share`: both empty segments and those two
+    // names have to match before there is a shared root at all.
+    let shared_root_segments = if root_directory.starts_with("//") { 4 } else { 1 };
+    if shared < shared_root_segments {
         return path_parts.last().unwrap_or(&path).to_string();
     }
 
@@ -91,7 +94,7 @@ mod tests {
     /// The root of a UNC path is `//server/share`, so another server or share
     /// shares no root, and the leading empty segments don't count as one.
     #[test]
-    fn bug_path_on_another_unc_share_keeps_only_the_file_name() {
+    fn path_on_another_unc_share_keeps_only_the_file_name() {
         assert_eq!(make_relative("//server-a/share/lib.lua", "//server-b/proj"), "lib.lua");
         assert_eq!(make_relative("//server/other/lib.lua", "//server/share/proj"), "lib.lua");
     }

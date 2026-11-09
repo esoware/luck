@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 luck_ast      = { workspace = true }
 luck_core     = { workspace = true }
+luck_lexer    = { workspace = true }
 luck_parser   = { workspace = true }
 luck_resolver = { workspace = true }
 luck_semantic = { workspace = true }

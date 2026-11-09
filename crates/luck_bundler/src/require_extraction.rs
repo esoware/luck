@@ -1,8 +1,10 @@
-use luck_ast::{Block, Expression, FunctionArgs, FunctionCall, Statement, Var, Visitor};
+use luck_ast::{
+    Block, Expression, FunctionArgs, FunctionBody, FunctionCall, Statement, Var, Visitor,
+};
 use luck_core::{Diagnostic, DynamicRequire};
-use luck_semantic::ScopeTree;
-use luck_token::{LuaVersion, Span, decode_string};
-use rustc_hash::FxHashSet;
+use luck_semantic::{ScopeId, ScopeKind, ScopeTree, StdlibEntry, SymbolId};
+use luck_token::{LuaVersion, Span, StdlibEnvironment, decode_string};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A `require("literal")` call that reaches the global `require`.
 #[derive(Debug)]
@@ -22,14 +24,24 @@ pub(crate) struct ExtractedRequires {
     /// nested in the argument still gets its own rewrite.
     pub dynamic_callees: Vec<Span>,
     pub diagnostics: Vec<Diagnostic>,
+    /// The module's own chunk reads `...`.
+    pub has_vararg_read: bool,
+    /// Lua 5.1: the module reads the global `arg`.
+    pub has_global_arg_read: bool,
+    /// Lua 5.2+: the module assigns its `_ENV` or calls `module`.
+    pub has_env_rebinding: bool,
+    /// Lua 5.1: the most locals any one function captures. Zero elsewhere.
+    pub max_function_upvalues: usize,
 }
 
 /// Finds every `require()` call in the module, at any depth.
 ///
-/// A call through a local binding named `require` keeps its meaning and gets
-/// W005. So does any reference to the global `require` that isn't a direct
-/// call, because calls through that alias escape bundling. On Luau, writes to
-/// `package.loaded` get E006.
+/// A call that doesn't reach the global `require`, through a local binding
+/// named `require`, a local `_ENV`, or a global the file replaced, keeps its
+/// meaning and gets W005. So does a reference to the global `require` that
+/// isn't a direct call, since calls through it escape bundling, like
+/// `_G.require`. A standard library's name is served from `package.loaded`, so
+/// it stays the host's. On Luau, writes to `package.loaded` get E006.
 ///
 /// `dynamic_require` decides whether a `require(expr)` aborts the bundle or
 /// stays for the runtime.
@@ -51,6 +63,8 @@ pub(crate) fn extract_requires(
         package_loaded_writes: Vec::new(),
         seen_require_strings: FxHashSet::default(),
         direct_callee_spans: FxHashSet::default(),
+        function_depth: 0,
+        has_vararg_read: false,
     };
     finder.visit_block(block);
 
@@ -60,6 +74,7 @@ pub(crate) fn extract_requires(
         mut diagnostics,
         package_loaded_writes,
         direct_callee_spans,
+        has_vararg_read,
         ..
     } = finder;
 
@@ -67,7 +82,9 @@ pub(crate) fn extract_requires(
         scope_tree
             .unresolved_references()
             .filter(|reference| {
-                reference.name == "require" && !direct_callee_spans.contains(&reference.span)
+                reference.name == "require"
+                    && reference.kind.is_read()
+                    && !direct_callee_spans.contains(&reference.span)
             })
             .map(|reference| Diagnostic::w005_aliased(file_path, reference.span)),
     );
@@ -75,7 +92,51 @@ pub(crate) fn extract_requires(
     sites.sort_by_key(|site| site.call_span.start);
     diagnostics.extend(package_loaded_writes);
 
-    ExtractedRequires { sites, dynamic_callees, diagnostics }
+    let has_global_arg_read = version.has_implicit_vararg_table()
+        && scope_tree.unresolved_references().any(|reference| reference.name == "arg");
+    let has_env_rebinding = version.has_env_upvalue()
+        && (scope_tree.is_env_assigned
+            || scope_tree.unresolved_references().any(|reference| reference.name == "module"));
+    // Lua 5.1: the only target with an upvalue limit a loader can hit.
+    let max_function_upvalues = if version.has_env_upvalue() || version.is_luau() {
+        0
+    } else {
+        max_function_upvalues(&scope_tree)
+    };
+
+    ExtractedRequires {
+        sites,
+        dynamic_callees,
+        diagnostics,
+        has_vararg_read,
+        has_global_arg_read,
+        has_env_rebinding,
+        max_function_upvalues,
+    }
+}
+
+/// The most distinct outer locals any one function captures. A capture counts
+/// on every function between the use and the declaring scope, as Lua's
+/// compiler counts it.
+fn max_function_upvalues(tree: &ScopeTree) -> usize {
+    let mut captures: FxHashMap<ScopeId, FxHashSet<SymbolId>> = FxHashMap::default();
+    for reference in &tree.references {
+        let Some(symbol) = reference.resolved else {
+            continue;
+        };
+        let home = tree.symbol(symbol).scope;
+        let mut current = Some(reference.scope);
+        while let Some(id) = current
+            && id != home
+        {
+            let scope = tree.scope(id);
+            if scope.kind == ScopeKind::Function {
+                captures.entry(id).or_default().insert(symbol);
+            }
+            current = scope.parent;
+        }
+    }
+    captures.values().map(FxHashSet::len).max().unwrap_or(0)
 }
 
 struct RequireFinder<'input> {
@@ -90,6 +151,9 @@ struct RequireFinder<'input> {
     package_loaded_writes: Vec<Diagnostic>,
     seen_require_strings: FxHashSet<String>,
     direct_callee_spans: FxHashSet<Span>,
+    /// Function bodies entered so far; zero is the module's own chunk.
+    function_depth: usize,
+    has_vararg_read: bool,
 }
 
 impl RequireFinder<'_> {
@@ -98,12 +162,15 @@ impl RequireFinder<'_> {
             return;
         };
         self.direct_callee_spans.insert(callee_span);
-        if self.scope_tree.resolves_to_local("require", callee_span) {
+        if !self.scope_tree.reaches_host_global("require", callee_span) {
             self.diagnostics.push(Diagnostic::w005_shadowed(self.file_path, call.span));
             return;
         }
 
         match literal_require_string(call, self.version) {
+            // The real `require` finds a standard library in `package.loaded`
+            // before any searcher, so no file can stand in for it.
+            Some(require_string) if is_standard_library(&require_string, self.version) => {}
             Some(require_string) => {
                 if !self.seen_require_strings.insert(require_string.clone()) {
                     self.diagnostics.push(Diagnostic::w001(
@@ -147,9 +214,19 @@ impl RequireFinder<'_> {
     /// `package` is no concern of the bundle's.
     fn flag_package_loaded_write(&mut self, target: &Var) {
         if let Some(package_span) = package_loaded_root(target, self.version)
-            && !self.scope_tree.resolves_to_local("package", package_span)
+            && self.scope_tree.reaches_host_global("package", package_span)
         {
             self.package_loaded_writes.push(Diagnostic::e006(self.file_path, target.span()));
+        }
+    }
+
+    /// W005 for `_G.require` or `_ENV.require`, the global `require` reached
+    /// through its table rather than a direct call.
+    fn flag_global_table_require(&mut self, var: &Var) {
+        if let Some((table_name, table_span)) = global_table_require(var, self.version)
+            && self.scope_tree.reaches_host_global(table_name, table_span)
+        {
+            self.diagnostics.push(Diagnostic::w005_aliased(self.file_path, var.span()));
         }
     }
 }
@@ -172,10 +249,70 @@ impl<'ast> Visitor<'ast> for RequireFinder<'_> {
         self.walk_stmt(stmt);
     }
 
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if self.function_depth == 0 && matches!(expr, Expression::VarArg(_)) {
+            self.has_vararg_read = true;
+        }
+        self.walk_expr(expr);
+    }
+
+    fn visit_var(&mut self, var: &'ast Var) {
+        self.flag_global_table_require(var);
+        self.walk_var(var);
+    }
+
+    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
+        self.function_depth = self.function_depth.saturating_add(1);
+        self.walk_function_body(body);
+        self.function_depth = self.function_depth.saturating_sub(1);
+    }
+
     fn visit_function_call(&mut self, call: &'ast FunctionCall) {
         self.handle_call(call);
         self.walk_function_call(call);
     }
+}
+
+/// Whether the real `require` serves `name` straight from `package.loaded`.
+/// Luau has no `package` table, so its `require` always resolves a path.
+fn is_standard_library(name: &str, version: LuaVersion) -> bool {
+    !version.is_luau()
+        && (name == "_G"
+            || matches!(
+                luck_semantic::library_for(version, StdlibEnvironment::Standalone)
+                    .globals
+                    .get(name),
+                Some(StdlibEntry::Namespace(_))
+            ))
+}
+
+/// When `var` reads the field `require` of the global table (`_G`, or `_ENV`
+/// on Lua 5.2+), that table's name and span, which decide whether the access
+/// reaches the host's global table.
+fn global_table_require(var: &Var, version: LuaVersion) -> Option<(&str, Span)> {
+    let (prefix, is_require_key) = match var {
+        Var::FieldAccess(field_access) => {
+            (&field_access.prefix, field_access.name.identifier() == Some("require"))
+        }
+        Var::Index(index_expr) => {
+            let is_require_string = matches!(
+                &index_expr.index,
+                Expression::StringLiteral(literal)
+                    if decode_string(&literal.text, version).is_some_and(|value| *value == *b"require")
+            );
+            (&index_expr.prefix, is_require_string)
+        }
+        Var::Name(_) => return None,
+    };
+    if !is_require_key {
+        return None;
+    }
+    let Expression::Var(Var::Name(token)) = prefix else {
+        return None;
+    };
+    let table_name = token.identifier()?;
+    (table_name == "_G" || (table_name == "_ENV" && version.has_env_upvalue()))
+        .then_some((table_name, token.span))
 }
 
 /// The callee token span when `call` is a direct, non-method call of a
