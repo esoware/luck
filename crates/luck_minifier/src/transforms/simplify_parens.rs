@@ -1,4 +1,7 @@
-use luck_ast::{Block, Expression, FunctionArgs, FunctionCall, Transform, Var, is_prefix_expr};
+use luck_ast::{
+    Block, Expression, FunctionArgs, FunctionCall, Transform, Var, ensure_sufficient_stack,
+    is_prefix_expr,
+};
 
 use crate::expr::{can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, parenthesize};
 
@@ -15,9 +18,8 @@ impl ParenSimplifier {
     /// needs, but strips any nested inside them.
     fn transform_prefix(&mut self, prefix: Expression) -> Expression {
         match prefix {
-            Expression::Parenthesized(paren) => {
-                let transformed = self.transform_expr(paren.expr);
-                parenthesize(transformed)
+            Expression::Parenthesized(mut paren) => {
+                parenthesize(self.transform_expr(paren.expr.take()))
             }
             other @ (Expression::Nil(_)
             | Expression::False(_)
@@ -44,37 +46,34 @@ impl ParenSimplifier {
 impl Transform for ParenSimplifier {
     fn transform_expr(&mut self, expr: Expression) -> Expression {
         match self.walk_expr(expr) {
-            Expression::Parenthesized(paren) => {
-                if can_remove_parens(&paren.expr) {
-                    paren.expr
-                } else {
-                    parenthesize(paren.expr)
-                }
+            Expression::Parenthesized(mut paren) => {
+                let inner = paren.expr.take();
+                if can_remove_parens(&inner) { inner } else { parenthesize(inner) }
             }
             Expression::BinaryOp(mut binop) => {
-                if let Expression::Parenthesized(paren) = binop.left {
-                    if can_unwrap_in_binop_lhs(&paren.expr, binop.op) {
-                        binop.left = paren.expr;
+                if let Expression::Parenthesized(paren) = &mut binop.left {
+                    let inner = paren.expr.take();
+                    binop.left = if can_unwrap_in_binop_lhs(&inner, binop.op) {
+                        inner
                     } else {
-                        binop.left = parenthesize(paren.expr);
-                    }
+                        parenthesize(inner)
+                    };
                 }
-                if let Expression::Parenthesized(paren) = binop.right {
-                    if can_unwrap_in_binop_rhs(&paren.expr, binop.op) {
-                        binop.right = paren.expr;
+                if let Expression::Parenthesized(paren) = &mut binop.right {
+                    let inner = paren.expr.take();
+                    binop.right = if can_unwrap_in_binop_rhs(&inner, binop.op) {
+                        inner
                     } else {
-                        binop.right = parenthesize(paren.expr);
-                    }
+                        parenthesize(inner)
+                    };
                 }
                 Expression::BinaryOp(binop)
             }
             Expression::UnaryOp(mut unop) => {
-                if let Expression::Parenthesized(paren) = unop.operand {
-                    if can_unwrap_in_unary(&paren.expr) {
-                        unop.operand = paren.expr;
-                    } else {
-                        unop.operand = parenthesize(paren.expr);
-                    }
+                if let Expression::Parenthesized(paren) = &mut unop.operand {
+                    let inner = paren.expr.take();
+                    unop.operand =
+                        if can_unwrap_in_unary(&inner) { inner } else { parenthesize(inner) };
                 }
                 Expression::UnaryOp(unop)
             }
@@ -82,7 +81,7 @@ impl Transform for ParenSimplifier {
             // parse, so anything that isn't a valid prefix gets them back.
             Expression::TypeInstantiation(mut instantiation) => {
                 if !is_prefix_expr(&instantiation.expr) {
-                    instantiation.expr = parenthesize(instantiation.expr);
+                    instantiation.expr = parenthesize(instantiation.expr.take());
                 }
                 Expression::TypeInstantiation(instantiation)
             }
@@ -150,26 +149,26 @@ impl Transform for ParenSimplifier {
 
     fn transform_var(&mut self, var: Var) -> Var {
         match var {
-            Var::FieldAccess(mut field_access) => {
-                field_access.prefix = self.transform_prefix(field_access.prefix);
+            Var::FieldAccess(mut field_access) => ensure_sufficient_stack(|| {
+                field_access.prefix = self.transform_prefix(field_access.prefix.take());
                 Var::FieldAccess(field_access)
-            }
-            Var::Index(mut index_expr) => {
-                index_expr.prefix = self.transform_prefix(index_expr.prefix);
-                index_expr.index = self.transform_expr(index_expr.index);
+            }),
+            Var::Index(mut index_expr) => ensure_sufficient_stack(|| {
+                index_expr.prefix = self.transform_prefix(index_expr.prefix.take());
+                index_expr.index = self.transform_expr(index_expr.index.take());
                 Var::Index(index_expr)
-            }
+            }),
             name @ Var::Name(_) => self.walk_var(name),
         }
     }
 
     fn transform_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
-        call.callee = self.transform_prefix(call.callee);
-        call.explicit_type_args = call.explicit_type_args.map(|mut type_args| {
+        call.callee = ensure_sufficient_stack(|| self.transform_prefix(call.callee.take()));
+        call.explicit_type_args = call.explicit_type_args.take().map(|mut type_args| {
             *type_args = self.walk_type_args(*type_args);
             type_args
         });
-        call.args = self.transform_function_args(call.args);
+        call.args = self.transform_function_args(call.args.take());
         call
     }
 }

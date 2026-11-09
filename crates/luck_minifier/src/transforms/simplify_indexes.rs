@@ -44,14 +44,14 @@ impl Transform for IndexSimplifier {
     fn transform_var(&mut self, var: Var) -> Var {
         match self.walk_var(var) {
             // t["foo"] becomes t.foo when "foo" is a valid identifier.
-            Var::Index(index_expr) => {
+            Var::Index(mut index_expr) => {
                 if let Expression::StringLiteral(literal) = &index_expr.index
                     && let Some(name) = short_string_body(&literal.text)
                     && is_valid_identifier_in(name, self.version)
                 {
                     return Var::FieldAccess(Box::new(FieldAccess {
                         span: Span::default(),
-                        prefix: index_expr.prefix,
+                        prefix: index_expr.prefix.take(),
                         name: identifier_token(name.into()),
                     }));
                 }

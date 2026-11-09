@@ -187,14 +187,14 @@ fn minify_on_a_cli_sized_stack(source: String) -> String {
 }
 
 #[test]
-fn bug_long_if_return_chain_does_not_overflow_the_stack() {
+fn long_if_return_chain_does_not_overflow_the_stack() {
     let source = format!("{}return 0\n", "if a then return 1 end\n".repeat(6000));
     let output = minify_on_a_cli_sized_stack(source);
     assert!(reparses(&output), "flat guards must minify to valid Lua, not abort the process");
 }
 
 #[test]
-fn bug_long_operator_chain_does_not_overflow_the_stack() {
+fn long_operator_chain_does_not_overflow_the_stack() {
     let source = format!("return a{}\n", " + a".repeat(6000));
     let output = minify_on_a_cli_sized_stack(source);
     assert!(reparses(&output), "a chain the parser accepts must not abort the process");

@@ -108,7 +108,7 @@ pub struct FunctionTypeParam {
 }
 
 /// Postfix optional: `T?`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct OptionalType {
     pub span: Span,
     pub type_value: Type,

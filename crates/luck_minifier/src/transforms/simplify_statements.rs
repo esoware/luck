@@ -1,5 +1,3 @@
-use core::mem;
-
 use luck_ast::{
     BinaryOp, Block, Expression, IfStatement, LastStatement, Punctuated, ReturnStatement,
     Statement, Transform, is_multi_value,
@@ -101,13 +99,18 @@ fn try_convert_if_return_chain(mut block: Block) -> Block {
         return block;
     }
 
-    let fallback = mem::replace(fallback_expr, Expression::Nil(Span::default()));
-    let result_expr = block.stmts.drain(chain_start..).rev().filter_map(into_guard_parts).fold(
-        fallback,
-        |otherwise, (condition, return_expr)| {
-            logical(logical(condition, BinOp::And, return_expr), BinOp::Or, otherwise)
-        },
-    );
+    let fallback = fallback_expr.take();
+    // Left-nested, the shape the parser builds for the printed chain.
+    let guards = block
+        .stmts
+        .drain(chain_start..)
+        .filter_map(into_guard_parts)
+        .map(|(condition, return_expr)| logical(condition, BinOp::And, return_expr))
+        .reduce(|earlier, guard| logical(earlier, BinOp::Or, guard));
+    let result_expr = match guards {
+        Some(chain) => logical(chain, BinOp::Or, fallback),
+        None => fallback,
+    };
     **return_stmt =
         ReturnStatement { span: Span::default(), exprs: Punctuated::from_item(result_expr) };
     block

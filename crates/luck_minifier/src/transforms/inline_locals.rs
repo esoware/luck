@@ -1,7 +1,8 @@
 use core::mem;
 
 use luck_ast::{
-    Block, Expression, FunctionBody, Statement, Transform, Var, Visitor, is_prefix_expr,
+    Block, Expression, FunctionBody, Statement, Transform, Var, Visitor, ensure_sufficient_stack,
+    is_prefix_expr,
 };
 use luck_token::{BinOp, CompactString, LuaVersion, Span, UnOp};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -44,15 +45,23 @@ fn is_closed_literal_expr(expr: &Expression) -> bool {
         | Expression::Nil(_)
         | Expression::True(_)
         | Expression::False(_) => true,
-        Expression::Parenthesized(paren) => is_closed_literal_expr(&paren.expr),
-        Expression::UnaryOp(unop) => is_closed_literal_expr(&unop.operand),
-        Expression::BinaryOp(binop) => {
+        Expression::Parenthesized(paren) => {
+            ensure_sufficient_stack(|| is_closed_literal_expr(&paren.expr))
+        }
+        Expression::UnaryOp(unop) => {
+            ensure_sufficient_stack(|| is_closed_literal_expr(&unop.operand))
+        }
+        Expression::BinaryOp(binop) => ensure_sufficient_stack(|| {
             is_closed_literal_expr(&binop.left) && is_closed_literal_expr(&binop.right)
+        }),
+        // Luau
+        Expression::TypeCast(cast) => {
+            ensure_sufficient_stack(|| is_closed_literal_expr(&cast.expr))
         }
         // Luau
-        Expression::TypeCast(cast) => is_closed_literal_expr(&cast.expr),
-        // Luau
-        Expression::TypeInstantiation(instantiation) => is_closed_literal_expr(&instantiation.expr),
+        Expression::TypeInstantiation(instantiation) => {
+            ensure_sufficient_stack(|| is_closed_literal_expr(&instantiation.expr))
+        }
         Expression::VarArg(_)
         | Expression::FunctionDef(_)
         | Expression::Var(_)
@@ -283,7 +292,7 @@ impl Transform for Inliner {
         // A call statement holds its `FunctionCall` outside any `Expression`,
         // so `transform_expr` never guards its callee.
         if let Statement::FunctionCall(mut call_stmt) = walked {
-            call_stmt.callee = ensure_prefix(call_stmt.callee);
+            call_stmt.callee = ensure_prefix(call_stmt.callee.take());
             return Statement::FunctionCall(call_stmt);
         }
         walked
@@ -292,11 +301,11 @@ impl Transform for Inliner {
     fn transform_var(&mut self, var: Var) -> Var {
         match self.walk_var(var) {
             Var::Index(mut index_expr) => {
-                index_expr.prefix = ensure_prefix(index_expr.prefix);
+                index_expr.prefix = ensure_prefix(index_expr.prefix.take());
                 Var::Index(index_expr)
             }
             Var::FieldAccess(mut field_access) => {
-                field_access.prefix = ensure_prefix(field_access.prefix);
+                field_access.prefix = ensure_prefix(field_access.prefix.take());
                 Var::FieldAccess(field_access)
             }
             name @ Var::Name(_) => name,
@@ -307,12 +316,12 @@ impl Transform for Inliner {
         self.inline_operands(&mut expr);
         let walked = self.walk_expr(expr);
         if let Expression::FunctionCall(mut call) = walked {
-            call.callee = ensure_prefix(call.callee);
+            call.callee = ensure_prefix(call.callee.take());
             return Expression::FunctionCall(call);
         }
         // Luau
         if let Expression::TypeInstantiation(mut instantiation) = walked {
-            instantiation.expr = ensure_prefix(instantiation.expr);
+            instantiation.expr = ensure_prefix(instantiation.expr.take());
             return Expression::TypeInstantiation(instantiation);
         }
         if let Expression::Var(Var::Name(name)) = &walked
@@ -382,8 +391,12 @@ fn keeps_grouping(expr: &Expression, position: OperandPosition) -> bool {
 /// The operand `expr` prints last, which is what a following token lands on.
 fn last_operand(expr: &mut Expression) -> &mut Expression {
     match expr {
-        Expression::BinaryOp(binop) => last_operand(&mut binop.right),
-        Expression::UnaryOp(unop) => last_operand(&mut unop.operand),
+        Expression::BinaryOp(binop) => {
+            ensure_sufficient_stack(move || last_operand(&mut binop.right))
+        }
+        Expression::UnaryOp(unop) => {
+            ensure_sufficient_stack(move || last_operand(&mut unop.operand))
+        }
         operand @ (Expression::Number(_)
         | Expression::Integer(_)
         | Expression::StringLiteral(_)

@@ -7,7 +7,9 @@
 //! Two traversals share one shape: [`Visitor`] borrows the tree, and
 //! [`Transform`] takes each node by value and returns its replacement, as the
 //! minifier's passes do. Override the `visit_*` or `transform_*` method you
-//! care about and call `self.walk_*` to recurse.
+//! care about and call `self.walk_*` to recurse. A manual walk that follows a
+//! chain link, such as a call's callee or a field access's prefix, recurses
+//! through [`ensure_sufficient_stack`] the way `walk_*` does.
 //!
 //! # Usage
 //!
@@ -36,6 +38,7 @@ mod layout;
 mod punctuated;
 mod query;
 mod span;
+mod stack;
 mod stmt;
 mod synth;
 mod transform;
@@ -53,6 +56,7 @@ pub use query::{
     DottedPath, dotted_path, expr_starts_with_brace, is_multi_value, is_prefix_expr,
     stmt_starts_with_paren,
 };
+pub use stack::ensure_sufficient_stack;
 pub use stmt::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
     ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,

@@ -8,6 +8,11 @@ use tower_lsp::lsp_types::{Position, SelectionRange};
 use crate::document::DocumentState;
 use crate::providers::cursor::touches;
 
+/// How many of the innermost enclosing spans reach the editor. The `parent`
+/// chain's drop and serialization recurse, so a long operator chain must not
+/// become an equally long list.
+const MAX_SELECTION_DEPTH: usize = 256;
+
 pub(crate) fn selection_ranges(
     document: &DocumentState,
     positions: &[Position],
@@ -19,6 +24,8 @@ fn selection_for(document: &DocumentState, position: Position) -> SelectionRange
     let offset = document.offset(position);
     let mut collector = SpanStack { offset, stack: Vec::new() };
     collector.visit_block(&document.parsed.block);
+    let first_kept = collector.stack.len().saturating_sub(MAX_SELECTION_DEPTH);
+    collector.stack.drain(..first_kept);
 
     let mut chain: Option<SelectionRange> = None;
     for &span in collector.stack.iter().rev() {

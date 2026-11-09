@@ -2,7 +2,7 @@
 
 use luck_ast::{
     Expression, FunctionArgs, FunctionAttribute, FunctionBody, FunctionCall, Literal, Parameter,
-    Punctuated, TypeArgs, VarArgParam,
+    Punctuated, TypeArgs, VarArgParam, ensure_sufficient_stack,
 };
 use luck_token::Token;
 
@@ -164,26 +164,28 @@ impl Format for FunctionCall {
     fn fmt(&self, formatter: &mut Formatter) {
         let (root, segments) = collect_call_chain(self);
 
-        if is_method_chain(&segments) {
-            // Wrap the whole chain so it can break before each accessor.
-            group((
-                root,
-                indent(format_with(|indented| {
-                    for segment in &segments {
-                        if segment.accessor.is_some() {
-                            soft_line().fmt(indented);
+        ensure_sufficient_stack(|| {
+            if is_method_chain(&segments) {
+                // Wrap the whole chain so it can break before each accessor.
+                group((
+                    root,
+                    indent(format_with(|indented| {
+                        for segment in &segments {
+                            if segment.accessor.is_some() {
+                                soft_line().fmt(indented);
+                            }
+                            segment.fmt(indented);
                         }
-                        segment.fmt(indented);
-                    }
-                })),
-            ))
-            .fmt(formatter);
-        } else {
-            root.fmt(formatter);
-            for segment in &segments {
-                segment.fmt(formatter);
+                    })),
+                ))
+                .fmt(formatter);
+            } else {
+                root.fmt(formatter);
+                for segment in &segments {
+                    segment.fmt(formatter);
+                }
             }
-        }
+        });
     }
 }
 

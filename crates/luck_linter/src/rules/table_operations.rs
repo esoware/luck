@@ -142,16 +142,25 @@ fn length_offset_operand(expr: &Expression, op: BinOp) -> Option<&Expression> {
 /// Whether both are the same name or the same dotted path. Anything else,
 /// such as an index or a call, never matches.
 fn same_target(left: &Expression, right: &Expression) -> bool {
-    let (Expression::Var(left_var), Expression::Var(right_var)) = (left, right) else {
-        return false;
-    };
-    match (left_var, right_var) {
-        (Var::Name(left_token), Var::Name(right_token)) => same_identifier(left_token, right_token),
-        (Var::FieldAccess(left_field), Var::FieldAccess(right_field)) => {
-            same_identifier(&left_field.name, &right_field.name)
-                && same_target(&left_field.prefix, &right_field.prefix)
+    let (mut left_expr, mut right_expr) = (left, right);
+    loop {
+        let (Expression::Var(left_var), Expression::Var(right_var)) = (left_expr, right_expr)
+        else {
+            return false;
+        };
+        match (left_var, right_var) {
+            (Var::Name(left_token), Var::Name(right_token)) => {
+                return same_identifier(left_token, right_token);
+            }
+            (Var::FieldAccess(left_field), Var::FieldAccess(right_field)) => {
+                if !same_identifier(&left_field.name, &right_field.name) {
+                    return false;
+                }
+                left_expr = &left_field.prefix;
+                right_expr = &right_field.prefix;
+            }
+            _ => return false,
         }
-        _ => false,
     }
 }
 

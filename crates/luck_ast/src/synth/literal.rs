@@ -315,10 +315,10 @@ mod tests {
 
         // Hex would lex as +2^63 on Luau; the decimal magnitude is exact
         // as a float, so i64::MIN becomes its negation.
-        let Expression::UnaryOp(negated) = luau.number_i64(i64::MIN) else {
+        let Expression::UnaryOp(mut negated) = luau.number_i64(i64::MIN) else {
             panic!("expected unop");
         };
-        assert_eq!(number_text(negated.operand), "9223372036854775808");
+        assert_eq!(number_text(negated.operand.take()), "9223372036854775808");
 
         // The integer/float split keeps the markers on 5.3+.
         let lua54 = Synth::new().with_version(LuaVersion::Lua54);

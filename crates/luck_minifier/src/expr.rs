@@ -1,15 +1,24 @@
 //! Expression predicates and builders, and the integer-to-float conversion,
 //! that the passes share.
 
-use luck_ast::{Expression, Field, ParenthesizedExpression, Var};
+use luck_ast::{Expression, Field, ParenthesizedExpression, Var, ensure_sufficient_stack};
 use luck_token::{BinOp, OperandSide, Span, UnOp};
 
+/// `expr` with any enclosing parentheses stripped.
+pub(crate) fn unparenthesized(expr: &Expression) -> &Expression {
+    let mut current = expr;
+    while let Expression::Parenthesized(paren) = current {
+        current = &paren.expr;
+    }
+    current
+}
+
 pub(crate) fn extract_boolean(expr: &Expression) -> Option<bool> {
-    match expr {
+    match unparenthesized(expr) {
         Expression::True(_) => Some(true),
         Expression::False(_) => Some(false),
-        Expression::Parenthesized(paren) => extract_boolean(&paren.expr),
-        Expression::Nil(_)
+        Expression::Parenthesized(_)
+        | Expression::Nil(_)
         | Expression::Number(_)
         | Expression::Integer(_)
         | Expression::StringLiteral(_)
@@ -29,10 +38,10 @@ pub(crate) fn extract_boolean(expr: &Expression) -> Option<bool> {
 }
 
 pub(crate) fn is_nil(expr: &Expression) -> bool {
-    match expr {
+    match unparenthesized(expr) {
         Expression::Nil(_) => true,
-        Expression::Parenthesized(paren) => is_nil(&paren.expr),
-        Expression::False(_)
+        Expression::Parenthesized(_)
+        | Expression::False(_)
         | Expression::True(_)
         | Expression::Number(_)
         | Expression::Integer(_)
@@ -62,11 +71,11 @@ fn is_literal_expr(expr: &Expression) -> bool {
         | Expression::Nil(_)
         | Expression::True(_)
         | Expression::False(_) => true,
-        Expression::Parenthesized(paren) => is_literal_expr(&paren.expr),
-        Expression::UnaryOp(unop) => is_literal_expr(&unop.operand),
-        Expression::BinaryOp(binop) => {
+        Expression::Parenthesized(paren) => is_literal_expr(unparenthesized(&paren.expr)),
+        Expression::UnaryOp(unop) => ensure_sufficient_stack(|| is_literal_expr(&unop.operand)),
+        Expression::BinaryOp(binop) => ensure_sufficient_stack(|| {
             is_literal_expr(&binop.left) && is_literal_expr(&binop.right)
-        }
+        }),
         Expression::Integer(_)
         | Expression::VarArg(_)
         | Expression::FunctionDef(_)
@@ -97,13 +106,13 @@ pub(crate) fn is_pure_expr(expr: &Expression) -> bool {
         // `...` can't be reassigned, so its value is fixed for the whole
         // function body.
         | Expression::VarArg(_) => true,
-        Expression::Parenthesized(paren) => is_pure_expr(&paren.expr),
+        Expression::Parenthesized(paren) => is_pure_expr(unparenthesized(&paren.expr)),
         Expression::UnaryOp(_) => is_literal_expr(expr),
         Expression::BinaryOp(binop) => {
             if matches!(binop.op, BinOp::And | BinOp::Or) {
                 // and/or never invoke metamethods, so they are pure whenever
                 // both operands are.
-                is_pure_expr(&binop.left) && is_pure_expr(&binop.right)
+                ensure_sufficient_stack(|| is_pure_expr(&binop.left) && is_pure_expr(&binop.right))
             } else {
                 is_literal_expr(expr)
             }
@@ -124,9 +133,11 @@ pub(crate) fn is_pure_expr(expr: &Expression) -> bool {
         },
         // Luau type casts are transparent wrappers, so purity is the inner
         // expression's.
-        Expression::TypeCast(cast) => is_pure_expr(&cast.expr),
+        Expression::TypeCast(cast) => ensure_sufficient_stack(|| is_pure_expr(&cast.expr)),
         // Luau: explicit type arguments aren't evaluated at runtime.
-        Expression::TypeInstantiation(instantiation) => is_pure_expr(&instantiation.expr),
+        Expression::TypeInstantiation(instantiation) => {
+            ensure_sufficient_stack(|| is_pure_expr(&instantiation.expr))
+        }
         Expression::FunctionCall(_)
         | Expression::IfExpression(_)
         | Expression::InterpolatedString(_)
@@ -144,7 +155,7 @@ pub(crate) fn is_always_truthy(expr: &Expression) -> bool {
         | Expression::FunctionDef(_)
         | Expression::TableConstructor(_)
         | Expression::True(_) => true,
-        Expression::Parenthesized(paren) => is_always_truthy(&paren.expr),
+        Expression::Parenthesized(paren) => is_always_truthy(unparenthesized(&paren.expr)),
         Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
             is_literal_expr(&unop.operand) && is_always_truthy(&unop.operand)
         }
@@ -201,26 +212,29 @@ pub(crate) fn parenthesize(expr: Expression) -> Expression {
 /// Whether `expr` prints a Luau if-expression last, whose `else` branch would
 /// take in an operator printed after it.
 pub(crate) fn ends_in_if_expr(expr: &Expression) -> bool {
-    match expr {
-        Expression::IfExpression(_) => true,
-        Expression::BinaryOp(binop) => ends_in_if_expr(&binop.right),
-        Expression::UnaryOp(unop) => ends_in_if_expr(&unop.operand),
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Var(_)
-        | Expression::FunctionCall(_)
-        | Expression::Parenthesized(_)
-        | Expression::TableConstructor(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::TypeInstantiation(_)
-        | Expression::Error(_) => false,
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::IfExpression(_) => return true,
+            Expression::BinaryOp(binop) => &binop.right,
+            Expression::UnaryOp(unop) => &unop.operand,
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Var(_)
+            | Expression::FunctionCall(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::TypeInstantiation(_)
+            | Expression::Error(_) => return false,
+        };
     }
 }
 

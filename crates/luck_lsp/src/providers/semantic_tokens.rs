@@ -6,7 +6,7 @@ use alloc::collections::BTreeMap;
 
 use luck_ast::{
     Expression, Field, FunctionCall, GenericTypeList, Statement, TableConstructor, Type,
-    TypeDeclarationValue, TypeField, Var, Visitor,
+    TypeDeclarationValue, TypeField, Var, Visitor, ensure_sufficient_stack,
 };
 use luck_semantic::{StdlibEntry, SymbolKind};
 use luck_token::{Span, Token, TokenKind, index_to_offset, offset_to_index};
@@ -302,30 +302,37 @@ impl Classifier<'_> {
     }
 
     fn callee(&mut self, expr: &Expression) {
-        match expr {
-            Expression::Var(Var::Name(name)) => self.retype(name.span, TYPE_FUNCTION),
-            Expression::Var(Var::FieldAccess(access)) => {
-                self.retype(access.name.span, TYPE_METHOD);
-            }
-            Expression::Parenthesized(parenthesized) => self.callee(&parenthesized.expr),
-            Expression::TypeInstantiation(instantiation) => self.callee(&instantiation.expr), // Luau
-            Expression::TypeCast(cast) => self.callee(&cast.expr), // Luau
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Var(Var::Index(_))
-            | Expression::FunctionCall(_)
-            | Expression::TableConstructor(_)
-            | Expression::BinaryOp(_)
-            | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::Error(_) => {}
+        let mut current = expr;
+        loop {
+            current = match current {
+                Expression::Var(Var::Name(name)) => {
+                    self.retype(name.span, TYPE_FUNCTION);
+                    return;
+                }
+                Expression::Var(Var::FieldAccess(access)) => {
+                    self.retype(access.name.span, TYPE_METHOD);
+                    return;
+                }
+                Expression::Parenthesized(parenthesized) => &parenthesized.expr,
+                Expression::TypeInstantiation(instantiation) => &instantiation.expr, // Luau
+                Expression::TypeCast(cast) => &cast.expr,                            // Luau
+                Expression::Nil(_)
+                | Expression::False(_)
+                | Expression::True(_)
+                | Expression::Number(_)
+                | Expression::Integer(_)
+                | Expression::StringLiteral(_)
+                | Expression::VarArg(_)
+                | Expression::FunctionDef(_)
+                | Expression::Var(Var::Index(_))
+                | Expression::FunctionCall(_)
+                | Expression::TableConstructor(_)
+                | Expression::BinaryOp(_)
+                | Expression::UnaryOp(_)
+                | Expression::IfExpression(_)
+                | Expression::InterpolatedString(_)
+                | Expression::Error(_) => return,
+            };
         }
     }
 }
@@ -425,7 +432,7 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
     }
 
     fn visit_function_call(&mut self, call: &'ast FunctionCall) {
-        self.visit_expr(&call.callee);
+        ensure_sufficient_stack(|| self.visit_expr(&call.callee));
         if let Some(method) = &call.method {
             self.retype(method.span, TYPE_METHOD);
         } else {

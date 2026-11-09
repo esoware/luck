@@ -1,6 +1,11 @@
+use core::mem;
+
+use luck_token::Span;
+
 use crate::expr::{Expression, Field, FunctionArgs, FunctionCall, TableConstructor, Var};
 use crate::function::{FunctionBody, Parameter};
 use crate::punctuated::Punctuated;
+use crate::stack::ensure_sufficient_stack;
 use crate::stmt::{
     AttributedName, Block, IfStatement, LastStatement, Statement, TypeDeclarationValue,
 };
@@ -209,23 +214,23 @@ pub trait Transform {
                 *call = self.transform_function_call(*call);
                 Expression::FunctionCall(call)
             }
-            Expression::Parenthesized(mut parenthesized) => {
-                parenthesized.expr = self.transform_expr(parenthesized.expr);
+            Expression::Parenthesized(mut parenthesized) => ensure_sufficient_stack(|| {
+                parenthesized.expr = self.transform_expr(parenthesized.expr.take());
                 Expression::Parenthesized(parenthesized)
-            }
+            }),
             Expression::TableConstructor(mut table) => {
                 *table = self.transform_table_constructor(*table);
                 Expression::TableConstructor(table)
             }
-            Expression::BinaryOp(mut binary_op) => {
-                binary_op.left = self.transform_expr(binary_op.left);
-                binary_op.right = self.transform_expr(binary_op.right);
+            Expression::BinaryOp(mut binary_op) => ensure_sufficient_stack(|| {
+                binary_op.left = self.transform_expr(binary_op.left.take());
+                binary_op.right = self.transform_expr(binary_op.right.take());
                 Expression::BinaryOp(binary_op)
-            }
-            Expression::UnaryOp(mut unary_op) => {
-                unary_op.operand = self.transform_expr(unary_op.operand);
+            }),
+            Expression::UnaryOp(mut unary_op) => ensure_sufficient_stack(|| {
+                unary_op.operand = self.transform_expr(unary_op.operand.take());
                 Expression::UnaryOp(unary_op)
-            }
+            }),
             // Luau
             Expression::IfExpression(mut if_expr) => {
                 if_expr.condition = self.transform_expr(if_expr.condition);
@@ -256,45 +261,49 @@ pub trait Transform {
                 Expression::InterpolatedString(interpolated_string)
             }
             // Luau
-            Expression::TypeCast(mut cast) => {
-                cast.expr = self.transform_expr(cast.expr);
-                cast.type_annotation = self.transform_type(cast.type_annotation);
+            Expression::TypeCast(mut cast) => ensure_sufficient_stack(|| {
+                cast.expr = self.transform_expr(cast.expr.take());
+                cast.type_annotation = self.transform_type(cast.type_annotation.take());
                 Expression::TypeCast(cast)
-            }
+            }),
             // Luau
-            Expression::TypeInstantiation(mut instantiation) => {
-                instantiation.expr = self.transform_expr(instantiation.expr);
-                instantiation.type_args = self.walk_type_args(instantiation.type_args);
+            Expression::TypeInstantiation(mut instantiation) => ensure_sufficient_stack(|| {
+                instantiation.expr = self.transform_expr(instantiation.expr.take());
+                let type_args = mem::replace(
+                    &mut instantiation.type_args,
+                    TypeArgs { span: Span::default(), args: Punctuated::empty() },
+                );
+                instantiation.type_args = self.walk_type_args(type_args);
                 Expression::TypeInstantiation(instantiation)
-            }
+            }),
         }
     }
 
     fn walk_var(&mut self, var: Var) -> Var {
         match var {
             Var::Name(_) => var,
-            Var::Index(mut index_expr) => {
-                index_expr.prefix = self.transform_expr(index_expr.prefix);
-                index_expr.index = self.transform_expr(index_expr.index);
+            Var::Index(mut index_expr) => ensure_sufficient_stack(|| {
+                index_expr.prefix = self.transform_expr(index_expr.prefix.take());
+                index_expr.index = self.transform_expr(index_expr.index.take());
                 Var::Index(index_expr)
-            }
-            Var::FieldAccess(mut field_access) => {
-                field_access.prefix = self.transform_expr(field_access.prefix);
+            }),
+            Var::FieldAccess(mut field_access) => ensure_sufficient_stack(|| {
+                field_access.prefix = self.transform_expr(field_access.prefix.take());
                 Var::FieldAccess(field_access)
-            }
+            }),
         }
     }
 
     /// Rewrites the callee, then any explicit type arguments, then the
     /// arguments, in source order as the `Visitor` walk reaches them.
-    fn walk_function_call(&mut self, call: FunctionCall) -> FunctionCall {
-        let callee = self.transform_expr(call.callee);
-        let explicit_type_args = call.explicit_type_args.map(|mut type_args| {
+    fn walk_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
+        call.callee = ensure_sufficient_stack(|| self.transform_expr(call.callee.take()));
+        call.explicit_type_args = call.explicit_type_args.take().map(|mut type_args| {
             *type_args = self.walk_type_args(*type_args);
             type_args
         });
-        let args = self.transform_function_args(call.args);
-        FunctionCall { callee, args, explicit_type_args, ..call }
+        call.args = self.transform_function_args(call.args.take());
+        call
     }
 
     fn walk_function_args(&mut self, args: FunctionArgs) -> FunctionArgs {
@@ -381,10 +390,10 @@ pub trait Transform {
                 function_type.return_type = self.transform_type(function_type.return_type);
                 Type::Function(function_type)
             }
-            Type::Optional(mut optional) => {
-                optional.type_value = self.transform_type(optional.type_value);
+            Type::Optional(mut optional) => ensure_sufficient_stack(|| {
+                optional.type_value = self.transform_type(optional.type_value.take());
                 Type::Optional(optional)
-            }
+            }),
             Type::Union(mut union) => {
                 union.types = self.walk_punctuated_types(union.types);
                 Type::Union(union)

@@ -241,7 +241,7 @@ impl DeadCodeRemover {
 
         match if_stmt {
             IfStatement {
-                condition: Expression::UnaryOp(unop),
+                condition: Expression::UnaryOp(mut unop),
                 block,
                 elseif_clauses,
                 else_clause: Some(else_clause),
@@ -250,7 +250,7 @@ impl DeadCodeRemover {
                 self.has_changed = true;
                 let new_if = IfStatement {
                     span: Span::default(),
-                    condition: unop.operand,
+                    condition: unop.operand.take(),
                     block: self.transform_block(else_clause.block),
                     elseif_clauses: Vec::new(),
                     else_clause: Some(ElseClause {
@@ -376,9 +376,9 @@ impl Transform for DeadCodeRemover {
         match self.walk_expr(expr) {
             // `cond and X or X` folds to `X` when both branches are identical
             // and the condition is pure.
-            Expression::BinaryOp(outer) if is_redundant_ternary(&outer) => {
+            Expression::BinaryOp(mut outer) if is_redundant_ternary(&outer) => {
                 self.has_changed = true;
-                outer.right
+                outer.right.take()
             }
             other @ (Expression::Nil(_)
             | Expression::False(_)

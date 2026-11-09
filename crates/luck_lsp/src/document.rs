@@ -154,9 +154,8 @@ mod tests {
     }
 
     #[test]
-    fn bug_a_long_left_associative_chain_does_not_overflow_the_worker_stack() {
-        // `luck lsp` runs requests on 16 MiB workers. A stack overflow aborts
-        // the whole server process, so this fails by aborting the test.
+    fn a_long_left_associative_chain_does_not_overflow_the_worker_stack() {
+        // `luck lsp` runs requests on 16 MiB workers.
         const WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
         let chain = vec!["1"; 200_000].join("+");
         let text = format!("local x = {chain}\n");

@@ -142,28 +142,33 @@ pub fn stmt_starts_with_paren(stmt: &Statement) -> bool {
 }
 
 fn expr_starts_with_paren(expr: &Expression) -> bool {
-    match expr {
-        Expression::Parenthesized(_) => true,
-        Expression::FunctionCall(call) => expr_starts_with_paren(&call.callee),
-        Expression::Var(var) => var_starts_with_paren(var),
-        Expression::BinaryOp(binary_op) => expr_starts_with_paren(&binary_op.left),
-        // Luau
-        Expression::TypeCast(cast) => expr_starts_with_paren(&cast.expr),
-        // Luau
-        Expression::TypeInstantiation(instantiation) => expr_starts_with_paren(&instantiation.expr),
-        Expression::UnaryOp(_)
-        | Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::TableConstructor(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::Error(_) => false,
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::Parenthesized(_) => return true,
+            Expression::FunctionCall(call) => &call.callee,
+            Expression::Var(Var::FieldAccess(field_access)) => &field_access.prefix,
+            Expression::Var(Var::Index(index)) => &index.prefix,
+            Expression::BinaryOp(binary_op) => &binary_op.left,
+            // Luau
+            Expression::TypeCast(cast) => &cast.expr,
+            // Luau
+            Expression::TypeInstantiation(instantiation) => &instantiation.expr,
+            Expression::Var(Var::Name(_))
+            | Expression::UnaryOp(_)
+            | Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::TableConstructor(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::Error(_) => return false,
+        };
     }
 }
 
@@ -181,30 +186,31 @@ fn var_starts_with_paren(var: &Var) -> bool {
 /// opener forms `{{`, which Luau rejects, so printers must separate them.
 #[must_use]
 pub fn expr_starts_with_brace(expr: &Expression) -> bool {
-    match expr {
-        Expression::TableConstructor(_) => true,
-        Expression::FunctionCall(call) => expr_starts_with_brace(&call.callee),
-        Expression::BinaryOp(binary_op) => expr_starts_with_brace(&binary_op.left),
-        // Luau
-        Expression::TypeCast(cast) => expr_starts_with_brace(&cast.expr),
-        Expression::Var(var) => match var {
-            Var::Name(_) => false,
-            Var::FieldAccess(field_access) => expr_starts_with_brace(&field_access.prefix),
-            Var::Index(index) => expr_starts_with_brace(&index.prefix),
-        },
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Parenthesized(_)
-        | Expression::UnaryOp(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeInstantiation(_)
-        | Expression::Error(_) => false,
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::TableConstructor(_) => return true,
+            Expression::FunctionCall(call) => &call.callee,
+            Expression::BinaryOp(binary_op) => &binary_op.left,
+            // Luau
+            Expression::TypeCast(cast) => &cast.expr,
+            Expression::Var(Var::FieldAccess(field_access)) => &field_access.prefix,
+            Expression::Var(Var::Index(index)) => &index.prefix,
+            Expression::Var(Var::Name(_))
+            | Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Parenthesized(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeInstantiation(_)
+            | Expression::Error(_) => return false,
+        };
     }
 }

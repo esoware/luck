@@ -58,14 +58,15 @@ fn overwrite_finding(name: &str, span: Span) -> Finding {
 }
 
 fn expr_base_identifier(expr: &Expression) -> Option<(&str, Span)> {
-    let Expression::Var(var) = expr else {
-        return None;
-    };
-    match var {
-        Var::Name(token) => Some((token.identifier()?, token.span)),
-        Var::FieldAccess(field_access) => expr_base_identifier(&field_access.prefix),
-        Var::Index(index) => expr_base_identifier(&index.prefix),
+    let mut current = expr;
+    while let Expression::Var(var) = current {
+        match var {
+            Var::Name(token) => return Some((token.identifier()?, token.span)),
+            Var::FieldAccess(field_access) => current = &field_access.prefix,
+            Var::Index(index) => current = &index.prefix,
+        }
     }
+    None
 }
 
 struct FieldWriteChecker<'semantic> {

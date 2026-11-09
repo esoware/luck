@@ -51,27 +51,30 @@ const fn op_token_extends_types(op: BinOp) -> bool {
 /// Whether `expr` prints with a type cast as its rightmost part, so the next
 /// token lands directly after the cast's type.
 fn ends_with_type_cast(expr: &Expression) -> bool {
-    match expr {
-        // Luau
-        Expression::TypeCast(_) => true,
-        Expression::BinaryOp(inner) => ends_with_type_cast(&inner.right),
-        Expression::UnaryOp(inner) => ends_with_type_cast(&inner.operand),
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Var(_)
-        | Expression::FunctionCall(_)
-        | Expression::Parenthesized(_)
-        | Expression::TableConstructor(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeInstantiation(_)
-        | Expression::Error(_) => false,
+    let mut current = expr;
+    loop {
+        current = match current {
+            // Luau
+            Expression::TypeCast(_) => return true,
+            Expression::BinaryOp(inner) => &inner.right,
+            Expression::UnaryOp(inner) => &inner.operand,
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Var(_)
+            | Expression::FunctionCall(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeInstantiation(_)
+            | Expression::Error(_) => return false,
+        };
     }
 }
 
@@ -809,6 +812,6 @@ mod tests {
         ) else {
             panic!("expected method call");
         };
-        assert_eq!(method.explicit_type_args.expect("type arguments").args.len(), 1);
+        assert_eq!(method.explicit_type_args.as_ref().expect("type arguments").args.len(), 1);
     }
 }

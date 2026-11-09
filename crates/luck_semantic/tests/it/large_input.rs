@@ -13,12 +13,12 @@ const CHILD_MARKER: &str = "LUCK_SEMANTIC_BUG_LARGE_INPUT_CHILD";
 const CLI_STACK_BYTES: usize = 16 * 1024 * 1024;
 
 #[test]
-fn bug_analyze_survives_long_left_associative_chain() {
+fn analyze_survives_long_left_associative_chain() {
     if env::var_os(CHILD_MARKER).is_none() {
         let status = Command::new(env::current_exe().expect("test binary path"))
             .args([
                 "--exact",
-                "large_input::bug_analyze_survives_long_left_associative_chain",
+                "large_input::analyze_survives_long_left_associative_chain",
                 "--nocapture",
             ])
             .env(CHILD_MARKER, "1")
@@ -34,9 +34,7 @@ fn bug_analyze_survives_long_left_associative_chain() {
 
     let worker = Builder::new().stack_size(CLI_STACK_BYTES).spawn(|| {
         let source = format!("local x = 1{}", " + 1".repeat(100_000));
-        // Leaked because dropping the left-deep tree recurses too, which isn't
-        // under test.
-        let parsed = Box::leak(Box::new(luck_parser::parse(&source, LuaVersion::Lua54)));
+        let parsed = luck_parser::parse(&source, LuaVersion::Lua54);
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let analysis = luck_semantic::analyze(&parsed.block, LuaVersion::Lua54);
         assert_eq!(analysis.scope_tree.symbols.len(), 1, "only x is declared");

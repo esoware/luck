@@ -148,7 +148,7 @@ fn bug_lint_counts_a_file_reached_twice_once() {
 }
 
 #[test]
-fn bug_lint_survives_a_long_operator_chain() {
+fn lint_survives_a_long_operator_chain() {
     let directory = TempDir::new().unwrap();
     let source = format!("local a = 1\nlocal x = a{}\nreturn x\n", "+a".repeat(8_000));
     write_file(directory.path(), "main.lua", &source);
@@ -164,7 +164,7 @@ fn bug_lint_survives_a_long_operator_chain() {
 }
 
 #[test]
-fn bug_minify_survives_a_long_operator_chain() {
+fn minify_survives_a_long_operator_chain() {
     let directory = TempDir::new().unwrap();
     let source = format!("local a = 1\nlocal x = a{}\nreturn x\n", "+a".repeat(8_000));
     write_file(directory.path(), "main.lua", &source);

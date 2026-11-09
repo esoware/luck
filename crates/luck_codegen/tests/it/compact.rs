@@ -280,27 +280,27 @@ fn luau_types_compact_to_minimal_whitespace() {
 }
 
 #[test]
-fn bug_compact_survives_a_long_left_associative_operator_chain() {
+fn compact_survives_a_long_left_associative_operator_chain() {
     assert_compact_fits_worker_stack(
-        "compact::bug_compact_survives_a_long_left_associative_operator_chain",
+        "compact::compact_survives_a_long_left_associative_operator_chain",
         &format!("return a{}", " + a".repeat(CHAIN_LINKS)),
         LuaVersion::Lua54,
     );
 }
 
 #[test]
-fn bug_compact_survives_a_long_suffix_chain() {
+fn compact_survives_a_long_suffix_chain() {
     assert_compact_fits_worker_stack(
-        "compact::bug_compact_survives_a_long_suffix_chain",
+        "compact::compact_survives_a_long_suffix_chain",
         &format!("return a{}", ".b".repeat(CHAIN_LINKS)),
         LuaVersion::Lua54,
     );
 }
 
 #[test]
-fn bug_compact_survives_a_long_optional_type_chain() {
+fn compact_survives_a_long_optional_type_chain() {
     assert_compact_fits_worker_stack(
-        "compact::bug_compact_survives_a_long_optional_type_chain",
+        "compact::compact_survives_a_long_optional_type_chain",
         &format!("type A = T{}", "?".repeat(CHAIN_LINKS)),
         LuaVersion::Luau,
     );

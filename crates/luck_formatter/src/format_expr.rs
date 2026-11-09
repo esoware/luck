@@ -5,7 +5,7 @@
 
 use luck_ast::{
     BinaryOp, Expression, FieldAccess, IfExpression, InterpolatedString, ParenthesizedExpression,
-    UnaryOp, Var, expr_starts_with_brace,
+    UnaryOp, Var, ensure_sufficient_stack, expr_starts_with_brace,
 };
 use luck_token::{BinOp, CompactString, Token, TokenKind, UnOp};
 
@@ -52,13 +52,13 @@ impl Format for Expression {
             Self::IfExpression(if_expr) => if_expr.fmt(formatter), // Luau
             Self::InterpolatedString(interpolated) => interpolated.fmt(formatter), // Luau
             // Luau
-            Self::TypeCast(cast) => {
+            Self::TypeCast(cast) => ensure_sufficient_stack(|| {
                 (&cast.expr, space(), token("::"), space(), &cast.type_annotation).fmt(formatter);
-            }
+            }),
             // Luau
-            Self::TypeInstantiation(instantiation) => {
+            Self::TypeInstantiation(instantiation) => ensure_sufficient_stack(|| {
                 (&instantiation.expr, ExplicitTypeArgs(&instantiation.type_args)).fmt(formatter);
-            }
+            }),
 
             // A parse-recovery placeholder has no text to print.
             Self::Error(_) => {}
@@ -71,7 +71,9 @@ impl Format for Var {
         match self {
             Self::Name(name) => name.fmt(formatter),
             Self::FieldAccess(access) => access.fmt(formatter),
-            Self::Index(index) => (&index.prefix, BracketedKey(&index.index)).fmt(formatter),
+            Self::Index(index) => ensure_sufficient_stack(|| {
+                (&index.prefix, BracketedKey(&index.index)).fmt(formatter);
+            }),
         }
     }
 }
@@ -93,32 +95,33 @@ impl Format for BracketedKey<'_> {
 
 /// Whether the expression's leftmost token is a long-bracket string.
 fn starts_with_bracket(expr: &Expression) -> bool {
-    match expr {
-        Expression::StringLiteral(literal) => literal.text.starts_with('['),
-        Expression::BinaryOp(binary_op) => starts_with_bracket(&binary_op.left),
-        // Luau
-        Expression::TypeCast(cast) => starts_with_bracket(&cast.expr),
-        // Luau
-        Expression::TypeInstantiation(instantiation) => starts_with_bracket(&instantiation.expr),
-        Expression::FunctionCall(call) => starts_with_bracket(&call.callee),
-        Expression::Var(var) => match var {
-            Var::Name(_) => false,
-            Var::Index(index) => starts_with_bracket(&index.prefix),
-            Var::FieldAccess(access) => starts_with_bracket(&access.prefix),
-        },
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Parenthesized(_)
-        | Expression::TableConstructor(_)
-        | Expression::UnaryOp(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::Error(_) => false,
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::StringLiteral(literal) => return literal.text.starts_with('['),
+            Expression::BinaryOp(binary_op) => &binary_op.left,
+            // Luau
+            Expression::TypeCast(cast) => &cast.expr,
+            // Luau
+            Expression::TypeInstantiation(instantiation) => &instantiation.expr,
+            Expression::FunctionCall(call) => &call.callee,
+            Expression::Var(Var::Index(index)) => &index.prefix,
+            Expression::Var(Var::FieldAccess(access)) => &access.prefix,
+            Expression::Var(Var::Name(_))
+            | Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::Error(_) => return false,
+        };
     }
 }
 
@@ -145,19 +148,21 @@ fn collect_access_chain(access: &FieldAccess) -> (&Expression, Vec<&Token>) {
 impl Format for FieldAccess {
     fn fmt(&self, formatter: &mut Formatter) {
         let (root, names) = collect_access_chain(self);
-        if names.len() >= 3 {
-            group((
-                root,
-                indent(format_with(|indented| {
-                    for name in &names {
-                        (soft_line(), token("."), *name).fmt(indented);
-                    }
-                })),
-            ))
-            .fmt(formatter);
-        } else {
-            (&self.prefix, token("."), &self.name).fmt(formatter);
-        }
+        ensure_sufficient_stack(|| {
+            if names.len() >= 3 {
+                group((
+                    root,
+                    indent(format_with(|indented| {
+                        for name in &names {
+                            (soft_line(), token("."), *name).fmt(indented);
+                        }
+                    })),
+                ))
+                .fmt(formatter);
+            } else {
+                (&self.prefix, token("."), &self.name).fmt(formatter);
+            }
+        });
     }
 }
 
@@ -203,16 +208,18 @@ impl Format for BinaryOp {
         let (first, chain) = collect_binary_chain(self);
         // One group over the whole chain, so it's either flat or breaks before
         // every operator.
-        group((
-            first,
-            indent(format_with(|indented| {
-                for (op, right_expr) in &chain {
-                    (soft_line_or_space(), token(op.static_text()), space(), *right_expr)
-                        .fmt(indented);
-                }
-            })),
-        ))
-        .fmt(formatter);
+        ensure_sufficient_stack(|| {
+            group((
+                first,
+                indent(format_with(|indented| {
+                    for (op, right_expr) in &chain {
+                        (soft_line_or_space(), token(op.static_text()), space(), *right_expr)
+                            .fmt(indented);
+                    }
+                })),
+            ))
+            .fmt(formatter);
+        });
     }
 }
 
@@ -229,13 +236,13 @@ impl Format for UnaryOp {
         if self.op == UnOp::Not || is_double_minus_hazard(self.op, &self.operand) {
             space().fmt(formatter);
         }
-        self.operand.fmt(formatter);
+        ensure_sufficient_stack(|| self.operand.fmt(formatter));
     }
 }
 
 impl Format for ParenthesizedExpression {
     fn fmt(&self, formatter: &mut Formatter) {
-        (token("("), &self.expr, token(")")).fmt(formatter);
+        ensure_sufficient_stack(|| (token("("), &self.expr, token(")")).fmt(formatter));
     }
 }
 

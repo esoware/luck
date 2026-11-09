@@ -7,7 +7,10 @@
 //! declares a return shape, or a never-reassigned local initialized from
 //! one of those.
 
-use luck_ast::{Block, DottedPath, Expression, FunctionCall, Statement, Var, Visitor, dotted_path};
+use luck_ast::{
+    Block, DottedPath, Expression, FunctionCall, Statement, Var, Visitor, dotted_path,
+    ensure_sufficient_stack,
+};
 use luck_token::{CompactString, Span};
 use rustc_hash::FxHashMap;
 
@@ -49,8 +52,10 @@ impl<'input> ShapeResolver<'input> {
             Expression::Var(Var::FieldAccess(_)) => {
                 self.library.lookup(&self.global_path(expr)?)?.shape()
             }
-            Expression::FunctionCall(call) => self.call_shape(call),
-            Expression::Parenthesized(parenthesized) => self.expr_shape(&parenthesized.expr),
+            Expression::FunctionCall(call) => ensure_sufficient_stack(|| self.call_shape(call)),
+            Expression::Parenthesized(parenthesized) => {
+                ensure_sufficient_stack(|| self.expr_shape(&parenthesized.expr))
+            }
             // Literal strings carry the derived `string` receiver shape, so
             // `("x"):upper()` and `local s = "x" ... s:upper()` resolve.
             Expression::StringLiteral(_) | Expression::InterpolatedString(_) => {

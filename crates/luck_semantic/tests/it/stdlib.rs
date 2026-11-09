@@ -1437,8 +1437,8 @@ fn returned_expr(text: &str, version: LuaVersion) -> Expression {
         panic!("{text} must parse as a return");
     };
     let mut expr = return_stmt.exprs.first().expect("one returned value").clone();
-    while let Expression::Parenthesized(parenthesized) = expr {
-        expr = parenthesized.expr;
+    while let Expression::Parenthesized(mut parenthesized) = expr {
+        expr = parenthesized.expr.take();
     }
     expr
 }

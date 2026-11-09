@@ -2,7 +2,7 @@ use core::ops::ControlFlow::{self, Continue};
 
 use luck_ast::{
     FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, NamedType, TableType, Type,
-    TypeArgs, TypeField,
+    TypeArgs, TypeField, ensure_sufficient_stack,
 };
 use luck_token::{LuaVersion, Token, TokenKind};
 
@@ -48,7 +48,7 @@ pub(super) fn type_eq(left: &Type, right: &Type, version: LuaVersion) -> Control
         (Type::Table(lhs), Type::Table(rhs)) => table_type_eq(lhs, rhs, version),
         (Type::Function(lhs), Type::Function(rhs)) => function_type_eq(lhs, rhs, version),
         (Type::Optional(lhs), Type::Optional(rhs)) => {
-            type_eq(&lhs.type_value, &rhs.type_value, version)
+            ensure_sufficient_stack(|| type_eq(&lhs.type_value, &rhs.type_value, version))
         }
         // `leading_pipe` is trivia the formatter may add or remove.
         (Type::Union(lhs), Type::Union(rhs)) => {

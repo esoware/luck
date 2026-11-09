@@ -50,7 +50,7 @@ pub enum Var {
     FieldAccess(Box<FieldAccess>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct FunctionCall {
     pub span: Span,
     pub callee: Expression,
@@ -73,7 +73,7 @@ pub enum FunctionArgs {
     StringLiteral(Literal),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct BinaryOp {
     pub span: Span,
     pub left: Expression,
@@ -81,14 +81,14 @@ pub struct BinaryOp {
     pub right: Expression,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct UnaryOp {
     pub span: Span,
     pub op: UnOp,
     pub operand: Expression,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct ParenthesizedExpression {
     pub span: Span,
     pub expr: Expression,
@@ -107,14 +107,14 @@ pub enum Field {
     Positional { span: Span, value: Expression },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct IndexExpression {
     pub span: Span,
     pub prefix: Expression,
     pub index: Expression,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct FieldAccess {
     pub span: Span,
     pub prefix: Expression,
@@ -162,7 +162,7 @@ pub struct InterpolatedStringSegment {
 }
 
 /// Luau type cast (`expr :: Type`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct TypeCast {
     pub span: Span,
     pub expr: Expression,
@@ -170,7 +170,7 @@ pub struct TypeCast {
 }
 
 /// Luau explicit type-parameter instantiation (`expr<<T, U>>`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Eq)]
 pub struct TypeInstantiation {
     pub span: Span,
     pub expr: Expression,

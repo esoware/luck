@@ -554,11 +554,8 @@ fn bug_multiline_require_keeps_its_lone_cr_line_breaks() {
     );
 }
 
-// The parser builds left-associative chains in a loop, with no depth limit,
-// and the passes after it recurse, so a legal 800 KB file aborts the process
-// on the CLI's own 16 MiB stack instead of returning a diagnostic.
 #[test]
-fn bug_long_left_associative_chain_does_not_overflow_the_stack() {
+fn long_left_associative_chain_does_not_overflow_the_stack() {
     let mut huge = "return 1".to_owned();
     huge.push_str(&"+1".repeat(400_000));
     huge.push('\n');

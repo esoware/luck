@@ -1,12 +1,14 @@
 use alloc::borrow::Cow;
 
-use luck_ast::{Block, Expression, Literal, Transform, UnaryOp, is_multi_value};
+use luck_ast::{
+    Block, Expression, Literal, Transform, UnaryOp, ensure_sufficient_stack, is_multi_value,
+};
 use luck_token::{
     BinOp, CompactString, LuaNumber, LuaVersion, NumberSubtypes, Span, UnOp, decode_string,
     encode_string, parse_lua_number,
 };
 
-use crate::expr::{extract_boolean, int_to_float, is_nil, parenthesize};
+use crate::expr::{extract_boolean, int_to_float, is_nil, parenthesize, unparenthesized};
 
 /// Folds constant arithmetic, comparisons, string concatenation, and boolean
 /// logic, keeping Lua 5.3+ integer/float subtypes exact.
@@ -21,11 +23,11 @@ struct ConstantFolder {
 impl Transform for ConstantFolder {
     fn transform_expr(&mut self, expr: Expression) -> Expression {
         match self.walk_expr(expr) {
-            Expression::BinaryOp(binop) => {
+            Expression::BinaryOp(mut binop) => {
                 match fold_binary(&binop.left, binop.op, &binop.right, self.version) {
                     Some(BinaryFold::Literal(literal)) => literal,
-                    Some(BinaryFold::Left) => binop.left,
-                    Some(BinaryFold::Right) => truncate_multi_value(binop.right),
+                    Some(BinaryFold::Left) => binop.left.take(),
+                    Some(BinaryFold::Right) => truncate_multi_value(binop.right.take()),
                     None => Expression::BinaryOp(binop),
                 }
             }
@@ -79,9 +81,12 @@ fn extract_lua_number(expr: &Expression, subtypes: NumberSubtypes) -> Option<Lua
     match expr {
         Expression::Number(literal) => parse_lua_number(&literal.text, subtypes),
         Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
-            extract_lua_number(&unop.operand, subtypes).map(negate_number)
+            ensure_sufficient_stack(|| extract_lua_number(&unop.operand, subtypes))
+                .map(negate_number)
         }
-        Expression::Parenthesized(paren) => extract_lua_number(&paren.expr, subtypes),
+        Expression::Parenthesized(paren) => {
+            extract_lua_number(unparenthesized(&paren.expr), subtypes)
+        }
         Expression::Nil(_)
         | Expression::False(_)
         | Expression::True(_)
@@ -308,7 +313,9 @@ fn truncate_multi_value(expr: Expression) -> Expression {
 fn extract_string_bytes(expr: &Expression, version: LuaVersion) -> Option<Cow<'_, [u8]>> {
     match expr {
         Expression::StringLiteral(literal) => decode_string(&literal.text, version),
-        Expression::Parenthesized(paren) => extract_string_bytes(&paren.expr, version),
+        Expression::Parenthesized(paren) => {
+            extract_string_bytes(unparenthesized(&paren.expr), version)
+        }
         Expression::Nil(_)
         | Expression::False(_)
         | Expression::True(_)

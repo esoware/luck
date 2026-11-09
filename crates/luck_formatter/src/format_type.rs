@@ -6,6 +6,7 @@
 use luck_ast::{
     FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, IntersectionType,
     NamedType, TableType, Type, TypeArgs, TypeField, TypeofType, UnionType,
+    ensure_sufficient_stack,
 };
 
 use crate::ir::{
@@ -21,7 +22,9 @@ impl Format for Type {
             Self::Typeof(typeof_type) => typeof_type.fmt(formatter),
             Self::Table(table) => table.fmt(formatter),
             Self::Function(function) => function.fmt(formatter),
-            Self::Optional(optional) => (&optional.type_value, token("?")).fmt(formatter),
+            Self::Optional(optional) => {
+                ensure_sufficient_stack(|| (&optional.type_value, token("?")).fmt(formatter));
+            }
             Self::Union(union) => union.fmt(formatter),
             Self::Intersection(intersection) => intersection.fmt(formatter),
             Self::Parenthesized(parenthesized) => {
