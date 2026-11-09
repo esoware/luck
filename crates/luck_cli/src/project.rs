@@ -33,35 +33,24 @@ pub(crate) fn current_directory() -> Result<PathBuf, Exit> {
 ///
 /// # Errors
 ///
-/// Reports the failure and returns [`Exit::Usage`] on a bad `-t` value or a
-/// bad dialect in `config`.
+/// Reports the failure and returns [`Exit::Usage`] on a bad dialect in
+/// `config`.
 pub(crate) fn resolve_configured_target(
     config: &LuckConfig,
-    target: Option<&str>,
+    target: Option<LuaTarget>,
     input_path: &str,
 ) -> Result<LuaTarget, Exit> {
-    target.map_or_else(
-        || config.target_for_path(Path::new(input_path)).map_err(usage_error),
-        |name| name.parse::<LuaTarget>().map_err(usage_error),
-    )
+    target.map_or_else(|| config.target_for_path(Path::new(input_path)).map_err(usage_error), Ok)
 }
 
 /// Resolve how the one-shot commands treat `require(expr)`. An explicit
 /// `--dynamic-require` wins over the project's setting, which defaults to
 /// warning and keeping the call.
-///
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Usage`] on a bad
-/// `--dynamic-require` value.
 pub(crate) fn resolve_dynamic_require(
     config: &LuckConfig,
-    flag: Option<&str>,
-) -> Result<DynamicRequire, Exit> {
-    flag.map_or_else(
-        || Ok(config.dynamic_require.unwrap_or_default()),
-        |value| value.parse::<DynamicRequire>().map_err(usage_error),
-    )
+    flag: Option<DynamicRequire>,
+) -> DynamicRequire {
+    flag.or(config.dynamic_require).unwrap_or_default()
 }
 
 /// The config for a one-shot `bundle`, `minify`, or `graph` run.
@@ -214,7 +203,7 @@ mod tests {
 
     /// Discovers the governing config and resolves against it, as the
     /// one-shot commands do.
-    fn target_for(target: Option<&str>, input_path: &str) -> LuaTarget {
+    fn target_for(target: Option<LuaTarget>, input_path: &str) -> LuaTarget {
         let config = config_for_one_shot(None, input_path).expect("config resolves");
         resolve_configured_target(&config, target, input_path).expect("target resolves")
     }
@@ -245,18 +234,18 @@ mod tests {
         let entry = source_directory.join("main.lua").display().to_string();
         assert_eq!(target_for(None, &entry), LuaTarget::LuauRoblox);
         // An explicit -t still wins over the config.
-        assert_eq!(target_for(Some("51"), &entry), LuaTarget::Lua51);
+        assert_eq!(target_for(Some(LuaTarget::Lua51), &entry), LuaTarget::Lua51);
     }
 
     #[test]
     fn configured_target_prefers_an_explicit_target_over_the_extension() {
         let config = LuckConfig::default();
         assert_eq!(
-            resolve_configured_target(&config, Some("54"), "main.luau"),
+            resolve_configured_target(&config, Some(LuaTarget::Lua54), "main.luau"),
             Ok(LuaTarget::Lua54)
         );
         assert_eq!(
-            resolve_configured_target(&config, Some("roblox"), "main.lua"),
+            resolve_configured_target(&config, Some(LuaTarget::LuauRoblox), "main.lua"),
             Ok(LuaTarget::LuauRoblox)
         );
     }
@@ -264,10 +253,13 @@ mod tests {
     #[test]
     fn resolve_dynamic_require_prefers_the_flag_over_the_config() {
         let config = parse_luck_config(r#"{"dynamic_require":"error"}"#).expect("parse config");
-        assert_eq!(resolve_dynamic_require(&config, None), Ok(DynamicRequire::Error));
-        assert_eq!(resolve_dynamic_require(&config, Some("allow")), Ok(DynamicRequire::Allow));
+        assert_eq!(resolve_dynamic_require(&config, None), DynamicRequire::Error);
+        assert_eq!(
+            resolve_dynamic_require(&config, Some(DynamicRequire::Allow)),
+            DynamicRequire::Allow
+        );
         // Warning and keeping the call is the default when nothing says otherwise.
-        assert_eq!(resolve_dynamic_require(&LuckConfig::default(), None), Ok(DynamicRequire::Warn));
+        assert_eq!(resolve_dynamic_require(&LuckConfig::default(), None), DynamicRequire::Warn);
     }
 
     /// A `.luau` file under a roblox config must resolve to the roblox target,

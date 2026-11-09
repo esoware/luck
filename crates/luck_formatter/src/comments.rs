@@ -190,6 +190,17 @@ impl Comments {
         }
     }
 
+    /// Span end of the most recently printed comment (parsed path only).
+    pub(crate) fn last_printed_end(&self) -> Option<u32> {
+        match &self.store {
+            Store::Sourced { comments, printed_count, .. } => {
+                let last_index = printed_count.checked_sub(1)?;
+                comments.get(last_index).map(|comment| comment.span.end)
+            }
+            Store::Synthetic { .. } | Store::Empty => None,
+        }
+    }
+
     /// Whether an empty region ending at `end` has comments to print.
     ///
     /// On the parsed path those are the unprinted comments before `end` that
@@ -218,6 +229,46 @@ impl Comments {
             take_pending_while(comments, printed_count, |comment| {
                 (start..end).contains(&comment.span.start)
             });
+        }
+    }
+
+    /// Whether a comment in the body of an `if` ending at `if_end` keeps it
+    /// from collapsing onto one line around `body_stmt`.
+    ///
+    /// The run right after `condition_end` is before `then`, so it stays out
+    /// of the body. Of the rest, only a single-line block comment inside a
+    /// `body_stmt` written on one line can stay put. Any other would have to
+    /// move past `end`, break the line, or reindent on the next format.
+    pub(crate) fn blocks_if_collapse(
+        &self,
+        condition_end: u32,
+        body_stmt: Span,
+        if_end: u32,
+    ) -> bool {
+        match &self.store {
+            Store::Sourced { comments, printed_count, source, .. } => {
+                let is_body_one_line = !body_stmt.text(source).contains(['\n', '\r']);
+                let mut gap_start = condition_end;
+                pending_comments(comments, *printed_count)
+                    .iter()
+                    .skip_while(|comment| comment.span.start < condition_end)
+                    .skip_while(|comment| {
+                        let is_header = comment.kind == CommentKind::SingleLineBlock
+                            && is_code_free(Span::new(gap_start, comment.span.start).text(source));
+                        if is_header {
+                            gap_start = comment.span.end;
+                        }
+                        is_header
+                    })
+                    .take_while(|comment| comment.span.start < if_end)
+                    .any(|comment| {
+                        comment.kind != CommentKind::SingleLineBlock
+                            || !is_body_one_line
+                            || !(body_stmt.start..body_stmt.end).contains(&comment.span.start)
+                    })
+            }
+            Store::Synthetic { comments, .. } => comments.contains_key(&body_stmt.start),
+            Store::Empty => false,
         }
     }
 

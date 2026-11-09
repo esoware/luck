@@ -20,3 +20,6 @@ luck_lexer = { workspace = true }
 luck_token = { workspace = true }
 
 rustc-hash = { workspace = true }
+
+[dev-dependencies]
+luck_testgen = { workspace = true }

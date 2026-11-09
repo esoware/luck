@@ -14,7 +14,7 @@ Two entry points share the same machine:
 ## Key features
 
 - **Version-gated tokens.** Keyword and operator recognition queries `LuaVersion` predicates. `//` is floor division in Lua 5.3+ and Luau. `goto` is a keyword in 5.2+ (not Luau) and `global` in 5.5. `&`, `|`, `~`, `<<`, `>>` arrive with bitwise ops in 5.3+, and Luau also lexes `&` and `|` for its type syntax. Compound assignment, `->`, `@`, `?`, backtick strings, and binary/underscore-separated numbers are Luau-only. In Luau, standalone `~` is invalid (`~=` remains valid), and `<<` and `>>` stay two angle tokens each, which the parser reads as explicit type instantiation.
-- **Complete number literals.** Decimal, hexadecimal, hex floats (5.2+), binary literals and underscore separators (Luau), plus Luau's 64-bit integer literals with an `i` suffix, which must fit an `i64` in decimal but may use all 64 bits in hex and binary.
+- **Complete number literals.** Decimal, hexadecimal, hex floats (5.2+), binary literals and underscore separators (Luau), plus Luau's 64-bit integer literals with an `i` suffix, which must fit an `i64` in decimal but may use all 64 bits in hex and binary. A letter touching a decimal numeral makes it malformed, except that 5.2 and 5.3 read only hex digits past a numeral and split before any other letter.
 - **Complete string literals.** Short strings with single or double quotes, long brackets (`[==[...]==]`) at any equals-sign depth, and the full escape repertoire (`\x`, `\z`, `\u{}`, decimal escapes), each escape gated to the versions that accept it.
 - **Luau interpolated strings.** Backtick-delimited strings with `{expr}` segments, split into `InterpolatedStringBegin` / `InterpolatedStringMiddle` / `InterpolatedStringEnd` tokens. A brace-depth stack finds the `}` that closes each expression, and a string with no expressions still lexes as an empty `InterpolatedStringBegin` plus an `InterpolatedStringEnd`, so the parser always sees a begin/end pair.
 - **Shebang and BOM.** The lexer skips a leading UTF-8 BOM and captures a `#`-prefixed first line as a shebang comment rather than parsing it as the length operator.
@@ -23,7 +23,7 @@ Two entry points share the same machine:
 
 ### Cursor (`cursor.rs`)
 
-A zero-copy forward-only byte cursor: `peek`, `peek_at`, `advance`, `eat`, and `rest`, all tracking a single byte position. Scanners take a token's text and span from it with `text_since` and `span_since`, and the batched search in `search.rs` runs over `rest`.
+A zero-copy forward-only byte cursor: `peek`, `peek_next`, `advance`, `eat`, and `rest`, all tracking a single byte position. Scanners take a token's text and span from it with `text_since` and `span_since`, and the batched search in `search.rs` runs over `rest`.
 
 ### Body scanning (`search.rs`, `string.rs`)
 

@@ -1,39 +1,31 @@
-use luck_ast::{LastStatement, Statement};
+use luck_ast::{Expression, FunctionAttribute, LastStatement, Statement};
 use luck_token::{CommentKind, Span, offset_to_index};
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RedundantNativeAttribute;
 
-impl Rule for RedundantNativeAttribute {
-    fn name(&self) -> &'static str {
-        "redundant_native_attribute"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "`@native` attribute is redundant in a `--!native` module"
-    }
-}
+impl_rule!(
+    RedundantNativeAttribute,
+    "redundant_native_attribute",
+    Style,
+    Warning,
+    "`@native` attribute is redundant in a `--!native` module"
+);
 
 impl NodeRule for RedundantNativeAttribute {
     fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionDecl, NodeType::LocalFunction])
+        NodeTypeSet::from_types(&[
+            NodeType::FunctionDecl,
+            NodeType::LocalFunction,
+            NodeType::FunctionDef,
+        ])
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let attributes = match stmt {
             Statement::FunctionDecl(function_decl) => &function_decl.attributes,
             Statement::LocalFunction(local_function) => &local_function.attributes,
@@ -57,41 +49,54 @@ impl NodeRule for RedundantNativeAttribute {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => return,
         };
-        // Check for attributes first, since the directive scan reads the
-        // comments.
-        if attributes.is_empty()
-            || !context.semantic.version.is_luau()
-            || !has_native_directive(context)
-        {
-            return;
+        check_attributes(attributes, context, findings);
+    }
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        if let Expression::FunctionDef(function) = expr {
+            check_attributes(&function.attributes, context, findings);
         }
-        for attribute in attributes {
-            if attribute.name.identifier() != Some("native") {
-                continue;
-            }
-            // Also delete one trailing whitespace byte so no doubled
-            // separator is left behind. It's cosmetic; the code re-parses
-            // either way.
-            let name_end = attribute.name.span.end;
-            let has_trailing_space = matches!(
-                context.source.as_bytes().get(offset_to_index(name_end)),
-                Some(b' ' | b'\t' | b'\n' | b'\r')
-            );
-            let edit_end = name_end.saturating_add(u32::from(has_trailing_space));
-            findings.push(
-                Finding::new(
-                    "`@native` attribute is redundant in a `--!native` module",
-                    attribute.span,
-                )
-                .with_fix(Fix {
-                    description: "remove the redundant `@native` attribute".to_owned(),
-                    edits: vec![TextEdit {
-                        span: Span::new(attribute.span.start, edit_end),
-                        replacement: String::new(),
-                    }],
-                }),
-            );
+    }
+}
+
+fn check_attributes(
+    attributes: &[FunctionAttribute],
+    context: &LintContext<'_>,
+    findings: &mut Vec<Finding>,
+) {
+    // Check for attributes first, since the directive scan reads the
+    // comments.
+    if attributes.is_empty()
+        || !context.semantic.version.is_luau()
+        || !has_native_directive(context)
+    {
+        return;
+    }
+    for attribute in attributes {
+        if attribute.name.identifier() != Some("native") {
+            continue;
         }
+        // Also delete one trailing whitespace byte so no doubled
+        // separator is left behind. It's cosmetic; the code re-parses
+        // either way.
+        let name_end = attribute.name.span.end;
+        let has_trailing_space = matches!(
+            context.source.as_bytes().get(offset_to_index(name_end)),
+            Some(b' ' | b'\t' | b'\n' | b'\r')
+        );
+        let edit_end = name_end.saturating_add(u32::from(has_trailing_space));
+        findings.push(
+            Finding::new(
+                "`@native` attribute is redundant in a `--!native` module",
+                attribute.span,
+            )
+            .with_fix(Fix {
+                description: "remove the redundant `@native` attribute".to_owned(),
+                edits: vec![TextEdit {
+                    span: Span::new(attribute.span.start, edit_end),
+                    replacement: String::new(),
+                }],
+            }),
+        );
     }
 }
 
@@ -156,6 +161,15 @@ mod tests {
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         fix_and_reparse(source, &diags, LuaVersion::Luau);
+    }
+
+    #[test]
+    fn flags_function_expr_attribute() {
+        let source = "--!native\n@native\nlocal function a() end\nlocal f = @native function() end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
+        assert_eq!(fixed, "--!native\nlocal function a() end\nlocal f = function() end");
     }
 
     #[test]

@@ -54,7 +54,7 @@ pub(super) fn renamable_globals(block: &Block, version: LuaVersion) -> Vec<&str>
 struct DeclaredGlobals(FxHashSet<CompactString>);
 
 impl<'ast> Visitor<'ast> for DeclaredGlobals {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             // Lua 5.5
             Statement::GlobalDeclaration(global_declaration) => {
@@ -67,7 +67,7 @@ impl<'ast> Visitor<'ast> for DeclaredGlobals {
                 self.0.insert(identifier_name(&global_function.name).into());
             }
             // `global *` names nothing, and the rest declare no global.
-            // `walk_statement` below still descends into nested blocks.
+            // `walk_stmt` below still descends into nested blocks.
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::DoBlock(_)
@@ -88,7 +88,7 @@ impl<'ast> Visitor<'ast> for DeclaredGlobals {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
         }
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 }
 
@@ -158,7 +158,7 @@ fn collect_toplevel_function_globals(
                 function_globals.insert(name.into());
             }
         } else {
-            reads.visit_statement(stmt);
+            reads.visit_stmt(stmt);
         }
     }
 
@@ -216,7 +216,7 @@ fn collect_assign_first_globals(
             | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => reads.visit_statement(stmt),
+            | Statement::Error(_) => reads.visit_stmt(stmt),
         }
     }
 
@@ -229,7 +229,7 @@ fn collect_assign_first_globals(
 struct ChunkLocals(FxHashSet<CompactString>);
 
 impl<'ast> Visitor<'ast> for ChunkLocals {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalAssignment(local) => {
                 for attributed in local.names.iter() {
@@ -247,7 +247,7 @@ impl<'ast> Visitor<'ast> for ChunkLocals {
                     self.0.insert(identifier_name(&param.name).into());
                 }
             }
-            // Nothing else binds a local. `walk_statement` below still
+            // Nothing else binds a local. `walk_stmt` below still
             // descends into nested blocks.
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
@@ -267,11 +267,11 @@ impl<'ast> Visitor<'ast> for ChunkLocals {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
         }
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 
     // Only a function body nests a block inside an expression.
-    fn visit_expression(&mut self, _expr: &'ast Expression) {}
+    fn visit_expr(&mut self, _expr: &'ast Expression) {}
 
     fn visit_function_body(&mut self, _body: &'ast FunctionBody) {}
 }
@@ -330,7 +330,7 @@ impl<'locals> NameReads<'locals> {
     fn visit_scope(&mut self, block: &Block) -> usize {
         let mark = self.hidden_log.len();
         for stmt in &block.stmts {
-            self.visit_statement(stmt);
+            self.visit_stmt(stmt);
             match stmt {
                 Statement::LocalAssignment(local) => {
                     for attributed in local.names.iter() {
@@ -362,7 +362,7 @@ impl<'locals> NameReads<'locals> {
             }
         }
         if let Some(last) = &block.last_stmt {
-            self.visit_last_statement(last);
+            self.visit_last_stmt(last);
         }
         mark
     }
@@ -374,7 +374,7 @@ impl<'locals> NameReads<'locals> {
     /// `g, t[g] = 1, 2` reads `g` even though its own target comes first.
     fn visit_assignment_reads(&mut self, assignment: &Assignment) {
         for expr in assignment.values.iter() {
-            self.visit_expression(expr);
+            self.visit_expr(expr);
         }
         for var in assignment.targets.iter() {
             if !matches!(var, Var::Name(_)) {
@@ -390,19 +390,19 @@ impl<'ast> Visitor<'ast> for NameReads<'_> {
         self.unhide_from(mark);
     }
 
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::RepeatLoop(repeat_loop) => {
                 // The condition sees the block's locals.
                 let mark = self.visit_scope(&repeat_loop.block);
-                self.visit_expression(&repeat_loop.condition);
+                self.visit_expr(&repeat_loop.condition);
                 self.unhide_from(mark);
             }
             Statement::NumericFor(numeric_for) => {
-                self.visit_expression(&numeric_for.start);
-                self.visit_expression(&numeric_for.limit);
+                self.visit_expr(&numeric_for.start);
+                self.visit_expr(&numeric_for.limit);
                 if let Some(step) = &numeric_for.step {
-                    self.visit_expression(step);
+                    self.visit_expr(step);
                 }
                 let mark = self.hidden_log.len();
                 self.hide(identifier_name(&numeric_for.name));
@@ -411,7 +411,7 @@ impl<'ast> Visitor<'ast> for NameReads<'_> {
             }
             Statement::GenericFor(generic_for) => {
                 for expr in generic_for.exprs.iter() {
-                    self.visit_expression(expr);
+                    self.visit_expr(expr);
                 }
                 let mark = self.hidden_log.len();
                 for param in generic_for.names.iter() {
@@ -445,7 +445,7 @@ impl<'ast> Visitor<'ast> for NameReads<'_> {
             | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => self.walk_statement(stmt),
+            | Statement::Error(_) => self.walk_stmt(stmt),
         }
     }
 

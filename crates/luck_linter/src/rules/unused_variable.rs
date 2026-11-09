@@ -1,26 +1,19 @@
 use luck_semantic::SymbolKind;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnusedVariable;
 
-impl Rule for UnusedVariable {
-    fn name(&self) -> &'static str {
-        "unused_variable"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "variable is declared but never read"
-    }
-}
+impl_rule!(
+    UnusedVariable,
+    "unused_variable",
+    Correctness,
+    Warning,
+    "variable is declared but never read"
+);
 
 impl WholeRule for UnusedVariable {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

@@ -1,32 +1,34 @@
 use luck_ast::{Attribute, LocalAssignment, Statement};
+use luck_semantic::{ScopeTree, SymbolId};
 use luck_token::{Comment, Span};
+use rustc_hash::FxHashMap;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags two adjacent `local NAME = VALUE` statements that could be one
 /// `local A, B = X, Y`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MergeAdjacentLocals;
 
-impl Rule for MergeAdjacentLocals {
-    fn name(&self) -> &'static str {
-        "merge_adjacent_locals"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "adjacent simple `local` declarations can be merged"
-    }
-}
+impl_rule!(
+    MergeAdjacentLocals,
+    "merge_adjacent_locals",
+    Style,
+    Warning,
+    "adjacent simple `local` declarations can be merged"
+);
 
 impl WholeRule for MergeAdjacentLocals {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let symbols_by_definition: FxHashMap<Span, SymbolId> = context
+            .semantic
+            .scope_tree
+            .symbols
+            .iter()
+            .map(|symbol| (symbol.definition_span, symbol.id))
+            .collect();
         let mut findings = Vec::new();
         for block in context.blocks {
             let mut pairs = block.stmts.windows(2);
@@ -38,7 +40,9 @@ impl WholeRule for MergeAdjacentLocals {
                 else {
                     continue;
                 };
-                let Some(merged) = merged_local(first_local, second_local, context) else {
+                let Some(merged) =
+                    merged_local(first_local, second_local, &symbols_by_definition, context)
+                else {
                     continue;
                 };
                 findings.push(
@@ -66,6 +70,7 @@ impl WholeRule for MergeAdjacentLocals {
 fn merged_local(
     first_local: &LocalAssignment,
     second_local: &LocalAssignment,
+    symbols_by_definition: &FxHashMap<Span, SymbolId>,
     context: &LintContext<'_>,
 ) -> Option<String> {
     let first = simple_binding(first_local)?;
@@ -84,10 +89,19 @@ fn merged_local(
     // Both values in `local a, b = x, y` are evaluated before either name is
     // bound, so merging `local a = 1 local b = a` would make `b` read an outer
     // or global `a`.
-    if references_identifier(second.initializer.text(source), first.name.text(source)) {
+    let tree = &context.semantic.scope_tree;
+    let first_symbol = *symbols_by_definition.get(&first.name)?;
+    if is_read_in_span(first_symbol, second.initializer, tree) {
         return None;
     }
     Some(build_merged(source, &first, &second))
+}
+
+fn is_read_in_span(symbol_id: SymbolId, span: Span, tree: &ScopeTree) -> bool {
+    tree.symbol(symbol_id).reference_ids.iter().any(|&reference_id| {
+        let reference_span = tree.reference(reference_id).span;
+        span.start <= reference_span.start && reference_span.end <= span.end
+    })
 }
 
 fn has_comment_between(comments: &[Comment], start: u32, end: u32) -> bool {
@@ -147,18 +161,6 @@ fn build_merged(source: &str, first: &SimpleBinding<'_>, second: &SimpleBinding<
     )
 }
 
-/// Whole-word search for `name` in `haystack`. A match inside a string
-/// literal only costs a skipped merge.
-fn references_identifier(haystack: &str, name: &str) -> bool {
-    let is_word_byte = |byte: &u8| byte.is_ascii_alphanumeric() || *byte == b'_';
-    haystack.match_indices(name).any(|(start, _)| {
-        let (before, from_match) = haystack.split_at(start);
-        let after = from_match.strip_prefix(name).unwrap_or_default();
-        !before.as_bytes().last().is_some_and(is_word_byte)
-            && !after.as_bytes().first().is_some_and(is_word_byte)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use luck_token::LuaVersion;
@@ -207,6 +209,39 @@ mod tests {
     fn ignores_second_value_reading_first_name() {
         let diags = run("local a = 1\nlocal b = a + 1");
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_second_value_reading_first_name_in_a_closure() {
+        let diags = run("local a = 1\nlocal b = function() return a end");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_and_fixes_field_named_like_first_name() {
+        let source = "local a = 1\nlocal b = t.a";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "local a, b = 1, t.a");
+    }
+
+    #[test]
+    fn flags_and_fixes_string_spelling_first_name() {
+        let source = "local a = 1\nlocal b = \"a\"";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "local a, b = 1, \"a\"");
+    }
+
+    #[test]
+    fn flags_and_fixes_parameter_named_like_first_name() {
+        let source = "local a = 1\nlocal b = function(a) return a end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "local a, b = 1, function(a) return a end");
     }
 
     #[test]

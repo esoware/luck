@@ -1,23 +1,33 @@
 use alloc::collections::VecDeque;
 use std::path::Path;
 
-use luck_core::{
-    DEFAULT_SEARCH_PATHS, Diagnostic, DynamicRequire, native_path, normalize_path, read_source_file,
-};
+use luck_core::{Diagnostic, DynamicRequire, native_path, normalize_path, read_source_file};
 use luck_resolver::{ResolveRequest, ResolvedModule, Resolver};
-use luck_token::{LuaVersion, Span};
+use luck_token::{CommentKind, LuaVersion, Span, leading_hot_comments};
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Control, DfsEvent, depth_first_search};
 use rustc_hash::FxHashMap;
 
-use crate::hot_comments::leading_hot_comments;
 use crate::module::{Dependency, ModuleId, ModuleInfo};
 use crate::relative_path::{absolute_project_root, make_relative};
 use crate::require_extraction::{ExtractedRequires, extract_requires};
 
 const MAX_MODULE_COUNT: usize = 10_000;
 const MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
+
+/// How to find a bundle's modules and what to build it for.
+#[derive(Debug, Clone, Copy)]
+pub struct BundleOptions<'input> {
+    pub version: LuaVersion,
+    /// Lua search path templates, resolved against `project_root`. Empty
+    /// means the default templates.
+    pub search_paths: &'input [String],
+    /// Every module's `relative_path`, and so every path in the output, is
+    /// relative to this.
+    pub project_root: &'input Path,
+    pub dynamic_require: DynamicRequire,
+}
 
 /// Every module an entry reaches, and the order the bundle registers them in.
 #[derive(Debug)]
@@ -34,30 +44,13 @@ impl DependencyGraph {
     /// Discovers all modules reachable from `entry_path`, then topologically
     /// sorts them.
     ///
-    /// Lua search paths resolve against `project_root`, and every module's
-    /// `relative_path` is relative to it. An empty `search_paths` means the
-    /// default Lua templates.
-    ///
     /// # Errors
     ///
     /// Returns every error found during discovery, such as unreadable,
     /// oversized, or unparsable files, the entry included, and unresolved or
     /// ambiguous requires.
-    pub fn build(
-        entry_path: &Path,
-        version: LuaVersion,
-        search_paths: &[String],
-        project_root: &Path,
-        dynamic_require: DynamicRequire,
-    ) -> Result<Self, Vec<Diagnostic>> {
-        let default_search_paths: Vec<String>;
-        let effective_search_paths = if search_paths.is_empty() {
-            default_search_paths = DEFAULT_SEARCH_PATHS.iter().map(ToString::to_string).collect();
-            &default_search_paths
-        } else {
-            search_paths
-        };
-
+    pub fn build(entry_path: &Path, options: &BundleOptions<'_>) -> Result<Self, Vec<Diagnostic>> {
+        let BundleOptions { version, search_paths, project_root, dynamic_require } = *options;
         // Emitted paths are made relative to this, so it must be absolute
         // and normalized. `luck bundle main.lua` passes the entry's parent,
         // which is empty for a bare file name.
@@ -67,16 +60,14 @@ impl DependencyGraph {
             version,
             project_root: &root,
             dynamic_require,
-            resolver: Resolver::new(version, effective_search_paths, Path::new(&root)),
+            resolver: Resolver::new(version, search_paths, Path::new(&root)),
             modules: Vec::new(),
             path_to_id: FxHashMap::default(),
             queue: VecDeque::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
         };
-        let Some(entry_id) = builder.add_module(normalize_path(entry_path)) else {
-            return Err(builder.errors);
-        };
+        let entry_id = builder.module_id(normalize_path(entry_path));
         builder.discover_dependencies();
         builder.finish(entry_id)
     }
@@ -89,34 +80,45 @@ struct GraphBuilder<'input> {
     project_root: &'input str,
     dynamic_require: DynamicRequire,
     resolver: Resolver<'input>,
-    modules: Vec<ModuleInfo>,
+    /// By `ModuleId`. `None` means not read yet or, on the slots left after
+    /// discovery, an error was recorded for it.
+    modules: Vec<Option<ModuleInfo>>,
     path_to_id: FxHashMap<String, ModuleId>,
-    queue: VecDeque<String>,
+    queue: VecDeque<(ModuleId, String)>,
     errors: Vec<Diagnostic>,
     warnings: Vec<Diagnostic>,
 }
 
 impl GraphBuilder<'_> {
-    /// Walks breadth-first from the modules added so far, stopping with E009
+    /// The id of the module at `file_path`, first queueing it for discovery
+    /// if this is the first require to reach it.
+    fn module_id(&mut self, file_path: String) -> ModuleId {
+        if let Some(&id) = self.path_to_id.get(&file_path) {
+            return id;
+        }
+        let id = ModuleId(self.modules.len());
+        self.modules.push(None);
+        self.path_to_id.insert(file_path.clone(), id);
+        self.queue.push_back((id, file_path));
+        id
+    }
+
+    /// Walks breadth-first from the modules queued so far, stopping with E009
     /// at the module limit.
     fn discover_dependencies(&mut self) {
-        while let Some(file_path) = self.queue.pop_front() {
-            if self.path_to_id.contains_key(&file_path) {
-                continue;
-            }
-            if self.modules.len() >= MAX_MODULE_COUNT {
+        while let Some((id, file_path)) = self.queue.pop_front() {
+            if id.0 >= MAX_MODULE_COUNT {
                 self.errors.push(Diagnostic::e009(&file_path, Span::default(), MAX_MODULE_COUNT));
                 return;
             }
-            self.add_module(file_path);
+            self.add_module(id, file_path);
         }
     }
 
-    /// Reads and parses one module and adds it with its resolved requires.
-    ///
-    /// `None` when the file can't be read or is too large, which records the
-    /// error and adds nothing.
-    fn add_module(&mut self, file_path: String) -> Option<ModuleId> {
+    /// Reads and parses one module and fills its slot with its resolved
+    /// requires. A file that can't be read or is too large records the error
+    /// and leaves the slot empty.
+    fn add_module(&mut self, id: ModuleId, file_path: String) {
         let source = match read_source_file(native_path(&file_path)) {
             Ok(source) => source,
             Err(io_error) => {
@@ -125,7 +127,7 @@ impl GraphBuilder<'_> {
                     Span::default(),
                     &io_error.to_string(),
                 ));
-                return None;
+                return;
             }
         };
 
@@ -136,7 +138,7 @@ impl GraphBuilder<'_> {
                 source.len(),
                 MAX_FILE_SIZE,
             ));
-            return None;
+            return;
         }
 
         let parsed = luck_parser::parse(source, self.version);
@@ -162,13 +164,11 @@ impl GraphBuilder<'_> {
                 span: site.call_span,
             }) {
                 Ok(ResolvedModule { path, warnings }) => {
-                    if !self.path_to_id.contains_key(&path) {
-                        self.queue.push_back(path.clone());
-                    }
+                    let target = self.module_id(path);
                     self.warnings.extend(warnings);
                     dependencies.push(Dependency {
                         require_string: site.require_string,
-                        resolved_path: path,
+                        target,
                         call_span: site.call_span,
                     });
                 }
@@ -177,117 +177,120 @@ impl GraphBuilder<'_> {
         }
 
         let relative_path = make_relative(&file_path, self.project_root);
-        let id = ModuleId(self.modules.len());
-        self.path_to_id.insert(file_path.clone(), id);
-        self.modules.push(ModuleInfo {
+        let hot_comments = if self.version.is_luau() {
+            leading_hot_comments(&parsed.comments, &parsed.source)
+                .map(|comment| comment.span)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let shebang = parsed
+            .comments
+            .iter()
+            .find(|comment| comment.kind == CommentKind::Shebang)
+            .map(|comment| comment.span);
+        let module = ModuleInfo {
             path: file_path,
             source: parsed.source,
             dependencies,
             relative_path,
             dynamic_callees,
+            hot_comments,
+            shebang,
             block: parsed.block,
-        });
-        Some(id)
+        };
+        if let Some(slot) = self.modules.get_mut(id.0) {
+            *slot = Some(module);
+        }
     }
 
     /// # Errors
     ///
     /// Returns the errors collected during discovery.
-    fn finish(mut self, entry_id: ModuleId) -> Result<DependencyGraph, Vec<Diagnostic>> {
-        if !self.errors.is_empty() {
-            return Err(self.errors);
+    fn finish(self, entry_id: ModuleId) -> Result<DependencyGraph, Vec<Diagnostic>> {
+        let Self { modules: module_slots, errors, mut warnings, .. } = self;
+        if !errors.is_empty() {
+            return Err(errors);
         }
 
-        let topological_order = self.topological_order();
-        self.warn_inert_hot_comments(entry_id);
+        // No errors, so every slot was filled and each index is its `ModuleId`.
+        let modules: Vec<ModuleInfo> = module_slots.into_iter().flatten().collect();
+        let topological_order = topological_order(&modules, &mut warnings);
+        warn_inert_hot_comments(&modules, entry_id, &mut warnings);
 
-        Ok(DependencyGraph {
-            modules: self.modules,
-            topological_order,
-            entry_id,
-            warnings: self.warnings,
-        })
+        Ok(DependencyGraph { modules, topological_order, entry_id, warnings })
     }
+}
 
-    /// Luau hot comments only take effect at the top of a chunk. The
-    /// emitter hoists the entry module's leading run above the loader;
-    /// any other module's hot comments become inert in the bundle.
-    fn warn_inert_hot_comments(&mut self, entry_id: ModuleId) {
-        if !self.version.is_luau() {
-            return;
+/// Luau hot comments only take effect at the top of a chunk. The emitter
+/// hoists the entry module's leading run above the loader; any other module's
+/// hot comments become inert in the bundle.
+fn warn_inert_hot_comments(
+    modules: &[ModuleInfo],
+    entry_id: ModuleId,
+    warnings: &mut Vec<Diagnostic>,
+) {
+    for (index, module) in modules.iter().enumerate() {
+        if ModuleId(index) == entry_id {
+            continue;
         }
-        for (index, module) in self.modules.iter().enumerate() {
-            if ModuleId(index) == entry_id {
-                continue;
-            }
-            if let Some((offset, line)) = leading_hot_comments(&module.source).next() {
-                // Unlike the hoisted copy, the warning drops the carriage
-                // returns `str::lines` leaves on a line.
-                let hot_comment = line.trim_end_matches('\r');
-                self.warnings.push(Diagnostic::w006(
-                    &module.path,
-                    Span::from_indices(offset, offset.saturating_add(hot_comment.len())),
-                    hot_comment,
-                ));
-            }
+        if let Some(span) = module.hot_comments.first() {
+            warnings.push(Diagnostic::w006(&module.path, *span, span.text(&module.source)));
         }
     }
+}
 
-    /// Topological order, leaves first.
-    ///
-    /// The loader doesn't depend on registration order, so a cycle only warns
-    /// (W003) and falls back to discovery order. A deferred cycle works as in
-    /// real Lua, and a load-time cycle fails at runtime the way the target
-    /// version fails.
-    fn topological_order(&mut self) -> Vec<ModuleId> {
-        // Node `i` is `modules[i]`. Insertion order breaks toposort's ties,
-        // so the edges go in require order.
-        let mut graph: DiGraph<(), ()> = DiGraph::new();
-        for _ in &self.modules {
-            graph.add_node(());
-        }
-        for (from, module) in self.modules.iter().enumerate() {
-            for dependency in &module.dependencies {
-                if let Some(to) = self.path_to_id.get(&dependency.resolved_path) {
-                    graph.add_edge(NodeIndex::new(from), NodeIndex::new(to.0), ());
-                }
-            }
-        }
-
-        let cycle_node = match toposort(&graph, None) {
-            // toposort gives roots first; reverse so leaves come first.
-            Ok(sorted_nodes) => {
-                return sorted_nodes.into_iter().rev().map(|node| ModuleId(node.index())).collect();
-            }
-            Err(cycle) => cycle.node_id(),
-        };
-
-        let cycle: Vec<&ModuleInfo> = find_cycle(&graph, cycle_node)
-            .into_iter()
-            .filter_map(|id| self.modules.get(id.0))
-            .collect();
-        let cycle_paths: Vec<String> = cycle.iter().map(|module| module.path.clone()).collect();
-
-        // The require that closes the cycle: the last module in the path
-        // requiring the first.
-        let (file_path, closing_span) = match cycle.as_slice() {
-            [.., from, to] => (
-                from.path.as_str(),
-                from.dependencies
-                    .iter()
-                    .find(|dependency| dependency.resolved_path == to.path)
-                    .map(|dependency| dependency.call_span),
-            ),
-            [] | [_] => (self.modules.first().map_or("", |module| module.path.as_str()), None),
-        };
-
-        self.warnings.push(Diagnostic::w003(
-            file_path,
-            closing_span.unwrap_or_default(),
-            &cycle_paths,
-        ));
-        (0..self.modules.len()).map(ModuleId).collect()
+/// Topological order, leaves first.
+///
+/// The loader doesn't depend on registration order, so a cycle only warns
+/// (W003) and falls back to discovery order. A deferred cycle works as in real
+/// Lua, and a load-time cycle fails at runtime the way the target version
+/// fails.
+fn topological_order(modules: &[ModuleInfo], warnings: &mut Vec<Diagnostic>) -> Vec<ModuleId> {
+    // Node `i` is `modules[i]`. Insertion order breaks toposort's ties, so the
+    // edges go in require order.
+    let mut graph: DiGraph<(), ()> = DiGraph::new();
+    for _ in modules {
+        graph.add_node(());
     }
+    for (from, module) in modules.iter().enumerate() {
+        for dependency in &module.dependencies {
+            graph.add_edge(NodeIndex::new(from), NodeIndex::new(dependency.target.0), ());
+        }
+    }
+
+    let cycle_node = match toposort(&graph, None) {
+        // toposort gives roots first; reverse so leaves come first.
+        Ok(sorted_nodes) => {
+            return sorted_nodes.into_iter().rev().map(|node| ModuleId(node.index())).collect();
+        }
+        Err(cycle) => cycle.node_id(),
+    };
+
+    let cycle = find_cycle(&graph, cycle_node);
+    let cycle_paths: Vec<String> =
+        cycle.iter().filter_map(|id| modules.get(id.0)).map(|module| module.path.clone()).collect();
+
+    // The require that closes the cycle: the last module in the path requiring
+    // the first.
+    let closing_require = match cycle.as_slice() {
+        [.., from, to] => modules.get(from.0).map(|module| (module, *to)),
+        [] | [_] => None,
+    };
+    let (file_path, closing_span) = closing_require.map_or_else(
+        || (modules.first().map_or("", |module| module.path.as_str()), None),
+        |(module, to)| {
+            let closing_span = module
+                .dependencies
+                .iter()
+                .find(|dependency| dependency.target == to)
+                .map(|dependency| dependency.call_span);
+            (module.path.as_str(), closing_span)
+        },
+    );
+
+    warnings.push(Diagnostic::w003(file_path, closing_span.unwrap_or_default(), &cycle_paths));
+    (0..modules.len()).map(ModuleId).collect()
 }
 
 /// The first cycle a depth-first search from `start_node` closes, as the

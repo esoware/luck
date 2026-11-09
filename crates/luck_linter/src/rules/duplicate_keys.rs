@@ -5,38 +5,26 @@ use luck_ast::{Expression, Field, Literal};
 use luck_token::{LuaVersion, Span, decode_string};
 use rustc_hash::FxHashMap;
 
-use crate::diagnostic::{Category, Finding, Severity, line_column};
+use crate::diagnostic::{Finding, line_column};
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DuplicateKeys;
 
-impl Rule for DuplicateKeys {
-    fn name(&self) -> &'static str {
-        "duplicate_keys"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "table constructor has duplicate keys"
-    }
-}
+impl_rule!(
+    DuplicateKeys,
+    "duplicate_keys",
+    Correctness,
+    Error,
+    "table constructor has duplicate keys"
+);
 
 impl NodeRule for DuplicateKeys {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::TableConstructor])
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let Expression::TableConstructor(table) = expr else {
             return;
         };

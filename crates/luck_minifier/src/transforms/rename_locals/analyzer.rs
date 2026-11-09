@@ -306,13 +306,13 @@ impl Analyzer {
 }
 
 impl<'ast> Visitor<'ast> for Analyzer {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalAssignment(local) => {
                 // RHS before LHS: `local x = x` reads the outer x.
                 if let Some(exprs) = &local.exprs {
                     for expr in exprs.iter() {
-                        self.visit_expression(expr);
+                        self.visit_expr(expr);
                     }
                 }
                 for attributed in local.names.iter() {
@@ -334,21 +334,21 @@ impl<'ast> Visitor<'ast> for Analyzer {
             }
             Statement::DoBlock(do_block) => self.visit_scoped_block(&do_block.block),
             Statement::WhileLoop(while_loop) => {
-                self.visit_expression(&while_loop.condition);
+                self.visit_expr(&while_loop.condition);
                 self.visit_scoped_block(&while_loop.block);
             }
             Statement::RepeatLoop(repeat_loop) => {
                 // The condition sees the block's locals.
                 self.enter_scope();
                 self.visit_block(&repeat_loop.block);
-                self.visit_expression(&repeat_loop.condition);
+                self.visit_expr(&repeat_loop.condition);
                 self.exit_scope();
             }
             Statement::IfStatement(if_stmt) => {
-                self.visit_expression(&if_stmt.condition);
+                self.visit_expr(&if_stmt.condition);
                 self.visit_scoped_block(&if_stmt.block);
                 for clause in &if_stmt.elseif_clauses {
-                    self.visit_expression(&clause.condition);
+                    self.visit_expr(&clause.condition);
                     self.visit_scoped_block(&clause.block);
                 }
                 if let Some(else_clause) = &if_stmt.else_clause {
@@ -356,10 +356,10 @@ impl<'ast> Visitor<'ast> for Analyzer {
                 }
             }
             Statement::NumericFor(numeric_for) => {
-                self.visit_expression(&numeric_for.start);
-                self.visit_expression(&numeric_for.limit);
+                self.visit_expr(&numeric_for.start);
+                self.visit_expr(&numeric_for.limit);
                 if let Some(step) = &numeric_for.step {
-                    self.visit_expression(step);
+                    self.visit_expr(step);
                 }
                 self.enter_scope();
                 self.declare_parameter(identifier_name(&numeric_for.name));
@@ -368,7 +368,7 @@ impl<'ast> Visitor<'ast> for Analyzer {
             }
             Statement::GenericFor(generic_for) => {
                 for expr in generic_for.exprs.iter() {
-                    self.visit_expression(expr);
+                    self.visit_expr(expr);
                 }
                 self.enter_scope();
                 for param in generic_for.names.iter() {
@@ -386,7 +386,7 @@ impl<'ast> Visitor<'ast> for Analyzer {
             Statement::GlobalDeclaration(global_declaration) => {
                 if let Some(exprs) = &global_declaration.exprs {
                     for expr in exprs.iter() {
-                        self.visit_expression(expr);
+                        self.visit_expr(expr);
                     }
                 }
                 for attributed in global_declaration.names.iter() {
@@ -406,7 +406,7 @@ impl<'ast> Visitor<'ast> for Analyzer {
             | Statement::Label(_)
             | Statement::GlobalStar(_)
             | Statement::Break(_)
-            | Statement::Error(_) => self.walk_statement(stmt),
+            | Statement::Error(_) => self.walk_stmt(stmt),
         }
     }
 
@@ -421,6 +421,10 @@ impl<'ast> Visitor<'ast> for Analyzer {
         self.enter_scope();
         for param in body.params.iter() {
             self.declare_parameter(identifier_name(&param.name));
+        }
+        // Lua 5.5
+        if let Some(vararg_name) = body.vararg.as_ref().and_then(|vararg| vararg.name.as_ref()) {
+            self.declare_parameter(identifier_name(vararg_name));
         }
         self.visit_block(&body.block);
         self.exit_scope();

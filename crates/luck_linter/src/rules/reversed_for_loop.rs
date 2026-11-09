@@ -1,41 +1,29 @@
 use luck_ast::Statement;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::number::decimal_literal_value;
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::number::signed_number_value;
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ReversedForLoop;
 
-impl Rule for ReversedForLoop {
-    fn name(&self) -> &'static str {
-        "reversed_for_loop"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "numeric `for` loop counts down without a negative step"
-    }
-}
+impl_rule!(
+    ReversedForLoop,
+    "reversed_for_loop",
+    Suspicious,
+    Warning,
+    "numeric `for` loop counts down without a negative step"
+);
 
 impl NodeRule for ReversedForLoop {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::NumericFor])
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Statement::NumericFor(numeric_for) = stmt
-            && let Some(start) = decimal_literal_value(&numeric_for.start)
-            && let Some(limit) = decimal_literal_value(&numeric_for.limit)
+            && let Some(start) = signed_number_value(&numeric_for.start)
+            && let Some(limit) = signed_number_value(&numeric_for.limit)
             && start > limit
             && numeric_for.step.is_none()
         {
@@ -72,6 +60,12 @@ mod tests {
             diags[0].message, "`for` loop from 10 to 1 without a negative step never runs",
             "{diags:?}"
         );
+    }
+
+    #[test]
+    fn flags_hex_start() {
+        let diags = run("for i = 0x10, 1 do print(i) end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]

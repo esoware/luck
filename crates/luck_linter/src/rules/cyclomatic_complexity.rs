@@ -1,54 +1,35 @@
 use luck_ast::{Expression, Statement};
 
 use crate::cfg::analyze_full_block;
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
 use crate::node_type::NodeTypeSet;
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CyclomaticComplexity;
 
-impl Rule for CyclomaticComplexity {
-    fn name(&self) -> &'static str {
-        "cyclomatic_complexity"
-    }
-    fn category(&self) -> Category {
-        // `Category` has no complexity variant, and `Style` fits pressure
-        // to refactor best.
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "function exceeds the configured cyclomatic complexity threshold"
-    }
-}
+// `Category` has no complexity variant, and `Style` fits pressure to refactor best.
+impl_rule!(
+    CyclomaticComplexity,
+    "cyclomatic_complexity",
+    Style,
+    Warning,
+    "function exceeds the configured cyclomatic complexity threshold"
+);
 
 impl NodeRule for CyclomaticComplexity {
     fn node_types(&self) -> NodeTypeSet {
         FunctionNode::NODE_TYPES
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         findings.extend(
-            FunctionNode::of_statement(stmt).and_then(|function| check_function(function, context)),
+            FunctionNode::of_stmt(stmt).and_then(|function| check_function(function, context)),
         );
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         findings.extend(
-            FunctionNode::of_expression(expr)
-                .and_then(|function| check_function(function, context)),
+            FunctionNode::of_expr(expr).and_then(|function| check_function(function, context)),
         );
     }
 }
@@ -136,6 +117,55 @@ mod tests {
         let diags = run(source, Some(1));
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("(anonymous)"), "msg: {}", diags[0].message);
+    }
+
+    #[test]
+    fn flags_decision_points_in_table_call_arguments() {
+        for source in [
+            "function paren_table_arg() f({a and b}) end",
+            "function bare_table_arg() f{a and b} end",
+        ] {
+            let diags = run(source, Some(0));
+            assert!(diags[0].message.contains("complexity 2"), "{source}: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn flags_decision_points_in_assignment_targets() {
+        for source in
+            ["function value_and() x = a and b end", "function target_or() t[a or b] = 1 end"]
+        {
+            let diags = run(source, Some(0));
+            assert!(diags[0].message.contains("complexity 2"), "{source}: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn flags_decision_points_in_return_exprs() {
+        let diags = run("function return_and() return a and b end", Some(0));
+        assert!(diags[0].message.contains("complexity 2"), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_decision_points_in_compound_assignment_targets() {
+        let config = LintConfig { max_cyclomatic_complexity: Some(0), ..LintConfig::default() };
+        for source in [
+            "function comp_value() t[1] += a or b end",
+            "function comp_target() t[a or b] += 1 end",
+        ] {
+            let diags =
+                run_rule_with_config(&CyclomaticComplexity, source, LuaVersion::Luau, &config);
+            assert!(diags[0].message.contains("complexity 2"), "{source}: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn flags_type_function_bodies() {
+        let config = LintConfig { max_cyclomatic_complexity: Some(1), ..LintConfig::default() };
+        let source = "type function t1(a) if a then return a end end";
+        let diags = run_rule_with_config(&CyclomaticComplexity, source, LuaVersion::Luau, &config);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].message, "function `t1` has cyclomatic complexity 2 (threshold: 1)");
     }
 
     #[test]

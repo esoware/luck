@@ -11,6 +11,12 @@ use crate::string::{
     scan_interpolated_segment, scan_long_string, scan_short_string,
 };
 
+/// The median file in the bench corpus runs about this many bytes per token.
+const BYTES_PER_TOKEN: usize = 5;
+
+/// Keeps a huge comment-only file from reserving gigabytes it never touches.
+const MAX_RESERVED_TOKENS: usize = 1 << 20;
+
 /// Lex all of `source` at once.
 ///
 /// A source over 4 GiB yields only the error [`Lexer::new`] reports, with no
@@ -141,7 +147,8 @@ impl<'source> Lexer<'source> {
     /// Lex the whole source into one stream ending in EOF. Its own loop
     /// rather than `next_token` until EOF, so no per-token EOF test.
     fn tokenize(mut self) -> LexResult {
-        let mut tokens = Vec::new();
+        let capacity = self.cursor.rest().len().div_ceil(BYTES_PER_TOKEN);
+        let mut tokens = Vec::with_capacity(capacity.min(MAX_RESERVED_TOKENS));
         loop {
             self.skip_whitespace();
             let Some(byte) = self.cursor.peek() else {
@@ -170,7 +177,7 @@ impl<'source> Lexer<'source> {
         match byte {
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => Some(self.lex_identifier()),
             b'0'..=b'9' => self.lex_number(),
-            b'.' if matches!(self.cursor.peek_at(1), Some(b'0'..=b'9')) => self.lex_number(),
+            b'.' if matches!(self.cursor.peek_next(), Some(b'0'..=b'9')) => self.lex_number(),
             b'"' | b'\'' => self.lex_short_string(byte),
             b'[' => self.lex_long_string_or_bracket(),
             // Luau
@@ -179,7 +186,7 @@ impl<'source> Lexer<'source> {
             b'}' if self.interpolation_brace_depths.last() == Some(&0) => {
                 self.lex_interpolated_string_continuation()
             }
-            b'-' if self.cursor.peek_at(1) == Some(b'-') => {
+            b'-' if self.cursor.peek_next() == Some(b'-') => {
                 self.lex_comment();
                 None
             }
@@ -284,6 +291,9 @@ impl<'source> Lexer<'source> {
             self.comments.push(comment.attach(token_start, CommentPosition::Trailing));
         } else {
             self.pending_leading_comments.push(comment);
+        }
+        if kind == CommentKind::MultiLineBlock {
+            self.has_newline_since_last_token = true;
         }
     }
 
@@ -397,7 +407,7 @@ impl<'source> Lexer<'source> {
             b',' => TokenKind::Comma,
             b'#' => TokenKind::Hash,
             b'-' => {
-                if self.version.is_luau() && self.cursor.eat(b'>') {
+                if self.version.has_type_syntax() && self.cursor.eat(b'>') {
                     TokenKind::Arrow
                 } else {
                     self.compound_or(TokenKind::MinusEqual, TokenKind::Minus)
@@ -438,10 +448,13 @@ impl<'source> Lexer<'source> {
                 }
             }
             // Luau uses `&` and `|` for intersection and union types.
-            b'&' | b'|' if !self.version.has_bitwise_ops() && !self.version.is_luau() => {
+            b'&' | b'|' if !self.version.has_bitwise_ops() && !self.version.has_type_syntax() => {
                 return self.reject_unsupported_symbol(start, byte);
             }
-            b'@' | b'?' if !self.version.is_luau() => {
+            b'@' if !self.version.has_function_attributes() => {
+                return self.reject_unsupported_symbol(start, byte);
+            }
+            b'?' if !self.version.has_type_syntax() => {
                 return self.reject_unsupported_symbol(start, byte);
             }
             b'&' => TokenKind::Ampersand,

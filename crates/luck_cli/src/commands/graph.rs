@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use clap::{Args, ValueEnum};
-use luck_bundler::{DependencyGraph, ModuleId};
+use luck_bundler::{BundleOptions, DependencyGraph, ModuleId};
+use luck_core::{DynamicRequire, LuaTarget};
 
 use crate::exit::{Exit, fail_with_diags, usage_error};
 use crate::project::{
@@ -25,7 +26,7 @@ pub(crate) struct GraphArgs {
 
     /// Lua target [default: from the entry's extension and luck.json].
     #[arg(short = 't', long = "target", value_name = "TARGET")]
-    target: Option<String>,
+    target: Option<LuaTarget>,
 
     /// Search path template (repeatable).
     #[arg(short = 's', long = "search-path", value_name = "PATTERN")]
@@ -37,19 +38,19 @@ pub(crate) struct GraphArgs {
 
     /// How to treat require(expr): error, warn, or allow.
     #[arg(long = "dynamic-require", value_name = "MODE")]
-    dynamic_require: Option<String>,
+    dynamic_require: Option<DynamicRequire>,
 }
 
 impl GraphArgs {
     /// # Errors
     ///
-    /// Returns [`Exit::Usage`] on a bad config, target, or entry path, and
+    /// Returns [`Exit::Usage`] on a bad config or entry path, and
     /// [`Exit::Failure`] when the graph can't be built.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         // `graph` takes no `-c`, so its config is always the discovered one.
         let config = config_for_one_shot(None, &self.entry)?;
-        let target = resolve_configured_target(&config, self.target.as_deref(), &self.entry)?;
-        let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require.as_deref())?;
+        let target = resolve_configured_target(&config, self.target, &self.entry)?;
+        let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require);
 
         let entry_path = Path::new(&self.entry);
         if !entry_path.is_file() {
@@ -60,10 +61,12 @@ impl GraphArgs {
 
         let dependency_graph = DependencyGraph::build(
             entry_path,
-            target.lua_version(),
-            &self.search_paths,
-            &working_directory,
-            dynamic_require,
+            &BundleOptions {
+                version: target.lua_version(),
+                search_paths: &self.search_paths,
+                project_root: &working_directory,
+                dynamic_require,
+            },
         )
         .map_err(|errors| fail_with_diags(&errors))?;
 
@@ -92,11 +95,8 @@ fn print_graph_json(dependency_graph: &DependencyGraph) {
             .iter()
             .map(|dependency| dependency.require_string.as_str())
             .collect();
-        let resolved_paths: Vec<&str> = module
-            .dependencies
-            .iter()
-            .map(|dependency| dependency.resolved_path.as_str())
-            .collect();
+        let resolved_paths: Vec<Option<&str>> =
+            module.dependencies.iter().map(|dependency| module_path(dependency.target)).collect();
 
         modules_map.insert(
             module.path.clone(),
@@ -123,7 +123,9 @@ fn print_graph_dot(dependency_graph: &DependencyGraph) {
     println!("digraph dependencies {{");
     for module in &dependency_graph.modules {
         for dependency in &module.dependencies {
-            println!("  \"{}\" -> \"{}\";", module.path, dependency.resolved_path);
+            if let Some(target) = dependency_graph.modules.get(dependency.target.0) {
+                println!("  \"{}\" -> \"{}\";", module.path, target.path);
+            }
         }
     }
     println!("}}");
@@ -132,6 +134,7 @@ fn print_graph_dot(dependency_graph: &DependencyGraph) {
 #[cfg(test)]
 mod tests {
     use clap::Parser as _;
+    use luck_core::LuaTarget;
 
     use super::{GraphArgs, GraphFormat};
     use crate::cli::{Cli, Command};
@@ -145,7 +148,7 @@ mod tests {
             panic!("expected Command::Graph");
         };
         assert_eq!(entry, "src/main.lua");
-        assert_eq!(target, Some("54".to_owned()));
+        assert_eq!(target, Some(LuaTarget::Lua54));
         assert!(matches!(format, GraphFormat::Dot));
     }
 }

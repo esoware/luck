@@ -1,52 +1,34 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement};
+use luck_ast::{Expression, FunctionArgs, FunctionCall};
 use luck_semantic::SemanticAnalysis;
 
 use crate::call::is_global_call;
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnnecessaryAssert;
 
-impl Rule for UnnecessaryAssert {
-    fn name(&self) -> &'static str {
-        "unnecessary_assert"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "`assert` on a constant value always passes or always errors"
-    }
-}
+impl_rule!(
+    UnnecessaryAssert,
+    "unnecessary_assert",
+    Suspicious,
+    Warning,
+    "`assert` on a constant value always passes or always errors"
+);
 
 impl NodeRule for UnnecessaryAssert {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_statement(
+    fn on_call(
         &self,
-        stmt: &Statement,
+        call: &FunctionCall,
+        _position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        if let Statement::FunctionCall(call) = stmt {
-            findings.extend(check_call(call, context.semantic));
-        }
-    }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Expression::FunctionCall(call) = expr {
-            findings.extend(check_call(call, context.semantic));
-        }
+        findings.extend(check_call(call, context.semantic));
     }
 }
 
@@ -139,7 +121,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_assert_in_expression_position() {
+    fn flags_assert_in_expr_position() {
         let diags = run("local ok = assert(true)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }

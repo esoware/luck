@@ -1,39 +1,27 @@
 use luck_ast::Expression;
 use luck_token::{BinOp, UnOp};
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnnecessaryNegation;
 
-impl Rule for UnnecessaryNegation {
-    fn name(&self) -> &'static str {
-        "unnecessary_negation"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "negated comparison that could use the opposite operator"
-    }
-}
+impl_rule!(
+    UnnecessaryNegation,
+    "unnecessary_negation",
+    Style,
+    Warning,
+    "negated comparison that could use the opposite operator"
+);
 
 impl NodeRule for UnnecessaryNegation {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::UnaryOp])
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let Expression::UnaryOp(unary) = expr else {
             return;
         };

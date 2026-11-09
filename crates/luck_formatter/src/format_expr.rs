@@ -385,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn if_expression_flat() {
+    fn if_expr_flat() {
         assert_eq!(print_expr("if a then b else c", QuoteStyle::Double, 80), "if a then b else c");
     }
 

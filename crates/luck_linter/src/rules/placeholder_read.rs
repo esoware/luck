@@ -1,8 +1,8 @@
 use luck_ast::{Expression, Var};
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags reads of `_`, which by convention names a value being thrown away.
 ///
@@ -13,31 +13,19 @@ use crate::rule::{LintContext, NodeRule, Rule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PlaceholderRead;
 
-impl Rule for PlaceholderRead {
-    fn name(&self) -> &'static str {
-        "placeholder_read"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "use of `_` as a value; convention reserves it for ignored bindings"
-    }
-}
+impl_rule!(
+    PlaceholderRead,
+    "placeholder_read",
+    Suspicious,
+    Warning,
+    "use of `_` as a value; convention reserves it for ignored bindings"
+);
 
 impl NodeRule for PlaceholderRead {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::Var])
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Expression::Var(Var::Name(token)) = expr
             && token.identifier() == Some("_")
         {

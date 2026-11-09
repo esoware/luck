@@ -1,10 +1,10 @@
 use luck_ast::{Expression, NumericFor, Statement, Var};
 use luck_token::UnOp;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::number::decimal_literal_value;
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::number::signed_number_value;
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags numeric `for` ranges that can't iterate or are likely off by one.
 ///
@@ -14,31 +14,19 @@ use crate::rule::{LintContext, NodeRule, Rule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ForRange;
 
-impl Rule for ForRange {
-    fn name(&self) -> &'static str {
-        "for_range"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "numeric `for` range can't iterate or is off by one"
-    }
-}
+impl_rule!(
+    ForRange,
+    "for_range",
+    Correctness,
+    Error,
+    "numeric `for` range can't iterate or is off by one"
+);
 
 impl NodeRule for ForRange {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::NumericFor])
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Statement::NumericFor(numeric_for) = stmt
             && let Some((message, help)) = range_problem(numeric_for)
         {
@@ -49,9 +37,9 @@ impl NodeRule for ForRange {
 
 /// The message and help for what's wrong with a loop's range, if anything.
 fn range_problem(numeric_for: &NumericFor) -> Option<(String, &'static str)> {
-    let start = decimal_literal_value(&numeric_for.start);
-    let limit = decimal_literal_value(&numeric_for.limit);
-    let step = numeric_for.step.as_ref().and_then(decimal_literal_value);
+    let start = signed_number_value(&numeric_for.start);
+    let limit = signed_number_value(&numeric_for.limit);
+    let step = numeric_for.step.as_ref().and_then(signed_number_value);
 
     // A zero step loops forever before Lua 5.4 and raises an error from 5.4
     // on.
@@ -215,6 +203,13 @@ mod tests {
         let diags = run("for i = 10, 1, 1 do end");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("positive step"));
+    }
+
+    #[test]
+    fn flags_hex_bounds() {
+        let diags = run("for i = 0x10, 1, 1 do end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("from 16 to 1"), "{diags:?}");
     }
 
     #[test]

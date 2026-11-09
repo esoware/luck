@@ -4,22 +4,23 @@
 use alloc::sync::Arc;
 use core::str::FromStr as _;
 use std::fs;
+use std::path::Path;
 
 use luck_lsp::{Backend, Notifier};
 use luck_token::index_to_offset;
 use tokio::sync::RwLock;
 use tower_lsp::LanguageServer as _;
 use tower_lsp::lsp_types::{
-    CodeActionContext, CodeActionOrCommand, CodeActionParams, CompletionParams, CompletionResponse,
-    Diagnostic, DidChangeTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
-    DocumentHighlightKind, DocumentHighlightParams, DocumentLinkParams,
-    DocumentRangeFormattingParams, DocumentSymbolParams, DocumentSymbolResponse,
-    FoldingRangeParams, FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse,
-    HoverContents, HoverParams, InitializeParams, MessageType, PartialResultParams, Position,
-    PrepareRenameResponse, Range, ReferenceContext, ReferenceParams, Registration, RenameParams,
-    SelectionRangeParams, SemanticTokensParams, SemanticTokensRangeParams,
-    SemanticTokensRangeResult, SemanticTokensResult, SignatureHelpParams,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, CompletionParams,
+    CompletionResponse, Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+    DidOpenTextDocumentParams, DocumentFormattingParams, DocumentHighlightKind,
+    DocumentHighlightParams, DocumentLinkParams, DocumentRangeFormattingParams,
+    DocumentSymbolParams, DocumentSymbolResponse, FoldingRangeParams, FormattingOptions,
+    GotoDefinitionParams, GotoDefinitionResponse, HoverContents, HoverParams, InitializeParams,
+    MessageType, PartialResultParams, Position, PrepareRenameResponse, Range, ReferenceContext,
+    ReferenceParams, Registration, RenameParams, SelectionRangeParams, SemanticTokensParams,
+    SemanticTokensRangeParams, SemanticTokensRangeResult, SemanticTokensResult,
+    SignatureHelpParams, TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, Url, VersionedTextDocumentIdentifier, WorkDoneProgressParams,
     WorkspaceSymbolParams,
 };
@@ -94,6 +95,58 @@ async fn open(server: &Backend<CapturedNotifier>, uri: &Url, text: &str) {
             },
         })
         .await;
+}
+
+/// The refusal message for renaming the local at the top of `uri` to
+/// `new_name`, or `None` when the rename is accepted.
+async fn rename_refusal(
+    server: &Backend<CapturedNotifier>,
+    uri: &Url,
+    new_name: &str,
+) -> Option<String> {
+    server
+        .rename(RenameParams {
+            text_document_position: position_params(uri, 0, 8),
+            new_name: new_name.to_owned(),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        })
+        .await
+        .err()
+        .map(|error| error.message.into_owned())
+}
+
+/// A project that excludes `gen/` and turns on a fixable rule, with one
+/// fixable document on each side of the exclude, as `(included, excluded)`.
+fn project_with_excluded_directory(directory: &Path) -> (Url, Url) {
+    fs::write(
+        directory.join("luck.json"),
+        r#"{ "exclude": ["gen/**"], "lint": { "disable_default_rules": true, "rule_overrides": { "redundant_nil_init": { "enabled": true } } } }"#,
+    )
+    .expect("write luck.json");
+    let generated = directory.join("gen");
+    fs::create_dir_all(&generated).expect("mkdir gen");
+    let included_path = directory.join("kept.lua");
+    let excluded_path = generated.join("a.lua");
+    fs::write(&included_path, "local x = nil\n").expect("write kept.lua");
+    fs::write(&excluded_path, "local x = nil\n").expect("write gen/a.lua");
+    (
+        Url::from_file_path(&included_path).expect("file path URI"),
+        Url::from_file_path(&excluded_path).expect("file path URI"),
+    )
+}
+
+fn fix_all_params(uri: &Url) -> CodeActionParams {
+    CodeActionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        range: Range::default(),
+        context: CodeActionContext {
+            diagnostics: Vec::new(),
+            only: Some(vec![CodeActionKind::SOURCE_FIX_ALL]),
+            trigger_kind: None,
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    }
 }
 
 fn formatting_options() -> FormattingOptions {
@@ -1034,4 +1087,172 @@ async fn fix_all_workspace_collects_fixes_from_open_documents() {
         "only the document with a fix gets edits: {changes:?}"
     );
     assert!(!changes[&fixable].is_empty(), "{changes:?}");
+}
+
+#[tokio::test]
+async fn did_change_with_no_changes_stores_the_new_version() {
+    let notifier = CapturedNotifier::default();
+    let server = Backend::new(notifier.clone());
+    let uri = workspace_uri("empty_change.lua");
+    open(&server, &uri, "local a = 1\n").await;
+
+    server
+        .did_change(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 5 },
+            content_changes: Vec::new(),
+        })
+        .await;
+    let (publish_count, republished_version) = {
+        let published = notifier.published.read().await;
+        (published.len(), published.last().map(|(_, _, version)| *version))
+    };
+    assert_eq!(republished_version, Some(Some(5i32)), "the republish carries the new version");
+
+    server
+        .did_change(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 5 },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "local b = 2\n".to_owned(),
+            }],
+        })
+        .await;
+    assert_eq!(
+        notifier.published.read().await.len(),
+        publish_count,
+        "a repeated version is stale and republishes nothing"
+    );
+    let response = server
+        .document_symbol(DocumentSymbolParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .await
+        .expect("document symbol errored")
+        .expect("document stays open");
+    let DocumentSymbolResponse::Nested(symbols) = response else {
+        panic!("document symbols should be nested");
+    };
+    assert_eq!(symbols.iter().map(|symbol| symbol.name.as_str()).collect::<Vec<_>>(), ["a"]);
+}
+
+#[tokio::test]
+async fn fix_all_workspace_skips_excluded_documents() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (included, excluded) = project_with_excluded_directory(directory.path());
+
+    let notifier = CapturedNotifier::default();
+    let server = Backend::new(notifier.clone());
+    open(&server, &included, "local x = nil\n").await;
+    open(&server, &excluded, "local x = nil\n").await;
+    assert!(
+        notifier.diagnostics_for(&excluded).await.is_empty(),
+        "an excluded document publishes nothing"
+    );
+
+    let edit = server
+        .fix_all_workspace_request(serde_json::Value::Null)
+        .await
+        .expect("fix-all request errored");
+    let changes = edit.changes.expect("changes map");
+    assert_eq!(
+        changes.keys().collect::<Vec<_>>(),
+        [&included],
+        "an excluded document gets no edits: {changes:?}"
+    );
+}
+
+#[tokio::test]
+async fn source_fix_all_skips_excluded_documents() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (included, excluded) = project_with_excluded_directory(directory.path());
+
+    let server = Backend::new(CapturedNotifier::default());
+    open(&server, &included, "local x = nil\n").await;
+    open(&server, &excluded, "local x = nil\n").await;
+
+    let excluded_actions = server
+        .code_action(fix_all_params(&excluded))
+        .await
+        .expect("code action errored")
+        .expect("the document is open");
+    assert!(excluded_actions.is_empty(), "{excluded_actions:?}");
+    let included_actions = server
+        .code_action(fix_all_params(&included))
+        .await
+        .expect("code action errored")
+        .expect("the document is open");
+    assert_eq!(included_actions.len(), 1, "{included_actions:?}");
+}
+
+#[tokio::test]
+async fn source_fix_all_stops_once_a_config_change_excludes_the_document() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (_included, excluded) = project_with_excluded_directory(directory.path());
+    fs::write(
+        directory.path().join("luck.json"),
+        r#"{ "lint": { "disable_default_rules": true, "rule_overrides": { "redundant_nil_init": { "enabled": true } } } }"#,
+    )
+    .expect("rewrite luck.json without the exclude");
+
+    let server = Backend::new(CapturedNotifier::default());
+    open(&server, &excluded, "local x = nil\n").await;
+    let before = server
+        .code_action(fix_all_params(&excluded))
+        .await
+        .expect("code action errored")
+        .expect("the document is open");
+    assert_eq!(before.len(), 1, "not excluded yet: {before:?}");
+
+    fs::write(
+        directory.path().join("luck.json"),
+        r#"{ "exclude": ["gen/**"], "lint": { "disable_default_rules": true, "rule_overrides": { "redundant_nil_init": { "enabled": true } } } }"#,
+    )
+    .expect("rewrite luck.json with the exclude");
+    server.did_change_watched_files(DidChangeWatchedFilesParams { changes: Vec::new() }).await;
+
+    let after = server
+        .code_action(fix_all_params(&excluded))
+        .await
+        .expect("code action errored")
+        .expect("the document is open");
+    assert!(after.is_empty(), "{after:?}");
+}
+
+#[tokio::test]
+async fn rename_refuses_a_configured_extra_global() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    fs::write(directory.path().join("luck.json"), r#"{ "lint": { "extra_globals": ["vim"] } }"#)
+        .expect("write luck.json");
+    let path = directory.path().join("main.lua");
+    fs::write(&path, "local count = 1\n").expect("write main.lua");
+    let uri = Url::from_file_path(&path).expect("file path URI");
+
+    let server = Backend::new(CapturedNotifier::default());
+    open(&server, &uri, "local count = 1\n").await;
+
+    let refusal = rename_refusal(&server, &uri, "vim").await.expect("`vim` is configured");
+    assert!(refusal.contains("`vim` would shadow"), "{refusal}");
+    assert_eq!(rename_refusal(&server, &uri, "total").await, None);
+}
+
+#[tokio::test]
+async fn watched_config_change_reseeds_open_documents_with_extra_globals() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
+    let path = directory.path().join("main.lua");
+    fs::write(&path, "local count = 1\n").expect("write main.lua");
+    let uri = Url::from_file_path(&path).expect("file path URI");
+
+    let server = Backend::new(CapturedNotifier::default());
+    open(&server, &uri, "local count = 1\n").await;
+    assert_eq!(rename_refusal(&server, &uri, "vim").await, None, "`vim` isn't configured yet");
+
+    fs::write(directory.path().join("luck.json"), r#"{ "lint": { "extra_globals": ["vim"] } }"#)
+        .expect("rewrite luck.json");
+    server.did_change_watched_files(DidChangeWatchedFilesParams { changes: Vec::new() }).await;
+    let refusal = rename_refusal(&server, &uri, "vim").await;
+    assert!(refusal.is_some(), "the config change took effect");
 }

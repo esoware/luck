@@ -28,9 +28,9 @@ pub(crate) fn format_size(bytes: usize) -> String {
 ///
 /// Reports the failure and returns [`Exit::Failure`] when `output_path` can't
 /// be written.
-pub(crate) fn write_output(output_path: Option<&str>, content: &str) -> Result<(), Exit> {
+pub(crate) fn write_output(output_path: Option<&Path>, content: &str) -> Result<(), Exit> {
     if let Some(path) = output_path {
-        return write_output_file(Path::new(path), content);
+        return write_output_file(path, content);
     }
     print!("{content}");
     Ok(())

@@ -1,40 +1,36 @@
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
-use crate::uninitialized::{UninitializedLocals, first_reference};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::uninitialized::first_reference;
 
 /// Luacheck 321: a local declared without a value is read before anything
 /// is assigned to it.
 ///
 /// Only a bare `local x` counts. `local x = nil` is initialized, and
-/// `redundant_nil_init` covers it instead.
+/// `redundant_nil_init` covers it instead. A field or index write through the
+/// local is `mutating_uninitialized`'s (Luacheck 341).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AccessingUninitialized;
 
-impl Rule for AccessingUninitialized {
-    fn name(&self) -> &'static str {
-        "accessing_uninitialized"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "local is read before any value is assigned to it"
-    }
-}
+impl_rule!(
+    AccessingUninitialized,
+    "accessing_uninitialized",
+    Correctness,
+    Warning,
+    "local is read before any value is assigned to it"
+);
 
 impl WholeRule for AccessingUninitialized {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let tree = &context.semantic.scope_tree;
-        let uninitialized_locals = UninitializedLocals::collect(context.block);
+        let uninitialized_locals = context.uninitialized_locals;
         tree.symbols
             .iter()
             .filter(|symbol| uninitialized_locals.contains(symbol) && !symbol.name.starts_with('_'))
             .filter_map(|symbol| {
                 let first = first_reference(symbol, tree)?;
-                first.kind.is_read().then(|| {
+                let is_read =
+                    first.kind.is_read() && !uninitialized_locals.is_field_write_prefix(first);
+                is_read.then(|| {
                     Finding::new(
                         format!(
                             "`{}` is read before any value is assigned, so it is `nil`",
@@ -85,6 +81,25 @@ mod tests {
     fn ignores_write_in_branch_before_read() {
         let diags = run("local x\nif c then x = 1 end\nprint(x)");
         assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_field_write_as_the_first_reference() {
+        let diags = run("local x\nx.foo = 1");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_index_write_as_the_first_reference() {
+        let diags = run("local y\ny[1] = 2");
+        assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_field_read_through_a_nested_write_target() {
+        // `x.y.z = 1` reads `x.y` first, which isn't a write through `x`.
+        let diags = run("local x\nx.y.z = 1");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
     #[test]

@@ -18,7 +18,7 @@
 //!   kind = "function"
 //!   min_args = 0
 //!   max_args = -1            # -1 = unbounded
-//!   params = [{ kind = "vararg", required = false }]
+//!   params = [{ kind = "vararg", is_required = false }]
 //!
 //!   [globals.load]           # overloaded: one table per signature
 //!   kind = "function"
@@ -35,7 +35,7 @@
 //!
 //!   [shapes.file.members.read]  # colon-method on the `file` shape
 //!   kind = "function"
-//!   method = true
+//!   is_method = true
 //!   ...
 //! ```
 
@@ -127,13 +127,13 @@ struct RawFunction {
     #[serde(default)]
     is_pure: bool,
     #[serde(default)]
-    must_use: bool,
+    is_must_use: bool,
     #[serde(default)]
     deprecated: Option<RawDeprecation>,
     #[serde(default = "default_true")]
-    read_only: bool,
+    is_read_only: bool,
     #[serde(default)]
-    method: bool,
+    is_method: bool,
     #[serde(default)]
     returns: Option<String>,
 }
@@ -154,7 +154,7 @@ struct RawParam {
     #[serde(flatten)]
     kind: RawParamKind,
     #[serde(default = "default_true")]
-    required: bool,
+    is_required: bool,
     #[serde(default)]
     deprecated: Option<RawDeprecation>,
 }
@@ -191,7 +191,7 @@ enum RawConstantValue {
         #[serde(default)]
         deprecated: Option<RawDeprecation>,
         #[serde(default)]
-        common: bool,
+        is_common: bool,
     },
 }
 
@@ -199,7 +199,7 @@ enum RawConstantValue {
 #[serde(deny_unknown_fields)]
 struct RawValue {
     #[serde(default = "default_true")]
-    read_only: bool,
+    is_read_only: bool,
     #[serde(default)]
     deprecated: Option<RawDeprecation>,
     #[serde(default)]
@@ -239,10 +239,10 @@ impl From<RawConstantValue> for StdlibConstant {
             RawConstantValue::Plain(value) => {
                 Self { value: value.into(), deprecated: None, is_common: false }
             }
-            RawConstantValue::Detailed { value, deprecated, common } => Self {
+            RawConstantValue::Detailed { value, deprecated, is_common } => Self {
                 value: value.into(),
                 deprecated: deprecated.map(StdlibDeprecation::from),
-                is_common: common,
+                is_common,
             },
         }
     }
@@ -260,7 +260,7 @@ impl From<RawDeprecation> for StdlibDeprecation {
 impl From<RawValue> for StdlibValue {
     fn from(raw: RawValue) -> Self {
         Self {
-            is_read_only: raw.read_only,
+            is_read_only: raw.is_read_only,
             deprecated: raw.deprecated.map(StdlibDeprecation::from),
             shape: raw.shape.map(CompactString::from),
         }
@@ -302,7 +302,7 @@ fn convert_param(raw: RawParam, path: &str, sets: &ConstantSets) -> Result<Stdli
     };
     Ok(StdlibParam {
         kind,
-        is_required: raw.required,
+        is_required: raw.is_required,
         deprecated: raw.deprecated.map(StdlibDeprecation::from),
     })
 }
@@ -357,10 +357,10 @@ fn convert_function(
     Ok(StdlibFunction {
         signatures,
         is_pure: raw.is_pure,
-        is_must_use: raw.must_use,
+        is_must_use: raw.is_must_use,
         deprecated: raw.deprecated.map(StdlibDeprecation::from),
-        is_read_only: raw.read_only,
-        is_method: raw.method,
+        is_read_only: raw.is_read_only,
+        is_method: raw.is_method,
         returns_shape: raw.returns.map(CompactString::from),
     })
 }
@@ -792,7 +792,7 @@ mod tests {
             kind = "function"
             min_args = 1
             max_args = 2
-            params = [{ kind = "string" }, { kind = "number", required = false }]
+            params = [{ kind = "string" }, { kind = "number", is_required = false }]
             "#,
         );
         let StdlibEntry::Function(function) = library.lookup(&["f"]).expect("f") else {
@@ -814,7 +814,7 @@ mod tests {
               { min_args = 2, max_args = 3, params = [
                   { kind = "number" },
                   { kind = "number" },
-                  { kind = "number", required = false },
+                  { kind = "number", is_required = false },
               ] },
             ]
             "#,
@@ -842,7 +842,7 @@ mod tests {
             kind = "function"
             min_args = 0
             max_args = 1
-            params = [{ kind = "constant", required = false, values = [
+            params = [{ kind = "constant", is_required = false, values = [
               "collect",
               { value = "setpause", deprecated = { message = "gone" } },
             ] }]
@@ -872,8 +872,8 @@ mod tests {
 
             [shapes.DataModel.members.GetService]
             kind = "function"
-            method = true
-            must_use = true
+            is_method = true
+            is_must_use = true
             min_args = 1
             max_args = 1
             params = [{ kind = "string" }]
@@ -881,10 +881,10 @@ mod tests {
 
             [shapes.Instance.members.FindFirstChild]
             kind = "function"
-            method = true
+            is_method = true
             min_args = 1
             max_args = 2
-            params = [{ kind = "string" }, { kind = "bool", required = false }]
+            params = [{ kind = "string" }, { kind = "bool", is_required = false }]
             "#,
         );
         let entry = library.lookup(&["game", "GetService"]).expect("shape traversal");
@@ -906,7 +906,7 @@ mod tests {
             max_args = 2
             params = [
               { kind = "string" },
-              { kind = "any", required = false, deprecated = { message = "use x instead" } },
+              { kind = "any", is_required = false, deprecated = { message = "use x instead" } },
             ]
             "#,
         );
@@ -937,7 +937,7 @@ mod tests {
 
             [shapes.Instance.members.GetChildren]
             kind = "function"
-            method = true
+            is_method = true
             min_args = 0
             max_args = 0
         "#;

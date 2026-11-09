@@ -23,7 +23,7 @@ fn expectation_errors_have_exact_message_and_span() {
 }
 
 #[test]
-fn recovery_parses_subsequent_statements() {
+fn recovery_parses_subsequent_stmts() {
     let result = parse("local = 5\nlocal y = 10");
     assert!(!result.errors.is_empty(), "should have errors from first statement");
     let has_valid_local = result.block.stmts.iter().any(|stmt| {
@@ -41,13 +41,13 @@ fn unclosed_parameter_list_is_an_error() {
 }
 
 #[test]
-fn errors_in_separate_statements_are_all_reported() {
+fn errors_in_separate_stmts_are_all_reported() {
     let result = parse("local = 5\nlocal = 10\nlocal z = 15");
     assert!(result.errors.len() >= 2, "should collect multiple errors, got: {:?}", result.errors);
 }
 
 #[test]
-fn unexpected_token_becomes_an_error_statement() {
+fn unexpected_token_becomes_an_error_stmt() {
     let result = parse(") local x = 1");
     assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
     let has_error_node = result.block.stmts.iter().any(|stmt| matches!(stmt, Statement::Error(_)));
@@ -55,13 +55,13 @@ fn unexpected_token_becomes_an_error_statement() {
 }
 
 #[test]
-fn unmatched_paren_in_expression_position_is_an_error() {
+fn unmatched_paren_in_expr_position_is_an_error() {
     let result = parse("local x = )");
     assert!(!result.errors.is_empty(), "should error on invalid expression");
 }
 
 #[test]
-fn statement_after_top_level_return_is_an_error() {
+fn stmt_after_top_level_return_is_an_error() {
     // Accepting it would silently drop the tail from the AST.
     let result = parse("return 1\nlocal x = 2");
     assert!(!result.errors.is_empty(), "statements after a top-level return must be an error");

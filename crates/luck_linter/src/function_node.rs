@@ -1,13 +1,13 @@
 //! Function statements and function expressions as one view, for the node
 //! rules that check every function.
 
-use luck_ast::{Expression, FunctionBody, Statement};
+use luck_ast::{Expression, FunctionBody, Statement, TypeDeclarationValue};
 use luck_token::Span;
 
 use crate::node_type::{NodeType, NodeTypeSet};
 
-/// A `function`, `local function`, or `global function` statement, or a
-/// function expression.
+/// A `function`, `local function`, `global function`, or `type function`
+/// statement, or a function expression.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FunctionNode<'ast> {
     pub body: &'ast FunctionBody,
@@ -25,10 +25,11 @@ impl<'ast> FunctionNode<'ast> {
         NodeType::FunctionDecl,
         NodeType::LocalFunction,
         NodeType::GlobalFunction,
+        NodeType::TypeDeclaration,
         NodeType::FunctionDef,
     ]);
 
-    pub(crate) fn of_statement(stmt: &'ast Statement) -> Option<Self> {
+    pub(crate) fn of_stmt(stmt: &'ast Statement) -> Option<Self> {
         let (body, span, name_span, is_method) = match stmt {
             Statement::FunctionDecl(decl) => {
                 (&decl.body, decl.span, decl.name.span, decl.name.method.is_some())
@@ -39,6 +40,13 @@ impl<'ast> FunctionNode<'ast> {
             // Lua 5.5
             Statement::GlobalFunction(global_function) => {
                 (&global_function.body, global_function.span, global_function.name.span, false)
+            }
+            // Luau
+            Statement::TypeDeclaration(type_declaration) => {
+                let TypeDeclarationValue::TypeFunction(body) = &type_declaration.type_value else {
+                    return None;
+                };
+                (&**body, type_declaration.span, type_declaration.name.span, false)
             }
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
@@ -56,13 +64,12 @@ impl<'ast> FunctionNode<'ast> {
             | Statement::GlobalStar(_)
             | Statement::Break(_)
             | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
             | Statement::Error(_) => return None,
         };
         Some(Self { body, span, name_span: Some(name_span), is_method })
     }
 
-    pub(crate) const fn of_expression(expr: &'ast Expression) -> Option<Self> {
+    pub(crate) const fn of_expr(expr: &'ast Expression) -> Option<Self> {
         let Expression::FunctionDef(function) = expr else {
             return None;
         };

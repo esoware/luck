@@ -4,7 +4,7 @@ use luck_token::{Comment, CompactString, LuaVersion, SourceError, TokenKind};
 use crate::common::kinds_in;
 
 #[test]
-fn interpolated_string_without_expressions_lexes_as_a_begin_end_pair() {
+fn interpolated_string_without_exprs_lexes_as_a_begin_end_pair() {
     assert_eq!(
         kinds_in("`hello`", LuaVersion::Luau),
         vec![
@@ -33,7 +33,7 @@ fn interpolated_string_begin_stops_at_the_open_brace() {
 }
 
 #[test]
-fn interpolated_index_expression_lexes_token_by_token() {
+fn interpolated_index_expr_lexes_token_by_token() {
     assert_eq!(
         kinds_in("`{t[1]}`", LuaVersion::Luau),
         vec![

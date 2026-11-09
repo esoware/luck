@@ -12,9 +12,9 @@ use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 #[derive(Debug)]
 pub struct SemanticAnalysis {
     pub scope_tree: ScopeTree,
-    /// Globals beyond the stdlib, such as `vim`, filled by the linter from
-    /// the `extra_globals` config. Stdlib names aren't copied in, so use
-    /// `is_known_global` to check both.
+    /// Globals beyond the stdlib, such as `vim`, filled by the linter and the
+    /// language server from the `extra_globals` config. Stdlib names aren't
+    /// copied in, so use `is_known_global` to check both.
     pub extra_globals: FxHashSet<String>,
     pub version: LuaVersion,
     /// Which stdlib answers queries. Only matters for Luau, where `Roblox`
@@ -56,10 +56,31 @@ pub fn analyze_with_environment(
 
 /// A stdlib entry resolved from a call's callee.
 #[derive(Debug, Clone)]
-pub struct ResolvedCallee<'library> {
+pub struct ResolvedCallee<'call> {
+    path: CalleePath<'call>,
+    entry: &'call StdlibEntry,
+}
+
+#[derive(Debug, Clone)]
+enum CalleePath<'call> {
+    Method { base: &'call str, method: &'call str },
+    Dotted(Vec<&'call str>),
+}
+
+impl<'call> ResolvedCallee<'call> {
     /// Display path, such as `table.insert` or `game:GetService`.
-    pub name: String,
-    pub entry: &'library StdlibEntry,
+    #[must_use]
+    pub fn name(&self) -> String {
+        match &self.path {
+            CalleePath::Method { base, method } => format!("{base}:{method}"),
+            CalleePath::Dotted(segments) => segments.join("."),
+        }
+    }
+
+    #[must_use]
+    pub const fn entry(&self) -> &'call StdlibEntry {
+        self.entry
+    }
 }
 
 impl SemanticAnalysis {
@@ -77,14 +98,17 @@ impl SemanticAnalysis {
     /// (`local table = {}`), or it reports stdlib diagnostics on user values.
     #[must_use]
     pub fn resolves_to_local(&self, name: &str, span: Span) -> bool {
-        self.scope_tree.resolved_symbol(name, span).is_some()
+        self.scope_tree.resolves_to_local(name, span)
     }
 
-    /// Whether `name` is recognized as a global, either a stdlib entry for
-    /// this environment or an entry in `extra_globals`.
+    /// Whether `name` is recognized as a global: a stdlib entry for this
+    /// environment, an entry in `extra_globals`, or a name a `global` statement
+    /// in this chunk declares.
     #[must_use]
     pub fn is_known_global(&self, name: &str) -> bool {
-        self.stdlib().globals.contains_key(name) || self.extra_globals.contains(name)
+        self.stdlib().globals.contains_key(name)
+            || self.extra_globals.contains(name)
+            || self.scope_tree.declared_globals.contains(name)
     }
 
     /// Whether the stdlib marks the global `name` read-only, so code
@@ -100,7 +124,10 @@ impl SemanticAnalysis {
     /// shape, and calls whose `.` or `:` doesn't match the function's
     /// `is_method`.
     #[must_use]
-    pub fn resolve_callee(&self, call: &FunctionCall) -> Option<ResolvedCallee<'_>> {
+    pub fn resolve_callee<'call>(
+        &'call self,
+        call: &'call FunctionCall,
+    ) -> Option<ResolvedCallee<'call>> {
         let resolver = ShapeResolver::new(&self.scope_tree, self.stdlib(), &self.symbol_shapes);
         if let Some(method_token) = &call.method {
             let method_name = method_token.identifier()?;
@@ -110,7 +137,10 @@ impl SemanticAnalysis {
             } else {
                 shape.as_str()
             };
-            return Some(ResolvedCallee { name: format!("{base}:{method_name}"), entry });
+            return Some(ResolvedCallee {
+                path: CalleePath::Method { base, method: method_name },
+                entry,
+            });
         }
         let segments = resolver.global_path(&call.callee)?;
         let entry = self.stdlib().lookup(&segments)?;
@@ -121,7 +151,7 @@ impl SemanticAnalysis {
         {
             return None;
         }
-        Some(ResolvedCallee { name: segments.join("."), entry })
+        Some(ResolvedCallee { path: CalleePath::Dotted(segments), entry })
     }
 
     /// Resolve a dotted or colon path from its segments, where the root may

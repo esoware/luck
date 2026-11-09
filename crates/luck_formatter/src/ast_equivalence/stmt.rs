@@ -56,9 +56,7 @@ fn stmt_eq(left: &Statement, right: &Statement, version: LuaVersion) -> ControlF
             at("RepeatLoop/block", block_eq(&lhs.block, &rhs.block, version))?;
             at("RepeatLoop/condition", expr_eq(&lhs.condition, &rhs.condition, version))
         }
-        (Statement::IfStatement(lhs), Statement::IfStatement(rhs)) => {
-            if_statement_eq(lhs, rhs, version)
-        }
+        (Statement::IfStatement(lhs), Statement::IfStatement(rhs)) => if_stmt_eq(lhs, rhs, version),
         (Statement::NumericFor(lhs), Statement::NumericFor(rhs)) => {
             numeric_for_eq(lhs, rhs, version)
         }
@@ -146,7 +144,7 @@ fn compound_assignment_eq(
     at("CompoundAssignment/expr", expr_eq(&left.expr, &right.expr, version))
 }
 
-fn if_statement_eq(
+fn if_stmt_eq(
     left: &IfStatement,
     right: &IfStatement,
     version: LuaVersion,

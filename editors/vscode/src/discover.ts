@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import path from "node:path";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import { logExtension } from "./output";
 import { setting } from "./settings";
 
@@ -9,7 +8,7 @@ const BINARY_NAME = process.platform === "win32" ? "luck.exe" : "luck";
 
 const VSIX_OPERATING_SYSTEMS: ReadonlySet<NodeJS.Platform> = new Set(["win32", "darwin", "linux"]);
 
-export const VSIX_PLATFORM = VSIX_OPERATING_SYSTEMS.has(process.platform)
+const VSIX_PLATFORM = VSIX_OPERATING_SYSTEMS.has(process.platform)
 	? `${process.platform}-${process.arch === "arm64" ? "arm64" : "x64"}`
 	: null;
 
@@ -20,7 +19,7 @@ const WINDOWS_EXECUTABLE_EXTENSIONS = new Set(
 		.filter((extension) => extension.length > 0),
 );
 
-export async function discoverServer(extensionPath: string): Promise<string | null> {
+export async function discoverServer(context: vscode.ExtensionContext): Promise<string | null> {
 	const explicitPath = setting("server.path").trim();
 	if (explicitPath) {
 		if (await isExecutable(explicitPath)) {
@@ -33,10 +32,33 @@ export async function discoverServer(extensionPath: string): Promise<string | nu
 	}
 
 	const bundledPath =
-		VSIX_PLATFORM && path.join(extensionPath, "server", VSIX_PLATFORM, BINARY_NAME);
+		VSIX_PLATFORM && path.join(context.extensionPath, "server", VSIX_PLATFORM, BINARY_NAME);
 	if (bundledPath && (await isExecutable(bundledPath))) {
 		logExtension(`server: using bundled binary ${bundledPath}`);
-		return setting("runFromTemporaryLocation") ? copyToTemporaryLocation(bundledPath) : bundledPath;
+		if (!setting("runFromTemporaryLocation")) {
+			return bundledPath;
+		}
+		const storagePath = context.globalStorageUri.fsPath;
+		const copyPath = path.join(storagePath, BINARY_NAME);
+		try {
+			const bundled = await fs.promises.stat(bundledPath);
+			const existing = await fs.promises.stat(copyPath).catch(() => null);
+			if (existing?.size === bundled.size && existing.mtime.getTime() === bundled.mtime.getTime()) {
+				logExtension(`server: reusing copy ${copyPath}`);
+				return copyPath;
+			}
+			await fs.promises.mkdir(storagePath, { recursive: true });
+			await fs.promises.copyFile(bundledPath, copyPath);
+			if (process.platform !== "win32") {
+				await fs.promises.chmod(copyPath, 0o755);
+			}
+			await fs.promises.utimes(copyPath, bundled.atime, bundled.mtime);
+			logExtension(`server: copied to ${copyPath}`);
+			return copyPath;
+		} catch (error) {
+			logExtension(`server: copy failed: ${error}`);
+			return bundledPath;
+		}
 	}
 
 	for (const directory of (process.env["PATH"] ?? "").split(path.delimiter)) {
@@ -53,22 +75,6 @@ export async function discoverServer(extensionPath: string): Promise<string | nu
 
 	logExtension("server: no binary found");
 	return null;
-}
-
-async function copyToTemporaryLocation(source: string): Promise<string> {
-	try {
-		const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "luck-"));
-		const destination = path.join(directory, BINARY_NAME);
-		await fs.promises.copyFile(source, destination);
-		if (process.platform !== "win32") {
-			await fs.promises.chmod(destination, 0o755);
-		}
-		logExtension(`server: copied to temp ${destination}`);
-		return destination;
-	} catch (error) {
-		logExtension(`server: temp-copy failed: ${error}`);
-		return source;
-	}
 }
 
 async function isExecutable(filePath: string): Promise<boolean> {

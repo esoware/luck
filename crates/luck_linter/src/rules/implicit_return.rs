@@ -1,10 +1,10 @@
 use luck_ast::{Expression, Statement};
 
 use crate::cfg::analyze_full_block;
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
 use crate::node_type::NodeTypeSet;
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags functions that return on some paths but fall off the end on
 /// others.
@@ -13,42 +13,25 @@ use crate::rule::{LintContext, NodeRule, Rule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ImplicitReturn;
 
-impl Rule for ImplicitReturn {
-    fn name(&self) -> &'static str {
-        "implicit_return"
-    }
-    fn category(&self) -> Category {
-        // "Return a value or nil" is idiomatic Lua, and neither Selene nor
-        // Luacheck flags it, so this stays off by default.
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "function returns on some paths but falls through on others"
-    }
-}
+// "Return a value or nil" is idiomatic Lua, and neither Selene nor
+// Luacheck flags it, so this stays off by default.
+impl_rule!(
+    ImplicitReturn,
+    "implicit_return",
+    Suspicious,
+    Warning,
+    "function returns on some paths but falls through on others"
+);
 
 impl NodeRule for ImplicitReturn {
     fn node_types(&self) -> NodeTypeSet {
         FunctionNode::NODE_TYPES
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        findings.extend(FunctionNode::of_statement(stmt).and_then(check_function));
+    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        findings.extend(FunctionNode::of_stmt(stmt).and_then(check_function));
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        findings.extend(FunctionNode::of_expression(expr).and_then(check_function));
+    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        findings.extend(FunctionNode::of_expr(expr).and_then(check_function));
     }
 }
 
@@ -118,6 +101,19 @@ mod tests {
             LuaVersion::Lua55,
         );
         assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_type_function_with_mixed_paths() {
+        let source = "type function t1(a) if a then return a end end";
+        let diags = run_rule(&ImplicitReturn, source, LuaVersion::Luau);
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_type_alias() {
+        let diags = run_rule(&ImplicitReturn, "type T = number", LuaVersion::Luau);
+        assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]

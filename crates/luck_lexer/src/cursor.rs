@@ -23,8 +23,8 @@ impl<'source> Cursor<'source> {
     }
 
     #[inline]
-    pub(crate) fn peek_at(&self, offset: usize) -> Option<u8> {
-        self.source.as_bytes().get(self.position.saturating_add(offset)).copied()
+    pub(crate) fn peek_next(&self) -> Option<u8> {
+        self.source.as_bytes().get(self.position.saturating_add(1)).copied()
     }
 
     #[inline]

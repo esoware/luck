@@ -1,23 +1,16 @@
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SettingGlobal;
 
-impl Rule for SettingGlobal {
-    fn name(&self) -> &'static str {
-        "setting_global"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "implicit global variable assignment (missing `local`?)"
-    }
-}
+impl_rule!(
+    SettingGlobal,
+    "setting_global",
+    Correctness,
+    Warning,
+    "implicit global variable assignment (missing `local`?)"
+);
 
 impl WholeRule for SettingGlobal {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
@@ -67,6 +60,14 @@ mod tests {
         let diags = run("counter = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("`counter`"), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_declared_global_and_its_writes() {
+        for source in ["global x = 1", "global x\nx = 1", "global function f() end\nf = nil"] {
+            let diags = run_rule(&SettingGlobal, source, LuaVersion::Lua55);
+            assert!(diags.is_empty(), "{source}: {diags:?}");
+        }
     }
 
     #[test]

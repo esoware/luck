@@ -162,6 +162,16 @@ impl<'source> Parser<'source> {
         mem::discriminant(self.peek()) == mem::discriminant(kind)
     }
 
+    /// Consume the current token if it is a `kind`, whatever its payload.
+    #[inline]
+    fn eat(&mut self, kind: &TokenKind) -> bool {
+        let is_at_kind = self.is_at(kind);
+        if is_at_kind {
+            self.advance_span();
+        }
+        is_at_kind
+    }
+
     #[inline]
     fn advance(&mut self) -> Token {
         self.previous_span = self.current.span;
@@ -268,7 +278,7 @@ impl<'source> Parser<'source> {
     fn synchronize(&mut self) {
         self.advance();
         while !self.is_at_eof() {
-            if stmt::is_statement_start(self.peek())
+            if stmt::is_stmt_start(self.peek())
                 || matches!(
                     self.peek(),
                     TokenKind::End

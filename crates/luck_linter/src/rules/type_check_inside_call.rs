@@ -1,63 +1,41 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement, Var};
+use luck_ast::{Expression, FunctionArgs, FunctionCall};
 use luck_semantic::SemanticAnalysis;
 use luck_token::BinOp;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::call::is_global_call;
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
 /// Flags `type(x == "string")` written for `type(x) == "string"`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TypeCheckInsideCall;
 
-impl Rule for TypeCheckInsideCall {
-    fn name(&self) -> &'static str {
-        "type_check_inside_call"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "type comparison is inside the call instead of outside"
-    }
-}
+impl_rule!(
+    TypeCheckInsideCall,
+    "type_check_inside_call",
+    Correctness,
+    Error,
+    "type comparison is inside the call instead of outside"
+);
 
 impl NodeRule for TypeCheckInsideCall {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_statement(
+    fn on_call(
         &self,
-        stmt: &Statement,
+        call: &FunctionCall,
+        _position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        if let Statement::FunctionCall(call) = stmt {
-            findings.extend(check_call(call, context.semantic));
-        }
-    }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Expression::FunctionCall(call) = expr {
-            findings.extend(check_call(call, context.semantic));
-        }
+        findings.extend(check_call(call, context.semantic));
     }
 }
 
 fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<Finding> {
-    let Expression::Var(Var::Name(token)) = &call.callee else {
-        return None;
-    };
-    let name = token.identifier()?;
-    // A local `type` or `typeof` is a user function.
-    if !matches!(name, "type" | "typeof") || semantic.resolves_to_local(name, token.span) {
+    if !is_global_call(call, "type", semantic) && !is_global_call(call, "typeof", semantic) {
         return None;
     }
     let FunctionArgs::Parenthesized { args, .. } = &call.args else {
@@ -97,6 +75,19 @@ mod tests {
     fn flags_inequality_inside_typeof_call() {
         let diags = run("local ok = typeof(x ~= \"Instance\")");
         assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_method_call_on_a_table_named_type() {
+        let source = "type = {}\nfunction type:f(v) return v end\ntype:f(1 == 2)";
+        let diags = run(source);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_method_call_on_a_table_named_typeof() {
+        let diags = run("typeof:f(a == b)");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]

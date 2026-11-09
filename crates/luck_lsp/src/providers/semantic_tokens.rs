@@ -355,7 +355,7 @@ fn dotted_path<'token>(
 }
 
 impl<'ast> Visitor<'ast> for Classifier<'_> {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             // Luau
             Statement::TypeDeclaration(declaration) => {
@@ -421,11 +421,11 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
             | Statement::Break(_)
             | Statement::Error(_) => {}
         }
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 
     fn visit_function_call(&mut self, call: &'ast FunctionCall) {
-        self.visit_expression(&call.callee);
+        self.visit_expr(&call.callee);
         if let Some(method) = &call.method {
             self.retype(method.span, TYPE_METHOD);
         } else {
@@ -451,13 +451,13 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
                             TYPE_PROPERTY
                         },
                     );
-                    self.visit_expression(value);
+                    self.visit_expr(value);
                 }
                 Field::Bracketed { key, value, .. } => {
-                    self.visit_expression(key);
-                    self.visit_expression(value);
+                    self.visit_expr(key);
+                    self.visit_expr(value);
                 }
-                Field::Positional { value, .. } => self.visit_expression(value),
+                Field::Positional { value, .. } => self.visit_expr(value),
             }
         }
     }
@@ -542,31 +542,18 @@ const fn symbol_classify(kind: SymbolKind) -> Classification {
 }
 
 fn stdlib_classify(entry: &StdlibEntry) -> Classification {
-    let mut modifiers = MODIFIER_DEFAULT_LIBRARY;
     let token_type = match entry {
-        StdlibEntry::Function(function) => {
-            if function.deprecated.is_some() {
-                modifiers |= MODIFIER_DEPRECATED;
-            }
-            if function.is_read_only {
-                modifiers |= MODIFIER_READONLY;
-            }
-            TYPE_FUNCTION
-        }
-        StdlibEntry::Namespace(_) => {
-            modifiers |= MODIFIER_READONLY;
-            TYPE_NAMESPACE
-        }
-        StdlibEntry::Constant(value) | StdlibEntry::Property(value) => {
-            if value.deprecated.is_some() {
-                modifiers |= MODIFIER_DEPRECATED;
-            }
-            if value.is_read_only {
-                modifiers |= MODIFIER_READONLY;
-            }
-            TYPE_PROPERTY
-        }
+        StdlibEntry::Function(_) => TYPE_FUNCTION,
+        StdlibEntry::Namespace(_) => TYPE_NAMESPACE,
+        StdlibEntry::Constant(_) | StdlibEntry::Property(_) => TYPE_PROPERTY,
     };
+    let mut modifiers = MODIFIER_DEFAULT_LIBRARY;
+    if entry.deprecation().is_some() {
+        modifiers |= MODIFIER_DEPRECATED;
+    }
+    if entry.is_read_only() {
+        modifiers |= MODIFIER_READONLY;
+    }
     Classification { token_type, modifiers }
 }
 
@@ -590,11 +577,12 @@ fn utf16_length(source: &str, span: Span) -> u32 {
 #[cfg(test)]
 mod tests {
     use luck_core::LuaTarget;
+    use rustc_hash::FxHashSet;
 
     use super::*;
 
     fn parse_document(source: &str, target: LuaTarget) -> DocumentState {
-        let document = DocumentState::new(source.to_owned(), 1, target);
+        let document = DocumentState::new(source.to_owned(), 1, target, FxHashSet::default());
         assert!(document.parsed.errors.is_empty(), "{:?}", document.parsed.errors);
         document
     }
@@ -836,6 +824,21 @@ mod tests {
             MODIFIER_DEFAULT_LIBRARY,
             "defaultLibrary modifier expected: {tokens:?}"
         );
+    }
+
+    #[test]
+    fn deprecated_namespaces_carry_the_deprecated_modifier() {
+        let document = parse_document("local g = Enum.Genre\n", LuaTarget::LuauRoblox);
+        let tokens = highlights(&document);
+        let genre = tokens.iter().find(|token| token.text == "Genre").expect("Genre");
+        assert_eq!(genre.kind, "namespace", "{tokens:?}");
+        for modifier in ["deprecated", "readonly", "defaultLibrary"] {
+            assert!(genre.modifiers.iter().any(|name| name == modifier), "{modifier}: {tokens:?}");
+        }
+        let live = parse_document("local m = Enum.Material\n", LuaTarget::LuauRoblox);
+        let live_tokens = highlights(&live);
+        let material = live_tokens.iter().find(|token| token.text == "Material").expect("Material");
+        assert!(!material.modifiers.iter().any(|name| name == "deprecated"), "{live_tokens:?}");
     }
 
     #[test]

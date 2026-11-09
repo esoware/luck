@@ -11,8 +11,8 @@ use core::iter;
 use core::num::Saturating;
 
 use luck_ast::{
-    Block, Expression, FunctionArgs, FunctionCall, IfStatement, LastStatement, Punctuated,
-    Statement, Type, Var, Visitor,
+    Block, Expression, FunctionCall, IfStatement, LastStatement, Punctuated, Statement, Type, Var,
+    Visitor,
 };
 use luck_token::BinOp;
 
@@ -54,7 +54,16 @@ impl BranchSummary {
     fn add_exprs<'ast>(&mut self, exprs: impl IntoIterator<Item = &'ast Expression>) {
         let mut points = DecisionPoints::default();
         for expr in exprs {
-            points.visit_expression(expr);
+            points.visit_expr(expr);
+        }
+        self.add_decision_points(points.count.0);
+    }
+
+    /// Count the decision points inside `targets`.
+    fn add_targets<'ast>(&mut self, targets: impl IntoIterator<Item = &'ast Var>) {
+        let mut points = DecisionPoints::default();
+        for target in targets {
+            points.visit_var(target);
         }
         self.add_decision_points(points.count.0);
     }
@@ -99,6 +108,10 @@ fn analyze_sequence(stmts: &[Statement], last: Option<&LastStatement>) -> Branch
         }
     }
 
+    if let Some(LastStatement::Return(return_stmt)) = last {
+        summary.add_exprs(return_stmt.exprs.iter());
+    }
+
     if !is_terminated && let Some(last_stmt) = last {
         let exit = match last_stmt {
             LastStatement::Return(_) => Exit::Return,
@@ -120,7 +133,10 @@ fn analyze_stmt(stmt: &Statement) -> BranchSummary {
     let mut summary = BranchSummary::default();
 
     match stmt {
-        Statement::Assignment(node) => summary.add_exprs(node.values.iter()),
+        Statement::Assignment(node) => {
+            summary.add_targets(node.targets.iter());
+            summary.add_exprs(node.values.iter());
+        }
         Statement::FunctionCall(node) => {
             let mut points = DecisionPoints::default();
             points.visit_function_call(node);
@@ -194,7 +210,10 @@ fn analyze_stmt(stmt: &Statement) -> BranchSummary {
             summary.exit = Exit::Break;
         }
         // Luau
-        Statement::CompoundAssignment(node) => summary.add_exprs([&node.expr]),
+        Statement::CompoundAssignment(node) => {
+            summary.add_targets([&node.var]);
+            summary.add_exprs([&node.expr]);
+        }
         // A function's exits and decision points are its own, so callers
         // analyze each body separately. The walker doesn't model `goto`,
         // and the other statements here don't affect control flow.
@@ -313,7 +332,7 @@ struct DecisionPoints {
 }
 
 impl<'ast> Visitor<'ast> for DecisionPoints {
-    fn visit_expression(&mut self, expr: &'ast Expression) {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
         match expr {
             Expression::FunctionDef(_) => return,
             Expression::BinaryOp(node) => {
@@ -343,18 +362,7 @@ impl<'ast> Visitor<'ast> for DecisionPoints {
             | Expression::TypeInstantiation(_)
             | Expression::Error(_) => {}
         }
-        self.walk_expression(expr);
-    }
-
-    /// Only the callee and a parenthesized argument list count, so a table
-    /// argument adds nothing, as in `f{a and b}`.
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
-        self.visit_expression(&call.callee);
-        if let FunctionArgs::Parenthesized { args, .. } = &call.args {
-            for arg in args.iter() {
-                self.visit_expression(arg);
-            }
-        }
+        self.walk_expr(expr);
     }
 
     fn visit_type(&mut self, _type_value: &'ast Type) {}
@@ -501,6 +509,27 @@ mod tests {
         let summary = summarize("local a = 1\nlocal b = 1\nif a then elseif b then end");
         // +1 for the if, +1 for the elseif.
         assert_eq!(summary.decision_points, 2);
+    }
+
+    #[test]
+    fn decision_points_in_table_call_argument() {
+        assert_eq!(summarize("f{a and b}").decision_points, 1);
+        assert_eq!(summarize("f({a and b})").decision_points, 1);
+    }
+
+    #[test]
+    fn decision_points_in_assignment_target() {
+        assert_eq!(summarize("t[a or b] = 1").decision_points, 1);
+    }
+
+    #[test]
+    fn decision_points_in_return() {
+        assert_eq!(summarize("return a and b").decision_points, 1);
+    }
+
+    #[test]
+    fn decision_points_in_return_after_a_terminating_stmt() {
+        assert_eq!(summarize("do return end return a and b").decision_points, 1);
     }
 
     #[test]

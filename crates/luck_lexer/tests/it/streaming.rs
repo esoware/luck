@@ -1,35 +1,14 @@
-use std::path::{Path, PathBuf};
-use std::{fs, io};
+use std::fs;
+use std::path::Path;
 
 use luck_lexer::{Lexer, lex};
+use luck_testgen::collect_fixture_files;
 use luck_token::{LuaVersion, TokenKind};
-
-/// Every file under `root`, in path order.
-///
-/// # Errors
-///
-/// Fails when a directory or one of its entries can't be read.
-fn collect_files(root: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    let mut directories = vec![root.to_path_buf()];
-    while let Some(directory) = directories.pop() {
-        for entry in fs::read_dir(&directory)? {
-            let path = entry?.path();
-            if path.is_dir() {
-                directories.push(path);
-            } else {
-                files.push(path);
-            }
-        }
-    }
-    files.sort();
-    Ok(files)
-}
 
 #[test]
 fn next_token_streams_exactly_what_lex_materializes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
-    let fixtures = collect_files(&root).expect("fixture tree is readable");
+    let fixtures = collect_fixture_files(&root).expect("fixture tree is readable");
     assert!(!fixtures.is_empty(), "no fixtures under {}", root.display());
     let mut sources = [
         "",

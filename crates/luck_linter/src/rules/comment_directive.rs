@@ -3,8 +3,8 @@ use core::mem;
 use luck_ast::Block;
 use luck_token::{CommentKind, Span};
 
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 use crate::suggest::closest;
 
 const KNOWN_DIRECTIVES: &[&str] =
@@ -13,20 +13,13 @@ const KNOWN_DIRECTIVES: &[&str] =
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CommentDirective;
 
-impl Rule for CommentDirective {
-    fn name(&self) -> &'static str {
-        "comment_directive"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "invalid or misplaced `--!` comment directive"
-    }
-}
+impl_rule!(
+    CommentDirective,
+    "comment_directive",
+    Correctness,
+    Warning,
+    "invalid or misplaced `--!` comment directive"
+);
 
 impl WholeRule for CommentDirective {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
@@ -176,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_directive_after_first_statement() {
+    fn flags_directive_after_first_stmt() {
         let diags = run("local _x = 1\n--!strict");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("after the first statement"));

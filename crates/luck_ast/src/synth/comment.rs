@@ -53,7 +53,7 @@ mod tests {
     use crate::synth::Synth;
 
     #[test]
-    fn comment_helpers_anchor_on_statements() {
+    fn comment_helpers_anchor_on_stmts() {
         let synth = Synth::new();
         let stmt = synth.local(&["x"], vec![synth.number("1")]);
         let leading = SyntheticComment::leading(&stmt, "before");

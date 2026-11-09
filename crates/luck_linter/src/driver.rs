@@ -30,7 +30,7 @@ pub fn lint_target(source: &str, target: LuaTarget, config: &LintConfig) -> Vec<
     lint_parsed(&luck_parser::parse(source, version), version, target.stdlib_environment(), config)
 }
 
-/// Lints an existing parse, so hosts like the LSP don't parse twice.
+/// Lints an existing parse with the given dialect and config.
 ///
 /// A parse with errors yields one `parse_error` diagnostic per error, and no
 /// rules run.
@@ -45,16 +45,35 @@ pub fn lint_parsed(
     environment: StdlibEnvironment,
     config: &LintConfig,
 ) -> Vec<LintDiagnostic> {
+    lint_analyzed(parse, &analyze(&parse.block, version, environment, config), config)
+}
+
+/// Lints an existing parse and analysis, so hosts like the LSP don't build
+/// either twice.
+///
+/// `semantic` must already hold `config.extra_globals`, because rules read
+/// them from it. A parse with errors yields one `parse_error` diagnostic per
+/// error, and no rules run.
+///
+/// # Panics
+///
+/// In debug builds, when a rule's `node_types()` omits a type its hooks act on.
+#[must_use]
+pub fn lint_analyzed(
+    parse: &luck_parser::ParseResult,
+    semantic: &SemanticAnalysis,
+    config: &LintConfig,
+) -> Vec<LintDiagnostic> {
     if !parse.errors.is_empty() {
         return parse.errors.iter().map(parse_error_diag).collect();
     }
 
-    let semantic = analyze(&parse.block, version, environment, config);
     let nodes = Nodes::collect(&parse.block);
     let context = LintContext {
         block: &parse.block,
         blocks: nodes.blocks(),
-        semantic: &semantic,
+        uninitialized_locals: nodes.uninitialized_locals(),
+        semantic,
         source: &parse.source,
         comments: &parse.comments,
         config,

@@ -1,9 +1,9 @@
 use luck_ast::Expression;
 use luck_token::{BinOp, UnOp};
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags chained comparisons like `a < b == c`, and a `not` on the left of
 /// a comparison, as in `not a == b`.
@@ -14,31 +14,19 @@ use crate::rule::{LintContext, NodeRule, Rule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ComparisonPrecedence;
 
-impl Rule for ComparisonPrecedence {
-    fn name(&self) -> &'static str {
-        "comparison_precedence"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "chained comparison or `not` operand that doesn't parse the way it reads"
-    }
-}
+impl_rule!(
+    ComparisonPrecedence,
+    "comparison_precedence",
+    Correctness,
+    Error,
+    "chained comparison or `not` operand that doesn't parse the way it reads"
+);
 
 impl NodeRule for ComparisonPrecedence {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let Expression::BinaryOp(outer) = expr else {
             return;
         };

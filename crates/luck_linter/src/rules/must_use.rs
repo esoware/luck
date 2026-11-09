@@ -1,41 +1,35 @@
-use luck_ast::{FunctionCall, Statement};
+use luck_ast::FunctionCall;
 use luck_semantic::{SemanticAnalysis, StdlibEntry};
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
 /// Flags a call statement to a stdlib function marked `must_use`, which
 /// throws away its result.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MustUse;
 
-impl Rule for MustUse {
-    fn name(&self) -> &'static str {
-        "must_use"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "return value of a must-use function is discarded"
-    }
-}
+impl_rule!(
+    MustUse,
+    "must_use",
+    Suspicious,
+    Warning,
+    "return value of a must-use function is discarded"
+);
 
 impl NodeRule for MustUse {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt])
     }
-    fn on_statement(
+    fn on_call(
         &self,
-        stmt: &Statement,
+        call: &FunctionCall,
+        position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        if let Statement::FunctionCall(call) = stmt
+        if position == CallPosition::Statement
             && let Some(name) = must_use_name(context.semantic, call)
         {
             findings.push(
@@ -48,10 +42,10 @@ impl NodeRule for MustUse {
 
 fn must_use_name(semantic: &SemanticAnalysis, call: &FunctionCall) -> Option<String> {
     let callee = semantic.resolve_callee(call)?;
-    if let StdlibEntry::Function(function) = callee.entry
+    if let StdlibEntry::Function(function) = callee.entry()
         && function.is_must_use
     {
-        Some(callee.name)
+        Some(callee.name())
     } else {
         None
     }

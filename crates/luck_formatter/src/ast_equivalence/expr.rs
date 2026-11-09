@@ -64,7 +64,7 @@ pub(super) fn expr_eq(
             at("TableConstructor", table_eq(lhs, rhs, version))
         }
         (Expression::IfExpression(lhs), Expression::IfExpression(rhs)) => {
-            if_expression_eq(lhs, rhs, version)
+            if_expr_eq(lhs, rhs, version)
         }
         (Expression::TypeCast(lhs), Expression::TypeCast(rhs)) => {
             at("TypeCast/expr", expr_eq(&lhs.expr, &rhs.expr, version))?;
@@ -126,7 +126,7 @@ fn type_instantiation_eq(
     )
 }
 
-fn if_expression_eq(
+fn if_expr_eq(
     left: &IfExpression,
     right: &IfExpression,
     version: LuaVersion,

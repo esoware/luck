@@ -2,7 +2,7 @@
 //!
 //! Types appear in the annotation positions (parameters, varargs, return
 //! types, local/loop bindings, casts) and in `type` declarations. Outside
-//! Luau these nodes never occur; the parser gates on `LuaVersion::is_luau`.
+//! Luau these nodes never occur; the parser gates on `LuaVersion::has_type_syntax`.
 
 use luck_token::{CompactString, Span, Token};
 

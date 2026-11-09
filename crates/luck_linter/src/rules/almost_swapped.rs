@@ -1,25 +1,18 @@
 use luck_ast::{Expression, Statement, Var};
 
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AlmostSwapped;
 
-impl Rule for AlmostSwapped {
-    fn name(&self) -> &'static str {
-        "almost_swapped"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "looks like a failed variable swap; use `a, b = b, a`"
-    }
-}
+impl_rule!(
+    AlmostSwapped,
+    "almost_swapped",
+    Correctness,
+    Error,
+    "looks like a failed variable swap; use `a, b = b, a`"
+);
 
 impl WholeRule for AlmostSwapped {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

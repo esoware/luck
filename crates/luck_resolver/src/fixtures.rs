@@ -3,7 +3,6 @@
 use std::fs;
 use std::path::Path;
 
-use luck_core::normalize_path;
 use luck_token::Span;
 use tempfile::TempDir;
 
@@ -34,11 +33,6 @@ pub(crate) fn luau_project() -> TempDir {
         ("src/utils.luau", "return {}"),
         ("src/helper.lua", "return {}"),
     ])
-}
-
-/// The normalized path of `relative_path` under `project`.
-pub(crate) fn normalized(project: &TempDir, relative_path: &str) -> String {
-    normalize_path(&project.path().join(relative_path))
 }
 
 pub(crate) fn request<'request>(

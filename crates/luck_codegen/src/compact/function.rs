@@ -18,7 +18,7 @@ impl CompactPrinter {
                 self.emit_fixed("[");
                 self.emit_token(&attribute.name);
                 self.emit_fixed("(");
-                self.emit_punctuated(args, ",", Self::emit_expression);
+                self.emit_punctuated(args, ",", Self::emit_expr);
                 self.emit_fixed(")");
                 self.emit_fixed("]");
             } else {

@@ -1,6 +1,8 @@
 use core::mem;
 
-use luck_ast::{Block, Expression, FunctionBody, Statement, Transform, Var, Visitor};
+use luck_ast::{
+    Block, Expression, FunctionBody, Statement, Transform, Var, Visitor, is_prefix_expr,
+};
 use luck_token::{BinOp, CompactString, LuaVersion, Span, UnOp};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -13,8 +15,10 @@ use crate::expr::{can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, parenthesize
 /// This pass works on names, not bindings, so every candidate must be
 /// position-insensitive:
 /// - the name must not be bound anywhere else in the file (by another local,
-///   a parameter, a loop variable, or a `local function`), or a use of that
-///   binding would get the candidate's value;
+///   a parameter, a loop variable, a `local function`, or a 5.5 `global`), or
+///   a use of that binding would get the candidate's value;
+/// - every reference must be a read in the declaration's scope, since a read
+///   before or past it is a global's and a write would become one;
 /// - the value must carry no identity (a table or closure moved into a loop
 ///   mints a fresh object per iteration), capture nothing, and not be `...`,
 ///   whose meaning changes across function boundaries.
@@ -70,6 +74,8 @@ fn find_inline_candidates(
         declared_names: FxHashSet::default(),
         shadowed_names: FxHashSet::default(),
         reference_counts: FxHashMap::default(),
+        open_declarations: FxHashSet::default(),
+        opened_in_scope: Vec::new(),
         version,
     };
     scanner.visit_block(block);
@@ -93,18 +99,54 @@ struct CandidateScanner {
     declared_names: FxHashSet<CompactString>,
     shadowed_names: FxHashSet<CompactString>,
     reference_counts: FxHashMap<CompactString, usize>,
+    /// Candidates whose scope the walk is inside.
+    open_declarations: FxHashSet<CompactString>,
+    /// `open_declarations` in opening order, to close them per scope.
+    opened_in_scope: Vec<CompactString>,
     version: LuaVersion,
 }
 
+impl CandidateScanner {
+    fn open_declaration(&mut self, name: &str) {
+        self.open_declarations.insert(name.into());
+        self.opened_in_scope.push(name.into());
+    }
+
+    /// Closes every declaration opened since `opened_in_scope` was
+    /// `scope_start` long.
+    fn close_scope(&mut self, scope_start: usize) {
+        for name in self.opened_in_scope.drain(scope_start..) {
+            self.open_declarations.remove(&name);
+        }
+    }
+
+    fn shadow(&mut self, name: &str) {
+        self.shadowed_names.insert(name.into());
+    }
+
+    /// A candidate is removed, so a write to its name would land on a global.
+    fn shadow_write_target(&mut self, target: &Var) {
+        if let Var::Name(name) = target {
+            self.shadow(identifier_name(name));
+        }
+    }
+}
+
 impl<'ast> Visitor<'ast> for CandidateScanner {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_block(&mut self, block: &'ast Block) {
+        let scope_start = self.opened_in_scope.len();
+        self.walk_block(block);
+        self.close_scope(scope_start);
+    }
+
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalAssignment(local) => {
                 if has_fixed_binding(local, self.version) {
                     for attributed in local.names.iter() {
                         self.shadowed_names.insert(identifier_name(&attributed.name).into());
                     }
-                    self.walk_statement(stmt);
+                    self.walk_stmt(stmt);
                     return;
                 }
                 let initializers = local.exprs.as_ref().map(|exprs| exprs.items.as_slice());
@@ -116,6 +158,7 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
                         self.declared_names.insert(name.into());
                         if is_closed_literal_expr(expr) {
                             self.declarations.insert(name.into(), expr.clone());
+                            self.open_declaration(name);
                         }
                     }
                 } else {
@@ -138,42 +181,74 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
                     self.shadowed_names.insert(identifier_name(&param.name).into());
                 }
             }
-            // These bind no local. `walk_statement` below still descends into
+            Statement::RepeatLoop(repeat_loop) => {
+                // `until` reads the body's locals, so its scope closes after it.
+                let scope_start = self.opened_in_scope.len();
+                self.walk_block(&repeat_loop.block);
+                self.visit_expr(&repeat_loop.condition);
+                self.close_scope(scope_start);
+                return;
+            }
+            Statement::Assignment(assignment) => {
+                for target in assignment.targets.iter() {
+                    self.shadow_write_target(target);
+                }
+            }
+            // Luau
+            Statement::CompoundAssignment(compound) => self.shadow_write_target(&compound.var),
+            // `function x()` writes `x`, and `function x.y()` indexes it.
+            Statement::FunctionDecl(function_decl) => {
+                if let Some(root) = function_decl.name.names.first() {
+                    self.shadow(identifier_name(root));
+                }
+            }
+            // Lua 5.5
+            Statement::GlobalFunction(global_function) => {
+                self.shadow(identifier_name(&global_function.name));
+            }
+            // Lua 5.5
+            Statement::GlobalDeclaration(global) => {
+                for attributed in global.names.iter() {
+                    self.shadow(identifier_name(&attributed.name));
+                }
+            }
+            // These bind no local. `walk_stmt` below still descends into
             // nested blocks.
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
+            Statement::FunctionCall(_)
             | Statement::DoBlock(_)
             | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
             | Statement::IfStatement(_)
-            | Statement::FunctionDecl(_)
-            | Statement::GlobalFunction(_)
             | Statement::EmptyStatement(_)
             | Statement::Goto(_)
             | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
             | Statement::GlobalStar(_)
             | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
         }
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 
     fn visit_function_body(&mut self, body: &'ast FunctionBody) {
         for param in body.params.iter() {
-            self.shadowed_names.insert(identifier_name(&param.name).into());
+            self.shadow(identifier_name(&param.name));
+        }
+        // Lua 5.5
+        if let Some(vararg_name) = body.vararg.as_ref().and_then(|vararg| vararg.name.as_ref()) {
+            self.shadow(identifier_name(vararg_name));
         }
         self.walk_function_body(body);
     }
 
     fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(name) = var {
-            if let Some(count) = self.reference_counts.get_mut(identifier_name(name)) {
+        if let Var::Name(token) = var {
+            let name = identifier_name(token);
+            if !self.open_declarations.contains(name) {
+                self.shadow(name);
+            } else if let Some(count) = self.reference_counts.get_mut(name) {
                 *count = count.saturating_add(1);
             } else {
-                self.reference_counts.insert(identifier_name(name).into(), 1);
+                self.reference_counts.insert(name.into(), 1);
             }
         }
         self.walk_var(var);
@@ -190,23 +265,23 @@ impl Transform for Inliner {
             .stmts
             .into_iter()
             .filter_map(|stmt| {
-                let transformed = self.transform_statement(stmt);
+                let transformed = self.transform_stmt(stmt);
                 (!self.is_inlined_declaration(&transformed)).then_some(transformed)
             })
             .collect();
 
         let last_stmt = block.last_stmt.map(|mut last| {
-            *last = self.transform_last_statement(*last);
+            *last = self.transform_last_stmt(*last);
             last
         });
 
         Block { span: block.span, stmts, last_stmt }
     }
 
-    fn transform_statement(&mut self, stmt: Statement) -> Statement {
-        let walked = self.walk_statement(stmt);
+    fn transform_stmt(&mut self, stmt: Statement) -> Statement {
+        let walked = self.walk_stmt(stmt);
         // A call statement holds its `FunctionCall` outside any `Expression`,
-        // so `transform_expression` never guards its callee.
+        // so `transform_expr` never guards its callee.
         if let Statement::FunctionCall(mut call_stmt) = walked {
             call_stmt.callee = ensure_prefix(call_stmt.callee);
             return Statement::FunctionCall(call_stmt);
@@ -228,18 +303,16 @@ impl Transform for Inliner {
         }
     }
 
-    fn transform_expression(&mut self, mut expr: Expression) -> Expression {
+    fn transform_expr(&mut self, mut expr: Expression) -> Expression {
         self.inline_operands(&mut expr);
-        let walked = self.walk_expression(expr);
+        let walked = self.walk_expr(expr);
         if let Expression::FunctionCall(mut call) = walked {
             call.callee = ensure_prefix(call.callee);
             return Expression::FunctionCall(call);
         }
-        // Luau: a chained `f<<T>><<U>>` is already a valid prefix.
+        // Luau
         if let Expression::TypeInstantiation(mut instantiation) = walked {
-            if !matches!(instantiation.expr, Expression::TypeInstantiation(_)) {
-                instantiation.expr = ensure_prefix(instantiation.expr);
-            }
+            instantiation.expr = ensure_prefix(instantiation.expr);
             return Expression::TypeInstantiation(instantiation);
         }
         if let Expression::Var(Var::Name(name)) = &walked
@@ -253,17 +326,9 @@ impl Transform for Inliner {
 
 /// Parenthesizes an inlined literal that landed in a prefix position.
 ///
-/// Prefix positions (index and field prefixes, callees, type instantiations)
-/// only take vars, calls, and parenthesized expressions, so `x["k"]` with
-/// `x = 37.5` has to become `(37.5)["k"]`.
+/// `x["k"]` with `x = 37.5` has to become `(37.5)["k"]`.
 fn ensure_prefix(expr: Expression) -> Expression {
-    if matches!(
-        expr,
-        Expression::Var(_) | Expression::FunctionCall(_) | Expression::Parenthesized(_)
-    ) {
-        return expr;
-    }
-    parenthesize(expr)
+    if is_prefix_expr(&expr) { expr } else { parenthesize(expr) }
 }
 
 #[derive(Clone, Copy)]
@@ -520,11 +585,22 @@ mod tests {
 
     #[test]
     fn leaves_chained_type_instantiation_unwrapped() {
-        // The instantiation guard must not parenthesize a chain that is already
-        // a valid prefix, whether the chain sits on a var or an inlined prefix.
+        // A chain is already a valid prefix, whether it sits on a var or an
+        // inlined prefix.
         for (source, expected) in [
             ("local s = 1\nprint(s)\nreturn f<<T>><<U>>\n", "print(1)return f<<T>><<U>>"),
             ("local s = (\"x\")<<T>>\nreturn s<<U>>\n", "return(\"x\")<<T>><<U>>"),
+        ] {
+            assert_eq!(apply_luau_reparsing(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn leaves_type_instantiation_prefixes_unwrapped() {
+        for (source, expected) in [
+            ("local s = 1\nprint(s)\nreturn f<<T>>(x)\n", "print(1)return f<<T>>(x)"),
+            ("local s = 1\nprint(s)\nreturn f<<T>>.y\n", "print(1)return f<<T>>.y"),
+            ("local s = 1\nprint(s)\nf<<T>>(x)\n", "print(1)f<<T>>(x)"),
         ] {
             assert_eq!(apply_luau_reparsing(source), expected, "source: {source}");
         }
@@ -580,7 +656,7 @@ mod tests {
     }
 
     #[test]
-    fn leaves_inlined_expression_bare_where_its_grouping_holds() {
+    fn leaves_inlined_expr_bare_where_its_grouping_holds() {
         assert_inlines(&[
             ("local s = 1 + 2\nreturn s\n", "return 1+2"),
             ("local s = 1 + 2\nprint(s)\n", "print(1+2)"),
@@ -603,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn parenthesizes_expression_inlined_under_a_cast() {
+    fn parenthesizes_expr_inlined_under_a_cast() {
         // `::` binds to a simple expression and doesn't chain.
         for (source, expected) in [
             ("local s = 1 + 2\nreturn s :: any\n", "return(1+2)::any"),
@@ -649,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn parenthesizes_literal_inlined_into_statement_call_receiver() {
+    fn parenthesizes_literal_inlined_into_stmt_call_receiver() {
         let result = apply("local x = false\nx:resize(9)\n");
         assert!(
             result.contains("(false):resize(9)"),
@@ -702,6 +778,63 @@ mod tests {
         // TypeCast is transparent, and the inner variable read is impure.
         let result = apply_version("local x = foo :: Bar\nreturn x\n", LuaVersion::Luau);
         assert!(result.contains("local"), "TypeCast with var read should not be inlined: {result}");
+    }
+
+    #[test]
+    fn no_inline_over_a_read_outside_the_declaration_scope() {
+        for source in [
+            "print(x)\nlocal x = 1\n",
+            "local function g() return x end\nlocal x = 1\nprint(g())\n",
+            "do local x = 1 end\nprint(x)\n",
+            "for i = 1, 1 do\n  print(x)\n  local x = 2\nend\n",
+        ] {
+            let result = apply(source);
+            assert!(
+                result.contains("print(x)") || result.contains("return x"),
+                "{source}: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn inlines_reads_inside_the_declaration_scope() {
+        assert_inlines(&[
+            ("local x = 1\nprint(x)\n", "print(1)"),
+            ("local x = 1\nlocal function f() return x end\n", "local function f()return 1 end"),
+            ("if c then\n  local x = 1\n  print(x)\nend\n", "if c then print(1)end"),
+            ("do\n  local x = 1\n  do print(x) end\nend\n", "do do print(1)end end"),
+            ("repeat\n  local x = 1\nuntil x == y\n", "repeat until 1==y"),
+            ("repeat\n  local x = 1\n  repeat until x\nuntil z\n", "repeat repeat until 1 until z"),
+        ]);
+    }
+
+    #[test]
+    fn no_inline_over_a_write_to_the_name() {
+        for source in [
+            "local x = 1\nx = 2\n",
+            "local x = 1\nfunction x() end\nprint(x)\n",
+            "local x = \"s\"\nfunction x.f() end\nprint(x)\n",
+        ] {
+            let result = apply(source);
+            assert!(result.contains("local x"), "{source}: {result}");
+        }
+        let compound = apply_version("local x = 1\nx += 2\n", LuaVersion::Luau);
+        assert!(compound.contains("local x"), "{compound}");
+    }
+
+    #[test]
+    fn no_inline_over_lua55_bindings() {
+        for source in [
+            "local args = 1\nlocal function f(...args) return args end\n",
+            "local x = 1\nglobal x\nprint(x)\n",
+            "local x = 1\nglobal function x() end\nprint(x)\n",
+        ] {
+            let result = apply_version(source, LuaVersion::Lua55);
+            assert!(
+                result.contains("local args") || result.contains("local x"),
+                "{source}: {result}"
+            );
+        }
     }
 
     #[test]

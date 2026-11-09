@@ -57,8 +57,8 @@ impl FileCache {
     }
 }
 
-/// A path that isn't in the [`FileCache`]. ariadne prints it to stderr with
-/// `Debug`.
+/// A path that isn't in the [`FileCache`]. ariadne would print it to stderr
+/// with `Debug`, so `write_diags` never hands it a diagnostic in such a file.
 struct CacheMiss(String);
 
 impl fmt::Debug for CacheMiss {
@@ -76,15 +76,6 @@ impl ariadne::Cache<&str> for FileCache {
 
     fn display<'id>(&self, id: &'id &str) -> Option<impl fmt::Display + 'id> {
         Some(*id)
-    }
-}
-
-/// The lowercase name of a severity, as JSON output and compact rendering
-/// spell it.
-pub(crate) const fn severity_label(severity: DiagnosticSeverity) -> &'static str {
-    match severity {
-        DiagnosticSeverity::Error => "error",
-        DiagnosticSeverity::Warning => "warning",
     }
 }
 
@@ -129,10 +120,11 @@ pub(crate) fn render_source_errors(
 }
 
 /// Writes each diagnostic with ariadne's pretty-printer, or a compact
-/// fallback when its source line is pathologically long.
+/// fallback when its file couldn't be read or its source line is
+/// pathologically long.
 fn write_diags(diags: &[Diagnostic], cache: &mut FileCache, output: &mut impl Write) {
     for diag in diags {
-        if is_line_too_long(diag, cache) {
+        if !cache.sources.contains_key(&diag.file_path) || is_line_too_long(diag, cache) {
             write_compact(diag, output);
         } else {
             // A failed write has nowhere to be reported.
@@ -162,14 +154,15 @@ fn build_report(diag: &Diagnostic) -> Report<'_, (&str, Range<usize>)> {
     builder.finish()
 }
 
-/// Writes a one-line diagnostic with no source snippet, the fallback for a
-/// line too long for ariadne.
+/// Writes a diagnostic with no source snippet, the fallback when ariadne
+/// can't render one.
 fn write_compact(diag: &Diagnostic, output: &mut impl Write) {
+    let help_line = diag.help.as_ref().map_or_else(String::new, |help| format!("\nhelp: {help}"));
     let _unused = writeln!(
         output,
-        "[{}] {}: {} ({}: byte {})",
+        "[{}] {}: {} ({}: byte {}){help_line}",
         diag.code,
-        severity_label(diag.severity),
+        diag.severity.name(),
         diag.message,
         diag.file_path,
         diag.span.start
@@ -226,6 +219,19 @@ mod tests {
         assert_eq!(
             text,
             format!("[E008] error: parse error: boom (big.lua: byte {offset})\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn uncached_file_uses_compact_rendering_with_its_help() {
+        let diag = Diagnostic::e010("gone.lua", Span::default(), "no such file");
+        let rendered = render_document_diags("other.lua".to_owned(), String::new(), &[diag]);
+        let text = String::from_utf8(rendered).unwrap();
+        assert_eq!(
+            text,
+            "[E010] error: cannot read file `gone.lua`: no such file (gone.lua: byte 0)\n\
+             help: check that the file exists and is readable\n",
             "{text}"
         );
     }

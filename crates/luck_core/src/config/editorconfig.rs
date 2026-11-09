@@ -176,8 +176,9 @@ mod tests {
     }
 
     #[test]
-    fn no_editorconfig_yields_all_none() {
+    fn editorconfig_that_sets_nothing_yields_all_none() {
         let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join(".editorconfig"), "root = true\n").expect("write");
         let config = format_config_for(&directory.path().join("main.lua"));
         assert!(config.indent_style.is_none());
         assert!(config.indent_width.is_none());
@@ -209,7 +210,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join(".editorconfig"),
-            "# comment\n; also comment\n\n[*.lua]\n\nindent_size = 5 # inline kept as value? no\n",
+            "root = true\n# comment\n; also comment\n\n[*.lua]\n\nindent_size = 5 # inline kept as value? no\n",
         )
         .expect("write");
         // The inline `# ...` is part of the value, and `5 # ...` doesn't

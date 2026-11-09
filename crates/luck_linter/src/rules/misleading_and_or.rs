@@ -1,40 +1,28 @@
 use luck_ast::Expression;
 use luck_token::BinOp;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags the `(cond and a) or b` ternary idiom when `a` is a literal `false`
 /// or `nil`, which makes it always evaluate to `b`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MisleadingAndOr;
 
-impl Rule for MisleadingAndOr {
-    fn name(&self) -> &'static str {
-        "misleading_and_or"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "`and`/`or` ternary with a falsy middle operand always returns the right-hand value"
-    }
-}
+impl_rule!(
+    MisleadingAndOr,
+    "misleading_and_or",
+    Correctness,
+    Warning,
+    "`and`/`or` ternary with a falsy middle operand always returns the right-hand value"
+);
 
 impl NodeRule for MisleadingAndOr {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Expression::BinaryOp(outer) = expr
             && outer.op == BinOp::Or
         {

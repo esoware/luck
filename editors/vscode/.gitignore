@@ -9,9 +9,6 @@ node_modules/
 # packaged extensions
 *.vsix
 
-# vscode test infrastructure
-.vscode-test/
-
 # bundled server binaries, produced by CI
 server/
 

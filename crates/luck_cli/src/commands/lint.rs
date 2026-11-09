@@ -12,7 +12,7 @@ use luck_linter::{Category, LintConfig, LintDiagnostic, RuleSetting, Severity};
 use crate::exit::{Exit, usage_error};
 use crate::output::read_stdin_source;
 use crate::project::{outcomes_in_order, project_files, resolve_project};
-use crate::render::{render_document_diags, severity_label};
+use crate::render::render_document_diags;
 use crate::verbosity::Verbosity;
 
 #[derive(Clone, ValueEnum)]
@@ -248,7 +248,7 @@ impl LintArgs {
                     error_count: 1,
                     warning_count: 0,
                     is_fixed: false,
-                    note: Some(format!("Error: cannot read `{}`: {error}", file_path.display())),
+                    note: Some(format!("error: cannot read `{}`: {error}", file_path.display())),
                     rendered: None,
                 };
             }
@@ -264,7 +264,7 @@ impl LintArgs {
                 luck_linter::apply_fixes(&current_source, &diags, target.lua_version());
             if fixed_source != current_source {
                 if let Err(error) = fs::write(file_path, &fixed_source) {
-                    note = Some(format!("Error: cannot write `{}`: {error}", file_path.display()));
+                    note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
                 } else {
                     is_fixed = true;
                     diags = luck_linter::lint_target(&fixed_source, target, lint_config);
@@ -291,7 +291,7 @@ impl LintArgs {
                         severity: diag.severity,
                         file_path: file_label.to_owned(),
                         span: diag.span,
-                        help: None,
+                        help: diag.help.clone(),
                     })
                     .collect();
                 Rendered::Pretty(render_document_diags(
@@ -306,8 +306,9 @@ impl LintArgs {
                     let json_value = serde_json::json!({
                         "file": file_label,
                         "rule": diag.rule,
-                        "severity": severity_label(diag.severity),
+                        "severity": diag.severity.name(),
                         "message": diag.message,
+                        "help": diag.help,
                         "start": diag.span.start,
                         "end": diag.span.end,
                     });
@@ -397,7 +398,7 @@ fn print_lint_config(lint_config: &LintConfig) {
         .map(|(name, setting)| {
             let entry = serde_json::json!({
                 "enabled": setting.enabled,
-                "severity": setting.severity.map(severity_label),
+                "severity": setting.severity.map(Severity::name),
             });
             (name.clone(), entry)
         })

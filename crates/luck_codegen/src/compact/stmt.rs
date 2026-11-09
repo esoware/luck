@@ -19,21 +19,21 @@ impl CompactPrinter {
             if index > 0 && stmt_starts_with_paren(stmt) && self.previous != PieceClass::Semicolon {
                 self.emit_fixed(";");
             }
-            self.emit_statement(stmt);
+            self.emit_stmt(stmt);
         }
         if let Some(last) = &block.last_stmt {
-            self.emit_last_statement(last);
+            self.emit_last_stmt(last);
         }
     }
 
-    fn emit_statement(&mut self, stmt: &Statement) {
+    fn emit_stmt(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Assignment(assignment) => self.emit_assignment(assignment),
             Statement::FunctionCall(call) => self.emit_function_call(call),
             Statement::DoBlock(block) => self.emit_do_block(block),
             Statement::WhileLoop(while_loop) => self.emit_while_loop(while_loop),
             Statement::RepeatLoop(repeat_loop) => self.emit_repeat_loop(repeat_loop),
-            Statement::IfStatement(if_stmt) => self.emit_if_statement(if_stmt),
+            Statement::IfStatement(if_stmt) => self.emit_if_stmt(if_stmt),
             Statement::NumericFor(numeric_for) => self.emit_numeric_for(numeric_for),
             Statement::GenericFor(generic_for) => self.emit_generic_for(generic_for),
             Statement::FunctionDecl(declaration) => self.emit_function_declaration(declaration),
@@ -60,7 +60,7 @@ impl CompactPrinter {
         }
     }
 
-    fn emit_last_statement(&mut self, stmt: &LastStatement) {
+    fn emit_last_stmt(&mut self, stmt: &LastStatement) {
         match stmt {
             LastStatement::Return(return_stmt) => self.emit_return(return_stmt),
             LastStatement::Break(_) => self.emit_fixed("break"),
@@ -73,7 +73,7 @@ impl CompactPrinter {
     fn emit_assignment(&mut self, assignment: &Assignment) {
         self.emit_punctuated(&assignment.targets, ",", Self::emit_var);
         self.emit_fixed("=");
-        self.emit_punctuated(&assignment.values, ",", Self::emit_expression);
+        self.emit_punctuated(&assignment.values, ",", Self::emit_expr);
     }
 
     fn emit_do_block(&mut self, block: &DoBlock) {
@@ -84,7 +84,7 @@ impl CompactPrinter {
 
     fn emit_while_loop(&mut self, while_loop: &WhileLoop) {
         self.emit_fixed("while");
-        self.emit_expression(&while_loop.condition);
+        self.emit_expr(&while_loop.condition);
         self.emit_fixed("do");
         self.emit_block(&while_loop.block);
         self.emit_fixed("end");
@@ -94,17 +94,17 @@ impl CompactPrinter {
         self.emit_fixed("repeat");
         self.emit_block(&repeat_loop.block);
         self.emit_fixed("until");
-        self.emit_expression(&repeat_loop.condition);
+        self.emit_expr(&repeat_loop.condition);
     }
 
-    fn emit_if_statement(&mut self, if_stmt: &IfStatement) {
+    fn emit_if_stmt(&mut self, if_stmt: &IfStatement) {
         self.emit_fixed("if");
-        self.emit_expression(&if_stmt.condition);
+        self.emit_expr(&if_stmt.condition);
         self.emit_fixed("then");
         self.emit_block(&if_stmt.block);
         for clause in &if_stmt.elseif_clauses {
             self.emit_fixed("elseif");
-            self.emit_expression(&clause.condition);
+            self.emit_expr(&clause.condition);
             self.emit_fixed("then");
             self.emit_block(&clause.block);
         }
@@ -123,12 +123,12 @@ impl CompactPrinter {
             self.emit_type(ty);
         }
         self.emit_fixed("=");
-        self.emit_expression(&numeric_for.start);
+        self.emit_expr(&numeric_for.start);
         self.emit_fixed(",");
-        self.emit_expression(&numeric_for.limit);
+        self.emit_expr(&numeric_for.limit);
         if let Some(step) = &numeric_for.step {
             self.emit_fixed(",");
-            self.emit_expression(step);
+            self.emit_expr(step);
         }
         self.emit_fixed("do");
         self.emit_block(&numeric_for.block);
@@ -139,7 +139,7 @@ impl CompactPrinter {
         self.emit_fixed("for");
         self.emit_punctuated(&generic_for.names, ",", Self::emit_param);
         self.emit_fixed("in");
-        self.emit_punctuated(&generic_for.exprs, ",", Self::emit_expression);
+        self.emit_punctuated(&generic_for.exprs, ",", Self::emit_expr);
         self.emit_fixed("do");
         self.emit_block(&generic_for.block);
         self.emit_fixed("end");
@@ -158,12 +158,12 @@ impl CompactPrinter {
 
     fn emit_return(&mut self, return_stmt: &ReturnStatement) {
         self.emit_fixed("return");
-        self.emit_punctuated(&return_stmt.exprs, ",", Self::emit_expression);
+        self.emit_punctuated(&return_stmt.exprs, ",", Self::emit_expr);
     }
 
     fn emit_compound_assignment(&mut self, compound: &CompoundAssignment) {
         self.emit_var(&compound.var);
         self.emit_fixed(compound.op.static_text());
-        self.emit_expression(&compound.expr);
+        self.emit_expr(&compound.expr);
     }
 }

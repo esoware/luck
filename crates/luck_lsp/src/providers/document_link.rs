@@ -76,11 +76,11 @@ struct LinkCollector<'document> {
 }
 
 impl<'ast> Visitor<'ast> for LinkCollector<'_> {
-    fn visit_expression(&mut self, expr: &'ast Expression) {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
         if let Expression::FunctionCall(call) = expr {
             self.try_record(call);
         }
-        self.walk_expression(expr);
+        self.walk_expr(expr);
     }
 }
 
@@ -138,6 +138,7 @@ mod tests {
     use std::fs;
 
     use luck_core::LuaTarget;
+    use rustc_hash::FxHashSet;
 
     use super::*;
 
@@ -155,12 +156,36 @@ mod tests {
 
         let settings = ProjectSettings::default();
         assert!(settings.root.is_none(), "the fallback needs no project root");
-        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
 
         let links = document_links(&document, &uri, &settings);
         assert_eq!(links.len(), 1, "{links:?}");
         let target = links[0].target.as_ref().expect("link target");
         assert!(target.path().ends_with("foo.lua"), "{target}");
+    }
+
+    #[test]
+    fn empty_search_paths_link_like_a_build() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("dep.lua"), "return {}\n").expect("write dep.lua");
+        let main_path = directory.path().join("main.lua");
+        let text = "local dep = require(\"dep\")\n";
+        fs::write(&main_path, text).expect("write main.lua");
+        let uri = Url::from_file_path(&main_path).expect("file path URI");
+
+        let settings = ProjectSettings {
+            search_paths: Vec::new(),
+            root: Some(directory.path().to_path_buf()),
+            ..ProjectSettings::default()
+        };
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+
+        let links = document_links(&document, &uri, &settings);
+        assert_eq!(links.len(), 1, "{links:?}");
+        let target = links[0].target.as_ref().expect("link target");
+        assert!(target.path().ends_with("dep.lua"), "{target}");
     }
 
     #[test]
@@ -172,7 +197,8 @@ mod tests {
         fs::write(&main_path, text).expect("write main.lua");
         let uri = Url::from_file_path(&main_path).expect("file path URI");
         let settings = ProjectSettings::default();
-        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
 
         // Both ends of the string count.
         for utf16_column in [20, 25] {

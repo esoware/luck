@@ -1,9 +1,9 @@
 use luck_ast::Expression;
 use luck_token::BinOp;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags `/`, `%`, and `//` with a literal zero divisor.
 ///
@@ -13,31 +13,19 @@ use crate::rule::{LintContext, NodeRule, Rule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DivideByZero;
 
-impl Rule for DivideByZero {
-    fn name(&self) -> &'static str {
-        "divide_by_zero"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "literal division or modulo by zero"
-    }
-}
+impl_rule!(
+    DivideByZero,
+    "divide_by_zero",
+    Correctness,
+    Warning,
+    "literal division or modulo by zero"
+);
 
 impl NodeRule for DivideByZero {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Expression::BinaryOp(binary) = expr
             && let Some(op_name) = divisive_op_name(binary.op)
             && is_zero_literal(&binary.right)

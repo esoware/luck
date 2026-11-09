@@ -37,7 +37,7 @@ A `Block` is the fundamental unit: a sequence of `Statement`s followed by an opt
 
 ### Types
 
-The Luau type grammar lives in `types.rs` as its own `Type` node family, held to the same 64-byte budget as `Expression` and `Statement`. `Type` covers named and generic references (`Name`, `module.Name`, `Name<args>`), table types, function types, unions and intersections, postfix optionals (`T?`), literal singletons, `typeof(expr)`, parenthesized types, explicit type packs (`(T, U)`), and variadic (`...T`) / generic (`T...`) pack elements. `Visitor` and `Transform` carry matching `visit_type` / `transform_type` methods (with `walk_type` recursion), and `Synth` builds these nodes too. Type nodes appear only in Luau sources, and the parser gates them on `LuaVersion::is_luau`.
+The Luau type grammar lives in `types.rs` as its own `Type` node family, held to the same 64-byte budget as `Expression` and `Statement`. `Type` covers named and generic references (`Name`, `module.Name`, `Name<args>`), table types, function types, unions and intersections, postfix optionals (`T?`), literal singletons, `typeof(expr)`, parenthesized types, explicit type packs (`(T, U)`), and variadic (`...T`) / generic (`T...`) pack elements. `Visitor` and `Transform` carry matching `visit_type` / `transform_type` methods (with `walk_type` recursion), and `Synth` builds these nodes too. Type nodes appear only in Luau sources, and the parser gates them on `LuaVersion::has_type_syntax`.
 
 ### Traversal
 

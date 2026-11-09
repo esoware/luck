@@ -675,6 +675,20 @@ mod tests {
     }
 
     #[test]
+    fn named_vararg_binds_its_name_in_the_body() {
+        assert_lua55_renames(&[
+            (
+                "local args = f()\nlocal function g(...args) return args end\nreturn args, g\n",
+                "local l=f()local function u(...l)return l end return l,u",
+            ),
+            (
+                "local function g(a, ...rest) return rest, a end\nreturn g\n",
+                "local function l(l,...u)return u,l end return l",
+            ),
+        ]);
+    }
+
+    #[test]
     fn unreferenced_param_never_captures_live_upvalue() {
         // An unreferenced param must not get the name of an upvalue read in
         // the body, which would capture it.

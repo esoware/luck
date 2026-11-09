@@ -1,6 +1,4 @@
-use luck_ast::{
-    Block, Expression, FunctionArgs, FunctionCall, Transform, Var, is_prefix_expression,
-};
+use luck_ast::{Block, Expression, FunctionArgs, FunctionCall, Transform, Var, is_prefix_expr};
 
 use crate::expr::{can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, parenthesize};
 
@@ -18,7 +16,7 @@ impl ParenSimplifier {
     fn transform_prefix(&mut self, prefix: Expression) -> Expression {
         match prefix {
             Expression::Parenthesized(paren) => {
-                let transformed = self.transform_expression(paren.expr);
+                let transformed = self.transform_expr(paren.expr);
                 parenthesize(transformed)
             }
             other @ (Expression::Nil(_)
@@ -38,14 +36,14 @@ impl ParenSimplifier {
             | Expression::InterpolatedString(_)
             | Expression::TypeCast(_)
             | Expression::TypeInstantiation(_)
-            | Expression::Error(_)) => self.transform_expression(other),
+            | Expression::Error(_)) => self.transform_expr(other),
         }
     }
 }
 
 impl Transform for ParenSimplifier {
-    fn transform_expression(&mut self, expr: Expression) -> Expression {
-        match self.walk_expression(expr) {
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        match self.walk_expr(expr) {
             Expression::Parenthesized(paren) => {
                 if can_remove_parens(&paren.expr) {
                     paren.expr
@@ -83,7 +81,7 @@ impl Transform for ParenSimplifier {
             // Luau: the walk stripped these parens, but `{}<<T>>` doesn't
             // parse, so anything that isn't a valid prefix gets them back.
             Expression::TypeInstantiation(mut instantiation) => {
-                if !is_prefix_expression(&instantiation.expr) {
+                if !is_prefix_expr(&instantiation.expr) {
                     instantiation.expr = parenthesize(instantiation.expr);
                 }
                 Expression::TypeInstantiation(instantiation)
@@ -158,7 +156,7 @@ impl Transform for ParenSimplifier {
             }
             Var::Index(mut index_expr) => {
                 index_expr.prefix = self.transform_prefix(index_expr.prefix);
-                index_expr.index = self.transform_expression(index_expr.index);
+                index_expr.index = self.transform_expr(index_expr.index);
                 Var::Index(index_expr)
             }
             name @ Var::Name(_) => self.walk_var(name),

@@ -66,7 +66,7 @@ fn compound_assign_all_operators() {
 }
 
 #[test]
-fn if_expression_simple() {
+fn if_expr_simple() {
     let result = parse_luau("local x = if a then 1 else 2");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
@@ -78,7 +78,7 @@ fn if_expression_simple() {
 }
 
 #[test]
-fn if_expression_with_elseif() {
+fn if_expr_with_elseif() {
     let result = parse_luau("local y = if a then b elseif c then d else e");
     assert_no_errors(&result);
     let expr = local_value(&result);
@@ -90,7 +90,7 @@ fn if_expression_with_elseif() {
 }
 
 #[test]
-fn if_expression_nested() {
+fn if_expr_nested() {
     let result = parse_luau("local z = if a then if b then 1 else 2 else 3");
     assert_no_errors(&result);
     let expr = local_value(&result);
@@ -110,7 +110,7 @@ fn interpolated_string_plain() {
 }
 
 #[test]
-fn interpolated_string_with_expression() {
+fn interpolated_string_with_expr() {
     let result = parse_luau("local x = `{y}`");
     assert_no_errors(&result);
     let expr = local_value(&result);
@@ -125,7 +125,7 @@ fn interpolated_string_with_expression() {
 }
 
 #[test]
-fn interpolated_string_multiple_expressions() {
+fn interpolated_string_multiple_exprs() {
     let result = parse_luau("local x = `a{1+2}b{3}c`");
     assert_no_errors(&result);
     let expr = local_value(&result);
@@ -163,7 +163,7 @@ fn local_with_generic_type() {
 }
 
 #[test]
-fn type_cast_expression() {
+fn type_cast_expr() {
     let result = parse_luau("local x = y :: number");
     assert_no_errors(&result);
     let expr = local_value(&result);
@@ -297,14 +297,14 @@ fn continue_in_while_loop() {
 }
 
 #[test]
-fn if_at_statement_start_is_an_if_statement() {
+fn if_at_stmt_start_is_an_if_stmt() {
     let result = parse_luau("if true then x = 1 end");
     assert_no_errors(&result);
     assert!(matches!(&result.block.stmts[0], Statement::IfStatement(_)));
 }
 
 #[test]
-fn break_is_a_last_statement_in_luau() {
+fn break_is_a_last_stmt_in_luau() {
     // Luau keeps 5.1's `laststat` grammar (extended with `continue`):
     // break is a last statement, not a free-standing one.
     let result = parse_luau("while true do break end");
@@ -349,7 +349,7 @@ fn continue_as_field_access() {
 }
 
 #[test]
-fn nested_interpolated_string_statement_is_an_error() {
+fn nested_interpolated_string_stmt_is_an_error() {
     // A bare string isn't a statement, so this has to report errors, and the
     // nesting mustn't make the parser panic.
     let source = "`outer{`inner{x}`}`";
@@ -478,7 +478,7 @@ fn bracketed_and_parameterized_attributes() {
 }
 
 #[test]
-fn attributes_on_function_expressions() {
+fn attributes_on_function_exprs() {
     // simpleexp ::= attributes 'function' funcbody
     assert_no_errors(&parse_luau("local k = @native function() end"));
     assert_no_errors(&parse_luau("f(@checked function() end)"));

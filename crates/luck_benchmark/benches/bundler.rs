@@ -6,6 +6,7 @@
 use luck_benchmark::{
     BenchmarkId, Criterion, bundle_project_root, criterion_group, criterion_main,
 };
+use luck_bundler::BundleOptions;
 use luck_core::DynamicRequire;
 use luck_token::LuaVersion;
 
@@ -16,10 +17,12 @@ fn bench_bundler(criterion: &mut Criterion) {
     let bundle = || {
         luck_bundler::bundle(
             &entry_path,
-            LuaVersion::Lua54,
-            &search_paths,
-            &root,
-            DynamicRequire::default(),
+            &BundleOptions {
+                version: LuaVersion::Lua54,
+                search_paths: &search_paths,
+                project_root: &root,
+                dynamic_require: DynamicRequire::default(),
+            },
         )
     };
     let bundled = bundle();

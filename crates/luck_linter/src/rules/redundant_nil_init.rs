@@ -1,41 +1,29 @@
 use luck_ast::{Expression, LocalAssignment, Statement, is_multi_value};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags `nil` initializers on locals, as in `local x = nil` or the trailing
 /// `nil` in `local a, b = 1, nil`, since a local starts out `nil` anyway.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RedundantNilInit;
 
-impl Rule for RedundantNilInit {
-    fn name(&self) -> &'static str {
-        "redundant_nil_init"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "local variable initialized to `nil` (the default value)"
-    }
-}
+impl_rule!(
+    RedundantNilInit,
+    "redundant_nil_init",
+    Style,
+    Warning,
+    "local variable initialized to `nil` (the default value)"
+);
 
 impl NodeRule for RedundantNilInit {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::LocalAssignment])
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Statement::LocalAssignment(local) = stmt {
             findings.extend(check_local(local));
         }

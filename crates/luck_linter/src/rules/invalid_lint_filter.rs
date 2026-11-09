@@ -1,5 +1,5 @@
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 use crate::rules::{is_registered_rule_name, registered_rule_names};
 use crate::suggest::closest;
 use crate::suppression::{DirectiveRule, parse_directive};
@@ -9,20 +9,13 @@ use crate::suppression::{DirectiveRule, parse_directive};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct InvalidLintFilter;
 
-impl Rule for InvalidLintFilter {
-    fn name(&self) -> &'static str {
-        "invalid_lint_filter"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "lint directive names a rule that doesn't exist"
-    }
-}
+impl_rule!(
+    InvalidLintFilter,
+    "invalid_lint_filter",
+    Correctness,
+    Warning,
+    "lint directive names a rule that doesn't exist"
+);
 
 impl WholeRule for InvalidLintFilter {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

@@ -6,26 +6,22 @@ use std::path::Path;
 use clap::Args;
 use luck_core::LuaTarget;
 
-use crate::exit::{Exit, operation_error, usage_error};
+use crate::exit::{Exit, operation_error};
 
 #[derive(Args)]
 pub(crate) struct InitArgs {
     /// Lua target [default: Lua54].
     #[arg(short = 't', long = "target", value_name = "TARGET")]
-    target: Option<String>,
+    target: Option<LuaTarget>,
 }
 
 impl InitArgs {
     /// # Errors
     ///
-    /// Reports the failure and returns [`Exit::Usage`] on a bad target, and
-    /// [`Exit::Failure`] when `luck.json` exists or a scaffold file can't be
-    /// written.
+    /// Reports the failure and returns [`Exit::Failure`] when `luck.json`
+    /// exists or a scaffold file can't be written.
     pub(crate) fn run(self) -> Result<(), Exit> {
-        let target: LuaTarget = match self.target.as_deref() {
-            Some(name) => name.parse().map_err(usage_error)?,
-            None => LuaTarget::Lua54,
-        };
+        let target = self.target.unwrap_or(LuaTarget::Lua54);
 
         let config_path = Path::new("luck.json");
         if config_path.exists() {

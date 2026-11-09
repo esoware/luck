@@ -184,7 +184,7 @@ fn goto_into_local_scope_rejected() {
 }
 
 #[test]
-fn goto_trailing_labels_and_empty_statements() {
+fn goto_trailing_labels_and_empty_stmts() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         for source in [
             "",
@@ -219,4 +219,23 @@ fn continue_until_local_capture_rejected() {
         "repeat do continue end local found = f() until other",
         LuaVersion::Luau,
     ));
+}
+
+#[test]
+fn continue_until_reports_each_skipped_local_once() {
+    let errors = check(
+        "repeat if cond then continue end local found = true until found and found",
+        LuaVersion::Luau,
+    );
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].message.contains("`found`"), "{errors:?}");
+}
+
+#[test]
+fn continue_until_reports_every_distinct_skipped_local() {
+    let errors = check(
+        "repeat if cond then continue end local a = 1 local b = 2 until a and b and a",
+        LuaVersion::Luau,
+    );
+    assert_eq!(errors.len(), 2, "{errors:?}");
 }

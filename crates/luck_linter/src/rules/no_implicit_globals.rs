@@ -1,5 +1,5 @@
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags every read or write of a global, stdlib names like `print`
 /// included, unless it's listed in `extra_globals`.
@@ -9,20 +9,13 @@ use crate::rule::{LintContext, Rule, WholeRule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NoImplicitGlobals;
 
-impl Rule for NoImplicitGlobals {
-    fn name(&self) -> &'static str {
-        "no_implicit_globals"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "implicit global reference, including standard-library globals"
-    }
-}
+impl_rule!(
+    NoImplicitGlobals,
+    "no_implicit_globals",
+    Style,
+    Warning,
+    "implicit global reference, including standard-library globals"
+);
 
 impl WholeRule for NoImplicitGlobals {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

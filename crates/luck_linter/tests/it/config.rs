@@ -2,7 +2,8 @@
 
 use luck_core::LuaTarget;
 use luck_linter::{
-    Category, LintConfig, LintDiagnostic, RuleSetting, lint, lint_target, unknown_rule_names,
+    Category, LintConfig, LintDiagnostic, RuleSetting, lint, lint_analyzed, lint_target,
+    unknown_rule_names,
 };
 use luck_token::LuaVersion;
 
@@ -26,6 +27,28 @@ fn lint_target_distinguishes_luau_flavors() {
     );
     let roblox_diags = lint_target("print(game)", LuaTarget::LuauRoblox, &LintConfig::default());
     assert!(roblox_diags.iter().all(|diag| diag.rule != "undefined_variable"));
+}
+
+#[test]
+fn lint_analyzed_reads_extra_globals_from_the_given_analysis() {
+    let parse = luck_parser::parse("return vim", LuaVersion::Lua54);
+    let mut semantic = luck_semantic::analyze(&parse.block, LuaVersion::Lua54);
+    let config = LintConfig::default();
+    let flagged = lint_analyzed(&parse, &semantic, &config);
+    assert!(flagged.iter().any(|diag| diag.rule == "undefined_variable"), "{flagged:?}");
+
+    semantic.extra_globals.insert("vim".to_owned());
+    let quiet = lint_analyzed(&parse, &semantic, &config);
+    assert!(quiet.iter().all(|diag| diag.rule != "undefined_variable"), "{quiet:?}");
+}
+
+#[test]
+fn lint_analyzed_reports_parse_errors_without_running_rules() {
+    let parse = luck_parser::parse("local x =", LuaVersion::Lua54);
+    let semantic = luck_semantic::analyze(&parse.block, LuaVersion::Lua54);
+    let diags = lint_analyzed(&parse, &semantic, &LintConfig::default());
+    assert!(!diags.is_empty(), "{diags:?}");
+    assert!(diags.iter().all(|diag| diag.rule == "parse_error"), "{diags:?}");
 }
 
 #[test]

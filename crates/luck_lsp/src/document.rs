@@ -8,6 +8,7 @@ use luck_linter::{LintConfig, LintDiagnostic};
 use luck_parser::ParseResult;
 use luck_semantic::SemanticAnalysis;
 use luck_token::{LuaVersion, Span};
+use rustc_hash::FxHashSet;
 use tower_lsp::lsp_types::{Position, Range, TextDocumentContentChangeEvent};
 
 use crate::line_index::LineIndex;
@@ -27,15 +28,23 @@ pub(crate) struct DocumentState {
 }
 
 impl DocumentState {
-    pub(crate) fn new(text: String, version: i32, target: LuaTarget) -> Self {
+    /// Parses and analyzes `text`, seeding the project's `extra_globals` so
+    /// the linter and rename read one analysis.
+    pub(crate) fn new(
+        text: String,
+        version: i32,
+        target: LuaTarget,
+        extra_globals: FxHashSet<String>,
+    ) -> Self {
         let lua_version = target.lua_version();
         let line_index = LineIndex::new(&text);
         let parsed = luck_parser::parse(text, lua_version);
-        let semantic = luck_semantic::analyze_with_environment(
+        let mut semantic = luck_semantic::analyze_with_environment(
             &parsed.block,
             lua_version,
             target.stdlib_environment(),
         );
+        semantic.extra_globals = extra_globals;
         Self { version, target, lua_version, parsed, semantic, line_index }
     }
 
@@ -65,7 +74,7 @@ impl DocumentState {
     }
 
     pub(crate) fn lint(&self, config: &LintConfig) -> Vec<LintDiagnostic> {
-        luck_linter::lint_parsed(&self.parsed, self.lua_version, self.semantic.environment, config)
+        luck_linter::lint_analyzed(&self.parsed, &self.semantic, config)
     }
 
     /// The text once `changes` are applied in order, or `None` when a range
@@ -114,6 +123,7 @@ mod tests {
             "local a = 1\nlocal b = 2\nlocal c = 3".to_owned(),
             1,
             LuaTarget::Lua54,
+            FxHashSet::default(),
         );
         // The first edit inserts a line, and the second edit's range is
         // expressed against the text the first one produced, so the line
@@ -134,7 +144,8 @@ mod tests {
 
     #[test]
     fn changed_text_refuses_an_inverted_range() {
-        let document = DocumentState::new("local a = 1".to_owned(), 1, LuaTarget::Lua54);
+        let document =
+            DocumentState::new("local a = 1".to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         let text = document
             .changed_text(vec![replace(Range::new(Position::new(0, 5), Position::new(0, 2)), "x")]);
         assert_eq!(text, None);

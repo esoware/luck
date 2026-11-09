@@ -14,12 +14,12 @@ enum LoopEnd {
     reason = "the generator is one type with its grammar split by file"
 )]
 impl FullGenerator {
-    pub(super) fn statement(&mut self) {
+    pub(super) fn stmt(&mut self) {
         let can_nest = self.stmt_depth < MAX_STMT_DEPTH;
         match self.rng.below(24) {
             20 if self.version.is_luau() => self.type_alias_stmt(),
             20 if self.version.has_global() => self.line("global sink"),
-            20 if self.version.has_empty_statement() => self.line(";"),
+            20 if self.version.has_empty_stmt() => self.line(";"),
             0..=4 | 20 => self.local_declaration(),
             10 if self.version.has_compound_assignment() => self.compound_assignment(),
             8..=10 => self.assignment(),
@@ -319,7 +319,7 @@ impl FullGenerator {
     pub(super) fn small_body(&mut self, budget: usize) {
         let statement_count = self.rng.one_through(budget);
         for _ in 0..statement_count {
-            self.statement();
+            self.stmt();
         }
     }
 }

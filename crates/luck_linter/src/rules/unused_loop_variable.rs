@@ -1,8 +1,8 @@
 use luck_semantic::SymbolKind;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags a `for` loop variable that's never read (Luacheck 213).
 ///
@@ -12,20 +12,13 @@ use crate::rule::{LintContext, Rule, WholeRule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnusedLoopVariable;
 
-impl Rule for UnusedLoopVariable {
-    fn name(&self) -> &'static str {
-        "unused_loop_variable"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "for-loop variable is declared but never read in the loop body"
-    }
-}
+impl_rule!(
+    UnusedLoopVariable,
+    "unused_loop_variable",
+    Style,
+    Warning,
+    "for-loop variable is declared but never read in the loop body"
+);
 
 impl WholeRule for UnusedLoopVariable {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

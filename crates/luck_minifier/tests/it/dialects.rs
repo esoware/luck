@@ -29,7 +29,7 @@ fn luau_type_declaration_survives_minification() {
 }
 
 #[test]
-fn luau_if_expression_survives_minification() {
+fn luau_if_expr_survives_minification() {
     let result = minify_luau("local x = if true then 1 else 2\nreturn x\n");
     assert!(result.contains("if"), "Got: {result}");
 }
@@ -143,4 +143,15 @@ return 1
 ",
     );
     assert!(!output.contains("plain comment"), "{output}");
+}
+
+#[test]
+fn lua55_named_vararg_keeps_its_binding_over_a_same_named_local() {
+    let source = "local args = 1\nlocal function f(...args) return args end\nprint(f(2, 3))\n";
+    let result = minify_with(source, LuaVersion::Lua55, &TransformConfig::default());
+    assert!(!result.contains("return 1"), "the vararg read must stay one: {result}");
+    let (vararg_name, returned) =
+        result.split_once("(...").and_then(|(_, rest)| rest.split_once(")return ")).expect(&result);
+    assert!(returned.starts_with(vararg_name), "{result}");
+    assert_eq!(minify_with(&result, LuaVersion::Lua55, &TransformConfig::default()), result);
 }

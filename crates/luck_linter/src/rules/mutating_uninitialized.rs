@@ -1,51 +1,35 @@
-use luck_ast::{Expression, Statement, Var, Visitor};
-use luck_semantic::ReferenceKind;
-
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
-use crate::uninitialized::{UninitializedLocals, first_reference};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::uninitialized::first_reference;
 
 /// Flags a field or index write on a local declared without a value, before
 /// anything assigns the local itself (Luacheck 341). `local x; x.foo = 1`
 /// indexes `nil`.
 ///
 /// The scope tree records the `x` in `x.foo = ...` as a plain read, so
-/// `MutationCollector` finds the reads that are write prefixes to tell them
-/// apart from `print(x)`.
+/// `UninitializedLocals` records the write prefixes to tell them apart from
+/// `print(x)`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MutatingUninitialized;
 
-impl Rule for MutatingUninitialized {
-    fn name(&self) -> &'static str {
-        "mutating_uninitialized"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "field or index assignment on an uninitialized local"
-    }
-}
+impl_rule!(
+    MutatingUninitialized,
+    "mutating_uninitialized",
+    Correctness,
+    Warning,
+    "field or index assignment on an uninitialized local"
+);
 
 impl WholeRule for MutatingUninitialized {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let tree = &context.semantic.scope_tree;
-        let mut collector = MutationCollector::default();
-        collector.visit_block(context.block);
+        let uninitialized_locals = context.uninitialized_locals;
         tree.symbols
             .iter()
-            .filter(|symbol| {
-                collector.uninitialized_locals.contains(symbol) && !symbol.name.starts_with('_')
-            })
+            .filter(|symbol| uninitialized_locals.contains(symbol) && !symbol.name.starts_with('_'))
             .filter_map(|symbol| {
                 let first = first_reference(symbol, tree)?;
-                // The scope tree records a field write's prefix as a `Read`.
-                let is_mutation = collector.field_write_prefix_starts.contains(&first.span.start)
-                    && first.kind == ReferenceKind::Read;
-                is_mutation.then(|| {
+                uninitialized_locals.is_field_write_prefix(first).then(|| {
                     Finding::new(
                         format!(
                             "field/index assignment on uninitialized `{}` (value is `nil`)",
@@ -57,64 +41,6 @@ impl WholeRule for MutatingUninitialized {
                 })
             })
             .collect()
-    }
-}
-
-/// Records the locals declared without a value, and where a bare name is the
-/// prefix of a field or index write (`x.foo = ...`, `x[k] = ...`).
-#[derive(Default)]
-struct MutationCollector {
-    uninitialized_locals: UninitializedLocals,
-    field_write_prefix_starts: Vec<u32>,
-}
-
-impl MutationCollector {
-    fn record_target(&mut self, var: &Var) {
-        let prefix = match var {
-            Var::Name(_) => return,
-            Var::FieldAccess(field_access) => &field_access.prefix,
-            Var::Index(index) => &index.prefix,
-        };
-        if let Expression::Var(Var::Name(token)) = prefix
-            && token.identifier().is_some()
-        {
-            self.field_write_prefix_starts.push(token.span.start);
-        }
-    }
-}
-
-impl<'ast> Visitor<'ast> for MutationCollector {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
-        self.uninitialized_locals.record(stmt);
-        match stmt {
-            Statement::Assignment(assignment) => {
-                for var in assignment.targets.iter() {
-                    self.record_target(var);
-                }
-            }
-            // Luau: `x.foo += 1` also mutates a field.
-            Statement::CompoundAssignment(compound) => self.record_target(&compound.var),
-            Statement::LocalAssignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-        self.walk_statement(stmt);
     }
 }
 

@@ -50,7 +50,8 @@ pub use expr::{
 pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
 pub use punctuated::Punctuated;
 pub use query::{
-    expr_starts_with_brace, is_multi_value, is_prefix_expression, stmt_starts_with_paren,
+    DottedPath, dotted_path, expr_starts_with_brace, is_multi_value, is_prefix_expr,
+    stmt_starts_with_paren,
 };
 pub use stmt::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,

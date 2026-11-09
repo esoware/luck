@@ -1,9 +1,8 @@
-use luck_ast::{Expression, Var};
+use luck_ast::{DottedPath, Expression, Var, dotted_path};
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::path::{DottedPath, dotted_path};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags dotted accesses under the `Enum` global that name a
 /// nonexistent enum type, item, or item member.
@@ -14,31 +13,19 @@ use crate::rule::{LintContext, NodeRule, Rule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RobloxUnknownEnumMember;
 
-impl Rule for RobloxUnknownEnumMember {
-    fn name(&self) -> &'static str {
-        "roblox_unknown_enum_member"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "unknown Roblox enum type, item, or item member"
-    }
-}
+impl_rule!(
+    RobloxUnknownEnumMember,
+    "roblox_unknown_enum_member",
+    Correctness,
+    Error,
+    "unknown Roblox enum type, item, or item member"
+);
 
 impl NodeRule for RobloxUnknownEnumMember {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::Var])
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let Expression::Var(var @ Var::FieldAccess(_)) = expr else {
             return;
         };
@@ -64,8 +51,6 @@ impl NodeRule for RobloxUnknownEnumMember {
         if stdlib.child(prefix_entry, last_segment).is_some() {
             return;
         }
-        // `resolves_to_local` scans every reference, so it waits for an
-        // unknown member.
         if context.semantic.resolves_to_local("Enum", root_span) {
             return;
         }

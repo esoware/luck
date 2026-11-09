@@ -154,11 +154,11 @@ impl<'ast> Visitor<'ast> for NodeFinder<'ast> {
         }
     }
 
-    fn visit_expression(&mut self, expr: &'ast Expression) {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
         if let Expression::FunctionCall(call) = expr {
             self.record_call(call);
         }
-        self.walk_expression(expr);
+        self.walk_expr(expr);
     }
 }
 

@@ -9,7 +9,7 @@ A transform is a `Block -> Block` pass implementing `Transform` (`luck_ast/src/t
 
 ## 1. Write the pass
 
-Always recurse through `self.walk_*`, because hand-rolled recursion misses nested cases. Exhaustive matches only, no `_ =>` arms. If the pass needs scope or binding information, do **not** build a flat name-to-value map, which miscompiles shadowed names. Use a scope-aware analysis (see `rename_locals`'s Analyzer for the reference implementation), or don't write the pass yet. Purity questions go through `is_pure_expression` in `src/expr.rs`.
+Always recurse through `self.walk_*`, because hand-rolled recursion misses nested cases. Exhaustive matches only, no `_ =>` arms. If the pass needs scope or binding information, do **not** build a flat name-to-value map, which miscompiles shadowed names. Use a scope-aware analysis (see `rename_locals`'s Analyzer for the reference implementation), or don't write the pass yet. Purity questions go through `is_pure_expr` in `src/expr.rs`.
 
 ## 2. Config flag
 
@@ -23,7 +23,7 @@ Every pass gets a bool on `TransformConfig` (`luck_core/src/config/transform_con
 
 Metamethods: identifiers, indexing, arithmetic, comparison, concat, and length can all dispatch through metamethods with side effects. A transform is only safe on operands that cannot metamethod:
 
-- `is_pure_expression` rejects variable arithmetic. Only literal arithmetic is pure.
+- `is_pure_expr` rejects variable arithmetic. Only literal arithmetic is pure.
 - `#"str"` must not be folded, because escape sequences make raw length unreliable.
 - `-a + b != -(a + b)` for variable `a`, so sign folding works only on literals.
 - `__lt` vs `__le` differ: never invert comparisons, only wrap in `not`.

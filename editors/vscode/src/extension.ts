@@ -11,7 +11,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	logExtension("activate");
 
 	const statusBar = new StatusBar();
-	client = new LuckClient(context.extensionPath, statusBar);
+	client = new LuckClient(context, statusBar);
 	context.subscriptions.push(statusBar, ...registerCommands(client));
 
 	if (setting("enable")) {

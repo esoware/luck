@@ -18,7 +18,7 @@ impl Parser<'_> {
     ///
     /// Left-associative chains grow in a loop; only right operands recurse.
     #[inline]
-    pub(super) fn parse_expression(&mut self, min_precedence: u8) -> Expression {
+    pub(super) fn parse_expr(&mut self, min_precedence: u8) -> Expression {
         let mut left = self.parse_prefix();
 
         while let Some(op) = BinOp::from_token_kind(self.peek()) {
@@ -48,7 +48,7 @@ impl Parser<'_> {
                     right: Expression::Error(op_span),
                 }));
             }
-            let right = self.parse_expression(right_min_precedence);
+            let right = self.parse_expr(right_min_precedence);
             self.exit_depth();
             let span = left.span().merge(right.span());
             left = Expression::BinaryOp(Box::new(BinaryOp { span, left, op, right }));
@@ -57,12 +57,11 @@ impl Parser<'_> {
         left
     }
 
-    pub(super) fn parse_expression_list(&mut self) -> Punctuated<Expression> {
-        let mut exprs = vec![self.parse_expression(0)];
+    pub(super) fn parse_expr_list(&mut self) -> Punctuated<Expression> {
+        let mut exprs = vec![self.parse_expr(0)];
 
-        while matches!(self.peek(), TokenKind::Comma) {
-            self.advance_span();
-            exprs.push(self.parse_expression(0));
+        while self.eat(&TokenKind::Comma) {
+            exprs.push(self.parse_expr(0));
         }
 
         Punctuated::from_items(exprs)
@@ -77,12 +76,12 @@ impl Parser<'_> {
             if !self.enter_depth() {
                 return Expression::Error(op_span);
             }
-            let operand = self.parse_expression(UnOp::PRECEDENCE);
+            let operand = self.parse_expr(UnOp::PRECEDENCE);
             self.exit_depth();
             let span = op_span.merge(operand.span());
             return Expression::UnaryOp(Box::new(UnaryOp { span, op, operand }));
         }
-        let primary = self.parse_primary_expression();
+        let primary = self.parse_primary_expr();
         // Casts apply to any simpleexp (`1 :: number`, `{} :: Foo`), not just
         // suffix chains, so they're parsed here.
         self.parse_type_cast(primary)
@@ -94,8 +93,7 @@ impl Parser<'_> {
     /// is a parse error there. A second `::` is left in place to fail as an
     /// unexpected token.
     fn parse_type_cast(&mut self, expr: Expression) -> Expression {
-        if self.version.is_luau() && matches!(self.peek(), TokenKind::DoubleColon) {
-            self.advance_span();
+        if self.version.has_type_syntax() && self.eat(&TokenKind::DoubleColon) {
             let type_annotation = self.parse_type();
             let span = expr.span().merge(type_annotation.span());
             return Expression::TypeCast(Box::new(TypeCast { span, expr, type_annotation }));
@@ -105,7 +103,7 @@ impl Parser<'_> {
 
     /// Parse a primary expression and then any suffix chain.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
-    fn parse_primary_expression(&mut self) -> Expression {
+    fn parse_primary_expr(&mut self) -> Expression {
         match self.peek() {
             TokenKind::Nil => Expression::Nil(self.advance_span()),
             TokenKind::False => Expression::False(self.advance_span()),
@@ -121,7 +119,7 @@ impl Parser<'_> {
             }
             TokenKind::Function => self.parse_function_def(),
             // Luau: `simpleexp ::= attributes 'function' funcbody`
-            TokenKind::At if self.version.is_luau() => self.parse_function_def(),
+            TokenKind::At if self.version.has_function_attributes() => self.parse_function_def(),
             TokenKind::LeftBrace => {
                 Expression::TableConstructor(Box::new(self.parse_table_constructor()))
             }
@@ -130,7 +128,7 @@ impl Parser<'_> {
                 if !self.enter_depth() {
                     return Expression::Error(open);
                 }
-                let expr = self.parse_expression(0);
+                let expr = self.parse_expr(0);
                 self.exit_depth();
                 let close = self.expect(&TokenKind::RightParen);
                 let span = open.merge(close);
@@ -139,7 +137,7 @@ impl Parser<'_> {
                 self.parse_suffixes(paren_expr)
             }
             // Luau if-expression.
-            TokenKind::If if self.version.is_luau() => self.parse_if_expression(),
+            TokenKind::If if self.version.has_if_exprs() => self.parse_if_expr(),
             // Luau interpolated string.
             TokenKind::InterpolatedStringBegin(_) => self.parse_interpolated_string(),
             TokenKind::Identifier(_) => {
@@ -169,7 +167,7 @@ impl Parser<'_> {
     /// Consume a number token, an exact Luau integer when it has the `i`
     /// suffix.
     // Its own frame keeps these temporaries off that of
-    // `parse_primary_expression`, which every level of nesting pays for in an
+    // `parse_primary_expr`, which every level of nesting pays for in an
     // unoptimized build.
     fn parse_number(&mut self) -> Expression {
         let literal = self.advance_literal();
@@ -209,7 +207,7 @@ impl Parser<'_> {
                 }
                 TokenKind::LeftBracket => {
                     self.advance_span();
-                    let index = self.parse_expression(0);
+                    let index = self.parse_expr(0);
                     let close = self.expect(&TokenKind::RightBracket);
                     let span = expr.span().merge(close);
                     expr = Expression::Var(Var::Index(Box::new(IndexExpression {
@@ -282,21 +280,21 @@ impl Parser<'_> {
 
     /// Parse a Luau if-expression:
     /// `if cond then expr {elseif cond then expr} else expr`.
-    fn parse_if_expression(&mut self) -> Expression {
+    fn parse_if_expr(&mut self) -> Expression {
         let if_span = self.advance_span(); // `if`
         if !self.enter_depth() {
             return Expression::Error(if_span);
         }
-        let condition = self.parse_expression(0);
+        let condition = self.parse_expr(0);
         self.expect(&TokenKind::Then);
-        let then_expr = self.parse_expression(0);
+        let then_expr = self.parse_expr(0);
 
         let mut elseif_clauses = Vec::new();
         while matches!(self.peek(), TokenKind::ElseIf) {
             let elseif_span = self.advance_span();
-            let elseif_condition = self.parse_expression(0);
+            let elseif_condition = self.parse_expr(0);
             self.expect(&TokenKind::Then);
-            let elseif_expr = self.parse_expression(0);
+            let elseif_expr = self.parse_expr(0);
             let span = elseif_span.merge(elseif_expr.span());
             elseif_clauses.push(ElseIfExprClause {
                 span,
@@ -306,7 +304,7 @@ impl Parser<'_> {
         }
 
         self.expect(&TokenKind::Else);
-        let else_expr = self.parse_expression(0);
+        let else_expr = self.parse_expr(0);
         self.exit_depth();
         let span = if_span.merge(else_expr.span());
 
@@ -346,7 +344,7 @@ impl Parser<'_> {
 
         segments.push(InterpolatedStringSegment {
             literal: begin_token,
-            expr: Some(self.parse_expression(0)),
+            expr: Some(self.parse_expr(0)),
         });
 
         loop {
@@ -355,7 +353,7 @@ impl Parser<'_> {
                     let middle_token = self.advance();
                     segments.push(InterpolatedStringSegment {
                         literal: middle_token,
-                        expr: Some(self.parse_expression(0)),
+                        expr: Some(self.parse_expr(0)),
                     });
                 }
                 TokenKind::InterpolatedStringEnd(_) => {
@@ -391,7 +389,7 @@ impl Parser<'_> {
                 let args = if matches!(self.peek(), TokenKind::RightParen) {
                     Punctuated::empty()
                 } else {
-                    self.parse_expression_list()
+                    self.parse_expr_list()
                 };
                 let close = self.expect(&TokenKind::RightParen);
                 FunctionArgs::Parenthesized { span: open.merge(close), args }
@@ -473,10 +471,10 @@ impl Parser<'_> {
         // `[expr] = expr`
         if matches!(self.peek(), TokenKind::LeftBracket) {
             let open = self.advance_span();
-            let key = self.parse_expression(0);
+            let key = self.parse_expr(0);
             self.expect(&TokenKind::RightBracket);
             self.expect(&TokenKind::Equal);
-            let value = self.parse_expression(0);
+            let value = self.parse_expr(0);
             let span = open.merge(value.span());
             return Field::Bracketed { span, key, value };
         }
@@ -485,12 +483,12 @@ impl Parser<'_> {
         if self.is_at_identifier() && matches!(self.peek_next(), TokenKind::Equal) {
             let name = self.advance();
             self.advance_span();
-            let value = self.parse_expression(0);
+            let value = self.parse_expr(0);
             let span = name.span.merge(value.span());
             return Field::Named { span, name, value };
         }
 
-        let value = self.parse_expression(0);
+        let value = self.parse_expr(0);
         let span = value.span();
         Field::Positional { span, value }
     }

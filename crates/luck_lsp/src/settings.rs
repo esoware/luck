@@ -14,6 +14,7 @@ use luck_formatter::FormatOptions;
 use luck_linter::LintConfig;
 use rustc_hash::FxHashMap;
 use tokio::sync::RwLock;
+use tokio::task::spawn_blocking;
 
 #[derive(Debug)]
 pub(crate) struct ProjectSettings {
@@ -136,13 +137,21 @@ impl SettingsCache {
             }
         }
 
-        let Some(project) = discover_config(&search_directory).ok().flatten() else {
+        // Discovery reads config files and canonicalizes the root.
+        let discovery_directory = search_directory.clone();
+        let discovered = spawn_blocking(move || {
+            let project = discover_config(&discovery_directory).ok().flatten()?;
+            let settings = ProjectSettings::new(&project.config, Some(project.root.clone()));
+            Some((project.root, Arc::new(settings)))
+        })
+        .await
+        .ok()
+        .flatten();
+        let Some((root, settings)) = discovered else {
             // Cache the negative lookup so we don't re-walk every did_change.
             self.lookups.write().await.roots_by_search_directory.insert(search_directory, None);
             return Arc::clone(&self.defaults);
         };
-        let root = project.root;
-        let settings = Arc::new(ProjectSettings::new(&project.config, Some(root.clone())));
         let mut lookups = self.lookups.write().await;
         lookups.settings_by_root.insert(root.clone(), Arc::clone(&settings));
         lookups.roots_by_search_directory.insert(search_directory, Some(root));

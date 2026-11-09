@@ -1,44 +1,42 @@
-use luck_ast::Expression;
+use luck_ast::FunctionCall;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::roblox::{global_new_call, literal_arg_value};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::number::signed_number_value;
+use crate::roblox::global_new_call;
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RobloxIncorrectColor3NewBounds;
 
-impl Rule for RobloxIncorrectColor3NewBounds {
-    fn name(&self) -> &'static str {
-        "roblox_incorrect_color3_new_bounds"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "`Color3.new` component outside the 0 to 1 range"
-    }
-}
+impl_rule!(
+    RobloxIncorrectColor3NewBounds,
+    "roblox_incorrect_color3_new_bounds",
+    Correctness,
+    Error,
+    "`Color3.new` component outside the 0 to 1 range"
+);
 
 impl NodeRule for RobloxIncorrectColor3NewBounds {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallExpr])
     }
-    fn on_expression(
+    fn on_call(
         &self,
-        expr: &Expression,
+        call: &FunctionCall,
+        position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        let Some((call, args)) = global_new_call(expr, "Color3", context.semantic) else {
+        if position == CallPosition::Statement {
+            return;
+        }
+        let Some(args) = global_new_call(call, "Color3", context.semantic) else {
             return;
         };
         let has_out_of_bounds = args
             .iter()
-            .filter_map(literal_arg_value)
+            .filter_map(signed_number_value)
             .any(|value| !(0.0f64..=1.0f64).contains(&value));
         if has_out_of_bounds {
             findings.push(
@@ -64,6 +62,12 @@ mod tests {
     #[test]
     fn flags_component_above_one() {
         let diags = run("local c = Color3.new(255, 0, 0)");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_component_under_repeated_minus() {
+        let diags = run("local c = Color3.new(- -2, 0, 0)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 

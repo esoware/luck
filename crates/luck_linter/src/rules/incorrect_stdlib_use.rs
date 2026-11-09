@@ -1,10 +1,10 @@
-use luck_ast::{Expression, FunctionCall, Statement};
+use luck_ast::{Expression, FunctionCall};
 use luck_semantic::{ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction};
 
 use crate::call::{has_multi_value_tail, positional_args, string_literal_value};
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
 /// How many allowed values a message lists. Generated sets (Roblox service
 /// and class names) run to hundreds of values.
@@ -13,52 +13,34 @@ const LISTED_VALUE_LIMIT: usize = 8;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct IncorrectStdlibUse;
 
-impl Rule for IncorrectStdlibUse {
-    fn name(&self) -> &'static str {
-        "incorrect_stdlib_use"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "wrong argument count or invalid constant in a standard library call"
-    }
-}
+impl_rule!(
+    IncorrectStdlibUse,
+    "incorrect_stdlib_use",
+    Correctness,
+    Error,
+    "wrong argument count or invalid constant in a standard library call"
+);
 
 impl NodeRule for IncorrectStdlibUse {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_statement(
+    fn on_call(
         &self,
-        stmt: &Statement,
+        call: &FunctionCall,
+        _position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        if let Statement::FunctionCall(call) = stmt {
-            check_call(call, context.semantic, findings);
-        }
-    }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Expression::FunctionCall(call) = expr {
-            check_call(call, context.semantic, findings);
-        }
+        check_call(call, context.semantic, findings);
     }
 }
 
 fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, findings: &mut Vec<Finding>) {
-    let Some(ResolvedCallee { name, entry }) = semantic.resolve_callee(call) else {
+    let Some(callee) = semantic.resolve_callee(call) else {
         return;
     };
-    let StdlibEntry::Function(function) = entry else {
+    let StdlibEntry::Function(function) = callee.entry() else {
         return;
     };
     let (args, arg_count) = positional_args(&call.args);
@@ -68,21 +50,24 @@ fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, findings: &mut V
 
     let min_args = function.min_args();
     let arity_message = if arg_count < min_args && !has_multi_value_tail {
-        Some(format!("`{name}` requires at least {min_args} argument(s), got {arg_count}"))
+        Some(format!(
+            "`{}` requires at least {min_args} argument(s), got {arg_count}",
+            callee.name()
+        ))
     } else if let Some(max_args) = function.max_args()
         && arg_count > max_args
     {
-        Some(format!("`{name}` accepts at most {max_args} argument(s), got {arg_count}"))
+        Some(format!("`{}` accepts at most {max_args} argument(s), got {arg_count}", callee.name()))
     } else if !function.accepts_arg_count(arg_count) && !has_multi_value_tail {
         // Within the overall bounds but between overloads, like 1 argument
         // to a function that takes 0 or 2.
-        Some(format!("no overload of `{name}` accepts {arg_count} argument(s)"))
+        Some(format!("no overload of `{}` accepts {arg_count} argument(s)", callee.name()))
     } else {
         None
     };
     match arity_message {
         Some(message) => findings.push(Finding::new(message, call.span)),
-        None => findings.extend(invalid_constant_args(&name, function, args, arg_count)),
+        None => findings.extend(invalid_constant_args(&callee, function, args, arg_count)),
     }
 }
 
@@ -93,7 +78,7 @@ fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, findings: &mut V
 /// allows it, and a position some matching signature leaves unconstrained
 /// isn't checked.
 fn invalid_constant_args(
-    name: &str,
+    callee: &ResolvedCallee<'_>,
     function: &StdlibFunction,
     args: &[Expression],
     arg_count: usize,
@@ -119,8 +104,9 @@ fn invalid_constant_args(
         let arg_number = index.saturating_add(1);
         Some(Finding::new(
             format!(
-                "`{name}` argument {arg_number} must be one of \
+                "`{}` argument {arg_number} must be one of \
                  {allowed_list}{truncation_note}, got `{value}`",
+                callee.name(),
             ),
             span,
         ))

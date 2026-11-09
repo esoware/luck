@@ -1,37 +1,25 @@
 use luck_ast::Statement;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct IfSameThenElse;
 
-impl Rule for IfSameThenElse {
-    fn name(&self) -> &'static str {
-        "if_same_then_else"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "`if` and `else` branches have identical bodies"
-    }
-}
+impl_rule!(
+    IfSameThenElse,
+    "if_same_then_else",
+    Suspicious,
+    Warning,
+    "`if` and `else` branches have identical bodies"
+);
 
 impl NodeRule for IfSameThenElse {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::IfStatement])
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let Statement::IfStatement(if_stmt) = stmt else {
             return;
         };

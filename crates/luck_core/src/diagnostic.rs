@@ -24,6 +24,17 @@ pub enum DiagnosticSeverity {
     Warning,
 }
 
+impl DiagnosticSeverity {
+    /// The name `luck.json` and JSON output spell it with.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+        }
+    }
+}
+
 impl Diagnostic {
     fn error_at<Message>(code: &'static str, message: Message, file_path: &str, span: Span) -> Self
     where

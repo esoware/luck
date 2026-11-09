@@ -1,4 +1,4 @@
-use luck_token::{BinOp, CompactString, LuaVersion, TokenKind, UnOp};
+use luck_token::{BinOp, CompactString, LuaVersion, TokenKind, UnOp, encode_string};
 
 use crate::expr::{Expression, InterpolatedString, InterpolatedStringSegment, Literal};
 use crate::synth::Synth;
@@ -115,15 +115,18 @@ impl Synth {
     /// double-quoted token text.
     #[must_use]
     pub fn string(&self, content: &str) -> Expression {
-        Expression::StringLiteral(Literal { text: quote_utf8(content), span: self.next_span() })
+        Expression::StringLiteral(Literal {
+            text: encode_string(content.as_bytes()),
+            span: self.next_span(),
+        })
     }
 
     /// A string literal from arbitrary bytes, such as a bytecode constant
-    /// that isn't UTF-8. Bytes outside printable ASCII are escaped, so the
+    /// that isn't UTF-8. Bytes that aren't valid UTF-8 are escaped, so the
     /// token text is always valid UTF-8.
     #[must_use]
     pub fn string_bytes(&self, content: &[u8]) -> Expression {
-        Expression::StringLiteral(Literal { text: quote_bytes(content), span: self.next_span() })
+        Expression::StringLiteral(Literal { text: encode_string(content), span: self.next_span() })
     }
 
     /// A `[[...]]` long-bracket string at the lowest `=` level whose closer
@@ -203,46 +206,6 @@ impl Synth {
         segments.push(InterpolatedStringSegment { literal: self.token(end), expr: None });
         Expression::InterpolatedString(Box::new(InterpolatedString { span, segments }))
     }
-}
-
-/// Double-quoted token text for UTF-8 `content`. Multibyte characters pass
-/// through; quotes, backslashes, and control characters are escaped.
-pub(super) fn quote_utf8(content: &str) -> CompactString {
-    let mut raw = String::with_capacity(content.len().saturating_add(2));
-    raw.push('"');
-    for character in content.chars() {
-        match character {
-            '\\' => raw.push_str("\\\\"),
-            '"' => raw.push_str("\\\""),
-            '\n' => raw.push_str("\\n"),
-            '\r' => raw.push_str("\\r"),
-            '\t' => raw.push_str("\\t"),
-            '\0'..='\x1f' | '\x7f' => raw.push_str(&decimal_escape(u32::from(character))),
-            _ => raw.push(character),
-        }
-    }
-    raw.push('"');
-    CompactString::from(raw)
-}
-
-/// Double-quoted token text for arbitrary bytes. Everything outside
-/// printable ASCII is escaped, so the result is valid UTF-8 for any input.
-fn quote_bytes(content: &[u8]) -> CompactString {
-    let mut raw = String::with_capacity(content.len().saturating_add(2));
-    raw.push('"');
-    for &byte in content {
-        match byte {
-            b'\\' => raw.push_str("\\\\"),
-            b'"' => raw.push_str("\\\""),
-            b'\n' => raw.push_str("\\n"),
-            b'\r' => raw.push_str("\\r"),
-            b'\t' => raw.push_str("\\t"),
-            0x20..=0x7e => raw.push(char::from(byte)),
-            other => raw.push_str(&decimal_escape(u32::from(other))),
-        }
-    }
-    raw.push('"');
-    CompactString::from(raw)
 }
 
 /// Escapes interpolated-string segment text. The lexer stores segment text

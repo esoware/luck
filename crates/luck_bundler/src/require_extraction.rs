@@ -1,6 +1,6 @@
 use luck_ast::{Block, Expression, FunctionArgs, FunctionCall, Statement, Var, Visitor};
 use luck_core::{Diagnostic, DynamicRequire};
-use luck_semantic::SemanticAnalysis;
+use luck_semantic::ScopeTree;
 use luck_token::{LuaVersion, Span, decode_string};
 use rustc_hash::FxHashSet;
 
@@ -39,12 +39,12 @@ pub(crate) fn extract_requires(
     version: LuaVersion,
     dynamic_require: DynamicRequire,
 ) -> ExtractedRequires {
-    let analysis = luck_semantic::analyze(block, version);
+    let scope_tree = luck_semantic::build_scope_tree(block);
     let mut finder = RequireFinder {
         file_path,
         version,
         dynamic_require,
-        analysis: &analysis,
+        scope_tree: &scope_tree,
         sites: Vec::new(),
         dynamic_callees: Vec::new(),
         diagnostics: Vec::new(),
@@ -64,8 +64,7 @@ pub(crate) fn extract_requires(
     } = finder;
 
     diagnostics.extend(
-        analysis
-            .scope_tree
+        scope_tree
             .unresolved_references()
             .filter(|reference| {
                 reference.name == "require" && !direct_callee_spans.contains(&reference.span)
@@ -83,7 +82,7 @@ struct RequireFinder<'input> {
     file_path: &'input str,
     version: LuaVersion,
     dynamic_require: DynamicRequire,
-    analysis: &'input SemanticAnalysis,
+    scope_tree: &'input ScopeTree,
     sites: Vec<RequireSite>,
     dynamic_callees: Vec<Span>,
     diagnostics: Vec<Diagnostic>,
@@ -99,7 +98,7 @@ impl RequireFinder<'_> {
             return;
         };
         self.direct_callee_spans.insert(callee_span);
-        if self.analysis.resolves_to_local("require", callee_span) {
+        if self.scope_tree.resolves_to_local("require", callee_span) {
             self.diagnostics.push(Diagnostic::w005_shadowed(self.file_path, call.span));
             return;
         }
@@ -143,24 +142,34 @@ impl RequireFinder<'_> {
             self.dynamic_callees.push(callee_span);
         }
     }
+
+    /// Records E006 for a write to the global `package.loaded`. A local named
+    /// `package` is no concern of the bundle's.
+    fn flag_package_loaded_write(&mut self, target: &Var) {
+        if let Some(package_span) = package_loaded_root(target, self.version)
+            && !self.scope_tree.resolves_to_local("package", package_span)
+        {
+            self.package_loaded_writes.push(Diagnostic::e006(self.file_path, target.span()));
+        }
+    }
 }
 
 impl<'ast> Visitor<'ast> for RequireFinder<'_> {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         // Lua targets use package.loaded itself as the bundle cache, so writes
         // to it behave as in real Lua. Luau has no package table, and its
         // bundle cache is private.
-        if self.version.is_luau()
-            && let Statement::Assignment(assignment) = stmt
-        {
-            for target in assignment.targets.iter() {
-                if is_package_loaded_access(target, self.version) {
-                    self.package_loaded_writes
-                        .push(Diagnostic::e006(self.file_path, target.span()));
+        if self.version.is_luau() {
+            if let Statement::Assignment(assignment) = stmt {
+                for target in assignment.targets.iter() {
+                    self.flag_package_loaded_write(target);
                 }
             }
+            if let Statement::CompoundAssignment(compound) = stmt {
+                self.flag_package_loaded_write(&compound.var);
+            }
         }
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 
     fn visit_function_call(&mut self, call: &'ast FunctionCall) {
@@ -200,9 +209,9 @@ fn literal_require_string(call: &FunctionCall, version: LuaVersion) -> Option<St
     String::from_utf8(decode_string(&literal.text, version)?.into_owned()).ok()
 }
 
-/// Whether an assignment target is, or indexes into, `package.loaded` or
-/// `package["loaded"]`.
-fn is_package_loaded_access(target: &Var, version: LuaVersion) -> bool {
+/// The span of the `package` name when an assignment target is, or indexes
+/// into, `package.loaded` or `package["loaded"]`.
+fn package_loaded_root(target: &Var, version: LuaVersion) -> Option<Span> {
     let mut var = target;
     loop {
         let (prefix, is_loaded_key) = match var {
@@ -217,17 +226,16 @@ fn is_package_loaded_access(target: &Var, version: LuaVersion) -> bool {
                 );
                 (&index_expr.prefix, is_loaded_string)
             }
-            Var::Name(_) => return false,
+            Var::Name(_) => return None,
         };
-        let is_package = matches!(
-            prefix,
-            Expression::Var(Var::Name(token)) if token.identifier() == Some("package")
-        );
-        if is_loaded_key && is_package {
-            return true;
+        if is_loaded_key
+            && let Expression::Var(Var::Name(token)) = prefix
+            && token.identifier() == Some("package")
+        {
+            return Some(token.span);
         }
         let Expression::Var(prefix_var) = prefix else {
-            return false;
+            return None;
         };
         var = prefix_var;
     }
@@ -346,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn bare_require_statement_is_extracted() {
+    fn bare_require_stmt_is_extracted() {
         let result = extract("require(\"something\")\n");
         assert_eq!(require_strings(&result), ["something"]);
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
@@ -420,6 +428,38 @@ mod tests {
     #[test]
     fn package_loaded_field_write_flags_e006_on_luau() {
         let result = extract_luau("package.loaded.mymod = {}\n");
+        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn package_loaded_compound_assignment_flags_e006_on_luau() {
+        let result = extract_luau("package.loaded.x ..= \"a\"\n");
+        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn nested_package_loaded_compound_assignment_flags_e006_on_luau() {
+        let result = extract_luau("package.loaded[\"x\"].y += 1\n");
+        assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn compound_assignment_to_another_table_is_not_flagged_on_luau() {
+        let result = extract_luau("loaded.x ..= \"a\"\n");
+        assert!(with_code(&result, "E006").is_empty(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn local_named_package_is_not_flagged_on_luau() {
+        let result = extract_luau(
+            "local package = { loaded = {} }\npackage.loaded.x = 1\npackage.loaded.y ..= \"a\"\n",
+        );
+        assert!(with_code(&result, "E006").is_empty(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn package_write_outside_a_local_named_package_is_flagged_on_luau() {
+        let result = extract_luau("do local package = {} end\npackage.loaded.x = 1\n");
         assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diagnostics);
     }
 

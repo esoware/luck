@@ -14,14 +14,14 @@ pub trait Visitor<'ast> {
     fn visit_block(&mut self, block: &'ast Block) {
         self.walk_block(block);
     }
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
-        self.walk_statement(stmt);
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+        self.walk_stmt(stmt);
     }
-    fn visit_last_statement(&mut self, last: &'ast LastStatement) {
-        self.walk_last_statement(last);
+    fn visit_last_stmt(&mut self, last: &'ast LastStatement) {
+        self.walk_last_stmt(last);
     }
-    fn visit_expression(&mut self, expr: &'ast Expression) {
-        self.walk_expression(expr);
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        self.walk_expr(expr);
     }
     fn visit_var(&mut self, var: &'ast Var) {
         self.walk_var(var);
@@ -46,38 +46,38 @@ pub trait Visitor<'ast> {
 
     fn walk_block(&mut self, block: &'ast Block) {
         for stmt in &block.stmts {
-            self.visit_statement(stmt);
+            self.visit_stmt(stmt);
         }
         if let Some(last) = &block.last_stmt {
-            self.visit_last_statement(last);
+            self.visit_last_stmt(last);
         }
     }
 
-    fn walk_statement(&mut self, stmt: &'ast Statement) {
+    fn walk_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::Assignment(assignment) => {
                 for var in assignment.targets.iter() {
                     self.visit_var(var);
                 }
                 for expr in assignment.values.iter() {
-                    self.visit_expression(expr);
+                    self.visit_expr(expr);
                 }
             }
             Statement::FunctionCall(call_stmt) => self.visit_function_call(call_stmt),
             Statement::DoBlock(do_block) => self.visit_block(&do_block.block),
             Statement::WhileLoop(while_loop) => {
-                self.visit_expression(&while_loop.condition);
+                self.visit_expr(&while_loop.condition);
                 self.visit_block(&while_loop.block);
             }
             Statement::RepeatLoop(repeat_loop) => {
                 self.visit_block(&repeat_loop.block);
-                self.visit_expression(&repeat_loop.condition);
+                self.visit_expr(&repeat_loop.condition);
             }
             Statement::IfStatement(if_stmt) => {
-                self.visit_expression(&if_stmt.condition);
+                self.visit_expr(&if_stmt.condition);
                 self.visit_block(&if_stmt.block);
                 for clause in &if_stmt.elseif_clauses {
-                    self.visit_expression(&clause.condition);
+                    self.visit_expr(&clause.condition);
                     self.visit_block(&clause.block);
                 }
                 if let Some(else_clause) = &if_stmt.else_clause {
@@ -88,10 +88,10 @@ pub trait Visitor<'ast> {
                 if let Some(loop_variable_type) = &numeric_for.type_annotation {
                     self.visit_type(loop_variable_type);
                 }
-                self.visit_expression(&numeric_for.start);
-                self.visit_expression(&numeric_for.limit);
+                self.visit_expr(&numeric_for.start);
+                self.visit_expr(&numeric_for.limit);
                 if let Some(step) = &numeric_for.step {
-                    self.visit_expression(step);
+                    self.visit_expr(step);
                 }
                 self.visit_block(&numeric_for.block);
             }
@@ -102,7 +102,7 @@ pub trait Visitor<'ast> {
                     }
                 }
                 for expr in generic_for.exprs.iter() {
-                    self.visit_expression(expr);
+                    self.visit_expr(expr);
                 }
                 self.visit_block(&generic_for.block);
             }
@@ -116,14 +116,14 @@ pub trait Visitor<'ast> {
                 self.walk_attributed_names(&local_assignment.names);
                 if let Some(exprs) = &local_assignment.exprs {
                     for expr in exprs.iter() {
-                        self.visit_expression(expr);
+                        self.visit_expr(expr);
                     }
                 }
             }
             // Luau
             Statement::CompoundAssignment(compound) => {
                 self.visit_var(&compound.var);
-                self.visit_expression(&compound.expr);
+                self.visit_expr(&compound.expr);
             }
             // Lua 5.5
             Statement::GlobalFunction(global_function) => {
@@ -134,7 +134,7 @@ pub trait Visitor<'ast> {
                 self.walk_attributed_names(&global_declaration.names);
                 if let Some(exprs) = &global_declaration.exprs {
                     for expr in exprs.iter() {
-                        self.visit_expression(expr);
+                        self.visit_expr(expr);
                     }
                 }
             }
@@ -157,18 +157,18 @@ pub trait Visitor<'ast> {
         }
     }
 
-    fn walk_last_statement(&mut self, last: &'ast LastStatement) {
+    fn walk_last_stmt(&mut self, last: &'ast LastStatement) {
         match last {
             LastStatement::Return(return_stmt) => {
                 for expr in return_stmt.exprs.iter() {
-                    self.visit_expression(expr);
+                    self.visit_expr(expr);
                 }
             }
             LastStatement::Break(_) | LastStatement::Continue(_) | LastStatement::Error(_) => {}
         }
     }
 
-    fn walk_expression(&mut self, expr: &'ast Expression) {
+    fn walk_expr(&mut self, expr: &'ast Expression) {
         match expr {
             Expression::Nil(_)
             | Expression::False(_)
@@ -188,44 +188,44 @@ pub trait Visitor<'ast> {
                 self.visit_function_call(call);
             }
             Expression::Parenthesized(parenthesized) => {
-                self.visit_expression(&parenthesized.expr);
+                self.visit_expr(&parenthesized.expr);
             }
             Expression::TableConstructor(table) => {
                 self.visit_table_constructor(table);
             }
             Expression::BinaryOp(binary_op) => {
-                self.visit_expression(&binary_op.left);
-                self.visit_expression(&binary_op.right);
+                self.visit_expr(&binary_op.left);
+                self.visit_expr(&binary_op.right);
             }
             Expression::UnaryOp(unary_op) => {
-                self.visit_expression(&unary_op.operand);
+                self.visit_expr(&unary_op.operand);
             }
             // Luau
             Expression::IfExpression(if_expr) => {
-                self.visit_expression(&if_expr.condition);
-                self.visit_expression(&if_expr.then_expr);
+                self.visit_expr(&if_expr.condition);
+                self.visit_expr(&if_expr.then_expr);
                 for clause in &if_expr.elseif_clauses {
-                    self.visit_expression(&clause.condition);
-                    self.visit_expression(&clause.expr);
+                    self.visit_expr(&clause.condition);
+                    self.visit_expr(&clause.expr);
                 }
-                self.visit_expression(&if_expr.else_expr);
+                self.visit_expr(&if_expr.else_expr);
             }
             // Luau
             Expression::InterpolatedString(interpolated_string) => {
                 for segment in &interpolated_string.segments {
                     if let Some(interpolated) = &segment.expr {
-                        self.visit_expression(interpolated);
+                        self.visit_expr(interpolated);
                     }
                 }
             }
             // Luau
             Expression::TypeCast(cast) => {
-                self.visit_expression(&cast.expr);
+                self.visit_expr(&cast.expr);
                 self.visit_type(&cast.type_annotation);
             }
             // Luau
             Expression::TypeInstantiation(instantiation) => {
-                self.visit_expression(&instantiation.expr);
+                self.visit_expr(&instantiation.expr);
                 for argument in instantiation.type_args.args.iter() {
                     self.visit_type(argument);
                 }
@@ -237,17 +237,17 @@ pub trait Visitor<'ast> {
         match var {
             Var::Name(_) => {}
             Var::Index(index_expr) => {
-                self.visit_expression(&index_expr.prefix);
-                self.visit_expression(&index_expr.index);
+                self.visit_expr(&index_expr.prefix);
+                self.visit_expr(&index_expr.index);
             }
             Var::FieldAccess(field_access) => {
-                self.visit_expression(&field_access.prefix);
+                self.visit_expr(&field_access.prefix);
             }
         }
     }
 
     fn walk_function_call(&mut self, call: &'ast FunctionCall) {
-        self.visit_expression(&call.callee);
+        self.visit_expr(&call.callee);
         if let Some(type_args) = &call.explicit_type_args {
             for type_arg in type_args.args.iter() {
                 self.visit_type(type_arg);
@@ -260,7 +260,7 @@ pub trait Visitor<'ast> {
         match args {
             FunctionArgs::Parenthesized { args: exprs, .. } => {
                 for expr in exprs.iter() {
-                    self.visit_expression(expr);
+                    self.visit_expr(expr);
                 }
             }
             FunctionArgs::TableConstructor(table) => {
@@ -274,11 +274,11 @@ pub trait Visitor<'ast> {
         for field in table.fields.iter() {
             match field {
                 Field::Bracketed { key, value, .. } => {
-                    self.visit_expression(key);
-                    self.visit_expression(value);
+                    self.visit_expr(key);
+                    self.visit_expr(value);
                 }
                 Field::Named { value, .. } | Field::Positional { value, .. } => {
-                    self.visit_expression(value);
+                    self.visit_expr(value);
                 }
             }
         }
@@ -315,7 +315,7 @@ pub trait Visitor<'ast> {
             }
             // typeof embeds a real expression, so semantic passes must see it.
             Type::Typeof(typeof_type) => {
-                self.visit_expression(&typeof_type.expr);
+                self.visit_expr(&typeof_type.expr);
             }
             Type::Table(table) => {
                 for field in table.fields.iter() {
@@ -396,13 +396,13 @@ mod tests {
     }
 
     impl<'ast> Visitor<'ast> for HookCounts {
-        fn visit_statement(&mut self, stmt: &'ast Statement) {
+        fn visit_stmt(&mut self, stmt: &'ast Statement) {
             self.statements = self.statements.saturating_add(1);
-            self.walk_statement(stmt);
+            self.walk_stmt(stmt);
         }
-        fn visit_expression(&mut self, expr: &'ast Expression) {
+        fn visit_expr(&mut self, expr: &'ast Expression) {
             self.expressions = self.expressions.saturating_add(1);
-            self.walk_expression(expr);
+            self.walk_expr(expr);
         }
         fn visit_function_call(&mut self, call: &'ast FunctionCall) {
             self.calls = self.calls.saturating_add(1);
@@ -428,7 +428,7 @@ mod tests {
         counts
     }
 
-    fn expression_count(stmts: Vec<Statement>) -> usize {
+    fn expr_count(stmts: Vec<Statement>) -> usize {
         let synth = Synth::new();
         hook_counts(&synth.block(stmts, None)).expressions
     }
@@ -438,7 +438,7 @@ mod tests {
         // local x = 1 + 1: the sum and both operands.
         let synth = Synth::new();
         let sum = synth.binary_op(synth.number("1"), BinOp::Add, synth.number("1"));
-        assert_eq!(expression_count(vec![synth.local(&["x"], vec![sum])]), 3);
+        assert_eq!(expr_count(vec![synth.local(&["x"], vec![sum])]), 3);
     }
 
     #[test]
@@ -446,11 +446,11 @@ mod tests {
         // local t = {1, 1, 1}: the constructor and its three values.
         let synth = Synth::new();
         let table = synth.array(vec![synth.number("1"), synth.number("1"), synth.number("1")]);
-        assert_eq!(expression_count(vec![synth.local(&["t"], vec![table])]), 4);
+        assert_eq!(expr_count(vec![synth.local(&["t"], vec![table])]), 4);
     }
 
     #[test]
-    fn visit_statement_skips_the_last_statement() {
+    fn visit_stmt_skips_the_last_stmt() {
         let synth = Synth::new();
         let block = synth.block(
             vec![
@@ -468,7 +468,7 @@ mod tests {
         let synth = Synth::new();
         let sum = synth.binary_op(synth.name_expr("a"), BinOp::Add, synth.number("1"));
         let body = synth.block(vec![], Some(synth.return_(vec![sum])));
-        assert_eq!(expression_count(vec![synth.local_function("f", &["a"], body)]), 3);
+        assert_eq!(expr_count(vec![synth.local_function("f", &["a"], body)]), 3);
     }
 
     #[test]
@@ -480,7 +480,7 @@ mod tests {
         let else_block =
             synth.block(vec![synth.assign(vec![synth.name_var("y")], vec![synth.nil()])], None);
         let if_stmt = synth.if_(synth.name_expr("x"), then_block, vec![], Some(else_block));
-        assert_eq!(expression_count(vec![if_stmt]), 3);
+        assert_eq!(expr_count(vec![if_stmt]), 3);
     }
 
     #[test]
@@ -494,19 +494,19 @@ mod tests {
             Some(synth.number("2")),
             synth.block(vec![], None),
         );
-        assert_eq!(expression_count(vec![numeric_for]), 3);
+        assert_eq!(expr_count(vec![numeric_for]), 3);
     }
 
     #[test]
-    fn call_statement_visits_callee_and_args_but_no_call_expression() {
+    fn call_stmt_visits_callee_and_args_but_no_call_expr() {
         // f(x): the call is a statement here, so only `f` and `x` count.
         let synth = Synth::new();
         let call = synth.call(synth.name_expr("f"), vec![synth.name_expr("x")]);
-        assert_eq!(expression_count(vec![synth.call_stmt(call)]), 2);
+        assert_eq!(expr_count(vec![synth.call_stmt(call)]), 2);
     }
 
     #[test]
-    fn hooks_fire_in_statement_and_expression_positions() {
+    fn hooks_fire_in_stmt_and_expr_positions() {
         // f{}(function<T>() end); local t = {}
         let synth = Synth::new();
         let generic_function = synth.function_def_full(

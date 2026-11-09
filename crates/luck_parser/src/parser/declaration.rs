@@ -67,11 +67,9 @@ impl Parser<'_> {
     pub(super) fn parse_attributed_function(&mut self) -> Statement {
         let attributes = self.parse_function_attributes();
         match self.peek() {
-            TokenKind::Local => self.parse_local_statement(attributes),
+            TokenKind::Local => self.parse_local_stmt(attributes),
             TokenKind::Function => self.parse_function_decl(attributes),
-            TokenKind::Identifier(name) if name == "export" => {
-                self.parse_export_statement(attributes)
-            }
+            TokenKind::Identifier(name) if name == "export" => self.parse_export_stmt(attributes),
             _ => {
                 let span = self.current_span();
                 self.error(span, "expected `function`, `local`, or `export` after attribute");
@@ -95,17 +93,12 @@ impl Parser<'_> {
         let start_span = first.span;
         let mut names = vec![first];
 
-        while matches!(self.peek(), TokenKind::Dot) {
-            self.advance_span();
+        while self.eat(&TokenKind::Dot) {
             let name = self.expect_identifier_recover();
             names.push(name);
         }
 
-        let method = matches!(self.peek(), TokenKind::Colon).then(|| {
-            self.advance_span();
-
-            self.expect_identifier_recover()
-        });
+        let method = self.eat(&TokenKind::Colon).then(|| self.expect_identifier_recover());
 
         let end_span = method
             .as_ref()
@@ -116,10 +109,7 @@ impl Parser<'_> {
         FunctionName { span: start_span.merge(end_span), names, method }
     }
 
-    pub(super) fn parse_local_statement(
-        &mut self,
-        attributes: Vec<FunctionAttribute>,
-    ) -> Statement {
+    pub(super) fn parse_local_stmt(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
         let local_span = self.advance_span();
 
         if matches!(self.peek(), TokenKind::Function) {
@@ -134,7 +124,7 @@ impl Parser<'_> {
 
     /// Parse a Luau `const` declaration: `const bindinglist '=' explist` or
     /// `const function NAME funcbody`.
-    pub(super) fn parse_const_statement(&mut self) -> Statement {
+    pub(super) fn parse_const_stmt(&mut self) -> Statement {
         let const_span = self.advance_span(); // contextual `const`
         if matches!(self.peek(), TokenKind::Function) {
             return self.parse_local_function(const_span, Vec::new(), LocalKind::Const);
@@ -179,9 +169,8 @@ impl Parser<'_> {
             }
         }
 
-        let exprs = if matches!(self.peek(), TokenKind::Equal) {
-            self.advance_span();
-            Some(self.parse_expression_list())
+        let exprs = if self.eat(&TokenKind::Equal) {
+            Some(self.parse_expr_list())
         } else {
             // Grammar: `const bindinglist '=' explist`, so the initializer
             // isn't optional.
@@ -226,8 +215,7 @@ impl Parser<'_> {
         };
         let mut names = vec![first];
 
-        while matches!(self.peek(), TokenKind::Comma) {
-            self.advance_span();
+        while self.eat(&TokenKind::Comma) {
             let Some(name) = self.parse_attributed_name(leading_attribute) else {
                 break;
             };
@@ -261,12 +249,11 @@ impl Parser<'_> {
 
     /// Parse a `global` statement: `global function`, `global [attrib] *`, or
     /// `global attnamelist`.
-    pub(super) fn parse_global_statement(&mut self) -> Statement {
+    pub(super) fn parse_global_stmt(&mut self) -> Statement {
         let global_span = self.advance_span();
 
         // `global function name(...) ... end`
-        if matches!(self.peek(), TokenKind::Function) {
-            self.advance_span(); // `function`
+        if self.eat(&TokenKind::Function) {
             let name = self.expect_identifier_recover();
             let body = self.parse_function_body();
             let span = global_span.merge(body.span);
@@ -313,10 +300,7 @@ impl Parser<'_> {
             self.reject_global_close(attribute);
         }
 
-        let exprs = matches!(self.peek(), TokenKind::Equal).then(|| {
-            self.advance_span();
-            self.parse_expression_list()
-        });
+        let exprs = self.eat(&TokenKind::Equal).then(|| self.parse_expr_list());
 
         let span = declaration_span(global_span, &names, exprs.as_ref());
 
@@ -339,8 +323,7 @@ impl Parser<'_> {
 
         // `type function Name funcbody` takes no `=`, and the body is
         // ordinary Luau.
-        if matches!(self.peek(), TokenKind::Function) {
-            self.advance_span(); // `function`
+        if self.eat(&TokenKind::Function) {
             let name = self.expect_identifier_recover();
             let body = self.parse_function_body();
             let span = start_span.merge(body.span);
@@ -375,10 +358,7 @@ impl Parser<'_> {
     /// Parse Luau `export type`, `export local`, `export const`, or
     /// `export function` after an optional function attribute list.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
-    pub(super) fn parse_export_statement(
-        &mut self,
-        attributes: Vec<FunctionAttribute>,
-    ) -> Statement {
+    pub(super) fn parse_export_stmt(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
         let export_span = self.advance_span(); // contextual `export`
 
         if let TokenKind::Identifier(name) = self.peek()

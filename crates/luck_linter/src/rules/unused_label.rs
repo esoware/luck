@@ -1,8 +1,8 @@
 use luck_ast::{Block, FunctionBody, Statement, Visitor};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags labels (`::name::`) that no `goto` in the same function targets.
 ///
@@ -11,20 +11,13 @@ use crate::rule::{LintContext, Rule, WholeRule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnusedLabel;
 
-impl Rule for UnusedLabel {
-    fn name(&self) -> &'static str {
-        "unused_label"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "label declared but never targeted by a `goto` in the same function"
-    }
-}
+impl_rule!(
+    UnusedLabel,
+    "unused_label",
+    Style,
+    Warning,
+    "label declared but never targeted by a `goto` in the same function"
+);
 
 impl WholeRule for UnusedLabel {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
@@ -66,7 +59,7 @@ struct LabelScope<'ast> {
 }
 
 impl<'ast> Visitor<'ast> for LabelScope<'ast> {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             // Lua 5.2+
             Statement::Label(label) => {
@@ -100,7 +93,7 @@ impl<'ast> Visitor<'ast> for LabelScope<'ast> {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
         }
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 
     // A nested function gets its own `check_scope` pass.

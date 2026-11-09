@@ -9,7 +9,7 @@ fn parse_lua52(source: &str) -> ParseResult {
 }
 
 #[test]
-fn goto_statement() {
+fn goto_stmt() {
     // The label is there because Lua rejects a goto with no visible label.
     let result = parse_lua52("goto label_name ::label_name::");
     assert_no_errors(&result);
@@ -25,7 +25,7 @@ fn goto_statement() {
 }
 
 #[test]
-fn label_statement() {
+fn label_stmt() {
     let result = parse_lua52("::my_label::");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
@@ -49,7 +49,7 @@ fn goto_and_label_in_same_block() {
 }
 
 #[test]
-fn semicolons_parse_as_empty_statements() {
+fn semicolons_parse_as_empty_stmts() {
     let result = parse_lua52(";;;");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 3);
@@ -62,7 +62,7 @@ fn semicolons_parse_as_empty_statements() {
 }
 
 #[test]
-fn break_can_precede_other_statements() {
+fn break_can_precede_other_stmts() {
     let result = parse_lua52("while true do break local x = 1 end");
     assert_no_errors(&result);
     if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
@@ -102,7 +102,7 @@ fn return_takes_a_trailing_semicolon() {
 }
 
 #[test]
-fn break_at_block_end_is_an_ordinary_statement() {
+fn break_at_block_end_is_an_ordinary_stmt() {
     let result = parse_lua52("while true do break end");
     assert_no_errors(&result);
     if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {

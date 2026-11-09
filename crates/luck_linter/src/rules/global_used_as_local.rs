@@ -1,25 +1,18 @@
 use luck_semantic::{Reference, ScopeId, ScopeKind, ScopeTree};
 
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GlobalUsedAsLocal;
 
-impl Rule for GlobalUsedAsLocal {
-    fn name(&self) -> &'static str {
-        "global_used_as_local"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "global variable is only used inside one function; use a local"
-    }
-}
+impl_rule!(
+    GlobalUsedAsLocal,
+    "global_used_as_local",
+    Style,
+    Warning,
+    "global variable is only used inside one function; use a local"
+);
 
 impl WholeRule for GlobalUsedAsLocal {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

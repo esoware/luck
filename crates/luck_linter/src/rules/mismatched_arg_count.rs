@@ -4,26 +4,19 @@ use luck_token::Span;
 use rustc_hash::FxHashMap;
 
 use crate::call::{has_multi_value_tail, positional_args};
-use crate::diagnostic::{Category, Finding, Severity, line_column};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::{Finding, line_column};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MismatchedArgCount;
 
-impl Rule for MismatchedArgCount {
-    fn name(&self) -> &'static str {
-        "mismatched_arg_count"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "call passes more arguments than the called function accepts"
-    }
-}
+impl_rule!(
+    MismatchedArgCount,
+    "mismatched_arg_count",
+    Correctness,
+    Warning,
+    "call passes more arguments than the called function accepts"
+);
 
 impl WholeRule for MismatchedArgCount {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
@@ -85,7 +78,7 @@ impl DefinitionCollector<'_> {
 }
 
 impl<'ast> Visitor<'ast> for DefinitionCollector<'_> {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalFunction(local_function) => {
                 self.record(local_function.name.span, &local_function.body);
@@ -119,7 +112,7 @@ impl<'ast> Visitor<'ast> for DefinitionCollector<'_> {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
         }
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 }
 
@@ -196,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_extra_args_to_function_expression() {
+    fn flags_extra_args_to_function_expr() {
         let diags = run("local f = function(a) return a end\nf(1, 2)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }

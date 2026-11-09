@@ -1,14 +1,15 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Literal, Statement, Var, is_multi_value};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Literal, is_multi_value};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, Token, short_string_body};
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::call::dotted_callee;
+use crate::diagnostic::Finding;
 use crate::format_pattern::{
     PatternError, count_pattern_captures, validate_format, validate_gsub_replacement,
     validate_lua_pattern, validate_os_date, validate_pack_format,
 };
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
 /// Validates a literal format string, Lua pattern, or pack format passed to
 /// a `string` function, and checks the argument count where one applies.
@@ -18,46 +19,27 @@ use crate::rule::{LintContext, NodeRule, Rule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FormatString;
 
-impl Rule for FormatString {
-    fn name(&self) -> &'static str {
-        "format_string"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "malformed format, pattern, pack, or date literal, or wrong argument count"
-    }
-}
+impl_rule!(
+    FormatString,
+    "format_string",
+    Correctness,
+    Warning,
+    "malformed format, pattern, pack, or date literal, or wrong argument count"
+);
 
 impl NodeRule for FormatString {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_statement(
+    fn on_call(
         &self,
-        stmt: &Statement,
+        call: &FunctionCall,
+        _position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        if let Statement::FunctionCall(call) = stmt {
-            findings.extend(check_dsl_literal(call, context.semantic));
-            findings.extend(check_gsub_replacement(call, context.semantic));
-        }
-    }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Expression::FunctionCall(call) = expr {
-            findings.extend(check_dsl_literal(call, context.semantic));
-            findings.extend(check_gsub_replacement(call, context.semantic));
-        }
+        findings.extend(check_dsl_literal(call, context.semantic));
+        findings.extend(check_gsub_replacement(call, context.semantic));
     }
 }
 
@@ -156,17 +138,6 @@ fn dotted_callee_dsl(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option
         _ => return None,
     };
     is_global(root, semantic).then_some(dsl)
-}
-
-/// The root token and field name of a `root.field(...)` callee.
-fn dotted_callee(call: &FunctionCall) -> Option<(&Token, &str)> {
-    let Expression::Var(Var::FieldAccess(field_access)) = &call.callee else {
-        return None;
-    };
-    let Expression::Var(Var::Name(root)) = &field_access.prefix else {
-        return None;
-    };
-    Some((root, field_access.name.identifier()?))
 }
 
 /// Whether the name `token` reads a global. A shadowed root

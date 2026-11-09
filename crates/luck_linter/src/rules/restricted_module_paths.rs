@@ -1,52 +1,34 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement};
+use luck_ast::{Expression, FunctionArgs, FunctionCall};
 use luck_token::short_string_body;
 
 use crate::call::is_global_call;
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RestrictedModulePaths;
 
-impl Rule for RestrictedModulePaths {
-    fn name(&self) -> &'static str {
-        "restricted_module_paths"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "`require` of a module listed in `restricted_module_paths`"
-    }
-}
+impl_rule!(
+    RestrictedModulePaths,
+    "restricted_module_paths",
+    Correctness,
+    Error,
+    "`require` of a module listed in `restricted_module_paths`"
+);
 
 impl NodeRule for RestrictedModulePaths {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_statement(
+    fn on_call(
         &self,
-        stmt: &Statement,
+        call: &FunctionCall,
+        _position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        if let Statement::FunctionCall(call) = stmt {
-            findings.extend(check_call(call, context));
-        }
-    }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Expression::FunctionCall(call) = expr {
-            findings.extend(check_call(call, context));
-        }
+        findings.extend(check_call(call, context));
     }
 }
 

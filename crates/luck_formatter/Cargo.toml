@@ -23,3 +23,6 @@ luck_token  = { workspace = true }
 
 rustc-hash    = { workspace = true }
 unicode-width = { workspace = true }
+
+[dev-dependencies]
+luck_testgen = { workspace = true }

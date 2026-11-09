@@ -46,10 +46,7 @@ impl Parser<'_> {
     /// Parse `: T` if present. Every annotation site calls this, so the Luau
     /// gate lives in one place.
     pub(super) fn try_parse_type_annotation(&mut self) -> Option<Type> {
-        (self.version.is_luau() && matches!(self.peek(), TokenKind::Colon)).then(|| {
-            self.advance_span();
-            self.parse_type()
-        })
+        (self.version.has_type_syntax() && self.eat(&TokenKind::Colon)).then(|| self.parse_type())
     }
 
     /// Parse a complete type. Every annotation position starts here.
@@ -112,8 +109,7 @@ impl Parser<'_> {
             self.error(first.span(), MIXED_TYPE_MESSAGE);
         }
         let mut members = vec![first];
-        while matches!(self.peek(), TokenKind::Pipe) {
-            self.advance_span();
+        while self.eat(&TokenKind::Pipe) {
             let next = self.parse_intersection_level();
             if matches!(next, Type::Intersection(_)) {
                 self.error(next.span(), MIXED_TYPE_MESSAGE);
@@ -144,8 +140,7 @@ impl Parser<'_> {
             self.error(first.span(), MIXED_TYPE_MESSAGE);
         }
         let mut members = vec![first];
-        while matches!(self.peek(), TokenKind::Ampersand) {
-            self.advance_span();
+        while self.eat(&TokenKind::Ampersand) {
             let next = self.parse_postfix_type();
             if matches!(next, Type::Optional(_)) {
                 self.error(next.span(), MIXED_TYPE_MESSAGE);
@@ -219,7 +214,7 @@ impl Parser<'_> {
     fn parse_typeof_type(&mut self) -> Type {
         let typeof_span = self.advance_span();
         self.advance_span(); // `(`, guaranteed by the caller's lookahead
-        let expr = self.parse_expression(0);
+        let expr = self.parse_expr(0);
         let close = self.expect(&TokenKind::RightParen);
         let span = typeof_span.merge(close);
         Type::Typeof(Box::new(TypeofType { span, expr }))
@@ -236,8 +231,7 @@ impl Parser<'_> {
             };
             return Type::Name { name, span: first_name.span };
         }
-        let (prefix, name) = if matches!(self.peek(), TokenKind::Dot) {
-            self.advance_span();
+        let (prefix, name) = if self.eat(&TokenKind::Dot) {
             let name = self.expect_identifier_recover();
             (Some(first_name), name)
         } else {
@@ -287,10 +281,7 @@ impl Parser<'_> {
                 break;
             };
             let dots = matches!(self.peek(), TokenKind::DotDotDot).then(|| self.advance_span());
-            let default = matches!(self.peek(), TokenKind::Equal).then(|| {
-                self.advance_span();
-                self.parse_type()
-            });
+            let default = self.eat(&TokenKind::Equal).then(|| self.parse_type());
 
             // Grammar: plain parameters come before packs, a plain parameter
             // after a defaulted one needs a default too, each default must
@@ -507,8 +498,7 @@ impl Parser<'_> {
 
         let close = self.expect(&TokenKind::RightParen);
 
-        if matches!(self.peek(), TokenKind::Arrow) {
-            self.advance_span();
+        if self.eat(&TokenKind::Arrow) {
             let return_type = self.parse_type();
             let span = open.merge(return_type.span());
             return Type::Function(Box::new(FunctionType {

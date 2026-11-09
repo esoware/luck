@@ -39,7 +39,13 @@ luck = { package = "luck_lua", version = "0.4", features = ["bundler", "minifier
 use luck::bundler;
 use luck::minifier;
 
-let bundled = bundler::bundle(&entry_path, target.lua_version(), &search_paths, &project_root, dynamic_require)?;
+let options = bundler::BundleOptions {
+    version: target.lua_version(),
+    search_paths: &search_paths,
+    project_root: &project_root,
+    dynamic_require,
+};
+let bundled = bundler::bundle(&entry_path, &options)?;
 let minified = minifier::minify(&bundled.output, target.lua_version(), &Default::default())?;
 ```
 

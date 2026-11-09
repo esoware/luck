@@ -21,7 +21,7 @@
 
 [globals._G]
 kind = "property"
-read_only = false
+is_read_only = false
 
 [globals._VERSION]
 kind = "property"
@@ -32,8 +32,8 @@ min_args = 1
 max_args = -1
 params = [
   { kind = "any" },
-  { kind = "string", required = false },
-  { kind = "vararg", required = false },
+  { kind = "string", is_required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 # Roblox only supports the "count" operation; gcinfo() is the supported
@@ -42,10 +42,10 @@ params = [
 kind = "function"
 min_args = 0
 max_args = 1
-must_use = true
+is_must_use = true
 deprecated = { message = "deprecated on Roblox; use gcinfo() instead", replace_template = "gcinfo()" }
 params = [
-  { kind = "constant", values = ["count"], required = false },
+  { kind = "constant", values = ["count"], is_required = false },
 ]
 
 [globals.error]
@@ -54,14 +54,14 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "any" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.gcinfo]
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 
 # Luau retains 5.1's environment model (getfenv/setfenv) instead of _ENV.
 # Roblox marks both deprecated: touching an environment turns off Luau
@@ -70,15 +70,15 @@ must_use = true
 kind = "function"
 min_args = 0
 max_args = 1
-must_use = true
+is_must_use = true
 deprecated = { message = "deprecated on Roblox; environment manipulation disables Luau optimizations" }
-params = [{ kind = "any", required = false }]
+params = [{ kind = "any", is_required = false }]
 
 [globals.getmetatable]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.ipairs]
@@ -86,7 +86,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "table" }]
 
 # Works only server-side with ServerScriptService.LoadStringEnabled set,
@@ -95,14 +95,14 @@ params = [{ kind = "table" }]
 kind = "function"
 min_args = 1
 max_args = 2
-params = [{ kind = "string" }, { kind = "string", required = false }]
+params = [{ kind = "string" }, { kind = "string", is_required = false }]
 
 [globals.newproxy]
 kind = "function"
 min_args = 0
 max_args = 1
-must_use = true
-params = [{ kind = "bool", required = false }]
+is_must_use = true
+params = [{ kind = "bool", is_required = false }]
 
 [globals.next]
 kind = "function"
@@ -110,7 +110,7 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "table" },
-  { kind = "any", required = false },
+  { kind = "any", is_required = false },
 ]
 
 [globals.pairs]
@@ -118,31 +118,31 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "table" }]
 
 [globals.pcall]
 kind = "function"
 min_args = 1
 max_args = -1
-must_use = true
+is_must_use = true
 params = [
   { kind = "function" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.print]
 kind = "function"
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.rawequal]
 kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }, { kind = "any" }]
 
 [globals.rawget]
@@ -150,7 +150,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }, { kind = "any" }]
 
 [globals.rawlen]
@@ -158,7 +158,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "table" }]
 
 [globals.rawset]
@@ -177,10 +177,10 @@ params = [{ kind = "any" }]
 kind = "function"
 min_args = 1
 max_args = -1
-must_use = true
+is_must_use = true
 params = [
   { kind = "any" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.setfenv]
@@ -204,10 +204,10 @@ kind = "function"
 min_args = 1
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "any" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.tostring]
@@ -215,7 +215,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.type]
@@ -223,7 +223,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.typeof]
@@ -231,19 +231,19 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "any" }]
 
 [globals.unpack]
 kind = "function"
 min_args = 1
 max_args = 3
-must_use = true
+is_must_use = true
 deprecated = { message = "use 'table.unpack' instead", replace_template = "table.unpack(%1)" }
 params = [
   { kind = "table" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 # A Roblox runtime addition; the open-source Luau VM doesn't register
@@ -252,17 +252,17 @@ params = [
 kind = "function"
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.xpcall]
 kind = "function"
 min_args = 2
 max_args = -1
-must_use = true
+is_must_use = true
 params = [
   { kind = "function" },
   { kind = "function" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 # ---- string namespace ----
@@ -275,11 +275,11 @@ kind = "function"
 min_args = 1
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.string.members.char]
@@ -287,51 +287,51 @@ kind = "function"
 min_args = 0
 max_args = -1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
-  { kind = "number", required = false },
-  { kind = "vararg", required = false },
+  { kind = "number", is_required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.string.members.find]
 kind = "function"
 min_args = 2
 max_args = 4
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "string" },
-  { kind = "number", required = false },
-  { kind = "bool", required = false },
+  { kind = "number", is_required = false },
+  { kind = "bool", is_required = false },
 ]
 
 [globals.string.members.format]
 kind = "function"
 min_args = 1
 max_args = -1
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.string.members.gmatch]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }, { kind = "string" }]
 
 [globals.string.members.gsub]
 kind = "function"
 min_args = 3
 max_args = 4
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "string" },
   { kind = "any" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.string.members.len]
@@ -339,7 +339,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 [globals.string.members.lower]
@@ -347,28 +347,28 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 [globals.string.members.match]
 kind = "function"
 min_args = 2
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "string" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.string.members.pack]
 kind = "function"
 min_args = 1
 max_args = -1
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.string.members.packsize]
@@ -376,7 +376,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 # Unlike Lua 5.2+, Luau's rep has no separator argument.
@@ -385,7 +385,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "number" },
@@ -396,7 +396,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 [globals.string.members.split]
@@ -404,10 +404,10 @@ kind = "function"
 min_args = 1
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "string", required = false },
+  { kind = "string", is_required = false },
 ]
 
 [globals.string.members.sub]
@@ -415,22 +415,22 @@ kind = "function"
 min_args = 2
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.string.members.unpack]
 kind = "function"
 min_args = 2
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "string" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.string.members.upper]
@@ -438,7 +438,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 # ---- table namespace ----
@@ -456,40 +456,40 @@ params = [{ kind = "table" }]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "table" }]
 
 [globals.table.members.concat]
 kind = "function"
 min_args = 1
 max_args = 4
-must_use = true
+is_must_use = true
 params = [
   { kind = "table" },
-  { kind = "string", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "string", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.table.members.create]
 kind = "function"
 min_args = 1
 max_args = 2
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
-  { kind = "any", required = false },
+  { kind = "any", is_required = false },
 ]
 
 [globals.table.members.find]
 kind = "function"
 min_args = 2
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
   { kind = "table" },
   { kind = "any" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.table.members.foreach]
@@ -516,7 +516,7 @@ params = [{ kind = "table" }]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 deprecated = { message = "use the '#' length operator instead", replace_template = "#%1" }
 params = [{ kind = "table" }]
 
@@ -527,7 +527,7 @@ max_args = 3
 params = [
   { kind = "table" },
   { kind = "any" },
-  { kind = "any", required = false },
+  { kind = "any", is_required = false },
 ]
 
 [globals.table.members.isfrozen]
@@ -535,14 +535,14 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "table" }]
 
 [globals.table.members.maxn]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "table" }]
 
 [globals.table.members.move]
@@ -554,15 +554,15 @@ params = [
   { kind = "number" },
   { kind = "number" },
   { kind = "number" },
-  { kind = "table", required = false },
+  { kind = "table", is_required = false },
 ]
 
 [globals.table.members.pack]
 kind = "function"
 min_args = 0
 max_args = -1
-must_use = true
-params = [{ kind = "vararg", required = false }]
+is_must_use = true
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.table.members.remove]
 kind = "function"
@@ -570,7 +570,7 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "table" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.table.members.sort]
@@ -579,18 +579,18 @@ min_args = 1
 max_args = 2
 params = [
   { kind = "table" },
-  { kind = "function", required = false },
+  { kind = "function", is_required = false },
 ]
 
 [globals.table.members.unpack]
 kind = "function"
 min_args = 1
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
   { kind = "table" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 # ---- math namespace ----
@@ -603,7 +603,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.acos]
@@ -611,7 +611,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.asin]
@@ -619,7 +619,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.atan]
@@ -627,7 +627,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.atan2]
@@ -635,7 +635,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.ceil]
@@ -643,7 +643,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.clamp]
@@ -651,7 +651,7 @@ kind = "function"
 min_args = 3
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
 
 [globals.math.members.cos]
@@ -659,7 +659,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.cosh]
@@ -667,7 +667,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.deg]
@@ -675,7 +675,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.e]
@@ -686,7 +686,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.floor]
@@ -694,7 +694,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.fmod]
@@ -702,7 +702,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.frexp]
@@ -710,7 +710,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.huge]
@@ -721,7 +721,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.isinf]
@@ -729,7 +729,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.isnan]
@@ -737,7 +737,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.ldexp]
@@ -745,7 +745,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.lerp]
@@ -753,7 +753,7 @@ kind = "function"
 min_args = 3
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
 
 [globals.math.members.log]
@@ -761,10 +761,10 @@ kind = "function"
 min_args = 1
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.math.members.log10]
@@ -772,7 +772,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.map]
@@ -780,7 +780,7 @@ kind = "function"
 min_args = 5
 max_args = 5
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
   { kind = "number" },
@@ -794,10 +794,10 @@ kind = "function"
 min_args = 1
 max_args = -1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.math.members.min]
@@ -805,10 +805,10 @@ kind = "function"
 min_args = 1
 max_args = -1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.math.members.modf]
@@ -816,7 +816,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.nan]
@@ -827,11 +827,11 @@ kind = "function"
 min_args = 1
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.math.members.pi]
@@ -845,7 +845,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.rad]
@@ -853,31 +853,31 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.random]
 kind = "function"
 min_args = 0
 max_args = 2
-must_use = true
+is_must_use = true
 params = [
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.math.members.randomseed]
 kind = "function"
 min_args = 0
 max_args = 1
-params = [{ kind = "number", required = false }]
+params = [{ kind = "number", is_required = false }]
 
 [globals.math.members.round]
 kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.sign]
@@ -885,7 +885,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.sin]
@@ -893,7 +893,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.sinh]
@@ -901,7 +901,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.sqrt]
@@ -909,7 +909,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.sqrt2]
@@ -920,7 +920,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.tanh]
@@ -928,7 +928,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.math.members.tau]
@@ -944,7 +944,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.bit32.members.band]
@@ -952,15 +952,15 @@ kind = "function"
 min_args = 0
 max_args = -1
 is_pure = true
-must_use = true
-params = [{ kind = "vararg", required = false }]
+is_must_use = true
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.bit32.members.bnot]
 kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.bit32.members.bor]
@@ -968,31 +968,31 @@ kind = "function"
 min_args = 0
 max_args = -1
 is_pure = true
-must_use = true
-params = [{ kind = "vararg", required = false }]
+is_must_use = true
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.bit32.members.btest]
 kind = "function"
 min_args = 0
 max_args = -1
 is_pure = true
-must_use = true
-params = [{ kind = "vararg", required = false }]
+is_must_use = true
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.bit32.members.bxor]
 kind = "function"
 min_args = 0
 max_args = -1
 is_pure = true
-must_use = true
-params = [{ kind = "vararg", required = false }]
+is_must_use = true
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.bit32.members.byteswap]
 kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.bit32.members.countlz]
@@ -1000,7 +1000,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.bit32.members.countrz]
@@ -1008,7 +1008,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.bit32.members.extract]
@@ -1016,11 +1016,11 @@ kind = "function"
 min_args = 2
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.bit32.members.lrotate]
@@ -1028,7 +1028,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.bit32.members.lshift]
@@ -1036,7 +1036,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.bit32.members.replace]
@@ -1044,12 +1044,12 @@ kind = "function"
 min_args = 3
 max_args = 4
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "number" },
   { kind = "number" },
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.bit32.members.rrotate]
@@ -1057,7 +1057,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.bit32.members.rshift]
@@ -1065,7 +1065,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 # ---- utf8 namespace ----
@@ -1078,10 +1078,10 @@ kind = "function"
 min_args = 0
 max_args = -1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
-  { kind = "number", required = false },
-  { kind = "vararg", required = false },
+  { kind = "number", is_required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.utf8.members.charpattern]
@@ -1092,18 +1092,18 @@ kind = "function"
 min_args = 1
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.utf8.members.codes]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 # Roblox runtime addition; not part of the open-source Luau utf8 library.
@@ -1111,11 +1111,11 @@ params = [{ kind = "string" }]
 kind = "function"
 min_args = 1
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.utf8.members.len]
@@ -1123,11 +1123,11 @@ kind = "function"
 min_args = 1
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 # Roblox runtime additions; not part of the open-source Luau utf8 library.
@@ -1135,14 +1135,14 @@ params = [
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 [globals.utf8.members.nfdnormalize]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 [globals.utf8.members.offset]
@@ -1150,11 +1150,11 @@ kind = "function"
 min_args = 2
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "string" },
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 # ---- coroutine namespace ----
@@ -1172,7 +1172,7 @@ params = [{ kind = "display", display = "thread" }]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "function" }]
 
 [globals.coroutine.members.isyieldable]
@@ -1186,34 +1186,34 @@ min_args = 1
 max_args = -1
 params = [
   { kind = "display", display = "coroutine" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.coroutine.members.running]
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 
 [globals.coroutine.members.status]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "coroutine" }]
 
 [globals.coroutine.members.wrap]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "function" }]
 
 [globals.coroutine.members.yield]
 kind = "function"
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 
 # ---- debug namespace (Luau-trimmed) ----
 
@@ -1232,18 +1232,18 @@ params = []
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 params = []
 
 [globals.debug.members.info]
 kind = "function"
 min_args = 2
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
   { kind = "any" },
   { kind = "any" },
-  { kind = "string", required = false },
+  { kind = "string", is_required = false },
 ]
 
 [globals.debug.members.profilebegin]
@@ -1274,11 +1274,11 @@ params = [{ kind = "string" }]
 kind = "function"
 min_args = 0
 max_args = 3
-must_use = true
+is_must_use = true
 params = [
-  { kind = "any", required = false },
-  { kind = "any", required = false },
-  { kind = "any", required = false },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
 ]
 
 # ---- buffer namespace ----
@@ -1294,15 +1294,15 @@ params = [
   { kind = "display", display = "buffer" },
   { kind = "number" },
   { kind = "display", display = "buffer" },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.buffer.members.create]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.buffer.members.fill]
@@ -1313,14 +1313,14 @@ params = [
   { kind = "display", display = "buffer" },
   { kind = "number" },
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.buffer.members.fromstring]
 kind = "function"
 min_args = 1
 max_args = 1
-must_use = true
+is_must_use = true
 params = [{ kind = "string" }]
 
 [globals.buffer.members.len]
@@ -1328,84 +1328,84 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }]
 
 [globals.buffer.members.readbits]
 kind = "function"
 min_args = 3
 max_args = 3
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
 
 [globals.buffer.members.readf32]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
 
 [globals.buffer.members.readf64]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
 
 [globals.buffer.members.readi8]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
 
 [globals.buffer.members.readi16]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
 
 [globals.buffer.members.readi32]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
 
 [globals.buffer.members.readinteger]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
 
 [globals.buffer.members.readstring]
 kind = "function"
 min_args = 3
 max_args = 3
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }, { kind = "number" }]
 
 [globals.buffer.members.readu8]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
 
 [globals.buffer.members.readu16]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
 
 [globals.buffer.members.readu32]
 kind = "function"
 min_args = 2
 max_args = 2
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }, { kind = "number" }]
 
 [globals.buffer.members.tostring]
@@ -1413,7 +1413,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "buffer" }]
 
 [globals.buffer.members.writebits]
@@ -1475,7 +1475,7 @@ params = [
   { kind = "display", display = "buffer" },
   { kind = "number" },
   { kind = "string" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.buffer.members.writeu8]
@@ -1506,7 +1506,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }]
 
 [globals.integer.members.fromstring]
@@ -1514,15 +1514,15 @@ kind = "function"
 min_args = 1
 max_args = 2
 is_pure = true
-must_use = true
-params = [{ kind = "string" }, { kind = "number", required = false }]
+is_must_use = true
+params = [{ kind = "string" }, { kind = "number", is_required = false }]
 
 [globals.integer.members.tonumber]
 kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }]
 
 [globals.integer.members.neg]
@@ -1530,7 +1530,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }]
 
 [globals.integer.members.add]
@@ -1538,7 +1538,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.sub]
@@ -1546,7 +1546,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.mul]
@@ -1554,7 +1554,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.div]
@@ -1562,7 +1562,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.rem]
@@ -1570,7 +1570,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.idiv]
@@ -1578,7 +1578,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.mod]
@@ -1586,7 +1586,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.udiv]
@@ -1594,7 +1594,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.urem]
@@ -1602,7 +1602,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.min]
@@ -1610,23 +1610,23 @@ kind = "function"
 min_args = 1
 max_args = -1
 is_pure = true
-must_use = true
-params = [{ kind = "display", display = "integer" }, { kind = "vararg", required = false }]
+is_must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "vararg", is_required = false }]
 
 [globals.integer.members.max]
 kind = "function"
 min_args = 1
 max_args = -1
 is_pure = true
-must_use = true
-params = [{ kind = "display", display = "integer" }, { kind = "vararg", required = false }]
+is_must_use = true
+params = [{ kind = "display", display = "integer" }, { kind = "vararg", is_required = false }]
 
 [globals.integer.members.clamp]
 kind = "function"
 min_args = 3
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "display", display = "integer" },
   { kind = "display", display = "integer" },
@@ -1638,7 +1638,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }]
 
 [globals.integer.members.band]
@@ -1646,39 +1646,39 @@ kind = "function"
 min_args = 0
 max_args = -1
 is_pure = true
-must_use = true
-params = [{ kind = "vararg", required = false }]
+is_must_use = true
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.integer.members.bor]
 kind = "function"
 min_args = 0
 max_args = -1
 is_pure = true
-must_use = true
-params = [{ kind = "vararg", required = false }]
+is_must_use = true
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.integer.members.bxor]
 kind = "function"
 min_args = 0
 max_args = -1
 is_pure = true
-must_use = true
-params = [{ kind = "vararg", required = false }]
+is_must_use = true
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.integer.members.btest]
 kind = "function"
 min_args = 0
 max_args = -1
 is_pure = true
-must_use = true
-params = [{ kind = "vararg", required = false }]
+is_must_use = true
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.integer.members.lt]
 kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.le]
@@ -1686,7 +1686,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.gt]
@@ -1694,7 +1694,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.ge]
@@ -1702,7 +1702,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.ult]
@@ -1710,7 +1710,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.ule]
@@ -1718,7 +1718,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.ugt]
@@ -1726,7 +1726,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.uge]
@@ -1734,7 +1734,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.lshift]
@@ -1742,7 +1742,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.rshift]
@@ -1750,7 +1750,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.arshift]
@@ -1758,7 +1758,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.lrotate]
@@ -1766,7 +1766,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.rrotate]
@@ -1774,7 +1774,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }, { kind = "display", display = "integer" }]
 
 [globals.integer.members.extract]
@@ -1782,11 +1782,11 @@ kind = "function"
 min_args = 2
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "display", display = "integer" },
   { kind = "display", display = "integer" },
-  { kind = "display", display = "integer", required = false },
+  { kind = "display", display = "integer", is_required = false },
 ]
 
 [globals.integer.members.replace]
@@ -1794,12 +1794,12 @@ kind = "function"
 min_args = 3
 max_args = 4
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "display", display = "integer" },
   { kind = "display", display = "integer" },
   { kind = "display", display = "integer" },
-  { kind = "display", display = "integer", required = false },
+  { kind = "display", display = "integer", is_required = false },
 ]
 
 [globals.integer.members.countrz]
@@ -1807,7 +1807,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }]
 
 [globals.integer.members.countlz]
@@ -1815,7 +1815,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }]
 
 [globals.integer.members.bswap]
@@ -1823,7 +1823,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "integer" }]
 
 [globals.integer.members.maxsigned]
@@ -1842,7 +1842,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "vector" }]
 
 [globals.vector.members.angle]
@@ -1850,11 +1850,11 @@ kind = "function"
 min_args = 2
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "display", display = "vector" },
   { kind = "display", display = "vector" },
-  { kind = "display", display = "vector", required = false },
+  { kind = "display", display = "vector", is_required = false },
 ]
 
 [globals.vector.members.ceil]
@@ -1862,7 +1862,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "vector" }]
 
 [globals.vector.members.clamp]
@@ -1870,7 +1870,7 @@ kind = "function"
 min_args = 3
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "display", display = "vector" },
   { kind = "display", display = "vector" },
@@ -1882,7 +1882,7 @@ kind = "function"
 min_args = 3
 max_args = 3
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
 
 [globals.vector.members.cross]
@@ -1890,7 +1890,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "vector" }, { kind = "display", display = "vector" }]
 
 [globals.vector.members.dot]
@@ -1898,7 +1898,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "vector" }, { kind = "display", display = "vector" }]
 
 [globals.vector.members.floor]
@@ -1906,7 +1906,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "vector" }]
 
 [globals.vector.members.magnitude]
@@ -1914,7 +1914,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "vector" }]
 
 [globals.vector.members.max]
@@ -1922,10 +1922,10 @@ kind = "function"
 min_args = 1
 max_args = -1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "display", display = "vector" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.vector.members.min]
@@ -1933,10 +1933,10 @@ kind = "function"
 min_args = 1
 max_args = -1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [
   { kind = "display", display = "vector" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.vector.members.normalize]
@@ -1944,7 +1944,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "vector" }]
 
 [globals.vector.members.one]
@@ -1955,7 +1955,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "display", display = "vector" }]
 
 [globals.vector.members.zero]
@@ -1978,7 +1978,7 @@ min_args = 1
 max_args = -1
 params = [
   { kind = "any" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.task.members.delay]
@@ -1988,7 +1988,7 @@ max_args = -1
 params = [
   { kind = "number" },
   { kind = "any" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.task.members.desynchronize]
@@ -2003,7 +2003,7 @@ min_args = 1
 max_args = -1
 params = [
   { kind = "any" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 [globals.task.members.synchronize]
@@ -2016,7 +2016,7 @@ params = []
 kind = "function"
 min_args = 0
 max_args = 1
-params = [{ kind = "number", required = false }]
+params = [{ kind = "number", is_required = false }]
 
 # ---- Roblox runtime globals (DataModel + scheduler legacy) ----
 # The standalone Luau VM has none of these.
@@ -2038,7 +2038,7 @@ kind = "property"
 
 [globals.shared]
 kind = "property"
-read_only = false
+is_read_only = false
 
 # The enum types and items come from the generated roblox_enums.toml,
 # which the loader splices in as Enum-shaped namespaces of EnumItem-shaped
@@ -2051,7 +2051,7 @@ shape = "Enums"
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 deprecated = { message = "use os.clock() for benchmarking, or time()/DateTime.now() for wall-clock time" }
 params = []
 
@@ -2059,14 +2059,14 @@ params = []
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 params = []
 
 [globals.elapsedTime]
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 deprecated = { message = "use time() instead", replace_template = "time()" }
 params = []
 
@@ -2074,7 +2074,7 @@ params = []
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 params = []
 returns = "GlobalSettings"
 
@@ -2082,7 +2082,7 @@ returns = "GlobalSettings"
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 deprecated = { message = "deprecated on Roblox" }
 params = []
 
@@ -2090,7 +2090,7 @@ params = []
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 params = []
 returns = "UserSettings"
 
@@ -2099,14 +2099,14 @@ returns = "UserSettings"
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 params = []
 
 [globals.stats]
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 deprecated = { message = "use game:GetService(\"Stats\") instead", replace_template = "game:GetService(\"Stats\")" }
 params = []
 
@@ -2115,13 +2115,13 @@ kind = "function"
 min_args = 0
 max_args = 1
 deprecated = { message = "deprecated on Roblox; identity levels are not observable from scripts" }
-params = [{ kind = "string", required = false }]
+params = [{ kind = "string", is_required = false }]
 
 [globals.DebuggerManager]
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 deprecated = { message = "deprecated on Roblox" }
 params = []
 
@@ -2129,11 +2129,11 @@ params = []
 kind = "function"
 min_args = 1
 max_args = -1
-must_use = true
+is_must_use = true
 deprecated = { message = "pcall has supported yielding since 2014; use it directly", replace_template = "pcall(%1)" }
 params = [
   { kind = "function" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 
 # Legacy global scheduler functions; deprecated in favor of task.*.
@@ -2142,7 +2142,7 @@ params = [
 kind = "function"
 min_args = 0
 max_args = 1
-params = [{ kind = "number", required = false }]
+params = [{ kind = "number", is_required = false }]
 deprecated = { message = "use task.wait", replace_template = "task.wait(%1)" }
 
 [globals.spawn]
@@ -2151,7 +2151,7 @@ min_args = 1
 max_args = -1
 params = [
   { kind = "any" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 deprecated = { message = "use task.spawn", replace_template = "task.spawn(%1)" }
 
@@ -2162,7 +2162,7 @@ max_args = -1
 params = [
   { kind = "number" },
   { kind = "any" },
-  { kind = "vararg", required = false },
+  { kind = "vararg", is_required = false },
 ]
 deprecated = { message = "use task.delay", replace_template = "task.delay(%1, %2)" }
 
@@ -2175,25 +2175,25 @@ kind = "namespace"
 [globals.Vector3.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 3
 params = [
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 [globals.Vector3.members.FromNormalId]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "display", display = "Enum.NormalId" }]
 [globals.Vector3.members.FromAxis]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "display", display = "Enum.Axis" }]
@@ -2213,12 +2213,12 @@ kind = "namespace"
 [globals.Vector2.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 2
 params = [
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 [globals.Vector2.members.zero]
 kind = "property"
@@ -2234,13 +2234,13 @@ kind = "namespace"
 [globals.Vector3int16.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 3
 params = [
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.Vector2int16]
@@ -2248,12 +2248,12 @@ kind = "namespace"
 [globals.Vector2int16.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 2
 params = [
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.CFrame]
@@ -2261,7 +2261,7 @@ kind = "namespace"
 [globals.CFrame.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 overloads = [
   { min_args = 0, max_args = 0, params = [] },
   { min_args = 1, max_args = 1, params = [{ kind = "display", display = "Vector3" }] },
@@ -2303,29 +2303,29 @@ kind = "property"
 [globals.CFrame.members.lookAt]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 2
 max_args = 3
 params = [
   { kind = "display", display = "Vector3" },
   { kind = "display", display = "Vector3" },
-  { kind = "display", display = "Vector3", required = false },
+  { kind = "display", display = "Vector3", is_required = false },
 ]
 [globals.CFrame.members.lookAlong]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 2
 max_args = 3
 params = [
   { kind = "display", display = "Vector3" },
   { kind = "display", display = "Vector3" },
-  { kind = "display", display = "Vector3", required = false },
+  { kind = "display", display = "Vector3", is_required = false },
 ]
 [globals.CFrame.members.fromRotationBetweenVectors]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 2
 max_args = 2
 params = [
@@ -2335,40 +2335,40 @@ params = [
 [globals.CFrame.members.fromEulerAngles]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 3
 max_args = 4
 params = [
   { kind = "number" },
   { kind = "number" },
   { kind = "number" },
-  { kind = "display", display = "Enum.RotationOrder", required = false },
+  { kind = "display", display = "Enum.RotationOrder", is_required = false },
 ]
 [globals.CFrame.members.fromEulerAnglesXYZ]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 3
 max_args = 3
 params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
 [globals.CFrame.members.fromEulerAnglesYXZ]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 3
 max_args = 3
 params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
 [globals.CFrame.members.fromOrientation]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 3
 max_args = 3
 params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
 [globals.CFrame.members.fromAxisAngle]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 2
 max_args = 2
 params = [
@@ -2379,19 +2379,19 @@ params = [
 [globals.CFrame.members.fromMatrix]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 3
 max_args = 4
 params = [
   { kind = "display", display = "Vector3" },
   { kind = "display", display = "Vector3" },
   { kind = "display", display = "Vector3" },
-  { kind = "display", display = "Vector3", required = false },
+  { kind = "display", display = "Vector3", is_required = false },
 ]
 [globals.CFrame.members.Angles]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 3
 max_args = 3
 params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
@@ -2401,36 +2401,36 @@ kind = "namespace"
 [globals.Color3.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 3
 params = [
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 [globals.Color3.members.fromRGB]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 3
 params = [
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 [globals.Color3.members.fromHSV]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 3
 max_args = 3
 params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }]
 [globals.Color3.members.fromHex]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "string" }]
@@ -2442,7 +2442,7 @@ kind = "namespace"
 [globals.BrickColor.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 overloads = [
   { min_args = 1, max_args = 1, params = [{ kind = "constant", set = "brickcolor_names" }] },
   { min_args = 3, max_args = 3, params = [
@@ -2454,69 +2454,69 @@ overloads = [
 [globals.BrickColor.members.palette]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "number" }]
 [globals.BrickColor.members.random]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 [globals.BrickColor.members.White]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 [globals.BrickColor.members.Gray]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 [globals.BrickColor.members.DarkGray]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 [globals.BrickColor.members.Black]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 [globals.BrickColor.members.Red]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 [globals.BrickColor.members.Yellow]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 [globals.BrickColor.members.Green]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 [globals.BrickColor.members.Blue]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
@@ -2526,12 +2526,12 @@ kind = "namespace"
 [globals.UDim.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 2
 params = [
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.UDim2]
@@ -2539,13 +2539,13 @@ kind = "namespace"
 [globals.UDim2.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 overloads = [
   { min_args = 0, max_args = 4, params = [
-    { kind = "number", required = false },
-    { kind = "number", required = false },
-    { kind = "number", required = false },
-    { kind = "number", required = false },
+    { kind = "number", is_required = false },
+    { kind = "number", is_required = false },
+    { kind = "number", is_required = false },
+    { kind = "number", is_required = false },
   ] },
   { min_args = 2, max_args = 2, params = [
     { kind = "display", display = "UDim" },
@@ -2555,14 +2555,14 @@ overloads = [
 [globals.UDim2.members.fromScale]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 2
 max_args = 2
 params = [{ kind = "number" }, { kind = "number" }]
 [globals.UDim2.members.fromOffset]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 2
 max_args = 2
 params = [{ kind = "number" }, { kind = "number" }]
@@ -2572,7 +2572,7 @@ kind = "namespace"
 [globals.Rect.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 overloads = [
   { min_args = 0, max_args = 0, params = [] },
   { min_args = 2, max_args = 2, params = [
@@ -2592,7 +2592,7 @@ kind = "namespace"
 [globals.Region3.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 2
 max_args = 2
 params = [
@@ -2605,7 +2605,7 @@ kind = "namespace"
 [globals.Region3int16.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 2
 max_args = 2
 params = [
@@ -2618,7 +2618,7 @@ kind = "namespace"
 [globals.Ray.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 2
 max_args = 2
 params = [{ kind = "any" }, { kind = "any" }]
@@ -2628,12 +2628,12 @@ kind = "namespace"
 [globals.NumberRange.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 2
 params = [
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.NumberSequence]
@@ -2641,7 +2641,7 @@ kind = "namespace"
 [globals.NumberSequence.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 overloads = [
   { min_args = 1, max_args = 1, params = [{ kind = "any" }] },
   { min_args = 2, max_args = 2, params = [
@@ -2655,13 +2655,13 @@ kind = "namespace"
 [globals.NumberSequenceKeypoint.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 2
 max_args = 3
 params = [
   { kind = "number" },
   { kind = "number" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.ColorSequence]
@@ -2669,7 +2669,7 @@ kind = "namespace"
 [globals.ColorSequence.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 overloads = [
   { min_args = 1, max_args = 1, params = [{ kind = "any" }] },
   { min_args = 2, max_args = 2, params = [
@@ -2683,7 +2683,7 @@ kind = "namespace"
 [globals.ColorSequenceKeypoint.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 2
 max_args = 2
 params = [
@@ -2696,16 +2696,16 @@ kind = "namespace"
 [globals.TweenInfo.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 6
 params = [
-  { kind = "number", required = false },
-  { kind = "any", required = false },
-  { kind = "any", required = false },
-  { kind = "number", required = false },
-  { kind = "bool", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "bool", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.PhysicalProperties]
@@ -2713,7 +2713,7 @@ kind = "namespace"
 [globals.PhysicalProperties.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 overloads = [
   { min_args = 1, max_args = 1, params = [{ kind = "display", display = "Enum.Material" }] },
   { min_args = 3, max_args = 3, params = [
@@ -2727,7 +2727,7 @@ overloads = [
     { kind = "number" },
     { kind = "number" },
     { kind = "number" },
-    { kind = "number", required = false },
+    { kind = "number", is_required = false },
   ] },
 ]
 
@@ -2735,62 +2735,62 @@ overloads = [
 kind = "namespace"
 [globals.Random.members.new]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 1
-params = [{ kind = "number", required = false }]
+params = [{ kind = "number", is_required = false }]
 
 [globals.DateTime]
 kind = "namespace"
 [globals.DateTime.members.now]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 [globals.DateTime.members.fromUnixTimestamp]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "number" }]
 [globals.DateTime.members.fromUnixTimestampMillis]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "number" }]
 [globals.DateTime.members.fromUniversalTime]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 7
 params = [
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 [globals.DateTime.members.fromLocalTime]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 7
 params = [
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 [globals.DateTime.members.fromIsoDate]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "string" }]
@@ -2799,7 +2799,7 @@ params = [{ kind = "string" }]
 kind = "namespace"
 [globals.OverlapParams.members.new]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
@@ -2808,7 +2808,7 @@ params = []
 kind = "namespace"
 [globals.RaycastParams.members.new]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
@@ -2818,59 +2818,59 @@ kind = "namespace"
 [globals.Font.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 3
 params = [
   { kind = "string" },
-  { kind = "display", display = "Enum.FontWeight", required = false },
-  { kind = "display", display = "Enum.FontStyle", required = false },
+  { kind = "display", display = "Enum.FontWeight", is_required = false },
+  { kind = "display", display = "Enum.FontStyle", is_required = false },
 ]
 [globals.Font.members.fromEnum]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "display", display = "Enum.Font" }]
 [globals.Font.members.fromId]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 3
 params = [
   { kind = "number" },
-  { kind = "display", display = "Enum.FontWeight", required = false },
-  { kind = "display", display = "Enum.FontStyle", required = false },
+  { kind = "display", display = "Enum.FontWeight", is_required = false },
+  { kind = "display", display = "Enum.FontStyle", is_required = false },
 ]
 [globals.Font.members.fromName]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 3
 params = [
   { kind = "string" },
-  { kind = "display", display = "Enum.FontWeight", required = false },
-  { kind = "display", display = "Enum.FontStyle", required = false },
+  { kind = "display", display = "Enum.FontWeight", is_required = false },
+  { kind = "display", display = "Enum.FontStyle", is_required = false },
 ]
 
 [globals.Instance]
 kind = "namespace"
 [globals.Instance.members.new]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 2
 params = [
   { kind = "constant", set = "roblox_creatable_classes" },
-  { kind = "any", required = false, deprecated = { message = "performance: set Parent after configuring the instance instead of passing it here" } },
+  { kind = "any", is_required = false, deprecated = { message = "performance: set Parent after configuring the instance instead of passing it here" } },
 ]
 returns = "Instance"
 [globals.Instance.members.fromExisting]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "any" }]
@@ -2880,26 +2880,26 @@ kind = "namespace"
 [globals.Axes.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.Faces]
 kind = "namespace"
 [globals.Faces.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 
 [globals.CatalogSearchParams]
 kind = "namespace"
 [globals.CatalogSearchParams.members.new]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
@@ -2909,20 +2909,20 @@ kind = "namespace"
 [globals.Content.members.fromUri]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "string" }]
 [globals.Content.members.fromAssetId]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "number" }]
 [globals.Content.members.fromObject]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "display", display = "Object" }]
@@ -2933,17 +2933,17 @@ kind = "constant"
 kind = "namespace"
 [globals.DockWidgetPluginGuiInfo.members.new]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 7
 params = [
-  { kind = "display", display = "Enum.InitialDockState", required = false },
-  { kind = "bool", required = false },
-  { kind = "bool", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
-  { kind = "number", required = false },
+  { kind = "display", display = "Enum.InitialDockState", is_required = false },
+  { kind = "bool", is_required = false },
+  { kind = "bool", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.FloatCurveKey]
@@ -2951,7 +2951,7 @@ kind = "namespace"
 [globals.FloatCurveKey.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 3
 max_args = 3
 params = [
@@ -2965,7 +2965,7 @@ kind = "namespace"
 [globals.RotationCurveKey.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 3
 max_args = 3
 params = [
@@ -2981,13 +2981,13 @@ kind = "namespace"
 [globals.PathWaypoint.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 3
 params = [
   { kind = "display", display = "Vector3" },
-  { kind = "display", display = "Enum.PathWaypointAction", required = false },
-  { kind = "string", required = false },
+  { kind = "display", display = "Enum.PathWaypointAction", is_required = false },
+  { kind = "string", is_required = false },
 ]
 
 [globals.Path2DControlPoint]
@@ -2995,10 +2995,10 @@ kind = "namespace"
 [globals.Path2DControlPoint.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 overloads = [
   { min_args = 0, max_args = 1, params = [
-    { kind = "display", display = "UDim2", required = false },
+    { kind = "display", display = "UDim2", is_required = false },
   ] },
   { min_args = 3, max_args = 3, params = [
     { kind = "display", display = "UDim2" },
@@ -3012,13 +3012,13 @@ kind = "namespace"
 [globals.SecurityCapabilities.members.new]
 kind = "function"
 is_pure = true
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = -1
-params = [{ kind = "vararg", required = false }]
+params = [{ kind = "vararg", is_required = false }]
 [globals.SecurityCapabilities.members.fromCurrent]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
@@ -3027,10 +3027,10 @@ params = []
 kind = "namespace"
 [globals.SharedTable.members.new]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 0
 max_args = 1
-params = [{ kind = "table", required = false }]
+params = [{ kind = "table", is_required = false }]
 [globals.SharedTable.members.clear]
 kind = "function"
 min_args = 1
@@ -3038,21 +3038,21 @@ max_args = 1
 params = [{ kind = "display", display = "SharedTable" }]
 [globals.SharedTable.members.clone]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 2
 params = [
   { kind = "display", display = "SharedTable" },
-  { kind = "bool", required = false },
+  { kind = "bool", is_required = false },
 ]
 [globals.SharedTable.members.cloneAndFreeze]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 2
 params = [
   { kind = "display", display = "SharedTable" },
-  { kind = "bool", required = false },
+  { kind = "bool", is_required = false },
 ]
 [globals.SharedTable.members.increment]
 kind = "function"
@@ -3065,13 +3065,13 @@ params = [
 ]
 [globals.SharedTable.members.isFrozen]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "display", display = "SharedTable" }]
 [globals.SharedTable.members.size]
 kind = "function"
-must_use = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "display", display = "SharedTable" }]
@@ -3094,16 +3094,16 @@ kind = "namespace"
 kind = "function"
 min_args = 0
 max_args = 0
-must_use = true
+is_must_use = true
 
 [globals.os.members.date]
 kind = "function"
 min_args = 0
 max_args = 2
-must_use = true
+is_must_use = true
 params = [
-  { kind = "string", required = false },
-  { kind = "number", required = false },
+  { kind = "string", is_required = false },
+  { kind = "number", is_required = false },
 ]
 
 [globals.os.members.difftime]
@@ -3111,15 +3111,15 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_pure = true
-must_use = true
+is_must_use = true
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.os.members.time]
 kind = "function"
 min_args = 0
 max_args = 1
-must_use = true
-params = [{ kind = "table", required = false }]
+is_must_use = true
+params = [{ kind = "table", is_required = false }]
 
 # ---- hand-pinned constant sets ----
 
@@ -3342,17 +3342,17 @@ values = [
 
 [shapes.Instance.members.Name]
 kind = "property"
-read_only = false
+is_read_only = false
 
 [shapes.Instance.members.Parent]
 kind = "property"
-read_only = false
+is_read_only = false
 shape = "Instance"
 
 [shapes.Instance.members.Clone]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
@@ -3360,15 +3360,15 @@ returns = "Instance"
 
 [shapes.Instance.members.Destroy]
 kind = "function"
-method = true
+is_method = true
 min_args = 0
 max_args = 0
 params = []
 
 [shapes.Instance.members.FindFirstAncestor]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "string" }]
@@ -3379,8 +3379,8 @@ returns = "Instance"
 # could reject valid concrete names.
 [shapes.Instance.members.FindFirstAncestorOfClass]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "constant", set = "roblox_all_classes" }]
@@ -3388,8 +3388,8 @@ returns = "Instance"
 
 [shapes.Instance.members.FindFirstAncestorWhichIsA]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "constant", set = "roblox_all_classes" }]
@@ -3397,20 +3397,20 @@ returns = "Instance"
 
 [shapes.Instance.members.FindFirstChild]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 2
 params = [
   { kind = "string" },
-  { kind = "bool", required = false },
+  { kind = "bool", is_required = false },
 ]
 returns = "Instance"
 
 [shapes.Instance.members.FindFirstChildOfClass]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "constant", set = "roblox_all_classes" }]
@@ -3418,96 +3418,96 @@ returns = "Instance"
 
 [shapes.Instance.members.FindFirstChildWhichIsA]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 2
 params = [
   { kind = "constant", set = "roblox_all_classes" },
-  { kind = "bool", required = false },
+  { kind = "bool", is_required = false },
 ]
 returns = "Instance"
 
 [shapes.Instance.members.GetAttribute]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "string" }]
 
 [shapes.Instance.members.GetAttributes]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 
 [shapes.Instance.members.GetChildren]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 
 [shapes.Instance.members.GetDescendants]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 
 [shapes.Instance.members.GetFullName]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
 
 [shapes.Instance.members.IsA]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "constant", set = "roblox_all_classes" }]
 
 [shapes.Instance.members.IsAncestorOf]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "display", display = "Instance" }]
 
 [shapes.Instance.members.IsDescendantOf]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "display", display = "Instance" }]
 
 [shapes.Instance.members.SetAttribute]
 kind = "function"
-method = true
+is_method = true
 min_args = 2
 max_args = 2
 params = [{ kind = "string" }, { kind = "any" }]
 
 [shapes.Instance.members.WaitForChild]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 2
 params = [
   { kind = "string" },
-  { kind = "number", required = false },
+  { kind = "number", is_required = false },
 ]
 returns = "Instance"
 
@@ -3519,15 +3519,15 @@ extends = "Instance"
 
 [shapes.DataModel.members.BindToClose]
 kind = "function"
-method = true
+is_method = true
 min_args = 1
 max_args = 1
 params = [{ kind = "function" }]
 
 [shapes.DataModel.members.FindService]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "constant", set = "roblox_services" }]
@@ -3535,8 +3535,8 @@ returns = "Instance"
 
 [shapes.DataModel.members.GetService]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "constant", set = "roblox_services" }]
@@ -3544,8 +3544,8 @@ returns = "Instance"
 
 [shapes.DataModel.members.IsLoaded]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 0
 max_args = 0
 params = []
@@ -3562,84 +3562,84 @@ extends = "Instance"
 
 [shapes.Workspace.members.Blockcast]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 3
 max_args = 4
 params = [
   { kind = "display", display = "CFrame" },
   { kind = "display", display = "Vector3" },
   { kind = "display", display = "Vector3" },
-  { kind = "display", display = "RaycastParams", required = false },
+  { kind = "display", display = "RaycastParams", is_required = false },
 ]
 
 [shapes.Workspace.members.CurrentCamera]
 kind = "property"
-read_only = false
+is_read_only = false
 shape = "Instance"
 
 [shapes.Workspace.members.GetPartBoundsInBox]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 2
 max_args = 3
 params = [
   { kind = "display", display = "CFrame" },
   { kind = "display", display = "Vector3" },
-  { kind = "display", display = "OverlapParams", required = false },
+  { kind = "display", display = "OverlapParams", is_required = false },
 ]
 
 [shapes.Workspace.members.GetPartBoundsInRadius]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 2
 max_args = 3
 params = [
   { kind = "display", display = "Vector3" },
   { kind = "number" },
-  { kind = "display", display = "OverlapParams", required = false },
+  { kind = "display", display = "OverlapParams", is_required = false },
 ]
 
 [shapes.Workspace.members.GetPartsInPart]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 2
 params = [
   { kind = "display", display = "BasePart" },
-  { kind = "display", display = "OverlapParams", required = false },
+  { kind = "display", display = "OverlapParams", is_required = false },
 ]
 
 [shapes.Workspace.members.Gravity]
 kind = "property"
-read_only = false
+is_read_only = false
 
 [shapes.Workspace.members.Raycast]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 2
 max_args = 3
 params = [
   { kind = "display", display = "Vector3" },
   { kind = "display", display = "Vector3" },
-  { kind = "display", display = "RaycastParams", required = false },
+  { kind = "display", display = "RaycastParams", is_required = false },
 ]
 
 [shapes.Workspace.members.Spherecast]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 3
 max_args = 4
 params = [
   { kind = "display", display = "Vector3" },
   { kind = "number" },
   { kind = "display", display = "Vector3" },
-  { kind = "display", display = "RaycastParams", required = false },
+  { kind = "display", display = "RaycastParams", is_required = false },
 ]
 
 [shapes.Workspace.members.Terrain]
@@ -3653,8 +3653,8 @@ shape = "Instance"
 
 [shapes.GlobalSettings.members.GetService]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "constant", values = [
@@ -3670,8 +3670,8 @@ returns = "Instance"
 
 [shapes.UserSettings.members.GetService]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "constant", values = ["UserGameSettings"] }]
@@ -3684,22 +3684,22 @@ returns = "Instance"
 
 [shapes.Enums.members.GetEnums]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 0
 max_args = 0
 
 [shapes.Enum.members.GetEnumItems]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 0
 max_args = 0
 
 [shapes.Enum.members.FromName]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "string" }]
@@ -3707,8 +3707,8 @@ returns = "EnumItem"
 
 [shapes.Enum.members.FromValue]
 kind = "function"
-method = true
-must_use = true
+is_method = true
+is_must_use = true
 min_args = 1
 max_args = 1
 params = [{ kind = "number" }]

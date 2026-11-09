@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import type { LanguageClientOptions, ServerOptions } from "vscode-languageclient/node";
-import { LanguageClient, RevealOutputChannelOn } from "vscode-languageclient/node";
+import { LanguageClient, RevealOutputChannelOn, State } from "vscode-languageclient/node";
 import { discoverServer } from "./discover";
 import { logExtension, outputChannel } from "./output";
 import { affectsSetting, setting } from "./settings";
@@ -20,7 +20,7 @@ export class LuckClient {
 	private client: LanguageClient | undefined;
 	private operation: Promise<void> = Promise.resolve();
 	private restartTimer: NodeJS.Timeout | undefined;
-	private readonly extensionPath: string;
+	private readonly context: vscode.ExtensionContext;
 	private readonly statusBar: StatusBar;
 	private readonly settingsListener = vscode.workspace.onDidChangeConfiguration((event) => {
 		if (affectsSetting(event, "enable")) {
@@ -33,8 +33,8 @@ export class LuckClient {
 		}
 	});
 
-	public constructor(extensionPath: string, statusBar: StatusBar) {
-		this.extensionPath = extensionPath;
+	public constructor(context: vscode.ExtensionContext, statusBar: StatusBar) {
+		this.context = context;
 		this.statusBar = statusBar;
 	}
 
@@ -71,25 +71,63 @@ export class LuckClient {
 	}
 
 	private async doStart(): Promise<void> {
-		if (this.client) {
+		if (this.client?.needsStop()) {
 			logExtension("start ignored: state is running");
 			return;
 		}
 		this.statusBar.update({ state: "starting" });
 
-		const command = await discoverServer(this.extensionPath);
+		const command = await discoverServer(this.context);
 		if (!command) {
 			this.statusBar.update({ state: "error", message: "luck binary not found" });
 			void promptMissingBinary();
 			return;
 		}
 
-		const client = createLanguageClient(command);
+		const args = ["lsp", ...(setting("server.args") ?? [])];
+		const env = { ...process.env, ...setting("server.extraEnv") };
+		const serverOptions: ServerOptions = { command, args, options: { env } };
+		const clientOptions: LanguageClientOptions = {
+			documentSelector: [
+				{ scheme: "file", language: "lua" },
+				{ scheme: "file", language: "luau" },
+				{ scheme: "untitled", language: "lua" },
+				{ scheme: "untitled", language: "luau" },
+			],
+			outputChannel: outputChannel("server"),
+			traceOutputChannel: outputChannel("trace"),
+			revealOutputChannelOn: RevealOutputChannelOn.Never,
+		};
+
+		const client = new LanguageClient("luck", "Luck Language Server", serverOptions, clientOptions);
 		await client.start();
 		const version = client.initializeResult?.serverInfo?.version;
 		this.client = client;
+		client.onDidChangeState(({ newState }) => this.showClientState(client, newState));
 		this.statusBar.update({ state: "ready", version });
 		logExtension(`start: ready (server ${version ?? "unknown"})`);
+	}
+
+	private showClientState(client: LanguageClient, state: State): void {
+		if (client !== this.client) {
+			return;
+		}
+		switch (state) {
+			case State.Starting: {
+				this.statusBar.update({ state: "starting" });
+				break;
+			}
+			case State.Running: {
+				const version = client.initializeResult?.serverInfo?.version;
+				this.statusBar.update({ state: "ready", version });
+				break;
+			}
+			case State.Stopped:
+			case State.StartFailed: {
+				this.statusBar.update({ state: "error", message: "server stopped unexpectedly" });
+				break;
+			}
+		}
 	}
 
 	private async doStop(): Promise<void> {
@@ -121,27 +159,6 @@ export class LuckClient {
 			await this.restart();
 		}
 	}
-}
-
-function createLanguageClient(command: string): LanguageClient {
-	const args = ["lsp", ...(setting("server.args") ?? [])];
-	const env = { ...process.env, ...setting("server.extraEnv") };
-
-	const serverOptions: ServerOptions = { command, args, options: { env } };
-
-	const clientOptions: LanguageClientOptions = {
-		documentSelector: [
-			{ scheme: "file", language: "lua" },
-			{ scheme: "file", language: "luau" },
-			{ scheme: "untitled", language: "lua" },
-			{ scheme: "untitled", language: "luau" },
-		],
-		outputChannel: outputChannel("server"),
-		traceOutputChannel: outputChannel("trace"),
-		revealOutputChannelOn: RevealOutputChannelOn.Never,
-	};
-
-	return new LanguageClient("luck", "Luck Language Server", serverOptions, clientOptions);
 }
 
 async function promptMissingBinary(): Promise<void> {

@@ -148,7 +148,7 @@ fn symbols_that_cannot_merge_stay_glued() {
 }
 
 #[test]
-fn semicolon_separates_a_statement_that_starts_with_a_paren() {
+fn semicolon_separates_a_stmt_that_starts_with_a_paren() {
     for (source, expected, version) in [
         // Lua 5.2+: a bare `;` is an EmptyStatement, which survives the round
         // trip.

@@ -4,7 +4,7 @@
 //! Programs are shaped like real code (module prelude, OOP class table,
 //! call- and table-heavy bodies) rather than statement soup.
 //!
-//! Unlike [`crate::generate`], output isn't runtime-safe: programs are for
+//! Unlike [`crate::generate_runtime_safe`], output isn't runtime-safe: programs are for
 //! the parse -> analyze -> transform -> emit pipeline, never for execution,
 //! so expressions may index nil, divide strings, or call numbers. Every
 //! program must parse with zero errors, and the roundtrip suite checks that
@@ -105,7 +105,7 @@ impl FullGenerator {
             if self.is_export_module && self.rng.chance(15) {
                 self.export_declaration();
             } else {
-                self.statement();
+                self.stmt();
             }
         }
         self.module_return();

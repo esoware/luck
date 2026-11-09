@@ -1,9 +1,9 @@
 use luck_ast::Statement;
 
 use crate::cfg::{Exit, analyze_full_block};
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags loops whose body `break`s, `return`s, or `error`s on every path, so
 /// it runs at most once. Such a loop was usually meant to be an `if` or a
@@ -11,20 +11,13 @@ use crate::rule::{LintContext, NodeRule, Rule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LoopExecutesOnce;
 
-impl Rule for LoopExecutesOnce {
-    fn name(&self) -> &'static str {
-        "loop_executes_once"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "loop body always exits on the first iteration"
-    }
-}
+impl_rule!(
+    LoopExecutesOnce,
+    "loop_executes_once",
+    Suspicious,
+    Warning,
+    "loop body always exits on the first iteration"
+);
 
 impl NodeRule for LoopExecutesOnce {
     fn node_types(&self) -> NodeTypeSet {
@@ -35,12 +28,7 @@ impl NodeRule for LoopExecutesOnce {
             NodeType::GenericFor,
         ])
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let (body, span, kind) = match stmt {
             Statement::WhileLoop(node) => (&node.block, node.span, "`while`"),
             Statement::RepeatLoop(node) => (&node.block, node.span, "`repeat`"),

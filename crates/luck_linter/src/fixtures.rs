@@ -35,16 +35,6 @@ pub(crate) fn run_rule_with_config(
     check(rule, &parse_cleanly(source, version), version, StdlibEnvironment::Standalone, config)
 }
 
-/// Like [`run_rule`] but on a parse that may have errors, which would stop
-/// the driver before any rule ran.
-pub(crate) fn run_rule_on_parse(
-    rule: &dyn Rule,
-    parse: &ParseResult,
-    version: LuaVersion,
-) -> Vec<LintDiagnostic> {
-    check(rule, parse, version, StdlibEnvironment::Standalone, &LintConfig::default())
-}
-
 /// Applies the diagnostics' fixes the way `--fix` does, asserting that each
 /// diagnostic carries one and that the result re-parses.
 pub(crate) fn fix_and_reparse(
@@ -79,6 +69,7 @@ fn check(
     let context = LintContext {
         block: &parse.block,
         blocks: nodes.blocks(),
+        uninitialized_locals: nodes.uninitialized_locals(),
         semantic: &semantic,
         source: &parse.source,
         comments: &parse.comments,

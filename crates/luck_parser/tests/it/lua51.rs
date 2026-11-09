@@ -243,14 +243,14 @@ fn assign_mixed_chain_target() {
 }
 
 #[test]
-fn function_call_statement() {
+fn function_call_stmt() {
     let result = parse_lua51("print(\"hello\")");
     assert_no_errors(&result);
     assert!(matches!(&result.block.stmts[0], Statement::FunctionCall(_)));
 }
 
 #[test]
-fn method_call_statement() {
+fn method_call_stmt() {
     let result = parse_lua51("obj:method(1, 2)");
     assert_no_errors(&result);
     if let Statement::FunctionCall(call) = &result.block.stmts[0] {
@@ -609,7 +609,7 @@ fn return_multiple_values() {
 }
 
 #[test]
-fn break_as_last_statement() {
+fn break_as_last_stmt() {
     let result = parse_lua51("while true do break end");
     assert_no_errors(&result);
     if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
@@ -631,14 +631,14 @@ fn empty_program() {
 }
 
 #[test]
-fn semicolon_separates_statements_without_an_empty_statement() {
+fn semicolon_separates_stmts_without_an_empty_stmt() {
     let result = parse_lua51("local x = 1; local y = 2");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 2);
 }
 
 #[test]
-fn complex_expression_in_function() {
+fn complex_expr_in_function() {
     let result = parse_lua51("local x = function() return 1 + 2 * 3 end");
     assert_no_errors(&result);
     let expr = local_value(&result);
@@ -757,7 +757,7 @@ fn consecutive_method_calls_four_deep() {
 }
 
 #[test]
-fn call_on_parenthesized_expression() {
+fn call_on_parenthesized_expr() {
     let result = parse_lua51("(f)(x)");
     assert_no_errors(&result);
     if let Statement::FunctionCall(call) = &result.block.stmts[0] {

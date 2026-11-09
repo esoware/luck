@@ -242,7 +242,7 @@ impl FmtArgs {
             Ok(text) => text,
             Err(error) => {
                 return FileOutcome::Failed(
-                    format!("Error: cannot read `{}`: {error}\n", file_path.display()).into_bytes(),
+                    format!("error: cannot read `{}`: {error}\n", file_path.display()).into_bytes(),
                 );
             }
         };
@@ -262,7 +262,7 @@ impl FmtArgs {
         if self.is_report_only() {
             FileOutcome::Changed(path)
         } else if let Err(error) = fs::write(file_path, &formatted) {
-            FileOutcome::WriteError(format!("Error: cannot write `{path}`: {error}"))
+            FileOutcome::WriteError(format!("error: cannot write `{path}`: {error}"))
         } else {
             FileOutcome::Written(path)
         }
@@ -293,7 +293,7 @@ impl FmtArgs {
                 Err((_result, diff)) => {
                     return FormatOutcome::Failed(
                         format!(
-                            "Error: `{}`: formatting verification failed at `{}`: {}\n",
+                            "error: `{}`: formatting verification failed at `{}`: {}\n",
                             file_path.to_string_lossy(),
                             diff.path,
                             diff.reason
@@ -341,7 +341,7 @@ impl FmtArgs {
         let end = self.range_end.unwrap_or(source_length).min(source_length);
         if start > end {
             return Err(format!(
-                "Error: invalid format range: start ({start}) is greater than end ({end})"
+                "error: invalid format range: start ({start}) is greater than end ({end})"
             ));
         }
         Ok(Some(start..end))

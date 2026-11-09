@@ -1,6 +1,7 @@
+use alloc::borrow::Cow;
 use std::path::Path;
 
-use luck_core::Diagnostic;
+use luck_core::{DEFAULT_SEARCH_PATHS, Diagnostic};
 use luck_token::{LuaVersion, Span};
 
 use crate::luaurc::AliasCache;
@@ -38,15 +39,16 @@ pub struct Resolver<'config> {
 
 #[derive(Debug)]
 enum Scheme<'config> {
-    Lua { search_paths: &'config [String], project_root: &'config Path },
+    Lua { search_paths: Cow<'config, [String]>, project_root: &'config Path },
     Luau(AliasCache),
 }
 
 impl<'config> Resolver<'config> {
     /// A resolver for `version` source.
     ///
-    /// Lua 5.x tries each of `search_paths` against `project_root`. Luau
-    /// ignores both and resolves from the requiring file.
+    /// Lua 5.x tries each of `search_paths`, or [`DEFAULT_SEARCH_PATHS`] when
+    /// it's empty, against `project_root`. Luau ignores both and resolves from
+    /// the requiring file.
     #[must_use]
     pub fn new(
         version: LuaVersion,
@@ -55,8 +57,11 @@ impl<'config> Resolver<'config> {
     ) -> Self {
         let scheme = if version.is_luau() {
             Scheme::Luau(AliasCache::default())
+        } else if search_paths.is_empty() {
+            let default_paths = DEFAULT_SEARCH_PATHS.iter().map(ToString::to_string).collect();
+            Scheme::Lua { search_paths: Cow::Owned(default_paths), project_root }
         } else {
-            Scheme::Lua { search_paths, project_root }
+            Scheme::Lua { search_paths: Cow::Borrowed(search_paths), project_root }
         };
         Self { scheme }
     }

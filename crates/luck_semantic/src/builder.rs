@@ -5,7 +5,7 @@ use luck_ast::{
     Statement, Var, Visitor,
 };
 use luck_token::{CompactString, Span, TokenKind};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::scope::{
     Reference, ReferenceId, ReferenceKind, Scope, ScopeId, ScopeKind, ScopeTree, Symbol, SymbolId,
@@ -14,12 +14,15 @@ use crate::scope::{
 
 /// Builds the scope tree for `block`, declaring and resolving names in the
 /// order Lua makes them visible.
-pub(crate) fn build(block: &Block) -> ScopeTree {
+#[must_use]
+pub fn build(block: &Block) -> ScopeTree {
     let mut builder = ScopeTreeBuilder {
         tree: ScopeTree {
             scopes: vec![Scope { parent: None, kind: ScopeKind::Module }],
             symbols: Vec::new(),
             references: Vec::new(),
+            references_by_span: FxHashMap::default(),
+            declared_globals: FxHashSet::default(),
         },
         current_scope: ScopeId::from_index(0),
         outer_scopes: Vec::new(),
@@ -112,6 +115,7 @@ impl ScopeTreeBuilder {
     fn reference_name(&mut self, name: &CompactString, span: Span, kind: ReferenceKind) {
         let resolved = self.resolve(name);
         let id = ReferenceId::from_index(self.tree.references.len());
+        self.tree.references_by_span.entry(span).or_insert(id);
         if let Some(symbol) =
             resolved.and_then(|symbol_id| self.tree.symbols.get_mut(symbol_id.index()))
         {
@@ -183,7 +187,7 @@ impl ScopeTreeBuilder {
         // Initializers can't see the names being declared.
         if let Some(exprs) = &local.exprs {
             for expr in exprs.iter() {
-                self.visit_expression(expr);
+                self.visit_expr(expr);
             }
         }
         for attributed in local.names.iter() {
@@ -217,11 +221,11 @@ impl ScopeTreeBuilder {
         self.visit_function_body_with_method(&function_decl.body, is_method);
     }
 
-    fn visit_if_statement(&mut self, if_stmt: &IfStatement) {
-        self.visit_expression(&if_stmt.condition);
+    fn visit_if_stmt(&mut self, if_stmt: &IfStatement) {
+        self.visit_expr(&if_stmt.condition);
         self.visit_scoped_block(ScopeKind::Block, &if_stmt.block);
         for clause in &if_stmt.elseif_clauses {
-            self.visit_expression(&clause.condition);
+            self.visit_expr(&clause.condition);
             self.visit_scoped_block(ScopeKind::Block, &clause.block);
         }
         if let Some(else_clause) = &if_stmt.else_clause {
@@ -230,10 +234,10 @@ impl ScopeTreeBuilder {
     }
 
     fn visit_numeric_for(&mut self, numeric_for: &NumericFor) {
-        self.visit_expression(&numeric_for.start);
-        self.visit_expression(&numeric_for.limit);
+        self.visit_expr(&numeric_for.start);
+        self.visit_expr(&numeric_for.limit);
         if let Some(step) = &numeric_for.step {
-            self.visit_expression(step);
+            self.visit_expr(step);
         }
         self.push_scope(ScopeKind::Loop);
         if let TokenKind::Identifier(name) = &numeric_for.name.kind {
@@ -249,7 +253,7 @@ impl ScopeTreeBuilder {
     fn visit_generic_for(&mut self, generic_for: &GenericFor) {
         // The iterator expressions can't see the loop variables.
         for expr in generic_for.exprs.iter() {
-            self.visit_expression(expr);
+            self.visit_expr(expr);
         }
         self.push_scope(ScopeKind::Loop);
         for binding in generic_for.names.iter() {
@@ -270,12 +274,12 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
         self.visit_function_body_with_method(body, false);
     }
 
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalAssignment(local) => self.visit_local_assignment(local),
             Statement::Assignment(assignment) => {
                 for expr in assignment.values.iter() {
-                    self.visit_expression(expr);
+                    self.visit_expr(expr);
                 }
                 for var in assignment.targets.iter() {
                     self.reference_var(var, ReferenceKind::Write);
@@ -296,46 +300,56 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
                 self.visit_scoped_block(ScopeKind::Block, &do_block.block);
             }
             Statement::WhileLoop(while_loop) => {
-                self.visit_expression(&while_loop.condition);
+                self.visit_expr(&while_loop.condition);
                 self.visit_scoped_block(ScopeKind::Loop, &while_loop.block);
             }
             Statement::RepeatLoop(repeat_loop) => {
                 self.push_scope(ScopeKind::Loop);
                 self.visit_block(&repeat_loop.block);
                 // The `until` condition can see the body's locals.
-                self.visit_expression(&repeat_loop.condition);
+                self.visit_expr(&repeat_loop.condition);
                 self.pop_scope();
             }
-            Statement::IfStatement(if_stmt) => self.visit_if_statement(if_stmt),
+            Statement::IfStatement(if_stmt) => self.visit_if_stmt(if_stmt),
             Statement::NumericFor(numeric_for) => self.visit_numeric_for(numeric_for),
             Statement::GenericFor(generic_for) => self.visit_generic_for(generic_for),
             // Luau
             Statement::CompoundAssignment(compound) => {
-                self.visit_expression(&compound.expr);
+                self.visit_expr(&compound.expr);
                 self.reference_var(&compound.var, ReferenceKind::ReadWrite);
             }
             // Lua 5.5 globals declare no locals, but their initializers
             // still reference the enclosing scopes.
             Statement::GlobalDeclaration(global_declaration) => {
+                for attributed in global_declaration.names.iter() {
+                    if let Some(name) = attributed.name.identifier() {
+                        self.tree.declared_globals.insert(name.into());
+                    }
+                }
                 if let Some(exprs) = &global_declaration.exprs {
                     for expr in exprs.iter() {
-                        self.visit_expression(expr);
+                        self.visit_expr(expr);
                     }
                 }
             }
+            // Lua 5.5
+            Statement::GlobalFunction(global_function) => {
+                if let Some(name) = global_function.name.identifier() {
+                    self.tree.declared_globals.insert(name.into());
+                }
+                self.walk_stmt(stmt);
+            }
             // None of these declares a local, so the default walk records
-            // their references: call arguments, a `global function` body,
-            // a type alias's `typeof(expr)`, and a `type function` body,
-            // which is ordinary code.
+            // their references: call arguments, a type alias's `typeof(expr)`,
+            // and a `type function` body, which is ordinary code.
             Statement::FunctionCall(_)
-            | Statement::GlobalFunction(_)
             | Statement::TypeDeclaration(_)
             | Statement::GlobalStar(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::EmptyStatement(_)
             | Statement::Break(_)
-            | Statement::Error(_) => self.walk_statement(stmt),
+            | Statement::Error(_) => self.walk_stmt(stmt),
         }
     }
 
@@ -534,6 +548,37 @@ mod tests {
         let tree =
             scope_tree_for("local x = 1\nglobal function f() return x end", LuaVersion::Lua55);
         assert!(symbol(&tree, "x").is_upvalue);
+    }
+
+    #[test]
+    fn global_stmts_record_their_declared_names() {
+        let tree = scope_tree_for(
+            "global a, b <const> = 1, 2\nglobal c\nglobal function d() end\n",
+            LuaVersion::Lua55,
+        );
+        for name in ["a", "b", "c", "d"] {
+            assert!(tree.declared_globals.contains(name), "{name}");
+        }
+        assert_eq!(tree.declared_globals.len(), 4);
+    }
+
+    #[test]
+    fn references_by_span_finds_each_reference() {
+        let tree = scope_tree("local x = 1\nprint(x)");
+        for reference in &tree.references {
+            let id = tree.references_by_span[&reference.span];
+            assert_eq!(tree.reference(id).name, reference.name);
+        }
+    }
+
+    #[test]
+    fn resolves_to_local_checks_the_name_at_the_span() {
+        let tree = scope_tree("local x = 1\nprint(x)\nprint(y)");
+        let local_x = references(&tree, "x")[0].span;
+        let global_y = references(&tree, "y")[0].span;
+        assert!(tree.resolves_to_local("x", local_x));
+        assert!(!tree.resolves_to_local("y", local_x));
+        assert!(!tree.resolves_to_local("y", global_y));
     }
 
     #[test]

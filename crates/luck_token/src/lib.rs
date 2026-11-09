@@ -20,20 +20,12 @@
 //! assert_eq!(Span::new(0, 2).merge(Span::new(5, 7)), Span::new(0, 7));
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
 extern crate alloc;
 
 mod code_buffer;
 mod comment;
 mod number;
-mod operator;
+mod op;
 mod source_error;
 mod span;
 mod string;
@@ -41,10 +33,10 @@ mod token;
 mod version;
 
 pub use code_buffer::CodeBuffer;
-pub use comment::{Comment, CommentKind, CommentPosition};
+pub use comment::{Comment, CommentKind, CommentPosition, leading_hot_comments};
 pub use compact_str::CompactString;
 pub use number::{LuaNumber, NumberSubtypes, parse_lua_number};
-pub use operator::{Associativity, BinOp, CompoundOp, OperandSide, UnOp};
+pub use op::{Associativity, BinOp, CompoundOp, OperandSide, UnOp};
 pub use source_error::SourceError;
 pub use span::{Span, index_to_offset, offset_to_index};
 pub use string::{decode_string, encode_string, short_string_body};

@@ -36,11 +36,13 @@ mod tests {
     use luck_core::LuaTarget;
     use luck_linter::Category;
     use luck_token::Span;
+    use rustc_hash::FxHashSet;
 
     use super::*;
 
     fn convert(lint: LintDiagnostic) -> Diagnostic {
-        let document = DocumentState::new("local x = 1".to_owned(), 1, LuaTarget::Lua54);
+        let document =
+            DocumentState::new("local x = 1".to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         let mut diagnostics = to_lsp(&document, &[lint]);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         diagnostics.remove(0)

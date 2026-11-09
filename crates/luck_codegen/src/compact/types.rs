@@ -53,7 +53,7 @@ impl CompactPrinter {
     fn emit_typeof_type(&mut self, typeof_type: &TypeofType) {
         self.emit_fixed("typeof");
         self.emit_fixed("(");
-        self.emit_expression(&typeof_type.expr);
+        self.emit_expr(&typeof_type.expr);
         self.emit_fixed(")");
     }
 

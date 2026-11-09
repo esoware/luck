@@ -1,38 +1,27 @@
 use luck_ast::Expression;
 use luck_token::BinOp;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::number::is_number_literal;
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CompareNan;
 
-impl Rule for CompareNan {
-    fn name(&self) -> &'static str {
-        "compare_nan"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "comparison with NaN (`0/0`) always has the same result"
-    }
-}
+impl_rule!(
+    CompareNan,
+    "compare_nan",
+    Correctness,
+    Error,
+    "comparison with NaN (`0/0`) always has the same result"
+);
 
 impl NodeRule for CompareNan {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Expression::BinaryOp(binary) = expr
             && matches!(binary.op, BinOp::Eq | BinOp::Ne)
             && (is_nan_expr(&binary.left) || is_nan_expr(&binary.right))
@@ -48,16 +37,15 @@ impl NodeRule for CompareNan {
     }
 }
 
-/// Whether `expr` is spelled exactly `0/0`.
+/// Whether `expr` divides a zero literal by a zero literal, each in any
+/// spelling.
 fn is_nan_expr(expr: &Expression) -> bool {
     let Expression::BinaryOp(binary) = expr else {
         return false;
     };
-    binary.op == BinOp::Div && is_zero(&binary.left) && is_zero(&binary.right)
-}
-
-fn is_zero(expr: &Expression) -> bool {
-    matches!(expr, Expression::Number(literal) if literal.text == "0")
+    binary.op == BinOp::Div
+        && is_number_literal(&binary.left, 0.0)
+        && is_number_literal(&binary.right, 0.0)
 }
 
 #[cfg(test)]
@@ -82,6 +70,14 @@ mod tests {
     fn flags_inequality_with_nan_on_left() {
         let diags = run("local differs = 0/0 ~= x");
         assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_every_spelling_of_zero() {
+        for nan in ["0.0/0", "0/0.0", "0x0/0", "0e0/0"] {
+            let diags = run(&format!("local same = x == {nan}"));
+            assert_eq!(diags.len(), 1, "{nan}: {diags:?}");
+        }
     }
 
     #[test]

@@ -1,8 +1,7 @@
 //! The rewrite that gives each binding the name the analyzer picked.
 
 use luck_ast::{
-    AttributedName, FunctionBody, FunctionCall, IfStatement, Parameter, Punctuated, Statement,
-    Transform, Var,
+    AttributedName, FunctionBody, IfStatement, Parameter, Punctuated, Statement, Transform, Var,
 };
 use luck_token::CompactString;
 use rustc_hash::FxHashMap;
@@ -78,7 +77,7 @@ impl Renamer {
     }
 
     fn transform_if_scoped(&mut self, mut if_stmt: Box<IfStatement>) -> Box<IfStatement> {
-        if_stmt.condition = self.transform_expression(if_stmt.condition);
+        if_stmt.condition = self.transform_expr(if_stmt.condition);
         self.enter_scope();
         if_stmt.block = self.transform_block(if_stmt.block);
         self.exit_scope();
@@ -86,7 +85,7 @@ impl Renamer {
             .elseif_clauses
             .into_iter()
             .map(|mut clause| {
-                clause.condition = self.transform_expression(clause.condition);
+                clause.condition = self.transform_expr(clause.condition);
                 self.enter_scope();
                 clause.block = self.transform_block(clause.block);
                 self.exit_scope();
@@ -125,7 +124,7 @@ impl Renamer {
 }
 
 impl Transform for Renamer {
-    fn transform_statement(&mut self, stmt: Statement) -> Statement {
+    fn transform_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
             Statement::LocalAssignment(mut local) => {
                 // RHS before LHS: `local x = x` reads the outer x.
@@ -154,7 +153,7 @@ impl Transform for Renamer {
                 Statement::DoBlock(do_block)
             }
             Statement::WhileLoop(mut while_loop) => {
-                while_loop.condition = self.transform_expression(while_loop.condition);
+                while_loop.condition = self.transform_expr(while_loop.condition);
                 self.enter_scope();
                 while_loop.block = self.transform_block(while_loop.block);
                 self.exit_scope();
@@ -163,7 +162,7 @@ impl Transform for Renamer {
             Statement::RepeatLoop(mut repeat_loop) => {
                 self.enter_scope();
                 repeat_loop.block = self.transform_block(repeat_loop.block);
-                repeat_loop.condition = self.transform_expression(repeat_loop.condition);
+                repeat_loop.condition = self.transform_expr(repeat_loop.condition);
                 self.exit_scope();
                 Statement::RepeatLoop(repeat_loop)
             }
@@ -171,9 +170,9 @@ impl Transform for Renamer {
                 Statement::IfStatement(self.transform_if_scoped(if_stmt))
             }
             Statement::NumericFor(mut numeric_for) => {
-                numeric_for.start = self.transform_expression(numeric_for.start);
-                numeric_for.limit = self.transform_expression(numeric_for.limit);
-                numeric_for.step = numeric_for.step.map(|step| self.transform_expression(step));
+                numeric_for.start = self.transform_expr(numeric_for.start);
+                numeric_for.limit = self.transform_expr(numeric_for.limit);
+                numeric_for.step = numeric_for.step.map(|step| self.transform_expr(step));
                 self.enter_scope();
                 let new_name = self.declare_binding(identifier_name(&numeric_for.name));
                 numeric_for.name = identifier_token(new_name);
@@ -205,7 +204,7 @@ impl Transform for Renamer {
                 }
                 Statement::GlobalDeclaration(global_declaration)
             }
-            // `walk_statement` visits these in the same order as the
+            // `walk_stmt` visits these in the same order as the
             // analyzer's `Visitor` walk, which keeps the binding ids in step.
             other @ (Statement::Assignment(_)
             | Statement::FunctionCall(_)
@@ -216,7 +215,7 @@ impl Transform for Renamer {
             | Statement::GlobalStar(_)
             | Statement::Break(_)
             | Statement::TypeDeclaration(_)
-            | Statement::Error(_)) => self.walk_statement(other),
+            | Statement::Error(_)) => self.walk_stmt(other),
         }
     }
 
@@ -233,21 +232,13 @@ impl Transform for Renamer {
     fn transform_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
         self.enter_scope();
         body.params = self.declare_params(body.params);
+        // Lua 5.5
+        if let Some(vararg_name) = body.vararg.as_mut().and_then(|vararg| vararg.name.as_mut()) {
+            let new_name = self.declare_binding(identifier_name(vararg_name));
+            *vararg_name = identifier_token(new_name);
+        }
         body.block = self.transform_block(body.block);
         self.exit_scope();
         body
-    }
-
-    // `Transform::walk_function_call` reaches the arguments before the
-    // explicit type arguments, but the analyzer's `Visitor` walk reaches them
-    // after, so this follows the analyzer to keep the binding ids in step.
-    fn transform_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
-        call.callee = self.transform_expression(call.callee);
-        call.explicit_type_args = call.explicit_type_args.map(|mut type_args| {
-            *type_args = self.walk_type_args(*type_args);
-            type_args
-        });
-        call.args = self.transform_function_args(call.args);
-        call
     }
 }

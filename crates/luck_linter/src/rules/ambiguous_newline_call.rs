@@ -1,51 +1,33 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement};
+use luck_ast::{FunctionArgs, FunctionCall};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AmbiguousNewlineCall;
 
-impl Rule for AmbiguousNewlineCall {
-    fn name(&self) -> &'static str {
-        "ambiguous_newline_call"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "call arguments open on a new line, which reads ambiguously"
-    }
-}
+impl_rule!(
+    AmbiguousNewlineCall,
+    "ambiguous_newline_call",
+    Suspicious,
+    Warning,
+    "call arguments open on a new line, which reads ambiguously"
+);
 
 impl NodeRule for AmbiguousNewlineCall {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_statement(
+    fn on_call(
         &self,
-        stmt: &Statement,
+        call: &FunctionCall,
+        _position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        if let Statement::FunctionCall(call) = stmt {
-            findings.extend(check_call(call, context.source));
-        }
-    }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Expression::FunctionCall(call) = expr {
-            findings.extend(check_call(call, context.source));
-        }
+        findings.extend(check_call(call, context.source));
     }
 }
 
@@ -93,7 +75,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_statement_level_split_call() {
+    fn flags_stmt_level_split_call() {
         let diags = run("local f = print\nf\n(3)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }

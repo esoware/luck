@@ -2,7 +2,7 @@ use core::mem;
 
 use luck_ast::Block;
 use luck_core::TransformConfig;
-use luck_token::{LuaVersion, SourceError, Span};
+use luck_token::{LuaVersion, SourceError, leading_hot_comments};
 
 use crate::transforms;
 
@@ -35,20 +35,9 @@ pub fn minify(
     // output.
     let hot_comment_prefix = if version.is_luau() {
         let mut prefix = String::new();
-        let mut boundary = 0u32;
-        for comment in &result.comments {
-            let gap = Span::new(boundary, comment.span.start).text(source);
-            if !gap.chars().all(char::is_whitespace) {
-                break;
-            }
-            let text = comment.span.text(source);
-            if let Some(rest) = text.strip_prefix("--")
-                && rest.starts_with('!')
-            {
-                prefix.push_str(text.trim_end());
-                prefix.push('\n');
-            }
-            boundary = comment.span.end;
+        for comment in leading_hot_comments(&result.comments, source) {
+            prefix.push_str(comment.span.text(source).trim_end());
+            prefix.push('\n');
         }
         prefix
     } else {
@@ -121,7 +110,7 @@ fn apply_core_transforms(mut block: Block, config: &TransformConfig, version: Lu
         block = transforms::merge_locals::merge(block, version);
     }
     if config.simplify_indexes {
-        block = transforms::simplify_indexes::simplify(block);
+        block = transforms::simplify_indexes::simplify(block, version);
     }
     if config.shorten_strings {
         block = transforms::shorten_strings::shorten(block, version);

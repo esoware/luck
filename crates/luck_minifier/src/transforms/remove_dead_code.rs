@@ -8,7 +8,7 @@ use luck_token::{BinOp, CompactString, LuaVersion, Span, UnOp};
 use rustc_hash::FxHashSet;
 
 use crate::binding::{has_attributed_or_env_name, identifier_name, is_env_binding};
-use crate::expr::{extract_boolean, is_nil, is_pure_expression};
+use crate::expr::{extract_boolean, is_nil, is_pure_expr};
 
 /// Removes unused locals, dead branches, and trivial statements, looping to a
 /// fixpoint.
@@ -89,6 +89,17 @@ impl<'ast> Visitor<'ast> for ReferenceCollector {
         }
         self.walk_var(var);
     }
+
+    // `function M.f()` reads `M` and `function f()` writes `f`, and neither
+    // root is a `Var`.
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+        if let Statement::FunctionDecl(function_decl) = stmt
+            && let Some(root) = function_decl.name.names.first()
+        {
+            self.references.insert(identifier_name(root).into());
+        }
+        self.walk_stmt(stmt);
+    }
 }
 
 /// Removes unused locals and dead branches in one traversal.
@@ -127,7 +138,7 @@ fn is_dead_branch(stmt: &Statement) -> bool {
             // side-effect free: `if f() then end` calls f.
             let has_no_effect = if_stmt.block.stmts.is_empty()
                 && if_stmt.block.last_stmt.is_none()
-                && is_pure_expression(&if_stmt.condition);
+                && is_pure_expr(&if_stmt.condition);
             if_stmt.elseif_clauses.is_empty()
                 && if_stmt.else_clause.is_none()
                 && (constant_truthiness(&if_stmt.condition) == Some(false) || has_no_effect)
@@ -165,10 +176,10 @@ fn is_redundant_ternary(outer: &BinaryOp) -> bool {
             if matches!(outer.op, BinOp::Or)
                 && matches!(inner.op, BinOp::And)
                 && inner.right == outer.right
-                && is_pure_expression(&inner.left)
+                && is_pure_expr(&inner.left)
                 // X must be pure too: a call that returns a falsy value runs
                 // twice in the original but once here.
-                && is_pure_expression(&outer.right)
+                && is_pure_expr(&outer.right)
     )
 }
 
@@ -189,7 +200,7 @@ impl DeadCodeRemover {
             if let Some(first_elseif) = clauses.next() {
                 self.has_changed = true;
                 let else_clause = if_stmt.else_clause.take();
-                let new_condition = self.transform_expression(first_elseif.condition);
+                let new_condition = self.transform_expr(first_elseif.condition);
                 let new_block = self.transform_block(first_elseif.block);
                 let new_if = IfStatement {
                     span: Span::default(),
@@ -198,7 +209,7 @@ impl DeadCodeRemover {
                     elseif_clauses: clauses.collect(),
                     else_clause,
                 };
-                return self.transform_statement(Statement::IfStatement(Box::new(new_if)));
+                return self.transform_stmt(Statement::IfStatement(Box::new(new_if)));
             }
             if let Some(else_clause) = if_stmt.else_clause.take() {
                 self.has_changed = true;
@@ -216,7 +227,7 @@ impl DeadCodeRemover {
             && let Some(else_clause) = if_stmt.else_clause.take()
         {
             self.has_changed = true;
-            let negated = negate_expression(if_stmt.condition);
+            let negated = negate_expr(if_stmt.condition);
             let new_block = self.transform_block(else_clause.block);
             let new_if = IfStatement {
                 span: Span::default(),
@@ -249,7 +260,7 @@ impl DeadCodeRemover {
                 };
                 Statement::IfStatement(Box::new(new_if))
             }
-            other => self.walk_statement(Statement::IfStatement(Box::new(other))),
+            other => self.walk_stmt(Statement::IfStatement(Box::new(other))),
         }
     }
 }
@@ -258,7 +269,7 @@ impl Transform for DeadCodeRemover {
     fn transform_block(&mut self, block: Block) -> Block {
         let mut new_stmts: Vec<Statement> = Vec::new();
         for stmt in block.stmts {
-            let transformed = self.transform_statement(stmt);
+            let transformed = self.transform_stmt(stmt);
             // Unused-local removal first: a dropped/extracted statement
             // never reaches the branch checks below.
             match classify_dead_local(&transformed, &self.referenced_names, self.version) {
@@ -272,14 +283,14 @@ impl Transform for DeadCodeRemover {
                 DeadLocalAction::Remove => self.has_changed = true,
                 DeadLocalAction::ExtractCalls => {
                     if let Statement::LocalAssignment(local) = transformed {
-                        new_stmts.extend(call_statements(*local));
+                        new_stmts.extend(call_stmts(*local));
                     }
                 }
             }
         }
 
         let last_stmt = block.last_stmt.map(|mut last| {
-            *last = self.transform_last_statement(*last);
+            *last = self.transform_last_stmt(*last);
             last
         });
 
@@ -299,7 +310,7 @@ impl Transform for DeadCodeRemover {
         body
     }
 
-    fn transform_statement(&mut self, stmt: Statement) -> Statement {
+    fn transform_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
             Statement::IfStatement(if_stmt) => self.simplify_if(*if_stmt),
             // `repeat ... until true` runs once, so it becomes a `do` block
@@ -322,7 +333,7 @@ impl Transform for DeadCodeRemover {
                     self.has_changed = true;
                     numeric_for.step = None;
                 }
-                self.walk_statement(Statement::NumericFor(numeric_for))
+                self.walk_stmt(Statement::NumericFor(numeric_for))
             }
             // `local x = nil` becomes `local x`, since nil is the default.
             Statement::LocalAssignment(mut local) => {
@@ -338,7 +349,7 @@ impl Transform for DeadCodeRemover {
                     local.exprs = None;
                     return Statement::LocalAssignment(local);
                 }
-                self.walk_statement(Statement::LocalAssignment(local))
+                self.walk_stmt(Statement::LocalAssignment(local))
             }
             other @ (Statement::Assignment(_)
             | Statement::FunctionCall(_)
@@ -357,12 +368,12 @@ impl Transform for DeadCodeRemover {
             | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
-            | Statement::Error(_)) => self.walk_statement(other),
+            | Statement::Error(_)) => self.walk_stmt(other),
         }
     }
 
-    fn transform_expression(&mut self, expr: Expression) -> Expression {
-        match self.walk_expression(expr) {
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        match self.walk_expr(expr) {
             // `cond and X or X` folds to `X` when both branches are identical
             // and the condition is pure.
             Expression::BinaryOp(outer) if is_redundant_ternary(&outer) => {
@@ -392,7 +403,7 @@ impl Transform for DeadCodeRemover {
     }
 }
 
-fn negate_expression(expr: Expression) -> Expression {
+fn negate_expr(expr: Expression) -> Expression {
     // Only wrap in `not`. Inverting a comparison operator would change which
     // metamethod is called, __lt instead of __le and so on.
     Expression::UnaryOp(Box::new(UnaryOp { span: Span::default(), op: UnOp::Not, operand: expr }))
@@ -426,11 +437,11 @@ fn classify_dead_local(
             let Some(exprs) = &local.exprs else {
                 return DeadLocalAction::Remove;
             };
-            if exprs.iter().all(is_pure_expression) {
+            if exprs.iter().all(is_pure_expr) {
                 DeadLocalAction::Remove
             } else if exprs
                 .iter()
-                .all(|expr| is_pure_expression(expr) || matches!(expr, Expression::FunctionCall(_)))
+                .all(|expr| is_pure_expr(expr) || matches!(expr, Expression::FunctionCall(_)))
             {
                 DeadLocalAction::ExtractCalls
             } else {
@@ -479,7 +490,7 @@ fn classify_dead_local(
 }
 
 /// The calls among an unused local's initializers, as call statements.
-fn call_statements(local: LocalAssignment) -> impl Iterator<Item = Statement> {
+fn call_stmts(local: LocalAssignment) -> impl Iterator<Item = Statement> {
     local.exprs.into_iter().flat_map(Punctuated::into_items).filter_map(|expr| {
         if let Expression::FunctionCall(call) = expr {
             Some(Statement::FunctionCall(call))
@@ -518,6 +529,26 @@ mod tests {
                 "{version:?} binds _ENV like any other local: {removed}"
             );
         }
+    }
+
+    #[test]
+    fn keeps_local_rooting_a_function_declaration() {
+        for source in [
+            "local M = {}\nfunction M.foo() end\nprint(\"ok\")\n",
+            "local M = {}\nfunction M:foo() end\nprint(\"ok\")\n",
+            "local M = {}\nfunction M.a.b() end\nprint(\"ok\")\n",
+            "local M = {}\ndo function M.foo() end end\nprint(\"ok\")\n",
+            "local M\nfunction M() end\nprint(\"ok\")\n",
+        ] {
+            let result = apply(source);
+            assert!(result.contains("local M"), "{source:?} must keep `local M`: {result}");
+        }
+    }
+
+    #[test]
+    fn removes_unused_local_named_like_a_function_declaration_field() {
+        let result = apply("local foo = {}\nfunction M.foo() end\n");
+        assert!(!result.contains("local foo"), "only the root is a reference: {result}");
     }
 
     #[test]

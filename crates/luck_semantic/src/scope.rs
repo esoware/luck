@@ -1,4 +1,5 @@
 use luck_token::{CompactString, Span};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Defines an index newtype over `NonZeroU32` holding `index + 1`, so
 /// `Option<Id>` stays 4 bytes.
@@ -39,6 +40,11 @@ pub struct ScopeTree {
     pub scopes: Vec<Scope>,
     pub symbols: Vec<Symbol>,
     pub references: Vec<Reference>,
+    /// Each name reference by its span. A span holds at most one reference.
+    pub references_by_span: FxHashMap<Span, ReferenceId>,
+    /// Lua 5.5: names a `global` statement declares, which are defined
+    /// wherever they're read.
+    pub declared_globals: FxHashSet<CompactString>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -153,13 +159,17 @@ impl ScopeTree {
     }
 
     /// The local that the identifier `name` at `span` resolves to: `None`
-    /// for a global, and for a span that holds no reference. A span holds at
-    /// most one reference.
+    /// for a global, and for a span that holds no reference.
     pub(crate) fn resolved_symbol(&self, name: &str, span: Span) -> Option<SymbolId> {
-        self.references
-            .iter()
-            .find(|reference| reference.span == span && reference.name == name)
-            .and_then(|reference| reference.resolved)
+        let reference = self.reference(*self.references_by_span.get(&span)?);
+        if reference.name == name { reference.resolved } else { None }
+    }
+
+    /// True when the identifier `name` at `span` resolves to a local rather
+    /// than a global.
+    #[must_use]
+    pub fn resolves_to_local(&self, name: &str, span: Span) -> bool {
+        self.resolved_symbol(name, span).is_some()
     }
 
     /// All unresolved references, which are the globals.

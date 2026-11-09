@@ -21,7 +21,7 @@ The cache lives on the resolver, not in global state, and is never invalidated. 
 
 ## Key features
 
-- **Lua 5.x template paths.** Substitutes the module name, with dots turned into slashes, into template strings (`./?.lua`, `./lib/?/init.lua`, ...) and returns the first hit.
+- **Lua 5.x template paths.** Substitutes the module name, with dots turned into slashes, into template strings (`./?.lua`, `./lib/?/init.lua`, ...) and returns the first hit. An empty list means `luck_core::DEFAULT_SEARCH_PATHS`, so builds and editor links read `"search_paths": []` the same way.
 - **Luau relative imports.** `./module`, `../module`, with init-file resolution and `.luau` / `.lua` extension probing.
 - **Luau aliases.** `@utils` and similar prefixes resolve through `.luaurc` files discovered up the directory tree, with the closest definition winning.
 - **`@self`** is a built-in Luau alias resolving to the current file's own directory, including for init files, with no `.luaurc` entry needed. A `.luaurc` alias named `self` can't override it and raises W004.
@@ -45,7 +45,7 @@ The cache lives on the resolver, not in global state, and is never invalidated. 
 
 **Init file rule.** When the requiring file is itself an `init.lua` or `init.luau`, relative paths resolve from the parent's parent directory, the one containing the folder that holds the init file. This matches Roblox's resolver semantics.
 
-**Alias prefixes.** Aliases like `@utils` map to directories defined in `.luaurc` files, and a relative target resolves against the directory of the `.luaurc` that declares it. The resolver walks upward from the requiring file, reading each directory's `.luaurc` as JSON5 and caching its `aliases`. When multiple `.luaurc` files define the same alias, the closest one wins. Alias matching is case-insensitive. A merged alias map is cached only for directories that actually make alias requests, and each ancestor caches just its own raw table. Both caches live as long as the resolver, and a missing or malformed `.luaurc` is cached too.
+**Alias prefixes.** Aliases like `@utils` map to directories defined in `.luaurc` files, and a relative target resolves against the directory of the `.luaurc` that declares it. The resolver walks upward from the requiring file, reading each directory's `.luaurc` as JSON5 and caching its `aliases`. When multiple `.luaurc` files define the same alias, the closest one wins. Alias matching is case-insensitive, and when one file declares names that are equal after lowercasing, the last one wins, as in Luau. A merged alias map is cached only for directories that actually make alias requests, and each ancestor caches just its own raw table. Both caches live as long as the resolver, and a missing or malformed `.luaurc` is cached too.
 
 ### Extension preference
 

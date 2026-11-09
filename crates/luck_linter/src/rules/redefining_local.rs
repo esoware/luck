@@ -1,8 +1,8 @@
 use luck_ast::{Block, Statement};
 use luck_token::{Span, Token};
 
-use crate::diagnostic::{Category, Finding, Severity, line_column};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::{Finding, line_column};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags a local declared again in the same block (Luacheck 411), which
 /// hides the first one from all the code after it.
@@ -13,20 +13,13 @@ use crate::rule::{LintContext, Rule, WholeRule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RedefiningLocal;
 
-impl Rule for RedefiningLocal {
-    fn name(&self) -> &'static str {
-        "redefining_local"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "local redeclared with the same name in the same block"
-    }
-}
+impl_rule!(
+    RedefiningLocal,
+    "redefining_local",
+    Style,
+    Warning,
+    "local redeclared with the same name in the same block"
+);
 
 impl WholeRule for RedefiningLocal {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

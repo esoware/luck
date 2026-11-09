@@ -26,7 +26,7 @@ fn output_capacity_hint_never_changes_output() {
 }
 
 #[test]
-fn statements_compact_to_minimal_whitespace() {
+fn stmts_compact_to_minimal_whitespace() {
     for (source, expected) in [
         ("local  x  =  1", "local x=1"),
         ("local  a , b  =  1 , 2", "local a,b=1,2"),
@@ -83,7 +83,7 @@ fn functions_compact_to_minimal_whitespace() {
 }
 
 #[test]
-fn expressions_compact_to_minimal_whitespace() {
+fn exprs_compact_to_minimal_whitespace() {
     for (source, expected) in [
         ("x  =  a  +  b  *  c", "x=a+b*c"),
         ("x  =  a  +  b  *  ( c  -  d )  /  e", "x=a+b*(c-d)/e"),
@@ -186,7 +186,7 @@ fn compact_input_prints_unchanged() {
 }
 
 #[test]
-fn version_gated_statements_compact_to_minimal_whitespace() {
+fn version_gated_stmts_compact_to_minimal_whitespace() {
     for (source, expected, version) in [
         ("goto  skip  :: skip ::", "goto skip::skip::", LuaVersion::Lua52),
         (";", ";", LuaVersion::Lua52),

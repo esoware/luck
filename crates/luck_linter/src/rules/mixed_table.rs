@@ -1,39 +1,27 @@
 use luck_ast::{Expression, Field};
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags table constructors that mix positional fields with `name = value`
 /// fields, which `ipairs` skips.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MixedTable;
 
-impl Rule for MixedTable {
-    fn name(&self) -> &'static str {
-        "mixed_table"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "table constructor mixes positional and record-style fields"
-    }
-}
+impl_rule!(
+    MixedTable,
+    "mixed_table",
+    Suspicious,
+    Warning,
+    "table constructor mixes positional and record-style fields"
+);
 
 impl NodeRule for MixedTable {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::TableConstructor])
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let Expression::TableConstructor(table) = expr else {
             return;
         };

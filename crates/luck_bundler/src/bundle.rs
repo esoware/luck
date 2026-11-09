@@ -1,10 +1,9 @@
 use std::path::Path;
 
-use luck_core::{Diagnostic, DynamicRequire};
-use luck_token::LuaVersion;
+use luck_core::Diagnostic;
 
 use crate::emitter::{self, LineMapEntry};
-use crate::graph::DependencyGraph;
+use crate::graph::{BundleOptions, DependencyGraph};
 
 #[derive(Debug)]
 pub struct BundleResult {
@@ -17,24 +16,16 @@ pub struct BundleResult {
 
 /// Bundles `entry_path` and everything it requires into one Lua file.
 ///
-/// Lua search paths resolve against `project_root`, and every path in the
-/// output is relative to it. An empty `search_paths` means the default Lua
-/// templates.
-///
 /// # Errors
 ///
 /// Returns every diagnostic that stopped the graph from building, as
 /// [`DependencyGraph::build`] does.
 pub fn bundle(
     entry_path: &Path,
-    version: LuaVersion,
-    search_paths: &[String],
-    project_root: &Path,
-    dynamic_require: DynamicRequire,
+    options: &BundleOptions<'_>,
 ) -> Result<BundleResult, Vec<Diagnostic>> {
-    let graph =
-        DependencyGraph::build(entry_path, version, search_paths, project_root, dynamic_require)?;
-    let (output, line_map) = emitter::emit(&graph, version);
+    let graph = DependencyGraph::build(entry_path, options)?;
+    let (output, line_map) = emitter::emit(&graph, options.version);
     Ok(BundleResult {
         output,
         warnings: graph.warnings,

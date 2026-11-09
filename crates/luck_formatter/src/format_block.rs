@@ -86,7 +86,12 @@ fn printed_items(block: &Block) -> impl Iterator<Item = BlockItem<'_>> {
 
 /// Start offset of the first item that will produce output.
 pub(crate) fn first_item_start(block: &Block) -> Option<u32> {
-    printed_items(block).next().map(|item| item.span().start)
+    first_item_span(block).map(|span| span.start)
+}
+
+/// Span of the first item that will produce output.
+pub(crate) fn first_item_span(block: &Block) -> Option<Span> {
+    printed_items(block).next().map(BlockItem::span)
 }
 
 /// What the separator before an item needs to know about the one before it.
@@ -203,7 +208,12 @@ fn write_separator(
             // counted as part of this gap.
             let gap_end =
                 formatter.comments().peek_next_start().unwrap_or(next_start).min(next_start);
-            has_blank_line(source, previous.end, gap_end)
+            // A line break inside a printed trailing comment isn't a gap line.
+            let gap_start = formatter
+                .comments()
+                .last_printed_end()
+                .map_or(previous.end, |printed_end| printed_end.max(previous.end));
+            has_blank_line(source, gap_start, gap_end)
         }
         None => {
             previous.should_surround_with_blank

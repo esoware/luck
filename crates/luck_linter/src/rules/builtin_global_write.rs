@@ -1,28 +1,20 @@
-use luck_ast::{Expression, FunctionName, Statement, Var, Visitor};
+use luck_ast::{Expression, FunctionName, Statement, Var, Visitor, dotted_path};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, Token};
 
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::path::dotted_path;
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BuiltinGlobalWrite;
 
-impl Rule for BuiltinGlobalWrite {
-    fn name(&self) -> &'static str {
-        "builtin_global_write"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "overwriting a standard-library global or one of its fields"
-    }
-}
+impl_rule!(
+    BuiltinGlobalWrite,
+    "builtin_global_write",
+    Correctness,
+    Warning,
+    "overwriting a standard-library global or one of its fields"
+);
 
 impl WholeRule for BuiltinGlobalWrite {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
@@ -100,7 +92,6 @@ impl FieldWriteChecker<'_> {
         if !is_overwritable_builtin(self.semantic, name) {
             return;
         }
-        // `resolves_to_local` scans every reference, so it waits for a builtin.
         if self.semantic.resolves_to_local(name, name_span) {
             return;
         }
@@ -129,7 +120,6 @@ impl FieldWriteChecker<'_> {
         if !is_overwritable_builtin(self.semantic, name) {
             return;
         }
-        // `resolves_to_local` scans every reference, so it waits for a builtin.
         if self.semantic.resolves_to_local(name, first.span) {
             return;
         }
@@ -147,7 +137,7 @@ impl FieldWriteChecker<'_> {
 }
 
 impl<'ast> Visitor<'ast> for FieldWriteChecker<'_> {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::Assignment(assignment) => {
                 for var in assignment.targets.iter() {
@@ -176,7 +166,7 @@ impl<'ast> Visitor<'ast> for FieldWriteChecker<'_> {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
         }
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 }
 

@@ -1,4 +1,4 @@
-use luck_token::{BinOp, OperandSide, UnOp};
+use luck_token::{BinOp, OperandSide, UnOp, encode_string};
 
 use crate::expr::{
     BinaryOp, ElseIfExprClause, Expression, Field, FieldAccess, FunctionArgs, FunctionCall,
@@ -7,9 +7,8 @@ use crate::expr::{
 };
 use crate::function::FunctionAttribute;
 use crate::punctuated::Punctuated;
-use crate::query::{is_multi_value, is_prefix_expression};
+use crate::query::{is_multi_value, is_prefix_expr};
 use crate::stmt::Block;
-use crate::synth::literal::quote_utf8;
 use crate::synth::{FunctionSignature, Synth};
 use crate::types::{Type, TypeArgs};
 
@@ -266,7 +265,7 @@ impl Synth {
 
     /// Parenthesizes an expression that can't stand in prefix position.
     fn wrap_prefix(&self, prefix: Expression) -> Expression {
-        if is_prefix_expression(&prefix) { prefix } else { self.parenthesized(prefix) }
+        if is_prefix_expr(&prefix) { prefix } else { self.parenthesized(prefix) }
     }
 
     #[must_use]
@@ -307,7 +306,7 @@ impl Synth {
     #[must_use]
     pub fn call_string(&self, callee: Expression, content: &str) -> Expression {
         let args = FunctionArgs::StringLiteral(Literal {
-            text: quote_utf8(content),
+            text: encode_string(content.as_bytes()),
             span: self.next_span(),
         });
         self.call_node(callee, None, None, args)
@@ -334,7 +333,7 @@ impl Synth {
         content: &str,
     ) -> Expression {
         let args = FunctionArgs::StringLiteral(Literal {
-            text: quote_utf8(content),
+            text: encode_string(content.as_bytes()),
             span: self.next_span(),
         });
         self.call_node(receiver, Some(name), None, args)
@@ -542,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn binary_op_parenthesizes_if_expression_operands() {
+    fn binary_op_parenthesizes_if_expr_operands() {
         let synth = Synth::new();
         let if_expr =
             synth.if_expr(synth.boolean(true), synth.number("1"), vec![], synth.number("2"));
@@ -646,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn prefix_positions_wrap_non_prefix_expressions() {
+    fn prefix_positions_wrap_non_prefix_exprs() {
         let synth = Synth::new();
         // A string receiver must be parenthesized: ("s"):rep(2).
         let called = synth.method_call(synth.string("s"), "rep", vec![synth.number("2")]);

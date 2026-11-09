@@ -13,7 +13,7 @@ use super::lint_config::LintConfig;
 use super::transform_config::TransformConfig;
 use crate::lua_target::LuaTarget;
 
-/// Lua 5.x search path templates used when `search_paths` isn't set.
+/// Lua 5.x search path templates used when `search_paths` is unset or empty.
 pub const DEFAULT_SEARCH_PATHS: &[&str] = &["?.lua", "?/init.lua"];
 
 /// One of the two `luck.json` keys that name a dialect by file extension.
@@ -136,8 +136,9 @@ impl LuckConfig {
         ProjectFilter::new(root, self.include.as_deref(), self.exclude.as_deref())
     }
 
-    /// The Lua search path templates: `search_paths` when it's set, even to an
-    /// empty list, and [`DEFAULT_SEARCH_PATHS`] otherwise.
+    /// The Lua search path templates: `search_paths` when it's set and
+    /// [`DEFAULT_SEARCH_PATHS`] otherwise. An empty list reaches the resolver,
+    /// which treats it as the defaults too.
     #[must_use]
     pub fn search_paths_or_default(&self) -> Vec<String> {
         self.search_paths

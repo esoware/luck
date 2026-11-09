@@ -18,8 +18,8 @@ struct NumberShortener {
 }
 
 impl Transform for NumberShortener {
-    fn transform_expression(&mut self, expr: Expression) -> Expression {
-        match self.walk_expression(expr) {
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        match self.walk_expr(expr) {
             Expression::Number(literal) => {
                 if let Some(shortened) = shorten_number(&literal.text, self.subtypes) {
                     return Expression::Number(Literal {

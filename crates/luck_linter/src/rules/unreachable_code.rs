@@ -1,25 +1,18 @@
 use luck_ast::Statement;
 
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnreachableCode;
 
-impl Rule for UnreachableCode {
-    fn name(&self) -> &'static str {
-        "unreachable_code"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "code after a mid-block `break` is unreachable"
-    }
-}
+impl_rule!(
+    UnreachableCode,
+    "unreachable_code",
+    Suspicious,
+    Warning,
+    "code after a mid-block `break` is unreachable"
+);
 
 impl WholeRule for UnreachableCode {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
@@ -56,13 +49,13 @@ mod tests {
     }
 
     #[test]
-    fn flags_only_first_unreachable_statement() {
+    fn flags_only_first_unreachable_stmt() {
         let diags = run("for i = 1, 3 do break print(1) print(2) end");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
-    fn ignores_break_as_last_statement() {
+    fn ignores_break_as_last_stmt() {
         let diags = run("while true do print(1) break end");
         assert!(diags.is_empty(), "{diags:?}");
     }

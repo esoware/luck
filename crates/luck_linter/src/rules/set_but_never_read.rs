@@ -1,7 +1,7 @@
 use luck_semantic::SymbolKind;
 
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags a local that's assigned after its declaration but never read
 /// (Luacheck 231).
@@ -12,20 +12,13 @@ use crate::rule::{LintContext, Rule, WholeRule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SetButNeverRead;
 
-impl Rule for SetButNeverRead {
-    fn name(&self) -> &'static str {
-        "set_but_never_read"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "local is written to but its value is never read"
-    }
-}
+impl_rule!(
+    SetButNeverRead,
+    "set_but_never_read",
+    Style,
+    Warning,
+    "local is written to but its value is never read"
+);
 
 impl WholeRule for SetButNeverRead {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

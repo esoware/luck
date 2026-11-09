@@ -78,8 +78,7 @@ impl Parser<'_> {
         let mut attributes = Vec::new();
         while matches!(self.peek(), TokenKind::At) {
             let at_span = self.advance_span(); // `@`
-            if matches!(self.peek(), TokenKind::LeftBracket) {
-                self.advance_span(); // `[`
+            if self.eat(&TokenKind::LeftBracket) {
                 loop {
                     let name = self.expect_identifier_recover();
                     let args = self.parse_attribute_args();
@@ -93,8 +92,7 @@ impl Parser<'_> {
                         name,
                         args,
                     });
-                    if matches!(self.peek(), TokenKind::Comma) {
-                        self.advance_span();
+                    if self.eat(&TokenKind::Comma) {
                     } else {
                         break;
                     }
@@ -125,7 +123,7 @@ impl Parser<'_> {
                 let args = if matches!(self.peek(), TokenKind::RightParen) {
                     Punctuated::empty()
                 } else {
-                    self.parse_expression_list()
+                    self.parse_expr_list()
                 };
                 self.expect(&TokenKind::RightParen);
                 for expr in args.iter() {

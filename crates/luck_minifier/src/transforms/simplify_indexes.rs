@@ -1,18 +1,20 @@
 use luck_ast::{
     Block, Expression, Field, FieldAccess, Literal, TableConstructor, Transform, Var,
-    is_multi_value,
+    is_multi_value, is_valid_identifier_in,
 };
-use luck_token::{Span, TokenKind, short_string_body};
+use luck_token::{LuaVersion, Span, short_string_body};
 
 use crate::binding::identifier_token;
 
 /// Converts bracket indexing to dot notation and simplifies table
 /// constructors.
-pub(crate) fn simplify(block: Block) -> Block {
-    IndexSimplifier.transform_block(block)
+pub(crate) fn simplify(block: Block, version: LuaVersion) -> Block {
+    IndexSimplifier { version }.transform_block(block)
 }
 
-struct IndexSimplifier;
+struct IndexSimplifier {
+    version: LuaVersion,
+}
 
 impl IndexSimplifier {
     /// `{["foo"] = val}` becomes `{foo = val}`. A key that isn't a plain
@@ -21,8 +23,8 @@ impl IndexSimplifier {
         let Some(name) = short_string_body(&literal.text) else {
             return Field::Bracketed { span, key: Expression::StringLiteral(literal), value };
         };
-        let new_value = self.transform_expression(value);
-        if is_safe_field_name(name) {
+        let new_value = self.transform_expr(value);
+        if is_valid_identifier_in(name, self.version) {
             Field::Named {
                 span: Span::default(),
                 name: identifier_token(name.into()),
@@ -45,7 +47,7 @@ impl Transform for IndexSimplifier {
             Var::Index(index_expr) => {
                 if let Expression::StringLiteral(literal) = &index_expr.index
                     && let Some(name) = short_string_body(&literal.text)
-                    && is_safe_field_name(name)
+                    && is_valid_identifier_in(name, self.version)
                 {
                     return Var::FieldAccess(Box::new(FieldAccess {
                         span: Span::default(),
@@ -66,39 +68,25 @@ impl Transform for IndexSimplifier {
             // {[1]="a", [2]="b"} becomes {"a", "b"} when the keys run
             // sequentially from 1.
             Field::Bracketed { value, .. } if can_use_implicit => {
-                Field::Positional { span: Span::default(), value: self.transform_expression(value) }
+                Field::Positional { span: Span::default(), value: self.transform_expr(value) }
             }
             Field::Bracketed { span, key: Expression::StringLiteral(literal), value } => {
                 self.simplify_string_key(span, literal, value)
             }
             Field::Bracketed { span, key, value } => Field::Bracketed {
                 span,
-                key: self.transform_expression(key),
-                value: self.transform_expression(value),
+                key: self.transform_expr(key),
+                value: self.transform_expr(value),
             },
             Field::Named { span, name, value } => {
-                Field::Named { span, name, value: self.transform_expression(value) }
+                Field::Named { span, name, value: self.transform_expr(value) }
             }
             Field::Positional { span, value } => {
-                Field::Positional { span, value: self.transform_expression(value) }
+                Field::Positional { span, value: self.transform_expr(value) }
             }
         });
         table
     }
-}
-
-/// The 21 keywords every target reserves, plus `goto` and Luau's
-/// `continue`. One list serves every target, so those two stay bracketed even
-/// where they're plain names.
-const LUA_KEYWORDS: &[&str] = &[
-    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in",
-    "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
-    "continue", // Luau
-];
-
-/// Whether a string key can be spelled as a `.name` field or a `name =` key.
-fn is_safe_field_name(name: &str) -> bool {
-    TokenKind::is_identifier_shaped(name) && !LUA_KEYWORDS.contains(&name)
 }
 
 fn is_sequential_from_one(fields: &[Field]) -> bool {
@@ -121,32 +109,76 @@ fn is_sequential_from_one(fields: &[Field]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
-    use crate::fixtures::run_pass;
+    use crate::fixtures::{assert_reparses, run_pass};
+
+    fn apply_version(source: &str, version: LuaVersion) -> String {
+        run_pass(source, version, |block| simplify(block, version))
+    }
 
     fn apply(source: &str) -> String {
-        run_pass(source, LuaVersion::Lua54, simplify)
+        apply_version(source, LuaVersion::Lua54)
     }
 
     #[test]
-    fn recognizes_safe_field_names() {
-        assert!(is_safe_field_name("foo"));
-        assert!(is_safe_field_name("_bar"));
-        assert!(is_safe_field_name("x1"));
-        assert!(is_safe_field_name("_"));
-        assert!(is_safe_field_name("camelCase"));
+    fn identifier_keys_become_fields_and_other_keys_stay_bracketed() {
+        for key in ["foo", "_bar", "x1", "_", "camelCase"] {
+            assert_eq!(apply(&format!("return t[\"{key}\"]\n")), format!("return t.{key}"));
+        }
+        for key in ["if", "end", "and", "or", "a-b", "123abc", "", "foo bar"] {
+            let source = format!("return t[\"{key}\"]\n");
+            assert_eq!(apply(&source), format!("return t[\"{key}\"]"), "source: {source}");
+        }
+    }
 
-        assert!(!is_safe_field_name("if"));
-        assert!(!is_safe_field_name("end"));
-        assert!(!is_safe_field_name("and"));
-        assert!(!is_safe_field_name("or"));
+    fn fields_for(key: &str, version: LuaVersion) -> (String, String) {
+        let index = apply_version(&format!("return t[\"{key}\"]\n"), version);
+        let constructor = apply_version(&format!("return {{[\"{key}\"] = 1}}\n"), version);
+        assert_reparses(&index, version);
+        assert_reparses(&constructor, version);
+        (index, constructor)
+    }
 
-        assert!(!is_safe_field_name("a-b"));
-        assert!(!is_safe_field_name("123abc"));
-        assert!(!is_safe_field_name(""));
-        assert!(!is_safe_field_name("foo bar"));
+    fn assert_field_spelling(key: &str, is_plain: bool, versions: &[LuaVersion]) {
+        let expected = if is_plain {
+            (format!("return t.{key}"), format!("return{{{key}=1}}"))
+        } else {
+            (format!("return t[\"{key}\"]"), format!("return{{[\"{key}\"]=1}}"))
+        };
+        for &version in versions {
+            assert_eq!(fields_for(key, version), expected, "{key} on {version:?}");
+        }
+    }
+
+    #[test]
+    fn global_key_stays_bracketed_only_on_lua55() {
+        assert_field_spelling("global", false, &[LuaVersion::Lua55]);
+        assert_field_spelling(
+            "global",
+            true,
+            &[
+                LuaVersion::Lua51,
+                LuaVersion::Lua52,
+                LuaVersion::Lua53,
+                LuaVersion::Lua54,
+                LuaVersion::Luau,
+            ],
+        );
+    }
+
+    #[test]
+    fn goto_key_stays_bracketed_only_where_reserved() {
+        assert_field_spelling(
+            "goto",
+            false,
+            &[LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55],
+        );
+        assert_field_spelling("goto", true, &[LuaVersion::Lua51, LuaVersion::Luau]);
+    }
+
+    #[test]
+    fn continue_key_is_a_plain_field_on_every_target() {
+        assert_field_spelling("continue", true, &LuaVersion::ALL);
     }
 
     #[test]

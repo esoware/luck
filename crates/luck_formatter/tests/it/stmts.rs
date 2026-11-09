@@ -4,7 +4,7 @@ use luck_token::LuaVersion;
 use crate::common::{assert_format, assert_format_with, formatted};
 
 #[test]
-fn if_statement() {
+fn if_stmt() {
     assert_format(
         "if x then\ny=1\nelseif z then\ny=2\nelse\ny=3\nend\n",
         "if x then\n\ty = 1\nelseif z then\n\ty = 2\nelse\n\ty = 3\nend\n",
@@ -76,7 +76,7 @@ fn paren_stmt_after_a_call_keeps_its_semicolon_guard() {
 }
 
 #[test]
-fn empty_statement_stripped() {
+fn empty_stmt_stripped() {
     assert_format_with(
         "local x = 1\n;\n",
         "local x = 1\n",

@@ -1,9 +1,8 @@
-use luck_token::{Token, TokenKind};
+use luck_token::{Token, TokenKind, encode_string};
 
 use crate::expr::Expression;
 use crate::punctuated::Punctuated;
 use crate::synth::Synth;
-use crate::synth::literal::quote_utf8;
 use crate::types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
     IntersectionType, NamedType, OptionalType, ParenthesizedType, TableType, Type, TypeArgs,
@@ -218,7 +217,7 @@ impl Synth {
 
     #[must_use]
     pub fn ty_singleton_string(&self, content: &str) -> Type {
-        Type::Singleton(self.token(TokenKind::StringLiteral(quote_utf8(content))))
+        Type::Singleton(self.token(TokenKind::StringLiteral(encode_string(content.as_bytes()))))
     }
 
     #[must_use]

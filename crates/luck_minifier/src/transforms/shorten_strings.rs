@@ -15,8 +15,8 @@ struct StringShortener {
 }
 
 impl Transform for StringShortener {
-    fn transform_expression(&mut self, expr: Expression) -> Expression {
-        match self.walk_expression(expr) {
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        match self.walk_expr(expr) {
             Expression::StringLiteral(literal) => {
                 if let Some(bytes) = decode_string(&literal.text, self.version) {
                     let candidate = encode_string(&bytes);

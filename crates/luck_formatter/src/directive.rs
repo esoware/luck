@@ -16,16 +16,23 @@ pub(crate) enum Directive {
 impl Directive {
     pub(crate) fn parse(comment_text: &str) -> Option<Self> {
         let body = comment_text.trim_start_matches('-').trim();
-        if body.starts_with("luck: ignore") || body.starts_with("luck: format ignore") {
+        if opens_with_words(body, "luck: ignore") || opens_with_words(body, "luck: format ignore") {
             Some(Self::Ignore)
-        } else if body.starts_with("luck: format off") {
+        } else if opens_with_words(body, "luck: format off") {
             Some(Self::FormatOff)
-        } else if body.starts_with("luck: format on") {
+        } else if opens_with_words(body, "luck: format on") {
             Some(Self::FormatOn)
         } else {
             None
         }
     }
+}
+
+/// Whether `body` starts with `words`, ending at a word boundary, so
+/// `luck: format off` doesn't also match `luck: format offset`.
+fn opens_with_words(body: &str, words: &str) -> bool {
+    body.strip_prefix(words)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
 }
 
 /// The `-- luck: format off` regions, as directive spans.

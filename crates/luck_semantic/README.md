@@ -32,7 +32,7 @@ Each scope records its kind and its parent, and each symbol records its scope an
 
 A `Symbol` is a declared variable with a `SymbolKind` (`Local`, `Parameter`, `IteratorVariable`, `NumericForVariable`, `FunctionName`) and the span of its declaration. A `Reference` is a usage site with a `ReferenceKind`: Read, Write, or ReadWrite, the last for Luau compound assignments such as `x += 1`.
 
-A name with no visible declaration stays unresolved and is treated as a global, which may be a stdlib entry, a configured extra global, or unknown.
+A name with no visible declaration stays unresolved and is treated as a global, which may be a stdlib entry, a configured extra global, a name a Lua 5.5 `global` statement declares (`ScopeTree::declared_globals`), or unknown.
 
 ### Standard library
 
@@ -61,7 +61,7 @@ Entries model:
 | `lib.rs` | Crate docs and the flat public surface |
 | `analysis.rs` | `SemanticAnalysis`, the `analyze()` entry points, and its scope and stdlib queries |
 | `scope.rs` | Scope tree data structures |
-| `builder.rs` | AST visitor that constructs the scope tree |
+| `builder.rs` | AST visitor that constructs the scope tree, exported as `build_scope_tree` for callers that need no stdlib |
 | `resolve.rs` | Conservative shape and callee resolution, and the local-shape pass |
 | `stdlib_model.rs` | Stdlib data model and its queries |
 | `stdlib_load.rs` | TOML deserialization, composition into the `StdlibLibrary` model, and the per-environment library instances |

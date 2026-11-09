@@ -275,13 +275,13 @@ impl IneligibleScanner {
 }
 
 impl<'ast> Visitor<'ast> for IneligibleScanner {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::LocalAssignment(local) => {
                 // RHS before LHS: `local x = x` reads the outer x.
                 if let Some(exprs) = &local.exprs {
                     for expr in exprs.iter() {
-                        self.visit_expression(expr);
+                        self.visit_expr(expr);
                     }
                 }
                 for attributed in local.names.iter() {
@@ -300,21 +300,21 @@ impl<'ast> Visitor<'ast> for IneligibleScanner {
             }
             Statement::DoBlock(do_block) => self.scan_scoped_block(&do_block.block),
             Statement::WhileLoop(while_loop) => {
-                self.visit_expression(&while_loop.condition);
+                self.visit_expr(&while_loop.condition);
                 self.scan_scoped_block(&while_loop.block);
             }
             Statement::RepeatLoop(repeat_loop) => {
                 // The condition sees the block's locals.
                 self.frames.push(FxHashSet::default());
                 self.visit_block(&repeat_loop.block);
-                self.visit_expression(&repeat_loop.condition);
+                self.visit_expr(&repeat_loop.condition);
                 self.frames.pop();
             }
             Statement::IfStatement(if_stmt) => {
-                self.visit_expression(&if_stmt.condition);
+                self.visit_expr(&if_stmt.condition);
                 self.scan_scoped_block(&if_stmt.block);
                 for clause in &if_stmt.elseif_clauses {
-                    self.visit_expression(&clause.condition);
+                    self.visit_expr(&clause.condition);
                     self.scan_scoped_block(&clause.block);
                 }
                 if let Some(else_clause) = &if_stmt.else_clause {
@@ -322,10 +322,10 @@ impl<'ast> Visitor<'ast> for IneligibleScanner {
                 }
             }
             Statement::NumericFor(numeric_for) => {
-                self.visit_expression(&numeric_for.start);
-                self.visit_expression(&numeric_for.limit);
+                self.visit_expr(&numeric_for.start);
+                self.visit_expr(&numeric_for.limit);
                 if let Some(step) = &numeric_for.step {
-                    self.visit_expression(step);
+                    self.visit_expr(step);
                 }
                 self.frames.push(FxHashSet::default());
                 self.declare(identifier_name(&numeric_for.name));
@@ -334,7 +334,7 @@ impl<'ast> Visitor<'ast> for IneligibleScanner {
             }
             Statement::GenericFor(generic_for) => {
                 for expr in generic_for.exprs.iter() {
-                    self.visit_expression(expr);
+                    self.visit_expr(expr);
                 }
                 self.frames.push(FxHashSet::default());
                 for param in generic_for.names.iter() {
@@ -356,7 +356,7 @@ impl<'ast> Visitor<'ast> for IneligibleScanner {
             | Statement::Label(_)
             | Statement::GlobalStar(_)
             | Statement::Break(_)
-            | Statement::Error(_) => self.walk_statement(stmt),
+            | Statement::Error(_) => self.walk_stmt(stmt),
         }
     }
 

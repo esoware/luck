@@ -1,49 +1,32 @@
 use luck_ast::{Expression, Statement};
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
 use crate::node_type::NodeTypeSet;
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DuplicateParameter;
 
-impl Rule for DuplicateParameter {
-    fn name(&self) -> &'static str {
-        "duplicate_parameter"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "function declares two parameters with the same name"
-    }
-}
+impl_rule!(
+    DuplicateParameter,
+    "duplicate_parameter",
+    Correctness,
+    Error,
+    "function declares two parameters with the same name"
+);
 
 impl NodeRule for DuplicateParameter {
     fn node_types(&self) -> NodeTypeSet {
         FunctionNode::NODE_TYPES
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Some(function) = FunctionNode::of_statement(stmt) {
+    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        if let Some(function) = FunctionNode::of_stmt(stmt) {
             findings.extend(duplicate_params(function));
         }
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Some(function) = FunctionNode::of_expression(expr) {
+    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        if let Some(function) = FunctionNode::of_expr(expr) {
             findings.extend(duplicate_params(function));
         }
     }
@@ -86,7 +69,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_duplicate_in_function_expression() {
+    fn flags_duplicate_in_function_expr() {
         let diags = run("local f = function(x, x) end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`x`"));

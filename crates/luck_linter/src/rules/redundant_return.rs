@@ -1,26 +1,19 @@
 use luck_ast::{Block, FunctionBody, LastStatement, Visitor};
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RedundantReturn;
 
-impl Rule for RedundantReturn {
-    fn name(&self) -> &'static str {
-        "redundant_return"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "trailing bare `return` has no effect"
-    }
-}
+impl_rule!(
+    RedundantReturn,
+    "redundant_return",
+    Style,
+    Warning,
+    "trailing bare `return` has no effect"
+);
 
 impl WholeRule for RedundantReturn {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

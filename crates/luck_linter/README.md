@@ -15,7 +15,7 @@ Rule-based linter for Lua and Luau with scope-aware analysis.
 
 ## Rules
 
-Each rule lives in its own file under `src/rules/`, one module per rule (`unused_variable.rs`, `deprecated.rs`, ...), and is registered in the `RULES` array in `src/rules.rs`. Each rule's category and default severity come from its `Rule` impl, and `luck_linter::rules()` lists every registered rule.
+Each rule lives in its own file under `src/rules/`, one module per rule (`unused_variable.rs`, `deprecated.rs`, ...), and is registered in the `RULES` array in `src/rules.rs`. Each rule's category and default severity come from its `impl_rule!` invocation, and `luck_linter::rules()` lists every registered rule.
 
 `global_usage` warns about the global environment tables: `_G` everywhere, and `shared` only under the Roblox stdlib, where it's a global rather than an ordinary name. `no_implicit_globals` is the separate, broader policy: it flags every unresolved name, stdlib globals included, except configured `extra_globals`. Both are opt-in Style rules.
 
@@ -25,15 +25,15 @@ Migrating from 0.2.x: `global_usage` named that broader policy through 0.2 and n
 
 ### Pipeline
 
-`lint()` parses the source. If it doesn't parse, each parse error comes back as a `parse_error` diagnostic and no rules run. Otherwise it runs `luck_semantic` analysis to build the scope tree and resolve stdlib symbols, flattens the AST into node and block tables, runs every enabled rule, turns each rule's findings into diagnostics with the rule's name, its category, and its severity from the config override or the rule's default, applies suppression directives, and sorts the diagnostics by position. `lint_target()` takes a `LuaTarget` so Roblox globals resolve, and `lint_parsed()` lints a parse the caller already has, which the language server uses.
+`lint()` parses the source. If it doesn't parse, each parse error comes back as a `parse_error` diagnostic and no rules run. Otherwise it runs `luck_semantic` analysis to build the scope tree and resolve stdlib symbols, flattens the AST into node and block tables, runs every enabled rule, turns each rule's findings into diagnostics with the rule's name, its category, and its severity from the config override or the rule's default, applies suppression directives, and sorts the diagnostics by position. `lint_target()` takes a `LuaTarget` so Roblox globals resolve, `lint_parsed()` lints a parse the caller already has, and `lint_analyzed()` lints a parse and analysis the caller already has, which the language server uses.
 
 ### Rules
 
-Every rule implements the `Rule` trait, which holds its identity: `name`, `category`, `default_severity`, and `description`. It also implements exactly one of two checking traits, and its `RULES` entry (`RuleEntry::Whole` or `RuleEntry::Node`) names which.
+Every rule implements the `Rule` trait through `impl_rule!`, which holds its identity: `name`, `category`, `default_severity`, and `description`. It also implements exactly one of two checking traits, and its `RULES` entry (`RuleEntry::Whole` or `RuleEntry::Node`) names which.
 
-Rules that need state across nodes (scope stacks, statement sequences, the scope tree's symbols) implement `WholeRule`, whose `fn check(&self, context: &LintContext<'_>) -> Vec<Finding>` sees the whole document at once. A rule that checks each block's statement list reads `context.blocks` instead of walking the tree, and any other walk goes through `Visitor`. The `LintContext` bundles the block, every block in pre-order, the semantic analysis, the source text, the comment array, and the resolved config.
+Rules that need state across nodes (scope stacks, statement sequences, the scope tree's symbols) implement `WholeRule`, whose `fn check(&self, context: &LintContext<'_>) -> Vec<Finding>` sees the whole document at once. A rule that checks each block's statement list reads `context.blocks` instead of walking the tree, and any other walk goes through `Visitor`. The `LintContext` bundles the block, every block in pre-order, the locals declared without a value, the semantic analysis, the source text, the comment array, and the resolved config.
 
-Rules whose logic is node-local implement `NodeRule` instead: per-node hooks (`on_statement`, `on_expression`, `on_last_statement`) that push onto a `Vec<Finding>`, and a `NodeTypeSet` of the `NodeType`s they act on. The `bus` makes one pass over the node table and calls each node rule only for the node types it declared, so every node rule shares a single traversal, and a node rule whose types don't occur in a file is skipped. In debug builds the driver re-runs every node rule on every node and asserts the results match, which catches a `node_types` set that misses a type.
+Rules whose logic is node-local implement `NodeRule` instead: per-node hooks (`on_stmt`, `on_expr`, and `on_call`, which gets every call in either position and marks which) that push onto a `Vec<Finding>`, and a `NodeTypeSet` of the `NodeType`s they act on. The `bus` makes one pass over the node table and calls each node rule only for the node types it declared, so every node rule shares a single traversal, and a node rule whose types don't occur in a file is skipped. In debug builds the driver re-runs every node rule on every node and asserts the results match, which catches a `node_types` set that misses a type.
 
 A `Finding` holds only what differs per report: the message, span, optional help, and optional fix. The driver turns it into a public `LintDiagnostic` by adding the reporting rule's name and category and the severity the config resolves for it, so a rule can't report under another rule's name or set its own severity.
 
@@ -47,23 +47,22 @@ A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix`
 |------|---------|
 | `lib.rs` | Crate root: the module list and the public re-exports |
 | `driver.rs` | `lint()` and the other entry points, and the rule driver |
-| `rule.rs` | `Rule`, `WholeRule`, and `NodeRule` traits, `LintContext` |
+| `rule.rs` | `Rule`, `WholeRule`, and `NodeRule` traits, the `impl_rule!` macro, `CallPosition`, `LintContext` |
 | `rules.rs` | `RULES` registry, `rules()`, and the registered rule names |
 | `bus.rs` | The single-pass dispatch that drives every `NodeRule` in one shared walk |
-| `nodes.rs` | Flat pre-order node table (`Nodes::collect`) of borrowed `NodeKind` views that the bus walks, with the set of node types present, and the pre-order block table whole rules read |
+| `nodes.rs` | Flat pre-order node table (`Nodes::collect`) of borrowed `NodeKind` views that the bus walks, with the set of node types present, the pre-order block table whole rules read, and the `UninitializedLocals` built in the same walk |
 | `node_type.rs` | `NodeType`, one discriminant per statement, last-statement, and expression variant, and the `NodeTypeSet` bitset node rules declare |
 | `cfg.rs` | Control-flow analysis over statement slices (exits, decision points), used by some rules |
 | `diagnostic.rs` | `LintDiagnostic`, the `Finding` rules report, `Severity` and `Category` from `luck_core`, and the `line_column` positions that messages quote |
 | `suppression.rs` | `-- luck:` directive parsing, shared with `invalid_lint_filter`, and suppression |
 | `fix.rs` | `Fix` and `TextEdit`, and auto-fix application |
 | `format_pattern.rs` | Validators for `string.format`, pattern, `string.pack`, `gsub` replacement, and `os.date` literals |
-| `call.rs` | Whether a call names an unshadowed global, plus positional arguments, argument count, and raw string-argument text, shared by the rules that match calls |
-| `number.rs` | Values of decimal number literals, shared by `for_range`, `reversed_for_loop`, `manual_table_clone`, and `table_operations` |
+| `call.rs` | Whether a call names an unshadowed global, a `root.field(...)` callee's parts, plus positional arguments, argument count, and raw string-argument text, shared by the rules that match calls |
+| `number.rs` | Values of number literals, shared by `for_range`, `reversed_for_loop`, `manual_table_clone`, `table_operations`, `compare_nan`, and the Roblox rules |
 | `function_node.rs` | `FunctionNode`, one view of function statements and function expressions, for the node rules that check every function |
-| `path.rs` | Dotted `Name(.Name)*` path extraction shared by stdlib-resolving rules |
 | `roblox.rs` | Shared helpers for the Roblox `<Global>.new(...)` constructor rules |
 | `suggest.rs` | Levenshtein distance and the nearest-candidate search behind "did you mean" suggestions |
-| `uninitialized.rs` | Locals declared without a value, and a symbol's first reference, shared by the rules that track a local before its first assignment |
+| `uninitialized.rs` | Locals declared without a value, field writes through a bare name, and a symbol's first reference, shared by the rules that track a local before its first assignment |
 | `rules/*.rs` | Individual rule implementations |
 
 ### Testing

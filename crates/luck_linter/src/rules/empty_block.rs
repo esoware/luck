@@ -1,27 +1,14 @@
 use luck_ast::{Block, Statement};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EmptyBlock;
 
-impl Rule for EmptyBlock {
-    fn name(&self) -> &'static str {
-        "empty_block"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "block body is empty"
-    }
-}
+impl_rule!(EmptyBlock, "empty_block", Suspicious, Warning, "block body is empty");
 
 impl NodeRule for EmptyBlock {
     fn node_types(&self) -> NodeTypeSet {
@@ -34,12 +21,7 @@ impl NodeRule for EmptyBlock {
             NodeType::RepeatLoop,
         ])
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let (block, message, span) = match stmt {
             Statement::IfStatement(if_stmt) => {
                 findings.extend(check_body(&if_stmt.block, "empty `if` block", if_stmt.span));

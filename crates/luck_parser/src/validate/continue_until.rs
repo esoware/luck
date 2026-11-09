@@ -16,7 +16,7 @@ struct ContinueUntilChecker {
 }
 
 impl<'ast> Visitor<'ast> for ContinueUntilChecker {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         if let Statement::RepeatLoop(repeat_loop) = stmt
             && let Some(continue_index) = earliest_continue_stmt(&repeat_loop.block)
         {
@@ -55,9 +55,10 @@ impl<'ast> Visitor<'ast> for ContinueUntilChecker {
             }
             if !skipped_names.is_empty() {
                 let mut reads = ReadCollector { names: Vec::new() };
-                reads.visit_expression(&repeat_loop.condition);
+                reads.visit_expr(&repeat_loop.condition);
                 for name in reads.names {
                     if skipped_names.contains(&name) {
+                        skipped_names.retain(|skipped| *skipped != name);
                         self.errors.push(ParseError {
                             span: repeat_loop.condition.span(),
                             message: format!(
@@ -68,7 +69,7 @@ impl<'ast> Visitor<'ast> for ContinueUntilChecker {
                 }
             }
         }
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 }
 

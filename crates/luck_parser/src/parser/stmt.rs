@@ -32,7 +32,7 @@ impl Construct {
 }
 
 /// Whether `kind` can open a statement in some dialect.
-pub(super) const fn is_statement_start(kind: &TokenKind) -> bool {
+pub(super) const fn is_stmt_start(kind: &TokenKind) -> bool {
     match kind {
         TokenKind::If
         | TokenKind::While
@@ -113,7 +113,7 @@ pub(super) const fn is_statement_start(kind: &TokenKind) -> bool {
 
 /// Whether `kind` can follow a last statement: its optional `;` or a token
 /// that ends the block.
-const fn can_follow_last_statement(kind: &TokenKind) -> bool {
+const fn can_follow_last_stmt(kind: &TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Semicolon
@@ -149,7 +149,7 @@ impl Parser<'_> {
 
         loop {
             while matches!(self.peek(), TokenKind::Semicolon) {
-                if self.version.has_empty_statement() {
+                if self.version.has_empty_stmt() {
                     let span = self.advance_span();
                     stmts.push(Statement::EmptyStatement(span));
                 } else {
@@ -164,15 +164,13 @@ impl Parser<'_> {
 
             match self.peek() {
                 TokenKind::Return => {
-                    last_stmt = Some(Box::new(self.parse_return_statement()));
+                    last_stmt = Some(Box::new(self.parse_return_stmt()));
                     break;
                 }
-                TokenKind::Break if self.version.has_last_statement_break() => {
+                TokenKind::Break if self.version.has_last_stmt_break() => {
                     let span = self.advance_loop_exit("`break` outside a loop");
                     last_stmt = Some(Box::new(LastStatement::Break(span)));
-                    if matches!(self.peek(), TokenKind::Semicolon) {
-                        self.advance_span();
-                    }
+                    self.eat(&TokenKind::Semicolon);
                     break;
                 }
                 // Block-ending tokens, left for the caller to consume.
@@ -187,17 +185,15 @@ impl Parser<'_> {
                 TokenKind::Identifier(name)
                     if self.version.has_continue()
                         && name == "continue"
-                        && can_follow_last_statement(self.peek_next()) =>
+                        && can_follow_last_stmt(self.peek_next()) =>
                 {
                     let span = self.advance_loop_exit("`continue` outside a loop");
                     last_stmt = Some(Box::new(LastStatement::Continue(span)));
-                    if matches!(self.peek(), TokenKind::Semicolon) {
-                        self.advance_span();
-                    }
+                    self.eat(&TokenKind::Semicolon);
                     break;
                 }
-                kind if is_statement_start(kind) => {
-                    stmts.push(self.parse_statement());
+                kind if is_stmt_start(kind) => {
+                    stmts.push(self.parse_stmt());
                     can_take_separator = true;
                 }
                 _ => {
@@ -239,30 +235,32 @@ impl Parser<'_> {
     /// Parse a single statement, or a [`Statement::Error`] after recovering
     /// from malformed input.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
-    fn parse_statement(&mut self) -> Statement {
+    fn parse_stmt(&mut self) -> Statement {
         match self.peek() {
-            TokenKind::If => self.parse_if_statement(),
+            TokenKind::If => self.parse_if_stmt(),
             TokenKind::While => self.parse_while_loop(),
             TokenKind::Do => self.parse_do_block(),
-            TokenKind::For => self.parse_for_statement(),
+            TokenKind::For => self.parse_for_stmt(),
             TokenKind::Repeat => self.parse_repeat_loop(),
             TokenKind::Function => self.parse_function_decl(Vec::new()),
-            TokenKind::Local => self.parse_local_statement(Vec::new()),
+            TokenKind::Local => self.parse_local_stmt(Vec::new()),
             // Lua 5.2+: `break` is an ordinary statement.
-            TokenKind::Break if !self.version.has_last_statement_break() => {
+            TokenKind::Break if !self.version.has_last_stmt_break() => {
                 Statement::Break(self.advance_loop_exit("`break` outside a loop"))
             }
-            TokenKind::Goto if self.version.has_goto() => self.parse_goto_statement(),
-            TokenKind::DoubleColon if self.version.has_goto() => self.parse_label_statement(),
-            TokenKind::Global if self.version.has_global() => self.parse_global_statement(),
+            TokenKind::Goto if self.version.has_goto() => self.parse_goto_stmt(),
+            TokenKind::DoubleColon if self.version.has_goto() => self.parse_label_stmt(),
+            TokenKind::Global if self.version.has_global() => self.parse_global_stmt(),
             // Luau `@` attribute on function declarations.
-            TokenKind::At if self.version.is_luau() => self.parse_attributed_function(),
+            TokenKind::At if self.version.has_function_attributes() => {
+                self.parse_attributed_function()
+            }
             // Luau contextual keywords. `type`, `export`, and `const` start a
             // declaration only when the next token continues one; in
             // `const = 1`, `const()`, and `const.x`, `const` is an ordinary
             // identifier.
             TokenKind::Identifier(name)
-                if self.version.is_luau()
+                if self.version.has_type_syntax()
                     && name == "type"
                     && matches!(
                         self.peek_next(),
@@ -272,7 +270,7 @@ impl Parser<'_> {
                 self.parse_type_declaration(None)
             }
             TokenKind::Identifier(name)
-                if self.version.is_luau()
+                if self.version.has_type_syntax()
                     && name == "export"
                     && (matches!(self.peek_next(), TokenKind::Local | TokenKind::Function)
                         || matches!(
@@ -280,17 +278,17 @@ impl Parser<'_> {
                             TokenKind::Identifier(next) if next == "type" || next == "const"
                         )) =>
             {
-                self.parse_export_statement(Vec::new())
+                self.parse_export_stmt(Vec::new())
             }
             TokenKind::Identifier(name)
-                if self.version.is_luau()
+                if self.version.has_const_stmt()
                     && name == "const"
                     && matches!(
                         self.peek_next(),
                         TokenKind::Identifier(_) | TokenKind::Function
                     ) =>
             {
-                self.parse_const_statement()
+                self.parse_const_stmt()
             }
             TokenKind::Identifier(_) | TokenKind::LeftParen => self.parse_assignment_or_call(),
             _ => {
@@ -313,7 +311,7 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_return_statement(&mut self) -> LastStatement {
+    fn parse_return_stmt(&mut self) -> LastStatement {
         let return_span = self.advance_span(); // `return`
 
         if self.function_scope.is_chunk {
@@ -326,10 +324,10 @@ impl Parser<'_> {
             }
         }
 
-        let exprs = if can_follow_last_statement(self.peek()) {
+        let exprs = if can_follow_last_stmt(self.peek()) {
             Punctuated::empty()
         } else {
-            self.parse_expression_list()
+            self.parse_expr_list()
         };
 
         let semicolon = matches!(self.peek(), TokenKind::Semicolon).then(|| self.advance_span());
@@ -343,16 +341,16 @@ impl Parser<'_> {
         }))
     }
 
-    fn parse_if_statement(&mut self) -> Statement {
+    fn parse_if_stmt(&mut self) -> Statement {
         let if_span = self.advance_span();
-        let condition = self.parse_expression(0);
+        let condition = self.parse_expr(0);
         self.expect_keyword(&TokenKind::Then, Construct::IfStatement);
         let block = self.parse_block();
 
         let mut elseif_clauses = Vec::new();
         while matches!(self.peek(), TokenKind::ElseIf) {
             let elseif_span = self.advance_span();
-            let elseif_condition = self.parse_expression(0);
+            let elseif_condition = self.parse_expr(0);
             self.expect_keyword(&TokenKind::Then, Construct::IfStatement);
             let elseif_block = self.parse_block();
             let span = elseif_span.merge(elseif_block.span);
@@ -384,7 +382,7 @@ impl Parser<'_> {
 
     fn parse_while_loop(&mut self) -> Statement {
         let while_span = self.advance_span();
-        let condition = self.parse_expression(0);
+        let condition = self.parse_expr(0);
         self.expect_keyword(&TokenKind::Do, Construct::WhileLoop);
         let block = self.parse_loop_block();
         let end_span = self.expect_keyword(&TokenKind::End, Construct::WhileLoop);
@@ -402,7 +400,7 @@ impl Parser<'_> {
         Statement::DoBlock(Box::new(DoBlock { span, block }))
     }
 
-    fn parse_for_statement(&mut self) -> Statement {
+    fn parse_for_stmt(&mut self) -> Statement {
         let for_span = self.advance_span();
         let first_name = self.expect_identifier_recover();
         let first = self.parse_parameter(first_name);
@@ -418,14 +416,11 @@ impl Parser<'_> {
     fn parse_numeric_for(&mut self, for_span: Span, control: Parameter) -> Statement {
         let Parameter { name, type_annotation, .. } = control;
         self.advance_span(); // `=`
-        let start = self.parse_expression(0);
+        let start = self.parse_expr(0);
         self.expect_keyword(&TokenKind::Comma, Construct::ForLoop);
-        let limit = self.parse_expression(0);
+        let limit = self.parse_expr(0);
 
-        let step = matches!(self.peek(), TokenKind::Comma).then(|| {
-            self.advance_span();
-            self.parse_expression(0)
-        });
+        let step = self.eat(&TokenKind::Comma).then(|| self.parse_expr(0));
 
         self.expect_keyword(&TokenKind::Do, Construct::ForLoop);
         let block = self.parse_loop_block();
@@ -446,8 +441,7 @@ impl Parser<'_> {
     fn parse_generic_for(&mut self, for_span: Span, first: Parameter) -> Statement {
         let mut params = vec![first];
 
-        while matches!(self.peek(), TokenKind::Comma) {
-            self.advance_span();
+        while self.eat(&TokenKind::Comma) {
             let name = self.expect_identifier_recover();
             params.push(self.parse_parameter(name));
         }
@@ -455,7 +449,7 @@ impl Parser<'_> {
         let names = Punctuated::from_items(params);
 
         self.expect_keyword(&TokenKind::In, Construct::ForLoop);
-        let exprs = self.parse_expression_list();
+        let exprs = self.parse_expr_list();
         self.expect_keyword(&TokenKind::Do, Construct::ForLoop);
         let block = self.parse_loop_block();
         let end_span = self.expect_keyword(&TokenKind::End, Construct::ForLoop);
@@ -468,14 +462,14 @@ impl Parser<'_> {
         let repeat_span = self.advance_span();
         let block = self.parse_loop_block();
         self.expect_keyword(&TokenKind::Until, Construct::RepeatLoop);
-        let condition = self.parse_expression(0);
+        let condition = self.parse_expr(0);
         let span = repeat_span.merge(condition.span());
 
         Statement::RepeatLoop(Box::new(RepeatLoop { span, block, condition }))
     }
 
     /// Parse `goto Name`.
-    fn parse_goto_statement(&mut self) -> Statement {
+    fn parse_goto_stmt(&mut self) -> Statement {
         let goto_span = self.advance_span();
         let name = self.expect_identifier_recover();
         let span = goto_span.merge(name.span);
@@ -483,7 +477,7 @@ impl Parser<'_> {
     }
 
     /// Parse `:: Name ::`.
-    fn parse_label_statement(&mut self) -> Statement {
+    fn parse_label_stmt(&mut self) -> Statement {
         let colons_open = self.advance_span();
         let name = self.expect_identifier_recover();
         let colons_close = self.expect(&TokenKind::DoubleColon);
@@ -492,14 +486,14 @@ impl Parser<'_> {
     }
 
     fn parse_assignment_or_call(&mut self) -> Statement {
-        let expr = self.parse_expression(0);
+        let expr = self.parse_expr(0);
 
         // Luau compound assignment: `var op= expr`.
         if self.version.has_compound_assignment()
             && let Some(op) = CompoundOp::from_token_kind(self.peek())
         {
             self.advance_span();
-            let rhs = self.parse_expression(0);
+            let rhs = self.parse_expr(0);
             let var = self.assignment_target(expr);
             let span = var.span().merge(rhs.span());
             return Statement::CompoundAssignment(Box::new(CompoundAssignment {
@@ -513,14 +507,13 @@ impl Parser<'_> {
         // Assignment: `varlist = explist`.
         if matches!(self.peek(), TokenKind::Comma | TokenKind::Equal) {
             let mut target_exprs = vec![expr];
-            while matches!(self.peek(), TokenKind::Comma) {
-                self.advance_span();
-                target_exprs.push(self.parse_expression(0));
+            while self.eat(&TokenKind::Comma) {
+                target_exprs.push(self.parse_expr(0));
             }
 
             let equal = self.expect(&TokenKind::Equal);
 
-            let values = self.parse_expression_list();
+            let values = self.parse_expr_list();
 
             // Targets convert after the values parse, which decides how an
             // invalid target's error sorts among others at the same position.
@@ -579,14 +572,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_statement_start_accepts_only_statement_openers() {
-        assert!(is_statement_start(&TokenKind::If));
-        assert!(is_statement_start(&TokenKind::Local));
-        assert!(is_statement_start(&TokenKind::Identifier(CompactString::from("x"))));
-        assert!(is_statement_start(&TokenKind::LeftParen));
-        assert!(is_statement_start(&TokenKind::At));
-        assert!(!is_statement_start(&TokenKind::Plus));
-        assert!(!is_statement_start(&TokenKind::End));
-        assert!(!is_statement_start(&TokenKind::Eof));
+    fn is_stmt_start_accepts_only_stmt_openers() {
+        assert!(is_stmt_start(&TokenKind::If));
+        assert!(is_stmt_start(&TokenKind::Local));
+        assert!(is_stmt_start(&TokenKind::Identifier(CompactString::from("x"))));
+        assert!(is_stmt_start(&TokenKind::LeftParen));
+        assert!(is_stmt_start(&TokenKind::At));
+        assert!(!is_stmt_start(&TokenKind::Plus));
+        assert!(!is_stmt_start(&TokenKind::End));
+        assert!(!is_stmt_start(&TokenKind::Eof));
     }
 }

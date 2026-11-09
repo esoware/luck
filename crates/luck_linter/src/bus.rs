@@ -7,12 +7,13 @@
 
 use core::cell::RefCell;
 
+use luck_ast::{Expression, Statement};
 use rayon::prelude::*;
 
 use crate::diagnostic::Finding;
 use crate::node_type::NodeType;
 use crate::nodes::{AstNode, NodeKind};
-use crate::rule::{LintContext, NodeRule};
+use crate::rule::{CallPosition, LintContext, NodeRule};
 
 /// Below this many nodes the chunk setup costs more than it saves.
 const MIN_PARALLEL_NODES: usize = 4096;
@@ -32,9 +33,16 @@ fn dispatch(
     findings: &mut Vec<Finding>,
 ) {
     match node.kind {
-        NodeKind::Statement(stmt) => rule.on_statement(stmt, context, findings),
-        NodeKind::LastStatement(last_stmt) => rule.on_last_statement(last_stmt, context, findings),
-        NodeKind::Expression(expr) => rule.on_expression(expr, context, findings),
+        NodeKind::Statement(Statement::FunctionCall(call)) => {
+            rule.on_call(call, CallPosition::Statement, context, findings);
+        }
+        NodeKind::Expression(Expression::FunctionCall(call)) => {
+            rule.on_call(call, CallPosition::Expression, context, findings);
+        }
+        NodeKind::Statement(stmt) => rule.on_stmt(stmt, context, findings),
+        NodeKind::Expression(expr) => rule.on_expr(expr, context, findings),
+        // In the node table for suppression, with no hook of their own.
+        NodeKind::LastStatement(_) => {}
     }
 }
 

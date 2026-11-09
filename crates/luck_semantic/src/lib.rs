@@ -38,6 +38,7 @@ mod stdlib_load;
 mod stdlib_model;
 
 pub use analysis::{ResolvedCallee, SemanticAnalysis, analyze, analyze_with_environment};
+pub use builder::build as build_scope_tree;
 pub use scope::{
     Reference, ReferenceId, ReferenceKind, Scope, ScopeId, ScopeKind, ScopeTree, Symbol, SymbolId,
     SymbolKind,

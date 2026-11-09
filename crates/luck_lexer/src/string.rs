@@ -150,8 +150,7 @@ fn scan_escape(cursor: &mut Cursor<'_>, version: LuaVersion, escaped: u8) -> Res
     match escaped {
         b'\n' => {
             cursor.advance();
-            // PUC treats LFCR as one EOL sequence after `\`.
-            if !version.is_luau() && cursor.peek() == Some(b'\r') {
+            if version.has_lfcr_line_break() && cursor.peek() == Some(b'\r') {
                 cursor.advance();
             }
         }

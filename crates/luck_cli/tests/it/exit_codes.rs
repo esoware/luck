@@ -105,7 +105,7 @@ fn invalid_config_unknown_key_exits_usage() {
         .args(["check", "clean.lua"])
         .assert()
         .code(2i32)
-        .stderr(predicate::str::contains("Error"));
+        .stderr(predicate::str::contains("error: "));
 }
 
 /// Populate `directory` with a config naming a nonexistent dialect and enough
@@ -216,7 +216,7 @@ fn build_empty_entries_exits_usage() {
 }
 
 #[test]
-fn fmt_range_formats_only_covered_statement() {
+fn fmt_range_formats_only_covered_stmt() {
     let directory = TempDir::new().unwrap();
     // Two unformatted statements; the range covers only the second line.
     let path = write_file(directory.path(), "partial.lua", "local    a=1\nlocal    b=2\n");
@@ -253,6 +253,53 @@ fn fmt_range_reversed_bounds_exits_usage() {
         .assert()
         .code(2i32)
         .stderr(predicate::str::contains("invalid format range"));
+}
+
+#[test]
+fn bad_target_flag_is_reported_before_the_config() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "luck.json", "{ \"not_a_real_key\": true }\n");
+    write_file(directory.path(), "main.lua", "return 1\n");
+
+    for command in ["bundle", "minify", "graph"] {
+        luck_in(directory.path())
+            .args([command, "main.lua", "-t", "lua99"])
+            .assert()
+            .code(2i32)
+            .stderr(predicate::str::contains("invalid value 'lua99' for '--target <TARGET>'"))
+            .stderr(predicate::str::contains("invalid target `lua99`"))
+            .stderr(predicate::str::contains("not_a_real_key").not());
+    }
+}
+
+#[test]
+fn bad_init_target_exits_usage_and_writes_nothing() {
+    let directory = TempDir::new().unwrap();
+
+    luck_in(directory.path())
+        .args(["init", "-t", "lua99"])
+        .assert()
+        .code(2i32)
+        .stderr(predicate::str::contains("invalid value 'lua99' for '--target <TARGET>'"));
+    assert!(!directory.path().join("luck.json").exists());
+}
+
+#[test]
+fn bad_dynamic_require_flag_is_reported_before_the_config() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "luck.json", "{ \"not_a_real_key\": true }\n");
+    write_file(directory.path(), "main.lua", "return 1\n");
+
+    for command in ["bundle", "graph"] {
+        luck_in(directory.path())
+            .args([command, "main.lua", "--dynamic-require", "maybe"])
+            .assert()
+            .code(2i32)
+            .stderr(predicate::str::contains(
+                "invalid value 'maybe' for '--dynamic-require <MODE>'",
+            ))
+            .stderr(predicate::str::contains("not_a_real_key").not());
+    }
 }
 
 /// A `require(expr)` used to abort the whole bundle. It now warns, emits a

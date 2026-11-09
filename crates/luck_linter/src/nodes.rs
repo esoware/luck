@@ -7,6 +7,7 @@
 use luck_ast::{Block, Expression, LastStatement, Statement, Visitor};
 
 use crate::node_type::{NodeType, NodeTypeSet};
+use crate::uninitialized::UninitializedLocals;
 
 /// Borrowed view of one AST node, as dispatched to node rules.
 #[derive(Debug, Clone, Copy)]
@@ -28,6 +29,7 @@ pub(crate) struct AstNode<'ast> {
 pub(crate) struct Nodes<'ast> {
     table: Vec<AstNode<'ast>>,
     blocks: Vec<&'ast Block>,
+    uninitialized_locals: UninitializedLocals,
     present_types: NodeTypeSet,
 }
 
@@ -38,10 +40,12 @@ impl<'ast> Nodes<'ast> {
             nodes: Self {
                 table: Vec::new(),
                 blocks: Vec::new(),
+                uninitialized_locals: UninitializedLocals::default(),
                 present_types: NodeTypeSet::new(),
             },
         };
         collector.visit_block(block);
+        collector.nodes.uninitialized_locals.sort();
         collector.nodes
     }
 
@@ -52,6 +56,10 @@ impl<'ast> Nodes<'ast> {
     /// Every block, the chunk's own first.
     pub(crate) fn blocks(&self) -> &[&'ast Block] {
         &self.blocks
+    }
+
+    pub(crate) const fn uninitialized_locals(&self) -> &UninitializedLocals {
+        &self.uninitialized_locals
     }
 
     pub(crate) const fn contains_any(&self, node_types: NodeTypeSet) -> bool {
@@ -76,19 +84,20 @@ impl<'ast> Visitor<'ast> for NodeCollector<'ast> {
         self.walk_block(block);
     }
 
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         self.push_node(NodeKind::Statement(stmt), NodeType::of_stmt(stmt));
-        self.walk_statement(stmt);
+        self.nodes.uninitialized_locals.record(stmt);
+        self.walk_stmt(stmt);
     }
 
-    fn visit_expression(&mut self, expr: &'ast Expression) {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
         self.push_node(NodeKind::Expression(expr), NodeType::of_expr(expr));
-        self.walk_expression(expr);
+        self.walk_expr(expr);
     }
 
-    fn visit_last_statement(&mut self, last: &'ast LastStatement) {
+    fn visit_last_stmt(&mut self, last: &'ast LastStatement) {
         self.push_node(NodeKind::LastStatement(last), NodeType::of_last_stmt(last));
-        self.walk_last_statement(last);
+        self.walk_last_stmt(last);
     }
 }
 

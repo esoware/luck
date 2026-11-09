@@ -1,26 +1,19 @@
 use luck_ast::{FunctionName, Statement};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, Finding, Severity, line_column};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::{Finding, line_column};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DuplicateFunction;
 
-impl Rule for DuplicateFunction {
-    fn name(&self) -> &'static str {
-        "duplicate_function"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "function with the same name is defined twice in the same block"
-    }
-}
+impl_rule!(
+    DuplicateFunction,
+    "duplicate_function",
+    Suspicious,
+    Warning,
+    "function with the same name is defined twice in the same block"
+);
 
 impl WholeRule for DuplicateFunction {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

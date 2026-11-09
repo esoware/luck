@@ -1,8 +1,51 @@
-//! Read-only structural queries: how many values an expression yields, and
-//! where a reprinted node needs parentheses or a separator.
+//! Read-only structural queries: how many values an expression yields, where
+//! a reprinted node needs parentheses or a separator, and the names of a
+//! dotted path.
+
+use luck_token::Span;
 
 use crate::expr::{Expression, Var};
 use crate::stmt::Statement;
+
+/// A `Name(.Name)*` chain's names, root first, and where its first and last
+/// names sit.
+#[derive(Debug)]
+pub struct DottedPath<'ast> {
+    pub segments: Vec<&'ast str>,
+    pub root_span: Span,
+    pub leaf_span: Span,
+}
+
+/// Splits a `Name(.Name)*` chain into its names. Any other link, such as
+/// indexing or a call, yields `None`.
+#[must_use]
+pub fn dotted_path(var: &Var) -> Option<DottedPath<'_>> {
+    let leaf_span = match var {
+        Var::Name(token) => token.span,
+        Var::FieldAccess(field_access) => field_access.name.span,
+        Var::Index(_) => return None,
+    };
+    let mut segments: Vec<&str> = Vec::new();
+    let mut cursor = var;
+    let root_span = loop {
+        match cursor {
+            Var::Name(token) => {
+                segments.push(token.identifier()?);
+                break token.span;
+            }
+            Var::FieldAccess(field_access) => {
+                segments.push(field_access.name.identifier()?);
+                let Expression::Var(prefix) = &field_access.prefix else {
+                    return None;
+                };
+                cursor = prefix;
+            }
+            Var::Index(_) => return None,
+        }
+    };
+    segments.reverse();
+    Some(DottedPath { segments, root_span, leaf_span })
+}
 
 /// Whether `expr` is a call or `...`, the only forms that can yield any
 /// number of values, none included.
@@ -38,7 +81,7 @@ pub const fn is_multi_value(expr: &Expression) -> bool {
 ///
 /// Anything else needs parentheses there, as in `("s"):rep(2)` or `({}).x`.
 #[must_use]
-pub const fn is_prefix_expression(expr: &Expression) -> bool {
+pub const fn is_prefix_expr(expr: &Expression) -> bool {
     match expr {
         Expression::Var(_)
         | Expression::FunctionCall(_)

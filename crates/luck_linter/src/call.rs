@@ -3,7 +3,7 @@
 
 use luck_ast::{Expression, FunctionArgs, FunctionCall, Var, is_multi_value};
 use luck_semantic::SemanticAnalysis;
-use luck_token::{Span, short_string_body};
+use luck_token::{Span, Token, short_string_body};
 
 /// Whether `call` is a plain `name(...)` call to the global `name`. A method
 /// call, or a local that shadows `name`, is user code.
@@ -15,6 +15,21 @@ pub(crate) fn is_global_call(call: &FunctionCall, name: &str, semantic: &Semanti
                 if token.identifier() == Some(name)
                     && !semantic.resolves_to_local(name, token.span)
         )
+}
+
+/// The root token and field name of a `root.field(...)` callee. `None` for a
+/// method call.
+pub(crate) fn dotted_callee(call: &FunctionCall) -> Option<(&Token, &str)> {
+    if call.method.is_some() {
+        return None;
+    }
+    let Expression::Var(Var::FieldAccess(field_access)) = &call.callee else {
+        return None;
+    };
+    let Expression::Var(Var::Name(root)) = &field_access.prefix else {
+        return None;
+    };
+    Some((root, field_access.name.identifier()?))
 }
 
 /// A call's positional argument expressions, and how many arguments it

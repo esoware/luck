@@ -23,7 +23,7 @@ Text-document features:
 
 Custom requests:
 - `luck/syntaxTree` returns a debug AST dump for the requested document
-- `luck/fixAllWorkspace` returns one `WorkspaceEdit` holding every available fix across every open document
+- `luck/fixAllWorkspace` returns one `WorkspaceEdit` holding every available fix across every open document the project's `include` and `exclude` cover
 
 ## Config
 

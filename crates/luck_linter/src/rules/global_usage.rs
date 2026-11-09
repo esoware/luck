@@ -1,5 +1,5 @@
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags reads and writes of `_G`, and of `shared` under the Roblox stdlib.
 ///
@@ -7,20 +7,13 @@ use crate::rule::{LintContext, Rule, WholeRule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GlobalUsage;
 
-impl Rule for GlobalUsage {
-    fn name(&self) -> &'static str {
-        "global_usage"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "use of the global environment tables `_G` or `shared`"
-    }
-}
+impl_rule!(
+    GlobalUsage,
+    "global_usage",
+    Style,
+    Warning,
+    "use of the global environment tables `_G` or `shared`"
+);
 
 impl WholeRule for GlobalUsage {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

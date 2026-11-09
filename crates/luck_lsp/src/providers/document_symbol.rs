@@ -31,7 +31,7 @@ struct SymbolEmitter<'document> {
 }
 
 impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::FunctionDecl(declaration) => {
                 let (name, kind) = function_name_label(&declaration.name);
@@ -98,7 +98,7 @@ impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
             | Statement::RepeatLoop(_)
             | Statement::IfStatement(_)
             | Statement::NumericFor(_)
-            | Statement::GenericFor(_) => self.walk_statement(stmt),
+            | Statement::GenericFor(_) => self.walk_stmt(stmt),
             Statement::FunctionCall(_)
             | Statement::EmptyStatement(_)
             | Statement::Goto(_)
@@ -115,7 +115,7 @@ impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
 
     // A function inside an expression gets no symbol, so neither do its
     // declarations.
-    fn visit_expression(&mut self, _expr: &'ast Expression) {}
+    fn visit_expr(&mut self, _expr: &'ast Expression) {}
 }
 
 impl SymbolEmitter<'_> {

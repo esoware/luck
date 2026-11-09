@@ -143,7 +143,7 @@ fn close_attribute_on_globals_rejected() {
 }
 
 #[test]
-fn empty_statement_gated_by_version() {
+fn empty_stmt_gated_by_version() {
     // 5.1 and Luau have no empty statement: `;` only follows a statement.
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
         assert_has_errors(&parse(";", version));

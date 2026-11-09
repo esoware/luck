@@ -1,8 +1,8 @@
 use luck_semantic::SymbolKind;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags a function parameter that's never referenced (Luacheck 212).
 ///
@@ -12,20 +12,13 @@ use crate::rule::{LintContext, Rule, WholeRule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnusedArgument;
 
-impl Rule for UnusedArgument {
-    fn name(&self) -> &'static str {
-        "unused_argument"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "function parameter is declared but never referenced"
-    }
-}
+impl_rule!(
+    UnusedArgument,
+    "unused_argument",
+    Style,
+    Warning,
+    "function parameter is declared but never referenced"
+);
 
 impl WholeRule for UnusedArgument {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

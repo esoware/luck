@@ -19,10 +19,20 @@ pub struct ProjectConfig {
 
 impl ProjectConfig {
     fn loaded_from(config_path: &Path, config: LuckConfig) -> Self {
-        // A path that loaded names a file, so it has a parent.
-        let root = config_path.parent().map(Path::to_path_buf).unwrap_or_default();
-        Self { root, config }
+        Self { root: config_directory(config_path), config }
     }
+}
+
+/// The directory holding the config file at `config_path`.
+///
+/// A bare file name's parent is the empty path, which can't be canonicalized
+/// or watched, so it maps to `.`.
+#[must_use]
+pub fn config_directory(config_path: &Path) -> PathBuf {
+    config_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
 /// Deserializes a `luck.json` (JSON5) string into a [`LuckConfig`].
@@ -66,7 +76,7 @@ fn load_with_extends_inner(
     let contents =
         fs::read_to_string(path).map_err(|error| format!("`{}`: {error}", path.display()))?;
     let config = parse_luck_config(&contents)?;
-    let directory = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let directory = config_directory(path);
     let mut merged = LuckConfig::default();
     if let Some(parents) = &config.extends {
         // A `root: true` config's extends must stay inside its own directory.
@@ -162,6 +172,17 @@ mod tests {
         let config = parse_luck_config(json5).expect("JSON5 features should parse");
         assert_eq!(config.lua.as_deref(), Some("lua54"));
         assert_eq!(config.minify, Some(true));
+    }
+
+    #[test]
+    fn config_directory_of_a_bare_file_name_is_the_current_directory() {
+        assert_eq!(config_directory(Path::new("luck.json")), Path::new("."));
+    }
+
+    #[test]
+    fn config_directory_keeps_a_named_parent() {
+        assert_eq!(config_directory(Path::new("./luck.json")), Path::new("."));
+        assert_eq!(config_directory(Path::new("sub/luck.json")), Path::new("sub"));
     }
 
     #[test]

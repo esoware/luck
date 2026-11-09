@@ -36,3 +36,22 @@ pub enum CommentPosition {
     /// Comment appears after the attached token on the same line.
     Trailing,
 }
+
+/// The `--!` hot comments in the comment run that opens `source`.
+///
+/// Luau honours them only before the first token. Other comments, block
+/// comments included, don't end the run, and `comments` must be sorted.
+pub fn leading_hot_comments<'comments>(
+    comments: &'comments [Comment],
+    source: &str,
+) -> impl Iterator<Item = &'comments Comment> {
+    let mut run_end = 0;
+    comments
+        .iter()
+        .take_while(move |comment| {
+            let gap = Span::new(run_end, comment.span.start).text(source);
+            run_end = comment.span.end;
+            gap.chars().all(char::is_whitespace)
+        })
+        .filter(move |comment| comment.span.text(source).starts_with("--!"))
+}

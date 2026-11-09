@@ -11,9 +11,9 @@
 
 use core::ops::Range;
 
-use luck_ast::{Block, FunctionArgs, FunctionBody, FunctionCall, Statement, Visitor};
+use luck_ast::{FunctionArgs, FunctionCall};
 use luck_semantic::{StdlibEntry, StdlibFunction};
-use luck_token::{Span, Token};
+use luck_token::{Span, TokenKind};
 use rustc_hash::FxHashSet;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemTag, CompletionResponse, CompletionTextEdit,
@@ -69,19 +69,28 @@ pub(crate) fn completion(document: &DocumentState, position: Position) -> Comple
         for (name, entry) in &stdlib.globals {
             items.push(item_for_entry(name.as_str(), entry));
         }
-        for name in visible_locals(&document.parsed.block, offset) {
-            items.push(CompletionItem {
-                label: name.to_owned(),
-                kind: Some(CompletionItemKind::VARIABLE),
-                ..Default::default()
-            });
+        // Every local or parameter declared before the cursor, whether or not
+        // it's still in scope there, because completion is best-effort. The
+        // implicit `self` has the whole body as its span, so it fails the text
+        // check.
+        for symbol in &document.semantic.scope_tree.symbols {
+            let span = symbol.definition_span;
+            if span.end <= offset && span.text(document.text()) == symbol.name.as_str() {
+                items.push(CompletionItem {
+                    label: symbol.name.to_string(),
+                    kind: Some(CompletionItemKind::VARIABLE),
+                    ..Default::default()
+                });
+            }
         }
         for keyword in KEYWORD_COMPLETIONS {
-            items.push(CompletionItem {
-                label: (*keyword).to_owned(),
-                kind: Some(CompletionItemKind::KEYWORD),
-                ..Default::default()
-            });
+            if TokenKind::is_reserved(keyword, document.lua_version) {
+                items.push(CompletionItem {
+                    label: (*keyword).to_owned(),
+                    kind: Some(CompletionItemKind::KEYWORD),
+                    ..Default::default()
+                });
+            }
         }
     }
 
@@ -100,7 +109,7 @@ fn constant_value_completions(
 ) -> Option<Vec<CompletionItem>> {
     let site = find_string_arg_at(&document.parsed.block, offset)?;
     let callee = document.semantic.resolve_callee(site.call)?;
-    let StdlibEntry::Function(function) = callee.entry else {
+    let StdlibEntry::Function(function) = callee.entry() else {
         return None;
     };
     let allowed_sets = function.allowed_constants(site.arg_index, call_arg_count(site.call))?;
@@ -258,78 +267,12 @@ fn function_documentation(name: &str, function: &StdlibFunction) -> String {
     )
 }
 
+/// Every target's keywords. A target offers only those `is_reserved` admits.
 const KEYWORD_COMPLETIONS: &[&str] = &[
-    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in",
-    "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+    "and", "break", "continue", "do", "else", "elseif", "end", "false", "for", "function",
+    "global", "goto", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true",
+    "until", "while",
 ];
-
-/// Every local or parameter name declared before `offset`, whether or not
-/// it's still in scope there. Completion is best-effort and doesn't follow
-/// scopes.
-fn visible_locals(block: &Block, offset: u32) -> Vec<&str> {
-    let mut collector = LocalCollector { offset, names: Vec::new() };
-    collector.visit_block(block);
-    collector.names
-}
-
-struct LocalCollector<'ast> {
-    offset: u32,
-    names: Vec<&'ast str>,
-}
-
-impl<'ast> LocalCollector<'ast> {
-    fn record(&mut self, token: &'ast Token) {
-        if token.span.end <= self.offset
-            && let Some(name) = token.identifier()
-        {
-            self.names.push(name);
-        }
-    }
-}
-
-impl<'ast> Visitor<'ast> for LocalCollector<'ast> {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
-        match stmt {
-            Statement::LocalAssignment(local) => {
-                for name_token in local.names.iter() {
-                    self.record(&name_token.name);
-                }
-            }
-            Statement::LocalFunction(local_function) => self.record(&local_function.name),
-            Statement::NumericFor(numeric_for) => self.record(&numeric_for.name),
-            Statement::GenericFor(generic_for) => {
-                for binding in generic_for.names.iter() {
-                    self.record(&binding.name);
-                }
-            }
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-        self.walk_statement(stmt);
-    }
-
-    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
-        for param in body.params.iter() {
-            self.record(&param.name);
-        }
-        self.walk_function_body(body);
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -345,12 +288,76 @@ mod tests {
         }
     }
 
+    fn document_for(text: &str, target: LuaTarget) -> DocumentState {
+        DocumentState::new(text.to_owned(), 1, target, FxHashSet::default())
+    }
+
     fn roblox_document(text: &str) -> DocumentState {
-        DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox)
+        document_for(text, LuaTarget::LuauRoblox)
     }
 
     fn lua54_document(text: &str) -> DocumentState {
-        DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54)
+        document_for(text, LuaTarget::Lua54)
+    }
+
+    fn keywords_of(items: &[CompletionItem]) -> Vec<&str> {
+        items
+            .iter()
+            .filter(|item| item.kind == Some(CompletionItemKind::KEYWORD))
+            .map(|item| item.label.as_str())
+            .collect()
+    }
+
+    fn variables_of(items: &[CompletionItem]) -> Vec<&str> {
+        items
+            .iter()
+            .filter(|item| item.kind == Some(CompletionItemKind::VARIABLE))
+            .map(|item| item.label.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn keywords_follow_the_target() {
+        for (target, expect_goto, expect_global, expect_continue) in [
+            (LuaTarget::Lua51, false, false, false),
+            (LuaTarget::Lua52, true, false, false),
+            (LuaTarget::Lua53, true, false, false),
+            (LuaTarget::Lua54, true, false, false),
+            (LuaTarget::Lua55, true, true, false),
+            (LuaTarget::Luau, false, false, true),
+            (LuaTarget::LuauRoblox, false, false, true),
+        ] {
+            let document = document_for("", target);
+            let items = items_at(&document, 0, 0);
+            let keywords = keywords_of(&items);
+            assert!(keywords.contains(&"while"), "{target:?}: {keywords:?}");
+            assert_eq!(keywords.contains(&"goto"), expect_goto, "{target:?}: {keywords:?}");
+            assert_eq!(keywords.contains(&"global"), expect_global, "{target:?}: {keywords:?}");
+            assert_eq!(keywords.contains(&"continue"), expect_continue, "{target:?}: {keywords:?}");
+        }
+    }
+
+    #[test]
+    fn locals_before_the_cursor_are_offered_without_implicit_self() {
+        let text = "local a = 1\nlocal function f(p) end\nfor i = 1, 2 do end\n\
+                    for k, v in pairs({}) do end\nlocal t = {}\nfunction t:m(q)\n\nend\nlocal later\n";
+        let document = lua54_document(text);
+        // The blank line inside `t:m`.
+        let items = items_at(&document, 6, 0);
+        let variables = variables_of(&items);
+        for name in ["a", "f", "p", "i", "k", "v", "t", "q"] {
+            assert!(variables.contains(&name), "{name}: {variables:?}");
+        }
+        assert!(!variables.contains(&"self"), "{variables:?}");
+        assert!(!variables.contains(&"later"), "{variables:?}");
+    }
+
+    #[test]
+    fn named_vararg_is_offered_on_lua55() {
+        let text = "local function f(...args)\n\nend\n";
+        let document = document_for(text, LuaTarget::Lua55);
+        let items = items_at(&document, 1, 0);
+        assert!(variables_of(&items).contains(&"args"), "{items:?}");
     }
 
     #[test]

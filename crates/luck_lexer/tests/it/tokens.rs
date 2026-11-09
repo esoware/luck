@@ -119,7 +119,7 @@ fn token_spans_cover_their_source_bytes() {
 }
 
 #[test]
-fn local_statement_lexes_token_by_token() {
+fn local_stmt_lexes_token_by_token() {
     assert_eq!(
         kinds("local x = 1 + 2"),
         vec![
@@ -248,7 +248,7 @@ fn lua52_goto_and_label_lex_token_by_token() {
 }
 
 #[test]
-fn lua55_global_statement_lexes_token_by_token() {
+fn lua55_global_stmt_lexes_token_by_token() {
     assert_eq!(
         kinds_in("global x = 5", LuaVersion::Lua55),
         vec![
@@ -348,7 +348,7 @@ fn shift_operators_lex_only_in_lua53_plus() {
 }
 
 #[test]
-fn lua53_bitwise_expression_lexes_token_by_token() {
+fn lua53_bitwise_expr_lexes_token_by_token() {
     assert_eq!(
         kinds_in("a & b | c", LuaVersion::Lua53),
         vec![
@@ -362,7 +362,7 @@ fn lua53_bitwise_expression_lexes_token_by_token() {
 }
 
 #[test]
-fn lua53_shift_expression_lexes_token_by_token() {
+fn lua53_shift_expr_lexes_token_by_token() {
     assert_eq!(
         kinds_in("x << 2 >> 1", LuaVersion::Lua53),
         vec![
@@ -376,7 +376,7 @@ fn lua53_shift_expression_lexes_token_by_token() {
 }
 
 #[test]
-fn lua53_mixed_bitwise_expression_lexes_token_by_token() {
+fn lua53_mixed_bitwise_expr_lexes_token_by_token() {
     assert_eq!(
         kinds_in("(a & b) | (~c >> 2)", LuaVersion::Lua53),
         vec![

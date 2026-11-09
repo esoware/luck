@@ -8,7 +8,9 @@ use alloc::sync::Arc;
 
 use luck_core::LuaTarget;
 use luck_linter::LintDiagnostic;
+use rustc_hash::FxHashSet;
 use tokio::sync::RwLock;
+use tokio::task::spawn_blocking;
 use tower_lsp::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
 use tower_lsp::lsp_types::{
     CodeActionKind, CodeActionOptions, CodeActionParams, CodeActionProviderCapability,
@@ -40,7 +42,7 @@ use crate::providers::{
     document_symbol, folding_range, hover, references, rename, selection_range, semantic_tokens,
     signature_help, syntax_tree, workspace_symbol,
 };
-use crate::settings::SettingsCache;
+use crate::settings::{ProjectSettings, SettingsCache};
 
 /// The parts of `tower_lsp::Client` the backend uses, so tests can record
 /// what the server sends instead.
@@ -100,8 +102,21 @@ struct OpenDocument {
 }
 
 impl OpenDocument {
-    fn new(text: String, version: i32, target: LuaTarget) -> Self {
-        Self { state: Arc::new(DocumentState::new(text, version, target)), published_lints: None }
+    fn new(
+        text: String,
+        version: i32,
+        target: LuaTarget,
+        extra_globals: FxHashSet<String>,
+    ) -> Self {
+        Self {
+            state: Arc::new(DocumentState::new(text, version, target, extra_globals)),
+            published_lints: None,
+        }
+    }
+
+    /// The same document at new text, under the same target and globals.
+    fn with_text(&self, text: String, version: i32) -> Self {
+        Self::new(text, version, self.state.target, self.state.semantic.extra_globals.clone())
     }
 }
 
@@ -132,28 +147,42 @@ impl<N: Notifier> Backend<N> {
         documents.iter().map(|(uri, open)| (uri.clone(), Arc::clone(&open.state))).collect()
     }
 
-    async fn target_for(&self, uri: &Url) -> LuaTarget {
+    /// The target and extra globals a document at `uri` is analyzed with.
+    async fn document_settings(&self, uri: &Url) -> (LuaTarget, FxHashSet<String>) {
         let file_path = uri.to_file_path().ok();
-        self.settings_cache
-            .settings_for(file_path.as_deref())
+        let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
+        (
+            settings.target_for(file_path.as_deref()),
+            settings.lint_config.extra_globals.iter().cloned().collect(),
+        )
+    }
+
+    /// The settings of the document at `uri`, or `None` when the project's
+    /// include/exclude set leaves it out, so it gets no diagnostics and no
+    /// fixes.
+    async fn settings_if_included(&self, uri: &Url) -> Option<Arc<ProjectSettings>> {
+        let file_path = uri.to_file_path().ok();
+        let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
+        let Some(path) = file_path else {
+            return Some(settings);
+        };
+        let filter_settings = Arc::clone(&settings);
+        // `is_included` canonicalizes the path, which touches the disk. A
+        // check that dies counts as excluded, so no fix lands on a guess.
+        spawn_blocking(move || filter_settings.filter.is_included(&path))
             .await
-            .target_for(file_path.as_deref())
+            .unwrap_or(false)
+            .then_some(settings)
     }
 
     async fn lint_and_publish(&self, uri: Url) {
         let Some(document) = self.snapshot(&uri).await else {
             return;
         };
-        let file_path = uri.to_file_path().ok();
-        let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
-        // Files outside the project's include/exclude set get no diagnostics.
-        if let Some(path) = &file_path
-            && !settings.filter.is_included(path)
-        {
-            self.notifier.publish_diagnostics(uri, Vec::new(), Some(document.version)).await;
-            return;
-        }
-        let lints: Arc<[LintDiagnostic]> = document.lint(&settings.lint_config).into();
+        let lints: Arc<[LintDiagnostic]> = self.settings_if_included(&uri).await.map_or_else(
+            || Vec::new().into(),
+            |settings| document.lint(&settings.lint_config).into(),
+        );
         {
             let mut documents = self.documents.write().await;
             // A change that landed while linting has already replaced the
@@ -179,7 +208,9 @@ impl<N: Notifier> Backend<N> {
         };
         let file_path = uri.to_file_path().ok();
         let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
-        let options = settings.format_options(file_path.as_deref());
+        // Reading the `.editorconfig` chain touches the disk.
+        let options =
+            spawn_blocking(move || settings.format_options(file_path.as_deref())).await.ok()?;
         let lua_version = document.lua_version;
         let (result, action) = byte_range.map_or_else(
             || (luck_formatter::format(document.text(), lua_version, &options), "format"),
@@ -232,7 +263,8 @@ impl<N: Notifier> Backend<N> {
     }
 
     /// Serves `luck/fixAllWorkspace` with one `WorkspaceEdit` holding every
-    /// available fix in every open document, for the client to apply.
+    /// available fix in every open document the project's include/exclude set
+    /// covers, for the client to apply.
     ///
     /// # Errors
     ///
@@ -243,9 +275,9 @@ impl<N: Notifier> Backend<N> {
     ) -> JsonRpcResult<WorkspaceEdit> {
         let mut documents = Vec::new();
         for (uri, document) in self.open_documents().await {
-            let settings =
-                self.settings_cache.settings_for(uri.to_file_path().ok().as_deref()).await;
-            documents.push((uri, document, settings));
+            if let Some(settings) = self.settings_if_included(&uri).await {
+                documents.push((uri, document, settings));
+            }
         }
         Ok(code_action::fix_all_open(&documents))
     }
@@ -268,9 +300,6 @@ fn update_stored_document(
     if version <= open.state.version {
         return false;
     }
-    if params.content_changes.is_empty() {
-        return true;
-    }
     let Some(text) = open.state.changed_text(params.content_changes) else {
         // A range that doesn't fit means we've already desynced from the
         // client. Drop the document so nothing is served from corrupt text
@@ -278,7 +307,7 @@ fn update_stored_document(
         documents.remove(uri);
         return false;
     };
-    *open = OpenDocument::new(text, version, open.state.target);
+    *open = open.with_text(text, version);
     true
 }
 
@@ -393,18 +422,24 @@ impl<N: Notifier> LanguageServer for Backend<N> {
 
     async fn did_change_watched_files(&self, _params: DidChangeWatchedFilesParams) {
         self.settings_cache.clear().await;
-        // Retarget every open document (the config may have changed its
-        // dialect) and republish diagnostics under the new settings. Each
-        // target is found before taking the documents lock, so config
+        // Rebuild every open document whose dialect or extra globals changed
+        // and republish diagnostics under the new settings. Each document's
+        // settings are found before taking the documents lock, so config
         // discovery doesn't stall other requests.
         let uris: Vec<Url> = self.documents.read().await.keys().cloned().collect();
         for uri in &uris {
-            let target = self.target_for(uri).await;
+            let (target, extra_globals) = self.document_settings(uri).await;
             let mut documents = self.documents.write().await;
             if let Some(open) = documents.get_mut(uri)
-                && open.state.target != target
+                && (open.state.target != target
+                    || open.state.semantic.extra_globals != extra_globals)
             {
-                *open = OpenDocument::new(open.state.text().to_owned(), open.state.version, target);
+                *open = OpenDocument::new(
+                    open.state.text().to_owned(),
+                    open.state.version,
+                    target,
+                    extra_globals,
+                );
             }
         }
         for uri in uris {
@@ -418,9 +453,13 @@ impl<N: Notifier> LanguageServer for Backend<N> {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
-        let target = self.target_for(&uri).await;
-        let document =
-            OpenDocument::new(params.text_document.text, params.text_document.version, target);
+        let (target, extra_globals) = self.document_settings(&uri).await;
+        let document = OpenDocument::new(
+            params.text_document.text,
+            params.text_document.version,
+            target,
+            extra_globals,
+        );
         self.documents.write().await.insert(uri.clone(), document);
         self.lint_and_publish(uri).await;
     }
@@ -444,7 +483,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
                 // the current one.
                 && open.state.text() != text
             {
-                *open = OpenDocument::new(text, open.state.version, open.state.target);
+                *open = open.with_text(text, open.state.version);
             }
         }
         self.lint_and_publish(uri).await;
@@ -525,15 +564,15 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         else {
             return Ok(None);
         };
-        // Without published lints, they're recomputed through the same opt-in
-        // gate as publishing, so no action fixes a diagnostic the user wasn't
-        // shown.
+        // Without published lints, they're recomputed through the same
+        // include/exclude filter and opt-in gate as publishing, so no action
+        // fixes a diagnostic the user wasn't shown.
         let lints = if let Some(lints) = published_lints {
             lints
-        } else {
-            let settings =
-                self.settings_cache.settings_for(uri.to_file_path().ok().as_deref()).await;
+        } else if let Some(settings) = self.settings_if_included(uri).await {
             document.lint(&settings.lint_config).into()
+        } else {
+            Vec::new().into()
         };
         Ok(Some(code_action::code_action(&document, &params, &lints)))
     }
@@ -571,7 +610,11 @@ impl<N: Notifier> LanguageServer for Backend<N> {
             return Ok(None);
         };
         let settings = self.settings_cache.settings_for(uri.to_file_path().ok().as_deref()).await;
-        Ok(definition::goto(&document, &settings, &params))
+        // A `require` under the cursor resolves through the disk.
+        Ok(spawn_blocking(move || definition::goto(&document, &settings, &params))
+            .await
+            .ok()
+            .flatten())
     }
 
     async fn references(&self, params: ReferenceParams) -> JsonRpcResult<Option<Vec<Location>>> {
@@ -642,11 +685,16 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         &self,
         params: DocumentLinkParams,
     ) -> JsonRpcResult<Option<Vec<DocumentLink>>> {
-        let uri = &params.text_document.uri;
-        let Some(document) = self.snapshot(uri).await else {
+        let uri = params.text_document.uri;
+        let Some(document) = self.snapshot(&uri).await else {
             return Ok(None);
         };
         let settings = self.settings_cache.settings_for(uri.to_file_path().ok().as_deref()).await;
-        Ok(Some(document_link::document_links(&document, uri, &settings)))
+        // Each `require` resolves through the disk.
+        let links =
+            spawn_blocking(move || document_link::document_links(&document, &uri, &settings))
+                .await
+                .unwrap_or_default();
+        Ok(Some(links))
     }
 }

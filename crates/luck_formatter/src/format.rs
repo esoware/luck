@@ -38,9 +38,31 @@ fn print_block(
     output.truncate(trimmed.len());
     output.push('\n');
     if options.line_endings == LineEndings::Windows {
-        output = output.replace('\n', "\r\n");
+        output = with_windows_line_endings(&output);
     }
     output
+}
+
+/// `text` with a CR before each LF that isn't half of a line break already.
+///
+/// Verbatim text can already hold CRLF or LFCR, from CRLF input or an earlier
+/// pass, and a second CR would be another line break in a long string.
+fn with_windows_line_endings(text: &str) -> String {
+    let mut converted =
+        String::with_capacity(text.len().saturating_add(text.matches('\n').count()));
+    let mut segments = text.split_inclusive('\n').peekable();
+    while let Some(segment) = segments.next() {
+        let is_half_of_a_line_break =
+            segment.ends_with("\r\n") || segments.peek().is_some_and(|next| next.starts_with('\r'));
+        match segment.strip_suffix('\n') {
+            Some(line) if !is_half_of_a_line_break => {
+                converted.push_str(line);
+                converted.push_str("\r\n");
+            }
+            Some(_) | None => converted.push_str(segment),
+        }
+    }
+    converted
 }
 
 /// Format an AST, with or without source text behind it.

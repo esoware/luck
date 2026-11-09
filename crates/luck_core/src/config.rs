@@ -26,7 +26,8 @@ pub use format_config::{
 };
 pub use lint_config::{Category, LintConfig, RuleSetting};
 pub use load::{
-    ProjectConfig, discover_config, load_or_discover_config, load_with_extends, parse_luck_config,
+    ProjectConfig, config_directory, discover_config, load_or_discover_config, load_with_extends,
+    parse_luck_config,
 };
 pub use luck_config::{
     DEFAULT_SEARCH_PATHS, DialectKey, EntryConfig, LuckConfig, ProfileOverrides,

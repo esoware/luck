@@ -18,14 +18,14 @@ pub trait Transform {
     fn transform_block(&mut self, block: Block) -> Block {
         self.walk_block(block)
     }
-    fn transform_statement(&mut self, stmt: Statement) -> Statement {
-        self.walk_statement(stmt)
+    fn transform_stmt(&mut self, stmt: Statement) -> Statement {
+        self.walk_stmt(stmt)
     }
-    fn transform_last_statement(&mut self, last: LastStatement) -> LastStatement {
-        self.walk_last_statement(last)
+    fn transform_last_stmt(&mut self, last: LastStatement) -> LastStatement {
+        self.walk_last_stmt(last)
     }
-    fn transform_expression(&mut self, expr: Expression) -> Expression {
-        self.walk_expression(expr)
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        self.walk_expr(expr)
     }
     fn transform_var(&mut self, var: Var) -> Var {
         self.walk_var(var)
@@ -51,15 +51,15 @@ pub trait Transform {
     fn walk_block(&mut self, block: Block) -> Block {
         Block {
             span: block.span,
-            stmts: block.stmts.into_iter().map(|stmt| self.transform_statement(stmt)).collect(),
+            stmts: block.stmts.into_iter().map(|stmt| self.transform_stmt(stmt)).collect(),
             last_stmt: block.last_stmt.map(|mut last| {
-                *last = self.transform_last_statement(*last);
+                *last = self.transform_last_stmt(*last);
                 last
             }),
         }
     }
 
-    fn walk_statement(&mut self, stmt: Statement) -> Statement {
+    fn walk_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
             Statement::Assignment(mut assignment) => {
                 assignment.targets = self.walk_punctuated_vars(assignment.targets);
@@ -75,25 +75,23 @@ pub trait Transform {
                 Statement::DoBlock(do_block)
             }
             Statement::WhileLoop(mut while_loop) => {
-                while_loop.condition = self.transform_expression(while_loop.condition);
+                while_loop.condition = self.transform_expr(while_loop.condition);
                 while_loop.block = self.transform_block(while_loop.block);
                 Statement::WhileLoop(while_loop)
             }
             Statement::RepeatLoop(mut repeat_loop) => {
                 repeat_loop.block = self.transform_block(repeat_loop.block);
-                repeat_loop.condition = self.transform_expression(repeat_loop.condition);
+                repeat_loop.condition = self.transform_expr(repeat_loop.condition);
                 Statement::RepeatLoop(repeat_loop)
             }
-            Statement::IfStatement(if_stmt) => {
-                Statement::IfStatement(self.walk_if_statement(if_stmt))
-            }
+            Statement::IfStatement(if_stmt) => Statement::IfStatement(self.walk_if_stmt(if_stmt)),
             Statement::NumericFor(mut numeric_for) => {
                 numeric_for.type_annotation = numeric_for
                     .type_annotation
                     .map(|loop_variable_type| self.transform_type(loop_variable_type));
-                numeric_for.start = self.transform_expression(numeric_for.start);
-                numeric_for.limit = self.transform_expression(numeric_for.limit);
-                numeric_for.step = numeric_for.step.map(|step| self.transform_expression(step));
+                numeric_for.start = self.transform_expr(numeric_for.start);
+                numeric_for.limit = self.transform_expr(numeric_for.limit);
+                numeric_for.step = numeric_for.step.map(|step| self.transform_expr(step));
                 numeric_for.block = self.transform_block(numeric_for.block);
                 Statement::NumericFor(numeric_for)
             }
@@ -120,7 +118,7 @@ pub trait Transform {
             // Luau
             Statement::CompoundAssignment(mut compound) => {
                 compound.var = self.transform_var(compound.var);
-                compound.expr = self.transform_expression(compound.expr);
+                compound.expr = self.transform_expr(compound.expr);
                 Statement::CompoundAssignment(compound)
             }
             // Lua 5.5
@@ -161,14 +159,14 @@ pub trait Transform {
         }
     }
 
-    fn walk_if_statement(&mut self, mut if_stmt: Box<IfStatement>) -> Box<IfStatement> {
-        if_stmt.condition = self.transform_expression(if_stmt.condition);
+    fn walk_if_stmt(&mut self, mut if_stmt: Box<IfStatement>) -> Box<IfStatement> {
+        if_stmt.condition = self.transform_expr(if_stmt.condition);
         if_stmt.block = self.transform_block(if_stmt.block);
         if_stmt.elseif_clauses = if_stmt
             .elseif_clauses
             .into_iter()
             .map(|mut clause| {
-                clause.condition = self.transform_expression(clause.condition);
+                clause.condition = self.transform_expr(clause.condition);
                 clause.block = self.transform_block(clause.block);
                 clause
             })
@@ -180,7 +178,7 @@ pub trait Transform {
         if_stmt
     }
 
-    fn walk_last_statement(&mut self, last: LastStatement) -> LastStatement {
+    fn walk_last_stmt(&mut self, last: LastStatement) -> LastStatement {
         match last {
             LastStatement::Return(mut return_stmt) => {
                 return_stmt.exprs = self.walk_punctuated_exprs(return_stmt.exprs);
@@ -192,7 +190,7 @@ pub trait Transform {
         }
     }
 
-    fn walk_expression(&mut self, expr: Expression) -> Expression {
+    fn walk_expr(&mut self, expr: Expression) -> Expression {
         match expr {
             leaf @ (Expression::Nil(_)
             | Expression::False(_)
@@ -212,7 +210,7 @@ pub trait Transform {
                 Expression::FunctionCall(call)
             }
             Expression::Parenthesized(mut parenthesized) => {
-                parenthesized.expr = self.transform_expression(parenthesized.expr);
+                parenthesized.expr = self.transform_expr(parenthesized.expr);
                 Expression::Parenthesized(parenthesized)
             }
             Expression::TableConstructor(mut table) => {
@@ -220,28 +218,28 @@ pub trait Transform {
                 Expression::TableConstructor(table)
             }
             Expression::BinaryOp(mut binary_op) => {
-                binary_op.left = self.transform_expression(binary_op.left);
-                binary_op.right = self.transform_expression(binary_op.right);
+                binary_op.left = self.transform_expr(binary_op.left);
+                binary_op.right = self.transform_expr(binary_op.right);
                 Expression::BinaryOp(binary_op)
             }
             Expression::UnaryOp(mut unary_op) => {
-                unary_op.operand = self.transform_expression(unary_op.operand);
+                unary_op.operand = self.transform_expr(unary_op.operand);
                 Expression::UnaryOp(unary_op)
             }
             // Luau
             Expression::IfExpression(mut if_expr) => {
-                if_expr.condition = self.transform_expression(if_expr.condition);
-                if_expr.then_expr = self.transform_expression(if_expr.then_expr);
+                if_expr.condition = self.transform_expr(if_expr.condition);
+                if_expr.then_expr = self.transform_expr(if_expr.then_expr);
                 if_expr.elseif_clauses = if_expr
                     .elseif_clauses
                     .into_iter()
                     .map(|mut clause| {
-                        clause.condition = self.transform_expression(clause.condition);
-                        clause.expr = self.transform_expression(clause.expr);
+                        clause.condition = self.transform_expr(clause.condition);
+                        clause.expr = self.transform_expr(clause.expr);
                         clause
                     })
                     .collect();
-                if_expr.else_expr = self.transform_expression(if_expr.else_expr);
+                if_expr.else_expr = self.transform_expr(if_expr.else_expr);
                 Expression::IfExpression(if_expr)
             }
             // Luau
@@ -250,9 +248,8 @@ pub trait Transform {
                     .segments
                     .into_iter()
                     .map(|mut segment| {
-                        segment.expr = segment
-                            .expr
-                            .map(|interpolated| self.transform_expression(interpolated));
+                        segment.expr =
+                            segment.expr.map(|interpolated| self.transform_expr(interpolated));
                         segment
                     })
                     .collect();
@@ -260,13 +257,13 @@ pub trait Transform {
             }
             // Luau
             Expression::TypeCast(mut cast) => {
-                cast.expr = self.transform_expression(cast.expr);
+                cast.expr = self.transform_expr(cast.expr);
                 cast.type_annotation = self.transform_type(cast.type_annotation);
                 Expression::TypeCast(cast)
             }
             // Luau
             Expression::TypeInstantiation(mut instantiation) => {
-                instantiation.expr = self.transform_expression(instantiation.expr);
+                instantiation.expr = self.transform_expr(instantiation.expr);
                 instantiation.type_args = self.walk_type_args(instantiation.type_args);
                 Expression::TypeInstantiation(instantiation)
             }
@@ -277,26 +274,26 @@ pub trait Transform {
         match var {
             Var::Name(_) => var,
             Var::Index(mut index_expr) => {
-                index_expr.prefix = self.transform_expression(index_expr.prefix);
-                index_expr.index = self.transform_expression(index_expr.index);
+                index_expr.prefix = self.transform_expr(index_expr.prefix);
+                index_expr.index = self.transform_expr(index_expr.index);
                 Var::Index(index_expr)
             }
             Var::FieldAccess(mut field_access) => {
-                field_access.prefix = self.transform_expression(field_access.prefix);
+                field_access.prefix = self.transform_expr(field_access.prefix);
                 Var::FieldAccess(field_access)
             }
         }
     }
 
-    /// Rewrites the callee, then the arguments, then any explicit type
-    /// arguments.
+    /// Rewrites the callee, then any explicit type arguments, then the
+    /// arguments, in source order as the `Visitor` walk reaches them.
     fn walk_function_call(&mut self, call: FunctionCall) -> FunctionCall {
-        let callee = self.transform_expression(call.callee);
-        let args = self.transform_function_args(call.args);
+        let callee = self.transform_expr(call.callee);
         let explicit_type_args = call.explicit_type_args.map(|mut type_args| {
             *type_args = self.walk_type_args(*type_args);
             type_args
         });
+        let args = self.transform_function_args(call.args);
         FunctionCall { callee, args, explicit_type_args, ..call }
     }
 
@@ -317,14 +314,14 @@ pub trait Transform {
         table.fields = table.fields.map_items(|field| match field {
             Field::Bracketed { span, key, value } => Field::Bracketed {
                 span,
-                key: self.transform_expression(key),
-                value: self.transform_expression(value),
+                key: self.transform_expr(key),
+                value: self.transform_expr(value),
             },
             Field::Named { span, name, value } => {
-                Field::Named { span, name, value: self.transform_expression(value) }
+                Field::Named { span, name, value: self.transform_expr(value) }
             }
             Field::Positional { span, value } => {
-                Field::Positional { span, value: self.transform_expression(value) }
+                Field::Positional { span, value: self.transform_expr(value) }
             }
         });
         table
@@ -354,7 +351,7 @@ pub trait Transform {
             }
             // typeof embeds a real expression, so semantic passes must see it.
             Type::Typeof(mut typeof_type) => {
-                typeof_type.expr = self.transform_expression(typeof_type.expr);
+                typeof_type.expr = self.transform_expr(typeof_type.expr);
                 Type::Typeof(typeof_type)
             }
             Type::Table(mut table) => {
@@ -440,7 +437,7 @@ pub trait Transform {
     }
 
     fn walk_punctuated_exprs(&mut self, exprs: Punctuated<Expression>) -> Punctuated<Expression> {
-        exprs.map_items(|expr| self.transform_expression(expr))
+        exprs.map_items(|expr| self.transform_expr(expr))
     }
 
     fn walk_punctuated_vars(&mut self, vars: Punctuated<Var>) -> Punctuated<Var> {
@@ -469,8 +466,8 @@ mod tests {
     struct NilToFalse;
 
     impl Transform for NilToFalse {
-        fn transform_expression(&mut self, expr: Expression) -> Expression {
-            let walked = self.walk_expression(expr);
+        fn transform_expr(&mut self, expr: Expression) -> Expression {
+            let walked = self.walk_expr(expr);
             if let Expression::Nil(nil_span) = walked {
                 Expression::False(nil_span)
             } else {
@@ -486,7 +483,7 @@ mod tests {
     }
 
     impl<'ast> Visitor<'ast> for NilFalseCounts {
-        fn visit_expression(&mut self, expr: &'ast Expression) {
+        fn visit_expr(&mut self, expr: &'ast Expression) {
             match expr {
                 Expression::Nil(_) => self.nils = self.nils.saturating_add(1),
                 Expression::False(_) => self.falses = self.falses.saturating_add(1),
@@ -508,7 +505,7 @@ mod tests {
                 | Expression::TypeInstantiation(_)
                 | Expression::Error(_) => {}
             }
-            self.walk_expression(expr);
+            self.walk_expr(expr);
         }
     }
 
@@ -605,7 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn hooks_fire_in_statement_and_expression_positions() {
+    fn hooks_fire_in_stmt_and_expr_positions() {
         #[derive(Debug, Default, PartialEq, Eq)]
         struct HookCounts {
             calls: usize,

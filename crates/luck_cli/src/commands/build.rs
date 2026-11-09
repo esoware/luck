@@ -8,9 +8,10 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
 use clap::Args;
-use luck_bundler::bundle;
+use luck_bundler::{BundleOptions, bundle};
 use luck_core::{
-    BuildConfig, discover_config, load_or_discover_config, native_path, resolve_build_config,
+    BuildConfig, config_directory, discover_config, load_or_discover_config, native_path,
+    resolve_build_config,
 };
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
@@ -116,7 +117,7 @@ impl BuildArgs {
             match self.build_one(config, verbosity) {
                 Ok(_) => {}
                 Err(BuildFailure::Failed(message)) => {
-                    eprintln!("\n  \x1b[31m✗\x1b[0m {message}");
+                    eprintln!("\n  \x1b[31merror:\x1b[0m {message}");
                     return Err(Exit::Failure);
                 }
                 Err(BuildFailure::Fatal(exit)) => return Err(exit),
@@ -153,7 +154,7 @@ impl BuildArgs {
                     && let Err(error) =
                         debouncer.watcher().watch(directory, RecursiveMode::Recursive)
                 {
-                    eprintln!("Warning: failed to watch `{}`: {error}", directory.display());
+                    eprintln!("warning: failed to watch `{}`: {error}", directory.display());
                 }
             }
 
@@ -177,9 +178,7 @@ impl BuildArgs {
             .iter()
             .filter_map(|file| native_path(file).parent().map(Path::to_path_buf))
             .collect();
-        if let Some(parent) = config_path.and_then(Path::parent) {
-            directories.push(parent.to_path_buf());
-        }
+        directories.extend(config_path.map(config_directory));
         // Watch the discovered config too, or editing it never triggers a
         // rebuild.
         if config_path.is_none()
@@ -245,10 +244,12 @@ impl BuildArgs {
 
         let result = bundle(
             &config.entry,
-            version,
-            &config.search_paths,
-            &config.project_root,
-            config.dynamic_require,
+            &BundleOptions {
+                version,
+                search_paths: &config.search_paths,
+                project_root: &config.project_root,
+                dynamic_require: config.dynamic_require,
+            },
         )
         .map_err(|errors| {
             print_diags(&errors);
@@ -390,7 +391,7 @@ fn print_build_stat(
         )]
         let percent = ((original as f64 - output_size as f64) / original as f64 * 100.0f64) as i64;
         eprintln!(
-            "  \x1b[1m{path}\x1b[0m  \x1b[2m{}\x1b[0m \x1b[2m→\x1b[0m \x1b[32m{size}\x1b[0m  \x1b[2m(-{percent}%)\x1b[0m  \x1b[2m{time}\x1b[0m",
+            "  \x1b[1m{path}\x1b[0m  \x1b[2m{}\x1b[0m \x1b[2m->\x1b[0m \x1b[32m{size}\x1b[0m  \x1b[2m(-{percent}%)\x1b[0m  \x1b[2m{time}\x1b[0m",
             format_size(original),
         );
         return;
@@ -399,5 +400,23 @@ fn print_build_stat(
 }
 
 fn print_build_footer(total_duration: Duration) {
-    eprintln!("\n  \x1b[32m✓\x1b[0m Done in \x1b[1m{}\x1b[0m", format_duration(total_duration));
+    eprintln!("\n  \x1b[32mdone in\x1b[0m \x1b[1m{}\x1b[0m", format_duration(total_duration));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watches_the_current_directory_for_a_bare_config_path() {
+        let args = BuildArgs {
+            config: Some(PathBuf::from("luck.json")),
+            dry_run: false,
+            profile: None,
+            release: false,
+            dev: false,
+            watch: true,
+        };
+        assert_eq!(args.watched_directories(&[]), [PathBuf::from(".")]);
+    }
 }

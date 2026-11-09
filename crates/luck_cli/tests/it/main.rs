@@ -11,4 +11,6 @@
 mod common;
 
 mod config_transforms;
+mod diagnostics;
 mod exit_codes;
+mod project_config;

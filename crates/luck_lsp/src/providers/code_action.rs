@@ -129,8 +129,8 @@ fn should_offer_fix_all(context: &CodeActionContext) -> bool {
     })
 }
 
-/// Every available fix across the open documents, for the
-/// `luck/fixAllWorkspace` custom request.
+/// Every available fix across `documents`, for the `luck/fixAllWorkspace`
+/// custom request.
 pub(crate) fn fix_all_open(
     documents: &[(Url, Arc<DocumentState>, Arc<ProjectSettings>)],
 ) -> WorkspaceEdit {

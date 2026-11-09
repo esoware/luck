@@ -19,8 +19,8 @@ struct ConstantFolder {
 }
 
 impl Transform for ConstantFolder {
-    fn transform_expression(&mut self, expr: Expression) -> Expression {
-        match self.walk_expression(expr) {
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        match self.walk_expr(expr) {
             Expression::BinaryOp(binop) => {
                 match fold_binary(&binop.left, binop.op, &binop.right, self.version) {
                     Some(BinaryFold::Literal(literal)) => literal,

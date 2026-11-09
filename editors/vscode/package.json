@@ -38,8 +38,6 @@
   },
   "main": "./out/extension.js",
   "activationEvents": [
-    "onLanguage:lua",
-    "onLanguage:luau",
     "workspaceContains:luck.json",
     "workspaceContains:.luaurc",
     "workspaceContains:**/*.lua",
@@ -248,7 +246,7 @@
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
-          "markdownDescription": "Absolute path to the `luck` binary. If empty, the extension uses (in order): bundled binary → `PATH` → prompt to download."
+          "markdownDescription": "Absolute path to the `luck` binary. If empty, the extension tries the bundled binary, then `PATH`, then shows a download prompt."
         },
         "luck.server.extraEnv": {
           "type": "object",
@@ -269,7 +267,7 @@
         "luck.runFromTemporaryLocation": {
           "type": "boolean",
           "default": false,
-          "description": "Copy the luck binary to a temporary directory before running. Use this if Windows file locking prevents updates."
+          "description": "Run a copy of the bundled luck binary from the extension's storage directory. Use this if Windows file locking prevents updates."
         },
         "luck.statusBar.enable": {
           "type": "boolean",
@@ -453,49 +451,6 @@
       {
         "id": "luck.editorContext",
         "label": "Luck"
-      }
-    ],
-    "taskDefinitions": [
-      {
-        "type": "luck",
-        "required": [
-          "command"
-        ],
-        "properties": {
-          "command": {
-            "type": "string",
-            "enum": [
-              "lint",
-              "format",
-              "check",
-              "bundle"
-            ],
-            "description": "The luck CLI subcommand to run."
-          },
-          "args": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Extra CLI arguments."
-          },
-          "cwd": {
-            "type": "string",
-            "description": "Working directory."
-          },
-          "target": {
-            "type": "string",
-            "enum": [
-              "lua51",
-              "lua52",
-              "lua53",
-              "lua54",
-              "lua55",
-              "luau",
-              "roblox"
-            ]
-          }
-        }
       }
     ],
     "problemMatchers": [

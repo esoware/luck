@@ -4,28 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use luck_parser::parse;
-use luck_token::LuaVersion;
-
-/// The dialect of a fixture at `relative` under the fixtures root: `.luau`
-/// files and the `luau/` tree are Luau, `lua51/` to `lua55/` name their
-/// version, and everything else, `idiomatic/` included, is 5.4.
-fn detect_version(relative: &Path) -> LuaVersion {
-    if relative.extension() == Some(OsStr::new("luau")) {
-        return LuaVersion::Luau;
-    }
-    match relative.iter().next().and_then(OsStr::to_str) {
-        Some("luau") => LuaVersion::Luau,
-        Some("lua51") => LuaVersion::Lua51,
-        Some("lua52") => LuaVersion::Lua52,
-        Some("lua53") => LuaVersion::Lua53,
-        Some("lua55") => LuaVersion::Lua55,
-        _ => LuaVersion::Lua54,
-    }
-}
-
-fn is_error_fixture(relative: &Path) -> bool {
-    relative.components().any(|component| component.as_os_str() == "errors")
-}
+use luck_testgen::{collect_fixture_files, detect_version, is_error_fixture};
 
 fn fixtures_directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -37,35 +16,14 @@ fn fixtures_directory() -> PathBuf {
         .join("fixtures")
 }
 
-/// Every `.lua` and `.luau` file under `directory`, in path order.
-fn collect_fixture_files(directory: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    walk_directory(directory, &mut files);
-    files.sort();
-    files
-}
-
-fn walk_directory(directory: &Path, files: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            walk_directory(&path, files);
-        } else {
-            let extension = path.extension().and_then(OsStr::to_str);
-            if matches!(extension, Some("lua" | "luau")) {
-                files.push(path);
-            }
-        }
-    }
-}
-
 #[test]
 fn fixtures_outside_errors_parse_cleanly() {
     let root = fixtures_directory();
-    let files = collect_fixture_files(&root);
+    let files: Vec<PathBuf> = collect_fixture_files(&root)
+        .expect("fixture tree is readable")
+        .into_iter()
+        .filter(|path| matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau")))
+        .collect();
     assert!(!files.is_empty(), "no fixture files found");
 
     let mut failures = Vec::new();

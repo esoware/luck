@@ -4,7 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_bundler::{LineMapEntry, bundle};
+use luck_bundler::{BundleOptions, LineMapEntry, bundle};
+use luck_core::{DynamicRequire, LuaTarget};
 
 use crate::exit::{Exit, fail_with_diags, fail_with_source_errors, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
@@ -22,11 +23,11 @@ pub(crate) struct BundleArgs {
 
     /// Lua target [default: from the entry's extension and luck.json].
     #[arg(short = 't', long = "target", value_name = "TARGET")]
-    target: Option<String>,
+    target: Option<LuaTarget>,
 
     /// Output file [default: stdout].
     #[arg(short, long, value_name = "PATH")]
-    output: Option<String>,
+    output: Option<PathBuf>,
 
     /// Project config [default: discovered from entry directory].
     #[arg(short = 'c', long = "config", value_name = "PATH")]
@@ -42,7 +43,7 @@ pub(crate) struct BundleArgs {
 
     /// How to treat require(expr): error, warn, or allow.
     #[arg(long = "dynamic-require", value_name = "MODE")]
-    dynamic_require: Option<String>,
+    dynamic_require: Option<DynamicRequire>,
 
     /// Write a JSON line map (bundle lines -> source files) to PATH.
     /// Incompatible with --minify, which rewrites line structure.
@@ -56,13 +57,13 @@ pub(crate) struct BundleArgs {
 impl BundleArgs {
     /// # Errors
     ///
-    /// Returns [`Exit::Usage`] on a bad config, target, or entry path, and
+    /// Returns [`Exit::Usage`] on a bad config or entry path, and
     /// [`Exit::Failure`] when bundling, minifying, or writing fails.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let config = config_for_one_shot(self.config.as_deref(), &self.entry)?;
-        let target = resolve_configured_target(&config, self.target.as_deref(), &self.entry)?;
+        let target = resolve_configured_target(&config, self.target, &self.entry)?;
         let version = target.lua_version();
-        let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require.as_deref())?;
+        let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require);
         let transforms = self.minify_flags.apply_to(config.transforms.unwrap_or_default());
 
         let entry_path = Path::new(&self.entry);
@@ -76,8 +77,16 @@ impl BundleArgs {
             .parent()
             .map_or_else(current_directory, |parent| Ok(parent.to_path_buf()))?;
 
-        let result = bundle(entry_path, version, &self.search_paths, &search_root, dynamic_require)
-            .map_err(|errors| fail_with_diags(&errors))?;
+        let result = bundle(
+            entry_path,
+            &BundleOptions {
+                version,
+                search_paths: &self.search_paths,
+                project_root: &search_root,
+                dynamic_require,
+            },
+        )
+        .map_err(|errors| fail_with_diags(&errors))?;
 
         if verbosity != Verbosity::Quiet {
             print_diags(&result.warnings);
@@ -121,6 +130,7 @@ fn write_line_map(map_path: &Path, line_map: &[LineMapEntry]) -> Result<(), Exit
 #[cfg(test)]
 mod tests {
     use clap::Parser as _;
+    use luck_core::LuaTarget;
 
     use super::BundleArgs;
     use crate::cli::{Cli, Command};
@@ -133,6 +143,6 @@ mod tests {
             panic!("expected Command::Bundle");
         };
         assert_eq!(entry, "entry.lua");
-        assert_eq!(target, Some("54".to_owned()));
+        assert_eq!(target, Some(LuaTarget::Lua54));
     }
 }

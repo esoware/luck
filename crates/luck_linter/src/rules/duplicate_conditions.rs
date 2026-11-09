@@ -3,38 +3,26 @@ use core::iter;
 use luck_ast::Statement;
 use luck_token::Span;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DuplicateConditions;
 
-impl Rule for DuplicateConditions {
-    fn name(&self) -> &'static str {
-        "duplicate_conditions"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "`if`/`elseif` chain has duplicate conditions"
-    }
-}
+impl_rule!(
+    DuplicateConditions,
+    "duplicate_conditions",
+    Correctness,
+    Warning,
+    "`if`/`elseif` chain has duplicate conditions"
+);
 
 impl NodeRule for DuplicateConditions {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::IfStatement])
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let Statement::IfStatement(if_stmt) = stmt else {
             return;
         };

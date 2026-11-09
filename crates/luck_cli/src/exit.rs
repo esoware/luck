@@ -31,7 +31,7 @@ impl From<Exit> for ExitCode {
 }
 
 fn report_error(message: impl Display, exit: Exit) -> Exit {
-    eprintln!("Error: {message}");
+    eprintln!("error: {message}");
     exit
 }
 

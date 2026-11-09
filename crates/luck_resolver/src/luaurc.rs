@@ -1,8 +1,11 @@
+use core::fmt;
+use core::marker::PhantomData;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use rustc_hash::FxHashMap;
-use serde::Deserialize;
+use serde::de::{MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 
 /// The parts of a `.luaurc` (JSON5) the resolver reads.
 #[derive(Deserialize)]
@@ -13,13 +16,47 @@ struct Luaurc {
         reason = "never read, but a non-string value still rejects the whole file"
     )]
     language_mode: Option<String>,
-    aliases: Option<FxHashMap<String, String>>,
+    aliases: Option<DeclaredAliases>,
+}
+
+/// An `aliases` object in file order, which decides between names that are
+/// equal after lowercasing.
+struct DeclaredAliases(Vec<(String, String)>);
+
+impl<'de> Deserialize<'de> for DeclaredAliases {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(DeclaredAliasesVisitor(PhantomData))
+    }
+}
+
+struct DeclaredAliasesVisitor<'de>(PhantomData<&'de ()>);
+
+impl<'de> Visitor<'de> for DeclaredAliasesVisitor<'de> {
+    type Value = DeclaredAliases;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a map of alias names to directories")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut aliases = Vec::with_capacity(map.size_hint().unwrap_or(0));
+        while let Some(entry) = map.next_entry()? {
+            aliases.push(entry);
+        }
+        Ok(DeclaredAliases(aliases))
+    }
 }
 
 /// The `.luaurc` alias tables read so far, which are never reread.
 #[derive(Debug, Default)]
 pub(crate) struct AliasCache {
-    /// Each directory's own `.luaurc` aliases, as written.
+    /// Each directory's own `.luaurc` aliases, keyed by lowercased name.
     declared_tables: FxHashMap<PathBuf, FxHashMap<String, String>>,
     /// The aliases in effect in each directory a require came from.
     merged_tables: FxHashMap<PathBuf, FxHashMap<String, PathBuf>>,
@@ -41,7 +78,7 @@ impl AliasCache {
                     .entry(ancestor.to_path_buf())
                     .or_insert_with(|| read_declared_aliases(ancestor));
                 aliases.extend(ancestor_aliases.iter().map(|(name, target)| {
-                    (name.to_lowercase(), ancestor.join(target.replace('\\', "/")))
+                    (name.clone(), ancestor.join(target.replace('\\', "/")))
                 }));
             }
             aliases
@@ -49,15 +86,17 @@ impl AliasCache {
     }
 }
 
-/// The aliases `directory/.luaurc` declares, empty when the file is missing,
-/// malformed, or declares none.
+/// The aliases `directory/.luaurc` declares, keyed by lowercased name, with
+/// the last of any names equal after lowercasing kept, as in Luau. Empty when
+/// the file is missing, malformed, or declares none.
 fn read_declared_aliases(directory: &Path) -> FxHashMap<String, String> {
     let candidate = directory.join(".luaurc");
     if candidate.is_file()
         && let Ok(contents) = fs::read_to_string(&candidate)
-        && let Ok(luaurc) = json5::from_str::<Luaurc>(&contents)
+        && let Ok(Luaurc { aliases: Some(DeclaredAliases(aliases)), .. }) =
+            json5::from_str::<Luaurc>(&contents)
     {
-        luaurc.aliases.unwrap_or_default()
+        aliases.into_iter().map(|(name, target)| (name.to_lowercase(), target)).collect()
     } else {
         FxHashMap::default()
     }

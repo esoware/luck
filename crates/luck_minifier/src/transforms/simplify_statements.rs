@@ -6,7 +6,7 @@ use luck_ast::{
 };
 use luck_token::{BinOp, Span};
 
-use crate::expr::is_always_truthy;
+use crate::expr::{ends_in_if_expr, is_always_truthy, parenthesize};
 
 /// Flattens nested if-statements and converts if-return guard chains into
 /// `and`/`or` expressions.
@@ -17,7 +17,7 @@ pub(crate) fn simplify(block: Block) -> Block {
 struct StatementSimplifier;
 
 impl Transform for StatementSimplifier {
-    fn transform_statement(&mut self, stmt: Statement) -> Statement {
+    fn transform_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
             Statement::IfStatement(mut outer_if) => {
                 // `if a then if b then X end end` becomes `if a and b then X end`.
@@ -30,10 +30,10 @@ impl Transform for StatementSimplifier {
                     )
                     && let Some(Statement::IfStatement(inner_if)) = outer_if.block.stmts.pop()
                 {
-                    let combined_condition = binary(
-                        self.transform_expression(outer_if.condition),
+                    let combined_condition = logical(
+                        self.transform_expr(outer_if.condition),
                         BinOp::And,
-                        self.transform_expression(inner_if.condition),
+                        self.transform_expr(inner_if.condition),
                     );
                     let merged_block = self.transform_block(inner_if.block);
                     let merged_if = IfStatement {
@@ -43,9 +43,9 @@ impl Transform for StatementSimplifier {
                         elseif_clauses: Vec::new(),
                         else_clause: None,
                     };
-                    return self.transform_statement(Statement::IfStatement(Box::new(merged_if)));
+                    return self.transform_stmt(Statement::IfStatement(Box::new(merged_if)));
                 }
-                self.walk_statement(Statement::IfStatement(outer_if))
+                self.walk_stmt(Statement::IfStatement(outer_if))
             }
             other @ (Statement::Assignment(_)
             | Statement::FunctionCall(_)
@@ -66,7 +66,7 @@ impl Transform for StatementSimplifier {
             | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
-            | Statement::Error(_)) => self.walk_statement(other),
+            | Statement::Error(_)) => self.walk_stmt(other),
         }
     }
 
@@ -105,7 +105,7 @@ fn try_convert_if_return_chain(mut block: Block) -> Block {
     let result_expr = block.stmts.drain(chain_start..).rev().filter_map(into_guard_parts).fold(
         fallback,
         |otherwise, (condition, return_expr)| {
-            binary(binary(condition, BinOp::And, return_expr), BinOp::Or, otherwise)
+            logical(logical(condition, BinOp::And, return_expr), BinOp::Or, otherwise)
         },
     );
     **return_stmt =
@@ -156,8 +156,25 @@ const fn has_no_else(if_stmt: &IfStatement) -> bool {
     if_stmt.elseif_clauses.is_empty() && if_stmt.else_clause.is_none()
 }
 
-fn binary(left: Expression, op: BinOp, right: Expression) -> Expression {
+/// `left op right` for `and` and `or`, parenthesizing an operand that would
+/// regroup when codegen prints the tree flat.
+///
+/// A nested operand of the same operator stays bare on either side, because
+/// `and` and `or` are associative. An if-expression as `right` prints last, so
+/// only one in `left` can swallow an operator.
+fn logical(left_operand: Expression, op: BinOp, right_operand: Expression) -> Expression {
+    let left = if binds_looser(&left_operand, op) || ends_in_if_expr(&left_operand) {
+        parenthesize(left_operand)
+    } else {
+        left_operand
+    };
+    let right =
+        if binds_looser(&right_operand, op) { parenthesize(right_operand) } else { right_operand };
     Expression::BinaryOp(Box::new(BinaryOp { span: Span::default(), left, op, right }))
+}
+
+fn binds_looser(operand: &Expression, op: BinOp) -> bool {
+    matches!(operand, Expression::BinaryOp(inner) if inner.op.precedence().0 < op.precedence().0)
 }
 
 #[cfg(test)]
@@ -165,7 +182,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::fixtures::run_pass;
+    use crate::fixtures::{assert_reparses, run_pass};
 
     fn apply(source: &str) -> String {
         run_pass(source, LuaVersion::Lua54, simplify)
@@ -226,6 +243,64 @@ mod tests {
             result.contains("and") && result.contains("or"),
             "String literal returns should convert to ternary, got: {result}"
         );
+    }
+
+    #[test]
+    fn merged_conditions_keep_their_grouping() {
+        for (source, expected) in [
+            ("if a or b then if c then x() end end", "if(a or b)and c then x()end"),
+            ("if a then if b or c then x() end end", "if a and(b or c)then x()end"),
+            ("if a or b then return 1 end return 0", "return(a or b)and 1 or 0"),
+        ] {
+            assert_eq!(apply(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn merged_conditions_stay_bare_where_grouping_holds() {
+        for (source, expected) in [
+            ("if a then if b then x() end end", "if a and b then x()end"),
+            ("if a and b then if c then x() end end", "if a and b and c then x()end"),
+            ("if a then if b and c then x() end end", "if a and b and c then x()end"),
+            ("if not a then if b == c then x() end end", "if not a and b==c then x()end"),
+            (
+                "if a then return 1 end if b then return 2 end return 0",
+                "return a and 1 or b and 2 or 0",
+            ),
+            ("if a and b then return 1 end return c or d", "return a and b and 1 or c or d"),
+        ] {
+            assert_eq!(apply(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn merged_if_exprs_end_before_the_next_operator() {
+        for (source, expected) in [
+            (
+                "if if a then b else c then return 1 end return 0",
+                "return(if a then b else c)and 1 or 0",
+            ),
+            (
+                "if a then if if b then c else d then x() end end",
+                "if a and if b then c else d then x()end",
+            ),
+            (
+                "if a then if if b then c else d then return 1 end end return 0",
+                "return(a and if b then c else d)and 1 or 0",
+            ),
+            (
+                "if not if a then b else c then return 1 end return 0",
+                "return(not if a then b else c)and 1 or 0",
+            ),
+            (
+                "if a then return 1 end return if b then c else d",
+                "return a and 1 or if b then c else d",
+            ),
+        ] {
+            let result = run_pass(source, LuaVersion::Luau, simplify);
+            assert_eq!(result, expected, "source: {source}");
+            assert_reparses(&result, LuaVersion::Luau);
+        }
     }
 
     #[test]

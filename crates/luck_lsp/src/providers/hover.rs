@@ -138,6 +138,7 @@ const fn version_label(version: LuaVersion) -> &'static str {
 mod tests {
     use luck_core::LuaTarget;
     use luck_token::index_to_offset;
+    use rustc_hash::FxHashSet;
 
     use super::*;
 
@@ -153,7 +154,8 @@ mod tests {
     #[test]
     fn hover_on_enum_item_renders_constant() {
         let text = "local m = Enum.Material.Grass";
-        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox);
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox, FxHashSet::default());
         // Cursor on `Grass`.
         let utf16_column = index_to_offset(text.find("Grass").expect("item") + 2);
         let markdown = markdown_at(&document, 0, utf16_column).expect("hover on enum item");
@@ -163,7 +165,8 @@ mod tests {
     #[test]
     fn hover_on_shaped_local_method_renders_colon_form() {
         let text = "local f = io.open('x')\nlocal n = f:seek('set')";
-        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         let utf16_column = index_to_offset(text.find(":seek").expect("method") + 2);
         let markdown =
             markdown_at(&document, 1, utf16_column).expect("hover on shaped local method");
@@ -173,7 +176,8 @@ mod tests {
     #[test]
     fn hover_refuses_shadowed_namespace_member() {
         let text = "local string = 1\nlocal x = string.format";
-        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         let utf16_column = index_to_offset(text.find(".format").expect("member") + 3);
         assert!(
             markdown_at(&document, 1, utf16_column).is_none(),
@@ -184,7 +188,8 @@ mod tests {
     #[test]
     fn hover_on_game_get_service_uses_colon_syntax() {
         let text = "local p = game:GetService('RunService')";
-        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox);
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox, FxHashSet::default());
         let utf16_column = index_to_offset(text.find("GetService").expect("method") + 4);
         let markdown = markdown_at(&document, 0, utf16_column).expect("hover on GetService");
         assert!(markdown.contains("game:GetService("), "colon rendering expected: {markdown}");

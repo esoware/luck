@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
 import path from "node:path";
 import * as fs from "node:fs";
+import type { WorkspaceEdit } from "vscode-languageclient/node";
 import { version as extensionVersion } from "../package.json";
 import type { LuckClient } from "./client";
-import { VSIX_PLATFORM } from "./discover";
 import { outputChannel } from "./output";
 
 export function registerCommands(client: LuckClient): vscode.Disposable[] {
@@ -20,7 +20,11 @@ export function registerCommands(client: LuckClient): vscode.Disposable[] {
 		"luck.applyAllFixesFile": applyAllFixesFile,
 		"luck.applyAllFixesWorkspace": () => applyAllFixesWorkspace(client),
 		"luck.createConfig": createConfig,
-		"luck.downloadServer": downloadServer,
+		"luck.downloadServer": async () => {
+			await vscode.env.openExternal(
+				vscode.Uri.parse("https://github.com/esoware/luck#quick-start"),
+			);
+		},
 		"luck.viewSyntaxTree": () => viewSyntaxTree(client),
 		"luck.copyDebugInfo": () => copyDebugInfo(client),
 		"luck.reportIssue": async () => {
@@ -63,8 +67,15 @@ async function applyAllFixesWorkspace(client: LuckClient): Promise<void> {
 		return;
 	}
 	try {
-		await languageClient.sendRequest("luck/fixAllWorkspace", {});
-		void vscode.window.showInformationMessage("Luck: workspace fixes applied.");
+		const fixes = await languageClient.sendRequest<WorkspaceEdit>("luck/fixAllWorkspace", {});
+		const edit = await languageClient.protocol2CodeConverter.asWorkspaceEdit(fixes);
+		if (edit.size === 0) {
+			void vscode.window.showInformationMessage("Luck: no workspace fixes to apply.");
+		} else if (await vscode.workspace.applyEdit(edit)) {
+			void vscode.window.showInformationMessage("Luck: workspace fixes applied.");
+		} else {
+			void vscode.window.showErrorMessage("Luck: workspace fixes could not be applied.");
+		}
 	} catch (error) {
 		void vscode.window.showErrorMessage(`Luck: ${error}`);
 	}
@@ -83,12 +94,6 @@ async function createConfig(): Promise<void> {
 		const skeleton = {
 			lua: "lua54",
 			luau: "luau",
-			format: {
-				line_width: 100,
-				indent_style: "tabs",
-				indent_width: 4,
-				quote_style: "double",
-			},
 			lint: {
 				extra_globals: [],
 			},
@@ -96,19 +101,6 @@ async function createConfig(): Promise<void> {
 		await fs.promises.writeFile(configPath, `${JSON.stringify(skeleton, null, 2)}\n`, "utf8");
 	}
 	await vscode.window.showTextDocument(vscode.Uri.file(configPath));
-}
-
-function downloadServer(): void {
-	if (!VSIX_PLATFORM) {
-		void vscode.window.showErrorMessage(
-			`Luck: no prebuilt binary for ${process.platform}/${process.arch}. Install via cargo and set luck.server.path.`,
-		);
-		return;
-	}
-	const url = `https://github.com/esoware/luck/releases/download/v${extensionVersion}/luck-${VSIX_PLATFORM}.zip`;
-	void vscode.window.showInformationMessage(
-		`Luck: download from ${url} not yet implemented. Set luck.server.path or install luck via cargo.`,
-	);
 }
 
 async function viewSyntaxTree(client: LuckClient): Promise<void> {

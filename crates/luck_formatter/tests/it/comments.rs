@@ -1,4 +1,4 @@
-use luck_formatter::{FormatOptions, LineEndings};
+use luck_formatter::{CollapseSimpleStatement, FormatOptions, LineEndings};
 use luck_token::LuaVersion;
 
 use crate::common::{assert_format, assert_format_with};
@@ -314,4 +314,136 @@ fn fill_mode_packs_positional_table_entries() {
         LuaVersion::Lua54,
         &options,
     );
+}
+
+#[test]
+fn comment_after_a_multi_line_block_comment_formats_stably() {
+    assert_format("local x --[[\n]] -- c\nlocal y\n", "local x --[[\n]]\n-- c\nlocal y\n");
+}
+
+#[test]
+fn line_break_inside_a_trailing_block_comment_is_not_a_blank_line() {
+    assert_format("local x --[[\n]]\nlocal y\n", "local x --[[\n]]\nlocal y\n");
+    assert_format("local x --[[\n]]\n\nlocal y\n", "local x --[[\n]]\n\nlocal y\n");
+}
+
+fn windows_options() -> FormatOptions {
+    FormatOptions { line_endings: LineEndings::Windows, ..FormatOptions::default() }
+}
+
+#[test]
+fn windows_line_endings_add_one_cr_to_verbatim_text_across_passes() {
+    let cases = [
+        (
+            "local s = [[\nbody\nmore\n]]\nprint(#s)\n",
+            "local s = [[\r\nbody\r\nmore\r\n]]\r\nprint(#s)\r\n",
+        ),
+        ("--[[\nblock\n]]\nlocal x = 1\n", "--[[\r\nblock\r\n]]\r\nlocal x = 1\r\n"),
+        (
+            "-- luck: format off\nlocal   x  =  [[\na]]\n-- luck: format on\n",
+            "-- luck: format off\r\nlocal   x  =  [[\r\na]]\r\n-- luck: format on\r\n",
+        ),
+    ];
+    for (input, expected) in cases {
+        assert_format_with(input, expected, LuaVersion::Lua54, &windows_options());
+    }
+}
+
+#[test]
+fn windows_line_endings_keep_crlf_input_as_one_line_ending() {
+    assert_format_with(
+        "local s = [[\r\nbody\r\n]]\r\n--[[\r\nblock\r\n]]\r\n",
+        "local s = [[\r\nbody\r\n]]\r\n--[[\r\nblock\r\n]]\r\n",
+        LuaVersion::Lua54,
+        &windows_options(),
+    );
+}
+
+#[test]
+fn windows_line_endings_keep_other_verbatim_line_breaks() {
+    // Each of these is already a line break in a long string, so adding a CR
+    // would change the value.
+    let options = windows_options();
+    for line_break in ["\n\r", "\r\r\n", "\r"] {
+        let source = format!("local s = [[a{line_break}b]]\n");
+        let expected = format!("local s = [[a{line_break}b]]\r\n");
+        assert_format_with(&source, &expected, LuaVersion::Lua54, &options);
+    }
+}
+
+fn conditional_collapse_options() -> FormatOptions {
+    FormatOptions {
+        collapse_simple_statement: CollapseSimpleStatement::ConditionalOnly,
+        ..FormatOptions::default()
+    }
+}
+
+#[test]
+fn collapse_leaves_a_body_with_a_comment_expanded() {
+    let options = conditional_collapse_options();
+    for (input, expected) in [
+        ("if a then\n  i = 7 -- c\nend\n", "if a then\n\ti = 7 -- c\nend\n"),
+        ("if a then\n  return 1 -- c\nend\n", "if a then\n\treturn 1 -- c\nend\n"),
+        ("if a then\n  -- c\n  i = 7\nend\n", "if a then\n\t-- c\n\ti = 7\nend\n"),
+        ("if a then i = 7 --[[c]] end\n", "if a then\n\ti = 7 --[[c]]\nend\n"),
+        ("if a then --[[c]] i = 7 end\n", "if a then\n\t--[[c]]\n\ti = 7\nend\n"),
+        (
+            "function s()\nif a then\n  repeat -- c\n  until b\nend\nend\n",
+            "function s()\n\tif a then\n\t\trepeat -- c\n\t\tuntil b\n\tend\nend\n",
+        ),
+        (
+            "function s()\nif a then\n  -- luck: ignore\n  x   =   1\nend\nend\n",
+            "function s()\n\tif a then\n\t\t-- luck: ignore\n\t\tx   =   1\n\tend\nend\n",
+        ),
+    ] {
+        assert_format_with(input, expected, LuaVersion::Lua54, &options);
+    }
+}
+
+#[test]
+fn collapse_keeps_comments_that_stay_in_place() {
+    let options = conditional_collapse_options();
+    for (input, expected) in [
+        ("if a then\n  i = 7\nend\n", "if a then i = 7 end\n"),
+        ("if a then i = --[[c]] 7 end\n", "if a then i = --[[c]] 7 end\n"),
+        ("if a --[[c]] then i = 7 end\n", "if a --[[c]] then i = 7 end\n"),
+        ("if a then\n  i = 7\nend -- c\n", "if a then i = 7 end -- c\n"),
+        ("-- c\nif a then\n  i = 7\nend\n", "-- c\nif a then i = 7 end\n"),
+    ] {
+        assert_format_with(input, expected, LuaVersion::Lua54, &options);
+    }
+}
+
+#[test]
+fn directives_must_end_at_a_word_boundary() {
+    for (input, expected) in [
+        // `format on` must not close the region.
+        (
+            "-- luck: format off\nlocal   x  =  1\n-- luck: format one-liner\nlocal   y  =  2\n",
+            "-- luck: format off\nlocal   x  =  1\n-- luck: format one-liner\nlocal   y  =  2\n",
+        ),
+        // `format off` must not open one.
+        ("-- luck: format offset\nlocal   x  =  1\n", "-- luck: format offset\nlocal x = 1\n"),
+        // `ignore` must not keep the next statement.
+        ("-- luck: ignored\nlocal   x  =  1\n", "-- luck: ignored\nlocal x = 1\n"),
+        ("-- luck: format ignored\nlocal   x  =  1\n", "-- luck: format ignored\nlocal x = 1\n"),
+    ] {
+        assert_format(input, expected);
+    }
+}
+
+#[test]
+fn directives_may_be_followed_by_other_words() {
+    for (input, expected) in [
+        (
+            "-- luck: format off because generated\nlocal   x  =  1\n",
+            "-- luck: format off because generated\nlocal   x  =  1\n",
+        ),
+        (
+            "-- luck: ignore this one\nlocal   x  =  1\n",
+            "-- luck: ignore this one\nlocal   x  =  1\n",
+        ),
+    ] {
+        assert_format(input, expected);
+    }
 }

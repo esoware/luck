@@ -1,14 +1,12 @@
-use core::fmt::Write as _;
 use core::ops::Range;
 
-use luck_token::{LuaVersion, Span};
-use rustc_hash::{FxHashMap, FxHashSet};
+use luck_token::{LuaVersion, Span, encode_string};
+use rustc_hash::FxHashSet;
 
 use crate::exports::lower_exports;
 use crate::graph::DependencyGraph;
-use crate::hot_comments::leading_hot_comments;
 use crate::loader::{dynamic_entry_text, loader_text};
-use crate::module::{Dependency, ModuleInfo};
+use crate::module::{Dependency, ModuleId, ModuleInfo};
 
 /// One contiguous run of bundle lines that came from a single module.
 ///
@@ -53,6 +51,10 @@ pub struct LineMapEntry {
 /// Every generated identifier shares a prefix that appears nowhere in any
 /// module source, so user code can't capture or shadow loader internals.
 /// A lone module with no requires is emitted verbatim.
+///
+/// A shebang is only valid on a chunk's first line, so the entry's moves to
+/// the bundle's first line, which keeps the bundle runnable as a script, and
+/// every other module's is dropped.
 pub(crate) fn emit(graph: &DependencyGraph, version: LuaVersion) -> (String, Vec<LineMapEntry>) {
     let modules = &graph.modules;
     let Some(entry) = modules.get(graph.entry_id.0) else {
@@ -84,13 +86,16 @@ pub(crate) fn emit(graph: &DependencyGraph, version: LuaVersion) -> (String, Vec
         version,
     };
 
+    if let Some(shebang) = entry.shebang {
+        writer.push(shebang.text(&entry.source));
+        writer.push("\n");
+    }
+
     // Luau only honors hot comments before any code, so the entry's leading
     // ones go above the loader.
-    if version.is_luau() {
-        for (_, hot_comment) in leading_hot_comments(&entry.source) {
-            writer.push(hot_comment);
-            writer.push("\n");
-        }
+    for hot_comment in &entry.hot_comments {
+        writer.push(hot_comment.text(&entry.source));
+        writer.push("\n");
     }
 
     writer.push("do\n");
@@ -118,8 +123,8 @@ pub(crate) fn emit(graph: &DependencyGraph, version: LuaVersion) -> (String, Vec
 enum ModuleKeys<'slots> {
     /// Lua: the require string, as `package.loaded` keys its cache.
     RequireString,
-    /// Luau: the numeric slot of the resolved file.
-    Slot(&'slots FxHashMap<&'slots str, usize>),
+    /// Luau: the numeric slot of the resolved file, by `ModuleId`.
+    Slot(&'slots [Option<usize>]),
 }
 
 impl ModuleKeys<'_> {
@@ -127,9 +132,11 @@ impl ModuleKeys<'_> {
     /// as written.
     fn key(self, dependency: &Dependency) -> Option<String> {
         match self {
-            Self::RequireString => Some(quote_lua_string(&dependency.require_string)),
+            Self::RequireString => {
+                Some(encode_string(dependency.require_string.as_bytes()).into_string())
+            }
             Self::Slot(slots) => {
-                slots.get(dependency.resolved_path.as_str()).map(ToString::to_string)
+                slots.get(dependency.target.0).copied().flatten().map(|slot| slot.to_string())
             }
         }
     }
@@ -155,21 +162,25 @@ impl BundleWriter<'_> {
     /// the entry when something requires it.
     fn push_luau_modules(&mut self, graph: &DependencyGraph, entry: &ModuleInfo) {
         let prefix = self.prefix;
-        let mut path_to_slot: FxHashMap<&str, usize> = (1usize..)
-            .zip(non_entry_modules(graph))
-            .map(|(slot, module)| (module.path.as_str(), slot))
-            .collect();
+        let mut slots: Vec<Option<usize>> = vec![None; graph.modules.len()];
+        for (slot, (id, _)) in (1usize..).zip(non_entry_modules(graph)) {
+            if let Some(module_slot) = slots.get_mut(id.0) {
+                *module_slot = Some(slot);
+            }
+        }
         let is_entry_required = graph
             .modules
             .iter()
             .flat_map(|module| &module.dependencies)
-            .any(|dependency| dependency.resolved_path == entry.path);
-        if is_entry_required {
-            path_to_slot.insert(entry.path.as_str(), path_to_slot.len().saturating_add(1));
+            .any(|dependency| dependency.target == graph.entry_id);
+        // The slot after every other module's.
+        let entry_slot = is_entry_required.then_some(graph.modules.len());
+        if let Some(entry_module_slot) = slots.get_mut(graph.entry_id.0) {
+            *entry_module_slot = entry_slot;
         }
-        let keys = ModuleKeys::Slot(&path_to_slot);
+        let keys = ModuleKeys::Slot(&slots);
 
-        for (slot, module) in (1usize..).zip(non_entry_modules(graph)) {
+        for (slot, (_, module)) in (1usize..).zip(non_entry_modules(graph)) {
             self.push(&format!("-- module #{slot}: {}\n", module.relative_path));
             self.push(&format!("{prefix}modules[{slot}]=function(...)\n"));
             self.push_body(module, keys);
@@ -179,8 +190,8 @@ impl BundleWriter<'_> {
         self.push(&format!("local {prefix}entry=function(...)\n"));
         self.push_body(entry, keys);
         self.push("end\n");
-        if let Some(&entry_slot) = path_to_slot.get(entry.path.as_str()) {
-            self.push(&format!("{prefix}modules[{entry_slot}]={prefix}entry\n"));
+        if let Some(slot) = entry_slot {
+            self.push(&format!("{prefix}modules[{slot}]={prefix}entry\n"));
         }
     }
 
@@ -191,29 +202,28 @@ impl BundleWriter<'_> {
     fn push_lua_modules(&mut self, graph: &DependencyGraph, entry: &ModuleInfo) {
         let prefix = self.prefix;
         let mut seen_strings: FxHashSet<&str> = FxHashSet::default();
-        let mut strings_by_path: FxHashMap<&str, Vec<&str>> = FxHashMap::default();
+        let mut strings_by_module: Vec<Vec<&str>> = vec![Vec::new(); graph.modules.len()];
         let ordered_dependencies = graph
             .topological_order
             .iter()
             .filter_map(|id| graph.modules.get(id.0))
             .flat_map(|module| &module.dependencies);
         for dependency in ordered_dependencies {
-            if seen_strings.insert(dependency.require_string.as_str()) {
-                strings_by_path
-                    .entry(dependency.resolved_path.as_str())
-                    .or_default()
-                    .push(dependency.require_string.as_str());
+            if seen_strings.insert(dependency.require_string.as_str())
+                && let Some(strings) = strings_by_module.get_mut(dependency.target.0)
+            {
+                strings.push(dependency.require_string.as_str());
             }
         }
 
-        for module in non_entry_modules(graph) {
-            let Some(strings) = strings_by_path.get(module.path.as_str()) else {
+        for (id, module) in non_entry_modules(graph) {
+            let Some(strings) = strings_by_module.get(id.0) else {
                 continue;
             };
             let Some((primary, aliases)) = strings.split_first() else {
                 continue;
             };
-            let first = quote_lua_string(primary);
+            let first = encode_string(primary.as_bytes());
             self.push(&format!("-- module {first}: {}\n", module.relative_path));
             self.push(&format!("{prefix}modules[{first}]=function(...)\n"));
             self.push_body(module, ModuleKeys::RequireString);
@@ -221,7 +231,7 @@ impl BundleWriter<'_> {
             for alias in aliases {
                 self.push(&format!(
                     "{prefix}modules[{}]={prefix}modules[{first}]\n",
-                    quote_lua_string(alias)
+                    encode_string(alias.as_bytes())
                 ));
             }
             self.push_path_registrations(strings, &module.relative_path);
@@ -230,11 +240,13 @@ impl BundleWriter<'_> {
         self.push(&format!("local {prefix}entry=function(...)\n"));
         self.push_body(entry, ModuleKeys::RequireString);
         self.push("end\n");
-        if let Some(entry_strings) = strings_by_path.get(entry.path.as_str()) {
+        if let Some(entry_strings) =
+            strings_by_module.get(graph.entry_id.0).filter(|strings| !strings.is_empty())
+        {
             for string in entry_strings {
                 self.push(&format!(
                     "{prefix}modules[{}]={prefix}entry\n",
-                    quote_lua_string(string)
+                    encode_string(string.as_bytes())
                 ));
             }
             self.push_path_registrations(entry_strings, &entry.relative_path);
@@ -249,8 +261,8 @@ impl BundleWriter<'_> {
             self.push(&format!(
                 "{}paths[{}]={}\n",
                 self.prefix,
-                quote_lua_string(string),
-                quote_lua_string(relative_path)
+                encode_string(string.as_bytes()),
+                encode_string(relative_path.as_bytes())
             ));
         }
     }
@@ -294,11 +306,14 @@ impl BundleWriter<'_> {
         } else {
             Vec::new()
         };
+        // Only a chunk may open with a shebang or a BOM, and this body is
+        // inside a function. The shebang's line break stays for the line map.
+        edits.extend(module.shebang.map(|span| (span, String::new())));
         edits.sort_by_key(|(span, _)| span.start);
 
         let first_line = self.next_line;
         let body_start = self.output.len();
-        let mut cursor = 0;
+        let mut cursor = if source.starts_with('\u{FEFF}') { '\u{FEFF}'.len_utf8() } else { 0 };
         for (span, replacement) in &edits {
             let range = Range::<usize>::from(*span);
             self.push(source.get(cursor..range.start).unwrap_or_default());
@@ -328,12 +343,12 @@ impl BundleWriter<'_> {
 }
 
 /// Every module but the entry, in the order the bundle registers them.
-fn non_entry_modules(graph: &DependencyGraph) -> impl Iterator<Item = &ModuleInfo> {
+fn non_entry_modules(graph: &DependencyGraph) -> impl Iterator<Item = (ModuleId, &ModuleInfo)> {
     graph
         .topological_order
         .iter()
         .filter(|id| **id != graph.entry_id)
-        .filter_map(|id| graph.modules.get(id.0))
+        .filter_map(|id| graph.modules.get(id.0).map(|module| (*id, module)))
 }
 
 /// Prefix for every generated name, picked so it appears in no module
@@ -348,47 +363,35 @@ fn choose_prefix(modules: &[ModuleInfo]) -> String {
     candidate
 }
 
-/// A double-quoted Lua string literal that decodes to exactly `value`
-/// in every supported version. Bytes outside printable ASCII use
-/// zero-padded decimal escapes so a following digit can't extend them.
-fn quote_lua_string(value: &str) -> String {
-    let mut quoted = String::with_capacity(value.len().saturating_add(2));
-    quoted.push('"');
-    for byte in value.bytes() {
-        match byte {
-            b'"' => quoted.push_str("\\\""),
-            b'\\' => quoted.push_str("\\\\"),
-            b'\n' => quoted.push_str("\\n"),
-            b'\r' => quoted.push_str("\\r"),
-            0x20..=0x7e => quoted.push(char::from(byte)),
-            _ => {
-                let _unused = write!(quoted, "\\{byte:03}");
-            }
-        }
-    }
-    quoted.push('"');
-    quoted
-}
-
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use luck_core::DynamicRequire;
+    use rustc_hash::FxHashMap;
 
     use super::*;
-    use crate::module::ModuleId;
     use crate::require_extraction::extract_requires;
 
-    /// Builds a `ModuleInfo` with the real require extraction, resolving
-    /// each extracted string through `resolutions`.
+    /// A module whose dependencies' targets [`graph`] fills in.
+    struct ModuleFixture {
+        info: ModuleInfo,
+        /// The file each of `info.dependencies` resolves to.
+        resolved_paths: Vec<String>,
+    }
+
+    /// Builds a module with the real require extraction, resolving each
+    /// extracted string through `resolutions`.
     fn module(
         path: &str,
         source: &str,
         resolutions: &[(&str, &str)],
         version: LuaVersion,
-    ) -> ModuleInfo {
+    ) -> ModuleFixture {
         let parsed = luck_parser::parse(source, version);
         assert!(parsed.errors.is_empty(), "fixture must parse: {:?}", parsed.errors);
         let extracted = extract_requires(&parsed.block, path, version, DynamicRequire::default());
+        let mut resolved_paths = Vec::new();
         let dependencies = extracted
             .sites
             .into_iter()
@@ -397,34 +400,66 @@ mod tests {
                     .iter()
                     .find(|(require_string, _)| *require_string == site.require_string)
                     .unwrap_or_else(|| panic!("no resolution for {:?}", site.require_string));
+                resolved_paths.push(resolved.1.to_owned());
                 Dependency {
                     require_string: site.require_string,
-                    resolved_path: resolved.1.to_owned(),
+                    target: ModuleId(usize::MAX),
                     call_span: site.call_span,
                 }
             })
             .collect();
-        ModuleInfo {
+        let hot_comments = if version.is_luau() {
+            luck_token::leading_hot_comments(&parsed.comments, source)
+                .map(|comment| comment.span)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let shebang = parsed
+            .comments
+            .iter()
+            .find(|comment| comment.kind == luck_token::CommentKind::Shebang)
+            .map(|comment| comment.span);
+        let info = ModuleInfo {
             path: path.to_owned(),
             source: source.to_owned(),
             dependencies,
             relative_path: path.to_owned(),
             dynamic_callees: extracted.dynamic_callees,
+            hot_comments,
+            shebang,
             block: parsed.block,
-        }
+        };
+        ModuleFixture { info, resolved_paths }
     }
 
-    /// The graph of `modules`, given in topological order with the last one as
-    /// entry, laid out as `DependencyGraph::build` lays it out, entry first.
-    fn graph(mut modules: Vec<ModuleInfo>) -> DependencyGraph {
-        modules.rotate_right(1);
+    /// The graph of `fixtures`, given in topological order with the last one
+    /// as entry, laid out as `DependencyGraph::build` lays it out, entry first.
+    fn graph(mut fixtures: Vec<ModuleFixture>) -> DependencyGraph {
+        fixtures.rotate_right(1);
+        let ids_by_path: FxHashMap<String, ModuleId> = fixtures
+            .iter()
+            .enumerate()
+            .map(|(index, fixture)| (fixture.info.path.clone(), ModuleId(index)))
+            .collect();
+        let modules: Vec<ModuleInfo> = fixtures
+            .into_iter()
+            .map(|mut fixture| {
+                for (dependency, path) in
+                    fixture.info.dependencies.iter_mut().zip(&fixture.resolved_paths)
+                {
+                    dependency.target = ids_by_path[path];
+                }
+                fixture.info
+            })
+            .collect();
         let topological_order = (1..modules.len()).chain([0]).map(ModuleId).collect();
         DependencyGraph { modules, topological_order, entry_id: ModuleId(0), warnings: vec![] }
     }
 
-    /// The bundle for `modules`, with the last one as entry.
-    fn bundle(modules: Vec<ModuleInfo>, version: LuaVersion) -> String {
-        emit(&graph(modules), version).0
+    /// The bundle for `fixtures`, with the last one as entry.
+    fn bundle(fixtures: Vec<ModuleFixture>, version: LuaVersion) -> String {
+        emit(&graph(fixtures), version).0
     }
 
     fn assert_reparses(output: &str, version: LuaVersion) {
@@ -582,6 +617,23 @@ mod tests {
         // Source line 4 is print(d); it must land exactly 3 lines below
         // the entry body start despite the rewritten multiline call.
         assert_eq!(output_lines[entry.bundle_start_line - 1 + 3], "print(d)");
+        assert_reparses(&output, LuaVersion::Lua54);
+    }
+
+    #[test]
+    fn entry_shebang_moves_up_and_keeps_its_line_for_the_map() {
+        let source = "#!/usr/bin/env lua\nlocal d = require(\"dep\")\nprint(d)\n";
+        let modules = vec![
+            module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua54),
+            module("src/main.lua", source, &[("dep", "src/dep.lua")], LuaVersion::Lua54),
+        ];
+        let (output, line_map) = emit(&graph(modules), LuaVersion::Lua54);
+        assert!(output.starts_with("#!/usr/bin/env lua\ndo\n"), "{output}");
+        assert_eq!(output.matches("#!").count(), 1, "{output}");
+        let entry = find_line_entry(&line_map, "src/main.lua");
+        let output_lines: Vec<&str> = output.lines().collect();
+        assert_eq!(output_lines[entry.bundle_start_line - 1], "");
+        assert_eq!(output_lines[entry.bundle_start_line - 1 + 2], "print(d)");
         assert_reparses(&output, LuaVersion::Lua54);
     }
 
@@ -872,12 +924,20 @@ print(field, lazy())
     }
 
     #[test]
-    fn quote_lua_string_escapes_specials_and_zero_pads_unprintable_bytes() {
-        assert_eq!(quote_lua_string("plain"), "\"plain\"");
-        assert_eq!(quote_lua_string("a\"b"), "\"a\\\"b\"");
-        assert_eq!(quote_lua_string("a\\b"), "\"a\\\\b\"");
-        assert_eq!(quote_lua_string("a\nb"), "\"a\\nb\"");
-        // Zero-padded decimal escapes can never absorb a following digit.
-        assert_eq!(quote_lua_string("\u{7}5"), "\"\\0075\"");
+    fn loader_keys_escape_with_encode_string() {
+        let modules = vec![
+            module("/p/dep.lua", "return 1", &[], LuaVersion::Lua54),
+            module(
+                "/p/main.lua",
+                "local d = require(\"a\\tb\\ac\\u{e9}\\0015\")",
+                &[("a\tb\u{7}c\u{e9}\u{1}5", "/p/dep.lua")],
+                LuaVersion::Lua54,
+            ),
+        ];
+        let output = bundle(modules, LuaVersion::Lua54);
+        // `\t` and `\a` stay symbolic, UTF-8 stays literal, and a control
+        // byte before a digit stays padded.
+        assert!(output.contains("__luck_require(\"a\\tb\\ac\u{e9}\\0015\")"), "{output}");
+        assert_reparses(&output, LuaVersion::Lua54);
     }
 }

@@ -19,7 +19,7 @@ use crate::ParseError;
 #[must_use]
 pub fn validate(block: &Block, version: LuaVersion) -> Vec<ParseError> {
     let mut errors = Vec::new();
-    if version.has_attributes() || version.is_luau() {
+    if version.has_read_only_bindings() {
         errors.extend(const_writes::check(block, version));
     }
     if version.has_goto() {

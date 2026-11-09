@@ -13,17 +13,17 @@
 //! ```no_run
 //! use std::path::Path;
 //!
+//! use luck_bundler::BundleOptions;
 //! use luck_core::DynamicRequire;
 //! use luck_token::LuaVersion;
 //!
-//! let bundle = luck_bundler::bundle(
-//!     Path::new("main.lua"),
-//!     LuaVersion::Lua54,
-//!     &[],
-//!     Path::new("."),
-//!     DynamicRequire::default(),
-//! )
-//! .unwrap();
+//! let options = BundleOptions {
+//!     version: LuaVersion::Lua54,
+//!     search_paths: &[],
+//!     project_root: Path::new("."),
+//!     dynamic_require: DynamicRequire::default(),
+//! };
+//! let bundle = luck_bundler::bundle(Path::new("main.lua"), &options).unwrap();
 //! assert!(!bundle.output.is_empty());
 //! ```
 
@@ -41,7 +41,6 @@ mod bundle;
 mod emitter;
 mod exports;
 mod graph;
-mod hot_comments;
 mod loader;
 mod module;
 mod relative_path;
@@ -49,5 +48,5 @@ mod require_extraction;
 
 pub use bundle::{BundleResult, bundle};
 pub use emitter::LineMapEntry;
-pub use graph::DependencyGraph;
+pub use graph::{BundleOptions, DependencyGraph};
 pub use module::{Dependency, ModuleId, ModuleInfo};

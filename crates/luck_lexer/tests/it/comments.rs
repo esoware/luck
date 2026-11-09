@@ -148,3 +148,22 @@ fn block_comment_is_followed_by_newline_only_across_spaces_and_tabs() {
         assert_eq!(result.comments[0].is_followed_by_newline, is_followed_by_newline, "{source:?}");
     }
 }
+
+#[test]
+fn comment_after_a_multi_line_block_comment_leads_the_next_token() {
+    let result = lex_lua51("x --[[\n]] -- c\ny");
+    assert_eq!(result.comments.len(), 2);
+    assert_eq!(result.comments[0].position, CommentPosition::Trailing);
+    assert_eq!(result.comments[0].attached_to, 0);
+    assert!(!result.comments[0].is_preceded_by_newline);
+    assert_eq!(result.comments[1].position, CommentPosition::Leading);
+    assert_eq!(result.comments[1].attached_to, 15);
+    assert!(result.comments[1].is_preceded_by_newline);
+}
+
+#[test]
+fn single_line_block_comment_keeps_the_next_comment_trailing() {
+    let result = lex_lua51("x --[[ a ]] -- c\ny");
+    assert_eq!(result.comments[1].position, CommentPosition::Trailing);
+    assert!(!result.comments[1].is_preceded_by_newline);
+}

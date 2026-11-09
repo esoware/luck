@@ -37,7 +37,7 @@ impl Folder<'_> {
 }
 
 impl<'ast> Visitor<'ast> for Folder<'_> {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::DoBlock(_)
             | Statement::WhileLoop(_)
@@ -61,10 +61,10 @@ impl<'ast> Visitor<'ast> for Folder<'_> {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
         }
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 
-    fn visit_expression(&mut self, expr: &'ast Expression) {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
         match expr {
             Expression::FunctionDef(_) | Expression::TableConstructor(_) => self.push(expr.span()),
             Expression::Nil(_)
@@ -85,6 +85,6 @@ impl<'ast> Visitor<'ast> for Folder<'_> {
             | Expression::TypeInstantiation(_)
             | Expression::Error(_) => {}
         }
-        self.walk_expression(expr);
+        self.walk_expr(expr);
     }
 }

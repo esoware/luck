@@ -1,52 +1,35 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement, Var};
+use luck_ast::{Expression, FunctionArgs, FunctionCall, Var};
 use luck_token::{BinOp, Token, UnOp};
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::call::dotted_callee;
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::number::is_decimal_literal;
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::number::is_number_literal;
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TableOperations;
 
-impl Rule for TableOperations {
-    fn name(&self) -> &'static str {
-        "table_operations"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "misuse of `table.insert`, `table.remove`, `table.move`, or `table.create`"
-    }
-}
+impl_rule!(
+    TableOperations,
+    "table_operations",
+    Suspicious,
+    Warning,
+    "misuse of `table.insert`, `table.remove`, `table.move`, or `table.create`"
+);
 
 impl NodeRule for TableOperations {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_statement(
+    fn on_call(
         &self,
-        stmt: &Statement,
+        call: &FunctionCall,
+        _position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        if let Statement::FunctionCall(call) = stmt {
-            check_call(call, context, findings);
-        }
-    }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Expression::FunctionCall(call) = expr {
-            check_call(call, context, findings);
-        }
+        check_call(call, context, findings);
     }
 }
 
@@ -60,7 +43,7 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
     let finding = |message: &str| Finding::new(message, call.span);
     match (function_name, args.items.as_slice()) {
         ("insert", [table, index, _]) => {
-            if is_decimal_literal(index, 0.0) {
+            if is_number_literal(index, 0.0) {
                 findings.push(
                     finding("`table.insert` with index 0, but Lua arrays are 1-based")
                         .with_help("did you mean index 1?"),
@@ -86,7 +69,7 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
             }
         }
         ("remove", [table, index]) => {
-            if is_decimal_literal(index, 0.0) {
+            if is_number_literal(index, 0.0) {
                 findings.push(
                     finding("`table.remove` with index 0, but Lua arrays are 1-based")
                         .with_help("did you mean index 1?"),
@@ -103,11 +86,11 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
             }
         }
         ("move", move_args) => {
-            if move_args.get(1).is_some_and(|start| is_decimal_literal(start, 0.0)) {
+            if move_args.get(1).is_some_and(|start| is_number_literal(start, 0.0)) {
                 findings
                     .push(finding("`table.move` with start index 0, but Lua arrays are 1-based"));
             }
-            if move_args.get(3).is_some_and(|destination| is_decimal_literal(destination, 0.0)) {
+            if move_args.get(3).is_some_and(|destination| is_number_literal(destination, 0.0)) {
                 findings.push(finding(
                     "`table.move` with destination index 0, but Lua arrays are 1-based",
                 ));
@@ -129,21 +112,11 @@ fn table_stdlib_function<'call>(
     call: &'call FunctionCall,
     context: &LintContext<'_>,
 ) -> Option<&'call str> {
-    if call.method.is_some() {
-        return None;
-    }
-    let Expression::Var(Var::FieldAccess(field_access)) = &call.callee else {
-        return None;
-    };
-    let Expression::Var(Var::Name(prefix)) = &field_access.prefix else {
-        return None;
-    };
-    if prefix.identifier() != Some("table")
-        || context.semantic.resolves_to_local("table", prefix.span)
+    let (root, field) = dotted_callee(call)?;
+    if root.identifier() != Some("table") || context.semantic.resolves_to_local("table", root.span)
     {
         return None;
     }
-    let field = field_access.name.identifier()?;
     context.semantic.stdlib().lookup(&["table", field])?;
     Some(field)
 }
@@ -160,7 +133,7 @@ fn length_offset_operand(expr: &Expression, op: BinOp) -> Option<&Expression> {
     let Expression::BinaryOp(binary) = expr else {
         return None;
     };
-    if binary.op != op || !is_decimal_literal(&binary.right, 1.0) {
+    if binary.op != op || !is_number_literal(&binary.right, 1.0) {
         return None;
     }
     length_operand(&binary.left)
@@ -203,6 +176,27 @@ mod tests {
         let diags = run("table.insert(t, 0, v)", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("1-based"), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_hex_index_zero() {
+        for source in [
+            "table.insert(t, 0x0, v)",
+            "table.remove(t, 0x0)",
+            "table.move(t, 0x0, #t, 1)",
+            "table.move(t, 1, #t, 0x0, u)",
+        ] {
+            let diags = run(source, LuaVersion::Lua54);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn flags_hex_length_offset() {
+        for source in ["table.insert(t, #t + 0x1, v)", "table.remove(t, #t - 0x1)"] {
+            let diags = run(source, LuaVersion::Lua54);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+        }
     }
 
     #[test]
@@ -257,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_call_in_expression_position() {
+    fn flags_call_in_expr_position() {
         let diags = run("local last = table.remove(t, 0)", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
     }

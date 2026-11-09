@@ -14,6 +14,7 @@ use luck_ast::{
 
 use crate::CollapseSimpleStatement;
 use crate::comments::write_inline_comments_after;
+use crate::format_block::first_item_span;
 use crate::ir::{
     Format, Formatter, format_with, group, hard_line, indent, line_suffix_boundary, separated,
     soft_line_or_space, space, token,
@@ -231,13 +232,21 @@ impl Format for RepeatLoop {
 impl Format for IfStatement {
     fn fmt(&self, formatter: &mut Formatter) {
         // Collapses to `if cond then stmt end` when the option allows and
-        // there's one branch holding one statement.
+        // there's one branch holding one statement that no comment around it
+        // would stop from sharing the line.
         let can_collapse = matches!(
             formatter.options().collapse_simple_statement,
             CollapseSimpleStatement::ConditionalOnly | CollapseSimpleStatement::Always
         ) && self.elseif_clauses.is_empty()
             && self.else_clause.is_none()
-            && is_simple_block(&self.block);
+            && is_simple_block(&self.block)
+            && first_item_span(&self.block).is_some_and(|body_stmt| {
+                !formatter.comments().blocks_if_collapse(
+                    self.condition.span().end,
+                    body_stmt,
+                    self.span.end,
+                )
+            });
 
         if can_collapse {
             group((

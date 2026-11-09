@@ -49,7 +49,7 @@ impl RuntimeGenerator {
 
     fn program(mut self, statement_budget: usize) -> String {
         for _ in 0..statement_budget {
-            self.statement();
+            self.stmt();
         }
         // Print every top-level binding at the end so transforms that
         // wrongly eliminate or reorder assignments change stdout.
@@ -235,7 +235,7 @@ impl RuntimeGenerator {
         }
     }
 
-    fn statement(&mut self) {
+    fn stmt(&mut self) {
         // The module scope isn't a nesting level.
         let can_nest = self.scopes.len() <= MAX_STMT_DEPTH;
         match self.rng.below(12) {
@@ -294,7 +294,7 @@ impl RuntimeGenerator {
     fn small_body(&mut self) {
         let statement_count = self.rng.one_through(3);
         for _ in 0..statement_count {
-            self.statement();
+            self.stmt();
         }
     }
 
@@ -384,7 +384,7 @@ impl RuntimeGenerator {
 /// One deterministic runtime-safe program per (seed, version, budget), with
 /// roughly `statement_budget` top-level statements.
 #[must_use]
-pub fn generate(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
+pub fn generate_runtime_safe(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
     RuntimeGenerator::new(seed, version).program(statement_budget)
 }
 
@@ -394,15 +394,15 @@ mod tests {
 
     #[test]
     fn same_seed_generates_the_same_program() {
-        let first = generate(42, LuaVersion::Lua54, 30);
-        let second = generate(42, LuaVersion::Lua54, 30);
+        let first = generate_runtime_safe(42, LuaVersion::Lua54, 30);
+        let second = generate_runtime_safe(42, LuaVersion::Lua54, 30);
         assert_eq!(first, second);
     }
 
     #[test]
     fn different_seeds_generate_different_programs() {
-        let first = generate(1, LuaVersion::Lua54, 30);
-        let second = generate(2, LuaVersion::Lua54, 30);
+        let first = generate_runtime_safe(1, LuaVersion::Lua54, 30);
+        let second = generate_runtime_safe(2, LuaVersion::Lua54, 30);
         assert_ne!(first, second);
     }
 }

@@ -30,7 +30,7 @@ ready:
   just deny
   git status
 
-# Run all tests, or narrow them with nextest args like -p luck_parser goto_statement
+# Run all tests, or narrow them with nextest args like -p luck_parser goto_stmt
 test *args:
   cargo nextest run {{args}}
 

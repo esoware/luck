@@ -44,13 +44,13 @@ impl SpanStack {
 }
 
 impl<'ast> Visitor<'ast> for SpanStack {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         self.record(stmt.span());
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 
-    fn visit_expression(&mut self, expr: &'ast Expression) {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
         self.record(expr.span());
-        self.walk_expression(expr);
+        self.walk_expr(expr);
     }
 }

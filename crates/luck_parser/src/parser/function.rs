@@ -17,7 +17,7 @@ impl Parser<'_> {
     /// Parse a function body: `[<generics>] (params) block end`.
     pub(super) fn parse_function_body(&mut self) -> FunctionBody {
         // Luau puts the generic list before the parens: `function f<T>(x: T)`.
-        let generics = (self.version.is_luau() && matches!(self.peek(), TokenKind::Less))
+        let generics = (self.version.has_type_syntax() && matches!(self.peek(), TokenKind::Less))
             .then(|| Box::new(self.parse_generic_type_list(GenericsOwner::Function)));
 
         let open = self.expect(&TokenKind::LeftParen);
@@ -73,8 +73,7 @@ impl Parser<'_> {
         let first_name = self.advance();
         params.push(self.parse_parameter(first_name));
 
-        while matches!(self.peek(), TokenKind::Comma) {
-            self.advance_span();
+        while self.eat(&TokenKind::Comma) {
             if matches!(self.peek(), TokenKind::DotDotDot) {
                 // Vararg after the last named parameter.
                 return (params, Some(Box::new(self.parse_vararg_param())));

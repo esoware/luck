@@ -29,7 +29,7 @@ Core passes, one round, in order:
 5. `fold_constants` runs a second time, because inlining exposes new folds.
 6. `remove_dead_code` runs a second time, because the newly exposed folds, such as `local DEBUG = false` inlined into `if DEBUG then`, expose new dead branches.
 7. `merge_locals` combines adjacent single-name `local` declarations, or adjacent assignments, into one statement.
-8. `simplify_indexes` converts `t["key"]` into `t.key` and `{["key"] = v}` into `{key = v}` when the string is a valid identifier, and drops `[1]`, `[2]`, ... keys that run in sequence.
+8. `simplify_indexes` converts `t["key"]` into `t.key` and `{["key"] = v}` into `{key = v}` when the string is a valid identifier on the target, and drops `[1]`, `[2]`, ... keys that run in sequence.
 9. `shorten_strings` re-encodes each string literal as a double-quoted string and keeps whichever spelling is shorter.
 10. `shorten_numbers` picks the shortest spelling of each number literal that keeps its value and subtype.
 11. `simplify_parens` removes parentheses that precedence already makes redundant, and the call parentheses around a lone string or table argument.

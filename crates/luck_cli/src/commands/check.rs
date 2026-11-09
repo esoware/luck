@@ -62,7 +62,7 @@ fn check_file(file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
         Ok(text) => text,
         Err(error) => {
             return Some(
-                format!("Error: cannot read `{}`: {error}\n", file_path.display()).into_bytes(),
+                format!("error: cannot read `{}`: {error}\n", file_path.display()).into_bytes(),
             );
         }
     };

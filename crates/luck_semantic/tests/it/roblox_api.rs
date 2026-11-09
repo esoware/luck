@@ -97,7 +97,7 @@ fn generated_enums_path() -> PathBuf {
 fn value_line(name: &str, deprecation_message: Option<&str>, is_common: bool) -> String {
     let mut attributes: Vec<String> = Vec::new();
     if is_common {
-        attributes.push("common = true".to_owned());
+        attributes.push("is_common = true".to_owned());
     }
     if let Some(message) = deprecation_message {
         attributes.push(format!("deprecated = {{ message = \"{message}\" }}"));

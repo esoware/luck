@@ -56,7 +56,7 @@ serde_json            = "1"
 simdutf8              = { version = "0.1.5", features = ["aarch64_neon"] }
 tar                   = "0.4"
 tempfile              = "3"
-tokio                 = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "net", "macros", "sync"] }
+tokio                 = "1"
 toml                  = { version = "1.1", default-features = false, features = ["parse", "serde", "std"] }
 tower-lsp             = "0.20"
 unicode-width         = { version = "0.2", default-features = false }

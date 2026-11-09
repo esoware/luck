@@ -1067,7 +1067,7 @@ fn resolve_last_call(source: &str) -> Option<String> {
     } else {
         return None;
     };
-    Some(analysis.resolve_callee(call)?.name)
+    Some(analysis.resolve_callee(call)?.name())
 }
 
 #[test]

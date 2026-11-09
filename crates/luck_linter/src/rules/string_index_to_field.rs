@@ -1,30 +1,23 @@
 use luck_ast::{Expression, Statement, Var};
 use luck_token::{LuaVersion, Span, TokenKind, short_string_body};
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags `t["foo"]` where `foo` is a valid identifier and not a keyword, since
 /// `t.foo` means the same and reads better.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StringIndexToField;
 
-impl Rule for StringIndexToField {
-    fn name(&self) -> &'static str {
-        "string_index_to_field"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "use of string-key index for an identifier-safe key; prefer dot syntax"
-    }
-}
+impl_rule!(
+    StringIndexToField,
+    "string_index_to_field",
+    Style,
+    Warning,
+    "use of string-key index for an identifier-safe key; prefer dot syntax"
+);
 
 impl NodeRule for StringIndexToField {
     // Assignment targets are `Var`s but not expressions, so the statements
@@ -36,12 +29,7 @@ impl NodeRule for StringIndexToField {
             NodeType::CompoundAssignment,
         ])
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let version = context.semantic.version;
         match stmt {
             Statement::Assignment(assignment) => {
@@ -74,12 +62,7 @@ impl NodeRule for StringIndexToField {
             | Statement::Error(_) => {}
         }
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Expression::Var(var) = expr {
             findings.extend(check_var(var, context.semantic.version));
         }

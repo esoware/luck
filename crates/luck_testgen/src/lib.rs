@@ -1,7 +1,7 @@
 //! Deterministic random-program generators for property tests and bench
-//! corpora.
+//! corpora, plus the walker and dialect rules for the shared fixture tree.
 //!
-//! [`generate`] programs are:
+//! [`generate_runtime_safe`] programs are:
 //! - syntactically valid for the requested `LuaVersion`;
 //! - runtime-safe: every variable is initialized, arithmetic operands are
 //!   numbers, loops are bounded, no library calls with observable
@@ -19,9 +19,11 @@
     )
 )]
 
+mod fixtures;
 mod full;
 mod rng;
 mod runtime;
 
+pub use fixtures::{collect_fixture_files, detect_version, is_error_fixture};
 pub use full::{generate_full, generate_full_embeddable};
-pub use runtime::generate;
+pub use runtime::generate_runtime_safe;

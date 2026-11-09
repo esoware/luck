@@ -7,7 +7,7 @@ use core::mem;
 
 /// Byte-wise Levenshtein distance. The inputs are short names, so the
 /// quadratic cost doesn't matter.
-pub(crate) fn levenshtein(left: &str, right: &str) -> usize {
+fn levenshtein(left: &str, right: &str) -> usize {
     if left == right {
         return 0;
     }

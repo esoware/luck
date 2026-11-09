@@ -1,33 +1,25 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Statement, Var};
+use luck_ast::{DottedPath, Expression, FunctionArgs, FunctionCall, Var, dotted_path};
 use luck_semantic::{
     ResolvedCallee, SemanticAnalysis, StdlibDeprecation, StdlibEntry, StdlibFunction,
     expand_replace_template,
 };
 
 use crate::call::{positional_args, string_literal_value};
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::path::{DottedPath, dotted_path};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Deprecated;
 
-impl Rule for Deprecated {
-    fn name(&self) -> &'static str {
-        "deprecated"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "use of a deprecated standard library function, argument, or value"
-    }
-}
+impl_rule!(
+    Deprecated,
+    "deprecated",
+    Correctness,
+    Warning,
+    "use of a deprecated standard library function, argument, or value"
+);
 
 impl NodeRule for Deprecated {
     fn node_types(&self) -> NodeTypeSet {
@@ -37,28 +29,20 @@ impl NodeRule for Deprecated {
             NodeType::Var,
         ])
     }
-    fn on_statement(
+    fn on_call(
         &self,
-        stmt: &Statement,
+        call: &FunctionCall,
+        position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        if let Statement::FunctionCall(call) = stmt {
-            check_call(call, CallPosition::Statement, context, findings);
-        }
+        check_call(call, position, context, findings);
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         match expr {
-            Expression::FunctionCall(call) => {
-                check_call(call, CallPosition::Expression, context, findings);
-            }
             Expression::Var(var) => findings.extend(check_field_access(var, context.semantic)),
-            Expression::Nil(_)
+            Expression::FunctionCall(_)
+            | Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
@@ -79,25 +63,19 @@ impl NodeRule for Deprecated {
     }
 }
 
-/// Where a call sits. A fix's replacement must parse as a statement in
-/// statement position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CallPosition {
-    Statement,
-    Expression,
-}
-
 fn check_call(
     call: &FunctionCall,
     position: CallPosition,
     context: &LintContext<'_>,
     findings: &mut Vec<Finding>,
 ) {
-    let Some(ResolvedCallee { name, entry }) = context.semantic.resolve_callee(call) else {
+    let Some(callee) = context.semantic.resolve_callee(call) else {
         return;
     };
+    let entry = callee.entry();
 
     if let Some(deprecation) = entry.deprecation() {
+        let name = callee.name();
         let fix = replacement_fix(call, position, &name, deprecation, context);
         findings.push(
             Finding::new(format!("`{name}` is deprecated"), call.span)
@@ -108,8 +86,8 @@ fn check_call(
     }
 
     if let StdlibEntry::Function(function) = entry {
-        findings.extend(deprecated_constants(call, &name, function));
-        findings.extend(deprecated_params(call, &name, function));
+        findings.extend(deprecated_constants(call, &callee, function));
+        findings.extend(deprecated_params(call, &callee, function));
     }
 }
 
@@ -119,7 +97,7 @@ fn check_call(
 /// Any expression counts, since passing that argument at all is the problem.
 fn deprecated_params(
     call: &FunctionCall,
-    display_name: &str,
+    callee: &ResolvedCallee<'_>,
     function: &StdlibFunction,
 ) -> impl Iterator<Item = Finding> {
     let (args, arg_count) = positional_args(&call.args);
@@ -132,7 +110,7 @@ fn deprecated_params(
         deprecations.all(|later| later.is_some()).then(|| {
             let arg_number = index.saturating_add(1);
             Finding::new(
-                format!("argument {arg_number} of `{display_name}` is deprecated"),
+                format!("argument {arg_number} of `{}` is deprecated", callee.name()),
                 expr.span(),
             )
             .with_help(deprecation.message.as_str())
@@ -148,7 +126,7 @@ fn deprecated_params(
 /// constants are checked.
 fn deprecated_constants(
     call: &FunctionCall,
-    display_name: &str,
+    callee: &ResolvedCallee<'_>,
     function: &StdlibFunction,
 ) -> impl Iterator<Item = Finding> {
     let (args, arg_count) = positional_args(&call.args);
@@ -162,8 +140,11 @@ fn deprecated_constants(
             .filter_map(|values| values.iter().find(|constant| constant.value == value))
             .find_map(|constant| constant.deprecated.as_ref())?;
         Some(
-            Finding::new(format!("`{value}` is a deprecated argument of `{display_name}`"), span)
-                .with_help(deprecation.message.as_str()),
+            Finding::new(
+                format!("`{value}` is a deprecated argument of `{}`", callee.name()),
+                span,
+            )
+            .with_help(deprecation.message.as_str()),
         )
     })
 }
@@ -220,8 +201,6 @@ fn check_field_access(var: &Var, semantic: &SemanticAnalysis) -> Option<Finding>
     // Check only this node's own entry. The inner access node reports a
     // deprecated prefix, so a chain warns once.
     let deprecation = entry.deprecation()?;
-    // `resolves_to_local` scans every reference, so it waits for a deprecated
-    // entry.
     if semantic.resolves_to_local(segments.first()?, root_span) {
         return None;
     }
@@ -250,42 +229,42 @@ mod tests {
     }
 
     #[test]
-    fn fix_replaces_loadstring_with_load() {
+    fn flags_and_fixes_loadstring_to_load() {
         let (description, after) = run_fix("loadstring('x')", LuaVersion::Lua54).unwrap();
         assert_eq!(description, "replace deprecated `loadstring` with `load('x')`");
         assert_eq!(after, "load('x')");
     }
 
     #[test]
-    fn fix_replaces_string_gfind_with_gmatch() {
+    fn flags_and_fixes_string_gfind_to_gmatch() {
         let (description, after) = run_fix("string.gfind(s, p)", LuaVersion::Lua54).unwrap();
         assert_eq!(description, "replace deprecated `string.gfind` with `string.gmatch(s, p)`");
         assert_eq!(after, "string.gmatch(s, p)");
     }
 
     #[test]
-    fn fix_replaces_table_getn_with_length() {
+    fn flags_and_fixes_table_getn_to_length() {
         let (description, after) = run_fix("table.getn(t)", LuaVersion::Lua54).unwrap();
         assert_eq!(description, "replace deprecated `table.getn` with `#t`");
         assert_eq!(after, "#t");
     }
 
     #[test]
-    fn fix_replaces_unpack_with_table_unpack() {
+    fn flags_and_fixes_unpack_to_table_unpack() {
         let (description, after) = run_fix("unpack(t)", LuaVersion::Lua54).unwrap();
         assert_eq!(description, "replace deprecated `unpack` with `table.unpack(t)`");
         assert_eq!(after, "table.unpack(t)");
     }
 
     #[test]
-    fn fix_replaces_math_pow_with_caret() {
+    fn flags_and_fixes_math_pow_to_caret() {
         let (description, after) = run_fix("local r = math.pow(a, b)", LuaVersion::Lua54).unwrap();
         assert_eq!(description, "replace deprecated `math.pow` with `(a ^ b)`");
         assert_eq!(after, "local r = (a ^ b)");
     }
 
     #[test]
-    fn flags_expression_template_in_statement_position_without_fix() {
+    fn flags_expr_template_in_stmt_position_without_fix() {
         // `(a ^ b)` can't stand alone as a statement, so there's no fix.
         let diags = run_rule(&Deprecated, "math.pow(a, b)", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
@@ -294,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn fix_replaces_math_log10_with_log_base_10() {
+    fn flags_and_fixes_math_log10_to_log_base_10() {
         let (description, after) = run_fix("math.log10(x)", LuaVersion::Lua54).unwrap();
         assert_eq!(description, "replace deprecated `math.log10` with `math.log(x, 10)`");
         assert_eq!(after, "math.log(x, 10)");

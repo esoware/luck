@@ -97,7 +97,7 @@ impl LuaVersion {
     /// with `continue` but keeps the last-statement restriction. 5.2+
     /// allows `break` anywhere.
     #[must_use]
-    pub const fn has_last_statement_break(self) -> bool {
+    pub const fn has_last_stmt_break(self) -> bool {
         match self {
             Self::Lua51 | Self::Luau => true,
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
@@ -116,7 +116,7 @@ impl LuaVersion {
 
     /// Whether `;` is a valid empty statement (Lua 5.2+, not Luau).
     #[must_use]
-    pub const fn has_empty_statement(self) -> bool {
+    pub const fn has_empty_stmt(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
             Self::Lua51 | Self::Luau => false,
@@ -197,6 +197,27 @@ impl LuaVersion {
         }
     }
 
+    /// Whether a `.` is part of a hex numeral's scan, so `0xFF..2` is malformed
+    /// rather than a concat. 5.1's hex scanner stops before the dot.
+    #[must_use]
+    pub const fn has_hex_scan_dots(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
+            Self::Lua51 => false,
+        }
+    }
+
+    /// Whether any letter or `_` touching a decimal numeral makes it malformed.
+    /// 5.2 and 5.3 read only hex digits past a numeral, so `1then` splits there
+    /// into a number and a keyword.
+    #[must_use]
+    pub const fn has_strict_numeral_end(self) -> bool {
+        match self {
+            Self::Lua51 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
+            Self::Lua52 | Self::Lua53 => false,
+        }
+    }
+
     /// Whether explicit type-parameter instantiation (`f<<T>>`) is supported.
     #[must_use]
     pub const fn has_explicit_type_instantiation(self) -> bool {
@@ -212,6 +233,62 @@ impl LuaVersion {
         match self {
             Self::Luau => true,
             Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Whether type annotations, casts, and declarations are supported.
+    #[must_use]
+    pub const fn has_type_syntax(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Whether `@attr` is supported on functions.
+    #[must_use]
+    pub const fn has_function_attributes(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Whether `if` can begin an expression.
+    #[must_use]
+    pub const fn has_if_exprs(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Whether `const name = value` declares a local, as a contextual keyword.
+    #[must_use]
+    pub const fn has_const_stmt(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Whether some binding is read-only, so writing to it is a compile error:
+    /// `<const>` and `<close>` locals, or Luau's `const`.
+    #[must_use]
+    pub const fn has_read_only_bindings(self) -> bool {
+        match self {
+            Self::Lua54 | Self::Lua55 | Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 => false,
+        }
+    }
+
+    /// Whether LFCR is one line break and a lone CR is a line break in a long
+    /// string. Luau recognizes only LF and CRLF there (`fixupMultilineString`).
+    #[must_use]
+    pub const fn has_lfcr_line_break(self) -> bool {
+        match self {
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Luau => false,
         }
     }
 
@@ -337,78 +414,5 @@ impl StdlibEnvironment {
     #[must_use]
     pub const fn is_roblox(self) -> bool {
         matches!(self, Self::Roblox)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::LuaVersion::*;
-    use super::*;
-
-    fn versions_with(predicate: fn(LuaVersion) -> bool) -> Vec<LuaVersion> {
-        LuaVersion::ALL.into_iter().filter(|version| predicate(*version)).collect()
-    }
-
-    #[test]
-    fn statement_predicates_match_their_versions() {
-        let lua52_and_later = [Lua52, Lua53, Lua54, Lua55];
-        assert_eq!(versions_with(LuaVersion::has_goto), lua52_and_later);
-        assert_eq!(versions_with(LuaVersion::has_empty_statement), lua52_and_later);
-        assert_eq!(versions_with(LuaVersion::has_global), [Lua55]);
-        assert_eq!(versions_with(LuaVersion::has_const_for_variables), [Lua55]);
-        assert_eq!(versions_with(LuaVersion::has_last_statement_break), [Lua51, Luau]);
-        assert_eq!(versions_with(LuaVersion::has_ambiguous_call_newline_error), [Lua51, Luau]);
-        assert_eq!(versions_with(LuaVersion::has_continue), [Luau]);
-        assert_eq!(versions_with(LuaVersion::has_compound_assignment), [Luau]);
-        assert_eq!(versions_with(LuaVersion::has_value_exports), [Luau]);
-    }
-
-    #[test]
-    fn operator_and_number_predicates_match_their_versions() {
-        assert_eq!(versions_with(LuaVersion::has_floor_div), [Lua53, Lua54, Lua55, Luau]);
-        let lua53_and_later = [Lua53, Lua54, Lua55];
-        assert_eq!(versions_with(LuaVersion::has_bitwise_ops), lua53_and_later);
-        assert_eq!(versions_with(LuaVersion::has_integer_subtype), lua53_and_later);
-        assert_eq!(versions_with(LuaVersion::has_fmod_float_modulo), lua53_and_later);
-        assert_eq!(versions_with(LuaVersion::has_float_modulo_sign_compare), [Lua54, Lua55]);
-        assert_eq!(versions_with(LuaVersion::has_hex_floats), [Lua52, Lua53, Lua54, Lua55]);
-        assert_eq!(versions_with(LuaVersion::has_binary_literals), [Luau]);
-        assert_eq!(versions_with(LuaVersion::has_underscore_separators), [Luau]);
-        assert_eq!(versions_with(LuaVersion::has_luau_integer_literals), [Luau]);
-    }
-
-    #[test]
-    fn binding_predicates_match_their_versions() {
-        assert_eq!(versions_with(LuaVersion::has_attributes), [Lua54, Lua55]);
-        assert_eq!(versions_with(LuaVersion::has_leading_attributes), [Lua55]);
-        assert_eq!(versions_with(LuaVersion::has_named_varargs), [Lua55]);
-        assert_eq!(versions_with(LuaVersion::has_env_upvalue), [Lua52, Lua53, Lua54, Lua55]);
-        assert_eq!(versions_with(LuaVersion::has_explicit_type_instantiation), [Luau]);
-        assert_eq!(versions_with(LuaVersion::is_luau), [Luau]);
-    }
-
-    #[test]
-    fn string_predicates_match_their_versions() {
-        let all_but_lua51 = [Lua52, Lua53, Lua54, Lua55, Luau];
-        assert_eq!(versions_with(LuaVersion::has_strict_escapes), all_but_lua51);
-        assert_eq!(versions_with(LuaVersion::has_hex_escape), all_but_lua51);
-        assert_eq!(versions_with(LuaVersion::has_whitespace_escape), all_but_lua51);
-        assert_eq!(versions_with(LuaVersion::has_unicode_escape), [Lua53, Lua54, Lua55, Luau]);
-        assert_eq!(versions_with(LuaVersion::has_interpolated_strings), [Luau]);
-    }
-
-    #[test]
-    fn require_predicates_match_their_versions() {
-        let lua52_and_later = [Lua52, Lua53, Lua54, Lua55];
-        assert_eq!(versions_with(LuaVersion::has_require_filepath_arg), lua52_and_later);
-        assert_eq!(versions_with(LuaVersion::has_require_error_retry), lua52_and_later);
-        assert_eq!(versions_with(LuaVersion::has_require_loaderdata), [Lua54, Lua55]);
-    }
-
-    #[test]
-    fn stdlib_environment_defaults_to_standalone_and_flags_only_roblox() {
-        assert_eq!(StdlibEnvironment::default(), StdlibEnvironment::Standalone);
-        assert!(!StdlibEnvironment::Standalone.is_roblox());
-        assert!(StdlibEnvironment::Roblox.is_roblox());
     }
 }

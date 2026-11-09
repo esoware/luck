@@ -1,23 +1,16 @@
-use crate::diagnostic::{Category, Finding, Severity, line_column};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::{Finding, line_column};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Shadowing;
 
-impl Rule for Shadowing {
-    fn name(&self) -> &'static str {
-        "shadowing"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "variable shadows an outer variable with the same name"
-    }
-}
+impl_rule!(
+    Shadowing,
+    "shadowing",
+    Style,
+    Warning,
+    "variable shadows an outer variable with the same name"
+);
 
 impl WholeRule for Shadowing {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

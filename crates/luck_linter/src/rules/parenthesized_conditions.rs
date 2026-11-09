@@ -1,39 +1,27 @@
 use luck_ast::{Expression, Statement};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ParenthesizedConditions;
 
-impl Rule for ParenthesizedConditions {
-    fn name(&self) -> &'static str {
-        "parenthesized_conditions"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "unnecessary parentheses around condition"
-    }
-}
+impl_rule!(
+    ParenthesizedConditions,
+    "parenthesized_conditions",
+    Style,
+    Warning,
+    "unnecessary parentheses around condition"
+);
 
 impl NodeRule for ParenthesizedConditions {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::IfStatement, NodeType::WhileLoop])
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let source = context.source;
         match stmt {
             Statement::IfStatement(if_stmt) => {

@@ -13,8 +13,8 @@ pub struct Dependency {
     /// The require string with escapes decoded, as real `require` would
     /// receive it.
     pub require_string: String,
-    /// The canonical path the require resolved to, which keys the graph.
-    pub resolved_path: String,
+    /// The module the require resolved to.
+    pub target: ModuleId,
     /// The `require(...)` call in source. The emitter splices the loader call
     /// over it, and cycle warnings point at it.
     pub call_span: Span,
@@ -36,6 +36,11 @@ pub struct ModuleInfo {
     /// calls, which the emitter retargets at the loader's dynamic entry
     /// point. Always empty on Luau targets.
     pub dynamic_callees: Vec<Span>,
+    /// This module's leading `--!` hot comments. Empty except on Luau targets.
+    pub hot_comments: Vec<Span>,
+    /// The `#` first line, which Lua and Luau skip only at the start of a
+    /// chunk.
+    pub shebang: Option<Span>,
     /// The AST from graph construction, kept so the emitter doesn't reparse.
     pub block: Block,
 }

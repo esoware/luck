@@ -7,7 +7,7 @@
 //! declares a return shape, or a never-reassigned local initialized from
 //! one of those.
 
-use luck_ast::{Block, Expression, FunctionCall, Statement, Var, Visitor};
+use luck_ast::{Block, DottedPath, Expression, FunctionCall, Statement, Var, Visitor, dotted_path};
 use luck_token::{CompactString, Span};
 use rustc_hash::FxHashMap;
 
@@ -37,7 +37,7 @@ impl<'input> ShapeResolver<'input> {
 
     /// The shape of `expr`, when statically known. See the module docs for
     /// what "known" means.
-    pub(crate) fn expression_shape(self, expr: &Expression) -> Option<&'input CompactString> {
+    pub(crate) fn expr_shape(self, expr: &Expression) -> Option<&'input CompactString> {
         match expr {
             Expression::Var(Var::Name(token)) => {
                 let name = token.identifier()?;
@@ -50,7 +50,7 @@ impl<'input> ShapeResolver<'input> {
                 self.library.lookup(&self.global_path(expr)?)?.shape()
             }
             Expression::FunctionCall(call) => self.call_shape(call),
-            Expression::Parenthesized(parenthesized) => self.expression_shape(&parenthesized.expr),
+            Expression::Parenthesized(parenthesized) => self.expr_shape(&parenthesized.expr),
             // Literal strings carry the derived `string` receiver shape, so
             // `("x"):upper()` and `local s = "x" ... s:upper()` resolve.
             Expression::StringLiteral(_) | Expression::InterpolatedString(_) => {
@@ -84,7 +84,7 @@ impl<'input> ShapeResolver<'input> {
         receiver: &Expression,
         method_name: &str,
     ) -> Option<(&'input CompactString, &'input StdlibEntry)> {
-        let shape = self.expression_shape(receiver)?;
+        let shape = self.expr_shape(receiver)?;
         let entry = self.library.shape_member(shape, method_name)?;
         let StdlibEntry::Function(function) = entry else {
             return None;
@@ -98,29 +98,14 @@ impl<'input> ShapeResolver<'input> {
     /// Unwind a `Name(.Name)*` chain into path segments, root first. Any
     /// non-name link (indexing, calls, parens) aborts, as does a local root.
     pub(crate) fn global_path(self, expr: &Expression) -> Option<Vec<&str>> {
-        let mut segments: Vec<&str> = Vec::new();
-        let mut cursor = expr;
-        loop {
-            let Expression::Var(var) = cursor else {
-                return None;
-            };
-            match var {
-                Var::Name(token) => {
-                    let root = token.identifier()?;
-                    if self.tree.resolved_symbol(root, token.span).is_some() {
-                        return None;
-                    }
-                    segments.push(root);
-                    segments.reverse();
-                    return Some(segments);
-                }
-                Var::FieldAccess(field_access) => {
-                    segments.push(field_access.name.identifier()?);
-                    cursor = &field_access.prefix;
-                }
-                Var::Index(_) => return None,
-            }
+        let Expression::Var(var) = expr else {
+            return None;
+        };
+        let DottedPath { segments, root_span, .. } = dotted_path(var)?;
+        if self.tree.resolves_to_local(segments.first()?, root_span) {
+            return None;
         }
+        Some(segments)
     }
 
     /// Shape of a call's first return value.
@@ -171,14 +156,14 @@ struct ShapePass<'input> {
 }
 
 impl<'ast> Visitor<'ast> for ShapePass<'_> {
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         if let Statement::LocalAssignment(local) = stmt
             && let Some(exprs) = &local.exprs
             && local.names.len() == exprs.len()
         {
             for (attributed, expr) in local.names.iter().zip(exprs.iter()) {
                 let resolver = ShapeResolver::new(self.tree, self.library, &self.shapes);
-                let Some(shape) = resolver.expression_shape(expr).cloned() else {
+                let Some(shape) = resolver.expr_shape(expr).cloned() else {
                     continue;
                 };
                 let Some(&symbol_id) = self.span_to_symbol.get(&attributed.name.span) else {
@@ -190,7 +175,7 @@ impl<'ast> Visitor<'ast> for ShapePass<'_> {
                 self.shapes.insert(symbol_id, shape);
             }
         }
-        self.walk_statement(stmt);
+        self.walk_stmt(stmt);
     }
 }
 
@@ -213,12 +198,12 @@ mod tests {
         kind = "function"
         min_args = 1
         max_args = 2
-        params = [{ kind = "string" }, { kind = "string", required = false }]
+        params = [{ kind = "string" }, { kind = "string", is_required = false }]
         returns = "file"
 
         [shapes.DataModel.members.GetService]
         kind = "function"
-        method = true
+        is_method = true
         min_args = 1
         max_args = 1
         params = [{ kind = "string" }]
@@ -226,17 +211,17 @@ mod tests {
 
         [shapes.Instance.members.FindFirstChild]
         kind = "function"
-        method = true
+        is_method = true
         min_args = 1
         max_args = 2
-        params = [{ kind = "string" }, { kind = "bool", required = false }]
+        params = [{ kind = "string" }, { kind = "bool", is_required = false }]
 
         [shapes.file.members.read]
         kind = "function"
-        method = true
+        is_method = true
         min_args = 0
         max_args = -1
-        params = [{ kind = "vararg", required = false }]
+        params = [{ kind = "vararg", is_required = false }]
 
         [globals.string]
         kind = "namespace"
@@ -244,7 +229,7 @@ mod tests {
         kind = "function"
         min_args = 1
         max_args = 1
-        must_use = true
+        is_must_use = true
         params = [{ kind = "string" }]
     "#;
 

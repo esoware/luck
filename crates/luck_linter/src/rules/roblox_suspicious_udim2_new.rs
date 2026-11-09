@@ -1,45 +1,43 @@
-use luck_ast::Expression;
+use luck_ast::FunctionCall;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::roblox::{global_new_call, literal_arg_value};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::number::signed_number_value;
+use crate::roblox::global_new_call;
+use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RobloxSuspiciousUdim2New;
 
-impl Rule for RobloxSuspiciousUdim2New {
-    fn name(&self) -> &'static str {
-        "roblox_suspicious_udim2_new"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "`UDim2.new` called with fewer components than expected"
-    }
-}
+impl_rule!(
+    RobloxSuspiciousUdim2New,
+    "roblox_suspicious_udim2_new",
+    Suspicious,
+    Warning,
+    "`UDim2.new` called with fewer components than expected"
+);
 
 impl NodeRule for RobloxSuspiciousUdim2New {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallExpr])
     }
-    fn on_expression(
+    fn on_call(
         &self,
-        expr: &Expression,
+        call: &FunctionCall,
+        position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        let Some((call, args)) = global_new_call(expr, "UDim2", context.semantic) else {
+        if position == CallPosition::Statement {
+            return;
+        }
+        let Some(args) = global_new_call(call, "UDim2", context.semantic) else {
             return;
         };
         if args.is_empty() || args.len() >= 4 {
             return;
         }
-        let values: Vec<f64> = args.iter().filter_map(literal_arg_value).collect();
+        let values: Vec<f64> = args.iter().filter_map(signed_number_value).collect();
         if values.len() != args.len() {
             return;
         }

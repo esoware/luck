@@ -36,7 +36,7 @@ impl<'ast> Visitor<'ast> for SelfCounter {
 }
 
 impl Transform for ExplicitSelfRewriter {
-    fn transform_statement(&mut self, stmt: Statement) -> Statement {
+    fn transform_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
             Statement::FunctionDecl(mut function_declaration) => {
                 // The new `X,` parameter costs 2 bytes, and each `self` saves
@@ -75,7 +75,7 @@ impl Transform for ExplicitSelfRewriter {
             | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
-            | Statement::Error(_)) => self.walk_statement(other),
+            | Statement::Error(_)) => self.walk_stmt(other),
         }
     }
 }

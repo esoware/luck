@@ -10,7 +10,7 @@
 use luck_core::TransformConfig;
 use luck_formatter::{Comments, FormatOptions, blocks_equivalent, format, format_block};
 use luck_parser::ParseResult;
-use luck_testgen::{generate, generate_full};
+use luck_testgen::{generate_full, generate_runtime_safe};
 use luck_token::LuaVersion;
 
 const SEED_COUNT: u64 = 60;
@@ -32,7 +32,7 @@ fn programs() -> impl Iterator<Item = Program> {
         (0..SEED_COUNT).flat_map(move |seed| {
             [
                 Program {
-                    source: generate(seed, version, STATEMENT_BUDGET),
+                    source: generate_runtime_safe(seed, version, STATEMENT_BUDGET),
                     version,
                     label: format!("runtime seed {seed} {version:?}"),
                 },

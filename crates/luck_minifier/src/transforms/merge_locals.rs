@@ -7,7 +7,7 @@ use luck_token::{CompactString, LuaVersion, Span, Token};
 use rustc_hash::FxHashSet;
 
 use crate::binding::{has_fixed_binding, identifier_name, is_env_binding};
-use crate::expr::is_pure_expression;
+use crate::expr::is_pure_expr;
 
 /// Statements a merged group may take on after its first.
 ///
@@ -35,7 +35,7 @@ fn single_local(local: &LocalAssignment, version: LuaVersion) -> Option<(&Token,
     }
     let exprs = local.exprs.as_ref()?;
     if let ([attributed], [expr]) = (local.names.items.as_slice(), exprs.items.as_slice())
-        && is_pure_expression(expr)
+        && is_pure_expr(expr)
     {
         return Some((&attributed.name, expr));
     }
@@ -51,7 +51,7 @@ fn single_assignment(
     if let ([Var::Name(name)], [expr]) =
         (assignment.targets.items.as_slice(), assignment.values.items.as_slice())
         && !is_env_binding(identifier_name(name), version)
-        && is_pure_expression(expr)
+        && is_pure_expr(expr)
     {
         return Some((name, expr));
     }
@@ -95,7 +95,7 @@ impl LocalMerger {
             followers.push(next);
         }
         if followers.is_empty() {
-            return self.transform_statement(Statement::LocalAssignment(first));
+            return self.transform_stmt(Statement::LocalAssignment(first));
         }
 
         let mut names = first.names.into_items();
@@ -105,7 +105,7 @@ impl LocalMerger {
             names.extend(next.names.into_items());
             exprs.extend(next.exprs.into_iter().flat_map(Punctuated::into_items));
         }
-        self.transform_statement(Statement::LocalAssignment(Box::new(LocalAssignment {
+        self.transform_stmt(Statement::LocalAssignment(Box::new(LocalAssignment {
             span: Span::default(),
             names: Punctuated::from_items(names),
             exprs: Some(Punctuated::from_items(exprs)),
@@ -127,13 +127,16 @@ impl LocalMerger {
                 return false;
             };
             single_assignment(assignment, self.version).is_some_and(|(name, value)| {
-                can_join_group(name, value, followers.len(), &mut group_names)
+                // PUC Lua stores a multiple assignment right to left, so a
+                // repeated target would keep its first value.
+                !group_names.contains(identifier_name(name))
+                    && can_join_group(name, value, followers.len(), &mut group_names)
             })
         }) {
             followers.push(next);
         }
         if followers.is_empty() {
-            return self.transform_statement(Statement::Assignment(first));
+            return self.transform_stmt(Statement::Assignment(first));
         }
 
         let mut targets = first.targets.into_items();
@@ -142,7 +145,7 @@ impl LocalMerger {
             targets.extend(next.targets.into_items());
             values.extend(next.values.into_items());
         }
-        self.transform_statement(Statement::Assignment(Box::new(Assignment {
+        self.transform_stmt(Statement::Assignment(Box::new(Assignment {
             span: Span::default(),
             targets: Punctuated::from_items(targets),
             values: Punctuated::from_items(values),
@@ -162,7 +165,7 @@ impl LocalMerger {
             followers.push(next);
         }
         if followers.is_empty() {
-            return self.transform_statement(Statement::LocalAssignment(first));
+            return self.transform_stmt(Statement::LocalAssignment(first));
         }
 
         let mut names = first.names.into_items();
@@ -193,7 +196,7 @@ impl Transform for LocalMerger {
                     } else if is_bare_local(&first, self.version) {
                         self.merge_bare_locals(first, &mut stmts)
                     } else {
-                        self.transform_statement(Statement::LocalAssignment(first))
+                        self.transform_stmt(Statement::LocalAssignment(first))
                     }
                 }
                 Statement::Assignment(first) => {
@@ -201,7 +204,7 @@ impl Transform for LocalMerger {
                         let first_name = CompactString::from(identifier_name(name));
                         self.merge_assignments(first, first_name, &mut stmts)
                     } else {
-                        self.transform_statement(Statement::Assignment(first))
+                        self.transform_stmt(Statement::Assignment(first))
                     }
                 }
                 other @ (Statement::FunctionCall(_)
@@ -222,7 +225,7 @@ impl Transform for LocalMerger {
                 | Statement::Break(_)
                 | Statement::CompoundAssignment(_)
                 | Statement::TypeDeclaration(_)
-                | Statement::Error(_)) => self.transform_statement(other),
+                | Statement::Error(_)) => self.transform_stmt(other),
             });
         }
 
@@ -230,7 +233,7 @@ impl Transform for LocalMerger {
         let fused_stmts = fuse_bare_locals(merged_stmts, self.version);
 
         let last_stmt = block.last_stmt.map(|mut last| {
-            *last = self.transform_last_statement(*last);
+            *last = self.transform_last_stmt(*last);
             last
         });
 
@@ -270,7 +273,10 @@ fn can_fuse_assignment(local: &LocalAssignment, stmt: &Statement) -> bool {
     // `f`.
     let declared_names: FxHashSet<CompactString> =
         local.names.iter().map(|attributed| identifier_name(&attributed.name).into()).collect();
-    !assignment.values.iter().any(|value| references_any_in_expr(value, &declared_names))
+    // `local a, a; a, a = 1, 2` stores both values in the second `a`, right to
+    // left, but `local a, a = 1, 2` gives it the last.
+    declared_names.len() == local.names.len()
+        && !assignment.values.iter().any(|value| references_any_in_expr(value, &declared_names))
 }
 
 fn fuse_bare_locals(stmts: Vec<Statement>, version: LuaVersion) -> Vec<Statement> {
@@ -293,7 +299,8 @@ fn fuse_bare_locals(stmts: Vec<Statement>, version: LuaVersion) -> Vec<Statement
     fused_stmts
 }
 
-/// Reports whether any `Var::Name` in `names` appears in the visited subtree.
+/// Reports whether any `Var::Name` or function declaration root in `names`
+/// appears in the visited subtree.
 ///
 /// `Visitor` reaches every node, closure bodies included. Assignment targets
 /// go through `visit_var` too, so writes count as well as reads.
@@ -316,24 +323,31 @@ impl<'ast> Visitor<'ast> for ReferenceFinder<'_> {
         self.walk_var(var);
     }
 
-    fn visit_expression(&mut self, expr: &'ast Expression) {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
         if self.has_reference {
             return;
         }
-        self.walk_expression(expr);
+        self.walk_expr(expr);
     }
 
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         if self.has_reference {
             return;
         }
-        self.walk_statement(stmt);
+        if let Statement::FunctionDecl(function_decl) = stmt
+            && let Some(root) = function_decl.name.names.first()
+            && self.names.contains(identifier_name(root))
+        {
+            self.has_reference = true;
+            return;
+        }
+        self.walk_stmt(stmt);
     }
 }
 
 fn references_any_in_expr(expr: &Expression, names: &FxHashSet<CompactString>) -> bool {
     let mut finder = ReferenceFinder { names, has_reference: false };
-    finder.visit_expression(expr);
+    finder.visit_expr(expr);
     finder.has_reference
 }
 
@@ -382,10 +396,40 @@ mod tests {
     }
 
     #[test]
+    fn no_merge_when_a_closure_declares_a_function_on_the_earlier_name() {
+        let source = "local a = {}\nlocal b = function() function a.x() end end\nb()\nprint(a.x)\n";
+        let result = apply(source);
+        assert!(result.contains("local a = {}") || result.contains("local a={}"), "{result}");
+        assert!(!result.contains("local a, b") && !result.contains("local a,b"), "{result}");
+    }
+
+    #[test]
     fn merges_consecutive_assignments() {
         let result = apply("a = 1\nb = 2\nc = 3\n");
         let equal_count = result.matches('=').count();
         assert_eq!(equal_count, 1, "Global assignments should merge, got: {result}");
+    }
+
+    #[test]
+    fn no_merge_of_repeated_assignment_target() {
+        for (source, expected) in [
+            ("x = 1\nx = 2\n", "x=1 x=2"),
+            ("local x\nx = 1\nx = 2\n", "local x=1 x=2"),
+            ("x = 1\ny = 2\nx = 3\n", "x,y=1,2 x=3"),
+        ] {
+            assert_eq!(apply(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn no_fuse_of_repeated_declared_name() {
+        let result = apply("local a, a\na, a = 1, 2\n");
+        assert_eq!(result, "local a,a a,a=1,2");
+    }
+
+    #[test]
+    fn merges_redeclared_local() {
+        assert_eq!(apply("local x = 1\nlocal x = 2\n"), "local x,x=1,2");
     }
 
     fn parse_luau(source: &str) -> Block {

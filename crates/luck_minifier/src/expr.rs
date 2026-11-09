@@ -55,17 +55,17 @@ pub(crate) fn is_nil(expr: &Expression) -> bool {
 /// Whether the expression is built only from literal values, with no variable
 /// reads. Nested arithmetic on literals is still literal, because metamethods
 /// can't fire on primitives.
-fn is_literal_expression(expr: &Expression) -> bool {
+fn is_literal_expr(expr: &Expression) -> bool {
     match expr {
         Expression::Number(_)
         | Expression::StringLiteral(_)
         | Expression::Nil(_)
         | Expression::True(_)
         | Expression::False(_) => true,
-        Expression::Parenthesized(paren) => is_literal_expression(&paren.expr),
-        Expression::UnaryOp(unop) => is_literal_expression(&unop.operand),
+        Expression::Parenthesized(paren) => is_literal_expr(&paren.expr),
+        Expression::UnaryOp(unop) => is_literal_expr(&unop.operand),
         Expression::BinaryOp(binop) => {
-            is_literal_expression(&binop.left) && is_literal_expression(&binop.right)
+            is_literal_expr(&binop.left) && is_literal_expr(&binop.right)
         }
         Expression::Integer(_)
         | Expression::VarArg(_)
@@ -85,7 +85,7 @@ fn is_literal_expression(expr: &Expression) -> bool {
 ///
 /// A plain name read counts as pure. Any operator but `and`/`or` counts only
 /// when it applies to literals alone, since anything else may run a metamethod.
-pub(crate) fn is_pure_expression(expr: &Expression) -> bool {
+pub(crate) fn is_pure_expr(expr: &Expression) -> bool {
     match expr {
         Expression::Number(_)
         | Expression::Integer(_) // Luau integers are exact literal values.
@@ -97,23 +97,23 @@ pub(crate) fn is_pure_expression(expr: &Expression) -> bool {
         // `...` can't be reassigned, so its value is fixed for the whole
         // function body.
         | Expression::VarArg(_) => true,
-        Expression::Parenthesized(paren) => is_pure_expression(&paren.expr),
-        Expression::UnaryOp(_) => is_literal_expression(expr),
+        Expression::Parenthesized(paren) => is_pure_expr(&paren.expr),
+        Expression::UnaryOp(_) => is_literal_expr(expr),
         Expression::BinaryOp(binop) => {
             if matches!(binop.op, BinOp::And | BinOp::Or) {
                 // and/or never invoke metamethods, so they are pure whenever
                 // both operands are.
-                is_pure_expression(&binop.left) && is_pure_expression(&binop.right)
+                is_pure_expr(&binop.left) && is_pure_expr(&binop.right)
             } else {
-                is_literal_expression(expr)
+                is_literal_expr(expr)
             }
         }
         Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
             Field::Bracketed { key, value, .. } => {
-                is_pure_expression(key) && is_pure_expression(value)
+                is_pure_expr(key) && is_pure_expr(value)
             }
             Field::Named { value, .. } | Field::Positional { value, .. } => {
-                is_pure_expression(value)
+                is_pure_expr(value)
             }
         }),
         Expression::Var(var) => match var {
@@ -124,9 +124,9 @@ pub(crate) fn is_pure_expression(expr: &Expression) -> bool {
         },
         // Luau type casts are transparent wrappers, so purity is the inner
         // expression's.
-        Expression::TypeCast(cast) => is_pure_expression(&cast.expr),
+        Expression::TypeCast(cast) => is_pure_expr(&cast.expr),
         // Luau: explicit type arguments aren't evaluated at runtime.
-        Expression::TypeInstantiation(instantiation) => is_pure_expression(&instantiation.expr),
+        Expression::TypeInstantiation(instantiation) => is_pure_expr(&instantiation.expr),
         Expression::FunctionCall(_)
         | Expression::IfExpression(_)
         | Expression::InterpolatedString(_)
@@ -146,11 +146,9 @@ pub(crate) fn is_always_truthy(expr: &Expression) -> bool {
         | Expression::True(_) => true,
         Expression::Parenthesized(paren) => is_always_truthy(&paren.expr),
         Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
-            is_literal_expression(&unop.operand) && is_always_truthy(&unop.operand)
+            is_literal_expr(&unop.operand) && is_always_truthy(&unop.operand)
         }
-        Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Len) => {
-            is_literal_expression(&unop.operand)
-        }
+        Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Len) => is_literal_expr(&unop.operand),
         Expression::BinaryOp(binop) => {
             let is_arithmetic = matches!(
                 binop.op,
@@ -168,9 +166,7 @@ pub(crate) fn is_always_truthy(expr: &Expression) -> bool {
                     | BinOp::Shl
                     | BinOp::Shr
             );
-            is_arithmetic
-                && is_literal_expression(&binop.left)
-                && is_literal_expression(&binop.right)
+            is_arithmetic && is_literal_expr(&binop.left) && is_literal_expr(&binop.right)
         }
         Expression::Nil(_)
         | Expression::False(_)
@@ -202,6 +198,32 @@ pub(crate) fn parenthesize(expr: Expression) -> Expression {
     Expression::Parenthesized(Box::new(ParenthesizedExpression { span: Span::default(), expr }))
 }
 
+/// Whether `expr` prints a Luau if-expression last, whose `else` branch would
+/// take in an operator printed after it.
+pub(crate) fn ends_in_if_expr(expr: &Expression) -> bool {
+    match expr {
+        Expression::IfExpression(_) => true,
+        Expression::BinaryOp(binop) => ends_in_if_expr(&binop.right),
+        Expression::UnaryOp(unop) => ends_in_if_expr(&unop.operand),
+        Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Var(_)
+        | Expression::FunctionCall(_)
+        | Expression::Parenthesized(_)
+        | Expression::TableConstructor(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::TypeInstantiation(_)
+        | Expression::Error(_) => false,
+    }
+}
+
 /// Whether `inner` printed bare as the left operand of `outer` reparses as
 /// that same operand.
 pub(crate) fn can_unwrap_in_binop_lhs(inner: &Expression, outer: BinOp) -> bool {
@@ -216,8 +238,10 @@ pub(crate) fn can_unwrap_in_binop_lhs(inner: &Expression, outer: BinOp) -> bool 
         | Expression::TableConstructor(_)
         | Expression::FunctionDef(_) => true,
         // Unary ops bind looser than ^, so (-a)^b needs its parens.
-        Expression::UnaryOp(_) => outer != BinOp::Pow,
-        Expression::BinaryOp(binop) => binop.op.can_nest_bare(outer, OperandSide::Left),
+        Expression::UnaryOp(_) => outer != BinOp::Pow && !ends_in_if_expr(inner),
+        Expression::BinaryOp(binop) => {
+            binop.op.can_nest_bare(outer, OperandSide::Left) && !ends_in_if_expr(inner)
+        }
         Expression::FunctionCall(_)
         | Expression::VarArg(_)
         | Expression::Parenthesized(_)
@@ -241,9 +265,11 @@ pub(crate) fn can_unwrap_in_binop_rhs(inner: &Expression, outer: BinOp) -> bool 
         | Expression::False(_)
         | Expression::Var(_)
         | Expression::TableConstructor(_)
-        | Expression::FunctionDef(_)
-        | Expression::UnaryOp(_) => true,
-        Expression::BinaryOp(binop) => binop.op.can_nest_bare(outer, OperandSide::Right),
+        | Expression::FunctionDef(_) => true,
+        Expression::UnaryOp(_) => !ends_in_if_expr(inner),
+        Expression::BinaryOp(binop) => {
+            binop.op.can_nest_bare(outer, OperandSide::Right) && !ends_in_if_expr(inner)
+        }
         Expression::FunctionCall(_)
         | Expression::VarArg(_)
         | Expression::Parenthesized(_)

@@ -42,6 +42,8 @@
     )
 )]
 
+extern crate alloc;
+
 #[cfg(test)]
 mod fixtures;
 mod lua;

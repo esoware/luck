@@ -1,63 +1,42 @@
-use luck_token::{Comment, LuaVersion, Span, index_to_offset, offset_to_index};
+use luck_token::{Comment, Span, index_to_offset, offset_to_index};
 
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
-/// Flags backslash escapes in short strings that the target version
-/// doesn't define.
+/// Flags backslash escapes in short strings that Lua 5.1 doesn't define,
+/// which it reads as the bare character.
 ///
-/// It reads the raw source because in Lua 5.2+ and Luau the lexer rejects
-/// these escapes and drops the string, so the AST never holds it. Lua 5.1
-/// reads an unknown escape as the bare character, and it's flagged there
-/// too.
+/// Every later version and Luau reject these in the lexer, so a file on those
+/// targets that reaches the rules has none left to flag.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BadStringEscape;
 
-impl Rule for BadStringEscape {
-    fn name(&self) -> &'static str {
-        "bad_string_escape"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "invalid backslash escape in string literal"
-    }
-}
+impl_rule!(
+    BadStringEscape,
+    "bad_string_escape",
+    Correctness,
+    Warning,
+    "invalid backslash escape in string literal"
+);
 
 impl WholeRule for BadStringEscape {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        scan_source(context.source, context.semantic.version, context.comments)
+        if context.semantic.version.has_strict_escapes() {
+            return Vec::new();
+        }
+        scan_source(context.source, context.comments)
     }
 }
 
-/// Returns how many bytes after the `\` an escape spans, or `None` if
-/// `version` doesn't define it.
-fn escape_length(rest: &[u8], version: LuaVersion) -> Option<usize> {
+/// Returns how many bytes after the `\` an escape spans, or `None` if Lua 5.1
+/// doesn't define it.
+fn escape_length(rest: &[u8]) -> Option<usize> {
     match rest {
         [b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'"' | b'\'' | b'\n', ..] => {
             Some(1)
         }
         // CRLF and bare CR are both one logical newline.
         [b'\r', after_cr @ ..] => Some(if after_cr.first() == Some(&b'\n') { 2 } else { 1 }),
-        // Lua 5.2+ and Luau: `\xHH` requires two hex digits.
-        [b'x', high, low, ..]
-            if version.has_hex_escape() && high.is_ascii_hexdigit() && low.is_ascii_hexdigit() =>
-        {
-            Some(3)
-        }
-        // Lua 5.2+ and Luau.
-        [b'z', ..] if version.has_whitespace_escape() => Some(1),
-        // Lua 5.3+ and Luau: `\u{HHHH}` needs at least one hex digit between
-        // braces.
-        [b'u', b'{', digits @ ..] if version.has_unicode_escape() => {
-            let digit_count = digits.iter().take_while(|byte| byte.is_ascii_hexdigit()).count();
-            (digit_count > 0 && digits.get(digit_count) == Some(&b'}'))
-                .then(|| digit_count.saturating_add(3))
-        }
         // `\ddd` takes up to three decimal digits.
         [b'0'..=b'9', after_first @ ..] => {
             let extra_digit_count =
@@ -73,7 +52,7 @@ fn escape_length(rest: &[u8], version: LuaVersion) -> Option<usize> {
 ///
 /// Long-bracket strings (`[[...]]`, `[=[...]=]`) have no escapes, so
 /// they're skipped whole.
-fn scan_source(source: &str, version: LuaVersion, comments: &[Comment]) -> Vec<Finding> {
+fn scan_source(source: &str, comments: &[Comment]) -> Vec<Finding> {
     let bytes = source.as_bytes();
     let mut findings = Vec::new();
     // The list is sorted and the scan only moves forward, so a comment that
@@ -90,7 +69,7 @@ fn scan_source(source: &str, version: LuaVersion, comments: &[Comment]) -> Vec<F
             continue;
         }
         index = if byte == b'"' || byte == b'\'' {
-            scan_short_string(bytes, index, byte, version, &mut findings)
+            scan_short_string(bytes, index, byte, &mut findings)
         } else if byte == b'['
             && let Some(skip_to) = skip_long_bracket(bytes, index)
         {
@@ -128,13 +107,7 @@ fn skip_long_bracket(bytes: &[u8], start: usize) -> Option<usize> {
 /// `start`, and returns the offset after its closing quote.
 ///
 /// An unterminated string stops at its newline or the end of the source.
-fn scan_short_string(
-    bytes: &[u8],
-    start: usize,
-    quote: u8,
-    version: LuaVersion,
-    findings: &mut Vec<Finding>,
-) -> usize {
+fn scan_short_string(bytes: &[u8], start: usize, quote: u8, findings: &mut Vec<Finding>) -> usize {
     let mut index = start.saturating_add(1);
     while let Some(&byte) = bytes.get(index) {
         let after_byte = index.saturating_add(1);
@@ -144,7 +117,7 @@ fn scan_short_string(
         match byte {
             b'\\' => {
                 let after = bytes.get(after_byte..).unwrap_or_default();
-                if let Some(consumed) = escape_length(after, version) {
+                if let Some(consumed) = escape_length(after) {
                     index = after_byte.saturating_add(consumed);
                 } else {
                     let bad_char = after.first().copied().unwrap_or(b'?');
@@ -160,8 +133,7 @@ fn scan_short_string(
                         )
                         .with_help(
                             "valid escapes: `\\a` `\\b` `\\f` `\\n` `\\r` `\\t` \
-                             `\\v` `\\\\` `\\\"` `\\'` `\\ddd`, plus `\\xHH` and `\\z` \
-                             (Lua 5.2+, Luau) and `\\u{XXX}` (Lua 5.3+, Luau)",
+                             `\\v` `\\\\` `\\\"` `\\'` `\\ddd`",
                         ),
                     );
                     index = after_byte.saturating_add(after.len().min(1));
@@ -180,25 +152,26 @@ fn scan_short_string(
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule_on_parse;
+    use crate::fixtures::run_rule;
 
     fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
-        // The lexer rejects these escapes too, so the parse may have errors.
-        run_rule_on_parse(&BadStringEscape, &luck_parser::parse(source, version), version)
+        run_rule(&BadStringEscape, source, version)
     }
 
     #[test]
     fn flags_unknown_letter_escape() {
-        let diags = run(r#"local x = "\q""#, LuaVersion::Lua54);
+        let diags = run(r#"local x = "\q""#, LuaVersion::Lua51);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("\\q"));
     }
 
     #[test]
     fn ignores_newline_escape() {
-        let diags = run(r#"local x = "\n""#, LuaVersion::Lua54);
+        let diags = run(r#"local x = "\n""#, LuaVersion::Lua51);
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -215,8 +188,8 @@ mod tests {
     }
 
     #[test]
-    fn flags_unicode_escape_on_lua52() {
-        let diags = run(r#"local x = "\u{1F600}""#, LuaVersion::Lua52);
+    fn flags_unicode_escape_on_lua51() {
+        let diags = run(r#"local x = "\u{1F600}""#, LuaVersion::Lua51);
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
@@ -228,34 +201,42 @@ mod tests {
 
     #[test]
     fn ignores_long_bracket_escape() {
-        let diags = run(r"local x = [[\q]]", LuaVersion::Lua54);
+        let diags = run(r"local x = [[\q]]", LuaVersion::Lua51);
         assert!(diags.is_empty(), "long brackets ignored: {diags:?}");
     }
 
     #[test]
-    fn flags_bad_hex_escape() {
-        let diags = run(r#"local x = "\xZZ""#, LuaVersion::Lua54);
+    fn flags_hex_escape_on_lua51() {
+        let diags = run(r#"local x = "\x41""#, LuaVersion::Lua51);
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn ignores_decimal_escape() {
-        let diags = run(r#"local x = "\065""#, LuaVersion::Lua54);
+        let diags = run(r#"local x = "\065""#, LuaVersion::Lua51);
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_escape_inside_line_comment() {
-        let diags = run("-- a \\q comment\nlocal x = 1\n", LuaVersion::Lua54);
+        let diags = run("-- a \\q comment\nlocal x = 1\n", LuaVersion::Lua51);
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_escapes_between_comments() {
         let source = "-- \"\\q\nlocal x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e\n";
-        let diags = run(source, LuaVersion::Lua54);
+        let diags = run(source, LuaVersion::Lua51);
         let flagged: Vec<&str> = diags.iter().map(|diag| diag.span.text(source)).collect();
         assert_eq!(flagged, ["\\q", "\\w"], "{diags:?}");
         assert_eq!(offset_to_index(diags[0].span.start), source.find("= \"").unwrap() + 3);
+    }
+
+    #[test]
+    fn ignores_brace_escape_after_a_quote_in_a_backtick_string() {
+        for source in ["local a = `it's \\{x}`", "local b = `say \"\\{hi}\" {x}`"] {
+            let diags = run(source, LuaVersion::Luau);
+            assert!(diags.is_empty(), "{source}: {diags:?}");
+        }
     }
 }

@@ -432,7 +432,7 @@ impl Printer {
         if self.suffixes.is_empty() {
             return;
         }
-        let suffixes = take(&mut self.suffixes);
+        let mut suffixes = take(&mut self.suffixes);
         for element in &suffixes {
             match element {
                 FormatElement::Token(content) => self.emit_text(content),
@@ -448,6 +448,8 @@ impl Printer {
                 }
             }
         }
+        suffixes.clear();
+        self.suffixes = suffixes;
     }
 
     fn trim_trailing_whitespace(&mut self) {

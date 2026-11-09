@@ -45,7 +45,7 @@ impl CompactPrinter {
         self.emit_punctuated(&local_assignment.names, ",", Self::emit_attributed_name);
         if let Some(exprs) = &local_assignment.exprs {
             self.emit_fixed("=");
-            self.emit_punctuated(exprs, ",", Self::emit_expression);
+            self.emit_punctuated(exprs, ",", Self::emit_expr);
         }
     }
 
@@ -89,7 +89,7 @@ impl CompactPrinter {
         self.emit_punctuated(&global_declaration.names, ",", Self::emit_attributed_name);
         if let Some(exprs) = &global_declaration.exprs {
             self.emit_fixed("=");
-            self.emit_punctuated(exprs, ",", Self::emit_expression);
+            self.emit_punctuated(exprs, ",", Self::emit_expr);
         }
     }
 

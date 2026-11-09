@@ -23,7 +23,7 @@ The parser pulls tokens from `luck_lexer` one at a time, with one token of looka
 
 ### Expression parsing
 
-Each binary operator has a precedence level and an associativity, defined in `luck_token`. `parse_expression(min_precedence)` parses a unary operator or a primary expression with its suffix chain (field access, indexing, calls, method calls, Luau type instantiation) and any Luau `::` cast, then loops over binary operators whose precedence is at least `min_precedence`. A left-associative operator parses its right operand one level higher, so chains like `a + b + c` grow in the loop, while the right-associative `..` and `^` recurse, under the depth limit.
+Each binary operator has a precedence level and an associativity, defined in `luck_token`. `parse_expr(min_precedence)` parses a unary operator or a primary expression with its suffix chain (field access, indexing, calls, method calls, Luau type instantiation) and any Luau `::` cast, then loops over binary operators whose precedence is at least `min_precedence`. A left-associative operator parses its right operand one level higher, so chains like `a + b + c` grow in the loop, while the right-associative `..` and `^` recurse, under the depth limit.
 
 ### Statement parsing
 

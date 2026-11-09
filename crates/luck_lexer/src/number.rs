@@ -87,9 +87,7 @@ fn scan_hex_number(
         }
     }
 
-    // Luau's hex scanner consumes dots and 5.1's stops before them. 5.2+
-    // already failed in the hex-float path.
-    if version.is_luau() {
+    if version.has_hex_scan_dots() {
         reject_adjacent_concat(cursor, start)?;
     }
 
@@ -148,19 +146,10 @@ fn scan_decimal_number(
     eat_digits(cursor, version, u8::is_ascii_digit);
 
     let mut is_float = false;
-    if cursor.peek() == Some(b'.') {
-        let should_consume_dot = match cursor.peek_at(1) {
-            Some(byte) if byte.is_ascii_digit() => true,
-            Some(b'e' | b'E') => true,
-            Some(b'.') => false, // `..` or `...`
-            Some(byte) if byte.is_ascii_alphabetic() || byte == b'_' => false, // field access like `1.foo`
-            _ => true, // `1.` is a valid float at EOF or before an operator
-        };
-        if should_consume_dot {
-            is_float = true;
-            cursor.advance(); // .
-            eat_digits(cursor, version, u8::is_ascii_digit);
-        }
+    if cursor.peek() == Some(b'.') && cursor.peek_next() != Some(b'.') {
+        is_float = true;
+        cursor.advance();
+        eat_digits(cursor, version, u8::is_ascii_digit);
     }
 
     if matches!(cursor.peek(), Some(b'e' | b'E')) {
@@ -182,6 +171,20 @@ fn scan_decimal_number(
             ));
         }
         validate_integer_range(cursor, start, 10)?;
+    }
+
+    let is_touching_letter = cursor.peek().is_some_and(|byte| {
+        if version.has_strict_numeral_end() {
+            byte.is_ascii_alphabetic() || byte == b'_'
+        } else {
+            byte.is_ascii_hexdigit()
+        }
+    });
+    if is_touching_letter {
+        return Err(lex_error(
+            Span::from_indices(start, cursor.position().saturating_add(1)),
+            "malformed number (a numeral cannot touch a letter)",
+        ));
     }
     Ok(())
 }

@@ -12,7 +12,7 @@ Everything else consumes the parsed AST. `luck_minifier`, `luck_formatter`, and 
 
 | Crate | Role | Key entry |
 |-------|------|-----------|
-| `luck_token` | Spans, `LuaVersion`, `StdlibEnvironment`, `SourceError`, shared literal decode/encode, `CompactString` storage, `CodeBuffer` byte-level output builder | `span.rs`, `version.rs`, `token.rs`, `operator.rs`, `number.rs`, `string.rs`, `code_buffer.rs` |
+| `luck_token` | Spans, `LuaVersion`, `StdlibEnvironment`, `SourceError`, shared literal decode/encode, `CompactString` storage, `CodeBuffer` byte-level output builder | `span.rs`, `version.rs`, `token.rs`, `op.rs`, `number.rs`, `string.rs`, `code_buffer.rs` |
 | `luck_lexer` | Single-pass tokenizer, comments emitted separately, memchr + byte-table batched scanning | `lexer.rs`, `search.rs` |
 | `luck_ast` | `Expression`/`Statement`/`Type` <=64 B, `Visitor`, `Transform`, `Synth` builder (source-free AST construction) | `expr.rs`, `stmt.rs`, `types.rs`, `transform.rs`, `synth.rs` |
 | `luck_parser` | Pratt expressions + recursive-descent statements + full Luau type grammar, version-gated | `parser.rs`, `parser/expr.rs`, `parser/stmt.rs`, `parser/types.rs` |
@@ -27,7 +27,7 @@ Everything else consumes the parsed AST. `luck_minifier`, `luck_formatter`, and 
 | `luck_lsp` | Library-only LSP backend (no binary), served by `luck lsp` | `backend.rs`, `transport.rs`, `providers/` |
 | `luck_cli` | Binary only: flat Clap commands, one module per command, rayon-parallel lint/fmt/check, ariadne rendering, exit codes 0/1/2, 16 MB-stack worker thread | `main.rs`, `cli.rs`, `commands/`, `render.rs` |
 | `luck` | Facade re-exports (no logic), published as package `luck_lua` with `[lib] name = "luck"`, so imports stay `luck::` | `lib.rs` |
-| `luck_testgen` | Internal (`publish = false`): deterministic program generators (runtime-safe and full-grammar/parse-only) + round-trip property tests | `src/runtime.rs`, `src/full.rs`, `tests/it/roundtrip.rs` |
+| `luck_testgen` | Internal (`publish = false`): deterministic program generators (runtime-safe and full-grammar/parse-only), round-trip property tests, and the shared fixture walker | `src/runtime.rs`, `src/full.rs`, `src/fixtures.rs`, `tests/it/roundtrip.rs` |
 | `luck_benchmark` | Internal (`publish = false`): per-stage criterion benches run on CodSpeed, corpus cached in gitignored `corpus/`, committed `minsize.snap` size tracking | `benches/`, `src/corpus.rs`, `tests/it/metrics.rs` |
 
 ## The three target axes

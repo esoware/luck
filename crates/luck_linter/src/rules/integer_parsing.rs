@@ -3,9 +3,9 @@ use core::num::ParseIntError;
 use luck_ast::{Expression, Literal};
 use luck_token::LuaVersion;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Every integer up to this value is exact in a double.
 const MAX_EXACT_DOUBLE_INTEGER: u128 = 2u128.pow(53);
@@ -18,31 +18,19 @@ const MAX_EXACT_DOUBLE_INTEGER: u128 = 2u128.pow(53);
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct IntegerParsing;
 
-impl Rule for IntegerParsing {
-    fn name(&self) -> &'static str {
-        "integer_parsing"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "integer literal the target Lua version can't represent exactly"
-    }
-}
+impl_rule!(
+    IntegerParsing,
+    "integer_parsing",
+    Correctness,
+    Warning,
+    "integer literal the target Lua version can't represent exactly"
+);
 
 impl NodeRule for IntegerParsing {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::Number])
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Expression::Number(literal) = expr {
             findings.extend(check_number(literal, context.semantic.version));
         }

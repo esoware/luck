@@ -79,11 +79,11 @@ impl<'ast> Visitor<'ast> for ConstWriteChecker<'ast> {
         self.bindings.truncate(bindings_base);
     }
 
-    fn visit_statement(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::Assignment(assignment) => {
                 for value in assignment.values.iter() {
-                    self.visit_expression(value);
+                    self.visit_expr(value);
                 }
                 for target in assignment.targets.iter() {
                     self.check_target(target);
@@ -91,14 +91,14 @@ impl<'ast> Visitor<'ast> for ConstWriteChecker<'ast> {
             }
             // Luau
             Statement::CompoundAssignment(compound_assignment) => {
-                self.visit_expression(&compound_assignment.expr);
+                self.visit_expr(&compound_assignment.expr);
                 self.check_target(&compound_assignment.var);
             }
             Statement::NumericFor(numeric_for) => {
-                self.visit_expression(&numeric_for.start);
-                self.visit_expression(&numeric_for.limit);
+                self.visit_expr(&numeric_for.start);
+                self.visit_expr(&numeric_for.limit);
                 if let Some(step) = &numeric_for.step {
-                    self.visit_expression(step);
+                    self.visit_expr(step);
                 }
                 let bindings_base = self.bindings.len();
                 // Lua 5.5 makes for control variables read-only.
@@ -108,7 +108,7 @@ impl<'ast> Visitor<'ast> for ConstWriteChecker<'ast> {
             }
             Statement::GenericFor(generic_for) => {
                 for expr in generic_for.exprs.iter() {
-                    self.visit_expression(expr);
+                    self.visit_expr(expr);
                 }
                 let bindings_base = self.bindings.len();
                 let is_readonly = self.version.has_const_for_variables();
@@ -135,7 +135,7 @@ impl<'ast> Visitor<'ast> for ConstWriteChecker<'ast> {
             Statement::LocalAssignment(local) => {
                 if let Some(exprs) = &local.exprs {
                     for expr in exprs.iter() {
-                        self.visit_expression(expr);
+                        self.visit_expr(expr);
                     }
                 }
                 self.declare_attributed_names(&local.names, local.is_const);
@@ -144,7 +144,7 @@ impl<'ast> Visitor<'ast> for ConstWriteChecker<'ast> {
             Statement::GlobalDeclaration(global) => {
                 if let Some(exprs) = &global.exprs {
                     for expr in exprs.iter() {
-                        self.visit_expression(expr);
+                        self.visit_expr(expr);
                     }
                 }
                 self.declare_attributed_names(&global.names, false);
@@ -161,7 +161,7 @@ impl<'ast> Visitor<'ast> for ConstWriteChecker<'ast> {
             | Statement::Label(_)
             | Statement::GlobalStar(_)
             | Statement::Break(_)
-            | Statement::Error(_) => self.walk_statement(stmt),
+            | Statement::Error(_) => self.walk_stmt(stmt),
         }
     }
 

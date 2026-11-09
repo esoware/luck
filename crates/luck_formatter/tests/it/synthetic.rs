@@ -9,7 +9,9 @@ use luck_ast::{
     Block, FieldSpec, FunctionSignature, InterpolatedStringPart, Synth, SyntheticComment,
     TypeFieldAccess, TypeFieldSpec,
 };
-use luck_formatter::{Comments, FormatOptions, blocks_equivalent, format_block};
+use luck_formatter::{
+    CollapseSimpleStatement, Comments, FormatOptions, blocks_equivalent, format_block,
+};
 use luck_token::{BinOp, LuaVersion, TokenKind, UnOp, decode_string};
 
 /// Format a synthetic block and assert the output re-parses cleanly under
@@ -215,7 +217,7 @@ fn precedence_parens_roundtrip() {
 }
 
 #[test]
-fn if_expression_operand_roundtrips() {
+fn if_expr_operand_roundtrips() {
     let synth = Synth::new();
     // a or (if c then 1 else 2): unparenthesized, the if-expression's else
     // branch would swallow everything after it.
@@ -260,7 +262,7 @@ fn string_bytes_roundtrips() {
     let bytes = synth.string_bytes(&[0xff, 0x00, b'a', b'1']);
     let block = synth.block(vec![synth.local(&["blob"], vec![bytes])], None);
     let output = assert_roundtrips(&block);
-    assert!(output.contains("\\255") && output.contains("\\000"), "byte escapes missing: {output}");
+    assert!(output.contains("\\255") && output.contains("\\0a"), "byte escapes missing: {output}");
 }
 
 #[test]
@@ -627,9 +629,27 @@ fn empty_block_formats_to_parseable_output() {
 }
 
 #[test]
-fn last_statement_only_roundtrips() {
+fn last_stmt_only_roundtrips() {
     let synth = Synth::new();
     let return_stmt = synth.return_(vec![synth.number("42")]);
     let block = synth.block(vec![], Some(return_stmt));
     assert_roundtrips(&block);
+}
+
+#[test]
+fn synthetic_comment_on_a_collapsible_body_keeps_it_expanded() {
+    let synth = Synth::new();
+    let body_stmt = synth.local(&["x"], vec![synth.number("1")]);
+    let trailing = SyntheticComment::trailing(&body_stmt, "why");
+    let body = synth.block(vec![body_stmt], None);
+    let if_stmt = synth.if_(synth.name_expr("a"), body, vec![], None);
+    let block = synth.block(vec![if_stmt], None);
+    let options = FormatOptions {
+        collapse_simple_statement: CollapseSimpleStatement::ConditionalOnly,
+        ..FormatOptions::default()
+    };
+
+    let output = format_block(&block, Comments::synthetic(vec![trailing]), &options);
+
+    assert_eq!(output, "if a then\n\tlocal x = 1 -- why\nend\n");
 }

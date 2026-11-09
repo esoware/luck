@@ -1,38 +1,26 @@
 use luck_ast::Expression;
 use luck_token::BinOp;
 
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ConstantTableComparison;
 
-impl Rule for ConstantTableComparison {
-    fn name(&self) -> &'static str {
-        "constant_table_comparison"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "comparison with a table literal, which compares by identity"
-    }
-}
+impl_rule!(
+    ConstantTableComparison,
+    "constant_table_comparison",
+    Correctness,
+    Error,
+    "comparison with a table literal, which compares by identity"
+);
 
 impl NodeRule for ConstantTableComparison {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Expression::BinaryOp(binary) = expr
             && matches!(binary.op, BinOp::Eq | BinOp::Ne)
             && (matches!(&binary.left, Expression::TableConstructor(_))

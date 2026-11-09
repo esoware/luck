@@ -1,8 +1,8 @@
 use luck_ast::{LastStatement, Statement};
 use luck_token::{Span, index_to_offset};
 
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags a statement that starts on the line where the previous one ends
 /// (Luau's `SameLineStatement` lint).
@@ -13,20 +13,13 @@ use crate::rule::{LintContext, Rule, WholeRule};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MultipleStatementsPerLine;
 
-impl Rule for MultipleStatementsPerLine {
-    fn name(&self) -> &'static str {
-        "multiple_statements_per_line"
-    }
-    fn category(&self) -> Category {
-        Category::Style
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "multiple statements on the same line"
-    }
-}
+impl_rule!(
+    MultipleStatementsPerLine,
+    "multiple_statements_per_line",
+    Style,
+    Warning,
+    "multiple statements on the same line"
+);
 
 impl WholeRule for MultipleStatementsPerLine {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {

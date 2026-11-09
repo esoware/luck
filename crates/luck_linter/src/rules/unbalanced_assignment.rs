@@ -1,38 +1,26 @@
 use luck_ast::Statement;
 
 use crate::call::has_multi_value_tail;
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
+use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnbalancedAssignment;
 
-impl Rule for UnbalancedAssignment {
-    fn name(&self) -> &'static str {
-        "unbalanced_assignment"
-    }
-    fn category(&self) -> Category {
-        Category::Suspicious
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "assignment has a different number of targets and values"
-    }
-}
+impl_rule!(
+    UnbalancedAssignment,
+    "unbalanced_assignment",
+    Suspicious,
+    Warning,
+    "assignment has a different number of targets and values"
+);
 
 impl NodeRule for UnbalancedAssignment {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::LocalAssignment, NodeType::Assignment])
     }
-    fn on_statement(
-        &self,
-        stmt: &Statement,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         match stmt {
             Statement::LocalAssignment(local) => {
                 let Some(exprs) = &local.exprs else {

@@ -1,9 +1,8 @@
 use luck_semantic::{ReferenceKind, SymbolKind};
 use luck_token::Span;
 
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
-use crate::uninitialized::UninitializedLocals;
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags a value written to a local and then overwritten before anything
 /// reads it (Luacheck 311).
@@ -15,25 +14,18 @@ use crate::uninitialized::UninitializedLocals;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ValueOverwrittenBeforeRead;
 
-impl Rule for ValueOverwrittenBeforeRead {
-    fn name(&self) -> &'static str {
-        "value_overwritten_before_read"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "value assigned to a local is overwritten before it is read"
-    }
-}
+impl_rule!(
+    ValueOverwrittenBeforeRead,
+    "value_overwritten_before_read",
+    Correctness,
+    Warning,
+    "value assigned to a local is overwritten before it is read"
+);
 
 impl WholeRule for ValueOverwrittenBeforeRead {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let scope_tree = &context.semantic.scope_tree;
-        let uninitialized_locals = UninitializedLocals::collect(context.block);
+        let uninitialized_locals = context.uninitialized_locals;
         let mut findings = Vec::new();
 
         for symbol in &scope_tree.symbols {

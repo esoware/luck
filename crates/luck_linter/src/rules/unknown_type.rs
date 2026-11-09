@@ -3,39 +3,27 @@ use luck_semantic::SemanticAnalysis;
 use luck_token::{BinOp, LuaVersion, short_string_body};
 
 use crate::call::is_global_call;
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, Rule};
-use crate::suggest::levenshtein;
+use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::suggest::closest;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnknownType;
 
-impl Rule for UnknownType {
-    fn name(&self) -> &'static str {
-        "unknown_type"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-    fn description(&self) -> &'static str {
-        "`type()` or `typeof()` result compared against an unknown type name"
-    }
-}
+impl_rule!(
+    UnknownType,
+    "unknown_type",
+    Correctness,
+    Warning,
+    "`type()` or `typeof()` result compared against an unknown type name"
+);
 
 impl NodeRule for UnknownType {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expression(
-        &self,
-        expr: &Expression,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let Expression::BinaryOp(binary) = expr else {
             return;
         };
@@ -62,9 +50,9 @@ impl NodeRule for UnknownType {
         if is_roblox_typeof && case_match.is_none() {
             return;
         }
-        let suggestion = case_match.copied().or_else(|| {
-            primitives.iter().copied().find(|primitive| levenshtein(primitive, name) <= 2)
-        });
+        let suggestion = case_match
+            .copied()
+            .or_else(|| closest(name, primitives.iter().copied(), |distance, _| distance <= 2));
         let mut finding = Finding::new(
             format!("`{name}` is not a value that `{callee}` can return"),
             literal.span,
@@ -142,6 +130,14 @@ mod tests {
         let diags = run("local ok = type(x) == \"strng\"", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].help.as_deref() == Some("did you mean `string`?"), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_typo_with_the_nearest_primitive() {
+        // Within 2 of `number`, which comes first, and within 1 of `buffer`.
+        let diags = run("local ok = type(x) == \"nuffer\"", LuaVersion::Luau);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].help.as_deref() == Some("did you mean `buffer`?"), "{diags:?}");
     }
 
     #[test]

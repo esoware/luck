@@ -1061,6 +1061,7 @@ version = "0.4.0"
 dependencies = [
  "luck_ast",
  "luck_parser",
+ "luck_testgen",
  "luck_token",
 ]
 
@@ -1088,6 +1089,7 @@ dependencies = [
  "luck_core",
  "luck_lexer",
  "luck_parser",
+ "luck_testgen",
  "luck_token",
  "rustc-hash",
  "unicode-width",
@@ -1097,6 +1099,7 @@ dependencies = [
 name = "luck_lexer"
 version = "0.4.0"
 dependencies = [
+ "luck_testgen",
  "luck_token",
  "memchr",
 ]
@@ -1172,6 +1175,7 @@ version = "0.4.0"
 dependencies = [
  "luck_ast",
  "luck_lexer",
+ "luck_testgen",
  "luck_token",
  "rustc-hash",
 ]

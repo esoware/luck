@@ -1,25 +1,18 @@
 use rustc_hash::FxHashSet;
 
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::rule::{LintContext, Rule, WholeRule};
+use crate::diagnostic::Finding;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UndefinedVariable;
 
-impl Rule for UndefinedVariable {
-    fn name(&self) -> &'static str {
-        "undefined_variable"
-    }
-    fn category(&self) -> Category {
-        Category::Correctness
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-    fn description(&self) -> &'static str {
-        "use of undefined variable"
-    }
-}
+impl_rule!(
+    UndefinedVariable,
+    "undefined_variable",
+    Correctness,
+    Error,
+    "use of undefined variable"
+);
 
 impl WholeRule for UndefinedVariable {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
@@ -78,6 +71,19 @@ mod tests {
         let diags = run("print(missing)");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("`missing`"), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_names_declared_with_global() {
+        for source in [
+            "global x = 1\nprint(x)",
+            "global function f() end\nf()",
+            "global y\nprint(y)",
+            "global z <const> = 2\nprint(z)",
+        ] {
+            let diags = run_rule(&UndefinedVariable, source, LuaVersion::Lua55);
+            assert!(diags.is_empty(), "{source}: {diags:?}");
+        }
     }
 
     #[test]

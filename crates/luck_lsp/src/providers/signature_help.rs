@@ -4,7 +4,7 @@
 //! the stdlib model, and renders one signature per overload with the active
 //! signature and parameter selected from the cursor's argument position.
 
-use luck_semantic::{ResolvedCallee, StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
+use luck_semantic::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
 use luck_token::index_to_offset;
 use tower_lsp::lsp_types::{
     Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, Position,
@@ -25,10 +25,11 @@ pub(crate) fn signature_help(
     // `local f = io.open(...)`) and literal receivers (`("x"):rep(`), and
     // gives a shadowed base no help. Method params exclude `self`, matching
     // the argument count inside the parens.
-    let ResolvedCallee { name, entry } = document.semantic.resolve_callee(site.call)?;
-    let StdlibEntry::Function(function) = entry else {
+    let callee = document.semantic.resolve_callee(site.call)?;
+    let StdlibEntry::Function(function) = callee.entry() else {
         return None;
     };
+    let name = callee.name();
     let deprecated_message =
         function.deprecated.as_ref().map(|deprecation| deprecation.message.as_str());
     let signatures: Vec<SignatureInformation> = function
@@ -118,6 +119,7 @@ fn param_documentation(param: &StdlibParam) -> Option<Documentation> {
 mod tests {
     use luck_core::LuaTarget;
     use luck_token::offset_to_index;
+    use rustc_hash::FxHashSet;
 
     use super::*;
 
@@ -128,7 +130,8 @@ mod tests {
     #[test]
     fn signature_help_resolves_shaped_local_method() {
         let text = "local f = io.open('x')\nf:setvbuf('full', 512)";
-        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         // Cursor inside the second argument.
         let help =
             signature_help(&document, Position::new(1, 18)).expect("file method signature help");
@@ -140,7 +143,8 @@ mod tests {
     #[test]
     fn signature_help_marks_method_active_param_excluding_self() {
         let text = "local p = game:GetService('Players')";
-        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox);
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox, FxHashSet::default());
         let utf16_column = index_to_offset(text.find("'Players'").expect("literal") + 3);
         let help = signature_help(&document, Position::new(0, utf16_column))
             .expect("GetService signature help");
@@ -155,7 +159,8 @@ mod tests {
     #[test]
     fn signature_help_refuses_shadowed_base() {
         let text = "local string = 1\nstring.format('x')";
-        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         assert!(
             signature_help(&document, Position::new(1, 15)).is_none(),
             "shadowed base must not show stdlib signatures"
@@ -163,11 +168,12 @@ mod tests {
     }
 
     #[test]
-    fn signature_help_finds_a_call_at_statement_position() {
-        // Statement-position calls never pass through visit_expression;
+    fn signature_help_finds_a_call_at_stmt_position() {
+        // Statement-position calls never pass through visit_expr;
         // the call hook must find them.
         let text = "collectgarbage('collect')";
-        let document = DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54);
+        let document =
+            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         let help =
             signature_help(&document, Position::new(0, 16)).expect("statement-position call");
         assert!(
