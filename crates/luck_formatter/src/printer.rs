@@ -23,11 +23,13 @@ enum PrintMode {
     Expanded,
 }
 
-/// Lay out a document whose groups took `group_count` ids.
+/// Lay out a document whose groups took `group_count` ids, with `base_indent`
+/// before every line's own indentation.
 pub(crate) fn print(
     elements: &[FormatElement],
     group_count: usize,
     options: &FormatOptions,
+    base_indent: &str,
 ) -> String {
     // The width model counts a tab as one column.
     let (indent_byte, indent_width) = match options.indent_style {
@@ -38,6 +40,7 @@ pub(crate) fn print(
         line_width: usize::from(options.line_width),
         indent_byte,
         indent_width,
+        base_indent: base_indent.to_owned(),
         // Synthetic ASTs have no source, so size by element count. Four bytes
         // per element is close enough to avoid most reallocations.
         output: CodeBuffer::with_capacity(elements.len().saturating_mul(4)),
@@ -48,7 +51,7 @@ pub(crate) fn print(
         group_modes: vec![None; group_count],
         suffixes: Vec::new(),
         is_pending_space: false,
-        is_pending_indent: false,
+        is_pending_indent: !base_indent.is_empty(),
     };
     propagate_expand(elements, &mut printer.group_modes);
     printer.print_elements(elements);
@@ -86,6 +89,8 @@ struct Printer {
     /// many columns.
     indent_byte: u8,
     indent_width: usize,
+    /// Written before the indent of every line.
+    base_indent: String,
     output: CodeBuffer,
     /// Byte offset in `output` where the current line begins.
     line_start: usize,
@@ -124,7 +129,7 @@ fn propagate_expand(elements: &[FormatElement], group_modes: &mut [Option<PrintM
                     mark_expanded(&group_stack, group_modes);
                 }
             }
-            FormatElement::Text(content) => {
+            FormatElement::Text(content) | FormatElement::Verbatim(content) => {
                 if !is_in_suffix && content.contains('\n') {
                     mark_expanded(&group_stack, group_modes);
                 }
@@ -172,6 +177,7 @@ impl Printer {
         match element {
             FormatElement::Token(content) => self.emit_text(content),
             FormatElement::Text(content) => self.emit_text(content),
+            FormatElement::Verbatim(content) => self.emit_verbatim(content),
             FormatElement::Space => self.is_pending_space = true,
             FormatElement::Line(mode) => self.print_line(*mode),
             FormatElement::ExpandParent => {}
@@ -207,7 +213,8 @@ impl Printer {
                 }
                 self.modes.push(mode);
             }
-            Tag::EndGroup => {
+            Tag::StartFlat => self.modes.push(PrintMode::Flat),
+            Tag::EndGroup | Tag::EndFlat => {
                 self.modes.pop();
             }
             Tag::StartIndent => self.indent_level = self.indent_level.saturating_add(1),
@@ -310,6 +317,7 @@ impl Printer {
                 }
                 FormatElement::Token(_)
                 | FormatElement::Text(_)
+                | FormatElement::Verbatim(_)
                 | FormatElement::Space
                 | FormatElement::ExpandParent
                 | FormatElement::LineSuffixBoundary
@@ -332,7 +340,7 @@ impl Printer {
     }
 
     const fn indent_columns(&self) -> usize {
-        self.indent_level.saturating_mul(self.indent_width)
+        self.indent_level.saturating_mul(self.indent_width).saturating_add(self.base_indent.len())
     }
 
     /// Simulate flat printing of `elements` up to the end of `region`,
@@ -358,7 +366,7 @@ impl Printer {
                 FormatElement::Token(content) => {
                     used_width = used_width.saturating_add(content.width());
                 }
-                FormatElement::Text(content) => {
+                FormatElement::Text(content) | FormatElement::Verbatim(content) => {
                     if content.contains('\n') {
                         return false;
                     }
@@ -412,6 +420,16 @@ impl Printer {
         }
     }
 
+    /// Copy source text, which brings its own indentation and keeps any
+    /// trailing whitespace. Text ending in a line break leaves the next line to
+    /// the printer's indent.
+    fn emit_verbatim(&mut self, content: &str) {
+        self.is_pending_indent = false;
+        self.emit_text(content);
+        self.line_start = self.output.len();
+        self.is_pending_indent = content.ends_with(['\n', '\r']);
+    }
+
     fn emit_newline(&mut self, is_blank_line: bool) {
         self.flush_suffixes();
         self.is_pending_space = false;
@@ -440,7 +458,8 @@ impl Printer {
                 FormatElement::Space => self.is_pending_space = true,
                 // `Formatter::write_line_suffix` writes only a space and
                 // text, so nothing structural can reach a suffix body.
-                FormatElement::Line(_)
+                FormatElement::Verbatim(_)
+                | FormatElement::Line(_)
                 | FormatElement::ExpandParent
                 | FormatElement::LineSuffixBoundary
                 | FormatElement::Tag(_) => {
@@ -467,9 +486,10 @@ impl Printer {
 
     fn flush_indent(&mut self) {
         self.is_pending_indent = false;
-        let indent_columns = self.indent_columns();
-        self.output.print_ascii_repeat(self.indent_byte, indent_columns);
-        self.display_column = self.display_column.saturating_add(indent_columns);
+        self.output.print_str(&self.base_indent);
+        let indent_bytes = self.indent_level.saturating_mul(self.indent_width);
+        self.output.print_ascii_repeat(self.indent_byte, indent_bytes);
+        self.display_column = self.display_column.saturating_add(self.indent_columns());
     }
 }
 
@@ -522,9 +542,9 @@ mod tests {
             indent_width: 4,
             ..FormatOptions::default()
         };
-        let mut formatter = Formatter::new(options, Comments::none(), None);
+        let mut formatter = Formatter::new(options, Comments::none());
         build(&mut formatter);
-        formatter.print()
+        formatter.print("")
     }
 
     #[test]

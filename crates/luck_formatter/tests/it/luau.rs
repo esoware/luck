@@ -176,7 +176,7 @@ fn merged_rfc_syntax_roundtrips() {
 }
 
 #[test]
-fn bug_broken_method_type_args_keep_the_call_paren_on_the_name_line() {
+fn broken_method_type_args_keep_the_call_paren_on_the_name_line() {
     let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
     let output = format_once(
         "local x = a:b<<Aaaaaaaaaaaaaa, Bbbbbbbbbbbbbbb>>(c)\n",
@@ -191,7 +191,7 @@ fn bug_broken_method_type_args_keep_the_call_paren_on_the_name_line() {
 }
 
 #[test]
-fn bug_string_singleton_type_follows_the_quote_style() {
+fn string_singleton_type_follows_the_quote_style() {
     assert_eq!(
         format_once("type A = 'b'\n", LuaVersion::Luau, &FormatOptions::default()),
         "type A = \"b\"\n",
@@ -200,7 +200,7 @@ fn bug_string_singleton_type_follows_the_quote_style() {
 }
 
 #[test]
-fn bug_verify_accepts_dropping_a_lone_leading_separator() {
+fn verify_accepts_dropping_a_lone_leading_separator() {
     for input in ["type A = | B\n", "type A = & B\n"] {
         let result =
             luck_formatter::format_and_verify(input, LuaVersion::Luau, &FormatOptions::default());

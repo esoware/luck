@@ -53,11 +53,11 @@ impl Format for TableConstructor {
             return;
         }
 
-        let should_fill = is_fillable(self);
+        let is_magic = formatter.options().magic_trailing_comma;
         // A trailing `,` or `;` after the last field asks for the expanded
         // layout.
-        let should_force_expand =
-            formatter.options().magic_trailing_comma && self.fields.has_trailing_separator;
+        let should_force_expand = is_magic && self.fields.has_trailing_separator;
+        let should_fill = is_fillable(self) && !should_force_expand;
         let last_index = self.fields.len().saturating_sub(1);
 
         let group_id = formatter.group_id();
@@ -68,7 +68,7 @@ impl Format for TableConstructor {
                 indent(format_with(|indented| {
                     soft_line_or_space().fmt(indented);
 
-                    if should_fill && !should_force_expand {
+                    if should_fill {
                         // Every entry but the last carries its own comma, so
                         // the fill measures widths with the comma included.
                         let entries: Vec<_> = self
@@ -88,7 +88,11 @@ impl Format for TableConstructor {
                     if should_force_expand {
                         expand_parent().fmt(indented);
                     }
-                    if_group_breaks(group_id, token(",")).fmt(indented);
+                    // A trailing comma means one field per line under the
+                    // magic comma option, so a packed fill can't carry one.
+                    if !(should_fill && is_magic) {
+                        if_group_breaks(group_id, token(",")).fmt(indented);
+                    }
                 })),
                 soft_line_or_space(),
                 line_suffix_boundary(),

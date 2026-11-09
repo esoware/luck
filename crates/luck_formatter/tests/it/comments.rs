@@ -162,8 +162,8 @@ fn stalled_comment_does_not_duplicate_a_format_off_region() {
         "local x = 1; -- stalled\n-- luck: format off\nlocal  y  =  { --[[inner]] 2 }\n-- luck: format on\nlocal z = 3\n",
         "local x = 1 -- stalled\n-- luck: format off\nlocal  y  =  { --[[inner]] 2 }\n-- luck: format on\nlocal z = 3\n",
     );
-    // The stalled comment is unmovable here - `then` sits between it and the
-    // statement - so the whole `if` goes verbatim rather than relocating it.
+    // The region is at statement level inside the `if`, so it goes out as
+    // written and the header still formats.
     assert_format(
         "if first --[[ header ]] then\n-- luck: format off\nlocal  y  =  { --[[inner]] 2 }\n-- luck: format on\nend\n",
         "if first --[[ header ]] then\n-- luck: format off\nlocal  y  =  { --[[inner]] 2 }\n-- luck: format on\nend\n",
@@ -391,7 +391,7 @@ fn collapse_leaves_a_body_with_a_comment_expanded() {
         ("if a then --[[c]] i = 7 end\n", "if a then\n\t--[[c]]\n\ti = 7\nend\n"),
         (
             "function s()\nif a then\n  repeat -- c\n  until b\nend\nend\n",
-            "function s()\n\tif a then\n\t\trepeat -- c\n\t\tuntil b\n\tend\nend\n",
+            "function s()\n\tif a then\n\t\trepeat\n\t\t\t-- c\n\t\tuntil b\n\tend\nend\n",
         ),
         (
             "function s()\nif a then\n  -- luck: ignore\n  x   =   1\nend\nend\n",
@@ -460,7 +460,7 @@ fn range_of(input: &str, needle: &str) -> Range<usize> {
 }
 
 #[test]
-fn bug_comment_after_the_last_stmt_keeps_the_function_formatted() {
+fn comment_after_the_last_stmt_keeps_the_function_formatted() {
     assert_eq!(
         default_format("function f()\n  x   =   1\n  -- tail\nend\n"),
         "function f()\n\tx = 1\n\t-- tail\nend\n",
@@ -469,7 +469,7 @@ fn bug_comment_after_the_last_stmt_keeps_the_function_formatted() {
 }
 
 #[test]
-fn bug_comment_only_do_block_formats_like_an_empty_function_body() {
+fn comment_only_do_block_formats_like_an_empty_function_body() {
     assert_eq!(
         default_format("do\n      -- only\nend\n"),
         "do\n\t-- only\nend\n",
@@ -478,7 +478,7 @@ fn bug_comment_only_do_block_formats_like_an_empty_function_body() {
 }
 
 #[test]
-fn bug_comment_before_else_keeps_the_if_formatted() {
+fn comment_before_else_keeps_the_if_formatted() {
     assert_eq!(
         default_format("if a then\n  x   =   1\n  -- before else\nelse\n  y   =   2\nend\n"),
         "if a then\n\tx = 1\n\t-- before else\nelse\n\ty = 2\nend\n",
@@ -487,7 +487,7 @@ fn bug_comment_before_else_keeps_the_if_formatted() {
 }
 
 #[test]
-fn bug_blank_line_after_a_leading_comment_is_preserved() {
+fn blank_line_after_a_leading_comment_is_preserved() {
     assert_eq!(
         default_format("-- license header\n\nlocal x = 1\n"),
         "-- license header\n\nlocal x = 1\n",
@@ -496,7 +496,7 @@ fn bug_blank_line_after_a_leading_comment_is_preserved() {
 }
 
 #[test]
-fn bug_blank_line_before_a_final_comment_is_preserved() {
+fn blank_line_before_a_final_comment_is_preserved() {
     assert_eq!(
         default_format("local x = 1\n\n-- end of file\n"),
         "local x = 1\n\n-- end of file\n",
@@ -505,7 +505,7 @@ fn bug_blank_line_before_a_final_comment_is_preserved() {
 }
 
 #[test]
-fn bug_second_trailing_comment_stays_on_its_stmt_line() {
+fn second_trailing_comment_stays_on_its_stmt_line() {
     assert_eq!(
         default_format("x = 1 --[[a]] -- b\ny = 2\n"),
         "x = 1 --[[a]] -- b\ny = 2\n",
@@ -514,19 +514,19 @@ fn bug_second_trailing_comment_stays_on_its_stmt_line() {
 }
 
 #[test]
-fn bug_format_off_keeps_trailing_comment_alignment() {
+fn format_off_keeps_trailing_comment_alignment() {
     let input = "-- luck: format off\nx   = 1    -- one\nyyy = 22   -- two\n-- luck: format on\n";
     assert_eq!(default_format(input), input, "a format-off region must keep its comment columns");
 }
 
 #[test]
-fn bug_format_off_keeps_blank_line_runs() {
+fn format_off_keeps_blank_line_runs() {
     let input = "-- luck: format off\nlocal a = 1\n\n\nlocal b = 2\n-- luck: format on\n";
     assert_eq!(default_format(input), input, "a format-off region must keep its blank lines");
 }
 
 #[test]
-fn bug_format_off_keeps_stmts_sharing_a_line() {
+fn format_off_keeps_stmts_sharing_a_line() {
     let input = "-- luck: format off\nlocal a = 1; local b = 2\n-- luck: format on\n";
     assert_eq!(
         default_format(input),
@@ -536,13 +536,13 @@ fn bug_format_off_keeps_stmts_sharing_a_line() {
 }
 
 #[test]
-fn bug_format_off_inside_a_table_keeps_the_region() {
+fn format_off_inside_a_table_keeps_the_region() {
     let input = "local t = {\n\t-- luck: format off\n\t1, 0,\n\t0, 1,\n\t-- luck: format on\n}\n";
     assert_eq!(default_format(input), input, "a format-off region inside a table must stay packed");
 }
 
 #[test]
-fn bug_ignore_directive_survives_the_semicolon_guard() {
+fn ignore_directive_survives_the_semicolon_guard() {
     let first_pass = default_format("f();\n-- luck: ignore\n(g   )()\n");
     assert_eq!(
         default_format(&first_pass),
@@ -552,7 +552,7 @@ fn bug_ignore_directive_survives_the_semicolon_guard() {
 }
 
 #[test]
-fn bug_collapse_stays_idempotent_with_a_comment_in_a_list() {
+fn collapse_stays_idempotent_with_a_comment_in_a_list() {
     let options = conditional_collapse_options();
     let first_pass = format_once("if a then b(1, --[[c]] 2) end\n", LuaVersion::Lua54, &options);
     assert_eq!(
@@ -563,7 +563,7 @@ fn bug_collapse_stays_idempotent_with_a_comment_in_a_list() {
 }
 
 #[test]
-fn bug_collapse_leaves_a_multi_line_body_expanded() {
+fn collapse_leaves_a_multi_line_body_expanded() {
     assert_eq!(
         format_once(
             "if a then\n  do x() end\nend\n",
@@ -576,7 +576,7 @@ fn bug_collapse_leaves_a_multi_line_body_expanded() {
 }
 
 #[test]
-fn bug_collapse_leaves_a_too_long_if_expanded() {
+fn collapse_leaves_a_too_long_if_expanded() {
     let options = FormatOptions { line_width: 30, ..conditional_collapse_options() };
     assert_eq!(
         format_once(
@@ -590,7 +590,7 @@ fn bug_collapse_leaves_a_too_long_if_expanded() {
 }
 
 #[test]
-fn bug_format_range_keeps_blank_line_runs_outside_the_selection() {
+fn format_range_keeps_blank_line_runs_outside_the_selection() {
     let input = "local a = 1\n\n\nlocal   b   =   2\n";
     let result = luck_formatter::format_range(
         input,
@@ -605,7 +605,7 @@ fn bug_format_range_keeps_blank_line_runs_outside_the_selection() {
 }
 
 #[test]
-fn bug_format_range_keeps_indentation_outside_the_selection() {
+fn format_range_keeps_indentation_outside_the_selection() {
     let input = "function f()\n  local a=1\n  local   b=2\nend\n";
     let result = luck_formatter::format_range(
         input,
@@ -621,7 +621,7 @@ fn bug_format_range_keeps_indentation_outside_the_selection() {
 }
 
 #[test]
-fn bug_format_range_keeps_crlf_outside_the_selection() {
+fn format_range_keeps_crlf_outside_the_selection() {
     let input = "local   a   =   1\r\nlocal   b   =   2\r\n";
     let result = luck_formatter::format_range(
         input,
@@ -637,7 +637,7 @@ fn bug_format_range_keeps_crlf_outside_the_selection() {
 }
 
 #[test]
-fn bug_ignored_multi_line_stmt_keeps_its_lines_aligned() {
+fn ignored_multi_line_stmt_keeps_its_lines_aligned() {
     let output = default_format("do\n    -- luck: ignore\n    local   t = {\n    }\nend\n");
     let indent_of = |needle: &str| {
         output
@@ -654,7 +654,7 @@ fn bug_ignored_multi_line_stmt_keeps_its_lines_aligned() {
 }
 
 #[test]
-fn bug_unix_line_endings_normalize_a_block_comment() {
+fn unix_line_endings_normalize_a_block_comment() {
     assert_eq!(
         default_format("--[[a\r\nb]]\r\nlocal x\r\n"),
         "--[[a\nb]]\nlocal x\n",

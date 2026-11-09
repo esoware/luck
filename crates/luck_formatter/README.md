@@ -9,12 +9,12 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 ## Key features
 
 - **Formats ASTs directly.** `format_block` formats an AST with no source text required, so ASTs built in code, and their synthetic comments, format the same as parsed source.
-- **Comment preservation.** Comments before, after, and between statements lay out normally. Table constructors and call argument lists claim the comments written between their items: the list breaks one item per line, and each comment keeps the line it was on. A single-line block comment between a statement's condition and its `then` or `do` prints where it was written. Each construct claims only the comments inside its own span, so none is dragged across an opening delimiter. When an interior comment still has no safe place, the smallest statement around it is kept verbatim instead of moving the comment. Its lines are re-indented to its block and a run of blank lines collapses to one, but nothing else changes, and the inside of a long string or long comment stays exactly as written. `-- luck: format off` and `-- luck: format on` turn formatting off for a region, and `-- luck: ignore` (or `-- luck: format ignore`) keeps the next statement as written. A directive's last word must end at a word boundary, so `-- luck: format offset` is not one.
+- **Comment preservation.** Comments before, after, and between statements lay out normally. Table constructors and call argument lists claim the comments written between their items: the list breaks one item per line, and each comment keeps the line it was on. A single-line block comment between a statement's condition and its `then` or `do` prints where it was written. Each construct claims only the comments inside its own span, so none is dragged across an opening delimiter. A comment after a block's last statement, or alone in an empty block, stays in that block, and blank lines around comments are kept. When an interior comment still has no safe place, the smallest statement around it is kept verbatim instead of moving the comment. Its lines are re-indented to its block and a run of blank lines collapses to one, but nothing else changes, and the inside of a long string or long comment stays exactly as written. `-- luck: format off` and `-- luck: format on` copy the region between them byte for byte, directive lines included, and a region that doesn't line up with a block's statements keeps the whole statement around it verbatim. `-- luck: ignore` (or `-- luck: format ignore`) keeps the next statement's layout and line breaks, re-indented to its block. A directive's last word must end at a word boundary, so `-- luck: format offset` is not one.
 - **Hug patterns.** A single function or table argument inside a call stays inline rather than forcing the outer group to expand. Multi-argument calls use a uniform expanded list when needed, including calls ending in a callback or table. StyLua byte-for-byte compatibility isn't a goal.
 - **Access chain breaking.** A long method chain (`foo:bar():baz()`) breaks before each `:` call, with the continuation lines indented.
 - **Condition breaking.** `if`, `elseif`, `while`, and `until` conditions lose redundant outer parentheses, and a long `if`, `elseif`, or `while` condition breaks onto its own indented line before `then` or `do`.
 - **Fill mode.** A table of positional literals and variables packs entries greedily onto lines instead of one per line.
-- **Range formatting.** `format_range` formats only the statements overlapping a byte range and emits the rest verbatim. This is what an editor's "format selection" calls.
+- **Range formatting.** `format_range` formats only the statements overlapping a byte range, or those of the innermost nested block holding the whole range, and copies every other byte as it was, line endings included. This is what an editor's "format selection" calls.
 - **Verified formatting.** `format_and_verify` checks re-parsing, AST equivalence (string literals compare by the bytes they decode to in the target dialect), comment text (normalizing line endings and trailing whitespace), comment position among the tokens both texts keep, and second-pass idempotency. It aligns the two token streams, skipping a paren only one side has, up to the first other mismatch, such as a leading `|` the formatter adds to or drops from a Luau union. Past that point, comments are checked by text and order only. It isn't a target VM compiler or a proof of runtime equivalence.
 - **Luau type annotations.** Luau type syntax formats from the `Type` AST, with group-based line breaking.
 
@@ -40,12 +40,12 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 | `quote_style` | `QuoteStyle` | `Double` | Double, Single, AutoPreferDouble, or AutoPreferSingle (the auto styles switch quotes when that needs fewer escapes) |
 | `hexadecimal_case` | `HexCase` | `Preserve` | Case of hex digits `A`-`F`: Preserve, Lower, or Upper. The `0x`/`0b` prefix and exponent markers are always lowercased |
 | `call_parentheses` | `CallParentheses` | `Always` | Always, NoSingleString, NoSingleTable, None (single string or table), or Input (preserve source) |
-| `collapse_simple_statement` | `CollapseSimpleStatement` | `Never` | Never, FunctionOnly, ConditionalOnly, or Always. Function bodies never collapse, so FunctionOnly acts like Never and Always like ConditionalOnly. An `if` whose body has a comment that couldn't keep its place on one line stays expanded |
+| `collapse_simple_statement` | `CollapseSimpleStatement` | `Never` | Never, FunctionOnly, ConditionalOnly, or Always. Function bodies never collapse, so FunctionOnly acts like Never and Always like ConditionalOnly. An `if` that doesn't fit on one line, or whose body spans lines or has a comment that couldn't keep its place on one line, stays expanded |
 | `line_endings` | `LineEndings` | `Unix` | Unix (LF) or Windows (CRLF) |
 | `block_newline_gaps` | `BlockNewlineGaps` | `Never` | Never (strip) or Preserve blank lines at block start/end |
 | `space_after_function_names` | `SpaceAfterFunction` | `Never` | Never, Definitions, Calls, or Always, for a space before a definition's parameter list, a call's `(`, or both |
-| `sort_requires` | `bool` | `false` | Sort runs of `local x = require(...)` and `GetService(...)` statements by name (source-level pre-pass) |
-| `magic_trailing_comma` | `bool` | `false` | A trailing comma forces the table to break one field per line (argument lists can't carry one) |
+| `sort_requires` | `bool` | `false` | Sort runs of `local x = require(...)` and `GetService(...)` statements by name, leaving alone any run whose reordering can't be proven safe |
+| `magic_trailing_comma` | `bool` | `false` | A trailing comma forces the table to break one field per line, and a packed table of positional values never gains one (argument lists can't carry one) |
 
 ### Module layout
 
@@ -67,6 +67,6 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 | `quotes.rs` | Quote style normalization |
 | `numbers.rs` | Numeric-literal normalization |
 | `tokens.rs` | Token-to-IR text emission |
-| `sort_requires.rs` | `require` statement sorting (source-level pre-pass) |
+| `sort_requires.rs` | `require` statement sorting, over the lines of formatted text |
 | `ast_equivalence.rs` | AST-equality verifier backing `format_and_verify`, with its comparisons in `ast_equivalence/` split by node family as `luck_ast` is: `stmt.rs`, `expr.rs`, `function.rs`, and `types.rs` |
 | `verify.rs` | `format_and_verify`: the re-parse, AST, comment-placement, and idempotency checks |

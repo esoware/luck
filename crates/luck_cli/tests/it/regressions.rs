@@ -410,7 +410,7 @@ fn bug_fmt_applies_a_path_scoped_editorconfig_section_from_a_subdirectory() {
 }
 
 #[test]
-fn bug_fmt_range_leaves_crlf_outside_the_range_verbatim() {
+fn fmt_range_leaves_crlf_outside_the_range_verbatim() {
     let directory = TempDir::new().unwrap();
     let path = write_file(directory.path(), "main.lua", "local    a=1\r\nlocal    b=2\r\n");
 

@@ -14,7 +14,7 @@ use luck_ast::{
 
 use crate::CollapseSimpleStatement;
 use crate::comments::write_inline_comments_after;
-use crate::format_block::first_item_span;
+use crate::format_block::{IndentedBlock, first_item_span};
 use crate::ir::{
     Format, Formatter, format_with, group, hard_line, indent, line_suffix_boundary, separated,
     soft_line_or_space, space, token,
@@ -73,7 +73,7 @@ where
 }
 
 fn indented_body_then_end(block: &Block) -> impl Format {
-    (indent((hard_line(), block)), hard_line(), line_suffix_boundary(), token("end"))
+    (IndentedBlock(block), hard_line(), line_suffix_boundary(), token("end"))
 }
 
 impl Format for Statement {
@@ -219,7 +219,7 @@ impl Format for RepeatLoop {
         // `until <cond>` closes the loop, so no `end` and no line-suffix flush.
         (
             token("repeat"),
-            indent((hard_line(), &self.block)),
+            IndentedBlock(&self.block),
             hard_line(),
             token("until"),
             space(),
@@ -231,9 +231,9 @@ impl Format for RepeatLoop {
 
 impl Format for IfStatement {
     fn fmt(&self, formatter: &mut Formatter) {
-        // Collapses to `if cond then stmt end` when the option allows and
-        // there's one branch holding one statement that no comment around it
-        // would stop from sharing the line.
+        // Collapses to `if cond then stmt end` when the option allows, there's
+        // one branch holding one statement that no comment around it would
+        // stop from sharing the line, and the whole `if` fits on one line.
         let can_collapse = matches!(
             formatter.options().collapse_simple_statement,
             CollapseSimpleStatement::ConditionalOnly | CollapseSimpleStatement::Always
@@ -248,39 +248,34 @@ impl Format for IfStatement {
                 )
             });
 
-        if can_collapse {
-            group((
-                token("if"),
-                space(),
+        // `if cond then` is a group so a long condition can break onto its
+        // own indented line before `then`.
+        let header = group((
+            token("if"),
+            indent((
+                soft_line_or_space(),
                 Condition(&self.condition),
                 header_comments(&self.condition),
-                space(),
-                token("then"),
-                space(),
-                &self.block,
-                space(),
+            )),
+            soft_line_or_space(),
+            token("then"),
+        ));
+
+        if can_collapse {
+            // The group stays flat only if the whole `if` fits, and a body
+            // spanning lines forces it to break.
+            group((
+                &header,
+                indent((soft_line_or_space(), &self.block)),
+                soft_line_or_space(),
+                line_suffix_boundary(),
                 token("end"),
             ))
             .fmt(formatter);
             return;
         }
 
-        // `if cond then` is a group so a long condition can break onto its
-        // own indented line before `then`.
-        (
-            group((
-                token("if"),
-                indent((
-                    soft_line_or_space(),
-                    Condition(&self.condition),
-                    header_comments(&self.condition),
-                )),
-                soft_line_or_space(),
-                token("then"),
-            )),
-            indent((hard_line(), &self.block)),
-        )
-            .fmt(formatter);
+        (&header, IndentedBlock(&self.block)).fmt(formatter);
 
         for clause in &self.elseif_clauses {
             (
@@ -295,13 +290,13 @@ impl Format for IfStatement {
                     soft_line_or_space(),
                     token("then"),
                 )),
-                indent((hard_line(), &clause.block)),
+                IndentedBlock(&clause.block),
             )
                 .fmt(formatter);
         }
 
         if let Some(else_clause) = &self.else_clause {
-            (hard_line(), token("else"), indent((hard_line(), &else_clause.block))).fmt(formatter);
+            (hard_line(), token("else"), IndentedBlock(&else_clause.block)).fmt(formatter);
         }
 
         (hard_line(), line_suffix_boundary(), token("end")).fmt(formatter);

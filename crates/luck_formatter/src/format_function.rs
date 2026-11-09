@@ -6,10 +6,11 @@ use luck_ast::{
 };
 use luck_token::Token;
 
-use crate::comments::{ListSeparator, write_commented_list, write_dangling_comments};
+use crate::comments::{ListSeparator, write_commented_list};
+use crate::format_block::IndentedBlock;
 use crate::format_type::ExplicitTypeArgs;
 use crate::ir::{
-    Format, Formatter, format_with, group, hard_line, indent, separated, soft_line,
+    Format, Formatter, flat, format_with, group, hard_line, indent, separated, soft_line,
     soft_line_or_space, space, token,
 };
 use crate::quotes::normalize_quote;
@@ -29,20 +30,7 @@ impl Format for FunctionBody {
             (token(":"), space(), return_type).fmt(formatter);
         }
 
-        if self.block.stmts.is_empty() && self.block.last_stmt.is_none() {
-            let anchor = self.block.span.start;
-            let end = self.end_keyword_span().start;
-            if formatter.comments().has_dangling_comments(anchor, end) {
-                // Comments in an otherwise empty body stay indented inside it.
-                indent(format_with(move |indented| {
-                    hard_line().fmt(indented);
-                    write_dangling_comments(indented, anchor, end);
-                }))
-                .fmt(formatter);
-            }
-        } else {
-            indent((hard_line(), &self.block)).fmt(formatter);
-        }
+        IndentedBlock(&self.block).fmt(formatter);
         // Even an empty body puts `end` on its own line.
         (hard_line(), token("end")).fmt(formatter);
     }
@@ -128,10 +116,15 @@ struct ChainSegment<'chain> {
 
 impl Format for ChainSegment<'_> {
     fn fmt(&self, formatter: &mut Formatter) {
+        let type_args = self.explicit_type_args.map(ExplicitTypeArgs);
         if let Some(name) = self.accessor {
             (token(":"), name).fmt(formatter);
+            // Luau rejects a method call whose `(` is on a later line than
+            // its name.
+            flat(type_args).fmt(formatter);
+        } else {
+            type_args.fmt(formatter);
         }
-        self.explicit_type_args.map(ExplicitTypeArgs).fmt(formatter);
         self.args.fmt(formatter);
     }
 }

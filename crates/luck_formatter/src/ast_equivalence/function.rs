@@ -46,6 +46,12 @@ pub(super) fn function_body_eq(
         right.vararg.as_deref(),
         "vararg presence differs",
         |lhs, rhs| {
+            presence_eq(
+                lhs.name.as_ref(),
+                rhs.name.as_ref(),
+                "vararg name presence differs",
+                |left_name, right_name| at("vararg/name", token_text_eq(left_name, right_name)),
+            )?;
             at(
                 "vararg/type_annotation",
                 type_annotation_eq(

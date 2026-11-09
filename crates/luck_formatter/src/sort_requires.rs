@@ -1,18 +1,30 @@
 //! Sorts runs of `local NAME = require(...)` and
 //! `local NAME = X:GetService(...)` statements by binding name.
 //!
-//! Works on source lines instead of the AST, so comments and trivia on a line
-//! move with it. A run is two or more sortable statements on consecutive
-//! lines, outside any `-- luck: format off` region. A blank line, a comment
-//! line, or any other statement but `;` ends it.
+//! Works on the source lines of formatted text instead of the AST, so
+//! comments and trivia on a line move with it. A run is two or more sortable
+//! statements on consecutive lines, outside any `-- luck: format off` region.
+//! A statement is sortable only if its lines hold nothing that can't move with
+//! it. A blank line, a comment between two statements, a statement under
+//! `luck: ignore`, a `<close>` binding, or any other statement ends a run, and
+//! a run whose members read each other's bindings stays as written.
+//!
+//! [`crate::format`] only ever runs this on formatted text, so every line
+//! ends in a line break and no `;` stands between two statements.
 
 use core::mem;
 use core::ops::Range;
 
-use luck_ast::{Block, Expression, FunctionArgs, LocalAssignment, Punctuated, Statement, Var};
-use luck_token::{Comment, LuaVersion, Span, index_to_offset, line_breaks, offset_to_index};
+use luck_ast::{
+    Block, Expression, FunctionArgs, FunctionCall, LocalAssignment, Punctuated, Statement, Var,
+};
+use luck_token::{
+    Comment, CommentKind, CommentPosition, LuaVersion, Span, has_line_break, index_to_offset,
+    line_breaks, offset_to_index,
+};
 
-use crate::directive::format_off_regions;
+use crate::comments::{is_code_free, own_line_start};
+use crate::directive::{Directive, format_off_regions};
 use crate::format_block::has_blank_line;
 
 struct SortableLine<'source> {
@@ -23,6 +35,8 @@ struct SortableLine<'source> {
     text: &'source str,
     /// The binding name, used as the sort key.
     key: &'source str,
+    /// The name the value reads: `require`, or the `GetService` receiver.
+    callee: &'source str,
 }
 
 /// `source` with every run sorted, or `None` when there's no run to sort.
@@ -36,6 +50,7 @@ pub(crate) fn sort_requires_in_source(
     let mut collector = RunCollector {
         source,
         version,
+        comments,
         disabled_ranges: format_off_regions(comments, source)
             .into_iter()
             .map(|(off, on)| off.start..on.map_or(source_end, |close| close.end))
@@ -81,6 +96,7 @@ pub(crate) fn sort_requires_in_source(
 struct RunCollector<'source> {
     source: &'source str,
     version: LuaVersion,
+    comments: &'source [Comment],
     disabled_ranges: Vec<Range<u32>>,
     runs: Vec<Vec<SortableLine<'source>>>,
 }
@@ -107,19 +123,24 @@ impl<'source> RunCollector<'source> {
                 .iter()
                 .any(|range| stmt_start < range.end && stmt_end > range.start);
 
-            if is_blank_break || is_disabled {
+            let comments_above = self.comments_above(stmt_start);
+            let has_comment_since_last_line = current_lines.last().is_some_and(|last_line| {
+                comments_above
+                    .iter()
+                    .any(|comment| offset_to_index(comment.span.start) >= last_line.range.end)
+            });
+
+            if is_blank_break || is_disabled || has_comment_since_last_line {
                 self.flush_run(&mut current_lines);
             }
 
-            // The formatter drops `;` in this same pass, so ending the run
-            // here would leave the sort to the second pass and break
-            // idempotency.
-            if matches!(stmt, Statement::EmptyStatement(_)) {
-                previous_end = Some(stmt_end);
-                continue;
-            }
-
-            if let Some(line) = sortable_line(self.source, stmt, self.version) {
+            let is_ignored = comments_above.iter().any(|comment| {
+                comment.position == CommentPosition::Leading
+                    && Directive::parse(comment.span.text(self.source)) == Some(Directive::Ignore)
+            });
+            if !is_ignored
+                && let Some(line) = sortable_line(self.source, self.comments, stmt, self.version)
+            {
                 if !is_disabled {
                     current_lines.push(line);
                 }
@@ -135,20 +156,31 @@ impl<'source> RunCollector<'source> {
         self.flush_run(&mut current_lines);
     }
 
-    /// Keeps `lines` as a run when it has two or more lines, then
-    /// empties it.
-    ///
-    /// Requires that share a line get the same line range, and sorting would
-    /// emit that line once per member, so such a run isn't kept.
+    /// Keeps `lines` as a run when it has two or more lines and sorting can't
+    /// change what they read, then empties it.
     fn flush_run(&mut self, lines: &mut Vec<SortableLine<'source>>) {
-        let has_shared_line = lines
-            .windows(2)
-            .any(|pair| matches!(pair, [left, right] if right.range.start < left.range.end));
-        if lines.len() >= 2 && !has_shared_line {
+        let has_dependency =
+            lines.iter().any(|line| lines.iter().any(|other| other.key == line.callee));
+        if lines.len() >= 2 && !has_dependency {
             self.runs.push(mem::take(lines));
         } else {
             lines.clear();
         }
+    }
+
+    /// The comments right above `stmt_start`, those only whitespace and `;`
+    /// separate from it, nearest last.
+    fn comments_above(&self, stmt_start: u32) -> &'source [Comment] {
+        let end = self.comments.partition_point(|comment| comment.span.start < stmt_start);
+        let mut first = end;
+        let mut next_start = stmt_start;
+        while let Some(comment) = first.checked_sub(1).and_then(|index| self.comments.get(index))
+            && is_code_free(Span::new(comment.span.end, next_start).text(self.source))
+        {
+            first = first.saturating_sub(1);
+            next_start = comment.span.start;
+        }
+        self.comments.get(first..end).unwrap_or_default()
     }
 
     fn collect_nested_blocks(&mut self, stmt: &Statement) {
@@ -210,9 +242,10 @@ impl<'source> RunCollector<'source> {
 }
 
 /// Matches a `local` with one name bound to one require or `GetService` call,
-/// in any dialect.
+/// in any dialect, whose whole lines can move as a unit.
 fn sortable_line<'source>(
     source: &'source str,
+    comments: &[Comment],
     stmt: &Statement,
     version: LuaVersion,
 ) -> Option<SortableLine<'source>> {
@@ -225,16 +258,17 @@ fn sortable_line<'source>(
     if exprs.len() != 1 {
         return None;
     }
-    let value = exprs.first()?;
-    if !is_pure_require_call(source, value) {
-        return None;
-    }
+    let callee = pure_require_callee(source, exprs.first()?)?;
 
-    let range = line_range(source, local.span, version);
+    let start = offset_to_index(own_line_start(source, local.span.start)?);
+    let end = movable_line_end(source, comments, local.span.end, version)?;
+    let range = start..end;
     let text = source.get(range.clone())?;
-    Some(SortableLine { range, text, key })
+    Some(SortableLine { range, text, key, callee })
 }
 
+/// The one name `local` binds, unless it's a `<close>` binding, whose
+/// declaration order sets the order things close in.
 fn single_binding_name<'source>(
     source: &'source str,
     local: &LocalAssignment,
@@ -242,40 +276,39 @@ fn single_binding_name<'source>(
     if local.names.len() != 1 {
         return None;
     }
-    Some(local.names.first()?.name.span.text(source))
+    let binding = local.names.first()?;
+    if binding
+        .attribute
+        .as_deref()
+        .is_some_and(|attribute| attribute.name.span.text(source) == "close")
+    {
+        return None;
+    }
+    Some(binding.name.span.text(source))
 }
 
-/// Matches `require(STRING)` and `NAME:GetService(STRING)`, with or without
-/// the parentheses.
+/// The name read by `require(STRING)` or `NAME:GetService(STRING)`, with or
+/// without the parentheses.
 ///
 /// Anything else, such as `require("a")()`, may have side effects that
 /// sorting would reorder.
-fn is_pure_require_call(source: &str, expr: &Expression) -> bool {
+fn pure_require_callee<'source>(source: &'source str, expr: &Expression) -> Option<&'source str> {
     let Expression::FunctionCall(call) = expr else {
-        return false;
+        return None;
     };
-
-    if matches!(call.callee, Expression::FunctionCall(_)) {
-        return false;
+    let FunctionCall { callee: Expression::Var(Var::Name(callee)), method, args, .. } = &**call
+    else {
+        return None;
+    };
+    if !is_single_string_arg(args) {
+        return None;
     }
 
-    if !is_single_string_arg(&call.args) {
-        return false;
-    }
-
-    if call.method.is_none()
-        && let Expression::Var(Var::Name(token)) = &call.callee
-    {
-        return token.span.text(source) == "require";
-    }
-
-    if let Some(method_name) = &call.method
-        && let Expression::Var(Var::Name(_)) = &call.callee
-    {
-        return method_name.span.text(source) == "GetService";
-    }
-
-    false
+    let is_pure = method.as_ref().map_or_else(
+        || callee.span.text(source) == "require",
+        |method_name| method_name.span.text(source) == "GetService",
+    );
+    is_pure.then(|| callee.span.text(source))
 }
 
 fn is_single_string_arg(call_args: &FunctionArgs) -> bool {
@@ -288,19 +321,33 @@ fn is_single_string_arg(call_args: &FunctionArgs) -> bool {
     }
 }
 
-/// Widens `stmt_span` to the whole source lines it occupies, including the
-/// trailing newline.
-fn line_range(source: &str, stmt_span: Span, version: LuaVersion) -> Range<usize> {
-    let line_start = line_breaks(Span::new(0, stmt_span.start).text(source), version)
-        .last()
-        .map_or(0, |line_break| line_break.end);
+/// The end of the line `stmt_end` is on, through its line break, when all
+/// that follows the statement there can move with it: whitespace, `;`, and
+/// comments that stay on the line.
+fn movable_line_end(
+    source: &str,
+    comments: &[Comment],
+    stmt_end: u32,
+    version: LuaVersion,
+) -> Option<usize> {
+    let first_index = comments.partition_point(|comment| comment.span.start < stmt_end);
+    let mut cursor = stmt_end;
+    for comment in comments.get(first_index..)? {
+        let gap = Span::new(cursor, comment.span.start).text(source);
+        if has_line_break(gap, version) {
+            break;
+        }
+        if !is_code_free(gap) || comment.kind == CommentKind::MultiLineBlock {
+            return None;
+        }
+        cursor = comment.span.end;
+    }
 
-    let stmt_end = offset_to_index(stmt_span.end);
-    let following = source.get(stmt_end..).unwrap_or_default();
-    let remainder_length =
-        line_breaks(following, version).next().map_or(following.len(), |line_break| line_break.end);
-
-    line_start..stmt_end.saturating_add(remainder_length)
+    let cursor_index = offset_to_index(cursor);
+    let rest = source.get(cursor_index..)?;
+    let line_length =
+        line_breaks(rest, version).next().map_or(rest.len(), |line_break| line_break.end);
+    is_code_free(rest.get(..line_length)?).then(|| cursor_index.saturating_add(line_length))
 }
 
 #[cfg(test)]

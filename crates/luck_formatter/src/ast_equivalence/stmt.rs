@@ -1,9 +1,9 @@
 use core::ops::ControlFlow::{self, Continue};
 
 use luck_ast::{
-    Assignment, AttributedName, Block, CompoundAssignment, ElseIfClause, FunctionDecl, GenericFor,
-    GlobalDeclaration, IfStatement, LastStatement, LocalAssignment, LocalFunction, NumericFor,
-    Statement, TypeDeclaration, TypeDeclarationValue,
+    Assignment, AttributedName, Block, CompoundAssignment, ElseIfClause, Expression, FunctionDecl,
+    GenericFor, GlobalDeclaration, IfStatement, LastStatement, LocalAssignment, LocalFunction,
+    NumericFor, Statement, TypeDeclaration, TypeDeclarationValue,
 };
 use luck_token::LuaVersion;
 
@@ -49,12 +49,12 @@ fn stmt_eq(left: &Statement, right: &Statement, version: LuaVersion) -> ControlF
             at("DoBlock", block_eq(&lhs.block, &rhs.block, version))
         }
         (Statement::WhileLoop(lhs), Statement::WhileLoop(rhs)) => {
-            at("WhileLoop/condition", expr_eq(&lhs.condition, &rhs.condition, version))?;
+            at("WhileLoop/condition", condition_eq(&lhs.condition, &rhs.condition, version))?;
             at("WhileLoop/block", block_eq(&lhs.block, &rhs.block, version))
         }
         (Statement::RepeatLoop(lhs), Statement::RepeatLoop(rhs)) => {
             at("RepeatLoop/block", block_eq(&lhs.block, &rhs.block, version))?;
-            at("RepeatLoop/condition", expr_eq(&lhs.condition, &rhs.condition, version))
+            at("RepeatLoop/condition", condition_eq(&lhs.condition, &rhs.condition, version))
         }
         (Statement::IfStatement(lhs), Statement::IfStatement(rhs)) => if_stmt_eq(lhs, rhs, version),
         (Statement::NumericFor(lhs), Statement::NumericFor(rhs)) => {
@@ -76,8 +76,18 @@ fn stmt_eq(left: &Statement, right: &Statement, version: LuaVersion) -> ControlF
         (Statement::LocalAssignment(lhs), Statement::LocalAssignment(rhs)) => {
             local_assignment_eq(lhs, rhs, version)
         }
+        (Statement::GlobalStar(lhs), Statement::GlobalStar(rhs)) => presence_eq(
+            lhs.attribute.as_ref(),
+            rhs.attribute.as_ref(),
+            "`GlobalStar` attribute presence differs",
+            |left_attribute, right_attribute| {
+                at(
+                    "GlobalStar/attribute",
+                    token_text_eq(&left_attribute.name, &right_attribute.name),
+                )
+            },
+        ),
         (Statement::EmptyStatement(_), Statement::EmptyStatement(_))
-        | (Statement::GlobalStar(_), Statement::GlobalStar(_))
         | (Statement::Break(_), Statement::Break(_))
         | (Statement::Error(_), Statement::Error(_)) => Continue(()),
         (Statement::Goto(lhs), Statement::Goto(rhs)) => {
@@ -126,6 +136,24 @@ fn stmt_eq(left: &Statement, right: &Statement, version: LuaVersion) -> ControlF
     }
 }
 
+/// A condition reads one truth value, so its parens are redundant whatever
+/// they hold, and the formatter drops them.
+fn condition_eq(
+    left: &Expression,
+    right: &Expression,
+    version: LuaVersion,
+) -> ControlFlow<AstDiff> {
+    expr_eq(unwrap_parens(left), unwrap_parens(right), version)
+}
+
+fn unwrap_parens(expr: &Expression) -> &Expression {
+    let mut current = expr;
+    while let Expression::Parenthesized(parenthesized) = current {
+        current = &parenthesized.expr;
+    }
+    current
+}
+
 fn assignment_eq(
     left: &Assignment,
     right: &Assignment,
@@ -140,6 +168,7 @@ fn compound_assignment_eq(
     right: &CompoundAssignment,
     version: LuaVersion,
 ) -> ControlFlow<AstDiff> {
+    require(left.op == right.op, "compound operator differs")?;
     at("CompoundAssignment/var", var_eq(&left.var, &right.var, version))?;
     at("CompoundAssignment/expr", expr_eq(&left.expr, &right.expr, version))
 }
@@ -149,11 +178,11 @@ fn if_stmt_eq(
     right: &IfStatement,
     version: LuaVersion,
 ) -> ControlFlow<AstDiff> {
-    at("IfStatement/condition", expr_eq(&left.condition, &right.condition, version))?;
+    at("IfStatement/condition", condition_eq(&left.condition, &right.condition, version))?;
     at("IfStatement/block", block_eq(&left.block, &right.block, version))?;
     require(left.elseif_clauses.len() == right.elseif_clauses.len(), "`elseif` count differs")?;
     let clause_eq = |lhs: &ElseIfClause, rhs: &ElseIfClause| {
-        at("condition", expr_eq(&lhs.condition, &rhs.condition, version))?;
+        at("condition", condition_eq(&lhs.condition, &rhs.condition, version))?;
         at("block", block_eq(&lhs.block, &rhs.block, version))
     };
     let clauses = left.elseif_clauses.iter().zip(&right.elseif_clauses);
@@ -271,6 +300,7 @@ fn type_declaration_eq(
     right: &TypeDeclaration,
     version: LuaVersion,
 ) -> ControlFlow<AstDiff> {
+    require(left.is_exported == right.is_exported, "`TypeDeclaration` export differs")?;
     at("TypeDeclaration/name", token_text_eq(&left.name, &right.name))?;
     at(
         "TypeDeclaration/generics",

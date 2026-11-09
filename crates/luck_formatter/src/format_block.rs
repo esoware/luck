@@ -4,28 +4,37 @@
 //! For each statement the loop flushes the comments stalled before it, emits
 //! its leading comments (noting a `luck: ignore`), adds the `;` guard before a
 //! leading `(`, and emits the statement and then its trailing comments. A
-//! statement under `luck: ignore`, in a `format off` region, or outside the
-//! format range goes out verbatim. One with an interior comment no emitter
-//! claimed falls back to its own source, re-indented.
+//! `format off` region goes out byte for byte as one verbatim item, and a
+//! statement under `luck: ignore` keeps its layout, re-indented to its block.
+//! A statement with an interior comment no emitter claimed falls back to its
+//! own source, re-indented.
 
-use core::iter;
+use core::iter::{self, Peekable};
 use core::ops::Range;
 
-use luck_ast::{Block, LastStatement, Statement, stmt_starts_with_paren};
+use luck_ast::{Block, LastStatement, Statement, Visitor, stmt_starts_with_paren};
 use luck_token::{
     CompactString, LuaVersion, Span, is_lua_whitespace, line_breaks, offset_to_index,
     strip_line_break,
 };
 
-use crate::BlockNewlineGaps;
-use crate::comments::{write_leading_comments, write_stalled_comments, write_trailing_comments};
-use crate::ir::{Format, Formatter, empty_line, hard_line, token};
+use crate::comments::{
+    is_code_free_byte, own_line_start, write_dangling_comments, write_leading_comments,
+    write_stalled_comments, write_tail_comments, write_trailing_comments,
+};
+use crate::ir::{Format, Formatter, empty_line, hard_line, indent, token};
+use crate::{BlockNewlineGaps, Comments, FormatOptions};
 
-/// A statement the block loop prints.
+/// What the block loop prints.
 #[derive(Debug, Clone, Copy)]
 enum BlockItem<'block> {
     Stmt(&'block Statement),
     Last(&'block LastStatement),
+    /// A stretch of source under `format off`, copied as written.
+    Verbatim {
+        span: Span,
+        starts_with_paren: bool,
+    },
 }
 
 impl BlockItem<'_> {
@@ -33,6 +42,7 @@ impl BlockItem<'_> {
         match self {
             Self::Stmt(stmt) => stmt.span(),
             Self::Last(last_stmt) => last_stmt.span(),
+            Self::Verbatim { span, .. } => span,
         }
     }
 
@@ -50,7 +60,7 @@ impl BlockItem<'_> {
                     | Statement::GlobalFunction(_)
                     | Statement::TypeDeclaration(_)
             ),
-            Self::Last(_) => false,
+            Self::Last(_) | Self::Verbatim { .. } => false,
         }
     }
 
@@ -58,6 +68,7 @@ impl BlockItem<'_> {
         match self {
             Self::Stmt(stmt) => stmt_starts_with_paren(stmt),
             Self::Last(_) => false,
+            Self::Verbatim { starts_with_paren, .. } => starts_with_paren,
         }
     }
 }
@@ -67,13 +78,14 @@ impl Format for BlockItem<'_> {
         match self {
             Self::Stmt(stmt) => stmt.fmt(formatter),
             Self::Last(last_stmt) => last_stmt.fmt(formatter),
+            Self::Verbatim { span, .. } => write_exact(formatter, *span),
         }
     }
 }
 
 /// The items of `block` that produce output, in order. A bare `;` and a
 /// parse-error placeholder print nothing, so they get no separator either.
-fn printed_items(block: &Block) -> impl Iterator<Item = BlockItem<'_>> {
+fn printed_items(block: &Block) -> impl Iterator<Item = BlockItem<'_>> + Clone {
     let stmts = block
         .stmts
         .iter()
@@ -104,9 +116,21 @@ struct PreviousItem {
     /// Whether it wants blank lines around it, which only counts on synthetic
     /// input, where there's no source to scan.
     should_surround_with_blank: bool,
-    /// Whether it ended with a comment moved onto its own line, which rules
-    /// out a blank after it.
-    has_own_line_comment: bool,
+}
+
+/// A block's contents on their own indented lines after its opener. An empty
+/// block with nothing to print writes nothing, so no blank line comes before
+/// its closer.
+pub(crate) struct IndentedBlock<'block>(pub &'block Block);
+
+impl Format for IndentedBlock<'_> {
+    fn fmt(&self, formatter: &mut Formatter) {
+        if first_item_span(self.0).is_some()
+            || formatter.comments().has_dangling_comments(self.0.span.start)
+        {
+            indent((hard_line(), self.0)).fmt(formatter);
+        }
+    }
 }
 
 impl Format for Block {
@@ -130,50 +154,185 @@ impl Format for Block {
             }
         }
 
-        let mut previous: Option<PreviousItem> = None;
-        for item in printed_items(self) {
-            let Span { start, end } = item.span();
-            let should_surround_with_blank = item.should_surround_with_blank();
+        let Some(last_end) = write_items(formatter, printed_items(self)) else {
+            write_dangling_comments(formatter, self.span.start);
+            return;
+        };
+        write_tail_comments(formatter, last_end);
 
-            if let Some(previous_item) = previous {
-                write_separator(formatter, previous_item, start, should_surround_with_blank);
-            }
-
-            write_stalled_comments(formatter, start);
-            let is_ignored = write_leading_comments(formatter, start);
-
-            // A statement starting with `(` would reparse as a call on the
-            // one before it (`f()` then `(g)()` reads as `f()(g)()`), so it
-            // gets a `;` prefix, as in the compact printer.
-            if previous.is_some() && item.starts_with_paren() {
-                token(";").fmt(formatter);
-            }
-
-            // Statements outside the format range stay verbatim, so a
-            // format-selection edit touches only the selection.
-            let is_outside_range = formatter
-                .format_range()
-                .is_some_and(|range| end <= range.start || start >= range.end);
-
-            write_verbatim_or(formatter, item, is_ignored || is_outside_range);
-            let has_own_line_comment = write_trailing_comments(formatter, start, end);
-
-            previous = Some(PreviousItem { end, should_surround_with_blank, has_own_line_comment });
-        }
-
-        if should_preserve_edge_blanks && let Some(last_item) = previous {
+        if should_preserve_edge_blanks {
+            let printed_end =
+                formatter.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
             let has_blank = formatter
                 .comments()
                 .source_text()
                 .zip(formatter.comments().source_version())
                 .is_some_and(|(source, version)| {
-                    has_trailing_edge_blank(source, last_item.end, version)
+                    has_trailing_edge_blank(source, printed_end, version)
                 });
             if has_blank {
                 empty_line().fmt(formatter);
             }
         }
     }
+}
+
+/// Write `items` with their separators and comments, and return where the
+/// last one ends.
+fn write_items<'block, Items>(formatter: &mut Formatter, items: Items) -> Option<u32>
+where
+    Items: Iterator<Item = BlockItem<'block>> + Clone,
+{
+    let mut remaining = items.peekable();
+    let mut previous: Option<PreviousItem> = None;
+    while let Some(item) =
+        next_item(formatter, &mut remaining, previous.map_or(0, |last_item| last_item.end))
+    {
+        let Span { start, end } = item.span();
+        let should_surround_with_blank = item.should_surround_with_blank();
+
+        if let Some(previous_item) = previous {
+            write_separator(formatter, previous_item, start, should_surround_with_blank);
+        }
+
+        let has_stalled_ignore = write_stalled_comments(formatter, start);
+        let has_leading_ignore = write_leading_comments(formatter, start);
+
+        // A statement starting with `(` would reparse as a call on the
+        // one before it (`f()` then `(g)()` reads as `f()(g)()`), so it
+        // gets a `;` prefix, as in the compact printer. A `format off`
+        // region can't gain one, so its guard goes on a line above it.
+        if previous.is_some() && item.starts_with_paren() {
+            token(";").fmt(formatter);
+            if matches!(item, BlockItem::Verbatim { .. }) {
+                hard_line().fmt(formatter);
+            }
+        }
+
+        write_verbatim_or(formatter, item, has_stalled_ignore || has_leading_ignore);
+        write_trailing_comments(formatter, start, end);
+
+        previous = Some(PreviousItem { end, should_surround_with_blank });
+    }
+    previous.map(|last_item| last_item.end)
+}
+
+/// The next item to print, which is a `format off` run if one starts before
+/// the next statement ends.
+///
+/// A region wholly inside the statement is left to it: a nested block claims
+/// it, and otherwise the statement's own verbatim fallback does. A region that
+/// crosses this block's opener or closer can't be claimed here either, so its
+/// `off` comment stays pending and the enclosing statement goes verbatim.
+fn next_item<'block, Items>(
+    formatter: &Formatter,
+    items: &mut Peekable<Items>,
+    position: u32,
+) -> Option<BlockItem<'block>>
+where
+    Items: Iterator<Item = BlockItem<'block>> + Clone,
+{
+    let comments = formatter.comments();
+    let Some(region) = comments.next_disabled_region(position) else {
+        return items.next();
+    };
+    if let Some(span) = items.peek().map(|item| item.span()) {
+        let is_past = region.start >= span.end;
+        // A region inside a statement starts past the statement's first token.
+        let is_inside = span.start < region.start && region.end <= span.end;
+        if is_past || is_inside {
+            return items.next();
+        }
+    }
+
+    let source = comments.source_text()?;
+    let mut run = region;
+    let mut lookahead = items.clone();
+    let mut absorbed: Option<Range<u32>> = None;
+    let mut starts_with_paren = false;
+    loop {
+        while let Some(item) = lookahead.next_if(|item| item.span().start < run.end) {
+            let span = item.span();
+            if absorbed.is_none() {
+                starts_with_paren = item.starts_with_paren();
+            }
+            run.start = run.start.min(own_line_start(source, span.start).unwrap_or(span.start));
+            run.end = run.end.max(span.end);
+            absorbed = Some(absorbed.map_or(span.start, |range| range.start)..span.end);
+        }
+        match comments.next_disabled_region(run.end) {
+            Some(next_region) if next_region.start < run.end => run.end = next_region.end,
+            Some(_) | None => break,
+        }
+    }
+
+    let stays_in_block = absorbed.map_or_else(
+        || comments.is_free_of_tokens(run.start, run.end),
+        |range| {
+            comments.is_free_of_tokens(run.start, range.start)
+                && comments.is_free_of_tokens(range.end, run.end)
+        },
+    );
+    if !stays_in_block {
+        return items.next();
+    }
+    *items = lookahead;
+    Some(BlockItem::Verbatim { span: Span::new(run.start, run.end), starts_with_paren })
+}
+
+/// Finds the innermost block that holds a whole selection.
+struct InnermostBlock<'ast, 'range> {
+    range: &'range Range<u32>,
+    found: &'ast Block,
+}
+
+impl<'ast> Visitor<'ast> for InnermostBlock<'ast, '_> {
+    fn visit_block(&mut self, block: &'ast Block) {
+        let first_start = first_item_start(block);
+        let last_end = printed_items(block).last().map(|item| item.span().end);
+        if first_start.is_some_and(|start| start <= self.range.start)
+            && last_end.is_some_and(|end| self.range.end <= end)
+        {
+            self.found = block;
+            self.walk_block(block);
+        }
+    }
+}
+
+/// Format the statements of `block`, or of its innermost nested block that
+/// holds the whole of `range`, that overlap `range`.
+///
+/// Returns the source span they replace, from the start of the first one's
+/// line to the end of the last one's trailing comment, and the text to put
+/// there. `None` when no statement overlaps `range`.
+pub(crate) fn format_selection(
+    block: &Block,
+    mut comments: Comments,
+    options: &FormatOptions,
+    range: &Range<u32>,
+) -> Option<(Span, String)> {
+    let mut finder = InnermostBlock { range, found: block };
+    finder.visit_block(block);
+
+    let is_selected = |item: &BlockItem<'_>| {
+        let Span { start, end } = item.span();
+        end > range.start && start < range.end
+    };
+    let items = printed_items(finder.found)
+        .skip_while(|item| !is_selected(item))
+        .take_while(|item| is_selected(item));
+    let first_start = items.clone().next()?.span().start;
+    let last_end = items.clone().last()?.span().end;
+
+    let source = comments.source_text()?;
+    let line_start = own_line_start(source, first_start).unwrap_or(first_start);
+    let base_indent = Span::new(line_start, first_start).text(source).to_owned();
+    comments.restrict_to(Span::new(line_start, last_end));
+
+    let mut formatter = Formatter::new(*options, comments);
+    write_items(&mut formatter, items);
+    let end = formatter.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
+    Some((Span::new(line_start, end), formatter.print(&base_indent)))
 }
 
 /// Whether the whitespace run immediately before `anchor` contains a blank
@@ -185,36 +344,38 @@ fn has_leading_edge_blank(source: &str, anchor: u32, version: LuaVersion) -> boo
     run_has_blank(preceding.get(run_start..).unwrap_or_default(), version)
 }
 
-/// Whether the whitespace run immediately after `end` contains a blank line
-/// (the gap between the last statement and the block closer).
+/// Whether the whitespace and `;` run immediately after `end` contains a blank
+/// line (the gap between the last statement and the block closer).
 fn has_trailing_edge_blank(source: &str, end: u32, version: LuaVersion) -> bool {
     let following = source.get(offset_to_index(end)..).unwrap_or_default();
-    let run_length = following.bytes().take_while(|&byte| is_lua_whitespace(byte)).count();
+    let run_length = following.bytes().take_while(|&byte| is_code_free_byte(byte)).count();
     run_has_blank(following.get(..run_length).unwrap_or_default(), version)
 }
 
-/// Whether `text` holds two or more line breaks.
+/// Whether `text` holds a blank line: two line breaks with no `;` between them,
+/// since a line holding only a `;` isn't blank.
 fn run_has_blank(text: &str, version: LuaVersion) -> bool {
-    line_breaks(text, version).nth(1).is_some()
+    text.split(';').any(|segment| line_breaks(segment, version).nth(1).is_some())
 }
 
 /// Write the line break between two adjacent items.
 ///
 /// It becomes a blank line when the source has one or, on the source-less
 /// path, when a neighbor wants surrounding blanks or the next statement's
-/// anchor asked for one. A comment the previous item moved onto its own line
-/// rules the blank out, because it would sit between that comment and this
-/// statement, where a reparse reads the comment as leading and drops the
-/// blank.
+/// anchor asked for one.
 fn write_separator(
     formatter: &mut Formatter,
     previous: PreviousItem,
     next_start: u32,
     should_surround_next_with_blank: bool,
 ) {
-    let is_blank = match formatter.comments().source_text() {
-        Some(_) if previous.has_own_line_comment => false,
-        Some(source) => {
+    let is_blank = formatter.comments().source_text().map_or_else(
+        || {
+            previous.should_surround_with_blank
+                || should_surround_next_with_blank
+                || formatter.comments().has_synthetic_blank_before(next_start)
+        },
+        |source| {
             // Stop at an intervening comment, so a blank line after it isn't
             // counted as part of this gap.
             let gap_end =
@@ -228,13 +389,8 @@ fn write_separator(
                 .comments()
                 .source_version()
                 .is_some_and(|version| has_blank_line(source, gap_start, gap_end, version))
-        }
-        None => {
-            previous.should_surround_with_blank
-                || should_surround_next_with_blank
-                || formatter.comments().has_synthetic_blank_before(next_start)
-        }
-    };
+        },
+    );
     if is_blank {
         empty_line().fmt(formatter);
     } else {
@@ -242,87 +398,116 @@ fn write_separator(
     }
 }
 
-/// Write the statement verbatim when it opted out of formatting or sits in a
-/// `format off` region, and format it otherwise.
+/// Write the item, copying its source when it opted out of formatting or has
+/// an interior comment no emitter claimed, so the comment can't drift.
 ///
-/// A formatted statement with an interior comment no emitter claimed is
-/// replaced by its own source, re-indented, so the comment can't drift.
+/// A statement that opted out or has such a comment takes its block's
+/// indentation, keeping its line breaks only if it opted out. One holding a
+/// `format off` region goes out byte for byte.
 fn write_verbatim_or(formatter: &mut Formatter, item: BlockItem<'_>, is_opted_out: bool) {
+    if matches!(item, BlockItem::Verbatim { .. }) {
+        item.fmt(formatter);
+        return;
+    }
     let Span { start, end } = item.span();
-    let verbatim = if is_opted_out || formatter.comments().is_format_disabled_at(start) {
-        formatter
-            .comments()
-            .source_text()
-            .map(|source| CompactString::from(Span::new(start, end).text(source)))
-    } else {
-        None
-    };
-    if let Some(slice) = verbatim {
-        // An opted-out statement keeps its layout down to the column, so the
-        // slice goes out as one multi-line text.
-        formatter.write_text(slice);
-        // The slice already holds the statement's comments; left pending,
-        // they'd print again after it.
-        formatter.comments_mut().mark_printed_range(start, end);
+    if is_opted_out && write_reindented(formatter, start, end, true) {
         return;
     }
 
     let checkpoint = formatter.checkpoint();
     item.fmt(formatter);
-    if formatter.comments().has_unhandled_in(start, end)
-        && let Some(source) = formatter.comments().source_text()
-        && let Some(version) = formatter.comments().source_version()
-    {
-        // An unclaimed interior comment keeps the statement as written, so
-        // the comment can't drift across tokens. The statement didn't opt out
-        // of formatting, though, so it still takes the block's indentation
-        // and its runs of blank lines still collapse to one.
-        let lines = reindented_lines(source, start, end, version);
+    if formatter.comments().has_unhandled_in(start, end) {
+        let is_in_region = formatter.comments().overlaps_disabled_region(Span::new(start, end));
         formatter.restore(checkpoint);
-        for (index, line) in lines.into_iter().enumerate() {
-            if index > 0 {
-                hard_line().fmt(formatter);
-            }
-            if !line.is_empty() {
-                formatter.write_text(line);
-            }
+        if is_in_region {
+            let line_start = formatter
+                .comments()
+                .source_text()
+                .and_then(|source| own_line_start(source, start))
+                .unwrap_or(start);
+            write_exact(formatter, Span::new(line_start, end));
+        } else {
+            write_reindented(formatter, start, end, false);
         }
-        formatter.comments_mut().mark_printed_range(start, end);
     }
 }
 
-/// `source[start..end]` split into lines, with the statement's own
-/// indentation stripped from its continuation lines so the printer's indent
-/// replaces the original column.
+/// Copy `span` of the source exactly and count its comments as printed.
+fn write_exact(formatter: &mut Formatter, span: Span) {
+    if let Some(text) =
+        formatter.comments().source_text().map(|source| span.text(source).to_owned())
+    {
+        formatter.write_verbatim(text);
+        formatter.comments_mut().mark_printed_range(span.start, span.end);
+    }
+}
+
+/// Write `source[start..end]` line by line with the printer's indentation, and
+/// count its comments as printed. Line breaks are the source's when
+/// `should_keep_breaks`, and the printer's otherwise.
 ///
-/// Lines split only at newlines between tokens. A newline inside a long
-/// string or long comment is part of that token, so it stays in its line and
-/// goes out as written; re-indenting around it would change the literal.
-fn reindented_lines(source: &str, start: u32, end: u32, version: LuaVersion) -> Vec<CompactString> {
-    let text = Span::new(start, end).text(source);
-    let preceding = Span::new(0, start).text(source);
-    let line_start = line_breaks(preceding, version).last().map_or(0, |line_break| line_break.end);
-    let line_prefix = preceding.get(line_start..).unwrap_or_default();
-    // A statement that shares its line with earlier code has no indentation
-    // of its own to strip.
-    let base_indent = if line_prefix.bytes().all(|byte| byte == b' ' || byte == b'\t') {
-        line_prefix
-    } else {
-        ""
+/// Returns false when there's no source to copy.
+fn write_reindented(
+    formatter: &mut Formatter,
+    start: u32,
+    end: u32,
+    should_keep_breaks: bool,
+) -> bool {
+    let (Some(source), Some(version)) =
+        (formatter.comments().source_text(), formatter.comments().source_version())
+    else {
+        return false;
     };
+    for (line, line_break) in reindented_lines(source, start, end, version) {
+        if !line.is_empty() {
+            formatter.write_text(line);
+        }
+        if line_break.is_empty() {
+            continue;
+        }
+        if should_keep_breaks {
+            formatter.write_verbatim(line_break);
+        } else {
+            hard_line().fmt(formatter);
+        }
+    }
+    formatter.comments_mut().mark_printed_range(start, end);
+    true
+}
+
+/// `source[start..end]` split into lines, each with the line break after it.
+///
+/// The statement's own indentation comes off its continuation lines, so the
+/// printer's indent replaces the original column. Lines split only at newlines
+/// between tokens: a newline inside a long string or long comment is part of
+/// that token and goes out as written, since re-indenting would change it.
+fn reindented_lines(
+    source: &str,
+    start: u32,
+    end: u32,
+    version: LuaVersion,
+) -> Vec<(CompactString, CompactString)> {
+    let text = Span::new(start, end).text(source);
+    let base_indent = own_line_start(source, start)
+        .map_or("", |line_start| Span::new(line_start, start).text(source));
 
     let mut lines = Vec::new();
     let mut cursor = 0;
     let separators = separable_newlines(text, version);
     for offset in separators.into_iter().chain(iter::once(text.len())) {
         let line = text.get(cursor..offset).unwrap_or_default();
-        lines.push(CompactString::from(if lines.is_empty() {
-            line
-        } else {
-            line.strip_prefix(base_indent).unwrap_or(line)
-        }));
         let rest = text.as_bytes().get(offset..).unwrap_or_default();
-        cursor = text.len().saturating_sub(strip_line_break(rest, version).unwrap_or(rest).len());
+        let next_cursor =
+            text.len().saturating_sub(strip_line_break(rest, version).unwrap_or(rest).len());
+        lines.push((
+            CompactString::from(if lines.is_empty() {
+                line
+            } else {
+                line.strip_prefix(base_indent).unwrap_or(line)
+            }),
+            CompactString::from(text.get(offset..next_cursor).unwrap_or_default()),
+        ));
+        cursor = next_cursor;
     }
     lines
 }

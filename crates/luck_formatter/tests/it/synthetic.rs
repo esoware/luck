@@ -659,7 +659,7 @@ fn synthetic_comment_on_a_collapsible_body_keeps_it_expanded() {
 }
 
 #[test]
-fn bug_multi_line_synthetic_comment_stays_a_comment() {
+fn multi_line_synthetic_comment_stays_a_comment() {
     let synth = Synth::new();
     let stmt = synth.local(&["x"], vec![synth.number("1")]);
     let comment = SyntheticComment::leading(&stmt, "first line\ny = 2");

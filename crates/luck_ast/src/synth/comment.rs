@@ -35,8 +35,8 @@ impl SyntheticComment {
         }
     }
 
-    /// A comment printed inside `block` when it's an empty function body,
-    /// such as `-- unreachable`.
+    /// A comment printed inside `block` when it's empty, such as
+    /// `-- unreachable`.
     #[must_use]
     pub fn dangling(block: &Block, text: &str) -> Self {
         Self {

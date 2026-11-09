@@ -28,13 +28,11 @@ pub(super) fn type_annotation_eq(
 /// semantics-neutral rewrites (redundant parens, leading union/intersection
 /// separators, and `,`/`;` table-field separators).
 pub(super) fn type_eq(left: &Type, right: &Type, version: LuaVersion) -> ControlFlow<AstDiff> {
-    // As with expression parens in `expr_eq`, the formatter may add or drop
-    // redundant type parens.
-    let left_ty = unwrap_type_parens(left);
-    let right_ty = unwrap_type_parens(right);
+    let left_ty = unwrap_redundant_type(left);
+    let right_ty = unwrap_redundant_type(right);
     match (left_ty, right_ty) {
-        // Unreachable after `unwrap_type_parens`, but recursing is safer than
-        // panicking.
+        // Unreachable after `unwrap_redundant_type`, but recursing is safer
+        // than panicking.
         (Type::Parenthesized(inner), _) => type_eq(&inner.type_value, right_ty, version),
         (Type::Name { name: lhs, .. }, Type::Name { name: rhs, .. }) => {
             at("name", require(lhs == rhs, "type name differs"))
@@ -93,13 +91,40 @@ pub(super) fn type_eq(left: &Type, right: &Type, version: LuaVersion) -> Control
     }
 }
 
-/// Strip any nesting of redundant type parens down to the inner type.
-fn unwrap_type_parens(ty: &Type) -> &Type {
+/// Strip the wrappers that say nothing about the type.
+///
+/// Redundant parens can come and go, and a lone union or intersection member
+/// is how a `| T` the formatter writes as `T` parses.
+fn unwrap_redundant_type(ty: &Type) -> &Type {
     let mut current = ty;
-    while let Type::Parenthesized(inner) = current {
-        current = &inner.type_value;
+    loop {
+        current = match current {
+            Type::Parenthesized(inner) => &inner.type_value,
+            Type::Union(union) if union.types.len() == 1 => match union.types.first() {
+                Some(member) => member,
+                None => return current,
+            },
+            Type::Intersection(intersection) if intersection.types.len() == 1 => {
+                match intersection.types.first() {
+                    Some(member) => member,
+                    None => return current,
+                }
+            }
+            Type::Name { .. }
+            | Type::Named(_)
+            | Type::Typeof(_)
+            | Type::Table(_)
+            | Type::Function(_)
+            | Type::Optional(_)
+            | Type::Union(_)
+            | Type::Intersection(_)
+            | Type::Pack(_)
+            | Type::Singleton(_)
+            | Type::Variadic(_)
+            | Type::GenericPack(_)
+            | Type::Error(_) => return current,
+        };
     }
-    current
 }
 
 fn named_type_eq(left: &NamedType, right: &NamedType, version: LuaVersion) -> ControlFlow<AstDiff> {

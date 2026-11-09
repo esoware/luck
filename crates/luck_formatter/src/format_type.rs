@@ -9,10 +9,13 @@ use luck_ast::{
     ensure_sufficient_stack,
 };
 
+use luck_token::TokenKind;
+
 use crate::ir::{
     Format, Formatter, group, group_with_id, if_group_breaks, indent, separated, soft_line,
     soft_line_or_space, space, token,
 };
+use crate::quotes::normalize_quote;
 
 impl Format for Type {
     fn fmt(&self, formatter: &mut Formatter) {
@@ -31,7 +34,14 @@ impl Format for Type {
                 (token("("), &parenthesized.type_value, token(")")).fmt(formatter);
             }
             Self::Pack(pack) => write_delimited(formatter, "(", ")", &pack.types.items),
-            Self::Singleton(literal) => literal.fmt(formatter),
+            Self::Singleton(literal) => {
+                if let TokenKind::StringLiteral(text) = &literal.kind {
+                    let quote_style = formatter.options().quote_style;
+                    formatter.write_text(normalize_quote(text, quote_style));
+                } else {
+                    literal.fmt(formatter);
+                }
+            }
             // Luau: `...T`.
             Self::Variadic(variadic) => (token("..."), &variadic.type_value).fmt(formatter),
             // Luau: `T...`.

@@ -9,9 +9,9 @@ use crate::ir::{Format, Formatter};
 
 /// Lay out `node` on its own, with no comments.
 pub(crate) fn render(node: &dyn Format, options: FormatOptions) -> String {
-    let mut formatter = Formatter::new(options, Comments::none(), None);
+    let mut formatter = Formatter::new(options, Comments::none());
     node.fmt(&mut formatter);
-    formatter.print()
+    formatter.print("")
 }
 
 /// The expression `source` parses to, read as Luau.

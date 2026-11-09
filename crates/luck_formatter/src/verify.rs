@@ -10,6 +10,7 @@ use luck_token::{Comment, LuaVersion, Token, TokenKind};
 
 use crate::FormatOptions;
 use crate::ast_equivalence::{AstDiff, blocks_equivalent};
+use crate::comments::unix_line_breaks;
 use crate::format::{FormatResult, format, format_source};
 
 /// Format, then check that the output re-parses to an equivalent AST, keeps
@@ -32,7 +33,7 @@ pub fn format_and_verify(
 ) -> Result<FormatResult, (FormatResult, AstDiff)> {
     // Compare against the text the formatter read, not `source`, since
     // `sort_requires` may have reordered it.
-    let (result, parsed) = format_source(source, version, options, None);
+    let (result, parsed) = format_source(source, version, options);
     let Some(original) = parsed else {
         return Ok(result);
     };
@@ -88,8 +89,8 @@ fn comments_kept_in_place(original: &str, formatted: &str, version: LuaVersion) 
     let before_tokens = significant_tokens(&before.tokens);
     let after_tokens = significant_tokens(&after.tokens);
     let (before_ends, after_ends) = aligned_token_ends(&before_tokens, &after_tokens);
-    comment_positions(original, &before_ends, &before.comments)
-        == comment_positions(formatted, &after_ends, &after.comments)
+    comment_positions(original, &before_ends, &before.comments, version)
+        == comment_positions(formatted, &after_ends, &after.comments, version)
 }
 
 /// The tokens a comment can be positioned against: everything but the
@@ -140,18 +141,13 @@ fn comment_positions<'source>(
     source: &'source str,
     aligned_ends: &[u32],
     comments: &[Comment],
+    version: LuaVersion,
 ) -> Vec<(usize, Cow<'source, str>)> {
     comments
         .iter()
         .map(|comment| {
             let preceding_count = aligned_ends.partition_point(|&end| end <= comment.span.start);
-            let trimmed = comment.span.text(source).trim_end();
-            let text = if trimmed.contains('\r') {
-                Cow::Owned(trimmed.replace("\r\n", "\n"))
-            } else {
-                Cow::Borrowed(trimmed)
-            };
-            (preceding_count, text)
+            (preceding_count, unix_line_breaks(comment.span.text(source).trim_end(), version))
         })
         .collect()
 }

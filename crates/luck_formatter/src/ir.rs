@@ -8,8 +8,6 @@
 //! module, and `Formatter`'s `write_*` methods. Only this module pushes raw
 //! elements, which is what keeps every tag paired.
 
-use core::ops::Range;
-
 use luck_token::CompactString;
 
 use crate::comments::{Comments, CommentsCheckpoint};
@@ -52,6 +50,10 @@ pub(crate) enum Tag {
     /// Content emitted only when the referenced group expanded.
     StartIfGroupBreaks(GroupId),
     EndIfGroupBreaks,
+    /// Content that prints flat whatever the width, with every nested group
+    /// flat too.
+    StartFlat,
+    EndFlat,
     /// Pack as many entries per line as fit. Each entry is wrapped in
     /// `StartEntry`/`EndEntry`, with a `Line` separator between entries.
     StartFill,
@@ -70,6 +72,9 @@ pub(crate) enum FormatElement {
     /// Dynamic text - identifiers, literals, comment bodies. May contain
     /// newlines (long strings); the printer measures from the last line.
     Text(CompactString),
+    /// Source text printed exactly as written, line breaks and indentation
+    /// included.
+    Verbatim(CompactString),
     Space,
     Line(LineMode),
     /// Force every enclosing group to expand without printing anything.
@@ -142,28 +147,15 @@ pub(crate) struct Formatter {
     next_group_id: usize,
     options: FormatOptions,
     comments: Comments,
-    /// When set, only statements overlapping this byte range are formatted
-    /// and the rest go out verbatim. Needs source text.
-    format_range: Option<Range<u32>>,
 }
 
 impl Formatter {
-    pub(crate) fn new(
-        options: FormatOptions,
-        comments: Comments,
-        format_range: Option<Range<u32>>,
-    ) -> Self {
+    pub(crate) fn new(options: FormatOptions, comments: Comments) -> Self {
         // Roughly one element per 8 source bytes; a mild undershoot that
         // still removes most realloc copies. Synthetic ASTs have no source
         // and start empty.
         let capacity = comments.source_text().map_or(0, |source| source.len().div_ceil(8));
-        Self {
-            elements: Vec::with_capacity(capacity),
-            next_group_id: 0,
-            options,
-            comments,
-            format_range,
-        }
+        Self { elements: Vec::with_capacity(capacity), next_group_id: 0, options, comments }
     }
 
     pub(crate) const fn options(&self) -> &FormatOptions {
@@ -176,10 +168,6 @@ impl Formatter {
 
     pub(crate) const fn comments_mut(&mut self) -> &mut Comments {
         &mut self.comments
-    }
-
-    pub(crate) const fn format_range(&self) -> Option<&Range<u32>> {
-        self.format_range.as_ref()
     }
 
     pub(crate) const fn group_id(&mut self) -> GroupId {
@@ -199,6 +187,14 @@ impl Formatter {
     /// would have to copy it.
     pub(crate) fn write_text(&mut self, content: impl Into<CompactString>) {
         self.elements.push(FormatElement::Text(content.into()));
+    }
+
+    /// Writes source text the printer copies byte for byte.
+    ///
+    /// Text ending in a line break leaves the next line to the printer's
+    /// indent. Any other starts at its own column.
+    pub(crate) fn write_verbatim(&mut self, content: impl Into<CompactString>) {
+        self.elements.push(FormatElement::Verbatim(content.into()));
     }
 
     /// Writes a space and `text` as a line suffix, printed just before the
@@ -228,8 +224,10 @@ impl Formatter {
         self.comments.restore(checkpoint.comments);
     }
 
-    pub(crate) fn print(self) -> String {
-        printer::print(&self.elements, self.next_group_id, &self.options)
+    /// Lay out the document with `base_indent` before every line's own
+    /// indentation.
+    pub(crate) fn print(self, base_indent: &str) -> String {
+        printer::print(&self.elements, self.next_group_id, &self.options, base_indent)
     }
 }
 
@@ -312,6 +310,18 @@ where
         formatter.push(FormatElement::Tag(Tag::StartGroup(id)));
         content.fmt(formatter);
         formatter.push(FormatElement::Tag(Tag::EndGroup));
+    })
+}
+
+/// `content` on one line whatever the width, for a place no line may break.
+pub(crate) fn flat<T>(content: T) -> impl Format
+where
+    T: Format,
+{
+    format_with(move |formatter| {
+        formatter.push(FormatElement::Tag(Tag::StartFlat));
+        content.fmt(formatter);
+        formatter.push(FormatElement::Tag(Tag::EndFlat));
     })
 }
 

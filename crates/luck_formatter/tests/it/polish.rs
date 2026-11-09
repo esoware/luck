@@ -311,7 +311,7 @@ fn preserving_gaps_options() -> FormatOptions {
 }
 
 #[test]
-fn bug_sort_requires_keeps_a_stmt_before_a_comment_at_eof() {
+fn sort_requires_keeps_a_stmt_before_a_comment_at_eof() {
     let output = sort_once("local z = require(\"z\")\nlocal a = require(\"a\") -- note");
     let reparsed = luck_parser::parse(&output, LuaVersion::Lua54);
     assert_eq!(
@@ -322,19 +322,19 @@ fn bug_sort_requires_keeps_a_stmt_before_a_comment_at_eof() {
 }
 
 #[test]
-fn bug_sort_requires_keeps_a_comment_between_requires() {
+fn sort_requires_keeps_a_comment_between_requires() {
     let output = sort_once("local b = require(\"b\")\n; -- important\nlocal a = require(\"a\")\n");
     assert!(output.contains("-- important"), "the comment must not be deleted: {output:?}");
 }
 
 #[test]
-fn bug_sort_requires_keeps_a_multi_line_comment_between_requires() {
+fn sort_requires_keeps_a_multi_line_comment_between_requires() {
     let output = sort_once("local z = require(\"z\") --[[\n]] local a = require(\"a\")\n");
     assert!(output.contains("--[[\n]]"), "the comment must not be split or lost: {output:?}");
 }
 
 #[test]
-fn bug_sort_requires_keeps_a_require_inside_the_block_opened_on_its_line() {
+fn sort_requires_keeps_a_require_inside_the_block_opened_on_its_line() {
     let output = sort_once("do local z = require(\"z\")\nlocal a = require(\"a\")\nend\n");
     assert!(
         output.starts_with("do\n"),
@@ -343,19 +343,19 @@ fn bug_sort_requires_keeps_a_require_inside_the_block_opened_on_its_line() {
 }
 
 #[test]
-fn bug_sort_requires_keeps_the_end_closing_on_a_require_line() {
+fn sort_requires_keeps_the_end_closing_on_a_require_line() {
     let output = sort_once("if x then\nlocal z = require(\"z\")\nlocal a = require(\"a\") end\n");
     assert!(output.ends_with("end\n"), "`local z` must not move past the `end`: {output:?}");
 }
 
 #[test]
-fn bug_sort_requires_keeps_a_binding_before_the_get_service_that_uses_it() {
+fn sort_requires_keeps_a_binding_before_the_get_service_that_uses_it() {
     let input = "local zeta = require(\"z\")\nlocal alpha = zeta:GetService(\"x\")\n";
     assert_eq!(sort_once(input), input, "`alpha` reads `zeta`, so `zeta` must stay first");
 }
 
 #[test]
-fn bug_sort_requires_keeps_a_shadowing_require_before_its_callers() {
+fn sort_requires_keeps_a_shadowing_require_before_its_callers() {
     let input = "local require = require(\"custom\")\nlocal a = require(\"a\")\n";
     assert_eq!(
         sort_once(input),
@@ -365,7 +365,7 @@ fn bug_sort_requires_keeps_a_shadowing_require_before_its_callers() {
 }
 
 #[test]
-fn bug_sort_requires_keeps_an_ignored_stmt_under_its_directive() {
+fn sort_requires_keeps_an_ignored_stmt_under_its_directive() {
     let output =
         sort_once("-- luck: ignore\nlocal   z  = require(\"z\")\nlocal a = require(\"a\")\n");
     assert!(
@@ -375,7 +375,7 @@ fn bug_sort_requires_keeps_an_ignored_stmt_under_its_directive() {
 }
 
 #[test]
-fn bug_sort_requires_keeps_the_close_order_of_to_be_closed_variables() {
+fn sort_requires_keeps_the_close_order_of_to_be_closed_variables() {
     let input = "local z <close> = require(\"z\")\nlocal a <close> = require(\"a\")\n";
     assert_eq!(
         sort_once(input),
@@ -385,7 +385,7 @@ fn bug_sort_requires_keeps_the_close_order_of_to_be_closed_variables() {
 }
 
 #[test]
-fn bug_magic_trailing_comma_formats_a_wrapped_fill_idempotently() {
+fn magic_trailing_comma_formats_a_wrapped_fill_idempotently() {
     let options =
         FormatOptions { magic_trailing_comma: true, line_width: 12, ..FormatOptions::default() };
     let first_pass = format_once("local t = {1,2,3,4,5,6,7,8,9,10}\n", LuaVersion::Lua54, &options);
@@ -397,7 +397,7 @@ fn bug_magic_trailing_comma_formats_a_wrapped_fill_idempotently() {
 }
 
 #[test]
-fn bug_block_gaps_preserve_keeps_a_blank_after_a_trailing_comment() {
+fn block_gaps_preserve_keeps_a_blank_after_a_trailing_comment() {
     let input = "do\n\tx() -- c\n\nend\n";
     assert_eq!(
         format_once(input, LuaVersion::Lua54, &preserving_gaps_options()),
@@ -407,7 +407,7 @@ fn bug_block_gaps_preserve_keeps_a_blank_after_a_trailing_comment() {
 }
 
 #[test]
-fn bug_block_gaps_preserve_keeps_a_blank_after_a_semicolon() {
+fn block_gaps_preserve_keeps_a_blank_after_a_semicolon() {
     assert_eq!(
         format_once("do\n\tx();\n\nend\n", LuaVersion::Lua54, &preserving_gaps_options()),
         "do\n\tx()\n\nend\n",
@@ -416,7 +416,7 @@ fn bug_block_gaps_preserve_keeps_a_blank_after_a_semicolon() {
 }
 
 #[test]
-fn bug_collapse_with_preserved_gaps_keeps_a_valid_layout() {
+fn collapse_with_preserved_gaps_keeps_a_valid_layout() {
     let options = FormatOptions {
         collapse_simple_statement: CollapseSimpleStatement::ConditionalOnly,
         ..preserving_gaps_options()

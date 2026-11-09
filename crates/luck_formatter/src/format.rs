@@ -1,10 +1,10 @@
 use core::ops::Range;
 
 use luck_ast::Block;
-use luck_token::{LuaVersion, index_to_offset};
+use luck_token::{LuaVersion, index_to_offset, offset_to_index};
 
 use crate::comments::{Comments, write_remaining_comments, write_shebang};
-use crate::format_block::first_item_start;
+use crate::format_block::{first_item_start, format_selection};
 use crate::ir::{Format as _, Formatter};
 use crate::sort_requires::sort_requires_in_source;
 use crate::{FormatOptions, LineEndings};
@@ -19,20 +19,15 @@ pub struct FormatResult {
 pub type FormatError = luck_token::SourceError;
 
 /// Lay out `block` as text, the tail every entry point shares.
-fn print_block(
-    block: &Block,
-    comments: Comments,
-    options: &FormatOptions,
-    format_range: Option<Range<u32>>,
-) -> String {
-    let mut formatter = Formatter::new(*options, comments, format_range);
+fn print_block(block: &Block, comments: Comments, options: &FormatOptions) -> String {
+    let mut formatter = Formatter::new(*options, comments);
     write_shebang(&mut formatter);
     block.fmt(&mut formatter);
     // Empty and error statements print nothing, so a block holding only
     // those must not open a line before the trailing comment flush.
     let has_stmts = first_item_start(block).is_some();
     write_remaining_comments(&mut formatter, has_stmts);
-    let mut output = formatter.print();
+    let mut output = formatter.print("");
 
     let trimmed = output.trim_end();
     output.truncate(trimmed.len());
@@ -74,7 +69,7 @@ fn with_windows_line_endings(text: &str) -> String {
 /// or [`Comments::none`].
 #[must_use]
 pub fn format_block(block: &Block, comments: Comments, options: &FormatOptions) -> String {
-    print_block(block, comments, options, None)
+    print_block(block, comments, options)
 }
 
 /// Format Lua source text.
@@ -83,13 +78,15 @@ pub fn format_block(block: &Block, comments: Comments, options: &FormatOptions) 
 /// `FormatResult::errors`.
 #[must_use]
 pub fn format(source: &str, version: LuaVersion, options: &FormatOptions) -> FormatResult {
-    format_source(source, version, options, None).0
+    format_source(source, version, options).0
 }
 
-/// Format only the statements that overlap a byte range.
+/// Format only the statements that overlap a byte range, or those of the
+/// innermost nested block holding the whole range.
 ///
-/// The rest of the file is copied verbatim, which is what an editor's "format
-/// selection" wants. `sort_requires` doesn't run in this mode.
+/// Every byte outside them is copied as it was, including line endings and
+/// the end of the file, which is what an editor's "format selection" wants.
+/// `sort_requires` doesn't run in this mode.
 #[must_use]
 pub fn format_range(
     source: &str,
@@ -97,27 +94,43 @@ pub fn format_range(
     options: &FormatOptions,
     range: Range<usize>,
 ) -> FormatResult {
-    format_source(
-        source,
-        version,
-        options,
-        Some(index_to_offset(range.start)..index_to_offset(range.end)),
-    )
-    .0
+    let parsed = luck_parser::parse(source, version);
+    if !parsed.errors.is_empty() {
+        return FormatResult { output: String::new(), errors: parsed.errors };
+    }
+
+    let offsets = index_to_offset(range.start)..index_to_offset(range.end);
+    let comments = Comments::from_source(&parsed.comments, source, version);
+    let output = format_selection(&parsed.block, comments, options, &offsets).map_or_else(
+        || source.to_owned(),
+        |(span, selected)| {
+            let text = if options.line_endings == LineEndings::Windows {
+                with_windows_line_endings(&selected)
+            } else {
+                selected
+            };
+            let before = source.get(..offset_to_index(span.start)).unwrap_or_default();
+            let after = source.get(offset_to_index(span.end)..).unwrap_or_default();
+            let mut spliced = String::with_capacity(source.len());
+            spliced.push_str(before);
+            spliced.push_str(&text);
+            spliced.push_str(after);
+            spliced
+        },
+    );
+    FormatResult { output, errors: Vec::new() }
 }
 
-/// Shared body of [`format()`], [`format_range`], and
+/// Shared body of [`format()`] and
 /// [`format_and_verify`](crate::format_and_verify).
 ///
 /// Also returns the parse the output came from, so verification needn't
-/// repeat it. Its `source` is the text the formatter actually read, which
-/// `sort_requires` may have rewritten. Input that fails to parse returns only
-/// errors and no parse.
+/// repeat it. When `sort_requires` reordered the text, it's the parse of the
+/// sorted text. Input that fails to parse returns only errors and no parse.
 pub(crate) fn format_source(
     source: &str,
     version: LuaVersion,
     options: &FormatOptions,
-    format_range: Option<Range<u32>>,
 ) -> (FormatResult, Option<luck_parser::ParseResult>) {
     let source_parse = luck_parser::parse(source, version);
     if !source_parse.errors.is_empty() {
@@ -125,21 +138,23 @@ pub(crate) fn format_source(
         return (result, None);
     }
 
+    let comments = Comments::from_source(&source_parse.comments, &source_parse.source, version);
+    let mut output = print_block(&source_parse.block, comments, options);
+    let mut parsed = source_parse;
     // `sort_requires` reorders source lines rather than AST nodes, so each
-    // statement's comments and trivia move with it. The rewrite leaves the
-    // old spans stale, so the new text is parsed again.
-    let parsed = if options.sort_requires
-        && format_range.is_none()
-        && let Some(sorted) =
-            sort_requires_in_source(source, &source_parse.block, &source_parse.comments, version)
-    {
-        luck_parser::parse(sorted, version)
-    } else {
-        source_parse
-    };
-
-    let comments = Comments::from_source(&parsed.comments, &parsed.source, version);
-    let output = print_block(&parsed.block, comments, options, format_range);
+    // statement's comments and trivia move with it. It reads formatted text
+    // so what it sees doesn't change on a second pass, and leaves the spans
+    // stale, so the sorted text is parsed and printed again.
+    if options.sort_requires {
+        let formatted = luck_parser::parse(output.as_str(), version);
+        if let Some(sorted) =
+            sort_requires_in_source(&output, &formatted.block, &formatted.comments, version)
+        {
+            parsed = luck_parser::parse(sorted, version);
+            let sorted_comments = Comments::from_source(&parsed.comments, &parsed.source, version);
+            output = print_block(&parsed.block, sorted_comments, options);
+        }
+    }
     let result = FormatResult { output, errors: Vec::new() };
     (result, Some(parsed))
 }

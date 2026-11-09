@@ -2,7 +2,8 @@ use core::ops::ControlFlow::{self, Continue};
 
 use luck_ast::{
     ElseIfExprClause, Expression, Field, FunctionArgs, FunctionCall, FunctionDef, IfExpression,
-    TableConstructor, TypeInstantiation, Var, ensure_sufficient_stack,
+    InterpolatedString, TableConstructor, TypeInstantiation, Var, ensure_sufficient_stack,
+    is_multi_value,
 };
 use luck_token::LuaVersion;
 
@@ -19,14 +20,14 @@ pub(super) fn expr_eq(
     version: LuaVersion,
 ) -> ControlFlow<AstDiff> {
     match (left, right) {
-        // Interpolated strings always match. Their embedded expressions
-        // aren't compared, even though the formatter reformats them.
         (Expression::Nil(_), Expression::Nil(_))
         | (Expression::False(_), Expression::False(_))
         | (Expression::True(_), Expression::True(_))
         | (Expression::VarArg(_), Expression::VarArg(_))
-        | (Expression::InterpolatedString(_), Expression::InterpolatedString(_))
         | (Expression::Error(_), Expression::Error(_)) => Continue(()),
+        (Expression::InterpolatedString(lhs), Expression::InterpolatedString(rhs)) => {
+            at("InterpolatedString", interpolated_string_eq(lhs, rhs, version))
+        }
         (Expression::StringLiteral(lhs), Expression::StringLiteral(rhs)) => {
             // The formatter may swap quote style, so compare decoded contents.
             require(string_raw_eq(&lhs.text, &rhs.text, version), "literal contents differ")
@@ -52,12 +53,15 @@ pub(super) fn expr_eq(
                 at("Parenthesized/expr", expr_eq(&lhs.expr, &rhs.expr, version))
             })
         }
-        // The formatter may add or drop redundant parens, so `(x)` matches
-        // `x` however deep the nesting.
+        // Redundant parens may come and go, so `(x)` matches `x` however deep
+        // the nesting. Parens around a call or `...` truncate it to one value
+        // and have to match.
         (Expression::Parenthesized(lhs), other) => {
+            require(!is_multi_value(&lhs.expr), "value-truncating parens differ")?;
             ensure_sufficient_stack(|| expr_eq(&lhs.expr, other, version))
         }
         (other, Expression::Parenthesized(rhs)) => {
+            require(!is_multi_value(&rhs.expr), "value-truncating parens differ")?;
             ensure_sufficient_stack(|| expr_eq(other, &rhs.expr, version))
         }
         (Expression::FunctionCall(lhs), Expression::FunctionCall(rhs)) => {
@@ -110,6 +114,28 @@ pub(super) fn expr_eq(
             expr_kind(right)
         )),
     }
+}
+
+/// Luau. Each segment's literal text and embedded expression both have to
+/// match.
+fn interpolated_string_eq(
+    left: &InterpolatedString,
+    right: &InterpolatedString,
+    version: LuaVersion,
+) -> ControlFlow<AstDiff> {
+    require(left.segments.len() == right.segments.len(), "interpolated segment count differs")?;
+    for (index, (lhs, rhs)) in left.segments.iter().zip(&right.segments).enumerate() {
+        at_index("segments", index, token_text_eq(&lhs.literal, &rhs.literal))?;
+        presence_eq(
+            lhs.expr.as_ref(),
+            rhs.expr.as_ref(),
+            "interpolated expression presence differs",
+            |left_expr, right_expr| {
+                at_index("segments", index, at("expr", expr_eq(left_expr, right_expr, version)))
+            },
+        )?;
+    }
+    Continue(())
 }
 
 fn function_def_eq(
