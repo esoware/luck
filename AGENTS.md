@@ -42,12 +42,12 @@ If a lint really has to go, suppress that one line with a reason:
 
 ### Naming
 
-- Prefer descriptive names. Conventional single-letter names are fine in small scopes or established notation, such as `i` for an index, `f` for a formatter, or `T` for a type parameter.
-- Don't use clipped names like `val`, `tmp`, `res`, `buf`, `ctx`, `cfg`, `req`, `resp`, `msg`, `err`, `addr`, `prev`, `len`, or `idx`, in tests either.
+- Prefer descriptive names, and use a single letter when a binding's scope is small and its role is obvious, such as `i` for an index, `b` for a byte, `c` for a char, `e` for a closure's error, `f` for a formatter, or `T` for a type parameter. `allowed-idents-below-min-chars` in `clippy.toml` lists the letters.
+- Don't use clipped names like `val`, `tmp`, `res`, `buf`, `ctx`, `cfg`, `req`, `resp`, `msg`, `err`, `addr`, `prev`, `len`, or `idx`, in tests either. `disallowed-names` in `clippy.toml` is the full list.
 - Use these domain abbreviations instead of the long form: `ast`, `ir`, `expr`, `stmt`, `op`, `ty`, `lhs`, `rhs`, `diag`, `diags`, `id`, `url`, `params`, and `args`. `cfg` always means the control-flow graph in `luck_linter`'s `cfg.rs`, never config.
 - A bool starts with `is`, `has`, `should`, or `can`: `is_open` in Rust, `isOpen` in TypeScript.
 - A raw integer that carries a unit names it: `utf16_column` or `timeout_millis` in Rust, `TICK_MS` or `unixSeconds` in TypeScript. A byte offset, a `Span`, or a `Duration` doesn't need to.
-- A field that mirrors the LSP protocol, a `luck.json` key, or a Lua or Roblox API keeps the name it mirrors.
+- A field that mirrors the LSP protocol, a `luck.json` key, a CLI flag, or a Lua or Roblox API keeps the name it mirrors.
 
 ### Comments
 
