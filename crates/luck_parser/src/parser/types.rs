@@ -82,26 +82,21 @@ impl Parser<'_> {
         if !self.enter_depth() {
             return Type::Error(self.current_span());
         }
-        let first = self.parse_paren_or_function_type(true);
+        let mut first = self.parse_paren_or_function_type(true);
         // `parseReturnType` folds a suffix over `(T)` and over the `T` of
         // `(T, ...U)`, so `(A, B)?` and `() -> (A, B) | C` leave it unconsumed.
-        let result = match first {
-            Type::Parenthesized(_) => self.parse_union_level(first),
-            Type::Pack(mut pack)
-                if matches!(
-                    pack.types.items.as_slice(),
-                    [_, Type::Variadic(_) | Type::GenericPack(_)]
-                ) =>
-            {
-                let folded = self.parse_union_level(pack.types.items[0].take());
-                pack.span = pack.span.merge(folded.span());
-                pack.types.items[0] = folded;
-                Type::Pack(pack)
-            }
-            other => other,
-        };
+        if matches!(first, Type::Parenthesized(_)) {
+            first = self.parse_union_level(first);
+        }
+        if let Type::Pack(pack) = &mut first
+            && let [element, Type::Variadic(_) | Type::GenericPack(_)] =
+                pack.types.items.as_mut_slice()
+        {
+            *element = self.parse_union_level(element.take());
+            pack.span = pack.span.merge(element.span());
+        }
         self.exit_depth();
-        result
+        first
     }
 
     /// Parse a generic argument or a generic pack's default, which may be a
