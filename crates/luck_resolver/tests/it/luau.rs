@@ -229,13 +229,16 @@ fn reports_e004_for_bare_self_alias() {
     assert_eq!(error.code, "E004");
 }
 
+// `parseAlias` tests the key as written against its lowercased entries, so
+// only a later name with an uppercase letter replaces an equal one.
 #[test]
-fn last_declared_alias_wins_among_names_equal_after_lowercasing() {
-    for (aliases, module) in [
-        (r#"{"aliases":{"Foo":"a","foo":"b"}}"#, "@foo/m"),
-        (r#"{"aliases":{"foo":"a","Foo":"b"}}"#, "@foo/m"),
-        (r#"{"aliases":{"bar":"a","Bar":"b"}}"#, "@bar/m"),
-        (r#"{"aliases":{"Bar":"a","bar":"b"}}"#, "@bar/m"),
+fn later_alias_replaces_an_equal_name_unless_already_lowercase() {
+    for (aliases, module, expected) in [
+        (r#"{"aliases":{"Foo":"a","foo":"b"}}"#, "@foo/m", "a/m.luau"),
+        (r#"{"aliases":{"foo":"a","Foo":"b"}}"#, "@foo/m", "b/m.luau"),
+        (r#"{"aliases":{"bar":"a","Bar":"b"}}"#, "@bar/m", "b/m.luau"),
+        (r#"{"aliases":{"Bar":"a","bar":"b"}}"#, "@bar/m", "a/m.luau"),
+        (r#"{"aliases":{"x":"a","x":"b"}}"#, "@x/m", "a/m.luau"),
     ] {
         let project = luau_project();
         write_files(
@@ -243,8 +246,21 @@ fn last_declared_alias_wins_among_names_equal_after_lowercasing() {
             &[("a/m.luau", "return 1"), ("b/m.luau", "return 2"), (".luaurc", aliases)],
         );
         let resolved = resolve_luau(&project, "src/main.luau", module).expect("resolve alias");
-        assert_eq!(resolved.path, normalized(&project, "b/m.luau"), "{aliases}");
+        assert_eq!(resolved.path, normalized(&project, expected), "{aliases}");
     }
+}
+
+#[test]
+fn one_resolver_sees_the_files_it_first_probed() {
+    let project = luau_project();
+    let from_file = normalized(&project, "src/main.luau");
+    let mut resolver = Resolver::new(LuaVersion::Luau, &[], project.path());
+    let first =
+        resolver.resolve(&request("./utils", &from_file)).expect("resolve before the change");
+    fs::remove_file(project.path().join("src/utils.luau")).expect("remove utils");
+    let second =
+        resolver.resolve(&request("./utils", &from_file)).expect("resolve from the warm cache");
+    assert_eq!(first.path, second.path);
 }
 
 // Luau chains an alias whose value starts with `@`, per the require-by-string
@@ -261,6 +277,41 @@ fn chained_alias_resolves_through_the_aliased_directory() {
     );
     let resolved = resolve_luau(&project, "src/main.luau", "@outer/m")
         .expect("`@outer` must chain through `@inner` to `lib/sub`");
+    assert_eq!(resolved.path, normalized(&project, "lib/sub/m.luau"));
+}
+
+// Luau looks a chained alias up from the `.luaurc` declaring it, so a closer
+// file's alias of the same name isn't in play.
+#[test]
+fn chained_alias_searches_from_the_luaurc_declaring_it() {
+    let project = luau_project();
+    write_files(
+        project.path(),
+        &[
+            (".luaurc", r#"{"aliases":{"outer":"@inner/sub","inner":"./lib"}}"#),
+            ("src/.luaurc", r#"{"aliases":{"inner":"./elsewhere"}}"#),
+            ("lib/sub/m.luau", "return {}"),
+        ],
+    );
+    let resolved = resolve_luau(&project, "src/main.luau", "@outer/m")
+        .expect("`@inner` must resolve in the `.luaurc` declaring `@outer`");
+    assert_eq!(resolved.path, normalized(&project, "lib/sub/m.luau"));
+}
+
+// Luau restarts its cycle check at each `.luaurc` the search moves to.
+#[test]
+fn chained_alias_through_a_parent_luaurc_is_no_cycle() {
+    let project = luau_project();
+    write_files(
+        project.path(),
+        &[
+            (".luaurc", r#"{"aliases":{"a":"./lib","b":"@a/sub"}}"#),
+            ("src/.luaurc", r#"{"aliases":{"a":"@b"}}"#),
+            ("lib/sub/m.luau", "return {}"),
+        ],
+    );
+    let resolved = resolve_luau(&project, "src/main.luau", "@a/m")
+        .expect("`src`'s `@a` goes through the root's `@b` to the root's own `@a`");
     assert_eq!(resolved.path, normalized(&project, "lib/sub/m.luau"));
 }
 

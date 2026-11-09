@@ -49,9 +49,6 @@ pub(crate) enum PatternError {
     EmptySet { offset: usize },
     /// A `%f` with no `[set]` after it.
     BadEscape { offset: usize, character: char },
-    /// A `*`, `+`, `-`, or `?` with nothing before it to repeat, such as at
-    /// the start of a pattern or right after `(`.
-    InvalidQuantifierTarget { offset: usize },
     /// A `)` with no open capture, or a `(` that never closes.
     UnmatchedCapture { offset: usize },
     /// A `(` past the limit on captures.
@@ -86,7 +83,6 @@ impl PatternError {
             | Self::LongSpecifier { offset }
             | Self::UnterminatedSet { offset }
             | Self::EmptySet { offset }
-            | Self::InvalidQuantifierTarget { offset }
             | Self::UnmatchedCapture { offset }
             | Self::TooManyCaptures { offset }
             | Self::BadBackReference { offset }
@@ -135,9 +131,6 @@ impl fmt::Display for PatternError {
             Self::EmptySet { offset } => write!(f, "empty set at offset {offset}"),
             Self::BadEscape { offset, character } => {
                 write!(f, "bad escape `%{character}` at offset {offset}")
-            }
-            Self::InvalidQuantifierTarget { offset } => {
-                write!(f, "quantifier has no target at offset {offset}")
             }
             Self::UnmatchedCapture { offset } => {
                 write!(f, "unmatched capture at offset {offset}")
@@ -412,32 +405,17 @@ pub(crate) fn validate_lua_pattern(pattern: &str) -> Result<usize, PatternError>
     let mut cursor = Cursor::new(pattern);
     // One entry per capture so far, true once its `)` has been read.
     let mut captures: Vec<bool> = Vec::new();
-    let mut can_quantify = false;
 
     while let Some(here) = cursor.peek() {
-        // A leading `^` and a trailing `$` are anchors, which a quantifier
-        // can't repeat.
-        let is_anchor = (here == b'^' && cursor.offset() == 0)
-            || (here == b'$' && cursor.remaining_length() == 1);
-        if is_anchor {
-            cursor.skip_bytes(1);
-            can_quantify = false;
-            continue;
-        }
-
-        can_quantify = match here {
+        match here {
             b'%' => scan_escape(&mut cursor, &captures)?,
-            b'[' => {
-                scan_set(&mut cursor)?;
-                true
-            }
+            b'[' => scan_set(&mut cursor)?,
             b'(' => {
                 if captures.len() >= MAX_CAPTURES {
                     return Err(PatternError::TooManyCaptures { offset: cursor.offset() });
                 }
                 captures.push(false);
                 cursor.skip_bytes(1);
-                false
             }
             b')' => {
                 let Some(closed) = captures.iter_mut().rev().find(|is_closed| !**is_closed) else {
@@ -445,24 +423,11 @@ pub(crate) fn validate_lua_pattern(pattern: &str) -> Result<usize, PatternError>
                 };
                 *closed = true;
                 cursor.skip_bytes(1);
-                true
             }
-            b'*' | b'+' | b'-' | b'?' => {
-                if !can_quantify {
-                    return Err(PatternError::InvalidQuantifierTarget { offset: cursor.offset() });
-                }
-                cursor.skip_bytes(1);
-                false
-            }
-            b'.' => {
-                cursor.skip_bytes(1);
-                true
-            }
-            _ => {
-                cursor.skip_char();
-                true
-            }
-        };
+            // `match` reads anything else as a single-character class, so a
+            // `*` with nothing to repeat is a literal `*`.
+            _ => cursor.skip_char(),
+        }
     }
 
     if !captures.iter().all(|&is_closed| is_closed) {
@@ -472,13 +437,12 @@ pub(crate) fn validate_lua_pattern(pattern: &str) -> Result<usize, PatternError>
     Ok(captures.len())
 }
 
-/// Scans a `%` escape with the cursor on the `%`, and returns whether a
-/// quantifier may follow it.
+/// Scans a `%` escape with the cursor on the `%`.
 ///
 /// # Errors
 ///
 /// A [`PatternError`] for a truncated or malformed escape.
-fn scan_escape(cursor: &mut Cursor<'_>, captures: &[bool]) -> Result<bool, PatternError> {
+fn scan_escape(cursor: &mut Cursor<'_>, captures: &[bool]) -> Result<(), PatternError> {
     let start = cursor.offset();
     cursor.skip_bytes(1);
     let escape_offset = cursor.offset();
@@ -489,14 +453,13 @@ fn scan_escape(cursor: &mut Cursor<'_>, captures: &[bool]) -> Result<bool, Patte
 
     match escape {
         // Back-references. `check_capture` rejects `%0`, an unseen capture,
-        // and one still open. Lua reads no quantifier after one, so a
-        // following `*` is a literal `*`.
+        // and one still open.
         b'0'..=b'9' => {
             let capture = usize::from(escape.saturating_sub(b'0'))
                 .checked_sub(1)
                 .and_then(|index| captures.get(index));
             if capture.is_some_and(|&is_closed| is_closed) {
-                Ok(false)
+                Ok(())
             } else {
                 Err(PatternError::BadBackReference { offset: escape_offset })
             }
@@ -507,7 +470,7 @@ fn scan_escape(cursor: &mut Cursor<'_>, captures: &[bool]) -> Result<bool, Patte
                 return Err(PatternError::TruncatedSpecifier { offset: start });
             }
             cursor.skip_bytes(2);
-            Ok(false)
+            Ok(())
         }
         // A `%f` frontier needs a `[set]` after it.
         b'f' => {
@@ -515,11 +478,11 @@ fn scan_escape(cursor: &mut Cursor<'_>, captures: &[bool]) -> Result<bool, Patte
                 return Err(PatternError::BadEscape { offset: start, character: 'f' });
             }
             scan_set(cursor)?;
-            Ok(false)
+            Ok(())
         }
         // A class or a literal. Lua's `match_class` treats an unknown letter
         // as itself rather than rejecting it.
-        _ => Ok(true),
+        _ => Ok(()),
     }
 }
 
@@ -919,19 +882,10 @@ mod tests {
     }
 
     #[test]
-    fn pattern_quantifier_at_start() {
-        assert!(matches!(
-            validate_lua_pattern("*"),
-            Err(PatternError::InvalidQuantifierTarget { .. })
-        ));
-    }
-
-    #[test]
-    fn pattern_quantifier_after_back_reference() {
-        assert!(matches!(
-            validate_lua_pattern("(a)%1*"),
-            Err(PatternError::InvalidQuantifierTarget { offset: 5 })
-        ));
+    fn pattern_reads_a_quantifier_with_nothing_to_repeat_as_a_literal() {
+        for pattern in ["*", "+a", "-", "?", "^-?%d+$", "(*)", "(a)%1*", "%f[a]*", "a**"] {
+            validate_lua_pattern(pattern).unwrap_or_else(|error| panic!("{pattern}: {error}"));
+        }
     }
 
     #[test]

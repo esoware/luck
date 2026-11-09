@@ -1,7 +1,7 @@
 //! Locals declared without a value and the bare names field writes go
 //! through, for the rules that follow a local before anything assigns it.
 
-use luck_ast::{Expression, Statement, Var};
+use luck_ast::{Expression, Statement, Var, is_multi_value};
 use luck_semantic::{Reference, Symbol, SymbolKind};
 use luck_token::Span;
 
@@ -9,7 +9,8 @@ use luck_token::Span;
 /// has run.
 #[derive(Debug, Default)]
 pub(crate) struct UninitializedLocals {
-    /// The names `local` statements declare without a value, as in `local x`.
+    /// The names `local` statements declare without a value, as in `local x`
+    /// or the `b` of `local a, b = 1`.
     name_spans: Vec<Span>,
     /// Where each bare name starts that a field or index write goes through,
     /// as in `x.foo = 1`.
@@ -20,10 +21,17 @@ impl UninitializedLocals {
     pub(crate) fn record(&mut self, stmt: &Statement) {
         match stmt {
             Statement::LocalAssignment(local) => {
-                if local.exprs.is_none() {
-                    self.name_spans
-                        .extend(local.names.iter().map(|attributed| attributed.name.span));
-                }
+                // A call or `...` last can fill every name after it.
+                let value_count = local.exprs.as_ref().map_or(0, |exprs| {
+                    if exprs.last().is_some_and(is_multi_value) {
+                        usize::MAX
+                    } else {
+                        exprs.items.len()
+                    }
+                });
+                self.name_spans.extend(
+                    local.names.iter().skip(value_count).map(|attributed| attributed.name.span),
+                );
             }
             Statement::Assignment(assignment) => {
                 for var in assignment.targets.iter() {
@@ -73,7 +81,7 @@ impl UninitializedLocals {
         self.field_write_prefix_starts.sort_unstable();
     }
 
-    /// Whether `symbol` is a local declared without a value.
+    /// Whether `symbol` is a local declared without a value of its own.
     pub(crate) fn contains(&self, symbol: &Symbol) -> bool {
         symbol.kind == SymbolKind::Local
             && self

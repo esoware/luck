@@ -468,6 +468,18 @@ mod tests {
     }
 
     #[test]
+    fn ignores_quantifier_with_nothing_to_repeat() {
+        for source in [
+            "local s = string.gsub(x, \"-\", \"_\")",
+            "local s = string.find(x, \"+\")",
+            "local s = string.match(x, \"^-?%d+$\")",
+        ] {
+            let diags = run(source);
+            assert!(diags.is_empty(), "{source}: `lstrlib.c` reads these as literals: {diags:?}");
+        }
+    }
+
+    #[test]
     fn ignores_set_with_leading_close_bracket() {
         let diags = run("local i = string.find(s, \"[]]\")");
         assert!(diags.is_empty(), "a `]` first in a set is a member: {diags:?}");

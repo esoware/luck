@@ -4,6 +4,7 @@ use std::path::Path;
 use luck_core::{DEFAULT_SEARCH_PATHS, Diagnostic};
 use luck_token::{LuaVersion, Span};
 
+use crate::luau::ModuleProbes;
 use crate::luaurc::AliasCache;
 use crate::{lua, luau};
 
@@ -29,9 +30,9 @@ pub struct ResolveRequest<'request> {
 
 /// Resolves the `require()` strings of one build.
 ///
-/// Luau caches the `.luaurc` alias tables it discovers. Cached data, including
-/// a missing or malformed file, is never reread, so make a fresh resolver per
-/// build.
+/// Luau caches the `.luaurc` alias tables it discovers and what each module
+/// path holds on disk. Cached data, including a missing or malformed file, is
+/// never reread, so make a fresh resolver per build.
 #[derive(Debug)]
 pub struct Resolver<'config> {
     scheme: Scheme<'config>,
@@ -40,7 +41,7 @@ pub struct Resolver<'config> {
 #[derive(Debug)]
 enum Scheme<'config> {
     Lua { search_paths: Cow<'config, [String]>, project_root: &'config Path },
-    Luau(AliasCache),
+    Luau(AliasCache, ModuleProbes),
 }
 
 impl<'config> Resolver<'config> {
@@ -56,7 +57,7 @@ impl<'config> Resolver<'config> {
         project_root: &'config Path,
     ) -> Self {
         let scheme = if version.is_luau() {
-            Scheme::Luau(AliasCache::default())
+            Scheme::Luau(AliasCache::default(), ModuleProbes::default())
         } else if search_paths.is_empty() {
             let default_paths = DEFAULT_SEARCH_PATHS.iter().map(ToString::to_string).collect();
             Scheme::Lua { search_paths: Cow::Owned(default_paths), project_root }
@@ -77,7 +78,7 @@ impl<'config> Resolver<'config> {
             Scheme::Lua { search_paths, project_root } => {
                 lua::resolve(search_paths, project_root, request)
             }
-            Scheme::Luau(aliases) => luau::resolve(aliases, request),
+            Scheme::Luau(aliases, probes) => luau::resolve(aliases, probes, request),
         }
     }
 }

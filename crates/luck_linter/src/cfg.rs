@@ -54,11 +54,23 @@ const EXIT_NODE_COUNT: usize = 5;
 #[derive(Debug)]
 pub(crate) struct FlowGraph {
     successors: Vec<[Option<usize>; 2]>,
+    /// Where each node's code starts, or 0 for a node without code.
+    code_starts: Vec<u32>,
     /// The span and node of each piece of code, in source order and disjoint.
     code: Vec<(Span, usize)>,
-    /// Each name a `local` statement declares, with that statement's node.
-    locals: Vec<(Span, usize)>,
+    locals: Vec<LocalDeclaration>,
     is_reachable: Vec<bool>,
+}
+
+/// One name a `local` statement declares.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LocalDeclaration {
+    pub name_span: Span,
+    /// The node of the `local` statement.
+    pub node: usize,
+    /// Where the name's scope ends. Code past this can't reference it, and
+    /// Lua can only re-enter a scope through the `local` statement itself.
+    pub scope_end: u32,
 }
 
 impl FlowGraph {
@@ -66,12 +78,14 @@ impl FlowGraph {
         let mut builder = GraphBuilder {
             graph: Self {
                 successors: vec![[None; 2]; EXIT_NODE_COUNT],
+                code_starts: vec![0; EXIT_NODE_COUNT],
                 code: Vec::new(),
                 locals: Vec::new(),
                 is_reachable: Vec::new(),
             },
             semantic,
             cursor: None,
+            scope_end: 0,
             break_target: Exit::Break.node(),
             continue_target: Exit::End.node(),
             labels: Vec::new(),
@@ -83,7 +97,14 @@ impl FlowGraph {
 
         let mut graph = builder.graph;
         let mut is_reachable = vec![false; graph.node_count()];
-        graph.mark_reachable_from([entry], None, &mut is_reachable);
+        let mut stack = vec![entry];
+        while let Some(node) = stack.pop() {
+            if let Some(mark) = is_reachable.get_mut(node)
+                && !mem::replace(mark, true)
+            {
+                stack.extend(graph.successors(node));
+            }
+        }
         graph.is_reachable = is_reachable;
         graph
     }
@@ -113,28 +134,13 @@ impl FlowGraph {
         self.successors.get(node).into_iter().flatten().copied().flatten()
     }
 
-    /// Each name a `local` statement declares, with that statement's node.
-    pub(crate) fn locals(&self) -> &[(Span, usize)] {
+    pub(crate) fn locals(&self) -> &[LocalDeclaration] {
         &self.locals
     }
 
-    /// Marks every node reachable from `starts`, without passing through
-    /// `barrier`, which stays unmarked.
-    pub(crate) fn mark_reachable_from(
-        &self,
-        starts: impl IntoIterator<Item = usize>,
-        barrier: Option<usize>,
-        is_marked: &mut [bool],
-    ) {
-        let mut stack: Vec<usize> = starts.into_iter().collect();
-        while let Some(node) = stack.pop() {
-            if Some(node) != barrier
-                && let Some(mark) = is_marked.get_mut(node)
-                && !mem::replace(mark, true)
-            {
-                stack.extend(self.successors(node));
-            }
-        }
+    /// Whether `node`'s code starts at or after `offset`.
+    pub(crate) fn starts_at_or_after(&self, node: usize, offset: u32) -> bool {
+        self.code_starts.get(node).is_some_and(|start| *start >= offset)
     }
 }
 
@@ -143,6 +149,8 @@ struct GraphBuilder<'ast, 'analysis> {
     semantic: &'analysis SemanticAnalysis,
     /// The node the next code runs after, or `None` right after a jump.
     cursor: Option<usize>,
+    /// Where the scope of a `local` declared here ends.
+    scope_end: u32,
     break_target: usize,
     continue_target: usize,
     /// Each label visible here, innermost last.
@@ -152,6 +160,7 @@ struct GraphBuilder<'ast, 'analysis> {
 impl<'ast> GraphBuilder<'ast, '_> {
     fn new_node(&mut self) -> usize {
         self.graph.successors.push([None; 2]);
+        self.graph.code_starts.push(0);
         self.graph.node_count().saturating_sub(1)
     }
 
@@ -174,6 +183,9 @@ impl<'ast> GraphBuilder<'ast, '_> {
     /// Adds the code at `span` after the cursor.
     fn code(&mut self, span: Span) -> usize {
         let node = self.new_node();
+        if let Some(code_start) = self.graph.code_starts.get_mut(node) {
+            *code_start = span.start;
+        }
         self.graph.code.push((span, node));
         self.advance_to(node);
         node
@@ -194,6 +206,12 @@ impl<'ast> GraphBuilder<'ast, '_> {
     }
 
     fn block(&mut self, block: &'ast Block) {
+        self.scoped_block(block, block.span.end);
+    }
+
+    /// Builds `block`, whose locals stay in scope up to `scope_end`.
+    fn scoped_block(&mut self, block: &'ast Block, scope_end: u32) {
+        let outer_scope_end = mem::replace(&mut self.scope_end, scope_end);
         let outer_label_count = self.labels.len();
         // A label is visible in its whole block, `goto`s before it included.
         for stmt in &block.stmts {
@@ -211,6 +229,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
             self.last_stmt(last);
         }
         self.labels.truncate(outer_label_count);
+        self.scope_end = outer_scope_end;
     }
 
     fn label_node(&self, token: &Token) -> Option<usize> {
@@ -229,9 +248,12 @@ impl<'ast> GraphBuilder<'ast, '_> {
             }
             Statement::LocalAssignment(local) => {
                 let node = self.code(local.span);
-                self.graph
-                    .locals
-                    .extend(local.names.iter().map(|attributed| (attributed.name.span, node)));
+                let scope_end = self.scope_end;
+                self.graph.locals.extend(local.names.iter().map(|attributed| LocalDeclaration {
+                    name_span: attributed.name.span,
+                    node,
+                    scope_end,
+                }));
             }
             Statement::DoBlock(node) => self.block(&node.block),
             Statement::WhileLoop(node) => self.while_loop(node),
@@ -288,11 +310,18 @@ impl<'ast> GraphBuilder<'ast, '_> {
         }
     }
 
-    /// Builds a loop's body, whose iterations end at `continue_target`.
-    fn loop_body(&mut self, block: &'ast Block, break_target: usize, continue_target: usize) {
+    /// Builds a loop's body, whose locals stay in scope up to `scope_end` and
+    /// whose iterations end at `continue_target`.
+    fn loop_body(
+        &mut self,
+        block: &'ast Block,
+        scope_end: u32,
+        break_target: usize,
+        continue_target: usize,
+    ) {
         let outer_break_target = mem::replace(&mut self.break_target, break_target);
         let outer_continue_target = mem::replace(&mut self.continue_target, continue_target);
-        self.block(block);
+        self.scoped_block(block, scope_end);
         self.close_into(continue_target);
         self.break_target = outer_break_target;
         self.continue_target = outer_continue_target;
@@ -305,7 +334,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
         if truth == Some(false) {
             self.cursor = None;
         }
-        self.loop_body(&node.block, after, head);
+        self.loop_body(&node.block, node.block.span.end, after, head);
         if truth != Some(true) {
             self.connect(head, after);
         }
@@ -317,7 +346,8 @@ impl<'ast> GraphBuilder<'ast, '_> {
         self.advance_to(body);
         let condition = self.new_node();
         let after = self.new_node();
-        self.loop_body(&node.block, after, condition);
+        // A repeat's condition still sees its body's locals.
+        self.loop_body(&node.block, node.condition.span().end, after, condition);
         self.graph.code.push((node.condition.span(), condition));
         let truth = literal_truth(&node.condition);
         if truth != Some(true) {
@@ -334,7 +364,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
         let head = self.new_node();
         self.advance_to(head);
         let after = self.new_node();
-        self.loop_body(body, after, head);
+        self.loop_body(body, body.span.end, after, head);
         // The iterator can run out before the first iteration.
         self.connect(head, after);
         self.cursor = Some(after);

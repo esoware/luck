@@ -4,7 +4,8 @@ use crate::rule::{LintContext, WholeRule, impl_rule};
 /// Luacheck 321: a local declared without a value is read where no assignment
 /// can have reached it.
 ///
-/// Only a bare `local x` counts. `local x = nil` is initialized, and
+/// A name counts when its `local` gives it no value, as in `local x` or the
+/// `b` of `local a, b = 1`. `local x = nil` is initialized, and
 /// `redundant_nil_init` covers it instead. A field or index write through the
 /// local is `mutating_uninitialized`'s (Luacheck 341).
 #[derive(Debug, Clone, Copy)]
@@ -149,6 +150,27 @@ mod tests {
     fn ignores_read_after_a_closure_that_writes_it() {
         let diags = run("local x\nlocal function set() x = 1 end\nset()\nprint(x)");
         assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_read_of_a_name_the_initializer_list_leaves_without_a_value() {
+        let diags = run("local a, b = 1
+print(a, b)");
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+        assert!(diags[0].message.contains("`b`"), "got: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_name_a_trailing_call_can_fill() {
+        let diags = run("local a, b = f()
+print(a, b)");
+        assert!(diags.is_empty(), "the call can fill `b`: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_read_in_until_after_a_write_in_the_body() {
+        let diags = run("repeat local x\nif c then x = 1 end until x");
+        assert!(diags.is_empty(), "the `until` sees the body's locals: {diags:?}");
     }
 
     #[test]

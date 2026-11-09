@@ -64,7 +64,9 @@ pub(crate) fn extract_requires(
         seen_require_strings: FxHashSet::default(),
         direct_callee_spans: FxHashSet::default(),
         function_depth: 0,
+        vararg_function_depth: 0,
         has_vararg_read: false,
+        has_global_arg_read: false,
     };
     finder.visit_block(block);
 
@@ -75,6 +77,7 @@ pub(crate) fn extract_requires(
         package_loaded_writes,
         direct_callee_spans,
         has_vararg_read,
+        has_global_arg_read,
         ..
     } = finder;
 
@@ -92,8 +95,6 @@ pub(crate) fn extract_requires(
     sites.sort_by_key(|site| site.call_span.start);
     diagnostics.extend(package_loaded_writes);
 
-    let has_global_arg_read = version.has_implicit_vararg_table()
-        && scope_tree.unresolved_references().any(|reference| reference.name == "arg");
     let has_env_rebinding = version.has_env_upvalue()
         && (scope_tree.is_env_assigned
             || scope_tree.unresolved_references().any(|reference| reference.name == "module"));
@@ -153,7 +154,10 @@ struct RequireFinder<'input> {
     direct_callee_spans: FxHashSet<Span>,
     /// Function bodies entered so far; zero is the module's own chunk.
     function_depth: usize,
+    /// How many of those declare `...`, each binding its own `arg` on 5.1.
+    vararg_function_depth: usize,
     has_vararg_read: bool,
+    has_global_arg_read: bool,
 }
 
 impl RequireFinder<'_> {
@@ -258,12 +262,25 @@ impl<'ast> Visitor<'ast> for RequireFinder<'_> {
 
     fn visit_var(&mut self, var: &'ast Var) {
         self.flag_global_table_require(var);
+        if let Var::Name(token) = var
+            && self.vararg_function_depth == 0
+            && self.version.has_implicit_vararg_table()
+            && token.identifier() == Some("arg")
+            && !self.scope_tree.resolves_to_local("arg", token.span)
+        {
+            self.has_global_arg_read = true;
+        }
         self.walk_var(var);
     }
 
     fn visit_function_body(&mut self, body: &'ast FunctionBody) {
+        let is_vararg = body.vararg.is_some();
         self.function_depth = self.function_depth.saturating_add(1);
+        self.vararg_function_depth =
+            self.vararg_function_depth.saturating_add(usize::from(is_vararg));
         self.walk_function_body(body);
+        self.vararg_function_depth =
+            self.vararg_function_depth.saturating_sub(usize::from(is_vararg));
         self.function_depth = self.function_depth.saturating_sub(1);
     }
 
@@ -613,6 +630,26 @@ mod tests {
         // `local modname = ...` idiom works and needs no warning.
         let result = extract("local modname = ...\nreturn modname\n");
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn lua51_global_arg_read_ignores_a_vararg_functions_own_arg() {
+        let extract_arg_read = |source: &str| {
+            extract_requires(
+                &luck_parser::parse(source, LuaVersion::Lua51).block,
+                "test.lua",
+                LuaVersion::Lua51,
+                DynamicRequire::default(),
+            )
+            .has_global_arg_read
+        };
+        assert!(extract_arg_read("return arg\n"));
+        assert!(extract_arg_read("local function f() return arg end\nreturn f\n"));
+        assert!(!extract_arg_read("local function f(...) return arg end\nreturn f\n"));
+        assert!(!extract_arg_read(
+            "local function f(...) return function() return arg end end\nreturn f\n"
+        ));
+        assert!(!extract_arg_read("local arg = {}\nreturn arg\n"));
     }
 
     #[test]

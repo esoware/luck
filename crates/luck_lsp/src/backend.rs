@@ -181,10 +181,10 @@ impl<N: Notifier> Backend<N> {
         if !self.is_open(&uri, &document).await {
             return;
         }
-        let lints: Arc<[LintDiagnostic]> = self.settings_if_included(&uri).await.map_or_else(
-            || Vec::new().into(),
-            |settings| document.lint(&settings.lint_config).into(),
-        );
+        let lints: Arc<[LintDiagnostic]> = match self.settings_if_included(&uri).await {
+            Some(settings) => lint_off_the_serve_loop(&document, settings).await,
+            None => Vec::new().into(),
+        };
         let diagnostics = diagnostics::to_lsp(&document, &lints);
         // Through the send, so nothing newer can reach the client before it.
         let _ordered = self.sync.lock().await;
@@ -311,6 +311,17 @@ impl<N: Notifier> Backend<N> {
         };
         Some(self.store(uri, current.with_text(text, version)).await)
     }
+}
+
+/// `document`'s lints, computed on the blocking pool: tower-lsp polls every
+/// handler on one task, so a lint run inline would stall the whole server. A
+/// lint that dies yields nothing.
+async fn lint_off_the_serve_loop(
+    document: &Arc<DocumentState>,
+    settings: Arc<ProjectSettings>,
+) -> Arc<[LintDiagnostic]> {
+    let linted = Arc::clone(document);
+    spawn_blocking(move || linted.lint(&settings.lint_config)).await.unwrap_or_default().into()
 }
 
 #[tower_lsp::async_trait]
@@ -585,7 +596,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         let lints = if let Some(lints) = published_lints {
             lints
         } else if let Some(settings) = self.settings_if_included(uri).await {
-            document.lint(&settings.lint_config).into()
+            lint_off_the_serve_loop(&document, settings).await
         } else {
             Vec::new().into()
         };

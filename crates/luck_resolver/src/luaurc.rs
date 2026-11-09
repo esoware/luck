@@ -9,8 +9,13 @@ use rustc_hash::FxHashMap;
 #[derive(Debug)]
 pub(crate) enum AliasTarget {
     Directory(PathBuf),
-    /// Another alias, as written after its `@`, and any sub path.
-    Chained(String),
+    /// Another alias, as written after its `@`, and any sub path, with the
+    /// directory of the `.luaurc` declaring it, where the search for that
+    /// alias starts.
+    Chained {
+        target: String,
+        declared_in: PathBuf,
+    },
 }
 
 /// The `.luaurc` alias tables read so far, which are never reread.
@@ -72,7 +77,10 @@ fn alias_target(declaring_directory: &Path, written_target: &str) -> AliasTarget
                 &declaring_directory.join(native_path(&target)),
             ))
         },
-        |chained| AliasTarget::Chained(chained.to_owned()),
+        |chained| AliasTarget::Chained {
+            target: chained.to_owned(),
+            declared_in: declaring_directory.to_path_buf(),
+        },
     )
 }
 
@@ -109,8 +117,7 @@ impl Deref for DeclaredTable {
     }
 }
 
-/// The aliases `directory/.luaurc` declares, with the last of any names equal
-/// after lowercasing kept, as in Luau. Empty when the file is missing,
+/// The aliases `directory/.luaurc` declares. Empty when the file is missing,
 /// malformed, or declares none.
 fn read_declared_aliases(directory: &Path) -> DeclaredTable {
     let candidate = directory.join(".luaurc");
@@ -160,19 +167,32 @@ fn parse_aliases(file_bytes: &[u8]) -> Option<FxHashMap<String, String>> {
             } else if reader.eat(b'{') {
                 // Its keys come next, under this one.
             } else {
-                let value = if reader.eat_word(b"true") || reader.eat_word(b"false") {
-                    None
+                // Luau hands a boolean on as its text, so one in `aliases` is
+                // just an odd target.
+                let (value, is_boolean) = if reader.eat_word(b"true") {
+                    (b"true".as_slice(), true)
+                } else if reader.eat_word(b"false") {
+                    (b"false".as_slice(), true)
                 } else {
-                    Some(reader.string()?)
+                    (reader.string()?, false)
                 };
-                match (keys.as_slice(), value) {
-                    ([b"aliases", name], Some(target)) if is_valid_alias_name(name) => {
-                        aliases.insert(
-                            String::from_utf8_lossy(name).to_ascii_lowercase(),
-                            String::from_utf8_lossy(target).into_owned(),
-                        );
+                match keys.as_slice() {
+                    [b"aliases", name] if !is_valid_alias_name(name) => return None,
+                    [b"aliases", name] => {
+                        let lowercase_name = String::from_utf8_lossy(name).to_ascii_lowercase();
+                        // `parseAlias` tests the key as written against its
+                        // lowercased entries, so only a later name with an
+                        // uppercase letter replaces an equal one.
+                        if lowercase_name.as_bytes() != *name
+                            || !aliases.contains_key(&lowercase_name)
+                        {
+                            aliases.insert(
+                                lowercase_name,
+                                String::from_utf8_lossy(value).into_owned(),
+                            );
+                        }
                     }
-                    ([b"aliases", _], _) | ([b"languageMode"], None) => return None,
+                    [b"languageMode"] if is_boolean => return None,
                     _ => {}
                 }
                 keys.pop();
@@ -197,20 +217,36 @@ struct LuaurcReader<'contents> {
 }
 
 impl<'contents> LuaurcReader<'contents> {
-    /// The next byte past any whitespace and `//` or `--` comments.
+    /// The next byte past any whitespace and comments. A long comment that
+    /// never closes yields its `-`, which no caller accepts.
     fn peek(&mut self) -> Option<u8> {
         loop {
             match self.rest {
-                [byte, tail @ ..] if byte.is_ascii_whitespace() => self.rest = tail,
-                [b'/', b'/', ..] | [b'-', b'-', ..] => {
-                    let line_end =
-                        self.rest.iter().position(|byte| *byte == b'\n').unwrap_or(self.rest.len());
-                    self.rest = self.rest.get(line_end..).unwrap_or_default();
+                [b' ' | b'\t' | b'\r' | b'\n' | b'\x0b' | b'\x0c', tail @ ..] => {
+                    self.rest = tail;
+                }
+                [b'/', b'/', ..] => self.skip_line(),
+                [b'-', b'-', after_dashes @ ..] => {
+                    let level = long_bracket_level(after_dashes);
+                    match level.map(|found_level| after_long_bracket(after_dashes, found_level)) {
+                        Some(Some(after_comment)) => self.rest = after_comment,
+                        Some(None) => return Some(b'-'),
+                        None => self.skip_line(),
+                    }
                 }
                 [byte, ..] => return Some(*byte),
                 [] => return None,
             }
         }
+    }
+
+    fn skip_line(&mut self) {
+        let line_end = self
+            .rest
+            .iter()
+            .position(|byte| matches!(byte, b'\r' | b'\n'))
+            .unwrap_or(self.rest.len());
+        self.rest = self.rest.get(line_end..).unwrap_or_default();
     }
 
     fn eat(&mut self, byte: u8) -> bool {
@@ -243,8 +279,8 @@ impl<'contents> LuaurcReader<'contents> {
         let mut remaining = body;
         loop {
             match remaining {
-                [] | [b'\n', ..] => return None,
-                [b'\\', _, tail @ ..] => remaining = tail,
+                [] | [b'\n' | b'\r' | 0, ..] => return None,
+                [b'\\', b'\r', b'\n', tail @ ..] | [b'\\', _, tail @ ..] => remaining = tail,
                 [byte, tail @ ..] if *byte == quote => {
                     self.rest = tail;
                     let text_length = body.len().saturating_sub(tail.len()).saturating_sub(1);
@@ -253,6 +289,28 @@ impl<'contents> LuaurcReader<'contents> {
                 [_, tail @ ..] => remaining = tail,
             }
         }
+    }
+}
+
+/// The level of the long bracket `text` opens with, if it opens one.
+fn long_bracket_level(text: &[u8]) -> Option<usize> {
+    let after_opening = text.strip_prefix(b"[")?;
+    let level = after_opening.iter().take_while(|byte| **byte == b'=').count();
+    (after_opening.get(level) == Some(&b'[')).then_some(level)
+}
+
+/// What follows the close of the level-`level` long bracket `text` opens with,
+/// or `None` when it doesn't close.
+fn after_long_bracket(text: &[u8], level: usize) -> Option<&[u8]> {
+    let mut remaining = text.get(level.saturating_add(2)..)?;
+    loop {
+        let closer = remaining.iter().position(|byte| *byte == b']')?;
+        let after_closer = remaining.get(closer.saturating_add(1)..)?;
+        let equals_count = after_closer.iter().take_while(|byte| **byte == b'=').count();
+        if equals_count == level && after_closer.get(level) == Some(&b']') {
+            return after_closer.get(level.saturating_add(1)..);
+        }
+        remaining = after_closer;
     }
 }
 
@@ -265,6 +323,7 @@ mod tests {
 
     use super::*;
     use crate::fixtures::{luau_project, project_with, request, write_files};
+    use crate::luau::ModuleProbes;
     use crate::{ResolveRequest, Resolver, luau};
 
     #[test]
@@ -287,8 +346,9 @@ mod tests {
         assert_eq!(cache.declared_tables.len(), source_directory.ancestors().count());
         assert_eq!(cache.in_effect(&source_directory).len(), 64);
         for module in ["@alias0/utils", "@ALIAS63/utils", "@alias0/utils"] {
-            let resolved = luau::resolve(&mut cache, &request(module, &current))
-                .expect("resolve cached alias");
+            let resolved =
+                luau::resolve(&mut cache, &mut ModuleProbes::default(), &request(module, &current))
+                    .expect("resolve cached alias");
             assert_eq!(resolved.path, normalize_path(&source_directory.join("utils.luau")));
             assert!(resolved.warnings.is_empty(), "{:?}", resolved.warnings);
             assert_eq!(ptr::from_ref(cache.in_effect(&source_directory)), cached);
@@ -314,12 +374,20 @@ mod tests {
         let mut cache = AliasCache::default();
         for _ in 0u8..2 {
             for module in ["@SHARED/utils", "@inherited/utils"] {
-                let resolved = luau::resolve(&mut cache, &request(module, &current))
-                    .expect("resolve inherited alias");
+                let resolved = luau::resolve(
+                    &mut cache,
+                    &mut ModuleProbes::default(),
+                    &request(module, &current),
+                )
+                .expect("resolve inherited alias");
                 assert_eq!(resolved.path, normalize_path(&source_directory.join("utils.luau")));
             }
-            let error = luau::resolve(&mut cache, &request("@SHARED/utils", &sibling_file))
-                .expect_err("sibling must not inherit child aliases");
+            let error = luau::resolve(
+                &mut cache,
+                &mut ModuleProbes::default(),
+                &request("@SHARED/utils", &sibling_file),
+            )
+            .expect_err("sibling must not inherit child aliases");
             assert_eq!(error.code, "E004");
         }
         assert_eq!(cache.merged_tables.len(), 2);
@@ -335,6 +403,7 @@ mod tests {
         for span in [Span::new(0, 10), Span::new(20, 30)] {
             let resolved = luau::resolve(
                 &mut cache,
+                &mut ModuleProbes::default(),
                 &ResolveRequest { module: "@SELF/utils", from_file: &current, span },
             )
             .expect("resolve built-in self");
@@ -403,6 +472,37 @@ mod tests {
         let aliases = read_declared_aliases(project.path());
         assert_eq!(aliases.get("utils").map(String::as_str), Some("../shared/utils"));
         assert_eq!(aliases.get("components").map(String::as_str), Some("./components"));
+    }
+
+    #[test]
+    fn luaurc_accepts_every_comment_form_the_luau_lexer_does() {
+        let project = project_with(&[(
+            ".luaurc",
+            "-- line\r{ --[[ block\n}]] // line\n --[==[ ]] ]==] \"aliases\": {\"a\": \"./a\"} } --x",
+        )]);
+        let declared = read_declared_aliases(project.path());
+        assert!(!declared.is_malformed);
+        assert_eq!(declared.get("a").map(String::as_str), Some("./a"));
+    }
+
+    #[test]
+    fn luaurc_with_an_unterminated_long_comment_is_malformed() {
+        let project = project_with(&[(".luaurc", "--[[ never closed\n{}")]);
+        assert!(read_declared_aliases(project.path()).is_malformed);
+    }
+
+    #[test]
+    fn luaurc_string_broken_by_a_carriage_return_is_malformed() {
+        let project = project_with(&[(".luaurc", "{\"aliases\": {\"a\": \"./a\r\"}}")]);
+        assert!(read_declared_aliases(project.path()).is_malformed);
+    }
+
+    #[test]
+    fn luaurc_boolean_alias_target_is_kept_as_its_text() {
+        let project = project_with(&[(".luaurc", r#"{"aliases": {"a": true}}"#)]);
+        let declared = read_declared_aliases(project.path());
+        assert!(!declared.is_malformed);
+        assert_eq!(declared.get("a").map(String::as_str), Some("true"));
     }
 
     #[test]

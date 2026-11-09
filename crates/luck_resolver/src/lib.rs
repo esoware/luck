@@ -11,8 +11,8 @@
 //! file's directory, and `@alias` prefixes from the `.luaurc` files found up
 //! the directory tree.
 //!
-//! A [`Resolver`] caches `.luaurc` aliases and never invalidates them, so
-//! create one per build to see alias edits.
+//! A [`Resolver`] caches `.luaurc` aliases and Luau's file probes and never
+//! invalidates them, so create one per build to see edits.
 //!
 //! # Usage
 //!

@@ -6,7 +6,7 @@ use core::mem;
 use luck_semantic::{ReferenceId, ReferenceKind, Symbol, SymbolId, SymbolKind};
 use luck_token::Span;
 
-use crate::cfg::FlowGraph;
+use crate::cfg::{FlowGraph, LocalDeclaration};
 use crate::rule::LintContext;
 
 #[derive(Debug, Default)]
@@ -47,12 +47,13 @@ impl LocalFlow {
                 continue;
             }
             let graph = FlowGraph::of_block(function_block, context.semantic);
-            for &(name_span, declaration) in graph.locals() {
-                if let Ok(index) = tracked
-                    .binary_search_by_key(&name_span.start, |symbol| symbol.definition_span.start)
-                    && let Some(symbol) = tracked.get(index)
+            let mut walk = GraphWalk::new(&graph);
+            for local in graph.locals() {
+                if let Ok(index) = tracked.binary_search_by_key(&local.name_span.start, |symbol| {
+                    symbol.definition_span.start
+                }) && let Some(symbol) = tracked.get(index)
                 {
-                    flow.add_local(symbol, declaration, &graph, context);
+                    flow.add_local(symbol, local, &mut walk, context);
                 }
             }
         }
@@ -62,11 +63,12 @@ impl LocalFlow {
     fn add_local(
         &mut self,
         symbol: &Symbol,
-        declaration: usize,
-        graph: &FlowGraph,
+        local: &LocalDeclaration,
+        walk: &mut GraphWalk<'_>,
         context: &LintContext<'_>,
     ) {
         let tree = &context.semantic.scope_tree;
+        let graph = walk.graph;
         let mut uses = Vec::with_capacity(symbol.reference_ids.len());
         for &reference_id in &symbol.reference_ids {
             let reference = tree.reference(reference_id);
@@ -84,9 +86,7 @@ impl LocalFlow {
         }
 
         let is_uninitialized = context.uninitialized_locals.contains(symbol);
-        if is_uninitialized
-            && let Some(reference_id) = first_unassigned_use(&uses, declaration, graph)
-        {
+        if is_uninitialized && let Some(reference_id) = walk.first_unassigned_use(&uses, local) {
             self.first_unassigned_uses.push((symbol.id, reference_id));
         }
 
@@ -94,8 +94,8 @@ impl LocalFlow {
         if symbol.is_modified && !symbol.is_upvalue {
             // Stable, so each node's uses stay in reference order.
             uses.sort_by_key(|used| used.node);
-            let mut value_walk = ValueWalk::new(graph, &uses, declaration);
-            if !is_uninitialized && value_walk.is_overwritten_unread(graph.successors(declaration))
+            if !is_uninitialized
+                && walk.is_overwritten_unread(&uses, local, graph.successors(local.node))
             {
                 self.overwritten_values.push((symbol.id, symbol.definition_span));
             }
@@ -106,7 +106,7 @@ impl LocalFlow {
                 let next_in_node =
                     uses.get(index.saturating_add(1)).filter(|next| next.node == used.node);
                 let is_overwritten = next_in_node.map_or_else(
-                    || value_walk.is_overwritten_unread(graph.successors(used.node)),
+                    || walk.is_overwritten_unread(&uses, local, graph.successors(used.node)),
                     |next| !next.kind.is_read(),
                 );
                 if is_overwritten {
@@ -127,81 +127,93 @@ struct Use {
     is_in_closure: bool,
 }
 
-/// The first read, in reference order, that no write can reach. A read in a
-/// closure runs at an unknown time, and a write in a closure can happen
-/// anywhere after the closure exists.
-fn first_unassigned_use(
-    uses: &[Use],
-    declaration: usize,
-    graph: &FlowGraph,
-) -> Option<ReferenceId> {
-    let mut is_assigned = vec![false; graph.node_count()];
-    let after_writes = uses
-        .iter()
-        .filter(|used| used.kind.is_write())
-        .flat_map(|used| graph.successors(used.node));
-    graph.mark_reachable_from(after_writes, Some(declaration), &mut is_assigned);
-    for used in uses {
-        if used.kind.is_read()
-            && !used.is_in_closure
-            && !is_assigned.get(used.node).copied().unwrap_or_default()
-        {
-            return Some(used.reference_id);
-        }
-        // A later read in the statement that wrote sees the value.
-        if used.kind.is_write()
-            && let Some(mark) = is_assigned.get_mut(used.node)
-        {
-            *mark = true;
-        }
-    }
-    None
-}
-
-/// Follows a value along every path out of a write, until something reads
-/// it, overwrites it, or a re-run of its `local` statement replaces the
-/// variable.
-struct ValueWalk<'walk> {
-    graph: &'walk FlowGraph,
-    /// Sorted by node, each node's uses in reference order.
-    uses: &'walk [Use],
-    declaration: usize,
+/// Follows a local's value along a graph's paths, stopping where the value
+/// can't go: past the local's scope, or at a re-run of its `local` statement,
+/// which replaces the variable.
+///
+/// The marks are shared across locals, so a long function doesn't allocate a
+/// fresh array for each one.
+struct GraphWalk<'graph> {
+    graph: &'graph FlowGraph,
     /// The last walk that visited each node.
     visited_in_walk: Vec<u32>,
     walk: u32,
     stack: Vec<usize>,
 }
 
-impl<'walk> ValueWalk<'walk> {
-    fn new(graph: &'walk FlowGraph, uses: &'walk [Use], declaration: usize) -> Self {
-        Self {
-            graph,
-            uses,
-            declaration,
-            visited_in_walk: vec![0; graph.node_count()],
-            walk: 0,
-            stack: Vec::new(),
+impl<'graph> GraphWalk<'graph> {
+    fn new(graph: &'graph FlowGraph) -> Self {
+        Self { graph, visited_in_walk: vec![0; graph.node_count()], walk: 0, stack: Vec::new() }
+    }
+
+    /// The first read, in reference order, that no write can reach. A read
+    /// in a closure runs at an unknown time, and a write in a closure can
+    /// happen anywhere after the closure exists.
+    fn first_unassigned_use(
+        &mut self,
+        uses: &[Use],
+        local: &LocalDeclaration,
+    ) -> Option<ReferenceId> {
+        let graph = self.graph;
+        self.start(
+            uses.iter()
+                .filter(|used| used.kind.is_write())
+                .flat_map(|used| graph.successors(used.node)),
+        );
+        while let Some(node) = self.next_node(local) {
+            self.stack.extend(graph.successors(node));
         }
+        for used in uses {
+            if used.kind.is_read() && !used.is_in_closure && !self.is_visited(used.node) {
+                return Some(used.reference_id);
+            }
+            // A later read in the statement that wrote sees the value.
+            if used.kind.is_write() {
+                self.visit(used.node);
+            }
+        }
+        None
     }
 
     /// Whether a value leaving through `starts` is overwritten on some path
-    /// and read on none.
-    fn is_overwritten_unread(&mut self, starts: impl IntoIterator<Item = usize>) -> bool {
-        self.walk = self.walk.saturating_add(1);
-        self.stack.clear();
-        self.stack.extend(starts);
+    /// and read on none. `uses` is sorted by node, each node's in reference
+    /// order.
+    fn is_overwritten_unread(
+        &mut self,
+        uses: &[Use],
+        local: &LocalDeclaration,
+        starts: impl IntoIterator<Item = usize>,
+    ) -> bool {
+        self.start(starts);
         let mut is_overwritten = false;
-        while let Some(node) = self.stack.pop() {
-            if node == self.declaration || !self.visit(node) {
-                continue;
-            }
-            match self.first_use_in(node) {
-                Some(used) if used.kind.is_read() => return false,
+        while let Some(node) = self.next_node(local) {
+            let first_use = uses.partition_point(|candidate| candidate.node < node);
+            match uses.get(first_use).filter(|candidate| candidate.node == node) {
+                Some(found) if found.kind.is_read() => return false,
                 Some(_) => is_overwritten = true,
                 None => self.stack.extend(self.graph.successors(node)),
             }
         }
         is_overwritten
+    }
+
+    fn start(&mut self, starts: impl IntoIterator<Item = usize>) {
+        self.walk = self.walk.saturating_add(1);
+        self.stack.clear();
+        self.stack.extend(starts);
+    }
+
+    /// The next node this walk can enter, marked visited.
+    fn next_node(&mut self, local: &LocalDeclaration) -> Option<usize> {
+        while let Some(node) = self.stack.pop() {
+            if node != local.node
+                && !self.graph.starts_at_or_after(node, local.scope_end)
+                && self.visit(node)
+            {
+                return Some(node);
+            }
+        }
+        None
     }
 
     /// Records this walk's visit to `node`, false if it's already been.
@@ -211,8 +223,7 @@ impl<'walk> ValueWalk<'walk> {
             .is_some_and(|visited| mem::replace(visited, self.walk) != self.walk)
     }
 
-    fn first_use_in(&self, node: usize) -> Option<&Use> {
-        let index = self.uses.partition_point(|used| used.node < node);
-        self.uses.get(index).filter(|used| used.node == node)
+    fn is_visited(&self, node: usize) -> bool {
+        self.visited_in_walk.get(node) == Some(&self.walk)
     }
 }

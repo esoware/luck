@@ -63,6 +63,14 @@ mod tests {
     }
 
     #[test]
+    fn ignores_name_the_initializer_list_leaves_without_a_value() {
+        let diags = run("local a, b = 1
+b = 2
+return a, b");
+        assert!(diags.is_empty(), "`local a, b = 1` assigns `b` no value: {diags:?}");
+    }
+
+    #[test]
     fn ignores_read_between_writes() {
         let diags = run("local x = 1\nprint(x)\nx = 2\nreturn x");
         assert!(diags.is_empty(), "got: {diags:?}");

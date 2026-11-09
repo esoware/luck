@@ -2,9 +2,47 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use luck_core::{Diagnostic, native_path, normalize_path};
+use rustc_hash::FxHashMap;
 
 use crate::luaurc::{AliasCache, AliasTarget};
 use crate::{ResolveRequest, ResolvedModule};
+
+/// What's on disk at each module path a build has walked through, since many
+/// requires pass through the same directories.
+pub(crate) type ModuleProbes = FxHashMap<PathBuf, ModuleFiles>;
+
+/// Which of a module's two spellings exist.
+#[derive(Debug, Clone, Copy)]
+struct ExtensionFiles {
+    has_luau: bool,
+    has_lua: bool,
+}
+
+/// The files and directory a module path could name.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ModuleFiles {
+    module: ExtensionFiles,
+    /// The directory's `init` files, or `None` when it isn't a directory.
+    init: Option<ExtensionFiles>,
+}
+
+impl ModuleFiles {
+    fn read(module_path: &Path) -> Self {
+        // `init` itself can't be named as a file, only reached through its
+        // directory.
+        let can_be_a_file = module_path.file_name() != Some(OsStr::new("init"));
+        Self {
+            module: ExtensionFiles {
+                has_luau: can_be_a_file && append_extension(module_path, ".luau").is_file(),
+                has_lua: can_be_a_file && append_extension(module_path, ".lua").is_file(),
+            },
+            init: module_path.is_dir().then(|| ExtensionFiles {
+                has_luau: module_path.join("init.luau").is_file(),
+                has_lua: module_path.join("init.lua").is_file(),
+            }),
+        }
+    }
+}
 
 /// What a module path names on disk.
 enum Probed {
@@ -25,6 +63,7 @@ enum Probed {
 /// way to it, or the requiring module is ambiguous.
 pub(crate) fn resolve(
     aliases: &mut AliasCache,
+    probes: &mut ModuleProbes,
     request: &ResolveRequest<'_>,
 ) -> Result<ResolvedModule, Diagnostic> {
     let module = request.module.replace('\\', "/");
@@ -32,12 +71,12 @@ pub(crate) fn resolve(
     let requiring_module = requiring_module_path(&from_path);
     // Luau resets to the requiring module first, so an ambiguous one fails
     // every require it makes.
-    probe(&requiring_module, request)?;
+    probe(probes, &requiring_module, request)?;
     let parent = requiring_module.parent().unwrap_or_else(|| Path::new("."));
     if module.starts_with("./") || module.starts_with("../") {
-        navigate(parent, &module, request)
+        navigate(probes, parent, &module, request)
     } else if let Some(alias) = module.strip_prefix('@') {
-        resolve_alias(aliases, alias, parent, &requiring_module, request)
+        resolve_alias(aliases, probes, alias, parent, &requiring_module, request)
     } else {
         Err(Diagnostic::e004_luau_scheme(request.from_file, request.span, request.module))
     }
@@ -65,6 +104,7 @@ fn requiring_module_path(from_path: &Path) -> PathBuf {
 /// cycle, and E007 when the target is ambiguous.
 fn resolve_alias(
     aliases: &mut AliasCache,
+    probes: &mut ModuleProbes,
     alias: &str,
     lookup_directory: &Path,
     requiring_module: &Path,
@@ -74,15 +114,22 @@ fn resolve_alias(
         alias.split_once('/').map_or((alias, None), |(name, rest)| (name, Some(rest)));
 
     if alias_name.eq_ignore_ascii_case("self") {
-        return resolve_self(aliases, sub_path, requiring_module, lookup_directory, request);
+        return resolve_self(
+            aliases,
+            probes,
+            sub_path,
+            requiring_module,
+            lookup_directory,
+            request,
+        );
     }
 
     let (directory, full_sub_path) =
         follow_alias(aliases, lookup_directory, alias_name, sub_path.unwrap_or(""), request)?;
-    if matches!(probe(&directory, request)?, Probed::Missing) {
+    if matches!(probe(probes, &directory, request)?, Probed::Missing) {
         return Err(module_not_found(&directory, &full_sub_path, request));
     }
-    navigate(&directory, &full_sub_path, request)
+    navigate(probes, &directory, &full_sub_path, request)
 }
 
 /// Follows `alias_name` through any aliases of aliases to the directory the
@@ -99,7 +146,7 @@ fn follow_alias(
     sub_path: &str,
     request: &ResolveRequest<'_>,
 ) -> Result<(PathBuf, String), Diagnostic> {
-    let table = aliases.in_effect(lookup_directory);
+    let mut directory = lookup_directory.to_path_buf();
     let mut name = alias_name.to_owned();
     let mut full_sub_path = sub_path.to_owned();
     let mut followed: Vec<String> = Vec::new();
@@ -114,18 +161,24 @@ fn follow_alias(
                 &followed,
             ));
         }
-        match table.get(&lowercase_name) {
-            Some(AliasTarget::Directory(directory)) => {
-                return Ok((directory.clone(), full_sub_path));
+        match aliases.in_effect(&directory).get(&lowercase_name) {
+            Some(AliasTarget::Directory(target_directory)) => {
+                return Ok((target_directory.clone(), full_sub_path));
             }
-            Some(AliasTarget::Chained(target)) => {
+            Some(AliasTarget::Chained { target, declared_in }) => {
+                // Luau finds the next alias in the file that declared this
+                // one or above it, and restarts its cycle check at a new file.
+                if *declared_in != directory {
+                    followed.clear();
+                }
                 let (next_name, added_path) = target.split_once('/').unwrap_or((target, ""));
                 full_sub_path = format!("{added_path}/{full_sub_path}");
                 followed.push(lowercase_name);
                 next_name.clone_into(&mut name);
+                directory.clone_from(declared_in);
             }
             None => {
-                return Err(aliases.malformed_luaurc(lookup_directory).map_or_else(
+                return Err(aliases.malformed_luaurc(&directory).map_or_else(
                     || {
                         Diagnostic::e004_unknown_alias(
                             request.from_file,
@@ -158,6 +211,7 @@ fn follow_alias(
 /// target is ambiguous.
 fn resolve_self(
     aliases: &mut AliasCache,
+    probes: &mut ModuleProbes,
     sub_path: Option<&str>,
     requiring_module: &Path,
     lookup_directory: &Path,
@@ -167,7 +221,7 @@ fn resolve_self(
         .ok_or_else(|| Diagnostic::e004_self_needs_subpath(request.from_file, request.span))?;
 
     let is_shadowed = aliases.in_effect(lookup_directory).contains_key("self");
-    let mut resolved = navigate(requiring_module, relative_path, request)?;
+    let mut resolved = navigate(probes, requiring_module, relative_path, request)?;
     if is_shadowed {
         resolved.warnings.push(Diagnostic::w004(request.from_file, request.span));
     }
@@ -183,6 +237,7 @@ fn resolve_self(
 /// Returns E004 when a component is missing or the path ends at no module,
 /// and E007 when a component is ambiguous.
 fn navigate(
+    probes: &mut ModuleProbes,
     start: &Path,
     sub_path: &str,
     request: &ResolveRequest<'_>,
@@ -201,15 +256,15 @@ fn navigate(
             ".config" => return Err(module_not_found(start, sub_path, request)),
             child => {
                 position.push(child);
-                let probed = probe(&position, request)?;
-                if matches!(probed, Probed::Missing) {
+                let child_probe = probe(probes, &position, request)?;
+                if matches!(child_probe, Probed::Missing) {
                     return Err(module_not_found(start, sub_path, request));
                 }
-                probed_position = Some(probed);
+                probed_position = Some(child_probe);
             }
         }
     }
-    match probed_position.map_or_else(|| probe(&position, request), Ok)? {
+    match probed_position.map_or_else(|| probe(probes, &position, request), Ok)? {
         Probed::Module(found) => {
             Ok(ResolvedModule { path: normalize_path(&found), warnings: Vec::new() })
         }
@@ -239,33 +294,40 @@ fn module_not_found(start: &Path, sub_path: &str, request: &ResolveRequest<'_>) 
     )
 }
 
-/// What `module_path`, a path with no extension, names on disk.
-///
-/// That's a `.luau` or `.lua` file, a directory with or without an `init`
-/// file, or nothing. `init` itself can't be named as a file, only reached
-/// through its directory.
+/// What `module_path`, a path with no extension, names on disk: a `.luau` or
+/// `.lua` file, a directory with or without an `init` file, or nothing.
 ///
 /// # Errors
 ///
 /// Returns E007 when more than one of those exists.
-fn probe(module_path: &Path, request: &ResolveRequest<'_>) -> Result<Probed, Diagnostic> {
-    let module_file = if module_path.file_name() == Some(OsStr::new("init")) {
-        None
-    } else {
-        // Append the extension to the full name: `with_extension` replaces
-        // everything after the last dot, so `./config.v2` would probe
-        // `config.luau` instead of `config.v2.luau`.
-        existing_one(
-            append_extension(module_path, ".luau"),
-            append_extension(module_path, ".lua"),
-            request,
-        )?
-    };
-    if !module_path.is_dir() {
+fn probe(
+    probes: &mut ModuleProbes,
+    module_path: &Path,
+    request: &ResolveRequest<'_>,
+) -> Result<Probed, Diagnostic> {
+    let files = probes.get(module_path).copied().unwrap_or_else(|| {
+        let files = ModuleFiles::read(module_path);
+        probes.insert(module_path.to_path_buf(), files);
+        files
+    });
+    // Append the extension to the full name: `with_extension` replaces
+    // everything after the last dot, so `./config.v2` would probe
+    // `config.luau` instead of `config.v2.luau`.
+    let module_file = existing_one(
+        files.module,
+        append_extension(module_path, ".luau"),
+        append_extension(module_path, ".lua"),
+        request,
+    )?;
+    let Some(init_files) = files.init else {
         return Ok(module_file.map_or(Probed::Missing, Probed::Module));
-    }
-    let init_file =
-        existing_one(module_path.join("init.luau"), module_path.join("init.lua"), request)?;
+    };
+    let init_file = existing_one(
+        init_files,
+        module_path.join("init.luau"),
+        module_path.join("init.lua"),
+        request,
+    )?;
     match (module_file, init_file) {
         (Some(file), Some(init)) => Err(Diagnostic::e007_file_and_directory(
             request.from_file,
@@ -290,11 +352,12 @@ fn probe(module_path: &Path, request: &ResolveRequest<'_>) -> Result<Probed, Dia
 ///
 /// Returns E007 when both are.
 fn existing_one(
+    files: ExtensionFiles,
     luau: PathBuf,
     lua: PathBuf,
     request: &ResolveRequest<'_>,
 ) -> Result<Option<PathBuf>, Diagnostic> {
-    match (luau.is_file(), lua.is_file()) {
+    match (files.has_luau, files.has_lua) {
         (true, true) => Err(Diagnostic::e007_both_extensions(
             request.from_file,
             request.span,

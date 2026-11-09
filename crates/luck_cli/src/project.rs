@@ -206,9 +206,17 @@ where
 /// # Errors
 ///
 /// Reports the failure and returns [`Exit::Failure`] when part of `directory`
-/// can't be walked, since the files in it would go unprocessed.
+/// outside any excluded tree can't be walked, since the files in it would go
+/// unprocessed.
 fn collect_lua_files(directory: &Path, filter: &ProjectFilter) -> Result<Vec<PathBuf>, Exit> {
-    let walker = WalkBuilder::new(directory).add_custom_ignore_filename(".luckignore").build();
+    let tree_filter = filter.clone();
+    let walker = WalkBuilder::new(directory)
+        .add_custom_ignore_filename(".luckignore")
+        .filter_entry(move |entry| {
+            !(entry.file_type().is_some_and(|file_type| file_type.is_dir())
+                && tree_filter.excludes_tree(entry.path()))
+        })
+        .build();
     let mut files: Vec<PathBuf> = Vec::new();
     for walked in walker {
         let entry =
@@ -350,6 +358,27 @@ mod tests {
         let names = file_names(&files);
         assert!(names.contains(&"keep.lua".to_owned()), "kept file present");
         assert!(!names.contains(&"skip.lua".to_owned()), "excluded file skipped");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_lua_files_does_not_enter_an_excluded_tree() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let root = directory.path();
+        let excluded = root.join("gen");
+        fs::create_dir_all(&excluded).expect("mkdir gen");
+        fs::write(root.join("keep.lua"), "return 1\n").expect("write keep");
+        fs::set_permissions(&excluded, fs::Permissions::from_mode(0o000)).expect("lock gen");
+
+        let filter =
+            ProjectFilter::new(root, None, Some(&["gen/**".to_owned()])).expect("valid globs");
+        let walked = collect_lua_files(root, &filter);
+        fs::set_permissions(&excluded, fs::Permissions::from_mode(0o755)).expect("unlock gen");
+
+        let files = walked.expect("an excluded directory must not fail the walk");
+        assert_eq!(file_names(&files), ["keep.lua"]);
     }
 
     #[test]

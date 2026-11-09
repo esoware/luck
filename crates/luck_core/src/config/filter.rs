@@ -21,6 +21,9 @@ pub struct ProjectFilter {
     root: PathBuf,
     include: GlobSet,
     exclude: GlobSet,
+    /// The directory part of each exclude ending in `/**` or `/**/*`, every
+    /// descendant of which that exclude covers.
+    excluded_trees: GlobSet,
 }
 
 impl ProjectFilter {
@@ -33,14 +36,37 @@ impl ProjectFilter {
         exclude: Option<&[String]>,
     ) -> Result<Self, String> {
         let default_include = ["{**/,}*.lua".to_owned(), "{**/,}*.luau".to_owned()];
+        let exclude_patterns = exclude.unwrap_or_default();
+        let excluded_trees: Vec<String> = exclude_patterns
+            .iter()
+            .filter_map(|pattern| {
+                pattern.strip_suffix("/**").or_else(|| pattern.strip_suffix("/**/*"))
+            })
+            .filter(|directory| !directory.is_empty())
+            .map(str::to_owned)
+            .collect();
         Ok(Self {
             // `is_included` canonicalizes candidates (`\\?\C:\...` on Windows),
             // so a non-canonical root would make `strip_prefix` fail and every
             // glob would see the absolute path.
             root: canonicalize_existing(root),
             include: build_set(include.unwrap_or(&default_include))?,
-            exclude: build_set(exclude.unwrap_or_default())?,
+            exclude: build_set(exclude_patterns)?,
+            // A directory part that doesn't compile alone only costs the pruning.
+            excluded_trees: build_set(&excluded_trees).unwrap_or_default(),
         })
+    }
+
+    /// Whether an exclude covers everything under `directory`, so a walk
+    /// needn't enter it.
+    #[must_use]
+    pub fn excludes_tree(&self, directory: &Path) -> bool {
+        if self.excluded_trees.is_empty() {
+            return false;
+        }
+        let candidate = canonicalize_existing(directory);
+        let relative = candidate.strip_prefix(&self.root).unwrap_or(&candidate);
+        self.excluded_trees.is_match(relative)
     }
 
     #[must_use]
@@ -106,6 +132,21 @@ mod tests {
         assert!(filter.is_included(Path::new("/proj/src/a.lua")));
         assert!(!filter.is_included(Path::new("/proj/src/gen/b.lua")));
         assert!(!filter.is_included(Path::new("/proj/other/c.lua")));
+    }
+
+    #[test]
+    fn excludes_tree_only_when_a_glob_covers_every_descendant() {
+        let filter = ProjectFilter::new(
+            Path::new("/proj"),
+            None,
+            Some(&["gen/**".into(), "**/vendor/**".into(), "dist/**/*".into(), "shallow/*".into()]),
+        )
+        .expect("valid globs");
+        assert!(filter.excludes_tree(Path::new("/proj/gen")));
+        assert!(filter.excludes_tree(Path::new("/proj/sub/vendor")));
+        assert!(filter.excludes_tree(Path::new("/proj/dist")));
+        assert!(!filter.excludes_tree(Path::new("/proj/shallow")));
+        assert!(!filter.excludes_tree(Path::new("/proj/other")));
     }
 
     #[test]
