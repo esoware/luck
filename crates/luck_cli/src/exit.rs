@@ -14,8 +14,8 @@ pub(crate) enum Exit {
     /// lint findings, files `fmt --check` would change, or a file or directory
     /// it couldn't read or write.
     Failure,
-    /// Exits 2: bad arguments, a missing or invalid config, or a path that
-    /// doesn't exist.
+    /// Exits 2: bad arguments, a missing or invalid config, a path that
+    /// doesn't exist, or no file to work on.
     Usage,
 }
 

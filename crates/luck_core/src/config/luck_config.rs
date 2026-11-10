@@ -426,18 +426,18 @@ mod tests {
     fn merge_onto_concatenates_lint_lists_and_keeps_unset_base_keys() {
         let base = parse_luck_config(
             r#"{ "lua":"lua54","lint":{"extra_globals":["a"],
-            "rule_overrides":{"x":{"enabled":false}}} }"#,
+            "rules":{"x":"off"}} }"#,
         )
         .unwrap();
         let child = parse_luck_config(
             r#"{ "lint":{"extra_globals":["b"],
-            "rule_overrides":{"y":{"severity":"error"}}} }"#,
+            "rules":{"y":"error"}} }"#,
         )
         .unwrap();
         let merged = child.merge_onto(base);
         let lint = merged.lint.unwrap();
         assert_eq!(lint.extra_globals, vec!["a".to_owned(), "b".to_owned()]);
-        assert!(lint.rule_overrides.contains_key("x") && lint.rule_overrides.contains_key("y"));
+        assert_eq!(lint.rules.names().collect::<Vec<_>>(), ["x", "y"]);
         assert_eq!(merged.lua.as_deref(), Some("lua54"));
     }
 }

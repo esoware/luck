@@ -1,5 +1,6 @@
 //! Every config struct denies unknown fields, and every config type derives
-//! `schemars::JsonSchema`.
+//! `schemars::JsonSchema`. The one open map is `RuleSettings`, whose other
+//! keys are rule names for the linter to check.
 //!
 //! The VS Code schema is generated from [`LuckConfig`], with the type names as
 //! its `$defs` keys and the doc comments as its descriptions.
@@ -21,7 +22,10 @@ pub use format_config::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatConfig, HexCase, IndentStyle,
     LineEndings, QuoteStyle, SpaceAfterFunction,
 };
-pub use lint_config::{Category, LintConfig, RuleSetting};
+pub use lint_config::{
+    Category, CategoryLevels, CyclomaticComplexityOptions, LintConfig,
+    RestrictedModulePathsOptions, RuleLevel, RuleSetting, RuleSettings,
+};
 pub use load::{
     ProjectConfig, config_directory, discover_config, load_or_discover_config, load_with_extends,
     parse_luck_config,
@@ -32,7 +36,7 @@ pub use luck_config::{
 pub use resolve::{BuildConfig, check_output_paths, resolve_build_config};
 pub use transform_config::TransformConfig;
 
-const CONFIG_FILE_NAME: &str = "luck.json";
+pub const CONFIG_FILE_NAME: &str = "luck.json";
 
 #[cfg(test)]
 mod tests {

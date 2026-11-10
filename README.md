@@ -26,7 +26,7 @@ luck lint src/     # lint (add --fix to auto-fix)
 luck check src/    # report syntax errors
 ```
 
-Configuration lives in a single `luck.json`, discovered by walking up from the working directory. Build entries, minifier passes, format options, lint rule settings, and per-extension targets all come from it. The `lua` and `luau` keys can each name any dialect, so a Roblox or Rojo tree that keeps Luau in `.lua` files sets `"lua": "roblox"`. See the schema shipped with the [VS Code extension](editors/vscode).
+Configuration lives in `luck.json`. `lint`, `fmt`, and `check` give each file the nearest one above it, and `build` takes the one above the working directory. Build entries, minifier passes, format options, lint rule settings, and per-extension targets all come from it. The `lua` and `luau` keys can each name any dialect, so a Roblox or Rojo tree that keeps Luau in `.lua` files sets `"lua": "roblox"`. See the schema shipped with the [VS Code extension](editors/vscode).
 
 ## Tools
 

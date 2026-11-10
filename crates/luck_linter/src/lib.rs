@@ -49,7 +49,9 @@ mod suppression;
 mod underscore_fix;
 mod uninitialized;
 
-pub use luck_core::{LintConfig, RuleSetting};
+pub use luck_core::{
+    CyclomaticComplexityOptions, LintConfig, RestrictedModulePathsOptions, RuleLevel, RuleSetting,
+};
 
 pub use diagnostic::{Category, LintDiagnostic, Severity};
 pub use driver::{lint, lint_analyzed, lint_parsed, lint_target};

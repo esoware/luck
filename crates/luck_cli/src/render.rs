@@ -7,7 +7,7 @@ use std::io::{self, Write};
 
 use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
 use luck_core::{Diagnostic, DiagnosticSeverity, native_path, read_source_file};
-use luck_token::{LuaVersion, SourceError, chunk_start, offset_to_index};
+use luck_token::{LuaVersion, SourceError, chunk_start, line_breaks, offset_to_index};
 use rustc_hash::FxHashMap;
 
 /// Above this line length, ariadne's caret rendering effectively hangs.
@@ -166,6 +166,32 @@ pub(crate) fn render_source_errors(
     render_document_diags(path, source, &diags, version)
 }
 
+/// Where each line of one source starts, for the machine-readable formats.
+/// Lines break where `version` breaks them, as in the rendered reports.
+pub(crate) struct LineIndex<'source> {
+    source: &'source str,
+    line_starts: Vec<usize>,
+}
+
+impl<'source> LineIndex<'source> {
+    pub(crate) fn new(source: &'source str, version: LuaVersion) -> Self {
+        // A BOM the dialect skips isn't a column of the first line.
+        let mut line_starts = vec![chunk_start(source, version)];
+        line_starts.extend(line_breaks(source, version).map(|line_break| line_break.end));
+        Self { source, line_starts }
+    }
+
+    /// The 1-based line and character column of the byte at `offset`.
+    pub(crate) fn line_and_column(&self, offset: u32) -> (usize, usize) {
+        let index = offset_to_index(offset);
+        let line = self.line_starts.partition_point(|line_start| *line_start <= index).max(1);
+        let line_start = self.line_starts.get(line.saturating_sub(1)).copied().unwrap_or_default();
+        let characters_before =
+            self.source.get(line_start..index).map_or(0, |text| text.chars().count());
+        (line, characters_before.saturating_add(1))
+    }
+}
+
 fn write_diags(diags: &[Diagnostic], cache: &mut FileCache, output: &mut impl Write) {
     for diag in diags {
         if !cache.files.contains_key(&diag.file_path) || is_line_too_long(diag, cache) {
@@ -283,6 +309,23 @@ mod tests {
              help: check that the file exists and is readable\n",
             "{text}"
         );
+    }
+
+    #[test]
+    fn line_index_counts_lines_and_character_columns_from_one() {
+        let lines = LineIndex::new("local a\nlocal \u{e9}b = 1\n", LuaVersion::Lua54);
+        assert_eq!(lines.line_and_column(0), (1, 1));
+        assert_eq!(lines.line_and_column(6), (1, 7));
+        assert_eq!(lines.line_and_column(8), (2, 1));
+        // `b` follows the two-byte `e` with an acute accent.
+        assert_eq!(lines.line_and_column(16), (2, 8));
+    }
+
+    #[test]
+    fn line_index_starts_the_first_line_after_a_skipped_bom() {
+        let lines = LineIndex::new("\u{feff}local a", LuaVersion::Lua54);
+        assert_eq!(lines.line_and_column(3), (1, 1));
+        assert_eq!(lines.line_and_column(9), (1, 7));
     }
 
     #[test]

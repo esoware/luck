@@ -28,16 +28,22 @@ pub(crate) fn print(
     options: &FormatOptions,
     base_indent: &str,
 ) -> String {
-    // The width model counts a tab as one column.
-    let (indent_byte, indent_width) = match options.indent_style {
+    let columns_per_indent = usize::from(options.indent_width);
+    let (indent_byte, bytes_per_indent) = match options.indent_style {
         IndentStyle::Tabs => (b'\t', 1),
-        IndentStyle::Spaces => (b' ', usize::from(options.indent_width)),
+        IndentStyle::Spaces => (b' ', columns_per_indent),
     };
+    let base_indent_columns = base_indent
+        .bytes()
+        .map(|b| if b == b'\t' { columns_per_indent } else { 1 })
+        .fold(0usize, usize::saturating_add);
     let mut printer = Printer {
         line_width: usize::from(options.line_width),
         indent_byte,
-        indent_width,
+        bytes_per_indent,
+        columns_per_indent,
         base_indent: base_indent.to_owned(),
+        base_indent_columns,
         // Synthetic ASTs have no source, so size by element count. Four bytes
         // per element is close enough to avoid most reallocations.
         output: CodeBuffer::with_capacity(elements.len().saturating_mul(4)),
@@ -80,12 +86,16 @@ impl Region {
 
 struct Printer {
     line_width: usize,
-    /// One indent level is `indent_width` copies of `indent_byte`, and as
-    /// many columns.
+    /// One indent level is `bytes_per_indent` copies of `indent_byte` and
+    /// measures `columns_per_indent` columns, so a tab is one byte and as wide
+    /// as `indent_width` says.
     indent_byte: u8,
-    indent_width: usize,
+    bytes_per_indent: usize,
+    columns_per_indent: usize,
     /// Written before the indent of every line.
     base_indent: String,
+    /// A tab in `base_indent` measures `columns_per_indent` too.
+    base_indent_columns: usize,
     output: CodeBuffer,
     line_start: usize,
     display_column: usize,
@@ -329,7 +339,9 @@ impl Printer {
     }
 
     const fn indent_columns(&self) -> usize {
-        self.indent_level.saturating_mul(self.indent_width).saturating_add(self.base_indent.len())
+        self.indent_level
+            .saturating_mul(self.columns_per_indent)
+            .saturating_add(self.base_indent_columns)
     }
 
     /// Simulate flat printing of `elements` up to the end of `region`,
@@ -476,7 +488,7 @@ impl Printer {
     fn flush_indent(&mut self) {
         self.is_pending_indent = false;
         self.output.print_str(&self.base_indent);
-        let indent_bytes = self.indent_level.saturating_mul(self.indent_width);
+        let indent_bytes = self.indent_level.saturating_mul(self.bytes_per_indent);
         self.output.print_ascii_repeat(self.indent_byte, indent_bytes);
         self.display_column = self.display_column.saturating_add(self.indent_columns());
     }
@@ -671,5 +683,44 @@ mod tests {
             80,
         );
         assert_eq!(output, "local x = 1 -- trailing\nlocal y = 2");
+    }
+
+    fn tab_formatter(indent_width: u8) -> Formatter {
+        let options = FormatOptions {
+            line_width: 10,
+            indent_style: IndentStyle::Tabs,
+            indent_width,
+            ..FormatOptions::default()
+        };
+        Formatter::new(options, Comments::none())
+    }
+
+    /// Nine columns when flat, so it fits in ten after one more column and
+    /// not after four.
+    fn write_bracketed(f: &mut Formatter) {
+        group((token("["), soft_line(), token("yyyyyyy"), soft_line(), token("]"))).fmt(f);
+    }
+
+    #[test]
+    fn tab_indent_measures_indent_width_columns() {
+        let print = |indent_width: u8| {
+            let mut f = tab_formatter(indent_width);
+            (token("a"), indent((hard_line(), format_with(write_bracketed)))).fmt(&mut f);
+            f.print("")
+        };
+        assert_eq!(print(1), "a\n\t[yyyyyyy]");
+        assert_eq!(print(4), "a\n\t[\n\tyyyyyyy\n\t]");
+    }
+
+    #[test]
+    fn tab_in_base_indent_measures_indent_width_columns() {
+        let print = |indent_width: u8, base_indent: &str| {
+            let mut f = tab_formatter(indent_width);
+            write_bracketed(&mut f);
+            f.print(base_indent)
+        };
+        assert_eq!(print(1, "\t"), "\t[yyyyyyy]");
+        assert_eq!(print(4, "\t"), "\t[\n\tyyyyyyy\n\t]");
+        assert_eq!(print(4, " "), " [yyyyyyy]");
     }
 }

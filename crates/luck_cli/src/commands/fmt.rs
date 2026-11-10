@@ -8,14 +8,15 @@ use luck_core::{LuaTarget, LuckConfig, read_source_file, resolved_format_config}
 
 use crate::exit::{Exit, usage_error};
 use crate::output::read_stdin_source;
-use crate::project::{outcomes_in_order, project_files, resolve_project};
+use crate::project::{config_for_one_shot, outcomes_in_order, project_files};
 use crate::render::render_source_errors;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
 #[expect(clippy::struct_excessive_bools, reason = "clap derive needs one bool field per flag")]
 pub(crate) struct FmtArgs {
-    /// Files or directories to format [default: current directory].
+    /// Files, directories, or globs to format, and `!` globs to leave out
+    /// [default: current directory].
     paths: Vec<String>,
 
     /// Format and write files in place (the default mode).
@@ -30,9 +31,14 @@ pub(crate) struct FmtArgs {
     #[arg(long, conflicts_with_all = ["write", "check"])]
     list_different: bool,
 
-    /// Path to config file [default: discover luck.json upward from cwd].
+    /// Use this config for every file [default: the nearest luck.json above
+    /// each file].
     #[arg(short, long, value_name = "PATH")]
     config: Option<PathBuf>,
+
+    /// Exit 0 when no file matches.
+    #[arg(long)]
+    no_error_on_unmatched_pattern: bool,
 
     /// Ignore any `.editorconfig` files when resolving formatting defaults.
     #[arg(long)]
@@ -85,15 +91,14 @@ enum FileOutcome {
 impl FmtArgs {
     /// # Errors
     ///
-    /// Returns [`Exit::Usage`] on a bad config, path, or range, and
-    /// [`Exit::Failure`] when a file can't be formatted or `--check` finds one
-    /// that would change.
+    /// Returns [`Exit::Usage`] on a bad config, path, or range, or when no
+    /// file matches, and [`Exit::Failure`] when a file can't be formatted or
+    /// `--check` finds one that would change.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
-        let project = resolve_project(self.config.as_deref())?;
-
         // Stdin mode ignores positional paths.
         if let Some(stdin_path) = self.stdin_filepath.as_deref() {
-            return self.run_stdin(stdin_path, &project.config);
+            let config = config_for_one_shot(self.config.as_deref(), stdin_path)?;
+            return self.run_stdin(stdin_path, &config);
         }
 
         // Range formatting is per-document: byte offsets are meaningless across
@@ -106,7 +111,12 @@ impl FmtArgs {
             ));
         }
 
-        let files = project_files(&project, &self.paths)?;
+        let files = project_files(
+            self.config.as_deref(),
+            &self.paths,
+            self.no_error_on_unmatched_pattern,
+            |_| Ok(()),
+        )?;
 
         // Writing in place is the default, so --write needs no handling here.
         let _: bool = self.write;
@@ -118,8 +128,8 @@ impl FmtArgs {
             // returns flush on drop).
             let mut stderr = BufWriter::new(io::stderr().lock());
             let mut stdout = BufWriter::new(io::stdout().lock());
-            let outcomes = outcomes_in_order(&files, |file_path, target| {
-                self.format_file(file_path, target, &project.config)
+            let outcomes = outcomes_in_order(&files, |file| {
+                self.format_file(&file.path, file.target, &file.project.config)
             });
             for outcome in outcomes {
                 match outcome {

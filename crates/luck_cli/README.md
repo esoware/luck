@@ -9,7 +9,9 @@ Command-line interface for the luck bundler, minifier, formatter, linter, and la
 ## Key features
 
 - **Flat subcommands.** Every operation is a top-level command (`init`, `build`, `bundle`, `minify`, `graph`, `lint`, `fmt`, `check`, `lsp`). `init`, `bundle`, `minify`, and `graph` take `-t/--target` to pick the dialect.
-- **Project config.** `luck init` writes `luck.json`, and `luck build` runs the full pipeline from it. `lint`, `fmt`, and `check` find `luck.json` by walking up from the working directory, or take `-c/--config`. `bundle`, `minify`, and `graph` walk up from the input's directory instead (the working directory for stdin), and `bundle` and `minify` also take `-c/--config`. The config supplies the target for the input's extension, `dynamic_require`, and the minifier transforms, and CLI flags override each of them. `-t` replaces only the target. Build-only fields such as `entry`, `output`, `profiles`, `minify`, and `search_paths` don't apply: `bundle` minifies only with `--minify`, and `bundle` and `graph` resolve `-s` search paths from the entry's directory.
+- **Project config.** `luck init` writes `luck.json`, and `luck build` runs the full pipeline from it. `lint`, `fmt`, and `check` give each file the nearest `luck.json` above it, so a nested config governs its own tree without merging into its parent, and `-c/--config` puts every file under one config instead. `--stdin-filepath` resolves the same way from the path it's given. `bundle`, `minify`, and `graph` walk up from the input's directory (the working directory for stdin), and `bundle` and `minify` also take `-c/--config`. The config supplies the target for the input's extension, `dynamic_require`, and the minifier transforms, and CLI flags override each of them. `-t` replaces only the target. Build-only fields such as `entry`, `output`, `profiles`, `minify`, and `search_paths` don't apply: `bundle` minifies only with `--minify`, and `bundle` and `graph` resolve `-s` search paths from the entry's directory.
+- **Path selection.** `lint`, `fmt`, and `check` take files, directories, and globs, and default to the working directory. A directory walk honors `.gitignore`, `.luckignore`, and its project's `include`/`exclude`. A glob is relative to the working directory and selects from the same walk, a file named outright skips `include` but not `exclude`, and a glob starting with `!` leaves out whatever it matches. A run that ends up with no file exits 2 unless `--no-error-on-unmatched-pattern` is given.
+- **Lint levels.** `-A/--allow`, `-W/--warn`, and `-D/--deny` set a rule or a category to `off`, `warn`, or `error` over `luck.json`, in the order given, and a rule's own level wins over its category's. `--quiet` prints errors only, while warnings still count toward `--max-warnings` and `--deny-warnings`.
 - **Profiles.** On `build`, `--release`, `--dev`, or `-P/--profile <name>` select an entry in the `luck.json` `profiles`, whose `minify` and `transforms` replace the top-level ones.
 - **File watching.** `build --watch` rebuilds through `notify` when a `.lua`, `.luau`, `.json`, or `.luaurc` file changes.
 - **Per-transform toggles.** `bundle` and `minify` take `--<pass>` and `--no-<pass>` for every minifier pass, so the CLI can turn a pass on or off whatever `luck.json` says. The flag given last wins. On `bundle` they only matter with `--minify`.
@@ -33,15 +35,16 @@ luck lsp [--socket <port>]                   # Run the language server over stdi
 
 ### Flag groups
 
-`--quiet` is global and hides progress, summaries, and bundler warnings.
+`--quiet` is global and hides progress, summaries, and warnings, the lint warnings included.
 
 | Command | Flags |
 |---------|-------|
 | `bundle` | `-c/--config`, `--fold-constants`/`--no-fold-constants`, `--rename-locals`/`--no-rename-locals`, ... (per-transform), `--rename-globals`/`--no-rename-globals`, `--minify`, `--line-map`, `-s/--search-path`, `--dynamic-require` |
 | `minify` | `-c/--config`, `--fold-constants`/`--no-fold-constants`, `--rename-locals`/`--no-rename-locals`, ... (per-transform), `--rename-globals`/`--no-rename-globals`, `--stats` |
 | `graph` | `--format` (json / dot), `-s/--search-path`, `--dynamic-require` |
-| `fmt` | `--write`, `--check`, `--list-different`, `--no-editorconfig`, `--stdin-filepath`, `--range-start`/`--range-end`, `--verify`, `-c/--config` (layout options live in `luck.json`/`.editorconfig`, not flags) |
-| `lint` | `--fix`, `-f/--format` (default / json), `-A/--allow`, `-W/--warn`, `-D/--deny` per rule or category, `--global`, `--max-warnings`, `--deny-warnings`, `--silent`, `--rules`, `--print-config`, `--stdin-filepath`, `-c/--config` |
+| `check` | `-c/--config`, `--no-error-on-unmatched-pattern` |
+| `fmt` | `--write`, `--check`, `--list-different`, `--no-editorconfig`, `--stdin-filepath`, `--range-start`/`--range-end`, `--verify`, `-c/--config`, `--no-error-on-unmatched-pattern` (layout options live in `luck.json`/`.editorconfig`, not flags) |
+| `lint` | `--fix`, `-f/--format` (default / json / github), `-A/--allow`, `-W/--warn`, `-D/--deny` per rule or category, `--global`, `--max-warnings`, `--deny-warnings`, `--silent`, `--rules`, `--print-config`, `--stdin-filepath`, `-c/--config`, `--no-error-on-unmatched-pattern` |
 | `build` | `--release`, `--dev`, `-P/--profile <name>`, `-w/--watch`, `--dry-run`, `-c/--config` |
 
 ## Architecture

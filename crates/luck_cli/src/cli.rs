@@ -19,7 +19,7 @@ pub(crate) struct Cli {
     #[command(subcommand)]
     pub command: Command,
 
-    /// Hide progress, summaries, and bundler warnings.
+    /// Hide progress, summaries, and warnings.
     #[arg(long, global = true)]
     pub quiet: bool,
 }

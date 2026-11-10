@@ -223,10 +223,9 @@ impl Format for IfStatement {
         // Collapses to `if cond then stmt end` when the option allows, there's
         // one branch holding one statement that no comment around it would
         // stop from sharing the line, and the whole `if` fits on one line.
-        let can_collapse = matches!(
-            f.options().collapse_simple_statement,
-            CollapseSimpleStatement::ConditionalOnly | CollapseSimpleStatement::Always
-        ) && self.elseif_clauses.is_empty()
+        let can_collapse = f.options().collapse_simple_statement
+            == CollapseSimpleStatement::ConditionalOnly
+            && self.elseif_clauses.is_empty()
             && self.else_clause.is_none()
             && is_simple_block(&self.block)
             && first_item_span(&self.block).is_some_and(|body_stmt| {

@@ -12,8 +12,10 @@ pub(crate) fn luck_in(directory: &Path) -> Command {
     command
 }
 
+/// Creates the directories `name` sits in as well.
 pub(crate) fn write_file(directory: &Path, name: &str, contents: &str) -> PathBuf {
     let path = directory.join(name);
+    fs::create_dir_all(path.parent().expect("a file has a parent")).expect("create directories");
     fs::write(&path, contents).expect("write temp source");
     path
 }

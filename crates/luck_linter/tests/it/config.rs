@@ -1,17 +1,25 @@
 use luck_core::LuaTarget;
 use luck_linter::{
-    Category, LintConfig, LintDiagnostic, RuleSetting, lint, lint_analyzed, lint_target,
-    unknown_rule_names,
+    Category, CyclomaticComplexityOptions, LintConfig, LintDiagnostic,
+    RestrictedModulePathsOptions, RuleLevel, RuleSetting, Severity, lint, lint_analyzed,
+    lint_target, unknown_rule_names,
 };
 use luck_token::LuaVersion;
 
 use crate::common::{disable, enable};
 
+fn with_category(category: Category, level: RuleLevel) -> LintConfig {
+    let mut config = LintConfig::default();
+    config.categories.set_level(category, level);
+    config
+}
+
 #[test]
 fn unknown_rule_names_flags_only_unregistered() {
     let mut config = LintConfig::default();
-    config.rule_overrides.insert("unused_variable".to_owned(), RuleSetting::default());
-    config.rule_overrides.insert("not_a_real_rule".to_owned(), RuleSetting::default());
+    config.rules.set_level("unused_variable", RuleLevel::Off);
+    config.rules.set_level("cyclomatic_complexity", RuleLevel::Off);
+    config.rules.set_level("not_a_real_rule", RuleLevel::Off);
     assert_eq!(unknown_rule_names(&config), vec!["not_a_real_rule"]);
 }
 
@@ -59,7 +67,7 @@ fn extra_globals_not_flagged() {
 }
 
 #[test]
-fn rule_override_disables() {
+fn rule_level_off_disables() {
     let config = disable("unused_variable");
     let diags = lint("local unused = 1", LuaVersion::Lua54, &config);
     assert!(diags.iter().all(|diag| diag.rule != "unused_variable"));
@@ -67,7 +75,7 @@ fn rule_override_disables() {
 
 #[test]
 fn categories_enable_group() {
-    let config = LintConfig { categories: vec![Category::Suspicious], ..Default::default() };
+    let config = with_category(Category::Suspicious, RuleLevel::Warn);
     let diags = lint("if true then end", LuaVersion::Lua54, &config);
     assert!(diags.iter().any(|diag| diag.rule == "empty_block"));
 }
@@ -79,30 +87,51 @@ fn suspicious_rules_off_by_default() {
 }
 
 #[test]
-fn suspicious_rules_enabled_by_override() {
+fn suspicious_rules_enabled_by_rule_level() {
     let config = enable("empty_block");
     let diags = lint("if true then end", LuaVersion::Lua54, &config);
     assert!(diags.iter().any(|diag| diag.rule == "empty_block"));
 }
 
 #[test]
-fn disable_default_rules_silences_correctness() {
-    let config = LintConfig { disable_default_rules: true, ..Default::default() };
+fn correctness_off_silences_the_default_rules() {
+    let config = with_category(Category::Correctness, RuleLevel::Off);
     let diags = lint("print(undefined_var)", LuaVersion::Lua54, &config);
     assert_eq!(diags, Vec::<LintDiagnostic>::new());
 }
 
 #[test]
-fn disable_default_rules_still_honors_explicit_enable() {
-    let config = LintConfig { disable_default_rules: true, ..enable("undefined_variable") };
+fn rule_level_wins_over_its_category() {
+    let mut config = with_category(Category::Correctness, RuleLevel::Off);
+    config.rules.set_level("undefined_variable", RuleLevel::Warn);
     let diags = lint("print(undefined_var)", LuaVersion::Lua54, &config);
-    assert!(diags.iter().any(|diag| diag.rule == "undefined_variable"));
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].rule, "undefined_variable");
+    assert_eq!(diags[0].severity, Severity::Warning);
+}
+
+#[test]
+fn category_level_sets_the_severity_of_its_rules() {
+    let source = "local unused = 1
+print(undefined_var)";
+    let defaults = lint(source, LuaVersion::Lua54, &LintConfig::default());
+    let default_severities: Vec<Severity> = defaults.iter().map(|diag| diag.severity).collect();
+    assert_eq!(default_severities, [Severity::Warning, Severity::Error], "{defaults:?}");
+
+    for (level, severity) in
+        [(RuleLevel::Warn, Severity::Warning), (RuleLevel::Error, Severity::Error)]
+    {
+        let diags = lint(source, LuaVersion::Lua54, &with_category(Category::Correctness, level));
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        assert!(diags.iter().all(|diag| diag.severity == severity), "{diags:?}");
+    }
 }
 
 #[test]
 fn cyclomatic_complexity_fires_when_threshold_configured() {
-    let config =
-        LintConfig { max_cyclomatic_complexity: Some(2), ..enable("cyclomatic_complexity") };
+    let mut config = LintConfig::default();
+    config.rules.cyclomatic_complexity =
+        Some(RuleSetting::WithOptions(RuleLevel::Warn, CyclomaticComplexityOptions { max: 2 }));
     let source = "function f() if a then end if b then end if c then end if d then end end";
     let diags = lint(source, LuaVersion::Lua54, &config);
     assert!(
@@ -124,10 +153,11 @@ fn cyclomatic_complexity_inert_without_threshold() {
 
 #[test]
 fn restricted_module_paths_fires_when_configured() {
-    let config = LintConfig {
-        restricted_module_paths: vec!["forbidden.lib".to_owned()],
-        ..Default::default()
-    };
+    let mut config = LintConfig::default();
+    config.rules.restricted_module_paths = Some(RuleSetting::WithOptions(
+        RuleLevel::Error,
+        RestrictedModulePathsOptions { paths: vec!["forbidden.lib".to_owned()] },
+    ));
     let diags = lint("require(\"forbidden.lib\")", LuaVersion::Lua54, &config);
     assert!(
         diags.iter().any(|diag| diag.rule == "restricted_module_paths"),

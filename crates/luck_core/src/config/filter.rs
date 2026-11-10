@@ -73,6 +73,15 @@ impl ProjectFilter {
         let relative = candidate.strip_prefix(&self.root).unwrap_or(&candidate);
         self.include.is_match(relative) && !self.exclude.is_match(relative)
     }
+
+    /// Whether an `exclude` glob matches `path`, whatever `include` says. A
+    /// file named on the command line is held to this alone.
+    #[must_use]
+    pub fn is_excluded(&self, path: &Path) -> bool {
+        let candidate = canonicalize_existing(path);
+        let relative = candidate.strip_prefix(&self.root).unwrap_or(&candidate);
+        self.exclude.is_match(relative)
+    }
 }
 
 /// # Errors
@@ -130,6 +139,19 @@ mod tests {
         assert!(filter.is_included(Path::new("/proj/src/a.lua")));
         assert!(!filter.is_included(Path::new("/proj/src/gen/b.lua")));
         assert!(!filter.is_included(Path::new("/proj/other/c.lua")));
+    }
+
+    #[test]
+    fn is_excluded_ignores_include() {
+        let filter = ProjectFilter::new(
+            Path::new("/proj"),
+            Some(&["src/**/*.lua".into()]),
+            Some(&["**/gen/**".into()]),
+        )
+        .expect("valid globs");
+        assert!(filter.is_excluded(Path::new("/proj/src/gen/b.lua")));
+        assert!(!filter.is_excluded(Path::new("/proj/other/c.lua")));
+        assert!(!filter.is_excluded(Path::new("/proj/tool")));
     }
 
     #[test]

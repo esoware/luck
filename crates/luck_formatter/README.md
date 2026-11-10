@@ -36,11 +36,11 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 |--------|------|---------|-------------|
 | `line_width` | `u16` | 100 | Target line width before breaking |
 | `indent_style` | `IndentStyle` | `Tabs` | Tabs or Spaces |
-| `indent_width` | `u8` | 4 | Spaces per indent level, unused with tabs, which count as one column when measuring |
+| `indent_width` | `u8` | 4 | Columns per indent level: the spaces written per level, or how wide a tab counts against `line_width` |
 | `quote_style` | `QuoteStyle` | `Double` | Double, Single, AutoPreferDouble, or AutoPreferSingle (the auto styles switch quotes when that needs fewer escapes) |
 | `hexadecimal_case` | `HexCase` | `Preserve` | Case of hex digits `A`-`F`: Preserve, Lower, or Upper. The `0x`/`0b` prefix and exponent markers are always lowercased |
 | `call_parentheses` | `CallParentheses` | `Always` | Always, NoSingleString, NoSingleTable, None (single string or table), or Input (preserve source) |
-| `collapse_simple_statement` | `CollapseSimpleStatement` | `Never` | Never, FunctionOnly, ConditionalOnly, or Always. Function bodies never collapse, so FunctionOnly acts like Never and Always like ConditionalOnly. An `if` that doesn't fit on one line, or whose body spans lines or has a comment that couldn't keep its place on one line, stays expanded |
+| `collapse_simple_statement` | `CollapseSimpleStatement` | `Never` | Never or ConditionalOnly. Function bodies never collapse. An `if` that doesn't fit on one line, or whose body spans lines or has a comment that couldn't keep its place on one line, stays expanded |
 | `line_endings` | `LineEndings` | `Unix` | Unix (LF) or Windows (CRLF) |
 | `block_newline_gaps` | `BlockNewlineGaps` | `Never` | Never (strip) or Preserve blank lines at block start/end |
 | `space_after_function_names` | `SpaceAfterFunction` | `Never` | Never, Definitions, Calls, or Always, for a space before a definition's parameter list, a call's `(`, or both |

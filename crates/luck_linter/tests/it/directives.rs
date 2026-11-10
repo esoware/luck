@@ -1,13 +1,7 @@
-use luck_linter::{LintConfig, LintDiagnostic, RuleSetting, Severity, lint};
+use luck_linter::{LintConfig, LintDiagnostic, RuleLevel, Severity, lint};
 use luck_token::LuaVersion;
 
-fn with_severity(name: &str, severity: Severity) -> LintConfig {
-    let mut config = LintConfig::default();
-    config
-        .rule_overrides
-        .insert(name.to_owned(), RuleSetting { enabled: Some(true), severity: Some(severity) });
-    config
-}
+use crate::common::with_level;
 
 #[test]
 fn allow_covers_next_stmt() {
@@ -57,7 +51,7 @@ fn misspelled_region_word_disables_directive() {
 
 #[test]
 fn deny_escalates_severity() {
-    let config = with_severity("undefined_variable", Severity::Warning);
+    let config = with_level("undefined_variable", RuleLevel::Warn);
     let diags = lint("-- luck: deny(undefined_variable)\nprint(undef)", LuaVersion::Lua54, &config);
     let denied = diags
         .iter()
@@ -68,7 +62,7 @@ fn deny_escalates_severity() {
 
 #[test]
 fn warn_downgrades_severity() {
-    let config = with_severity("undefined_variable", Severity::Error);
+    let config = with_level("undefined_variable", RuleLevel::Error);
     let diags = lint("-- luck: warn(undefined_variable)\nprint(undef)", LuaVersion::Lua54, &config);
     let downgraded = diags
         .iter()
@@ -86,7 +80,7 @@ fn file_level_allow_covers_whole_file() {
 
 #[test]
 fn deny_region_covers_block() {
-    let config = with_severity("unused_variable", Severity::Warning);
+    let config = with_level("unused_variable", RuleLevel::Warn);
     let source = "-- luck: deny(unused_variable) start\nlocal a = 1\nlocal b = 2\n-- luck: deny(unused_variable) end";
     let diags = lint(source, LuaVersion::Lua54, &config);
     let region_diags: Vec<_> = diags.iter().filter(|diag| diag.rule == "unused_variable").collect();

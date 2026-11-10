@@ -8,6 +8,8 @@
 pub struct FormatConfig {
     pub line_width: Option<u16>,
     pub indent_style: Option<IndentStyle>,
+    /// Columns per indent level. With tabs, this is how wide a tab counts
+    /// against `line_width`.
     pub indent_width: Option<u8>,
     pub quote_style: Option<QuoteStyle>,
     /// Case of the hex digits `A`-`F` in numeric literals: `"preserve"`
@@ -118,20 +120,15 @@ pub enum LineEndings {
     Windows,
 }
 
-/// Which simple single-statement blocks collapse onto one line.
+/// Which simple single-statement blocks collapse onto one line. Function
+/// bodies never do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CollapseSimpleStatement {
     /// Always expand blocks.
     Never,
-    /// Simple function bodies, as in `function() return x end`. The formatter
-    /// doesn't collapse function bodies, so this behaves like `never`.
-    FunctionOnly,
     /// Collapse simple conditionals: `if x then return y end`.
     ConditionalOnly,
-    /// Simple functions and conditionals. The formatter doesn't collapse
-    /// function bodies, so this behaves like `conditional_only`.
-    Always,
 }
 
 /// Whether a block body can start or end with a blank line.
@@ -269,5 +266,14 @@ mod tests {
             error.contains("bogus") || error.contains("unknown variant"),
             "error should name the offending value: {error}"
         );
+    }
+
+    #[test]
+    fn rejects_the_function_collapse_modes() {
+        for mode in ["function_only", "always"] {
+            let json = format!(r#"{{ "format": {{ "collapse_simple_statement": "{mode}" }} }}"#);
+            let error = parse_luck_config(&json).unwrap_err();
+            assert!(error.contains(mode), "error should name the offending value: {error}");
+        }
     }
 }
