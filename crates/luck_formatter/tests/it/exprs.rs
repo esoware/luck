@@ -42,6 +42,17 @@ fn binary_op_expanded() {
 }
 
 #[test]
+fn binary_chain_breaks_at_one_precedence_level() {
+    let options = FormatOptions { line_width: 40, ..FormatOptions::default() };
+    assert_format_with(
+        "local total = first_value * second_value + third_value * fourth_value\n",
+        "local total = first_value * second_value\n\t+ third_value * fourth_value\n",
+        LuaVersion::Lua54,
+        &options,
+    );
+}
+
+#[test]
 fn multi_assignment() {
     assert_format("x,y=1,2\n", "x, y = 1, 2\n");
 }

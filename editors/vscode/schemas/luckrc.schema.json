@@ -408,7 +408,7 @@
           "minimum": 0
         },
         "magic_trailing_comma": {
-          "description": "When true, a trailing comma in a table constructor breaks the table one\nfield per line, as in Black and Prettier. Defaults to `false`. Argument\nlists can't carry one, since no dialect allows a comma after the last\nargument.",
+          "description": "When true, a trailing comma in a table constructor keeps the table\nbroken, as in Black and Prettier: one field per line, or still packed\nwhen it's a list the source packed several to a line. Defaults to\n`true`. Argument lists can't carry one, since no dialect allows a comma\nafter the last argument.",
           "type": [
             "boolean",
             "null"
@@ -425,7 +425,7 @@
           ]
         },
         "sort_requires": {
-          "description": "When true, sorts each run of consecutive `local NAME = require(...)`\nor `local NAME = game:GetService(...)` statements by name. A blank\nline ends a run.",
+          "description": "When true, sorts each run of consecutive `local NAME = require(...)`\nor `local NAME = game:GetService(...)` statements by name, where the\nrequire takes a string or a dotted path such as `script.Parent.Module`.\nA blank line ends a run. Defaults to `true`.",
           "type": [
             "boolean",
             "null"

@@ -7,6 +7,11 @@
 //! Entering an undecided group measures whether its content fits the
 //! remaining width and commits to `Flat` or `Expanded`, and each decision is
 //! recorded by `GroupId` so conditional content elsewhere can look it up.
+//!
+//! A group holding hugged groups has two more layouts, tried when it doesn't
+//! fit flat. It stays flat while hugged groups expand in its place: first
+//! only those a forced break expands anyway, then all of them. That is how
+//! `f(a, function()` keeps its head on one line.
 
 use core::mem::take;
 
@@ -52,11 +57,12 @@ pub(crate) fn print(
         indent_level: 0,
         modes: Vec::new(),
         group_modes: vec![None; group_count],
+        hugs: vec![Vec::new(); group_count],
         suffixes: Vec::new(),
         is_pending_space: false,
         is_pending_indent: !base_indent.is_empty(),
     };
-    propagate_expand(elements, &mut printer.group_modes);
+    propagate_expand(elements, &mut printer.group_modes, &mut printer.hugs);
     printer.print_elements(elements);
     printer.flush_suffixes();
     printer.output.into_string()
@@ -71,7 +77,9 @@ enum Region {
 impl Region {
     const fn opens(self, element: &FormatElement) -> bool {
         match self {
-            Self::Group => matches!(element, FormatElement::Tag(Tag::StartGroup(_))),
+            Self::Group => {
+                matches!(element, FormatElement::Tag(Tag::StartGroup(_) | Tag::StartHuggedGroup(_)))
+            }
             Self::Entry => matches!(element, FormatElement::Tag(Tag::StartEntry)),
         }
     }
@@ -82,6 +90,24 @@ impl Region {
             Self::Entry => matches!(element, FormatElement::Tag(Tag::EndEntry)),
         }
     }
+}
+
+/// A hugged group, as the group right around it sees it. Both offsets count
+/// elements from that group's first.
+#[derive(Debug, Clone, Copy)]
+struct Hug {
+    child: GroupId,
+    /// The first line directly inside the child, where its opening line ends.
+    first_line: usize,
+    /// The last such line, where its closing line starts.
+    last_line: usize,
+}
+
+struct OpenGroup {
+    id: GroupId,
+    /// Index of the group's first element.
+    content_start: usize,
+    is_hugged: bool,
 }
 
 struct Printer {
@@ -105,47 +131,84 @@ struct Printer {
     /// Break decision per group id. Pre-seeded with `Expanded` for groups
     /// containing forced breaks; filled in as groups are entered.
     group_modes: Vec<Option<PrintMode>>,
+    /// The hugged groups each group holds, in order, by the holder's id.
+    hugs: Vec<Vec<Hug>>,
     suffixes: Vec<FormatElement>,
     is_pending_space: bool,
     is_pending_indent: bool,
 }
 
-/// A forced break marks every group on the stack of enclosing groups. Line
-/// suffixes are boundaries: breaks inside them don't force anything outside.
-fn propagate_expand(elements: &[FormatElement], group_modes: &mut [Option<PrintMode>]) {
-    let mut group_stack: Vec<GroupId> = Vec::new();
+/// A forced break marks every group on the stack of enclosing groups.
+///
+/// The exception is the group right around a hugged group the break is in,
+/// which can stay flat while the hugged group breaks. Line suffixes are
+/// boundaries: breaks inside them don't force anything outside.
+fn propagate_expand(
+    elements: &[FormatElement],
+    group_modes: &mut [Option<PrintMode>],
+    hugs: &mut [Vec<Hug>],
+) {
+    let mut open_groups: Vec<OpenGroup> = Vec::new();
     let mut is_in_suffix = false;
 
-    for element in elements {
+    for (index, element) in elements.iter().enumerate() {
+        let content_start = index.saturating_add(1);
         match element {
-            FormatElement::Tag(Tag::StartGroup(id)) => group_stack.push(*id),
+            FormatElement::Tag(Tag::StartGroup(id)) => {
+                open_groups.push(OpenGroup { id: *id, content_start, is_hugged: false });
+            }
+            FormatElement::Tag(Tag::StartHuggedGroup(id)) => {
+                open_groups.push(OpenGroup { id: *id, content_start, is_hugged: true });
+            }
             FormatElement::Tag(Tag::EndGroup) => {
-                group_stack.pop();
+                open_groups.pop();
             }
             FormatElement::Tag(Tag::StartLineSuffix) => is_in_suffix = true,
             FormatElement::Tag(Tag::EndLineSuffix) => is_in_suffix = false,
-            FormatElement::Line(LineMode::Hard | LineMode::Empty) | FormatElement::ExpandParent => {
+            FormatElement::Line(mode) => {
+                if let [.., parent, child] = open_groups.as_slice()
+                    && child.is_hugged
+                    && let Some(siblings) = hugs.get_mut(parent.id.index())
+                {
+                    let line = index.saturating_sub(parent.content_start);
+                    match siblings.last_mut() {
+                        Some(hug) if hug.child == child.id => hug.last_line = line,
+                        Some(_) | None => {
+                            siblings.push(Hug {
+                                child: child.id,
+                                first_line: line,
+                                last_line: line,
+                            });
+                        }
+                    }
+                }
+                if matches!(mode, LineMode::Hard | LineMode::Empty) && !is_in_suffix {
+                    mark_expanded(&open_groups, group_modes);
+                }
+            }
+            FormatElement::ExpandParent => {
                 if !is_in_suffix {
-                    mark_expanded(&group_stack, group_modes);
+                    mark_expanded(&open_groups, group_modes);
                 }
             }
             FormatElement::Text(content) | FormatElement::Verbatim(content) => {
                 if !is_in_suffix && content.contains('\n') {
-                    mark_expanded(&group_stack, group_modes);
+                    mark_expanded(&open_groups, group_modes);
                 }
             }
             FormatElement::Token(_)
             | FormatElement::Space
-            | FormatElement::Line(LineMode::Soft | LineMode::SoftOrSpace)
             | FormatElement::LineSuffixBoundary
             | FormatElement::Tag(_) => {}
         }
     }
 }
 
-fn mark_expanded(group_stack: &[GroupId], group_modes: &mut [Option<PrintMode>]) {
-    for id in group_stack {
-        if let Some(mode) = group_modes.get_mut(id.index()) {
+fn mark_expanded(open_groups: &[OpenGroup], group_modes: &mut [Option<PrintMode>]) {
+    let mut inner_groups = open_groups.iter().skip(1);
+    for group in open_groups {
+        let is_hugging = inner_groups.next().is_some_and(|inner| inner.is_hugged);
+        if !is_hugging && let Some(mode) = group_modes.get_mut(group.id.index()) {
             *mode = Some(PrintMode::Expanded);
         }
     }
@@ -197,20 +260,11 @@ impl Printer {
         rest: &'elements [FormatElement],
     ) -> &'elements [FormatElement] {
         match tag {
-            Tag::StartGroup(id) => {
-                // A mode already set was forced by `propagate_expand`.
-                let mode = self.group_mode(id).unwrap_or_else(|| {
-                    // An enclosing flat group already measured this content;
-                    // re-measuring can't change the answer.
-                    if self.current_mode() == PrintMode::Flat || self.fits(rest, Region::Group, 0) {
-                        PrintMode::Flat
-                    } else {
-                        PrintMode::Expanded
-                    }
-                });
-                if let Some(group_mode) = self.group_modes.get_mut(id.index()) {
-                    *group_mode = Some(mode);
-                }
+            Tag::StartGroup(id) | Tag::StartHuggedGroup(id) => {
+                // A mode already set was forced by `propagate_expand`, or by
+                // the group around a hugged one.
+                let mode = self.group_mode(id).unwrap_or_else(|| self.decide_mode(id, rest));
+                self.set_group_mode(id, mode);
                 self.modes.push(mode);
             }
             Tag::StartFlat => self.modes.push(PrintMode::Flat),
@@ -219,6 +273,16 @@ impl Printer {
             }
             Tag::StartIndent => self.indent_level = self.indent_level.saturating_add(1),
             Tag::EndIndent => self.indent_level = self.indent_level.saturating_sub(1),
+            Tag::StartIndentIfGroupBreaks(group_id) => {
+                if self.group_mode(group_id) == Some(PrintMode::Expanded) {
+                    self.indent_level = self.indent_level.saturating_add(1);
+                }
+            }
+            Tag::EndIndentIfGroupBreaks(group_id) => {
+                if self.group_mode(group_id) == Some(PrintMode::Expanded) {
+                    self.indent_level = self.indent_level.saturating_sub(1);
+                }
+            }
             Tag::StartIfGroupBreaks(group_id) => {
                 let decided_mode = self.group_mode(group_id);
                 debug_assert!(
@@ -245,6 +309,39 @@ impl Printer {
             | Tag::EndLineSuffix => {}
         }
         rest
+    }
+
+    fn set_group_mode(&mut self, id: GroupId, mode: PrintMode) {
+        if let Some(group_mode) = self.group_modes.get_mut(id.index()) {
+            *group_mode = Some(mode);
+        }
+    }
+
+    /// `rest` starts at the group's first element.
+    fn decide_mode(&mut self, id: GroupId, rest: &[FormatElement]) -> PrintMode {
+        // An enclosing flat group already measured this content;
+        // re-measuring can't change the answer.
+        if self.current_mode() == PrintMode::Flat || self.fits(rest, Region::Group, 0) {
+            return PrintMode::Flat;
+        }
+        let hugs = self.hugs.get(id.index()).map_or(&[][..], Vec::as_slice);
+        if hugs.is_empty() {
+            return PrintMode::Expanded;
+        }
+        // A hugged group left undecided here prints flat, like anything else
+        // in a flat group.
+        if self.fits_hugging(rest, hugs, false) {
+            return PrintMode::Flat;
+        }
+        if self.fits_hugging(rest, hugs, true) {
+            for hug in hugs {
+                if let Some(child_mode) = self.group_modes.get_mut(hug.child.index()) {
+                    *child_mode = Some(PrintMode::Expanded);
+                }
+            }
+            return PrintMode::Flat;
+        }
+        PrintMode::Expanded
     }
 
     fn print_line(&mut self, mode: LineMode) {
@@ -348,8 +445,53 @@ impl Printer {
     /// checking the content fits the remaining width. `separator_width`
     /// charges width up front for a pending separator.
     fn fits(&self, elements: &[FormatElement], region: Region, separator_width: usize) -> bool {
-        let mut used_width = self.occupied_width().saturating_add(separator_width);
-        let mut depth: u32 = 1;
+        let used_width = self.occupied_width().saturating_add(separator_width);
+        self.fits_from(elements, region, used_width, 1)
+    }
+
+    /// Whether a group fits with its hugged children expanded and the rest
+    /// flat.
+    ///
+    /// Each expanded child ends one line at its first break and starts the
+    /// next at its last, so what gets measured is the line up to the first
+    /// child, the line from each child to the next, and the line the last
+    /// child closes on. Without `should_expand_all`, only the children a
+    /// forced break expands count, and the others are measured flat.
+    fn fits_hugging(
+        &self,
+        elements: &[FormatElement],
+        hugs: &[Hug],
+        should_expand_all: bool,
+    ) -> bool {
+        let mut line_start = 0;
+        let mut used_width = self.occupied_width();
+        let mut depth = 1;
+        for hug in hugs {
+            if !should_expand_all && self.group_mode(hug.child) != Some(PrintMode::Expanded) {
+                continue;
+            }
+            let line = elements.get(line_start..hug.first_line).unwrap_or_default();
+            if !self.fits_from(line, Region::Group, used_width, depth) {
+                return false;
+            }
+            line_start = hug.last_line.saturating_add(1);
+            used_width = self.indent_columns();
+            // The next line starts inside the child, two groups deep.
+            depth = 2;
+        }
+        let closing_line = elements.get(line_start..).unwrap_or_default();
+        self.fits_from(closing_line, Region::Group, used_width, depth)
+    }
+
+    /// `depth` is how many regions deep `elements` starts. Measuring stops
+    /// where the outermost of them closes.
+    fn fits_from(
+        &self,
+        elements: &[FormatElement],
+        region: Region,
+        mut used_width: usize,
+        mut depth: u32,
+    ) -> bool {
         let mut remaining = elements;
 
         while let Some((element, rest)) = remaining.split_first() {
@@ -529,8 +671,9 @@ fn split_line_suffix(elements: &[FormatElement]) -> (&[FormatElement], &[FormatE
 mod tests {
     use crate::comments::Comments;
     use crate::ir::{
-        Format as _, Formatter, empty_line, format_with, group, group_with_id, hard_line,
-        if_group_breaks, indent, soft_line, soft_line_or_space, space, token,
+        Format, Formatter, empty_line, format_with, group, group_with_id, hard_line,
+        hugged_group_with_id, if_group_breaks, indent, indent_if_group_breaks, soft_line,
+        soft_line_or_space, space, token,
     };
     use crate::{FormatOptions, IndentStyle};
 
@@ -722,5 +865,138 @@ mod tests {
         assert_eq!(print(1, "\t"), "\t[yyyyyyy]");
         assert_eq!(print(4, "\t"), "\t[\n\tyyyyyyy\n\t]");
         assert_eq!(print(4, " "), " [yyyyyyy]");
+    }
+
+    /// `(a, <hugged>, bbbb)`, laid out as a call lays out its arguments.
+    fn write_hugging_list(f: &mut Formatter, hugged: impl Format) {
+        let list = f.group_id();
+        group_with_id(
+            list,
+            (
+                token("("),
+                indent_if_group_breaks(
+                    list,
+                    (
+                        soft_line(),
+                        token("a"),
+                        token(","),
+                        soft_line_or_space(),
+                        hugged,
+                        token(","),
+                        soft_line_or_space(),
+                        token("bbbb"),
+                    ),
+                ),
+                soft_line(),
+                token(")"),
+            ),
+        )
+        .fmt(f);
+    }
+
+    fn write_hugged_braces(f: &mut Formatter) {
+        let braces = f.group_id();
+        let hugged = hugged_group_with_id(
+            braces,
+            (
+                token("{"),
+                indent((soft_line_or_space(), token("xxxx"))),
+                soft_line_or_space(),
+                token("}"),
+            ),
+        );
+        write_hugging_list(f, hugged);
+    }
+
+    #[test]
+    fn hugged_group_breaks_in_its_parents_place() {
+        assert_eq!(print_document(write_hugged_braces, 19), "(a, { xxxx }, bbbb)");
+        assert_eq!(print_document(write_hugged_braces, 18), "(a, {\n    xxxx\n}, bbbb)");
+    }
+
+    #[test]
+    fn hugging_needs_its_closing_line_to_fit() {
+        // `}, bbbb)` is eight columns.
+        assert_eq!(print_document(write_hugged_braces, 8), "(a, {\n    xxxx\n}, bbbb)");
+        assert_eq!(
+            print_document(write_hugged_braces, 7),
+            "(\n    a,\n    {\n        xxxx\n    },\n    bbbb\n)"
+        );
+    }
+
+    /// `({xxxx}, <block>)`, both hugged.
+    fn write_hugged_braces_and(f: &mut Formatter, block: impl Format) {
+        let (list, braces, block_group) = (f.group_id(), f.group_id(), f.group_id());
+        group_with_id(
+            list,
+            (
+                token("("),
+                indent_if_group_breaks(
+                    list,
+                    (
+                        soft_line(),
+                        hugged_group_with_id(
+                            braces,
+                            (
+                                token("{"),
+                                indent((soft_line_or_space(), token("xxxx"))),
+                                soft_line_or_space(),
+                                token("}"),
+                            ),
+                        ),
+                        token(","),
+                        soft_line_or_space(),
+                        hugged_group_with_id(block_group, block),
+                    ),
+                ),
+                soft_line(),
+                token(")"),
+            ),
+        )
+        .fmt(f);
+    }
+
+    #[test]
+    fn hugged_group_stays_flat_beside_one_a_forced_break_expands() {
+        let write = |f: &mut Formatter| {
+            let block = (token("do"), indent((hard_line(), token("x"))), hard_line(), token("end"));
+            write_hugged_braces_and(f, block);
+        };
+        // `({ xxxx }, do` is thirteen columns.
+        assert_eq!(print_document(write, 13), "({ xxxx }, do\n    x\nend)");
+        assert_eq!(print_document(write, 12), "({\n    xxxx\n}, do\n    x\nend)");
+    }
+
+    #[test]
+    fn hugged_groups_all_expand_when_none_is_forced_to() {
+        let write = |f: &mut Formatter| {
+            let braces = (
+                token("{"),
+                indent((soft_line_or_space(), token("yyyy"))),
+                soft_line_or_space(),
+                token("}"),
+            );
+            write_hugged_braces_and(f, braces);
+        };
+        assert_eq!(print_document(write, 20), "({ xxxx }, { yyyy })");
+        assert_eq!(print_document(write, 19), "({\n    xxxx\n}, {\n    yyyy\n})");
+    }
+
+    #[test]
+    fn forced_break_in_a_hugged_group_leaves_its_parent_flat() {
+        let write_hugged_block = |f: &mut Formatter| {
+            let block = f.group_id();
+            let hugged = hugged_group_with_id(
+                block,
+                (token("do"), indent((hard_line(), token("x"))), hard_line(), token("end")),
+            );
+            write_hugging_list(f, hugged);
+        };
+        assert_eq!(print_document(write_hugged_block, 80), "(a, do\n    x\nend, bbbb)");
+        // `(a, do` is six columns.
+        assert_eq!(
+            print_document(write_hugged_block, 5),
+            "(\n    a,\n    do\n        x\n    end,\n    bbbb\n)"
+        );
     }
 }

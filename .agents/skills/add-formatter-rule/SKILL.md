@@ -13,7 +13,7 @@ Leaf text comes from token-carried values (`src/tokens.rs`), never from source s
 
 - **Comment safety.** If the construct can contain comments (tables, arg lists, chains), verify a comment inside it survives in place. Comment relocation is this crate's historical worst bug class. A comment no emitter claimed sends the statement down `write_verbatim_or`'s fallback.
 - **Synthetic ASTs.** `format_block` runs with no source text and `Comments::none()`/`Comments::synthetic(..)`. Any new logic that reads source must degrade gracefully when it is `None` (see the blank-line policy in `format_block.rs`).
-- **Hug patterns.** A single function or table literal argument stays inline (`format_function.rs`), defeated by a magic trailing comma.
+- **Hug patterns.** A call's function and table arguments break in the argument list's place (`format_function.rs`, through the hugged groups in `printer.rs`), unless another argument sits between two of them.
 - **Fill mode.** Simple all-positional tables pack greedily.
 - **Access chains** break at method calls, not field dots.
 - **Types are real AST** (`luck_ast::Type`), so extend the `format_type.rs` impls and never re-tokenize text.

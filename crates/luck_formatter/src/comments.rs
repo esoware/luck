@@ -25,7 +25,7 @@ use luck_token::{
 use rustc_hash::FxHashSet;
 
 use crate::directive::{Directive, format_off_regions};
-use crate::format_block::has_blank_line;
+use crate::format_block::{has_blank_line, has_blank_line_above, has_leading_edge_blank};
 use crate::ir::{Format, Formatter, empty_line, format_with, hard_line, indent, space, token};
 
 #[derive(Debug, Clone)]
@@ -477,10 +477,30 @@ pub(crate) fn write_trailing_comments(f: &mut Formatter, anchor: u32, stmt_end: 
 ///
 /// Parsed input only: a synthetic comment has no offset to compare, and
 /// [`write_leading_comments`] already places it by anchor.
-fn write_own_line_comments_in(f: &mut Formatter, start: u32, limit: u32) {
-    let texts = f.comments_mut().take_sourced_while(|c, _| (start..limit).contains(&c.span.start));
-    for text in texts {
-        hard_line().fmt(f);
+///
+/// `can_follow_blank` says whether a line here keeps a blank line the source
+/// has above it, and is set once a line is written.
+fn write_own_line_comments_in(
+    f: &mut Formatter,
+    start: u32,
+    limit: u32,
+    kind: ListKind,
+    can_follow_blank: &mut bool,
+) {
+    let version = f.comments().source_version();
+    let mut blanks_above = Vec::new();
+    let texts = f.comments_mut().take_sourced_while(|c, source| {
+        let is_inside = (start..limit).contains(&c.span.start);
+        if is_inside {
+            blanks_above.push(version.is_some_and(|source_version| {
+                has_leading_edge_blank(source, c.span.start, source_version)
+            }));
+        }
+        is_inside
+    });
+    for (text, has_blank_above) in texts.into_iter().zip(blanks_above) {
+        write_line_break(f, has_blank_above && *can_follow_blank);
+        *can_follow_blank = kind == ListKind::TableFields;
         f.write_text(text);
     }
 }
@@ -536,11 +556,12 @@ fn write_same_line_comments_after(f: &mut Formatter, offset: u32, limit: u32) {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ListSeparator {
-    /// Table fields: a trailing comma is the expanded-layout convention.
-    AfterEachItem,
-    /// Call arguments: no dialect's grammar allows a trailing comma.
-    BetweenItems,
+pub(crate) enum ListKind {
+    /// A trailing comma is the expanded-layout convention, and a blank line
+    /// above a field or a comment is kept.
+    TableFields,
+    /// No dialect's grammar allows a trailing comma.
+    CallArgs,
 }
 
 /// A packed or flat layout would push a line-suffix comment past the closing
@@ -555,27 +576,38 @@ pub(crate) fn write_commented_list<T>(
     span: Span,
     items: &[T],
     span_of: fn(&T) -> Span,
-    separator: ListSeparator,
+    kind: ListKind,
 ) where
     T: Format,
 {
     let (open, close) = delimiters;
     token(open).fmt(f);
     indent(format_with(|indented| {
+        // The line after the opener never follows a blank one.
+        let mut can_follow_blank = false;
         let mut remaining = items;
         while let [item, rest @ ..] = remaining {
             let item_span = span_of(item);
-            write_own_line_comments_in(indented, span.start, item_span.start);
-            hard_line().fmt(indented);
+            let item_start = item_span.start;
+            write_own_line_comments_in(
+                indented,
+                span.start,
+                item_start,
+                kind,
+                &mut can_follow_blank,
+            );
+            let has_blank_above = can_follow_blank && has_blank_line_above(indented, item_start);
+            write_line_break(indented, has_blank_above);
+            can_follow_blank = kind == ListKind::TableFields;
             item.fmt(indented);
-            if separator == ListSeparator::AfterEachItem || !rest.is_empty() {
+            if kind == ListKind::TableFields || !rest.is_empty() {
                 token(",").fmt(indented);
             }
             let next_start = rest.first().map_or(span.end, |next| span_of(next).start);
             write_same_line_comments_after(indented, item_span.end, next_start);
             remaining = rest;
         }
-        write_own_line_comments_in(indented, span.start, span.end);
+        write_own_line_comments_in(indented, span.start, span.end, kind, &mut can_follow_blank);
     }))
     .fmt(f);
     (hard_line(), token(close)).fmt(f);

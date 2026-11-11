@@ -41,9 +41,15 @@ pub(crate) enum LineMode {
 pub(crate) enum Tag {
     /// Content that prints flat if it fits the remaining line width.
     StartGroup(GroupId),
+    /// A group that may break while the group right around it stays flat, as
+    /// a call's function or table argument does. Closed by `EndGroup`.
+    StartHuggedGroup(GroupId),
     EndGroup,
     StartIndent,
     EndIndent,
+    /// Content indented only when the referenced group expanded.
+    StartIndentIfGroupBreaks(GroupId),
+    EndIndentIfGroupBreaks(GroupId),
     /// Content emitted only when the referenced group expanded.
     StartIfGroupBreaks(GroupId),
     EndIfGroupBreaks,
@@ -292,6 +298,30 @@ where
     })
 }
 
+/// See [`Tag::StartHuggedGroup`].
+pub(crate) fn hugged_group_with_id<T>(id: GroupId, content: T) -> impl Format
+where
+    T: Format,
+{
+    format_with(move |f| {
+        f.push(FormatElement::Tag(Tag::StartHuggedGroup(id)));
+        content.fmt(f);
+        f.push(FormatElement::Tag(Tag::EndGroup));
+    })
+}
+
+/// The group must start before this element, as for `if_group_breaks`.
+pub(crate) fn indent_if_group_breaks<T>(group_id: GroupId, content: T) -> impl Format
+where
+    T: Format,
+{
+    format_with(move |f| {
+        f.push(FormatElement::Tag(Tag::StartIndentIfGroupBreaks(group_id)));
+        content.fmt(f);
+        f.push(FormatElement::Tag(Tag::EndIndentIfGroupBreaks(group_id)));
+    })
+}
+
 pub(crate) fn flat<T>(content: T) -> impl Format
 where
     T: Format,
@@ -330,17 +360,20 @@ where
     })
 }
 
-/// Pack entries onto lines greedily, separated by `SoftOrSpace`. Entry
-/// boundaries are explicit so the printer can measure each entry as a unit.
-pub(crate) fn fill<T>(entries: &[T]) -> impl Format
+/// Pack entries onto lines greedily.
+///
+/// Each entry comes with the line that parts it from the one before, which
+/// the first entry has no use for. Entry boundaries are explicit so the
+/// printer can measure each entry as a unit.
+pub(crate) fn fill<T>(entries: &[(LineMode, T)]) -> impl Format
 where
     T: Format,
 {
     format_with(move |f| {
         f.push(FormatElement::Tag(Tag::StartFill));
-        for (i, entry) in entries.iter().enumerate() {
+        for (i, (separator, entry)) in entries.iter().enumerate() {
             if i > 0 {
-                f.push(FormatElement::Line(LineMode::SoftOrSpace));
+                f.push(FormatElement::Line(*separator));
             }
             f.push(FormatElement::Tag(Tag::StartEntry));
             entry.fmt(f);

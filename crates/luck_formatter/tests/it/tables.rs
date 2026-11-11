@@ -78,6 +78,40 @@ fn long_string_index_keeps_space() {
 }
 
 #[test]
+fn blank_line_between_fields_is_kept() {
+    let source = "local t = {\n\ta = 1,\n\n\tb = 2,\n\tc = 3,\n}\n";
+    assert_format(source, source);
+    // A run of blank lines is one, and the edges of the table take none.
+    assert_format(
+        "local t = {\n\n\ta = 1,\n\n\n\tb = 2,\n\n}\n",
+        "local t = {\n\ta = 1,\n\n\tb = 2,\n}\n",
+    );
+}
+
+#[test]
+fn blank_line_between_fields_breaks_a_table_that_fits() {
+    assert_format("local t = { a = 1,\n\n b = 2 }\n", "local t = {\n\ta = 1,\n\n\tb = 2,\n}\n");
+}
+
+#[test]
+fn blank_line_groups_a_packed_list() {
+    let source =
+        "local libs = {\n\t\"roact\", \"rodux\", \"cryo\",\n\n\t\"testez\", \"otter\",\n}\n";
+    assert_format(source, source);
+}
+
+#[test]
+fn blank_line_between_commented_fields_is_kept() {
+    let source = "local Status = {\n\t-- nothing runs\n\tDisabled = \"Disabled\",\n\n\t-- everything runs\n\tEnabled = \"Enabled\",\n}\n";
+    assert_format(source, source);
+    // The comment right after the opener takes no blank line above it.
+    assert_format(
+        "local Status = {\n\n\t-- nothing runs\n\tDisabled = \"Disabled\",\n}\n",
+        "local Status = {\n\t-- nothing runs\n\tDisabled = \"Disabled\",\n}\n",
+    );
+}
+
+#[test]
 fn fill_entry_with_grouped_dot_chain() {
     // A dot chain of three or more accesses gets its own group inside the
     // fill entry, and the fill printer must not take that group's soft lines

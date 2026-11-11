@@ -16,8 +16,9 @@ pub struct FormatOptions {
     pub block_newline_gaps: BlockNewlineGaps,
     pub sort_requires: bool,
     pub space_after_function_names: SpaceAfterFunction,
-    /// When true, a trailing comma in a table constructor breaks the table one
-    /// field per line, as in Black and Prettier.
+    /// When true, a trailing comma in a table constructor keeps the table
+    /// broken, as in Black and Prettier: one field per line, or still packed
+    /// when it's a list the source packed several to a line.
     ///
     /// Argument lists can't carry one, since no dialect allows a comma after
     /// the last argument.
@@ -36,9 +37,9 @@ impl Default for FormatOptions {
             collapse_simple_statement: CollapseSimpleStatement::Never,
             line_endings: LineEndings::Unix,
             block_newline_gaps: BlockNewlineGaps::Never,
-            sort_requires: false,
+            sort_requires: true,
             space_after_function_names: SpaceAfterFunction::Never,
-            magic_trailing_comma: false,
+            magic_trailing_comma: true,
         }
     }
 }

@@ -100,10 +100,28 @@ fn block_gaps_preserve_then_branch() {
 }
 
 #[test]
-fn sort_requires_off_by_default() {
+fn sort_requires_on_by_default() {
+    assert_format(
+        "local zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\n",
+        "local alpha = require(\"alpha\")\nlocal zeta = require(\"zeta\")\n",
+    );
+}
+
+#[test]
+fn sort_requires_off_keeps_the_source_order() {
+    let options = FormatOptions { sort_requires: false, ..FormatOptions::default() };
     let input = "local zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\n";
-    let result = format(input, LuaVersion::Lua54, &FormatOptions::default());
-    assert_eq!(result.output, input);
+    assert_format_with(input, input, LuaVersion::Lua54, &options);
+}
+
+#[test]
+fn sort_requires_orders_instance_path_requires() {
+    assert_format_with(
+        "local Zebra = require(script.Parent.Zebra)\nlocal Apple = require(Packages.Apple)\n",
+        "local Apple = require(Packages.Apple)\nlocal Zebra = require(script.Parent.Zebra)\n",
+        LuaVersion::Luau,
+        &FormatOptions::default(),
+    );
 }
 
 #[test]
@@ -253,8 +271,9 @@ fn format_ignore_alias_keeps_next_stmt_verbatim() {
 fn magic_trailing_comma_off_keeps_packed_table() {
     // With `magic_trailing_comma` off, a trailing comma doesn't force a break,
     // so the table stays packed.
+    let options = FormatOptions { magic_trailing_comma: false, ..FormatOptions::default() };
     let input = "local t = { 1, 2, 3, }\n";
-    let result = format(input, LuaVersion::Lua54, &FormatOptions::default());
+    let result = format(input, LuaVersion::Lua54, &options);
     assert_eq!(result.errors, Vec::<luck_token::SourceError>::new());
     assert!(!result.output.contains("\n\t1,"));
 }
@@ -267,6 +286,33 @@ fn magic_trailing_comma_on_expands_table() {
     let input = "local t = { 1, 2, 3, }\n";
     let expected = "local t = {\n\t1,\n\t2,\n\t3,\n}\n";
     assert_format_with(input, expected, LuaVersion::Lua54, &options);
+}
+
+#[test]
+fn magic_trailing_comma_keeps_a_broken_table_broken_by_default() {
+    let input = "local t = {\n\ttype = \"baz\",\n}\n";
+    assert_format(input, input);
+}
+
+#[test]
+fn magic_trailing_comma_keeps_a_packed_list_packed() {
+    // The values stay several to a line, repacked to the width, and the
+    // table stays broken.
+    assert_format(
+        "local libs = {\n\t\"roact\", \"rodux\",\n\t\"cryo\",\n}\n",
+        "local libs = {\n\t\"roact\", \"rodux\", \"cryo\",\n}\n",
+    );
+}
+
+#[test]
+fn magic_trailing_comma_gives_a_wrapped_fill_its_comma() {
+    let options = FormatOptions { line_width: 12, ..FormatOptions::default() };
+    assert_format_with(
+        "local t = {1,2,3,4,5,6}\n",
+        "local t = {\n\t1, 2, 3,\n\t4, 5, 6,\n}\n",
+        LuaVersion::Lua54,
+        &options,
+    );
 }
 
 #[test]

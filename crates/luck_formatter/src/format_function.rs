@@ -4,12 +4,13 @@ use luck_ast::{
 };
 use luck_token::Token;
 
-use crate::comments::{ListSeparator, write_commented_list};
-use crate::format_block::IndentedBlock;
+use crate::comments::{ListKind, write_commented_list};
+use crate::format_block::{IndentedBlock, first_item_span};
+use crate::format_table::HuggedTable;
 use crate::format_type::ExplicitTypeArgs;
 use crate::ir::{
-    Format, Formatter, flat, format_with, group, hard_line, indent, separated, soft_line,
-    soft_line_or_space, space, token,
+    Format, Formatter, flat, format_with, group, group_with_id, hard_line, hugged_group_with_id,
+    indent, indent_if_group_breaks, separated, soft_line, soft_line_or_space, space, token,
 };
 use crate::quotes::normalize_quote;
 use crate::{CallParentheses, SpaceAfterFunction};
@@ -26,9 +27,13 @@ impl Format for FunctionBody {
             (token(":"), space(), return_type).fmt(f);
         }
 
-        IndentedBlock(&self.block).fmt(f);
-        // Even an empty body puts `end` on its own line.
-        (hard_line(), token("end")).fmt(f);
+        let has_body = first_item_span(&self.block).is_some()
+            || f.comments().has_dangling_comments(self.block.span.start);
+        if has_body {
+            (IndentedBlock(&self.block), hard_line(), token("end")).fmt(f);
+        } else {
+            (space(), token("end")).fmt(f);
+        }
     }
 }
 
@@ -191,7 +196,7 @@ impl Format for FunctionArgs {
                         *span,
                         &args.items,
                         Expression::span,
-                        ListSeparator::BetweenItems,
+                        ListKind::CallArgs,
                     );
                     return;
                 }
@@ -260,6 +265,12 @@ impl Format for FunctionArgs {
 
 /// No dialect allows a comma after the last argument, so the list never gets
 /// a trailing comma and `magic_trailing_comma` only affects tables inside it.
+///
+/// The arguments that are functions or tables with fields are hugged: a list
+/// too long for one line keeps the other arguments beside the parens and
+/// breaks inside those, as in `f(a, function()` or `f(a, {` ... `}, {`.
+/// When another argument sits between two of them, or when that layout
+/// doesn't fit, every argument gets its own line.
 fn write_args_list(f: &mut Formatter, args: &Punctuated<Expression>) {
     if args.is_empty() {
         token("()").fmt(f);
@@ -271,12 +282,48 @@ fn write_args_list(f: &mut Formatter, args: &Punctuated<Expression>) {
         return;
     }
 
-    group((
-        token("("),
-        indent((soft_line(), separated(&args.items, (token(","), soft_line_or_space())))),
-        soft_line(),
-        token(")"),
-    ))
+    let is_block_arg = |arg: &Expression| {
+        matches!(arg, Expression::FunctionDef(_))
+            || matches!(arg, Expression::TableConstructor(table) if !table.fields.is_empty())
+    };
+    let has_split_blocks = args
+        .iter()
+        .map(is_block_arg)
+        .skip_while(|is_block| !is_block)
+        .skip_while(|is_block| *is_block)
+        .any(|is_block| is_block);
+
+    let group_id = f.group_id();
+    group_with_id(
+        group_id,
+        (
+            token("("),
+            indent_if_group_breaks(
+                group_id,
+                (
+                    soft_line(),
+                    format_with(|list| {
+                        for (i, arg) in args.iter().enumerate() {
+                            if i > 0 {
+                                (token(","), soft_line_or_space()).fmt(list);
+                            }
+                            let is_hugged = !has_split_blocks && is_block_arg(arg);
+                            if is_hugged && let Expression::TableConstructor(table) = arg {
+                                HuggedTable(table).fmt(list);
+                            } else if is_hugged {
+                                let function_group = list.group_id();
+                                hugged_group_with_id(function_group, arg).fmt(list);
+                            } else {
+                                arg.fmt(list);
+                            }
+                        }
+                    }),
+                ),
+            ),
+            soft_line(),
+            token(")"),
+        ),
+    )
     .fmt(f);
 }
 

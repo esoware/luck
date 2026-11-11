@@ -23,16 +23,18 @@ pub struct FormatConfig {
     /// `"never"` (default) or `"preserve"`.
     pub block_newline_gaps: Option<BlockNewlineGaps>,
     /// When true, sorts each run of consecutive `local NAME = require(...)`
-    /// or `local NAME = game:GetService(...)` statements by name. A blank
-    /// line ends a run.
+    /// or `local NAME = game:GetService(...)` statements by name, where the
+    /// require takes a string or a dotted path such as `script.Parent.Module`.
+    /// A blank line ends a run. Defaults to `true`.
     pub sort_requires: Option<bool>,
     /// Where to put a space before `(`: `"never"` (default), `"definitions"`,
     /// `"calls"`, or `"always"` for both.
     pub space_after_function_names: Option<SpaceAfterFunction>,
-    /// When true, a trailing comma in a table constructor breaks the table one
-    /// field per line, as in Black and Prettier. Defaults to `false`. Argument
-    /// lists can't carry one, since no dialect allows a comma after the last
-    /// argument.
+    /// When true, a trailing comma in a table constructor keeps the table
+    /// broken, as in Black and Prettier: one field per line, or still packed
+    /// when it's a list the source packed several to a line. Defaults to
+    /// `true`. Argument lists can't carry one, since no dialect allows a comma
+    /// after the last argument.
     pub magic_trailing_comma: Option<bool>,
 }
 
