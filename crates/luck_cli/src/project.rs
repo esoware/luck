@@ -1,13 +1,13 @@
 use alloc::sync::Arc;
-use core::slice;
 use std::env;
-use std::path::{self, MAIN_SEPARATOR, Path, PathBuf};
+use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use std::sync::mpsc;
 
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 use luck_core::{
     CONFIG_FILE_NAME, DynamicRequire, LuaTarget, LuckConfig, ProjectConfig, ProjectFilter,
-    discover_config, load_or_discover_config, normalize_path,
+    discover_config, load_or_discover_config, native_path, normalize_path,
 };
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -72,8 +72,9 @@ pub(crate) fn resolve_dynamic_require(
 /// That's `-c` resolved through `extends` when given.
 ///
 /// Otherwise it's the `luck.json` governing the input, or defaults if there's
-/// none, and discovery starts in the input's own directory, not cwd, so
-/// `luck bundle path/to/project/src/main.lua` sees that project's config.
+/// none, and discovery starts in the input's own directory, or in the input
+/// when it's a directory, not cwd, so `luck bundle path/to/project/src/main.lua`
+/// sees that project's config.
 ///
 /// The config directory isn't returned, since a one-shot run names its input
 /// and applies no include/exclude filter.
@@ -90,15 +91,20 @@ pub(crate) fn config_for_one_shot(
         return Ok(resolve_project(config_path)?.config);
     }
 
-    let start_directory =
-        match Path::new(input_path).parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            Some(parent) => match parent.canonicalize() {
-                Ok(canonical) => canonical,
-                Err(_) => current_directory()?.join(parent),
-            },
-            // A bare file name, or `-` for stdin: cwd is the only context there is.
-            None => current_directory()?,
-        };
+    let input = Path::new(input_path);
+    let input_directory = if input.is_dir() {
+        Some(input)
+    } else {
+        input.parent().filter(|parent| !parent.as_os_str().is_empty())
+    };
+    let start_directory = match input_directory {
+        Some(directory) => match directory.canonicalize() {
+            Ok(canonical) => canonical,
+            Err(_) => current_directory()?.join(directory),
+        },
+        // A bare file name, or `-` for stdin: cwd is the only context there is.
+        None => current_directory()?,
+    };
 
     let discovered = discover_config(&start_directory).map_err(usage_error)?;
     Ok(discovered.map_or_else(LuckConfig::default, |project| project.config))
@@ -145,8 +151,9 @@ pub(crate) struct ProjectFile<Settings> {
 /// A directory is walked and gated by its project's include/exclude filter,
 /// and a project nested in it is walked under its own config. A glob selects
 /// from the walk of its literal directory part, a file named outright skips
-/// `include` but not `exclude`, and a `!` glob drops whatever it matches. A
-/// file several arguments reach is processed once.
+/// `include` but not `exclude`, and a `!` glob drops whatever it matches and
+/// everything under a directory it matches. A file several arguments reach is
+/// processed once.
 ///
 /// `settings_of` runs once per project. Every target resolves here too,
 /// before the parallel commands' locked output sections. Those hold the stdio
@@ -156,9 +163,10 @@ pub(crate) struct ProjectFile<Settings> {
 /// # Errors
 ///
 /// Reports the failure and returns [`Exit::Usage`] on a config that doesn't
-/// load, a bad glob or dialect, a path that doesn't exist, or no file left to
-/// work on unless `can_match_nothing`, and [`Exit::Failure`] when a directory
-/// can't be walked. An error from `settings_of` is returned as it is.
+/// load, a bad glob or dialect, a path that doesn't exist, or, unless
+/// `can_match_nothing`, a glob that selects no file or no file left to work
+/// on, and [`Exit::Failure`] when a directory can't be walked. An error from
+/// `settings_of` is returned as it is.
 pub(crate) fn project_files<Settings>(
     config_path: Option<&Path>,
     paths: &[String],
@@ -186,13 +194,15 @@ pub(crate) fn project_files<Settings>(
                 found.push((path.to_path_buf(), project));
             }
         } else if is_glob(arg) {
-            let pattern = glob_pattern(arg);
-            let selection =
-                ProjectFilter::new(&working_directory, Some(slice::from_ref(&pattern)), None)
-                    .map_err(usage_error)?;
-            let base = glob_base(&pattern);
+            let (base, pattern) = split_glob(arg);
+            let max_depth = (!pattern.contains("**")).then(|| pattern.split('/').count());
+            let selection = Selection { patterns: glob_set(&[pattern])?, max_depth };
+            let found_before = found.len();
             if base.is_dir() {
                 projects.collect_tree(&base, Some(&selection), &mut found)?;
+            }
+            if found.len() == found_before && !can_match_nothing {
+                return Err(usage_error(format!("no `.lua` or `.luau` files matched `{arg}`")));
             }
         } else {
             return Err(usage_error(format!("path not found: `{arg}`")));
@@ -200,11 +210,24 @@ pub(crate) fn project_files<Settings>(
     }
 
     if !dropped_args.is_empty() {
-        let patterns: Vec<String> =
-            dropped_args.iter().map(|arg| glob_pattern(arg.trim_start_matches('!'))).collect();
-        let dropped =
-            ProjectFilter::new(&working_directory, None, Some(&patterns)).map_err(usage_error)?;
-        found.retain(|(path, _)| !dropped.is_excluded(path));
+        let mut dropped = Vec::with_capacity(dropped_args.len());
+        for arg in dropped_args {
+            let (base, pattern) = split_glob(arg.trim_start_matches('!'));
+            let patterns = if pattern.is_empty() {
+                vec!["**".to_owned()]
+            } else {
+                vec![format!("{pattern}/**"), pattern]
+            };
+            dropped.push((lexical_absolute(&working_directory, &base), glob_set(&patterns)?));
+        }
+        found.retain(|(path, _)| {
+            let absolute = lexical_absolute(&working_directory, path);
+            !dropped.iter().any(|(base, patterns)| {
+                absolute.strip_prefix(base).is_ok_and(|relative| {
+                    relative.as_os_str().is_empty() || patterns.is_match(relative)
+                })
+            })
+        });
     }
 
     // One argument can't reach a file twice, so only several pay for this.
@@ -234,23 +257,58 @@ fn is_glob(arg: &str) -> bool {
     arg.contains(['*', '?', '[', '{'])
 }
 
-/// A glob argument as `ProjectFilter` matches it: `/`-separated and relative
-/// to the working directory.
-fn glob_pattern(arg: &str) -> String {
+/// `arg` split before its first segment with a wildcard: the directory that
+/// holds everything it can match, and the `/`-separated pattern a path below
+/// that directory has to match.
+fn split_glob(arg: &str) -> (PathBuf, String) {
     let slashed = arg.replace(MAIN_SEPARATOR, "/");
-    slashed.strip_prefix("./").unwrap_or(&slashed).to_owned()
+    let segments: Vec<&str> = slashed.strip_prefix("./").unwrap_or(&slashed).split('/').collect();
+    let literal_count = segments.iter().take_while(|segment| !is_glob(segment)).count();
+    let (literal, pattern) = segments.split_at(literal_count);
+    // The trailing `/` keeps `/` and `C:/` roots instead of emptying them.
+    let base = if literal.is_empty() { ".".to_owned() } else { format!("{}/", literal.join("/")) };
+    (native_path(&base), pattern.join("/"))
 }
 
-/// The directory part of `pattern` before its first wildcard, which holds
-/// everything it can match.
-fn glob_base(pattern: &str) -> PathBuf {
-    let literal_segments: Vec<&str> =
-        pattern.split('/').take_while(|segment| !is_glob(segment)).collect();
-    if literal_segments.is_empty() {
-        PathBuf::from(".")
-    } else {
-        PathBuf::from(literal_segments.join("/"))
+/// # Errors
+///
+/// Reports the failure and returns [`Exit::Usage`] on an invalid pattern.
+fn glob_set(patterns: &[String]) -> Result<GlobSet, Exit> {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        let glob = GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .build()
+            .map_err(|e| usage_error(format!("invalid glob pattern `{pattern}`: {e}")))?;
+        builder.add(glob);
     }
+    builder.build().map_err(|e| usage_error(format!("invalid glob set: {e}")))
+}
+
+/// `path` from `working_directory` with `.` and `..` resolved without touching
+/// the disk.
+fn lexical_absolute(working_directory: &Path, path: &Path) -> PathBuf {
+    let mut absolute = PathBuf::new();
+    for component in working_directory.join(path).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                absolute.pop();
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                absolute.push(component);
+            }
+        }
+    }
+    absolute
+}
+
+/// What a glob argument selects below its base directory.
+struct Selection {
+    patterns: GlobSet,
+    /// How many levels below the base a match can sit, when the pattern has
+    /// no `**`.
+    max_depth: Option<usize>,
 }
 
 /// The projects a run has met, one per `luck.json`.
@@ -314,12 +372,16 @@ where
         if let Some(explicit) = &self.explicit {
             return Ok(Arc::clone(explicit));
         }
-        let absolute = path::absolute(directory)
+        // Discovery walks up by popping components, and popping a `..`, which
+        // `path::absolute` keeps on Unix, lands outside this directory's
+        // ancestors.
+        let canonical = directory
+            .canonicalize()
             .map_err(|e| usage_error(format!("`{}`: {e}", directory.display())))?;
-        if let Some(known) = self.by_directory.get(&absolute) {
+        if let Some(known) = self.by_directory.get(&canonical) {
             return Ok(Arc::clone(known));
         }
-        let project = if let Some(loaded) = discover_config(&absolute).map_err(usage_error)? {
+        let project = if let Some(loaded) = discover_config(&canonical).map_err(usage_error)? {
             if let Some(known) = self.discovered.iter().find(|known| known.root == loaded.root) {
                 Arc::clone(known)
             } else {
@@ -337,12 +399,12 @@ where
             self.fallback = Some(Arc::clone(&fallback));
             fallback
         };
-        self.by_directory.insert(absolute, Arc::clone(&project));
+        self.by_directory.insert(canonical, Arc::clone(&project));
         Ok(project)
     }
 
     /// Appends the Lua files under `directory` that their project's filter
-    /// takes and `selection` matches, sorted by path.
+    /// takes and `selection` matches relative to `directory`, sorted by path.
     ///
     /// # Errors
     ///
@@ -352,18 +414,20 @@ where
     fn collect_tree(
         &mut self,
         directory: &Path,
-        selection: Option<&ProjectFilter>,
+        selection: Option<&Selection>,
         found: &mut Vec<(PathBuf, Arc<Project<Settings>>)>,
     ) -> Result<(), Exit> {
         let has_nested_projects = self.explicit.is_none();
         let mut tree_files = Vec::new();
-        let mut pending_trees = vec![directory.to_path_buf()];
-        while let Some(tree) = pending_trees.pop() {
+        let max_depth = selection.and_then(|selected| selected.max_depth);
+        let mut pending_trees = vec![(directory.to_path_buf(), max_depth)];
+        while let Some((tree, tree_max_depth)) = pending_trees.pop() {
             let project = self.for_directory(&tree)?;
             let tree_filter = project.filter.clone();
             let (nested_sender, nested_receiver) = mpsc::channel();
             let walker = WalkBuilder::new(&tree)
                 .add_custom_ignore_filename(".luckignore")
+                .max_depth(tree_max_depth)
                 .filter_entry(move |entry| {
                     if !entry.file_type().is_some_and(|file_type| file_type.is_dir()) {
                         return true;
@@ -377,7 +441,10 @@ where
                         && entry.depth() > 0
                         && entry.path().join(CONFIG_FILE_NAME).is_file()
                     {
-                        let _unused = nested_sender.send(entry.path().to_path_buf());
+                        let nested_max_depth =
+                            tree_max_depth.map(|depth| depth.saturating_sub(entry.depth()));
+                        let _unused =
+                            nested_sender.send((entry.path().to_path_buf(), nested_max_depth));
                         return false;
                     }
                     true
@@ -391,8 +458,11 @@ where
                     .extension()
                     .is_some_and(|extension| extension == "lua" || extension == "luau")
                     && path.is_file()
+                    && selection.is_none_or(|selected| {
+                        path.strip_prefix(directory)
+                            .is_ok_and(|relative| selected.patterns.is_match(relative))
+                    })
                     && project.filter.is_included(path)
-                    && selection.is_none_or(|selected| selected.is_included(path))
                 {
                     tree_files.push((entry.into_path(), Arc::clone(&project)));
                 }
@@ -667,16 +737,50 @@ mod tests {
     }
 
     #[test]
-    fn glob_pattern_is_slashed_and_relative() {
-        assert_eq!(glob_pattern("./src/*.lua"), "src/*.lua");
-        assert_eq!(glob_pattern(&format!("src{MAIN_SEPARATOR}*.lua")), "src/*.lua");
+    fn split_glob_splits_before_the_first_wildcard() {
+        let split = |arg: &str| {
+            let (base, pattern) = split_glob(arg);
+            (base.to_string_lossy().replace('\\', "/"), pattern)
+        };
+        let pair = |base: &str, pattern: &str| (base.to_owned(), pattern.to_owned());
+        assert_eq!(split("src/**/*.lua"), pair("src/", "**/*.lua"));
+        assert_eq!(
+            split(&format!(".{MAIN_SEPARATOR}src{MAIN_SEPARATOR}*.lua")),
+            pair("src/", "*.lua")
+        );
+        assert_eq!(split("src/gen/a*.lua"), pair("src/gen/", "a*.lua"));
+        assert_eq!(split("../pkg/*.lua"), pair("../pkg/", "*.lua"));
+        assert_eq!(split("/abs/*.lua"), pair("/abs/", "*.lua"));
+        assert_eq!(split("/*.lua"), pair("/", "*.lua"));
+        assert_eq!(split("*.lua"), pair(".", "*.lua"));
+        assert_eq!(split("{a,b}/x.lua"), pair(".", "{a,b}/x.lua"));
+        assert_eq!(split("vendor"), pair("vendor/", ""));
     }
 
     #[test]
-    fn glob_base_is_the_part_before_the_first_wildcard() {
-        assert_eq!(glob_base("src/**/*.lua"), PathBuf::from("src"));
-        assert_eq!(glob_base("src/gen/a*.lua"), PathBuf::from("src/gen"));
-        assert_eq!(glob_base("*.lua"), PathBuf::from("."));
-        assert_eq!(glob_base("{a,b}/x.lua"), PathBuf::from("."));
+    fn lexical_absolute_resolves_dots_against_the_working_directory() {
+        let working_directory = Path::new("/work/project");
+        assert_eq!(
+            lexical_absolute(working_directory, Path::new("./a/../b/x.lua")),
+            Path::new("/work/project/b/x.lua")
+        );
+        assert_eq!(
+            lexical_absolute(working_directory, Path::new("../other")),
+            Path::new("/work/other")
+        );
+    }
+
+    /// `luck lint ../pkg` from a project with its own config must not take
+    /// that config: it isn't above `pkg`.
+    #[test]
+    fn discovery_ignores_a_config_reached_only_through_dot_dot() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let root = directory.path();
+        write_file(&root.join("here/luck.json"), r#"{"lua":"lua51"}"#);
+        write_file(&root.join("pkg/a.lua"), "return 1\n");
+
+        let mut projects = Projects::new(None, &root.join("here"), |_| Ok(())).expect("projects");
+        let project = projects.for_directory(&root.join("here/../pkg")).expect("project resolves");
+        assert_eq!(project.config.lua, None);
     }
 }

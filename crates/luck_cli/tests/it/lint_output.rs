@@ -1,5 +1,6 @@
 //! What `lint` prints and how its level flags decide the exit code.
 
+use luck_core::normalize_path;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
@@ -89,23 +90,26 @@ fn rule_level_wins_over_a_category_flag() {
         .stderr("");
 }
 
+/// The path is absolute, so a workflow step with a `working-directory` still
+/// annotates the right file.
 #[test]
 fn github_format_prints_annotations_on_stdout() {
     let project = TempDir::new().expect("project");
-    write_file(project.path(), "src/main.lua", WARNING_AND_ERROR);
+    let main_path = write_file(project.path(), "src/main.lua", WARNING_AND_ERROR);
+    let file = normalize_path(&main_path).replace(':', "%3A");
 
-    luck_in(project.path())
+    luck_in(&project.path().join("src"))
         .args(["lint", "--format", "github"])
         .assert()
         .code(1i32)
-        .stdout(predicate::str::contains(
-            "::warning file=src/main.lua,line=1,endLine=1,col=7,endColumn=13,\
+        .stdout(predicate::str::contains(format!(
+            "::warning file={file},line=1,endLine=1,col=7,endColumn=13,\
              title=unused_variable::unused variable `unused`",
-        ))
-        .stdout(predicate::str::contains(
-            "::error file=src/main.lua,line=2,endLine=2,col=7,endColumn=21,\
+        )))
+        .stdout(predicate::str::contains(format!(
+            "::error file={file},line=2,endLine=2,col=7,endColumn=21,\
              title=undefined_variable::",
-        ));
+        )));
 }
 
 #[test]
@@ -149,4 +153,34 @@ fn print_config_output_pastes_back_into_luck_json() {
 
     write_file(project.path(), "luck.json", &format!(r#"{{"lint":{with_flags}}}"#));
     assert_eq!(printed(&[]), with_flags);
+}
+
+/// Each file is linted under its nearest `luck.json`, so the config printed
+/// for a path is that one, not the working directory's.
+#[test]
+fn print_config_shows_the_config_of_the_path_given() {
+    let project = TempDir::new().expect("project");
+    write_file(project.path(), "luck.json", r#"{"lint":{"rules":{"empty_block":"warn"}}}"#);
+    write_file(project.path(), "pkg/luck.json", r#"{"lint":{"rules":{"empty_block":"error"}}}"#);
+    write_file(project.path(), "pkg/a.lua", WARNING_ONLY);
+    let printed = |args: &[&str]| {
+        let output = luck_in(project.path())
+            .args(["lint", "--print-config"])
+            .args(args)
+            .output()
+            .expect("lint runs");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8(output.stdout).expect("JSON is UTF-8")
+    };
+
+    assert!(printed(&[]).contains(r#""empty_block": "warn""#));
+    for args in [["pkg"].as_slice(), &["pkg/a.lua"], &["--stdin-filepath", "pkg/a.lua"]] {
+        let config = printed(args);
+        assert!(config.contains(r#""empty_block": "error""#), "{args:?}: {config}");
+    }
+    luck_in(project.path())
+        .args(["lint", "--print-config", "pkg", "pkg/a.lua"])
+        .assert()
+        .code(2i32)
+        .stderr("error: `--print-config` takes at most one path\n");
 }

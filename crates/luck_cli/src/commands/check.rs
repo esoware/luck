@@ -20,7 +20,7 @@ pub(crate) struct CheckArgs {
     #[arg(short, long, value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// Exit 0 when no file matches.
+    /// Exit 0 when a glob, or the whole run, matches no file.
     #[arg(long)]
     no_error_on_unmatched_pattern: bool,
 }

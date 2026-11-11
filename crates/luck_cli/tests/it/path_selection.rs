@@ -96,6 +96,70 @@ fn negated_glob_leaves_files_out() {
     assert_eq!(listed(root, &["src", "!**/a.lua"]), ["src/deep/b.lua"]);
 }
 
+/// A working directory `here` whose config indents with two spaces, beside a
+/// `pkg` with no config, which takes the default tabs.
+fn sibling_of_a_project() -> TempDir {
+    let project = TempDir::new().expect("project");
+    let root = project.path();
+    write_file(root, "here/luck.json", r#"{"format":{"indent_style":"spaces","indent_width":2}}"#);
+    write_file(root, "pkg/a.lua", UNINDENTED);
+    project
+}
+
+#[test]
+fn a_path_through_dot_dot_takes_no_config_from_the_working_directory() {
+    for arg in ["../pkg/a.lua", "../pkg", "../pkg/*.lua"] {
+        let project = sibling_of_a_project();
+        luck_in(&project.path().join("here")).args(["fmt", arg]).assert().success();
+        assert!(read(project.path(), "pkg/a.lua").contains("\n\treturn 1"), "{arg}");
+    }
+}
+
+#[test]
+fn glob_outside_the_working_directory_selects_files() {
+    let project = sibling_of_a_project();
+    let root = project.path();
+    let here = root.join("here");
+    assert_eq!(listed(&here, &["../pkg/*.lua"]), ["../pkg/a.lua"]);
+
+    let absolute_glob = root.join("pkg").join("*.lua").display().to_string();
+    let absolute_file = root.join("pkg").join("a.lua").display().to_string().replace('\\', "/");
+    assert_eq!(listed(&here, &[&absolute_glob]), [absolute_file]);
+    let dropped = format!("!{absolute_glob}");
+    let everything_dropped = [absolute_glob.as_str(), &dropped, "--no-error-on-unmatched-pattern"];
+    assert_eq!(listed(&here, &everything_dropped), Vec::<String>::new());
+}
+
+#[test]
+fn glob_that_matches_nothing_is_an_error_beside_one_that_matches() {
+    let project = TempDir::new().expect("project");
+    let root = project.path();
+    write_file(root, "src/a.lua", UNINDENTED);
+
+    luck_in(root)
+        .args(["fmt", "--check", "src", "srcc/**/*.lua"])
+        .assert()
+        .code(2i32)
+        .stderr(predicate::str::contains("no `.lua` or `.luau` files matched `srcc/**/*.lua`"));
+    assert_eq!(
+        listed(root, &["src", "srcc/**/*.lua", "--no-error-on-unmatched-pattern"]),
+        ["src/a.lua"]
+    );
+}
+
+#[test]
+fn negated_directory_leaves_out_everything_under_it() {
+    let project = TempDir::new().expect("project");
+    let root = project.path();
+    write_file(root, "src/a.lua", UNINDENTED);
+    write_file(root, "src/deep/b.lua", UNINDENTED);
+    write_file(root, "vendor/lib/c.lua", UNINDENTED);
+
+    assert_eq!(listed(root, &["!vendor"]), ["src/a.lua", "src/deep/b.lua"]);
+    assert_eq!(listed(root, &["!src/*"]), ["vendor/lib/c.lua"]);
+    assert_eq!(listed(root, &["!src/a.lua"]), ["src/deep/b.lua", "vendor/lib/c.lua"]);
+}
+
 #[test]
 fn glob_still_honors_the_project_exclude() {
     let project = TempDir::new().expect("project");

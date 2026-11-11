@@ -1,10 +1,10 @@
 use core::fmt::Write as _;
 use std::fs;
 use std::io::{self, BufWriter, Write as _};
-use std::path::{Path, PathBuf};
+use std::path::{self, Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, ValueEnum};
-use luck_core::{Diagnostic, LuaTarget, LuckConfig, read_source_file};
+use luck_core::{Diagnostic, LuaTarget, LuckConfig, normalize_path, read_source_file};
 use luck_linter::{Category, LintConfig, LintDiagnostic, RuleLevel, Severity};
 use luck_token::LuaVersion;
 
@@ -127,7 +127,7 @@ pub(crate) struct LintArgs {
     #[arg(long)]
     silent: bool,
 
-    /// Exit 0 when no file matches.
+    /// Exit 0 when a glob, or the whole run, matches no file.
     #[arg(long)]
     no_error_on_unmatched_pattern: bool,
 
@@ -135,7 +135,8 @@ pub(crate) struct LintArgs {
     #[arg(long)]
     rules: bool,
 
-    /// Print the effective lint configuration as JSON, then exit.
+    /// Print the lint configuration of the one path or --stdin-filepath given,
+    /// or else of the current directory, as JSON, then exit.
     #[arg(long)]
     print_config: bool,
 
@@ -176,8 +177,14 @@ impl LintArgs {
         }
 
         if self.print_config {
-            let project = resolve_project(self.config.as_deref())?;
-            print_lint_config(&self.lint_config(&project.config)?);
+            let config_path = self.config.as_deref();
+            let config = match (self.stdin_filepath.as_deref(), self.paths.as_slice()) {
+                (Some(path), _) => config_for_one_shot(config_path, path)?,
+                (None, [path]) => config_for_one_shot(config_path, path)?,
+                (None, []) => resolve_project(config_path)?.config,
+                (None, _) => return Err(usage_error("`--print-config` takes at most one path")),
+            };
+            print_lint_config(&self.lint_config(&config)?);
             return Ok(());
         }
 
@@ -437,10 +444,12 @@ impl LintArgs {
             }
             LintFormat::Github => {
                 let line_index = LineIndex::new(source, version);
-                // The runner resolves a `/` path from the workspace root on
-                // every platform.
-                let slashed = file_label.replace('\\', "/");
-                let file = annotation_property(slashed.strip_prefix("./").unwrap_or(&slashed));
+                // The runner resolves a relative path from the workspace root,
+                // not the working directory, and makes an absolute one
+                // relative to the workspace.
+                let label = Path::new(file_label);
+                let absolute = path::absolute(label).unwrap_or_else(|_| label.to_path_buf());
+                let file = annotation_property(&normalize_path(&absolute));
                 let mut lines = String::new();
                 for diag in diags {
                     let (line, column) = line_index.line_and_column(diag.span.start);
@@ -535,6 +544,8 @@ fn print_lint_config(lint_config: &LintConfig) {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+
     use clap::Parser as _;
 
     use super::*;
@@ -757,15 +768,25 @@ mod tests {
         assert_eq!((number("end_line"), number("end_column")), (2, 13));
     }
 
+    /// The path is absolute, since the runner would resolve a relative one
+    /// from the workspace root even when lint runs in a subdirectory.
     #[test]
     fn github_format_writes_one_annotation_per_finding() {
         let lines =
             rendered_lines("github", r"src\a.lua", "local a = 1\nlocal unused = 2\nprint(a)");
+        let (file, rest) = lines
+            .strip_prefix("::warning file=")
+            .and_then(|annotation| annotation.split_once(','))
+            .expect("one warning annotation");
+        let working_directory = env::current_dir().expect("current directory");
         assert_eq!(
-            lines,
-            "::warning file=src/a.lua,line=2,endLine=2,col=7,endColumn=13,\
-             title=unused_variable::unused variable `unused`%0Ahelp: prefix with `_` to suppress \
-             this warning\n"
+            file,
+            annotation_property(&normalize_path(&working_directory.join("src/a.lua")))
+        );
+        assert_eq!(
+            rest,
+            "line=2,endLine=2,col=7,endColumn=13,title=unused_variable::unused variable \
+             `unused`%0Ahelp: prefix with `_` to suppress this warning\n"
         );
     }
 

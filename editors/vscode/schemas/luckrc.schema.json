@@ -218,6 +218,17 @@
             }
           ]
         },
+        "perf": {
+          "description": "Performance improvements.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "performance": {
           "description": "Performance improvements.",
           "anyOf": [

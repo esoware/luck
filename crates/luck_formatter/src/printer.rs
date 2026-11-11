@@ -264,7 +264,9 @@ impl Printer {
                 // A mode already set was forced by `propagate_expand`, or by
                 // the group around a hugged one.
                 let mode = self.group_mode(id).unwrap_or_else(|| self.decide_mode(id, rest));
-                self.set_group_mode(id, mode);
+                if let Some(group_mode) = self.group_modes.get_mut(id.index()) {
+                    *group_mode = Some(mode);
+                }
                 self.modes.push(mode);
             }
             Tag::StartFlat => self.modes.push(PrintMode::Flat),
@@ -309,12 +311,6 @@ impl Printer {
             | Tag::EndLineSuffix => {}
         }
         rest
-    }
-
-    fn set_group_mode(&mut self, id: GroupId, mode: PrintMode) {
-        if let Some(group_mode) = self.group_modes.get_mut(id.index()) {
-            *group_mode = Some(mode);
-        }
     }
 
     /// `rest` starts at the group's first element.

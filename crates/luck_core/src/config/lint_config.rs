@@ -37,8 +37,9 @@ pub struct LintConfig {
 
 impl LintConfig {
     /// `extra_globals` concatenates base-first without repeats, and a
-    /// category or rule that `self` sets replaces the base's setting for it,
-    /// options included.
+    /// category or rule that `self` sets replaces the base's level for it. A
+    /// bare level keeps the base's options, as `-D` does, and options from
+    /// both sides merge: `paths` concatenate and `self`'s `max` wins.
     pub(super) fn merge_onto(self, base: Self) -> Self {
         Self {
             categories: self.categories.merge_onto(base.categories),
@@ -60,16 +61,6 @@ pub enum RuleLevel {
 }
 
 impl RuleLevel {
-    /// The name `luck.json` and `--print-config` spell it with.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Warn => "warn",
-            Self::Error => "error",
-        }
-    }
-
     /// `None` for [`RuleLevel::Off`].
     #[must_use]
     pub const fn severity(self) -> Option<DiagnosticSeverity> {
@@ -133,6 +124,7 @@ impl Category {
     schemars::JsonSchema,
 )]
 #[serde(deny_unknown_fields)]
+#[schemars(transform = with_perf_alias)]
 pub struct CategoryLevels {
     /// Outright wrong or useless code.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -176,6 +168,16 @@ impl CategoryLevels {
             style: self.style.or(base.style),
             performance: self.performance.or(base.performance),
         }
+    }
+}
+
+/// schemars drops serde aliases, and the schema denies unknown keys.
+fn with_perf_alias(schema: &mut schemars::Schema) {
+    if let Some(properties) =
+        schema.get_mut("properties").and_then(|properties| properties.as_object_mut())
+        && let Some(performance) = properties.get("performance").cloned()
+    {
+        properties.insert("perf".to_owned(), performance);
     }
 }
 
@@ -239,8 +241,18 @@ impl RuleSettings {
     fn merge_onto(self, mut base: Self) -> Self {
         base.levels.extend(self.levels);
         Self {
-            cyclomatic_complexity: self.cyclomatic_complexity.or(base.cyclomatic_complexity),
-            restricted_module_paths: self.restricted_module_paths.or(base.restricted_module_paths),
+            cyclomatic_complexity: merge_setting(
+                self.cyclomatic_complexity,
+                base.cyclomatic_complexity,
+                |options, _| options,
+            ),
+            restricted_module_paths: merge_setting(
+                self.restricted_module_paths,
+                base.restricted_module_paths,
+                |options, base_options| RestrictedModulePathsOptions {
+                    paths: concat(options.paths, base_options.paths),
+                },
+            ),
             levels: base.levels,
         }
     }
@@ -251,6 +263,28 @@ fn set_setting_level<Options>(setting: &mut Option<RuleSetting<Options>>, level:
         Some(RuleSetting::WithOptions(_, options)) => RuleSetting::WithOptions(level, options),
         Some(RuleSetting::Level(_)) | None => RuleSetting::Level(level),
     });
+}
+
+fn merge_setting<Options>(
+    child: Option<RuleSetting<Options>>,
+    base: Option<RuleSetting<Options>>,
+    merge_options: impl FnOnce(Options, Options) -> Options,
+) -> Option<RuleSetting<Options>> {
+    match (child, base) {
+        (None, base_setting) => base_setting,
+        (Some(RuleSetting::Level(level)), mut base_setting) => {
+            set_setting_level(&mut base_setting, level);
+            base_setting
+        }
+        (
+            Some(RuleSetting::WithOptions(level, options)),
+            Some(RuleSetting::WithOptions(_, base_options)),
+        ) => Some(RuleSetting::WithOptions(level, merge_options(options, base_options))),
+        (
+            child_setting @ Some(RuleSetting::WithOptions(..)),
+            Some(RuleSetting::Level(_)) | None,
+        ) => child_setting,
+    }
 }
 
 /// One rule's entry in `rules`.
@@ -580,6 +614,60 @@ mod tests {
         );
         assert_eq!(lint.rules.level("empty_block"), Some(RuleLevel::Warn));
         assert_eq!(lint.rules.level("unused_variable"), Some(RuleLevel::Error));
-        assert_eq!(lint.rules.cyclomatic_complexity, Some(RuleSetting::Level(RuleLevel::Off)));
+        assert_eq!(
+            lint.rules.cyclomatic_complexity,
+            Some(RuleSetting::WithOptions(RuleLevel::Off, CyclomaticComplexityOptions { max: 10 }))
+        );
+    }
+
+    /// A child that only raises a rule's severity mustn't silence it by
+    /// dropping the base's options.
+    #[test]
+    fn merge_onto_keeps_the_base_options_and_merges_the_child_s() {
+        let base = lint_config(
+            r#"{
+                "rules": {
+                    "cyclomatic_complexity": ["warn", { "max": 10 }],
+                    "restricted_module_paths": ["warn", { "paths": ["secret.*"] }]
+                }
+            }"#,
+        );
+        let raised = lint_config(r#"{ "rules": { "cyclomatic_complexity": "error" } }"#);
+        assert_eq!(
+            raised.merge_onto(base.clone()).rules.cyclomatic_complexity,
+            Some(RuleSetting::WithOptions(
+                RuleLevel::Error,
+                CyclomaticComplexityOptions { max: 10 }
+            ))
+        );
+
+        let extended = lint_config(
+            r#"{
+                "rules": {
+                    "cyclomatic_complexity": ["warn", { "max": 4 }],
+                    "restricted_module_paths": ["error", { "paths": ["legacy", "secret.*"] }]
+                }
+            }"#,
+        );
+        let rules = extended.merge_onto(base).rules;
+        assert_eq!(
+            rules.cyclomatic_complexity,
+            Some(RuleSetting::WithOptions(RuleLevel::Warn, CyclomaticComplexityOptions { max: 4 }))
+        );
+        assert_eq!(
+            rules.restricted_module_paths,
+            Some(RuleSetting::WithOptions(
+                RuleLevel::Error,
+                RestrictedModulePathsOptions {
+                    paths: vec!["secret.*".to_owned(), "legacy".to_owned()]
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn schema_takes_the_perf_category_alias() {
+        let schema = serde_json::to_value(schemars::schema_for!(CategoryLevels)).expect("schema");
+        assert_eq!(schema["properties"]["perf"], schema["properties"]["performance"]);
     }
 }

@@ -269,13 +269,9 @@ fn format_ignore_alias_keeps_next_stmt_verbatim() {
 
 #[test]
 fn magic_trailing_comma_off_keeps_packed_table() {
-    // With `magic_trailing_comma` off, a trailing comma doesn't force a break,
-    // so the table stays packed.
     let options = FormatOptions { magic_trailing_comma: false, ..FormatOptions::default() };
     let input = "local t = { 1, 2, 3, }\n";
-    let result = format(input, LuaVersion::Lua54, &options);
-    assert_eq!(result.errors, Vec::<luck_token::SourceError>::new());
-    assert!(!result.output.contains("\n\t1,"));
+    assert_format_with(input, "local t = { 1, 2, 3 }\n", LuaVersion::Lua54, &options);
 }
 
 #[test]
