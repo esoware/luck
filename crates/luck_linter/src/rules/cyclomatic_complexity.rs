@@ -35,7 +35,7 @@ impl NodeRule for CyclomaticComplexity {
 }
 
 fn check_function(function: FunctionNode<'_>, context: &LintContext<'_>) -> Option<Finding> {
-    let threshold = context.config.max_cyclomatic_complexity?;
+    let threshold = context.config.rules.cyclomatic_complexity.as_ref()?.options()?.max;
     // McCabe: one straight-line path plus one per decision point.
     let complexity = decision_points(&function.body.block).saturating_add(1);
     (complexity > threshold).then(|| {
@@ -56,16 +56,24 @@ fn check_function(function: FunctionNode<'_>, context: &LintContext<'_>) -> Opti
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LintConfig;
+    use luck_core::{CyclomaticComplexityOptions, LintConfig, RuleLevel, RuleSetting};
     use luck_token::LuaVersion;
 
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule_with_config;
 
+    fn config(threshold: Option<u32>) -> LintConfig {
+        let mut config = LintConfig::default();
+        config.rules.cyclomatic_complexity =
+            Some(threshold.map_or(RuleSetting::Level(RuleLevel::Warn), |max| {
+                RuleSetting::WithOptions(RuleLevel::Warn, CyclomaticComplexityOptions { max })
+            }));
+        config
+    }
+
     fn run(source: &str, threshold: Option<u32>) -> Vec<LintDiagnostic> {
-        let config = LintConfig { max_cyclomatic_complexity: threshold, ..LintConfig::default() };
-        run_rule_with_config(&CyclomaticComplexity, source, LuaVersion::Lua54, &config)
+        run_rule_with_config(&CyclomaticComplexity, source, LuaVersion::Lua54, &config(threshold))
     }
 
     #[test]
@@ -147,7 +155,7 @@ mod tests {
 
     #[test]
     fn flags_decision_points_in_compound_assignment_targets() {
-        let config = LintConfig { max_cyclomatic_complexity: Some(0), ..LintConfig::default() };
+        let config = config(Some(0));
         for source in [
             "function comp_value() t[1] += a or b end",
             "function comp_target() t[a or b] += 1 end",
@@ -160,7 +168,7 @@ mod tests {
 
     #[test]
     fn flags_type_function_bodies() {
-        let config = LintConfig { max_cyclomatic_complexity: Some(1), ..LintConfig::default() };
+        let config = config(Some(1));
         let source = "type function t1(a) if a then return a end end";
         let diags = run_rule_with_config(&CyclomaticComplexity, source, LuaVersion::Luau, &config);
         assert_eq!(diags.len(), 1, "{diags:?}");

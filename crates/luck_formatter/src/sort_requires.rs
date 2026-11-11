@@ -15,6 +15,7 @@ use core::ops::Range;
 
 use luck_ast::{
     Block, Expression, FunctionArgs, FunctionCall, LocalAssignment, Punctuated, Statement, Var,
+    dotted_path,
 };
 use luck_token::{
     Comment, CommentKind, CommentPosition, LuaVersion, Span, has_line_break, index_to_offset,
@@ -34,6 +35,9 @@ struct SortableLine<'source> {
     key: &'source str,
     /// The name the value reads: `require`, or the `GetService` receiver.
     callee: &'source str,
+    /// The name a required path starts at, which the value reads too:
+    /// `script` in `require(script.Parent.Module)`.
+    path_root: Option<&'source str>,
 }
 
 pub(crate) fn sort_requires_in_source(
@@ -149,8 +153,9 @@ impl<'source> RunCollector<'source> {
     /// Keeps `lines` as a run when it has two or more lines and sorting can't
     /// change what they read, then empties it.
     fn flush_run(&mut self, lines: &mut Vec<SortableLine<'source>>) {
-        let has_dependency =
-            lines.iter().any(|line| lines.iter().any(|other| other.key == line.callee));
+        let has_dependency = lines.iter().any(|line| {
+            lines.iter().any(|other| other.key == line.callee || Some(other.key) == line.path_root)
+        });
         if lines.len() >= 2 && !has_dependency {
             self.runs.push(mem::take(lines));
         } else {
@@ -248,13 +253,13 @@ fn sortable_line<'source>(
     if exprs.len() != 1 {
         return None;
     }
-    let callee = pure_require_callee(source, exprs.first()?)?;
+    let (callee, path_root) = pure_require_reads(source, exprs.first()?)?;
 
     let start = offset_to_index(own_line_start(source, local.span.start)?);
     let end = movable_line_end(source, comments, local.span.end, version)?;
     let range = start..end;
     let text = source.get(range.clone())?;
-    Some(SortableLine { range, text, key, callee })
+    Some(SortableLine { range, text, key, callee, path_root })
 }
 
 /// The one name `local` binds, unless it's a `<close>` binding, whose
@@ -277,12 +282,17 @@ fn single_binding_name<'source>(
     Some(binding.name.span.text(source))
 }
 
-/// The name read by `require(STRING)` or `NAME:GetService(STRING)`, with or
-/// without the parentheses.
+/// The names a sortable value reads: its callee, then the name a required
+/// path starts at.
 ///
-/// Anything else, such as `require("a")()`, may have side effects that
-/// sorting would reorder.
-fn pure_require_callee<'source>(source: &'source str, expr: &Expression) -> Option<&'source str> {
+/// The value is `require(STRING)`, `require(NAME.field)` with any number of
+/// fields, or `NAME:GetService(STRING)`, and a string argument may drop its
+/// parentheses. Anything else, such as `require("a")()`, may have side
+/// effects that sorting would reorder.
+fn pure_require_reads<'source>(
+    source: &'source str,
+    expr: &Expression,
+) -> Option<(&'source str, Option<&'source str>)> {
     let Expression::FunctionCall(call) = expr else {
         return None;
     };
@@ -290,15 +300,27 @@ fn pure_require_callee<'source>(source: &'source str, expr: &Expression) -> Opti
     else {
         return None;
     };
-    if !is_single_string_arg(args) {
+    let callee_name = callee.span.text(source);
+
+    if let Some(method_name) = method {
+        let is_get_service =
+            method_name.span.text(source) == "GetService" && is_single_string_arg(args);
+        return is_get_service.then_some((callee_name, None));
+    }
+    if callee_name != "require" {
         return None;
     }
-
-    let is_pure = method.as_ref().map_or_else(
-        || callee.span.text(source) == "require",
-        |method_name| method_name.span.text(source) == "GetService",
-    );
-    is_pure.then(|| callee.span.text(source))
+    if is_single_string_arg(args) {
+        return Some((callee_name, None));
+    }
+    let FunctionArgs::Parenthesized { args: path_args, .. } = args else {
+        return None;
+    };
+    let [Expression::Var(path)] = path_args.items.as_slice() else {
+        return None;
+    };
+    let root_span = dotted_path(path)?.root_span;
+    Some((callee_name, Some(root_span.text(source))))
 }
 
 fn is_single_string_arg(call_args: &FunctionArgs) -> bool {
@@ -398,6 +420,28 @@ mod tests {
         let expected =
             "local alpha = game:GetService(\"Players\")\nlocal zeta = require(\"zeta\")\n";
         assert_eq!(sort_source(input), expected);
+    }
+
+    #[test]
+    fn sorts_requires_of_field_paths() {
+        let input = "local Zebra = require(script.Parent.Zebra)\nlocal Apple = require(Packages.Apple)\nlocal Mango = require(module)\n";
+        let expected = "local Apple = require(Packages.Apple)\nlocal Mango = require(module)\nlocal Zebra = require(script.Parent.Zebra)\n";
+        assert_eq!(sort_source(input), expected);
+    }
+
+    #[test]
+    fn require_of_a_path_rooted_in_the_run_is_unsortable() {
+        let input =
+            "local Packages = require(script.Packages)\nlocal Apple = require(Packages.Apple)\n";
+        assert_eq!(sort_source(input), input);
+    }
+
+    #[test]
+    fn require_of_a_computed_path_is_unsortable() {
+        let called = "local Zebra = require(script:FindFirstChild(\"Zebra\"))\nlocal Apple = require(script.Apple)\n";
+        assert_eq!(sort_source(called), called);
+        let indexed = "local Zebra = require(script[name])\nlocal Apple = require(script.Apple)\n";
+        assert_eq!(sort_source(indexed), indexed);
     }
 
     #[test]

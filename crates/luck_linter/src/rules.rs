@@ -184,10 +184,10 @@ pub fn rules() -> impl Iterator<Item = &'static dyn Rule> {
 #[must_use]
 pub fn unknown_rule_names(config: &LintConfig) -> Vec<String> {
     let mut unknown_names: Vec<String> = config
-        .rule_overrides
-        .keys()
+        .rules
+        .names()
         .filter(|name| !is_registered_rule_name(name))
-        .cloned()
+        .map(str::to_owned)
         .collect();
     unknown_names.sort();
     unknown_names

@@ -19,6 +19,8 @@
     )
 )]
 
+extern crate alloc;
+
 mod cli;
 mod commands;
 mod exit;

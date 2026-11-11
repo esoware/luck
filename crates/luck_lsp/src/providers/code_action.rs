@@ -214,8 +214,8 @@ pub(crate) fn fix_all_open(
 
 #[cfg(test)]
 mod tests {
-    use luck_core::{LuaTarget, RuleSetting};
-    use luck_linter::{Category, LintConfig, Severity, TextEdit as LinterTextEdit};
+    use luck_core::LuaTarget;
+    use luck_linter::{Category, LintConfig, RuleLevel, Severity, TextEdit as LinterTextEdit};
     use rustc_hash::FxHashSet;
     use tower_lsp::lsp_types::{
         Diagnostic, PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams,
@@ -229,10 +229,9 @@ mod tests {
     }
 
     fn config_enabling(rule: &str) -> LintConfig {
-        let mut config = LintConfig { disable_default_rules: true, ..LintConfig::default() };
-        config
-            .rule_overrides
-            .insert(rule.to_owned(), RuleSetting { enabled: Some(true), severity: None });
+        let mut config = LintConfig::default();
+        config.categories.set_level(Category::Correctness, RuleLevel::Off);
+        config.rules.set_level(rule, RuleLevel::Warn);
         config
     }
 

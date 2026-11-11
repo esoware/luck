@@ -8,6 +8,8 @@
 pub struct FormatConfig {
     pub line_width: Option<u16>,
     pub indent_style: Option<IndentStyle>,
+    /// Columns per indent level. With tabs, this is how wide a tab counts
+    /// against `line_width`.
     pub indent_width: Option<u8>,
     pub quote_style: Option<QuoteStyle>,
     /// Case of the hex digits `A`-`F` in numeric literals: `"preserve"`
@@ -21,16 +23,18 @@ pub struct FormatConfig {
     /// `"never"` (default) or `"preserve"`.
     pub block_newline_gaps: Option<BlockNewlineGaps>,
     /// When true, sorts each run of consecutive `local NAME = require(...)`
-    /// or `local NAME = game:GetService(...)` statements by name. A blank
-    /// line ends a run.
+    /// or `local NAME = game:GetService(...)` statements by name, where the
+    /// require takes a string or a dotted path such as `script.Parent.Module`.
+    /// A blank line ends a run. Defaults to `true`.
     pub sort_requires: Option<bool>,
     /// Where to put a space before `(`: `"never"` (default), `"definitions"`,
     /// `"calls"`, or `"always"` for both.
     pub space_after_function_names: Option<SpaceAfterFunction>,
-    /// When true, a trailing comma in a table constructor breaks the table one
-    /// field per line, as in Black and Prettier. Defaults to `false`. Argument
-    /// lists can't carry one, since no dialect allows a comma after the last
-    /// argument.
+    /// When true, a trailing comma in a table constructor keeps the table
+    /// broken, as in Black and Prettier: one field per line, or still packed
+    /// when it's a list the source packed several to a line. Defaults to
+    /// `true`. Argument lists can't carry one, since no dialect allows a comma
+    /// after the last argument.
     pub magic_trailing_comma: Option<bool>,
 }
 
@@ -118,20 +122,15 @@ pub enum LineEndings {
     Windows,
 }
 
-/// Which simple single-statement blocks collapse onto one line.
+/// Which simple single-statement blocks collapse onto one line. Function
+/// bodies never do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CollapseSimpleStatement {
     /// Always expand blocks.
     Never,
-    /// Simple function bodies, as in `function() return x end`. The formatter
-    /// doesn't collapse function bodies, so this behaves like `never`.
-    FunctionOnly,
     /// Collapse simple conditionals: `if x then return y end`.
     ConditionalOnly,
-    /// Simple functions and conditionals. The formatter doesn't collapse
-    /// function bodies, so this behaves like `conditional_only`.
-    Always,
 }
 
 /// Whether a block body can start or end with a blank line.
@@ -269,5 +268,14 @@ mod tests {
             error.contains("bogus") || error.contains("unknown variant"),
             "error should name the offending value: {error}"
         );
+    }
+
+    #[test]
+    fn rejects_the_function_collapse_modes() {
+        for mode in ["function_only", "always"] {
+            let json = format!(r#"{{ "format": {{ "collapse_simple_statement": "{mode}" }} }}"#);
+            let error = parse_luck_config(&json).unwrap_err();
+            assert!(error.contains(mode), "error should name the offending value: {error}");
+        }
     }
 }

@@ -105,7 +105,7 @@ async fn rename_refusal(
 fn project_with_excluded_directory(directory: &Path) -> (Url, Url) {
     fs::write(
         directory.join("luck.json"),
-        r#"{ "exclude": ["gen/**"], "lint": { "disable_default_rules": true, "rule_overrides": { "redundant_nil_init": { "enabled": true } } } }"#,
+        r#"{ "exclude": ["gen/**"], "lint": { "categories": { "correctness": "off" }, "rules": { "redundant_nil_init": "warn" } } }"#,
     )
     .expect("write luck.json");
     let generated = directory.join("gen");
@@ -592,7 +592,7 @@ async fn code_action_offers_lint_fix() {
     // Opt in to linting and enable a fixable style rule.
     fs::write(
         directory.path().join("luck.json"),
-        r#"{ "lint": { "rule_overrides": { "redundant_nil_init": { "enabled": true } } } }"#,
+        r#"{ "lint": { "rules": { "redundant_nil_init": "warn" } } }"#,
     )
     .expect("write luck.json");
     let file_path = directory.path().join("nilinit.lua");
@@ -1051,7 +1051,7 @@ async fn fix_all_workspace_collects_fixes_from_open_documents() {
     let directory = tempfile::tempdir().expect("tempdir");
     fs::write(
         directory.path().join("luck.json"),
-        r#"{ "lint": { "disable_default_rules": true, "rule_overrides": { "redundant_nil_init": { "enabled": true } } } }"#,
+        r#"{ "lint": { "categories": { "correctness": "off" }, "rules": { "redundant_nil_init": "warn" } } }"#,
     )
     .expect("write luck.json");
     let fixable_path = directory.path().join("fixable.lua");
@@ -1182,7 +1182,7 @@ async fn source_fix_all_stops_once_a_config_change_excludes_the_document() {
     let (_included, excluded) = project_with_excluded_directory(directory.path());
     fs::write(
         directory.path().join("luck.json"),
-        r#"{ "lint": { "disable_default_rules": true, "rule_overrides": { "redundant_nil_init": { "enabled": true } } } }"#,
+        r#"{ "lint": { "categories": { "correctness": "off" }, "rules": { "redundant_nil_init": "warn" } } }"#,
     )
     .expect("rewrite luck.json without the exclude");
 
@@ -1197,7 +1197,7 @@ async fn source_fix_all_stops_once_a_config_change_excludes_the_document() {
 
     fs::write(
         directory.path().join("luck.json"),
-        r#"{ "exclude": ["gen/**"], "lint": { "disable_default_rules": true, "rule_overrides": { "redundant_nil_init": { "enabled": true } } } }"#,
+        r#"{ "exclude": ["gen/**"], "lint": { "categories": { "correctness": "off" }, "rules": { "redundant_nil_init": "warn" } } }"#,
     )
     .expect("rewrite luck.json with the exclude");
     server.did_change_watched_files(DidChangeWatchedFilesParams { changes: Vec::new() }).await;

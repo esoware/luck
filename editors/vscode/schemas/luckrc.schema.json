@@ -203,33 +203,70 @@
         }
       ]
     },
-    "Category": {
-      "description": "A group of lint rules, enabled together through `categories`.",
-      "oneOf": [
-        {
+    "CategoryLevels": {
+      "description": "The level of each rule category that sets one.",
+      "type": "object",
+      "properties": {
+        "correctness": {
           "description": "Outright wrong or useless code.",
-          "type": "string",
-          "const": "correctness"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
-        {
-          "description": "Most likely wrong or useless.",
-          "type": "string",
-          "const": "suspicious"
-        },
-        {
-          "description": "Idiomatic code style.",
-          "type": "string",
-          "const": "style"
-        },
-        {
+        "perf": {
           "description": "Performance improvements.",
-          "type": "string",
-          "const": "performance"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "performance": {
+          "description": "Performance improvements.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "style": {
+          "description": "Idiomatic code style.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suspicious": {
+          "description": "Most likely wrong or useless.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
-      ]
+      },
+      "additionalProperties": false
     },
     "CollapseSimpleStatement": {
-      "description": "Which simple single-statement blocks collapse onto one line.",
+      "description": "Which simple single-statement blocks collapse onto one line. Function\nbodies never do.",
       "oneOf": [
         {
           "description": "Always expand blocks.",
@@ -237,28 +274,26 @@
           "const": "never"
         },
         {
-          "description": "Simple function bodies, as in `function() return x end`. The formatter\ndoesn't collapse function bodies, so this behaves like `never`.",
-          "type": "string",
-          "const": "function_only"
-        },
-        {
           "description": "Collapse simple conditionals: `if x then return y end`.",
           "type": "string",
           "const": "conditional_only"
-        },
-        {
-          "description": "Simple functions and conditionals. The formatter doesn't collapse\nfunction bodies, so this behaves like `conditional_only`.",
-          "type": "string",
-          "const": "always"
         }
       ]
     },
-    "DiagnosticSeverity": {
-      "description": "Diagnostic severity: an `error` fails the run, a `warning` doesn't by\ndefault.",
-      "type": "string",
-      "enum": [
-        "error",
-        "warning"
+    "CyclomaticComplexityOptions": {
+      "description": "Options of the `cyclomatic_complexity` rule.",
+      "type": "object",
+      "properties": {
+        "max": {
+          "description": "Complexity above which a function is flagged.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "max"
       ]
     },
     "DynamicRequire": {
@@ -355,6 +390,7 @@
           ]
         },
         "indent_width": {
+          "description": "Columns per indent level. With tabs, this is how wide a tab counts\nagainst `line_width`.",
           "type": [
             "integer",
             "null"
@@ -383,7 +419,7 @@
           "minimum": 0
         },
         "magic_trailing_comma": {
-          "description": "When true, a trailing comma in a table constructor breaks the table one\nfield per line, as in Black and Prettier. Defaults to `false`. Argument\nlists can't carry one, since no dialect allows a comma after the last\nargument.",
+          "description": "When true, a trailing comma in a table constructor keeps the table\nbroken, as in Black and Prettier: one field per line, or still packed\nwhen it's a list the source packed several to a line. Defaults to\n`true`. Argument lists can't carry one, since no dialect allows a comma\nafter the last argument.",
           "type": [
             "boolean",
             "null"
@@ -400,7 +436,7 @@
           ]
         },
         "sort_requires": {
-          "description": "When true, sorts each run of consecutive `local NAME = require(...)`\nor `local NAME = game:GetService(...)` statements by name. A blank\nline ends a run.",
+          "description": "When true, sorts each run of consecutive `local NAME = require(...)`\nor `local NAME = game:GetService(...)` statements by name, where the\nrequire takes a string or a dotted path such as `script.Parent.Module`.\nA blank line ends a run. Defaults to `true`.",
           "type": [
             "boolean",
             "null"
@@ -459,16 +495,9 @@
       "type": "object",
       "properties": {
         "categories": {
-          "description": "Rule categories to enable on top of `correctness`, which is on by\ndefault.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Category"
-          }
-        },
-        "disable_default_rules": {
-          "description": "When true, only rules set to `\"enabled\": true` in `rule_overrides` run.\nCorrectness rules and `categories` are ignored.",
-          "type": "boolean",
-          "default": false
+          "description": "A level per rule category. `\"warn\"` and `\"error\"` run every rule in the\ncategory at that severity, and `\"off\"` runs none of them. A category\nleft out keeps its default: `correctness` runs each rule at the rule's\nown severity, and the others are off.",
+          "$ref": "#/$defs/CategoryLevels",
+          "default": {}
         },
         "extra_globals": {
           "description": "Extra global names to treat as defined, such as `vim` or `love`.",
@@ -478,30 +507,10 @@
             "type": "string"
           }
         },
-        "max_cyclomatic_complexity": {
-          "description": "Complexity above which the `cyclomatic_complexity` rule, a `style`\nrule, flags a function. The rule reports nothing while this is unset.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "default": null,
-          "minimum": 0
-        },
-        "restricted_module_paths": {
-          "description": "Modules the `restricted_module_paths` rule forbids requiring. A\ntrailing `.*` also covers submodules: `forbidden.*` matches `forbidden`\nand `forbidden.sub`.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          }
-        },
-        "rule_overrides": {
-          "description": "Per-rule overrides, keyed by rule name.",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/RuleSetting"
-          }
+        "rules": {
+          "description": "A setting per rule, keyed by rule name: `\"off\"`, `\"warn\"`, or\n`\"error\"`, or `[level, options]` for a rule that takes options. It\nwins over the rule's category.",
+          "$ref": "#/$defs/RuleSettings",
+          "default": {}
         }
       },
       "additionalProperties": false
@@ -553,20 +562,98 @@
         }
       ]
     },
-    "RuleSetting": {
-      "description": "Overrides for one lint rule.\n\n`enabled` turns the rule on or off, and `severity` replaces its default\nseverity. Either can be set alone.",
+    "RestrictedModulePathsOptions": {
+      "description": "Options of the `restricted_module_paths` rule.",
       "type": "object",
       "properties": {
-        "enabled": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "paths": {
+          "description": "Modules that can't be required. A trailing `.*` also covers\nsubmodules: `forbidden.*` matches `forbidden` and `forbidden.sub`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "paths"
+      ]
+    },
+    "RuleLevel": {
+      "description": "Whether a rule runs, and the severity of what it reports.",
+      "type": "string",
+      "enum": [
+        "off",
+        "warn",
+        "error"
+      ]
+    },
+    "RuleSetting_CyclomaticComplexityOptions": {
+      "description": "One rule's entry in `rules`.",
+      "anyOf": [
+        {
+          "description": "`\"off\"`, `\"warn\"`, or `\"error\"`.",
+          "$ref": "#/$defs/RuleLevel"
         },
-        "severity": {
+        {
+          "description": "A level and the rule's options: `[level, options]`.",
+          "type": "array",
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/RuleLevel"
+            },
+            {
+              "$ref": "#/$defs/CyclomaticComplexityOptions"
+            }
+          ]
+        }
+      ]
+    },
+    "RuleSetting_RestrictedModulePathsOptions": {
+      "description": "One rule's entry in `rules`.",
+      "anyOf": [
+        {
+          "description": "`\"off\"`, `\"warn\"`, or `\"error\"`.",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        {
+          "description": "A level and the rule's options: `[level, options]`.",
+          "type": "array",
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/RuleLevel"
+            },
+            {
+              "$ref": "#/$defs/RestrictedModulePathsOptions"
+            }
+          ]
+        }
+      ]
+    },
+    "RuleSettings": {
+      "description": "A level per rule, keyed by rule name. Only the rules listed here take\noptions.",
+      "type": "object",
+      "properties": {
+        "cyclomatic_complexity": {
+          "description": "Reports nothing until its options set `max`.",
           "anyOf": [
             {
-              "$ref": "#/$defs/DiagnosticSeverity"
+              "$ref": "#/$defs/RuleSetting_CyclomaticComplexityOptions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restricted_module_paths": {
+          "description": "Reports nothing until its options list `paths`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting_RestrictedModulePathsOptions"
             },
             {
               "type": "null"
@@ -574,7 +661,9 @@
           ]
         }
       },
-      "additionalProperties": false
+      "additionalProperties": {
+        "$ref": "#/$defs/RuleLevel"
+      }
     },
     "SpaceAfterFunction": {
       "description": "Where a space goes before the `(` of a function definition or call.",

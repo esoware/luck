@@ -16,15 +16,14 @@ pub struct Diagnostic {
 
 /// Diagnostic severity: an `error` fails the run, a `warning` doesn't by
 /// default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
     Error,
     Warning,
 }
 
 impl DiagnosticSeverity {
-    /// The name `luck.json` and JSON output spell it with.
+    /// The name JSON output spells it with.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {

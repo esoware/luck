@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use luck_core::{LintConfig, LuaTarget};
+use luck_core::{LintConfig, LuaTarget, RuleLevel};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{LuaVersion, SourceError, StdlibEnvironment};
 use rayon::prelude::*;
@@ -130,7 +130,7 @@ fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic
     #[cfg(debug_assertions)]
     let mut skipped_node_rules: Vec<&dyn NodeRule> = Vec::new();
     for (slot, entry) in RULES.iter().enumerate() {
-        if !is_rule_enabled(entry.rule(), config) {
+        if rule_severity(entry.rule(), config).is_none() {
             continue;
         }
         match *entry {
@@ -177,8 +177,10 @@ fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic
 
     let mut diags: Vec<LintDiagnostic> = Vec::new();
     for (entry, rule_findings) in RULES.iter().zip(findings_by_slot) {
-        if !rule_findings.is_empty() {
-            diags.extend(into_diagnostics(entry.rule(), rule_findings, config));
+        if !rule_findings.is_empty()
+            && let Some(severity) = rule_severity(entry.rule(), config)
+        {
+            diags.extend(into_diagnostics(entry.rule(), rule_findings, severity));
         }
     }
     diags
@@ -187,29 +189,23 @@ fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic
 pub(crate) fn into_diagnostics(
     rule: &dyn Rule,
     findings: Vec<Finding>,
-    config: &LintConfig,
+    severity: Severity,
 ) -> impl Iterator<Item = LintDiagnostic> {
     let name = rule.name();
     let category = rule.category();
-    let severity = config
-        .rule_overrides
-        .get(name)
-        .and_then(|setting| setting.severity)
-        .unwrap_or_else(|| rule.default_severity());
     findings.into_iter().map(move |finding| finding.into_diagnostic(name, category, severity))
 }
 
-/// A rule's own `enabled` override wins. Otherwise `disable_default_rules`
-/// turns every rule off, and without it correctness rules and the enabled
-/// categories run.
-fn is_rule_enabled(rule: &dyn Rule, config: &LintConfig) -> bool {
-    if let Some(setting) = config.rule_overrides.get(rule.name())
-        && let Some(enabled) = setting.enabled
-    {
-        return enabled;
-    }
-    if config.disable_default_rules {
-        return false;
-    }
-    rule.category() == Category::Correctness || config.categories.contains(&rule.category())
+/// The severity `rule` runs at, or `None` when it's off. The rule's own
+/// level wins, then its category's. With neither set, only correctness rules
+/// run, each at its own severity.
+pub(crate) fn rule_severity(rule: &dyn Rule, config: &LintConfig) -> Option<Severity> {
+    config
+        .rules
+        .level(rule.name())
+        .or_else(|| config.categories.level(rule.category()))
+        .map_or_else(
+            || (rule.category() == Category::Correctness).then(|| rule.default_severity()),
+            RuleLevel::severity,
+        )
 }

@@ -32,6 +32,7 @@ luck_token     = { workspace = true }
 
 ariadne               = { workspace = true }
 clap                  = { workspace = true }
+globset               = { workspace = true }
 ignore                = { workspace = true }
 notify-debouncer-mini = { workspace = true }
 rayon                 = { workspace = true }

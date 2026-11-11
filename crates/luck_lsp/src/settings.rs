@@ -9,7 +9,7 @@ use luck_core::{
     resolved_format_config,
 };
 use luck_formatter::FormatOptions;
-use luck_linter::LintConfig;
+use luck_linter::{Category, LintConfig, RuleLevel};
 use rustc_hash::FxHashMap;
 use tokio::sync::RwLock;
 use tokio::task::spawn_blocking;
@@ -22,7 +22,7 @@ pub(crate) struct ProjectSettings {
     /// `.editorconfig` at format time.
     pub format_config: Option<FormatConfig>,
     /// The lint config to run. Linting is opt-in, so without a `lint` section
-    /// every default rule is off and only parse errors surface.
+    /// `correctness` is off and only parse errors surface.
     ///
     /// Publishing, code actions, and fix-all all go through this, so none of
     /// them fixes a diagnostic the user was never shown.
@@ -56,9 +56,10 @@ impl ProjectSettings {
             lua_target: target(DialectKey::Lua),
             luau_target: target(DialectKey::Luau),
             format_config: config.format,
-            lint_config: config.lint.clone().unwrap_or_else(|| LintConfig {
-                disable_default_rules: true,
-                ..LintConfig::default()
+            lint_config: config.lint.clone().unwrap_or_else(|| {
+                let mut lint_config = LintConfig::default();
+                lint_config.categories.set_level(Category::Correctness, RuleLevel::Off);
+                lint_config
             }),
             // Without `include`/`exclude` the default globs are constants that
             // always build, so the fallback's `unwrap_or_default` is never
@@ -224,7 +225,7 @@ mod tests {
             "exclude":["**/vendor/**"] }"#;
         let config = parse_luck_config(json).unwrap();
         let settings = ProjectSettings::new(&config, Some(PathBuf::from("/proj")));
-        assert!(!settings.lint_config.disable_default_rules);
+        assert_eq!(settings.lint_config.categories.level(Category::Correctness), None);
         assert_eq!(settings.lint_config.extra_globals, vec!["vim".to_owned()]);
         assert_eq!(settings.lua_target, LuaTarget::Lua53);
         assert_eq!(settings.luau_target, LuaTarget::LuauRoblox);
@@ -235,8 +236,8 @@ mod tests {
     fn lint_disabled_without_lint_key() {
         let config = parse_luck_config(r#"{ "lua":"lua54" }"#).unwrap();
         let lint_config = ProjectSettings::new(&config, Some(PathBuf::from("."))).lint_config;
-        assert!(lint_config.disable_default_rules);
-        assert!(lint_config.rule_overrides.is_empty());
+        assert_eq!(lint_config.categories.level(Category::Correctness), Some(RuleLevel::Off));
+        assert_eq!(lint_config.rules.names().count(), 0);
     }
 
     #[test]

@@ -308,11 +308,11 @@ fn format_range_only_formats_selection() {
 #[test]
 fn fill_mode_packs_positional_table_entries() {
     let options = FormatOptions { line_width: 20, ..FormatOptions::default() };
-    // Fill mode packs as many positional values per line as the width allows,
-    // so the wrap lands after `6,`.
+    // Fill mode packs as many positional values per line as the width allows.
+    // The tab counts for four columns, so the wrap lands after `5,`.
     assert_format_with(
         "local t = {1, 2, 3, 4, 5, 6, 7, 8}\n",
-        "local t = {\n\t1, 2, 3, 4, 5, 6,\n\t7, 8,\n}\n",
+        "local t = {\n\t1, 2, 3, 4, 5,\n\t6, 7, 8,\n}\n",
         LuaVersion::Lua54,
         &options,
     );

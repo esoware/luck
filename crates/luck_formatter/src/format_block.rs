@@ -115,12 +115,14 @@ pub(crate) struct IndentedBlock<'block>(pub &'block Block);
 
 impl Format for IndentedBlock<'_> {
     fn fmt(&self, f: &mut Formatter) {
-        if first_item_span(self.0).is_some()
-            || f.comments().has_dangling_comments(self.0.span.start)
-        {
+        if has_printable_content(f, self.0) {
             indent((hard_line(), self.0)).fmt(f);
         }
     }
+}
+
+pub(crate) fn has_printable_content(f: &Formatter, block: &Block) -> bool {
+    first_item_span(block).is_some() || f.comments().has_dangling_comments(block.span.start)
 }
 
 impl Format for Block {
@@ -134,11 +136,7 @@ impl Format for Block {
                 .peek_next_start()
                 .filter(|start| *start < first_start)
                 .unwrap_or(first_start);
-            let has_blank =
-                f.comments().source_text().zip(f.comments().source_version()).is_some_and(
-                    |(source, version)| has_leading_edge_blank(source, anchor, version),
-                );
-            if has_blank {
+            if has_blank_line_above(f, anchor) {
                 empty_line().fmt(f);
             }
         }
@@ -316,9 +314,19 @@ pub(crate) fn format_selection(
     Some((Span::new(line_start, end), f.print(&base_indent)))
 }
 
+/// Whether the source has a blank line right above `offset`. Synthetic input
+/// has no source and never does.
+pub(crate) fn has_blank_line_above(f: &Formatter, offset: u32) -> bool {
+    let comments = f.comments();
+    comments
+        .source_text()
+        .zip(comments.source_version())
+        .is_some_and(|(source, version)| has_leading_edge_blank(source, offset, version))
+}
+
 /// Whether the whitespace run immediately before `anchor` contains a blank
 /// line (the gap between a block opener and its first statement).
-fn has_leading_edge_blank(source: &str, anchor: u32, version: LuaVersion) -> bool {
+pub(crate) fn has_leading_edge_blank(source: &str, anchor: u32, version: LuaVersion) -> bool {
     let preceding = source.get(..offset_to_index(anchor)).unwrap_or(source);
     let run_length = preceding.bytes().rev().take_while(|&b| is_lua_whitespace(b)).count();
     let run_start = preceding.len().saturating_sub(run_length);

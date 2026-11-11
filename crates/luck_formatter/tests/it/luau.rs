@@ -8,6 +8,34 @@ fn assert_luau(input: &str, expected: &str) {
 }
 
 #[test]
+fn long_if_expression_starts_a_line_at_then_and_else() {
+    let options = FormatOptions { line_width: 40, ..FormatOptions::default() };
+    assert_format_with(
+        "local scale = if someLongFlagName() then firstValue else secondValue\n",
+        "local scale = if someLongFlagName()\n\tthen firstValue\n\telse secondValue\n",
+        LuaVersion::Luau,
+        &options,
+    );
+}
+
+#[test]
+fn long_if_expression_keeps_an_elseif_and_its_then_together() {
+    let options = FormatOptions { line_width: 40, ..FormatOptions::default() };
+    assert_format_with(
+        "local scale = if firstFlag() then 1 elseif secondFlag() then 0.5 else 2\n",
+        "local scale = if firstFlag()\n\tthen 1\n\telseif secondFlag() then 0.5\n\telse 2\n",
+        LuaVersion::Luau,
+        &options,
+    );
+}
+
+#[test]
+fn if_expression_branches_hug_their_tables() {
+    let source = "local thing = makeSomething(\"Foo\", {\n\tOneChild = if someFlag()\n\t\tthen makeSomething(\"Bar\", {\n\t\t\tscale = 1,\n\t\t})\n\t\telse makeSomething(\"Bar\", {\n\t\t\tscale = 2,\n\t\t}),\n\tTwoChild = makeSomething(\"Baz\"),\n})\n";
+    assert_luau(source, source);
+}
+
+#[test]
 fn paren_type_instantiation_stmt_keeps_guard() {
     // Without the `;` this is a parse error: Luau rejects a call whose `(`
     // opens a new line.
@@ -17,14 +45,14 @@ fn paren_type_instantiation_stmt_keeps_guard() {
 
 #[test]
 fn param_type_annotation_simple() {
-    assert_luau("local function f(x: number)\nend\n", "local function f(x: number)\nend\n");
+    assert_luau("local function f(x: number)\nend\n", "local function f(x: number) end\n");
 }
 
 #[test]
 fn param_type_annotation_multiple() {
     assert_luau(
         "local function f(x: number, y: string)\nend\n",
-        "local function f(x: number, y: string)\nend\n",
+        "local function f(x: number, y: string) end\n",
     );
 }
 
@@ -32,7 +60,7 @@ fn param_type_annotation_multiple() {
 fn return_type_annotation() {
     assert_luau(
         "local function f(x: number): string\nend\n",
-        "local function f(x: number): string\nend\n",
+        "local function f(x: number): string end\n",
     );
 }
 
@@ -98,7 +126,7 @@ fn type_declaration_nested_generic() {
 
 #[test]
 fn type_annotation_optional() {
-    assert_luau("local function f(x: number?)\nend\n", "local function f(x: number?)\nend\n");
+    assert_luau("local function f(x: number?)\nend\n", "local function f(x: number?) end\n");
 }
 
 #[test]
@@ -108,7 +136,7 @@ fn type_declaration_qualified() {
 
 #[test]
 fn vararg_type_annotation() {
-    assert_luau("local function f(...: number)\nend\n", "local function f(...: number)\nend\n");
+    assert_luau("local function f(...: number)\nend\n", "local function f(...: number) end\n");
 }
 
 #[test]

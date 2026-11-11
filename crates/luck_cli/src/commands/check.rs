@@ -5,34 +5,45 @@ use clap::Args;
 use luck_core::{LuaTarget, read_source_file};
 
 use crate::exit::Exit;
-use crate::project::{outcomes_in_order, project_files, resolve_project};
+use crate::project::{outcomes_in_order, project_files};
 use crate::render::render_source_errors;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
 pub(crate) struct CheckArgs {
-    /// Files or directories to check [default: current directory].
+    /// Files, directories, or globs to check, and `!` globs to leave out
+    /// [default: current directory].
     paths: Vec<String>,
 
-    /// Path to config file [default: discover luck.json upward from cwd].
+    /// Use this config for every file [default: the nearest luck.json above
+    /// each file].
     #[arg(short, long, value_name = "PATH")]
     config: Option<PathBuf>,
+
+    /// Exit 0 when a glob, or the whole run, matches no file.
+    #[arg(long)]
+    no_error_on_unmatched_pattern: bool,
 }
 
 impl CheckArgs {
     /// # Errors
     ///
     /// Returns [`Exit::Failure`] if any file can't be read or has errors, and
-    /// [`Exit::Usage`] on a bad config or path.
+    /// [`Exit::Usage`] on a bad config or path, or when no file matches.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
-        let project = resolve_project(self.config.as_deref())?;
-        let files = project_files(&project, &self.paths)?;
+        let files = project_files(
+            self.config.as_deref(),
+            &self.paths,
+            self.no_error_on_unmatched_pattern,
+            |_| Ok(()),
+        )?;
 
         let mut has_errors = false;
         {
             // One lock and one flush for the whole run.
             let mut stderr = BufWriter::new(io::stderr().lock());
-            for rendered in outcomes_in_order(&files, check_file).flatten() {
+            let outcomes = outcomes_in_order(&files, |file| check_file(&file.path, file.target));
+            for rendered in outcomes.flatten() {
                 has_errors = true;
                 let _unused = stderr.write_all(&rendered);
             }
@@ -92,10 +103,13 @@ mod tests {
     fn check_is_top_level_command_with_paths_and_config() {
         let cli = Cli::try_parse_from(["luck", "check", "src", "main.lua", "-c", "luck.json"])
             .expect("check parses");
-        let Command::Check(CheckArgs { paths, config }) = cli.command else {
+        let Command::Check(CheckArgs { paths, config, no_error_on_unmatched_pattern }) =
+            cli.command
+        else {
             panic!("expected Command::Check");
         };
         assert_eq!(paths, vec!["src".to_owned(), "main.lua".to_owned()]);
         assert_eq!(config, Some(PathBuf::from("luck.json")));
+        assert!(!no_error_on_unmatched_pattern);
     }
 }

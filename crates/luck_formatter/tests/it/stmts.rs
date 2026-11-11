@@ -158,6 +158,56 @@ fn long_if_condition_breaks() {
 }
 
 #[test]
+fn long_condition_chain_breaks_level_with_its_first_operand() {
+    let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
+    assert_format_with(
+        "if first_condition and second_condition and third then\nx = 1\nelseif (other_condition or another_condition) then\nx = 2\nend\n",
+        "if\n\tfirst_condition\n\tand second_condition\n\tand third\nthen\n\tx = 1\nelseif\n\tother_condition\n\tor another_condition\nthen\n\tx = 2\nend\n",
+        LuaVersion::Lua54,
+        &options,
+    );
+    assert_format_with(
+        "while first_condition and second_condition do\nstep()\nend\n",
+        "while\n\tfirst_condition\n\tand second_condition\ndo\n\tstep()\nend\n",
+        LuaVersion::Lua54,
+        &options,
+    );
+}
+
+#[test]
+fn condition_breaks_between_comparisons_not_inside_them() {
+    let options = FormatOptions { line_width: 40, ..FormatOptions::default() };
+    assert_format_with(
+        "if phase == Phase.ShouldUpdate or phase == Phase.WillUpdate or phase == Phase.Render then\nx = 1\nend\n",
+        "if\n\tphase == Phase.ShouldUpdate\n\tor phase == Phase.WillUpdate\n\tor phase == Phase.Render\nthen\n\tx = 1\nend\n",
+        LuaVersion::Lua54,
+        &options,
+    );
+}
+
+#[test]
+fn chain_nested_in_a_condition_indents_under_its_operator() {
+    let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
+    assert_format_with(
+        "if alpha_condition or beta_condition and gamma_condition and delta_condition then\nx = 1\nend\n",
+        "if\n\talpha_condition\n\tor beta_condition\n\t\tand gamma_condition\n\t\tand delta_condition\nthen\n\tx = 1\nend\n",
+        LuaVersion::Lua54,
+        &options,
+    );
+}
+
+#[test]
+fn long_until_condition_chain_stays_indented() {
+    let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
+    assert_format_with(
+        "repeat\nstep()\nuntil first_condition and second_condition\n",
+        "repeat\n\tstep()\nuntil first_condition\n\tand second_condition\n",
+        LuaVersion::Lua54,
+        &options,
+    );
+}
+
+#[test]
 fn global_declaration_with_initializer() {
     // Lua 5.5: `global attnamelist ['=' explist]`.
     assert_format_with(
@@ -190,7 +240,7 @@ fn leading_attribute_formats_as_distributed_trailing() {
 fn function_body_of_only_semicolons_formats_like_an_empty_body() {
     assert_eq!(
         format_once("function f() ; end\n", LuaVersion::Lua54, &FormatOptions::default()),
-        "function f()\nend\n",
+        "function f() end\n",
         "a dropped `;` must leave the same output as an empty body"
     );
 }

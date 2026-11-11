@@ -33,7 +33,7 @@ impl NodeRule for RestrictedModulePaths {
 }
 
 fn check_call(call: &FunctionCall, context: &LintContext<'_>) -> Option<Finding> {
-    let restricted_paths = &context.config.restricted_module_paths;
+    let restricted_paths = &context.config.rules.restricted_module_paths.as_ref()?.options()?.paths;
     if restricted_paths.is_empty() {
         return None;
     }
@@ -74,7 +74,7 @@ fn path_matches(path: &str, pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LintConfig;
+    use luck_core::{LintConfig, RestrictedModulePathsOptions, RuleLevel, RuleSetting};
     use luck_token::LuaVersion;
 
     use super::*;
@@ -82,7 +82,11 @@ mod tests {
     use crate::fixtures::run_rule_with_config;
 
     fn run(source: &str, paths: Vec<String>) -> Vec<LintDiagnostic> {
-        let config = LintConfig { restricted_module_paths: paths, ..LintConfig::default() };
+        let mut config = LintConfig::default();
+        config.rules.restricted_module_paths = Some(RuleSetting::WithOptions(
+            RuleLevel::Error,
+            RestrictedModulePathsOptions { paths },
+        ));
         run_rule_with_config(&RestrictedModulePaths, source, LuaVersion::Lua54, &config)
     }
 

@@ -138,20 +138,23 @@ fn collect_access_chain(access: &FieldAccess) -> (&Expression, Vec<&Token>) {
 
 /// A dot chain of three or more accesses gets its own group so it can break
 /// one segment per line; shorter chains stay glued to their prefix.
+///
+/// The root stays outside the group, so a break inside it, as in a callback
+/// it's passed, doesn't break the chain after it.
 impl Format for FieldAccess {
     fn fmt(&self, f: &mut Formatter) {
         let (root, names) = collect_access_chain(self);
         ensure_sufficient_stack(|| {
             if names.len() >= 3 {
-                group((
+                (
                     root,
-                    indent(format_with(|indented| {
+                    group(indent(format_with(|indented| {
                         for name in &names {
                             (soft_line(), token("."), *name).fmt(indented);
                         }
-                    })),
-                ))
-                .fmt(f);
+                    }))),
+                )
+                    .fmt(f);
             } else {
                 (&self.prefix, token("."), &self.name).fmt(f);
             }
@@ -159,6 +162,10 @@ impl Format for FieldAccess {
     }
 }
 
+/// A chain is a run of operators at one precedence level. An operand that
+/// binds tighter keeps a group of its own, so `a == b or c == d` breaks at
+/// `or` alone.
+///
 /// Runs of the right-associative `..` or `^` nest on the right.
 ///
 /// Left nested, each level would be its own group and re-run `fits` over its remainder, which is
@@ -172,6 +179,9 @@ fn collect_binary_chain(binary_op: &BinaryOp) -> (&Expression, Vec<(BinOp, &Expr
         let Expression::BinaryOp(left_binary_op) = &current.lhs else {
             break;
         };
+        if left_binary_op.op.precedence().0 != current.op.precedence().0 {
+            break;
+        }
         current = left_binary_op;
     }
     parts.reverse();
@@ -196,22 +206,36 @@ fn collect_binary_chain(binary_op: &BinaryOp) -> (&Expression, Vec<(BinOp, &Expr
 
 impl Format for BinaryOp {
     fn fmt(&self, f: &mut Formatter) {
-        let (first, chain) = collect_binary_chain(self);
-        // One group over the whole chain, so it's either flat or breaks before
-        // every operator.
-        ensure_sufficient_stack(|| {
-            group((
-                first,
-                indent(format_with(|indented| {
-                    for (op, right_expr) in &chain {
-                        (soft_line_or_space(), token(op.static_text()), space(), *right_expr)
-                            .fmt(indented);
-                    }
-                })),
-            ))
-            .fmt(f);
-        });
+        write_binary_chain(f, self, true);
     }
+}
+
+/// A chain that breaks with its operators level with its first operand,
+/// for a condition that already sits on an indented line of its own.
+pub(crate) struct LevelChain<'chain>(pub &'chain BinaryOp);
+
+impl Format for LevelChain<'_> {
+    fn fmt(&self, f: &mut Formatter) {
+        write_binary_chain(f, self.0, false);
+    }
+}
+
+fn write_binary_chain(f: &mut Formatter, binary_op: &BinaryOp, is_indented: bool) {
+    let (first, chain) = collect_binary_chain(binary_op);
+    let operators = format_with(|lines| {
+        for (op, right_expr) in &chain {
+            (soft_line_or_space(), token(op.static_text()), space(), *right_expr).fmt(lines);
+        }
+    });
+    // One group over the whole chain, so it's either flat or breaks before
+    // every operator.
+    ensure_sufficient_stack(|| {
+        if is_indented {
+            group((first, indent(&operators))).fmt(f);
+        } else {
+            group((first, &operators)).fmt(f);
+        }
+    });
 }
 
 /// `-` right before a nested unary `-` would form `--` and start a comment, so
@@ -239,34 +263,32 @@ impl Format for ParenthesizedExpression {
 
 impl Format for IfExpression {
     fn fmt(&self, f: &mut Formatter) {
-        // Luau: one group so a long if-expression breaks before each branch.
-        group(format_with(|grouped| {
-            (
-                token("if"),
-                space(),
-                &self.condition,
-                space(),
-                token("then"),
-                indent((soft_line_or_space(), &self.then_expr)),
-            )
-                .fmt(grouped);
+        // Luau: one group, so a long if-expression starts an indented line at
+        // each `then`, `elseif`, and `else`.
+        group((
+            token("if"),
+            space(),
+            &self.condition,
+            indent(format_with(|branches| {
+                (soft_line_or_space(), token("then"), space(), &self.then_expr).fmt(branches);
 
-            for clause in &self.elseif_clauses {
-                (
-                    soft_line_or_space(),
-                    token("elseif"),
-                    space(),
-                    &clause.condition,
-                    space(),
-                    token("then"),
-                    indent((soft_line_or_space(), &clause.expr)),
-                )
-                    .fmt(grouped);
-            }
+                for clause in &self.elseif_clauses {
+                    (
+                        soft_line_or_space(),
+                        token("elseif"),
+                        space(),
+                        &clause.condition,
+                        space(),
+                        token("then"),
+                        space(),
+                        &clause.expr,
+                    )
+                        .fmt(branches);
+                }
 
-            (soft_line_or_space(), token("else"), indent((soft_line_or_space(), &self.else_expr)))
-                .fmt(grouped);
-        }))
+                (soft_line_or_space(), token("else"), space(), &self.else_expr).fmt(branches);
+            })),
+        ))
         .fmt(f);
     }
 }

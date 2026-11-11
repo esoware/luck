@@ -8,7 +8,7 @@ Rule-based linter for Lua and Luau with scope-aware analysis.
 
 ## Key features
 
-- **Four categories.** Correctness, Suspicious, Style, and Performance (`luck_core::Category`). Correctness rules run by default. The other three are opt-in, enabled per rule or by enabling the whole category in `luck.json`.
+- **Four categories.** Correctness, Suspicious, Style, and Performance (`luck_core::Category`). Correctness rules run by default, each at its own severity, and the other three are opt-in. In `luck.json`, `categories` sets a category to `off`, `warn`, or `error`, which every rule in it then reports at, and `rules` sets one rule, which wins over its category.
 - **Auto-fix.** Rules with a safe fix attach `TextEdit`s to their diagnostic, and `apply_fixes` applies them in a single pass, dropping a fix whole when it overlaps another.
 - **Suppression comments.** `-- luck: allow(rule_name)` suppresses the rule for the statement that follows, or for the statement it trails on the same line. `deny(...)` and `warn(...)` set the severity instead, `allow(...) start` and `allow(...) end` bound a region, `-- #luck: allow(...)` covers the whole file, and `*` matches every rule.
 - **Semantic-aware.** Unused/undefined variable, incorrect stdlib usage, and similar rules query `luck_semantic`'s `ScopeTree` and stdlib resolution instead of tracking scopes themselves.

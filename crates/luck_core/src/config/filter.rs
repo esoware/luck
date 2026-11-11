@@ -48,10 +48,10 @@ impl ProjectFilter {
             // so a non-canonical root would make `strip_prefix` fail and every
             // glob would see the absolute path.
             root: canonicalize_existing(root),
-            include: build_set(include.unwrap_or(&default_include))?,
-            exclude: build_set(exclude_patterns)?,
+            include: glob_set(include.unwrap_or(&default_include))?,
+            exclude: glob_set(exclude_patterns)?,
             // A directory part that doesn't compile alone only costs the pruning.
-            excluded_trees: build_set(&excluded_trees).unwrap_or_default(),
+            excluded_trees: glob_set(&excluded_trees).unwrap_or_default(),
         })
     }
 
@@ -73,12 +73,23 @@ impl ProjectFilter {
         let relative = candidate.strip_prefix(&self.root).unwrap_or(&candidate);
         self.include.is_match(relative) && !self.exclude.is_match(relative)
     }
+
+    /// Whether an `exclude` glob matches `path`, whatever `include` says. A
+    /// file named on the command line is held to this alone.
+    #[must_use]
+    pub fn is_excluded(&self, path: &Path) -> bool {
+        let candidate = canonicalize_existing(path);
+        let relative = candidate.strip_prefix(&self.root).unwrap_or(&candidate);
+        self.exclude.is_match(relative)
+    }
 }
 
+/// `*` stops at `/`, as in `include` and `exclude`.
+///
 /// # Errors
 ///
 /// Returns a message naming the first invalid glob pattern.
-fn build_set(patterns: &[String]) -> Result<GlobSet, String> {
+pub fn glob_set(patterns: &[String]) -> Result<GlobSet, String> {
     // Invalid patterns are hard errors, like unknown config keys, so a typo'd
     // exclude can't quietly let generated code through.
     let mut builder = GlobSetBuilder::new();
@@ -130,6 +141,19 @@ mod tests {
         assert!(filter.is_included(Path::new("/proj/src/a.lua")));
         assert!(!filter.is_included(Path::new("/proj/src/gen/b.lua")));
         assert!(!filter.is_included(Path::new("/proj/other/c.lua")));
+    }
+
+    #[test]
+    fn is_excluded_ignores_include() {
+        let filter = ProjectFilter::new(
+            Path::new("/proj"),
+            Some(&["src/**/*.lua".into()]),
+            Some(&["**/gen/**".into()]),
+        )
+        .expect("valid globs");
+        assert!(filter.is_excluded(Path::new("/proj/src/gen/b.lua")));
+        assert!(!filter.is_excluded(Path::new("/proj/other/c.lua")));
+        assert!(!filter.is_excluded(Path::new("/proj/tool")));
     }
 
     #[test]

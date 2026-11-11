@@ -1042,6 +1042,7 @@ dependencies = [
  "ariadne",
  "assert_cmd",
  "clap",
+ "globset",
  "ignore",
  "luck_bundler",
  "luck_core",

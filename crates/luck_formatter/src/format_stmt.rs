@@ -7,12 +7,13 @@ use luck_ast::{
     FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction, GlobalStar,
     GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment, LocalFunction,
     NumericFor, Punctuated, RepeatLoop, Statement, TypeDeclaration, TypeDeclarationValue,
-    WhileLoop,
+    WhileLoop, unwrap_parentheses,
 };
 
 use crate::CollapseSimpleStatement;
 use crate::comments::write_inline_comments_after;
 use crate::format_block::{IndentedBlock, first_item_span};
+use crate::format_expr::LevelChain;
 use crate::ir::{
     Format, Formatter, format_with, group, hard_line, indent, line_suffix_boundary, separated,
     soft_line_or_space, space, token,
@@ -25,11 +26,23 @@ struct Condition<'expr>(&'expr Expression);
 
 impl Format for Condition<'_> {
     fn fmt(&self, f: &mut Formatter) {
-        let mut inner = self.0;
-        while let Expression::Parenthesized(parenthesized) = inner {
-            inner = &parenthesized.expr;
+        unwrap_parentheses(self.0).fmt(f);
+    }
+}
+
+/// The condition between `if`, `elseif`, or `while` and its `then` or `do`,
+/// which breaks onto an indented line of its own, so an operator chain in it
+/// breaks level with its first operand instead of indenting again.
+struct HeaderCondition<'expr>(&'expr Expression);
+
+impl Format for HeaderCondition<'_> {
+    fn fmt(&self, f: &mut Formatter) {
+        if let Expression::BinaryOp(chain) = unwrap_parentheses(self.0) {
+            LevelChain(chain).fmt(f);
+        } else {
+            Condition(self.0).fmt(f);
         }
-        inner.fmt(f);
+        header_comments(self.0).fmt(f);
     }
 }
 
@@ -189,11 +202,7 @@ impl Format for WhileLoop {
         (
             group((
                 token("while"),
-                indent((
-                    soft_line_or_space(),
-                    Condition(&self.condition),
-                    header_comments(&self.condition),
-                )),
+                indent((soft_line_or_space(), HeaderCondition(&self.condition))),
                 soft_line_or_space(),
                 token("do"),
             )),
@@ -223,10 +232,9 @@ impl Format for IfStatement {
         // Collapses to `if cond then stmt end` when the option allows, there's
         // one branch holding one statement that no comment around it would
         // stop from sharing the line, and the whole `if` fits on one line.
-        let can_collapse = matches!(
-            f.options().collapse_simple_statement,
-            CollapseSimpleStatement::ConditionalOnly | CollapseSimpleStatement::Always
-        ) && self.elseif_clauses.is_empty()
+        let can_collapse = f.options().collapse_simple_statement
+            == CollapseSimpleStatement::ConditionalOnly
+            && self.elseif_clauses.is_empty()
             && self.else_clause.is_none()
             && is_simple_block(&self.block)
             && first_item_span(&self.block).is_some_and(|body_stmt| {
@@ -241,11 +249,7 @@ impl Format for IfStatement {
         // own indented line before `then`.
         let header = group((
             token("if"),
-            indent((
-                soft_line_or_space(),
-                Condition(&self.condition),
-                header_comments(&self.condition),
-            )),
+            indent((soft_line_or_space(), HeaderCondition(&self.condition))),
             soft_line_or_space(),
             token("then"),
         ));
@@ -271,11 +275,7 @@ impl Format for IfStatement {
                 hard_line(),
                 group((
                     token("elseif"),
-                    indent((
-                        soft_line_or_space(),
-                        Condition(&clause.condition),
-                        header_comments(&clause.condition),
-                    )),
+                    indent((soft_line_or_space(), HeaderCondition(&clause.condition))),
                     soft_line_or_space(),
                     token("then"),
                 )),

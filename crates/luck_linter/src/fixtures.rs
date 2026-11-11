@@ -84,7 +84,9 @@ fn check(
             bus::run(&[node_rule], nodes.as_slice(), &context).pop().unwrap_or_default()
         }
     };
-    driver::into_diagnostics(entry.rule(), findings, config).collect()
+    // A rule the config leaves off still runs here, at its own severity.
+    let severity = driver::rule_severity(rule, config).unwrap_or_else(|| rule.default_severity());
+    driver::into_diagnostics(entry.rule(), findings, severity).collect()
 }
 
 pub(crate) fn diagnostic(rule: &'static str, span: Span) -> LintDiagnostic {
