@@ -7,7 +7,7 @@ use luck_ast::{
     FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction, GlobalStar,
     GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment, LocalFunction,
     NumericFor, Punctuated, RepeatLoop, Statement, TypeDeclaration, TypeDeclarationValue,
-    WhileLoop,
+    WhileLoop, unwrap_parentheses,
 };
 
 use crate::CollapseSimpleStatement;
@@ -24,19 +24,9 @@ use crate::ir::{
 /// nothing observable.
 struct Condition<'expr>(&'expr Expression);
 
-impl Condition<'_> {
-    fn without_parens(&self) -> &Expression {
-        let mut inner = self.0;
-        while let Expression::Parenthesized(parenthesized) = inner {
-            inner = &parenthesized.expr;
-        }
-        inner
-    }
-}
-
 impl Format for Condition<'_> {
     fn fmt(&self, f: &mut Formatter) {
-        self.without_parens().fmt(f);
+        unwrap_parentheses(self.0).fmt(f);
     }
 }
 
@@ -47,11 +37,10 @@ struct HeaderCondition<'expr>(&'expr Expression);
 
 impl Format for HeaderCondition<'_> {
     fn fmt(&self, f: &mut Formatter) {
-        let condition = Condition(self.0);
-        if let Expression::BinaryOp(chain) = condition.without_parens() {
+        if let Expression::BinaryOp(chain) = unwrap_parentheses(self.0) {
             LevelChain(chain).fmt(f);
         } else {
-            condition.fmt(f);
+            Condition(self.0).fmt(f);
         }
         header_comments(self.0).fmt(f);
     }

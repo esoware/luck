@@ -115,12 +115,14 @@ pub(crate) struct IndentedBlock<'block>(pub &'block Block);
 
 impl Format for IndentedBlock<'_> {
     fn fmt(&self, f: &mut Formatter) {
-        if first_item_span(self.0).is_some()
-            || f.comments().has_dangling_comments(self.0.span.start)
-        {
+        if has_printable_content(f, self.0) {
             indent((hard_line(), self.0)).fmt(f);
         }
     }
+}
+
+pub(crate) fn has_printable_content(f: &Formatter, block: &Block) -> bool {
+    first_item_span(block).is_some() || f.comments().has_dangling_comments(block.span.start)
 }
 
 impl Format for Block {

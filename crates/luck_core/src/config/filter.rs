@@ -48,10 +48,10 @@ impl ProjectFilter {
             // so a non-canonical root would make `strip_prefix` fail and every
             // glob would see the absolute path.
             root: canonicalize_existing(root),
-            include: build_set(include.unwrap_or(&default_include))?,
-            exclude: build_set(exclude_patterns)?,
+            include: glob_set(include.unwrap_or(&default_include))?,
+            exclude: glob_set(exclude_patterns)?,
             // A directory part that doesn't compile alone only costs the pruning.
-            excluded_trees: build_set(&excluded_trees).unwrap_or_default(),
+            excluded_trees: glob_set(&excluded_trees).unwrap_or_default(),
         })
     }
 
@@ -84,10 +84,12 @@ impl ProjectFilter {
     }
 }
 
+/// `*` stops at `/`, as in `include` and `exclude`.
+///
 /// # Errors
 ///
 /// Returns a message naming the first invalid glob pattern.
-fn build_set(patterns: &[String]) -> Result<GlobSet, String> {
+pub fn glob_set(patterns: &[String]) -> Result<GlobSet, String> {
     // Invalid patterns are hard errors, like unknown config keys, so a typo'd
     // exclude can't quietly let generated code through.
     let mut builder = GlobSetBuilder::new();

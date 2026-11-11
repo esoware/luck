@@ -1,5 +1,7 @@
 //! What `lint` prints and how its level flags decide the exit code.
 
+use std::path::Path;
+
 use luck_core::normalize_path;
 use predicates::prelude::*;
 use tempfile::TempDir;
@@ -136,23 +138,17 @@ fn print_config_output_pastes_back_into_luck_json() {
         "luck.json",
         r#"{"lint":{"rules":{"cyclomatic_complexity":["warn",{"max":8}]}}}"#,
     );
-    let printed = |args: &[&str]| {
-        let output = luck_in(project.path())
-            .args(["lint", "--print-config"])
-            .args(args)
-            .output()
-            .expect("lint runs");
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        String::from_utf8(output.stdout).expect("JSON is UTF-8")
-    };
 
-    let with_flags = printed(&["-D", "style", "-A", "unused_variable", "--global", "vim"]);
+    let with_flags = printed_config(
+        project.path(),
+        &["-D", "style", "-A", "unused_variable", "--global", "vim"],
+    );
     assert!(with_flags.contains(r#""style": "error""#), "{with_flags}");
     assert!(with_flags.contains(r#""unused_variable": "off""#), "{with_flags}");
     assert!(with_flags.contains(r#""max": 8"#), "{with_flags}");
 
     write_file(project.path(), "luck.json", &format!(r#"{{"lint":{with_flags}}}"#));
-    assert_eq!(printed(&[]), with_flags);
+    assert_eq!(printed_config(project.path(), &[]), with_flags);
 }
 
 /// Each file is linted under its nearest `luck.json`, so the config printed
@@ -163,19 +159,10 @@ fn print_config_shows_the_config_of_the_path_given() {
     write_file(project.path(), "luck.json", r#"{"lint":{"rules":{"empty_block":"warn"}}}"#);
     write_file(project.path(), "pkg/luck.json", r#"{"lint":{"rules":{"empty_block":"error"}}}"#);
     write_file(project.path(), "pkg/a.lua", WARNING_ONLY);
-    let printed = |args: &[&str]| {
-        let output = luck_in(project.path())
-            .args(["lint", "--print-config"])
-            .args(args)
-            .output()
-            .expect("lint runs");
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        String::from_utf8(output.stdout).expect("JSON is UTF-8")
-    };
 
-    assert!(printed(&[]).contains(r#""empty_block": "warn""#));
+    assert!(printed_config(project.path(), &[]).contains(r#""empty_block": "warn""#));
     for args in [["pkg"].as_slice(), &["pkg/a.lua"], &["--stdin-filepath", "pkg/a.lua"]] {
-        let config = printed(args);
+        let config = printed_config(project.path(), args);
         assert!(config.contains(r#""empty_block": "error""#), "{args:?}: {config}");
     }
     luck_in(project.path())
@@ -183,4 +170,11 @@ fn print_config_shows_the_config_of_the_path_given() {
         .assert()
         .code(2i32)
         .stderr("error: `--print-config` takes at most one path\n");
+}
+
+fn printed_config(root: &Path, args: &[&str]) -> String {
+    let output =
+        luck_in(root).args(["lint", "--print-config"]).args(args).output().expect("lint runs");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8(output.stdout).expect("JSON is UTF-8")
 }

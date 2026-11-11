@@ -5,7 +5,7 @@ use luck_ast::{
 use luck_token::Token;
 
 use crate::comments::{ListKind, write_commented_list};
-use crate::format_block::first_item_span;
+use crate::format_block::has_printable_content;
 use crate::format_table::HuggedTable;
 use crate::format_type::ExplicitTypeArgs;
 use crate::ir::{
@@ -27,9 +27,7 @@ impl Format for FunctionBody {
             (token(":"), space(), return_type).fmt(f);
         }
 
-        let has_body = first_item_span(&self.block).is_some()
-            || f.comments().has_dangling_comments(self.block.span.start);
-        if has_body {
+        if has_printable_content(f, &self.block) {
             (indent((hard_line(), &self.block)), hard_line(), token("end")).fmt(f);
         } else {
             (space(), token("end")).fmt(f);

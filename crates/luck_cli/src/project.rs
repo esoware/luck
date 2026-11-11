@@ -3,11 +3,12 @@ use std::env;
 use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use std::sync::mpsc;
 
-use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use globset::GlobSet;
 use ignore::WalkBuilder;
 use luck_core::{
     CONFIG_FILE_NAME, DynamicRequire, LuaTarget, LuckConfig, ProjectConfig, ProjectFilter,
-    discover_config, load_or_discover_config, native_path, normalize_path,
+    discover_config, glob_set, load_or_discover_config, load_with_extends, native_path,
+    normalize_path,
 };
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -130,7 +131,6 @@ pub(crate) fn resolve_project(config_path: Option<&Path>) -> Result<ProjectConfi
 /// path command derived from it.
 #[derive(Debug)]
 pub(crate) struct Project<Settings> {
-    pub root: PathBuf,
     pub filter: ProjectFilter,
     pub config: LuckConfig,
     pub settings: Settings,
@@ -196,7 +196,8 @@ pub(crate) fn project_files<Settings>(
         } else if is_glob(arg) {
             let (base, pattern) = split_glob(arg);
             let max_depth = (!pattern.contains("**")).then(|| pattern.split('/').count());
-            let selection = Selection { patterns: glob_set(&[pattern])?, max_depth };
+            let patterns = glob_set(&[pattern]).map_err(usage_error)?;
+            let selection = Selection { patterns, max_depth };
             let found_before = found.len();
             if base.is_dir() {
                 projects.collect_tree(&base, Some(&selection), &mut found)?;
@@ -218,7 +219,8 @@ pub(crate) fn project_files<Settings>(
             } else {
                 vec![format!("{pattern}/**"), pattern]
             };
-            dropped.push((lexical_absolute(&working_directory, &base), glob_set(&patterns)?));
+            let absolute_base = lexical_absolute(&working_directory, &base);
+            dropped.push((absolute_base, glob_set(&patterns).map_err(usage_error)?));
         }
         found.retain(|(path, _)| {
             let absolute = lexical_absolute(&working_directory, path);
@@ -270,21 +272,6 @@ fn split_glob(arg: &str) -> (PathBuf, String) {
     (native_path(&base), pattern.join("/"))
 }
 
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Usage`] on an invalid pattern.
-fn glob_set(patterns: &[String]) -> Result<GlobSet, Exit> {
-    let mut builder = GlobSetBuilder::new();
-    for pattern in patterns {
-        let glob = GlobBuilder::new(pattern)
-            .literal_separator(true)
-            .build()
-            .map_err(|e| usage_error(format!("invalid glob pattern `{pattern}`: {e}")))?;
-        builder.add(glob);
-    }
-    builder.build().map_err(|e| usage_error(format!("invalid glob set: {e}")))
-}
-
 /// `path` from `working_directory` with `.` and `..` resolved without touching
 /// the disk.
 fn lexical_absolute(working_directory: &Path, path: &Path) -> PathBuf {
@@ -319,7 +306,8 @@ struct Projects<Settings, SettingsOf> {
     /// `luck.json` above it.
     fallback: Option<Arc<Project<Settings>>>,
     working_directory: PathBuf,
-    discovered: Vec<Arc<Project<Settings>>>,
+    /// By the directory holding the `luck.json`.
+    discovered: FxHashMap<PathBuf, Arc<Project<Settings>>>,
     by_directory: FxHashMap<PathBuf, Arc<Project<Settings>>>,
     settings_of: SettingsOf,
 }
@@ -341,12 +329,13 @@ where
             explicit: None,
             fallback: None,
             working_directory: working_directory.to_path_buf(),
-            discovered: Vec::new(),
+            discovered: FxHashMap::default(),
             by_directory: FxHashMap::default(),
             settings_of,
         };
         if config_path.is_some() {
-            projects.explicit = Some(projects.project(resolve_project(config_path)?)?);
+            let ProjectConfig { root, config } = resolve_project(config_path)?;
+            projects.explicit = Some(projects.project(&root, config)?);
         }
         Ok(projects)
     }
@@ -354,12 +343,11 @@ where
     /// # Errors
     ///
     /// Reports the failure and returns [`Exit::Usage`] on a bad glob in
-    /// `loaded`, and the error `settings_of` returns for it.
-    fn project(&self, loaded: ProjectConfig) -> Result<Arc<Project<Settings>>, Exit> {
-        let ProjectConfig { root, config } = loaded;
-        let filter = config.project_filter(&root).map_err(usage_error)?;
+    /// `config`, and the error `settings_of` returns for it.
+    fn project(&self, root: &Path, config: LuckConfig) -> Result<Arc<Project<Settings>>, Exit> {
+        let filter = config.project_filter(root).map_err(usage_error)?;
         let settings = (self.settings_of)(&config)?;
-        Ok(Arc::new(Project { root, filter, config, settings }))
+        Ok(Arc::new(Project { filter, config, settings }))
     }
 
     /// The project of the nearest `luck.json` at or above `directory`.
@@ -372,30 +360,31 @@ where
         if let Some(explicit) = &self.explicit {
             return Ok(Arc::clone(explicit));
         }
-        // Discovery walks up by popping components, and popping a `..`, which
-        // `path::absolute` keeps on Unix, lands outside this directory's
-        // ancestors.
+        // Walking up a `..`, which `path::absolute` keeps on Unix, would leave
+        // this directory's ancestors.
         let canonical = directory
             .canonicalize()
             .map_err(|e| usage_error(format!("`{}`: {e}", directory.display())))?;
         if let Some(known) = self.by_directory.get(&canonical) {
             return Ok(Arc::clone(known));
         }
-        let project = if let Some(loaded) = discover_config(&canonical).map_err(usage_error)? {
-            if let Some(known) = self.discovered.iter().find(|known| known.root == loaded.root) {
+        // Found by stat alone, so a project met before isn't loaded again.
+        let project = if let Some(root) =
+            canonical.ancestors().find(|ancestor| ancestor.join(CONFIG_FILE_NAME).is_file())
+        {
+            if let Some(known) = self.discovered.get(root) {
                 Arc::clone(known)
             } else {
-                let discovered = self.project(loaded)?;
-                self.discovered.push(Arc::clone(&discovered));
+                let config =
+                    load_with_extends(&root.join(CONFIG_FILE_NAME)).map_err(usage_error)?;
+                let discovered = self.project(root, config)?;
+                self.discovered.insert(root.to_path_buf(), Arc::clone(&discovered));
                 discovered
             }
         } else if let Some(fallback) = &self.fallback {
             Arc::clone(fallback)
         } else {
-            let fallback = self.project(ProjectConfig {
-                root: self.working_directory.clone(),
-                config: LuckConfig::default(),
-            })?;
+            let fallback = self.project(&self.working_directory, LuckConfig::default())?;
             self.fallback = Some(Arc::clone(&fallback));
             fallback
         };
@@ -457,11 +446,11 @@ where
                 if path
                     .extension()
                     .is_some_and(|extension| extension == "lua" || extension == "luau")
-                    && path.is_file()
                     && selection.is_none_or(|selected| {
                         path.strip_prefix(directory)
                             .is_ok_and(|relative| selected.patterns.is_match(relative))
                     })
+                    && path.is_file()
                     && project.filter.is_included(path)
                 {
                     tree_files.push((entry.into_path(), Arc::clone(&project)));

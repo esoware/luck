@@ -15,6 +15,7 @@ use core::ops::Range;
 
 use luck_ast::{
     Block, Expression, FunctionArgs, FunctionCall, LocalAssignment, Punctuated, Statement, Var,
+    dotted_path,
 };
 use luck_token::{
     Comment, CommentKind, CommentPosition, LuaVersion, Span, has_line_break, index_to_offset,
@@ -315,17 +316,11 @@ fn pure_require_reads<'source>(
     let FunctionArgs::Parenthesized { args: path_args, .. } = args else {
         return None;
     };
-    let [path_arg] = path_args.items.as_slice() else {
+    let [Expression::Var(path)] = path_args.items.as_slice() else {
         return None;
     };
-    let mut path = path_arg;
-    while let Expression::Var(Var::FieldAccess(access)) = path {
-        path = &access.prefix;
-    }
-    let Expression::Var(Var::Name(root)) = path else {
-        return None;
-    };
-    Some((callee_name, Some(root.span.text(source))))
+    let root_span = dotted_path(path)?.root_span;
+    Some((callee_name, Some(root_span.text(source))))
 }
 
 fn is_single_string_arg(call_args: &FunctionArgs) -> bool {

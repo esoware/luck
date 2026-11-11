@@ -43,7 +43,7 @@ pub use config::{
     DynamicRequire, EntryConfig, FormatConfig, HexCase, IndentStyle, LineEndings, LintConfig,
     LuckConfig, ProfileOverrides, ProjectConfig, ProjectFilter, QuoteStyle,
     RestrictedModulePathsOptions, RuleLevel, RuleSetting, RuleSettings, SpaceAfterFunction,
-    TransformConfig, check_output_paths, config_directory, discover_config,
+    TransformConfig, check_output_paths, config_directory, discover_config, glob_set,
     load_or_discover_config, load_with_extends, parse_luck_config, resolve_build_config,
     resolved_format_config,
 };

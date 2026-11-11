@@ -325,8 +325,11 @@ impl Printer {
             return PrintMode::Expanded;
         }
         // A hugged group left undecided here prints flat, like anything else
-        // in a flat group.
-        if self.fits_hugging(rest, hugs, false) {
+        // in a flat group. With none forced, that's the flat layout that just
+        // failed.
+        let is_any_hug_forced =
+            hugs.iter().any(|hug| self.group_mode(hug.child) == Some(PrintMode::Expanded));
+        if is_any_hug_forced && self.fits_hugging(rest, hugs, false) {
             return PrintMode::Flat;
         }
         if self.fits_hugging(rest, hugs, true) {
@@ -890,17 +893,18 @@ mod tests {
         .fmt(f);
     }
 
+    /// `{ <content> }`, laid out as a table.
+    fn braces(content: &'static str) -> impl Format {
+        (
+            token("{"),
+            indent((soft_line_or_space(), token(content))),
+            soft_line_or_space(),
+            token("}"),
+        )
+    }
+
     fn write_hugged_braces(f: &mut Formatter) {
-        let braces = f.group_id();
-        let hugged = hugged_group_with_id(
-            braces,
-            (
-                token("{"),
-                indent((soft_line_or_space(), token("xxxx"))),
-                soft_line_or_space(),
-                token("}"),
-            ),
-        );
+        let hugged = hugged_group_with_id(f.group_id(), braces("xxxx"));
         write_hugging_list(f, hugged);
     }
 
@@ -922,7 +926,7 @@ mod tests {
 
     /// `({xxxx}, <block>)`, both hugged.
     fn write_hugged_braces_and(f: &mut Formatter, block: impl Format) {
-        let (list, braces, block_group) = (f.group_id(), f.group_id(), f.group_id());
+        let (list, braces_group, block_group) = (f.group_id(), f.group_id(), f.group_id());
         group_with_id(
             list,
             (
@@ -931,15 +935,7 @@ mod tests {
                     list,
                     (
                         soft_line(),
-                        hugged_group_with_id(
-                            braces,
-                            (
-                                token("{"),
-                                indent((soft_line_or_space(), token("xxxx"))),
-                                soft_line_or_space(),
-                                token("}"),
-                            ),
-                        ),
+                        hugged_group_with_id(braces_group, braces("xxxx")),
                         token(","),
                         soft_line_or_space(),
                         hugged_group_with_id(block_group, block),
@@ -965,15 +961,7 @@ mod tests {
 
     #[test]
     fn hugged_groups_all_expand_when_none_is_forced_to() {
-        let write = |f: &mut Formatter| {
-            let braces = (
-                token("{"),
-                indent((soft_line_or_space(), token("yyyy"))),
-                soft_line_or_space(),
-                token("}"),
-            );
-            write_hugged_braces_and(f, braces);
-        };
+        let write = |f: &mut Formatter| write_hugged_braces_and(f, braces("yyyy"));
         assert_eq!(print_document(write, 20), "({ xxxx }, { yyyy })");
         assert_eq!(print_document(write, 19), "({\n    xxxx\n}, {\n    yyyy\n})");
     }

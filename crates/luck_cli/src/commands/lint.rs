@@ -48,7 +48,6 @@ const LEVEL_FLAGS: [(&str, char, RuleLevel, &str); 3] = [
 
 /// The `-A`, `-W`, and `-D` flags in command-line order, which a derived
 /// `Vec` per flag would lose.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct LevelFlags(Vec<(RuleLevel, String)>);
 
 impl FromArgMatches for LevelFlags {

@@ -17,7 +17,7 @@ mod transform_config;
 
 pub use dynamic_require::DynamicRequire;
 pub use editorconfig::resolved_format_config;
-pub use filter::ProjectFilter;
+pub use filter::{ProjectFilter, glob_set};
 pub use format_config::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatConfig, HexCase, IndentStyle,
     LineEndings, QuoteStyle, SpaceAfterFunction,
