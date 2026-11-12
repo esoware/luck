@@ -119,6 +119,22 @@ fn shebang_stays_on_the_first_line() {
 }
 
 #[test]
+fn shebang_drops_trailing_carriage_returns() {
+    for source in ["#!x\r\r", "#!x\r\r\nprint(1)\n"] {
+        let output = minify_lua54(source);
+        assert!(output.starts_with("#!x\n"), "{output:?}");
+        assert_eq!(minify_lua54(&output), output, "must be idempotent");
+    }
+}
+
+#[test]
+fn shebang_keeps_a_lone_carriage_return_as_text() {
+    let output = minify_lua54("#!x\ry = {\nprint(1)\n");
+    assert_eq!(output, "#!x\ry = {\nprint(1)");
+    assert_eq!(minify_lua54(&output), output, "must be idempotent");
+}
+
+#[test]
 fn shebang_stays_above_luau_hot_comments() {
     let output = minify_luau("#!/usr/bin/env luau\n--!strict\nprint(1)\n");
     assert_eq!(output, "#!/usr/bin/env luau\n--!strict\nprint(1)");

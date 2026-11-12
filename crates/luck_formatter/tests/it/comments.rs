@@ -217,6 +217,17 @@ fn shebang_preserved() {
 }
 
 #[test]
+fn shebang_keeps_a_lone_carriage_return_as_text() {
+    assert_format("#!x\ry = {\nlocal x = 1\n", "#!x\ry = {\nlocal x = 1\n");
+}
+
+#[test]
+fn shebang_drops_trailing_carriage_returns() {
+    assert_format("#!x\r\r\nlocal x = 1\n", "#!x\nlocal x = 1\n");
+    assert_format("#!x\r\r", "#!x\n");
+}
+
+#[test]
 fn blank_line_preserved() {
     assert_format("local x = 1\n\nlocal y = 2\n", "local x = 1\n\nlocal y = 2\n");
 }

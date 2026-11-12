@@ -35,7 +35,8 @@ pub fn minify(
     if let Some(shebang) =
         result.comments.first().filter(|comment| comment.kind == CommentKind::Shebang)
     {
-        comment_prefix.push_str(shebang.span.text(source));
+        // A trailing CR would pair with this line break into a CRLF.
+        comment_prefix.push_str(shebang.span.text(source).trim_end_matches('\r'));
         comment_prefix.push('\n');
     }
     if version.is_luau() {
