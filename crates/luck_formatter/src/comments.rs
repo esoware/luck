@@ -82,7 +82,13 @@ impl Comments {
         let sourced_comments = comments
             .iter()
             .map(|comment| SourcedComment {
-                text: CompactString::from(unix_line_breaks(comment.span.text(source), version)),
+                text: CompactString::from(if comment.kind == CommentKind::Shebang {
+                    // Loaders skip this line up to LF, so a CR in it is text, but a
+                    // trailing one would pair with the line break written after it.
+                    Cow::Borrowed(comment.span.text(source).trim_end_matches('\r'))
+                } else {
+                    unix_line_breaks(comment.span.text(source), version)
+                }),
                 attached_to: comment.attached_to,
                 span: comment.span,
                 position: comment.position,
