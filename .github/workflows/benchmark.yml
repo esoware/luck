@@ -29,7 +29,7 @@ env:
 jobs:
   benchmark:
     name: Bench ${{ matrix.component }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -53,7 +53,7 @@ jobs:
           shared-key: benchmark
           save-if: ${{ github.ref_name == 'main' }}
 
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-codspeed
 
@@ -67,7 +67,7 @@ jobs:
         run: cargo codspeed build -p luck_benchmark --bench "$COMPONENT" --features codspeed
 
       - name: Run the benchmark
-        uses: CodSpeedHQ/action@f22792bfac16f3e14eb9fbea76f4a48e9cc22b93 # v4.19.1
+        uses: CodSpeedHQ/action@af75f77f17a054769abefaa42fe8dc2975469b5f # v5.6.3
         timeout-minutes: 30
         with:
           mode: simulation
@@ -75,7 +75,7 @@ jobs:
 
   minsize:
     name: Minsize snapshot
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

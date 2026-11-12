@@ -17,9 +17,10 @@ allow = [
   "Unicode-3.0",
   "Zlib",
   "MPL-2.0",
-  # notify is CC0; webpki-roots CA data is CDLA-Permissive-2.0.
+  # notify is CC0; webpki-roots CA data is CDLA-Permissive-2.0; borrow-or-share is MIT-0.
   "CC0-1.0",
   "CDLA-Permissive-2.0",
+  "MIT-0",
 ]
 
 [bans]

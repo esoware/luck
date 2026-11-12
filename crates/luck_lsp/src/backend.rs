@@ -3,14 +3,15 @@
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use core::future::ready;
 
 use luck_core::LuaTarget;
 use luck_linter::LintDiagnostic;
 use rustc_hash::FxHashSet;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::{spawn_blocking, yield_now};
-use tower_lsp::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
-use tower_lsp::lsp_types::{
+use tower_lsp_server::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
+use tower_lsp_server::ls_types::{
     CodeActionKind, CodeActionOptions, CodeActionParams, CodeActionProviderCapability,
     CodeActionResponse, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
     DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
@@ -27,14 +28,14 @@ use tower_lsp::lsp_types::{
     SemanticTokensParams, SemanticTokensRangeParams, SemanticTokensRangeResult,
     SemanticTokensRegistrationOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
     ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
-    StaticRegistrationOptions, SymbolInformation, TextDocumentPositionParams,
-    TextDocumentRegistrationOptions, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url, WorkDoneProgressOptions,
-    WorkspaceEdit, WorkspaceSymbolParams,
+    StaticRegistrationOptions, TextDocumentPositionParams, TextDocumentRegistrationOptions,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    TextDocumentSyncSaveOptions, TextEdit, Uri, WorkDoneProgressOptions, WorkspaceEdit,
+    WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
-use tower_lsp::{Client, LanguageServer};
+use tower_lsp_server::{Client, LanguageServer};
 
-use crate::document::DocumentState;
+use crate::document::{DocumentState, file_path};
 use crate::providers::{
     code_action, completion, definition, diagnostics, document_highlight, document_link,
     document_symbol, folding_range, hover, references, rename, selection_range, semantic_tokens,
@@ -42,12 +43,12 @@ use crate::providers::{
 };
 use crate::settings::{ProjectSettings, SettingsCache};
 
-/// The parts of `tower_lsp::Client` the backend uses, so tests can record
-/// what the server sends instead.
+/// The parts of `tower_lsp_server::Client` the backend uses, so tests can
+/// record what the server sends instead.
 pub trait Notifier: Send + Sync + 'static {
     fn publish_diagnostics(
         &self,
-        uri: Url,
+        uri: Uri,
         diags: Vec<Diagnostic>,
         version: Option<i32>,
     ) -> impl Future<Output = ()> + Send;
@@ -68,7 +69,7 @@ pub trait Notifier: Send + Sync + 'static {
 }
 
 impl Notifier for Client {
-    async fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i32>) {
+    async fn publish_diagnostics(&self, uri: Uri, diags: Vec<Diagnostic>, version: Option<i32>) {
         Self::publish_diagnostics(self, uri, diags, version).await;
     }
 
@@ -97,10 +98,10 @@ struct OpenDocument {
 #[derive(Debug)]
 pub struct Backend<N: Notifier = Client> {
     notifier: N,
-    documents: RwLock<BTreeMap<Url, OpenDocument>>,
+    documents: RwLock<BTreeMap<Uri, OpenDocument>>,
     /// Orders what changes the open documents and what tells the client about
-    /// them. tower-lsp polls notifications concurrently, but this lock
-    /// queues them in arrival order: an edit can't overtake the open it
+    /// them. tower-lsp-server polls notifications concurrently, but this
+    /// lock queues them in arrival order: an edit can't overtake the open it
     /// follows, and a publish can't land after what replaced or closed its
     /// document.
     sync: Mutex<()>,
@@ -119,28 +120,28 @@ impl<N: Notifier> Backend<N> {
 
     /// Makes `state` what's open at `uri`, which leaves any lint still
     /// running on what it replaces with nothing to publish.
-    async fn store(&self, uri: &Url, state: DocumentState) -> Arc<DocumentState> {
+    async fn store(&self, uri: &Uri, state: DocumentState) -> Arc<DocumentState> {
         let shared = Arc::new(state);
         let open = OpenDocument { state: Arc::clone(&shared), published_lints: None };
         self.documents.write().await.insert(uri.clone(), open);
         shared
     }
 
-    async fn snapshot(&self, uri: &Url) -> Option<Arc<DocumentState>> {
+    async fn snapshot(&self, uri: &Uri) -> Option<Arc<DocumentState>> {
         let documents = self.documents.read().await;
         documents.get(uri).map(|open| Arc::clone(&open.state))
     }
 
-    async fn open_documents(&self) -> Vec<(Url, Arc<DocumentState>)> {
+    async fn open_documents(&self) -> Vec<(Uri, Arc<DocumentState>)> {
         let documents = self.documents.read().await;
         documents.iter().map(|(uri, open)| (uri.clone(), Arc::clone(&open.state))).collect()
     }
 
-    async fn document_settings(&self, uri: &Url) -> (LuaTarget, FxHashSet<String>) {
-        let file_path = uri.to_file_path().ok();
-        let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
+    async fn document_settings(&self, uri: &Uri) -> (LuaTarget, FxHashSet<String>) {
+        let document_path = file_path(uri);
+        let settings = self.settings_cache.settings_for(document_path.as_deref()).await;
         (
-            settings.target_for(file_path.as_deref()),
+            settings.target_for(document_path.as_deref()),
             settings.lint_config.extra_globals.iter().cloned().collect(),
         )
     }
@@ -148,10 +149,10 @@ impl<N: Notifier> Backend<N> {
     /// The settings of the document at `uri`, or `None` when the project's
     /// include/exclude set leaves it out, so it gets no diagnostics and no
     /// fixes.
-    async fn settings_if_included(&self, uri: &Url) -> Option<Arc<ProjectSettings>> {
-        let file_path = uri.to_file_path().ok();
-        let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
-        let Some(path) = file_path else {
+    async fn settings_if_included(&self, uri: &Uri) -> Option<Arc<ProjectSettings>> {
+        let document_path = file_path(uri);
+        let settings = self.settings_cache.settings_for(document_path.as_deref()).await;
+        let Some(path) = document_path else {
             return Some(settings);
         };
         let filter_settings = Arc::clone(&settings);
@@ -165,7 +166,7 @@ impl<N: Notifier> Backend<N> {
 
     /// Lints `document` and publishes the result, unless `document` has been
     /// replaced or closed by the time the result is ready.
-    async fn lint_and_publish(&self, uri: Url, document: Arc<DocumentState>) {
+    async fn lint_and_publish(&self, uri: Uri, document: Arc<DocumentState>) {
         // A change already queued behind this one replaces `document`, which
         // saves linting it, so a burst of keystrokes lints once.
         yield_now().await;
@@ -188,24 +189,24 @@ impl<N: Notifier> Backend<N> {
         self.notifier.publish_diagnostics(uri, diags, Some(document.version)).await;
     }
 
-    async fn is_open(&self, uri: &Url, document: &Arc<DocumentState>) -> bool {
+    async fn is_open(&self, uri: &Uri, document: &Arc<DocumentState>) -> bool {
         self.documents.read().await.get(uri).is_some_and(|open| Arc::ptr_eq(&open.state, document))
     }
 
     /// Formats the document at `uri`, or only `range` of it, as one
     /// whole-document edit. `None` when it isn't open, `range` doesn't fit
     /// it, or it doesn't parse, which also shows a warning.
-    async fn format_edits(&self, uri: &Url, range: Option<Range>) -> Option<Vec<TextEdit>> {
+    async fn format_edits(&self, uri: &Uri, range: Option<Range>) -> Option<Vec<TextEdit>> {
         let document = self.snapshot(uri).await?;
         let byte_range = match range {
             Some(requested) => Some(document.byte_range(requested)?),
             None => None,
         };
-        let file_path = uri.to_file_path().ok();
-        let settings = self.settings_cache.settings_for(file_path.as_deref()).await;
+        let document_path = file_path(uri);
+        let settings = self.settings_cache.settings_for(document_path.as_deref()).await;
         // Reading the `.editorconfig` chain touches the disk.
         let options =
-            spawn_blocking(move || settings.format_options(file_path.as_deref())).await.ok()?;
+            spawn_blocking(move || settings.format_options(document_path.as_deref())).await.ok()?;
         let lua_version = document.lua_version;
         let (result, action) = byte_range.map_or_else(
             || (luck_formatter::format(document.text(), lua_version, &options), "format"),
@@ -242,7 +243,7 @@ impl<N: Notifier> Backend<N> {
         &self,
         params: serde_json::Value,
     ) -> JsonRpcResult<serde_json::Value> {
-        let uri: Url = params
+        let uri: Uri = params
             .get("textDocument")
             .and_then(|text_document| text_document.get("uri"))
             .and_then(|uri| uri.as_str())
@@ -296,9 +297,9 @@ impl<N: Notifier> Backend<N> {
     }
 }
 
-/// `document`'s lints, computed on the blocking pool: tower-lsp polls every
-/// handler on one task, so a lint run inline would stall the whole server. A
-/// lint that dies yields nothing.
+/// `document`'s lints, computed on the blocking pool: tower-lsp-server polls
+/// every handler on one task, so a lint run inline would stall the whole
+/// server. A lint that dies yields nothing.
 async fn lint_off_the_serve_loop(
     document: &Arc<DocumentState>,
     settings: Arc<ProjectSettings>,
@@ -307,10 +308,12 @@ async fn lint_off_the_serve_loop(
     spawn_blocking(move || linted.lint(&settings.lint_config)).await.unwrap_or_default().into()
 }
 
-#[tower_lsp::async_trait]
 impl<N: Notifier> LanguageServer for Backend<N> {
-    async fn initialize(&self, _params: InitializeParams) -> JsonRpcResult<InitializeResult> {
-        Ok(InitializeResult {
+    fn initialize(
+        &self,
+        _params: InitializeParams,
+    ) -> impl Future<Output = JsonRpcResult<InitializeResult>> {
+        ready(Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
                     TextDocumentSyncOptions {
@@ -382,7 +385,8 @@ impl<N: Notifier> LanguageServer for Backend<N> {
                 name: "luck".to_owned(),
                 version: Some(env!("CARGO_PKG_VERSION").to_owned()),
             }),
-        })
+            offset_encoding: None,
+        }))
     }
 
     async fn initialized(&self, _params: InitializedParams) {
@@ -423,7 +427,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         // old settings has nothing to publish. Each document's settings are
         // found before taking the sync lock, so config discovery doesn't
         // stall edits.
-        let uris: Vec<Url> = self.documents.read().await.keys().cloned().collect();
+        let uris: Vec<Uri> = self.documents.read().await.keys().cloned().collect();
         for uri in uris {
             let (target, extra_globals) = self.document_settings(&uri).await;
             let document = {
@@ -443,8 +447,8 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         }
     }
 
-    async fn shutdown(&self) -> JsonRpcResult<()> {
-        Ok(())
+    fn shutdown(&self) -> impl Future<Output = JsonRpcResult<()>> {
+        ready(Ok(()))
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
@@ -618,7 +622,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         let Some(document) = self.snapshot(uri).await else {
             return Ok(None);
         };
-        let settings = self.settings_cache.settings_for(uri.to_file_path().ok().as_deref()).await;
+        let settings = self.settings_cache.settings_for(file_path(uri).as_deref()).await;
         // A `require` under the cursor resolves through the disk.
         Ok(spawn_blocking(move || definition::goto(&document, &settings, &params))
             .await
@@ -655,9 +659,12 @@ impl<N: Notifier> LanguageServer for Backend<N> {
     async fn symbol(
         &self,
         params: WorkspaceSymbolParams,
-    ) -> JsonRpcResult<Option<Vec<SymbolInformation>>> {
+    ) -> JsonRpcResult<Option<WorkspaceSymbolResponse>> {
         let documents = self.open_documents().await;
-        Ok(Some(workspace_symbol::workspace_symbols(&documents, &params.query)))
+        Ok(Some(WorkspaceSymbolResponse::Flat(workspace_symbol::workspace_symbols(
+            &documents,
+            &params.query,
+        ))))
     }
 
     async fn semantic_tokens_range(
@@ -698,7 +705,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         let Some(document) = self.snapshot(&uri).await else {
             return Ok(None);
         };
-        let settings = self.settings_cache.settings_for(uri.to_file_path().ok().as_deref()).await;
+        let settings = self.settings_cache.settings_for(file_path(&uri).as_deref()).await;
         // Each `require` resolves through the disk.
         let links =
             spawn_blocking(move || document_link::document_links(&document, &uri, &settings))

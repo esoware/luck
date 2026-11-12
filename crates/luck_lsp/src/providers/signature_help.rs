@@ -1,6 +1,6 @@
 use luck_semantic::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
 use luck_token::index_to_offset;
-use tower_lsp::lsp_types::{
+use tower_lsp_server::ls_types::{
     Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, Position,
     SignatureHelp, SignatureInformation,
 };

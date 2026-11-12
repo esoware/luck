@@ -1,6 +1,6 @@
 use luck_ast::{Expression, LastStatement, Statement, Visitor};
 use luck_token::Span;
-use tower_lsp::lsp_types::{Position, SelectionRange};
+use tower_lsp_server::ls_types::{Position, SelectionRange};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::touches;
@@ -76,7 +76,7 @@ impl<'ast> Visitor<'ast> for SpanStack {
 mod tests {
     use luck_core::LuaTarget;
     use rustc_hash::FxHashSet;
-    use tower_lsp::lsp_types::Range;
+    use tower_lsp_server::ls_types::Range;
 
     use super::*;
 

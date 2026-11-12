@@ -6,7 +6,7 @@ use luck_ast::{FunctionArgs, FunctionCall, Literal};
 use luck_semantic::{StdlibEntry, StdlibFunction};
 use luck_token::{Span, TokenKind, index_to_offset};
 use rustc_hash::FxHashSet;
-use tower_lsp::lsp_types::{
+use tower_lsp_server::ls_types::{
     CompletionItem, CompletionItemKind, CompletionItemTag, CompletionResponse, CompletionTextEdit,
     Documentation, InsertTextFormat, MarkupContent, MarkupKind, Position, TextEdit,
 };
@@ -300,7 +300,7 @@ const KEYWORD_COMPLETIONS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use luck_core::LuaTarget;
-    use tower_lsp::lsp_types::Range as LspRange;
+    use tower_lsp_server::ls_types::Range as LspRange;
 
     use super::*;
 

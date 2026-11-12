@@ -1,4 +1,6 @@
+use alloc::borrow::Cow;
 use core::ops;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use luck_core::LuaTarget;
@@ -7,7 +9,7 @@ use luck_parser::ParseResult;
 use luck_semantic::SemanticAnalysis;
 use luck_token::{LuaVersion, Span, Token};
 use rustc_hash::FxHashSet;
-use tower_lsp::lsp_types::{Position, Range, TextDocumentContentChangeEvent};
+use tower_lsp_server::ls_types::{Position, Range, TextDocumentContentChangeEvent, Uri};
 
 use crate::line_index::LineIndex;
 
@@ -111,11 +113,29 @@ impl DocumentState {
     }
 }
 
+/// The path a `file:` URI names. `Uri::to_file_path` ignores the scheme, so
+/// it would turn an `untitled:` buffer into a relative path.
+pub(crate) fn file_path(uri: &Uri) -> Option<PathBuf> {
+    if !uri.scheme().as_str().eq_ignore_ascii_case("file") {
+        return None;
+    }
+    uri.to_file_path().map(Cow::into_owned)
+}
+
 #[cfg(test)]
 mod tests {
+    use core::str::FromStr as _;
     use std::thread;
 
     use super::*;
+
+    #[test]
+    fn only_a_file_uri_has_a_file_path() {
+        let untitled = Uri::from_str("untitled:Untitled-1").expect("valid URI");
+        assert_eq!(file_path(&untitled), None);
+        let saved = Uri::from_str("FILE:///tmp/main.lua").expect("valid URI");
+        assert!(file_path(&saved).is_some_and(|path| path.ends_with("main.lua")));
+    }
 
     fn replace(range: Range, text: &str) -> TextDocumentContentChangeEvent {
         TextDocumentContentChangeEvent {

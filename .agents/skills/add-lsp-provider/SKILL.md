@@ -5,9 +5,9 @@ description: Adds or extends a language-server feature in luck_lsp through the p
 
 # Add an LSP provider
 
-luck_lsp is a library-only tower-lsp backend served via `luck lsp`. Every feature follows the same four-site pattern. Miss the last site and the handler is dead code:
+luck_lsp is a library-only tower-lsp-server backend served via `luck lsp`. Every feature follows the same four-site pattern. Miss the last site and the handler is dead code:
 
-1. **Provider module** (`src/providers/<feature>.rs`): a pure function taking the document state pieces it needs and returning the LSP response type. Keep tokio and `tower_lsp::Client` out of providers so they stay testable. Read a neighboring provider of similar shape first (`hover.rs` for cursor-position features, `document_symbol.rs` for whole-document, `code_action.rs` for lint-coupled).
+1. **Provider module** (`src/providers/<feature>.rs`): a pure function taking the document state pieces it needs and returning the LSP response type. Keep tokio and `tower_lsp_server::Client` out of providers so they stay testable. Read a neighboring provider of similar shape first (`hover.rs` for cursor-position features, `document_symbol.rs` for whole-document, `code_action.rs` for lint-coupled).
 2. **Declare** it in `providers.rs` as a `pub(crate) mod`. Providers aren't public API. Only `Backend`, `Notifier`, and the `serve_*` entry points are.
 3. **Backend handler** in `backend.rs`: snapshot the document, call the provider, map errors. Mirror a neighboring handler for the lock/snapshot pattern, and don't hold the documents lock across heavy work.
 4. **Capability registration** in `initialize()`. This is the step that gets forgotten, and without it clients never call the handler.

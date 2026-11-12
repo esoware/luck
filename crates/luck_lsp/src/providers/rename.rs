@@ -10,8 +10,8 @@
 use luck_ast::is_valid_identifier_in;
 use luck_semantic::{SymbolId, SymbolKind};
 use luck_token::Span;
-use tower_lsp::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
-use tower_lsp::lsp_types::{
+use tower_lsp_server::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
+use tower_lsp_server::ls_types::{
     Position, PrepareRenameResponse, RenameParams, TextEdit, WorkspaceEdit,
 };
 
@@ -124,14 +124,14 @@ fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), Str
 mod tests {
     use luck_core::LuaTarget;
     use rustc_hash::FxHashSet;
-    use tower_lsp::lsp_types::{
-        Range, TextDocumentIdentifier, TextDocumentPositionParams, Url, WorkDoneProgressParams,
+    use tower_lsp_server::ls_types::{
+        Range, TextDocumentIdentifier, TextDocumentPositionParams, Uri, WorkDoneProgressParams,
     };
 
     use super::*;
 
-    fn uri() -> Url {
-        Url::parse("file:///main.lua").expect("valid URI")
+    fn uri() -> Uri {
+        "file:///main.lua".parse().expect("valid URI")
     }
 
     fn document(text: &str, target: LuaTarget) -> DocumentState {

@@ -1,5 +1,5 @@
 use luck_linter::{LintDiagnostic, Severity};
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString};
+use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, NumberOrString};
 
 use crate::document::DocumentState;
 

@@ -4,9 +4,9 @@ use luck_ast::{Block, LastStatement, Statement, Visitor};
 use luck_linter::{Fix, LintDiagnostic};
 use luck_token::{Span, is_lua_whitespace, line_breaks, offset_to_index};
 use rustc_hash::FxHashMap;
-use tower_lsp::lsp_types::{
+use tower_lsp_server::ls_types::{
     CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams,
-    CodeActionResponse, NumberOrString, Range, TextEdit, Url, WorkspaceEdit,
+    CodeActionResponse, NumberOrString, Range, TextEdit, Uri, WorkspaceEdit,
 };
 
 use crate::document::DocumentState;
@@ -176,7 +176,7 @@ impl<'ast> Visitor<'ast> for StatementFinder {
     }
 }
 
-fn workspace_edit(uri: &Url, edits: Vec<TextEdit>) -> WorkspaceEdit {
+fn workspace_edit(uri: &Uri, edits: Vec<TextEdit>) -> WorkspaceEdit {
     WorkspaceEdit {
         changes: Some([(uri.clone(), edits)].into()),
         document_changes: None,
@@ -198,7 +198,7 @@ fn should_offer_fix_all(context: &CodeActionContext) -> bool {
 }
 
 pub(crate) fn fix_all_open(
-    documents: &[(Url, Arc<DocumentState>, Arc<ProjectSettings>)],
+    documents: &[(Uri, Arc<DocumentState>, Arc<ProjectSettings>)],
 ) -> WorkspaceEdit {
     let changes = documents
         .iter()
@@ -217,15 +217,15 @@ mod tests {
     use luck_core::LuaTarget;
     use luck_linter::{Category, LintConfig, RuleLevel, Severity, TextEdit as LinterTextEdit};
     use rustc_hash::FxHashSet;
-    use tower_lsp::lsp_types::{
+    use tower_lsp_server::ls_types::{
         Diagnostic, PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams,
     };
 
     use super::*;
     use crate::providers::diagnostics;
 
-    fn uri() -> Url {
-        Url::parse("file:///main.lua").expect("valid URI")
+    fn uri() -> Uri {
+        "file:///main.lua".parse().expect("valid URI")
     }
 
     fn config_enabling(rule: &str) -> LintConfig {

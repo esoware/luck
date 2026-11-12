@@ -17,7 +17,7 @@ env:
 jobs:
   fuzz:
     name: ${{ matrix.target }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -33,7 +33,7 @@ jobs:
       - name: Install the nightly toolchain
         run: rustup toolchain install nightly --profile minimal
 
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-fuzz
 
@@ -44,8 +44,9 @@ jobs:
             cp "$fixture" "fuzz/corpus/$TARGET/$(echo "$fixture" | md5sum | cut -d ' ' -f 1)"
           done
 
+      # The prebuilt cargo-fuzz is a musl build, and it defaults to its own target, which ASan can't link.
       - name: Fuzz for 5 minutes
-        run: cargo +nightly fuzz run "$TARGET" -- -max_total_time=300 -timeout=30
+        run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$TARGET" -- -max_total_time=300 -timeout=30
 
       - name: Upload the crash artifacts
         if: failure()

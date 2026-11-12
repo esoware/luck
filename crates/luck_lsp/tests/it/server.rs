@@ -6,8 +6,8 @@ use std::path::Path;
 use luck_lsp::{Backend, Notifier};
 use luck_token::index_to_offset;
 use tokio::sync::{RwLock, Semaphore};
-use tower_lsp::LanguageServer as _;
-use tower_lsp::lsp_types::{
+use tower_lsp_server::LanguageServer as _;
+use tower_lsp_server::ls_types::{
     CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, CompletionParams,
     CompletionResponse, Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
@@ -19,11 +19,11 @@ use tower_lsp::lsp_types::{
     SelectionRangeParams, SemanticTokensParams, SemanticTokensRangeParams,
     SemanticTokensRangeResult, SemanticTokensResult, SignatureHelpParams,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, Url, VersionedTextDocumentIdentifier, WorkDoneProgressParams,
-    WorkspaceSymbolParams,
+    TextDocumentPositionParams, Uri, VersionedTextDocumentIdentifier, WorkDoneProgressParams,
+    WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 
-type PublishedRecord = (Url, Vec<Diagnostic>, Option<i32>);
+type PublishedRecord = (Uri, Vec<Diagnostic>, Option<i32>);
 
 type MessageRecord = (MessageType, String);
 
@@ -34,7 +34,7 @@ struct CapturedNotifier {
 }
 
 impl Notifier for CapturedNotifier {
-    async fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i32>) {
+    async fn publish_diagnostics(&self, uri: Uri, diags: Vec<Diagnostic>, version: Option<i32>) {
         self.published.write().await.push((uri, diags, version));
     }
 
@@ -50,7 +50,7 @@ impl Notifier for CapturedNotifier {
 }
 
 impl CapturedNotifier {
-    async fn diagnostics_for(&self, uri: &Url) -> Vec<Diagnostic> {
+    async fn diagnostics_for(&self, uri: &Uri) -> Vec<Diagnostic> {
         let published = self.published.read().await;
         published
             .iter()
@@ -61,19 +61,19 @@ impl CapturedNotifier {
     }
 }
 
-fn workspace_uri(name: &str) -> Url {
+fn workspace_uri(name: &str) -> Uri {
     // `file:///` URIs work cross-platform for tests that never hit disk.
-    Url::from_str(&format!("file:///tmp/{name}")).expect("hand-rolled URI is valid")
+    Uri::from_str(&format!("file:///tmp/{name}")).expect("hand-rolled URI is valid")
 }
 
-fn position_params(uri: &Url, line: u32, utf16_column: u32) -> TextDocumentPositionParams {
+fn position_params(uri: &Uri, line: u32, utf16_column: u32) -> TextDocumentPositionParams {
     TextDocumentPositionParams {
         text_document: TextDocumentIdentifier { uri: uri.clone() },
         position: Position { line, character: utf16_column },
     }
 }
 
-async fn open(server: &Backend<CapturedNotifier>, uri: &Url, text: &str) {
+async fn open(server: &Backend<CapturedNotifier>, uri: &Uri, text: &str) {
     server
         .did_open(DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
@@ -88,7 +88,7 @@ async fn open(server: &Backend<CapturedNotifier>, uri: &Url, text: &str) {
 
 async fn rename_refusal(
     server: &Backend<CapturedNotifier>,
-    uri: &Url,
+    uri: &Uri,
     new_name: &str,
 ) -> Option<String> {
     server
@@ -102,7 +102,7 @@ async fn rename_refusal(
         .map(|e| e.message.into_owned())
 }
 
-fn project_with_excluded_directory(directory: &Path) -> (Url, Url) {
+fn project_with_excluded_directory(directory: &Path) -> (Uri, Uri) {
     fs::write(
         directory.join("luck.json"),
         r#"{ "exclude": ["gen/**"], "lint": { "categories": { "correctness": "off" }, "rules": { "redundant_nil_init": "warn" } } }"#,
@@ -115,12 +115,12 @@ fn project_with_excluded_directory(directory: &Path) -> (Url, Url) {
     fs::write(&included_path, "local x = nil\n").expect("write kept.lua");
     fs::write(&excluded_path, "local x = nil\n").expect("write gen/a.lua");
     (
-        Url::from_file_path(&included_path).expect("file path URI"),
-        Url::from_file_path(&excluded_path).expect("file path URI"),
+        Uri::from_file_path(&included_path).expect("file path URI"),
+        Uri::from_file_path(&excluded_path).expect("file path URI"),
     )
 }
 
-fn fix_all_params(uri: &Url) -> CodeActionParams {
+fn fix_all_params(uri: &Uri) -> CodeActionParams {
     CodeActionParams {
         text_document: TextDocumentIdentifier { uri: uri.clone() },
         range: Range::default(),
@@ -490,7 +490,7 @@ async fn document_link_resolves_require_path() {
     fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
     let main_path = directory.path().join("main.lua");
     fs::write(&main_path, "local foo = require(\"foo\")\n").expect("write main.lua");
-    let uri = Url::from_file_path(&main_path).expect("file path URI");
+    let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
     let server = Backend::new(CapturedNotifier::default());
     open(&server, &uri, "local foo = require(\"foo\")\n").await;
@@ -511,7 +511,11 @@ async fn document_link_resolves_require_path() {
         "link tooltip should carry the module name"
     );
     let target = links[0].target.as_ref().expect("link should have a target");
-    assert!(target.path().ends_with("foo.lua"), "link should resolve to foo.lua: {target}");
+    assert!(
+        target.path().as_str().ends_with("foo.lua"),
+        "link should resolve to foo.lua: {}",
+        target.as_str()
+    );
 }
 
 #[tokio::test]
@@ -525,7 +529,7 @@ async fn document_link_resolves_luau_relative_import() {
     let main_path = directory.path().join("main.luau");
     let source = "local s = require(\"./sibling\")\n";
     fs::write(&main_path, source).expect("write main.luau");
-    let uri = Url::from_file_path(&main_path).expect("file path URI");
+    let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
     let server = Backend::new(CapturedNotifier::default());
     open(&server, &uri, source).await;
@@ -542,8 +546,9 @@ async fn document_link_resolves_luau_relative_import() {
     assert_eq!(links.len(), 1, "exactly one require link expected");
     let target = links[0].target.as_ref().expect("link should have a target");
     assert!(
-        target.path().ends_with("sibling.luau"),
-        "link should resolve to sibling.luau: {target}"
+        target.path().as_str().ends_with("sibling.luau"),
+        "link should resolve to sibling.luau: {}",
+        target.as_str()
     );
 }
 
@@ -564,7 +569,7 @@ async fn document_link_resolves_luau_alias_import() {
     let main_path = directory.path().join("main.luau");
     let source = "local c = require(\"@shared/common\")\n";
     fs::write(&main_path, source).expect("write main.luau");
-    let uri = Url::from_file_path(&main_path).expect("file path URI");
+    let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
     let server = Backend::new(CapturedNotifier::default());
     open(&server, &uri, source).await;
@@ -581,8 +586,9 @@ async fn document_link_resolves_luau_alias_import() {
     assert_eq!(links.len(), 1, "exactly one require link expected");
     let target = links[0].target.as_ref().expect("link should have a target");
     assert!(
-        target.path().ends_with("shared/common.luau"),
-        "alias link should resolve to shared/common.luau: {target}"
+        target.path().as_str().ends_with("shared/common.luau"),
+        "alias link should resolve to shared/common.luau: {}",
+        target.as_str()
     );
 }
 
@@ -597,7 +603,7 @@ async fn code_action_offers_lint_fix() {
     .expect("write luck.json");
     let file_path = directory.path().join("nilinit.lua");
     fs::write(&file_path, "local x = nil\n").expect("write lua file");
-    let uri = Url::from_file_path(&file_path).expect("file path URI");
+    let uri = Uri::from_file_path(&file_path).expect("file path URI");
 
     let notifier = CapturedNotifier::default();
     let server = Backend::new(notifier.clone());
@@ -845,7 +851,7 @@ async fn workspace_symbols_filter_across_open_documents() {
     open(&server, &first, "local function setup_camera() end\nsetup_camera()\n").await;
     open(&server, &second, "local function teardown() end\nteardown()\n").await;
 
-    let symbols = server
+    let response = server
         .symbol(WorkspaceSymbolParams {
             query: "camera".to_owned(),
             work_done_progress_params: WorkDoneProgressParams::default(),
@@ -854,11 +860,14 @@ async fn workspace_symbols_filter_across_open_documents() {
         .await
         .expect("workspace symbol errored")
         .expect("symbols expected");
+    let WorkspaceSymbolResponse::Flat(symbols) = response else {
+        panic!("workspace symbols should be flat");
+    };
     assert_eq!(symbols.len(), 1, "{symbols:?}");
     assert_eq!(symbols[0].name, "setup_camera");
     assert_eq!(symbols[0].location.uri, first);
 
-    let all = server
+    let all_response = server
         .symbol(WorkspaceSymbolParams {
             query: String::new(),
             work_done_progress_params: WorkDoneProgressParams::default(),
@@ -867,6 +876,9 @@ async fn workspace_symbols_filter_across_open_documents() {
         .await
         .expect("workspace symbol errored")
         .expect("symbols expected");
+    let WorkspaceSymbolResponse::Flat(all) = all_response else {
+        panic!("workspace symbols should be flat");
+    };
     assert!(all.len() >= 2, "empty query returns everything: {all:?}");
 }
 
@@ -1058,8 +1070,8 @@ async fn fix_all_workspace_collects_fixes_from_open_documents() {
     let clean_path = directory.path().join("clean.lua");
     fs::write(&fixable_path, "local x = nil\n").expect("write fixable.lua");
     fs::write(&clean_path, "return 1\n").expect("write clean.lua");
-    let fixable = Url::from_file_path(&fixable_path).expect("file path URI");
-    let clean = Url::from_file_path(&clean_path).expect("file path URI");
+    let fixable = Uri::from_file_path(&fixable_path).expect("file path URI");
+    let clean = Uri::from_file_path(&clean_path).expect("file path URI");
 
     let server = Backend::new(CapturedNotifier::default());
     open(&server, &fixable, "local x = nil\n").await;
@@ -1210,6 +1222,40 @@ async fn source_fix_all_stops_once_a_config_change_excludes_the_document() {
     assert!(after.is_empty(), "{after:?}");
 }
 
+/// The form VS Code sends on Windows, `file:///c%3A/...`, unlike the
+/// `file:///C%3A/...` that `Uri::from_file_path` builds.
+#[cfg(windows)]
+fn vscode_windows_uri(path: &Path) -> Uri {
+    let slashed = path.to_str().expect("UTF-8 temp path").replace('\\', "/");
+    let (drive, rest) = slashed.split_once(':').expect("a drive letter");
+    Uri::from_str(&format!("file:///{}%3A{rest}", drive.to_ascii_lowercase()))
+        .expect("hand-rolled URI is valid")
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_vscode_windows_uri_finds_its_project_settings() {
+    use tower_lsp_server::ls_types::NumberOrString;
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    project_with_excluded_directory(directory.path());
+    let included = vscode_windows_uri(&directory.path().join("kept.lua"));
+    let excluded = vscode_windows_uri(&directory.path().join("gen").join("a.lua"));
+
+    let notifier = CapturedNotifier::default();
+    let server = Backend::new(notifier.clone());
+    open(&server, &included, "local x = nil\n").await;
+    open(&server, &excluded, "local x = nil\n").await;
+    let included_diags = notifier.diagnostics_for(&included).await;
+    assert!(
+        included_diags
+            .iter()
+            .any(|diag| diag.code == Some(NumberOrString::String("redundant_nil_init".to_owned()))),
+        "luck.json's rules apply: {included_diags:?}"
+    );
+    assert!(notifier.diagnostics_for(&excluded).await.is_empty(), "luck.json's exclude applies");
+}
+
 #[tokio::test]
 async fn rename_refuses_a_configured_extra_global() {
     let directory = tempfile::tempdir().expect("tempdir");
@@ -1217,7 +1263,7 @@ async fn rename_refuses_a_configured_extra_global() {
         .expect("write luck.json");
     let path = directory.path().join("main.lua");
     fs::write(&path, "local count = 1\n").expect("write main.lua");
-    let uri = Url::from_file_path(&path).expect("file path URI");
+    let uri = Uri::from_file_path(&path).expect("file path URI");
 
     let server = Backend::new(CapturedNotifier::default());
     open(&server, &uri, "local count = 1\n").await;
@@ -1233,7 +1279,7 @@ async fn watched_config_change_reseeds_open_documents_with_extra_globals() {
     fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
     let path = directory.path().join("main.lua");
     fs::write(&path, "local count = 1\n").expect("write main.lua");
-    let uri = Url::from_file_path(&path).expect("file path URI");
+    let uri = Uri::from_file_path(&path).expect("file path URI");
 
     let server = Backend::new(CapturedNotifier::default());
     open(&server, &uri, "local count = 1\n").await;
@@ -1248,14 +1294,14 @@ async fn watched_config_change_reseeds_open_documents_with_extra_globals() {
 
 /// A document on disk under a `luck.json` of its own, so settings discovery
 /// has to leave the current task, as it does for a real client's file.
-fn file_in_project(directory: &Path, text: &str) -> Url {
+fn file_in_project(directory: &Path, text: &str) -> Uri {
     fs::write(directory.join("luck.json"), "{}").expect("write luck.json");
     let path = directory.join("main.lua");
     fs::write(&path, text).expect("write main.lua");
-    Url::from_file_path(&path).expect("file path URI")
+    Uri::from_file_path(&path).expect("file path URI")
 }
 
-fn replace_all(uri: &Url, version: i32, text: &str) -> DidChangeTextDocumentParams {
+fn replace_all(uri: &Uri, version: i32, text: &str) -> DidChangeTextDocumentParams {
     DidChangeTextDocumentParams {
         text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version },
         content_changes: vec![TextDocumentContentChangeEvent {
@@ -1268,8 +1314,8 @@ fn replace_all(uri: &Url, version: i32, text: &str) -> DidChangeTextDocumentPara
 
 #[tokio::test]
 async fn a_change_arriving_during_open_is_not_lost() {
-    // tower-lsp polls notifications concurrently, and `did_open` awaits
-    // settings discovery before it stores the document.
+    // tower-lsp-server polls notifications concurrently, and `did_open`
+    // awaits settings discovery before it stores the document.
     let directory = tempfile::tempdir().expect("tempdir");
     let uri = file_in_project(directory.path(), "local before = 1\n");
     let server = Backend::new(CapturedNotifier::default());
@@ -1323,7 +1369,7 @@ struct ReorderingNotifier {
 impl Notifier for ReorderingNotifier {
     async fn publish_diagnostics(
         &self,
-        _uri: Url,
+        _uri: Uri,
         _diagnostics: Vec<Diagnostic>,
         version: Option<i32>,
     ) {

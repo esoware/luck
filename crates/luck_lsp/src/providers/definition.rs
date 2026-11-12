@@ -1,6 +1,6 @@
 //! Globals have no definition site in a single-file view and return `None`.
 
-use tower_lsp::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location, Range};
+use tower_lsp_server::ls_types::{GotoDefinitionParams, GotoDefinitionResponse, Location, Range};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::local_at;

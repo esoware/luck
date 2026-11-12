@@ -25,10 +25,10 @@ luck_resolver  = { workspace = true }
 luck_semantic  = { workspace = true }
 luck_token     = { workspace = true }
 
-rustc-hash = { workspace = true }
-serde_json = { workspace = true }
-tokio      = { workspace = true, features = ["io-std", "io-util", "net", "rt", "sync"] }
-tower-lsp  = { workspace = true }
+rustc-hash       = { workspace = true }
+serde_json       = { workspace = true }
+tokio            = { workspace = true, features = ["io-std", "io-util", "net", "rt", "sync"] }
+tower-lsp-server = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
