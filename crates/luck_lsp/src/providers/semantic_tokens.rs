@@ -11,7 +11,7 @@ use luck_ast::{
 use luck_semantic::{StdlibEntry, SymbolKind};
 use luck_token::{Span, Token, TokenKind, index_to_offset, offset_to_index};
 use rustc_hash::FxHashMap;
-use tower_lsp::lsp_types::{
+use tower_lsp_server::ls_types::{
     Position, Range, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
     SemanticTokensLegend, SemanticTokensRangeResult, SemanticTokensResult,
 };

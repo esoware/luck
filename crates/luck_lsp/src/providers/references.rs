@@ -4,7 +4,7 @@
 
 use luck_semantic::SymbolKind;
 use luck_token::Span;
-use tower_lsp::lsp_types::{Location, ReferenceParams};
+use tower_lsp_server::ls_types::{Location, ReferenceParams};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::local_at;
@@ -40,9 +40,9 @@ pub(crate) fn references(document: &DocumentState, params: &ReferenceParams) -> 
 mod tests {
     use luck_core::LuaTarget;
     use rustc_hash::FxHashSet;
-    use tower_lsp::lsp_types::{
+    use tower_lsp_server::ls_types::{
         PartialResultParams, Position, ReferenceContext, TextDocumentIdentifier,
-        TextDocumentPositionParams, Url, WorkDoneProgressParams,
+        TextDocumentPositionParams, WorkDoneProgressParams,
     };
 
     use super::*;
@@ -58,7 +58,7 @@ mod tests {
         let params = ReferenceParams {
             text_document_position: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier {
-                    uri: Url::parse("file:///main.lua").expect("valid URI"),
+                    uri: "file:///main.lua".parse().expect("valid URI"),
                 },
                 position: Position::new(2, 10),
             },

@@ -24,7 +24,7 @@
     "Formatters"
   ],
   "engines": {
-    "vscode": "^1.125.0"
+    "vscode": "^1.146.0"
   },
   "capabilities": {
     "untrustedWorkspaces": {
@@ -537,16 +537,16 @@
     "fmt:check": "oxfmt src --check"
   },
   "dependencies": {
-    "vscode-languageclient": "^10.1.0"
+    "vscode-languageclient": "^11.0.0"
   },
   "devDependencies": {
-    "@tsconfig/strictest": "^2.0.8",
-    "@types/node": "^26.1.1",
-    "@types/vscode": "^1.125.0",
-    "@vscode/vsce": "^3.9.2",
-    "esbuild": "^0.28.1",
-    "oxfmt": "^0.59.0",
-    "oxlint": "^1.74.0",
+    "@tsconfig/strictest": "^2.0.9",
+    "@types/node": "^26.6.6",
+    "@types/vscode": "^1.146.0",
+    "@vscode/vsce": "^4.1.0",
+    "esbuild": "^0.28.2",
+    "oxfmt": "^0.78.0",
+    "oxlint": "^1.93.0",
     "typescript": "^7.0.2"
   },
   "icon": "assets/icon.png",

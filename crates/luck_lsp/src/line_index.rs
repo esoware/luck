@@ -4,7 +4,7 @@
 use core::ops;
 
 use luck_token::{Span, index_to_offset, offset_to_index};
-use tower_lsp::lsp_types::{Position, Range};
+use tower_lsp_server::ls_types::{Position, Range};
 
 #[derive(Debug)]
 pub(crate) struct LineIndex {

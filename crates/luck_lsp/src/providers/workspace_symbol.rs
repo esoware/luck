@@ -7,7 +7,7 @@
 
 use alloc::sync::Arc;
 
-use tower_lsp::lsp_types::{DocumentSymbol, Location, SymbolInformation, Url};
+use tower_lsp_server::ls_types::{DocumentSymbol, Location, SymbolInformation, Uri};
 
 use crate::document::DocumentState;
 use crate::providers::document_symbol;
@@ -15,7 +15,7 @@ use crate::providers::document_symbol;
 const MAX_RESULTS: usize = 1000;
 
 pub(crate) fn workspace_symbols(
-    documents: &[(Url, Arc<DocumentState>)],
+    documents: &[(Uri, Arc<DocumentState>)],
     query: &str,
 ) -> Vec<SymbolInformation> {
     let query_lower = query.to_lowercase();
@@ -33,7 +33,7 @@ pub(crate) fn workspace_symbols(
 
 fn flatten(
     symbols: &[DocumentSymbol],
-    uri: &Url,
+    uri: &Uri,
     container: Option<&str>,
     query_lower: &str,
     results: &mut Vec<SymbolInformation>,

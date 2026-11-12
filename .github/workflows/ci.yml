@@ -28,7 +28,7 @@ jobs:
           - os: macOS
             runner: macos-26
           - os: Linux
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:

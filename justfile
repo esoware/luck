@@ -13,7 +13,7 @@ alias f := fmt
 # Install the extension's packages, cargo-nextest, cargo-insta, cargo-deny, cargo-shear, and zizmor
 init:
   npm ci --prefix editors/vscode
-  cargo install --locked cargo-nextest@0.9.148 cargo-insta@1.46.3 cargo-deny@0.20.2 cargo-shear@1.14.0 zizmor@1.31.1
+  cargo install --locked cargo-nextest@0.9.151 cargo-insta@1.49.0 cargo-deny@0.20.2 cargo-shear@1.14.0 zizmor@1.32.0
 
 # Run fmt, clippy, rustdoc, the fuzz crate's check, cargo-shear, zizmor, the extension's type check and oxlint, the tests, the doctests, and cargo-deny
 ready:
@@ -57,11 +57,12 @@ deny:
   cargo deny check bans licenses sources
 
 # Kept out of ready because a new advisory can fail an unchanged commit. CI runs it daily.
+# npm audit skips moderate until vscode-languageclient accepts minimatch 11, the only fix for GHSA-g3hv-75wg-m249.
 
 # Check the locked crates and the packages the extension ships against published advisories
 advisories:
   cargo deny check advisories
-  npm audit --prefix editors/vscode --omit=dev
+  npm audit --prefix editors/vscode --omit=dev --audit-level=high
 
 # Run the criterion benches, or one stage with --bench parser
 bench *args:

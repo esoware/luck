@@ -8,7 +8,7 @@ use luck_ast::{
     Var, Visitor,
 };
 use luck_token::{Span, Token};
-use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
+use tower_lsp_server::ls_types::{DocumentSymbol, SymbolKind};
 
 use crate::document::DocumentState;
 

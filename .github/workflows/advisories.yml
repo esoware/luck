@@ -17,7 +17,7 @@ env:
 jobs:
   scan:
     name: Scan the lockfiles
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,7 +31,7 @@ jobs:
       - name: Install the Rust toolchain
         run: rustup toolchain install
 
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: just@1.59.0,cargo-deny@0.20.2
 
@@ -42,7 +42,7 @@ jobs:
     name: Open an issue
     needs: scan
     if: failure()
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       issues: write # Opens an issue when the scan fails.

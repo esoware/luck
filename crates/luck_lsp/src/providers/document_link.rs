@@ -10,14 +10,14 @@ use luck_ast::{Expression, FunctionArgs, FunctionCall, Var, Visitor};
 use luck_core::normalize_path;
 use luck_resolver::{ResolveRequest, Resolver};
 use luck_token::decode_string;
-use tower_lsp::lsp_types::{DocumentLink, Position, Url};
+use tower_lsp_server::ls_types::{DocumentLink, Position, Uri};
 
-use crate::document::DocumentState;
+use crate::document::{DocumentState, file_path};
 use crate::settings::ProjectSettings;
 
 pub(crate) fn document_links(
     document: &DocumentState,
-    document_uri: &Url,
+    document_uri: &Uri,
     settings: &ProjectSettings,
 ) -> Vec<DocumentLink> {
     collect_links(document, document_uri, settings, None)
@@ -25,10 +25,10 @@ pub(crate) fn document_links(
 
 pub(crate) fn target_at(
     document: &DocumentState,
-    document_uri: &Url,
+    document_uri: &Uri,
     settings: &ProjectSettings,
     position: Position,
-) -> Option<Url> {
+) -> Option<Uri> {
     collect_links(document, document_uri, settings, Some(position))
         .into_iter()
         .find_map(|link| link.target)
@@ -36,11 +36,11 @@ pub(crate) fn target_at(
 
 fn collect_links(
     document: &DocumentState,
-    document_uri: &Url,
+    document_uri: &Uri,
     settings: &ProjectSettings,
     position: Option<Position>,
 ) -> Vec<DocumentLink> {
-    let Ok(document_path) = document_uri.to_file_path() else {
+    let Some(document_path) = file_path(document_uri) else {
         return Vec::new();
     };
     // Lua templates resolve against the project root; with no config, fall
@@ -119,7 +119,7 @@ impl LinkCollector<'_> {
         }) else {
             return;
         };
-        let Ok(target) = Url::from_file_path(&resolved.path) else {
+        let Some(target) = Uri::from_file_path(&resolved.path) else {
             return;
         };
         self.links.push(DocumentLink {
@@ -150,7 +150,7 @@ mod tests {
         let main_path = directory.path().join("main.lua");
         let text = "local foo = require(\"foo\")\n";
         fs::write(&main_path, text).expect("write main.lua");
-        let uri = Url::from_file_path(&main_path).expect("file path URI");
+        let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
         let settings = ProjectSettings::default();
         assert!(settings.root.is_none(), "the fallback needs no project root");
@@ -160,7 +160,7 @@ mod tests {
         let links = document_links(&document, &uri, &settings);
         assert_eq!(links.len(), 1, "{links:?}");
         let target = links[0].target.as_ref().expect("link target");
-        assert!(target.path().ends_with("foo.lua"), "{target}");
+        assert!(target.path().as_str().ends_with("foo.lua"), "{}", target.as_str());
     }
 
     #[test]
@@ -170,7 +170,7 @@ mod tests {
         let main_path = directory.path().join("main.lua");
         let text = "local dep = require(\"dep\")\n";
         fs::write(&main_path, text).expect("write main.lua");
-        let uri = Url::from_file_path(&main_path).expect("file path URI");
+        let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
         let settings = ProjectSettings {
             search_paths: Vec::new(),
@@ -183,7 +183,7 @@ mod tests {
         let links = document_links(&document, &uri, &settings);
         assert_eq!(links.len(), 1, "{links:?}");
         let target = links[0].target.as_ref().expect("link target");
-        assert!(target.path().ends_with("dep.lua"), "{target}");
+        assert!(target.path().as_str().ends_with("dep.lua"), "{}", target.as_str());
     }
 
     #[test]
@@ -193,7 +193,7 @@ mod tests {
         let main_path = directory.path().join("main.lua");
         let text = "local foo = require(\"foo\")\nlocal x = 1\n";
         fs::write(&main_path, text).expect("write main.lua");
-        let uri = Url::from_file_path(&main_path).expect("file path URI");
+        let uri = Uri::from_file_path(&main_path).expect("file path URI");
         let settings = ProjectSettings::default();
         let document =
             DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
@@ -202,7 +202,7 @@ mod tests {
         for utf16_column in [20, 25] {
             let target = target_at(&document, &uri, &settings, Position::new(0, utf16_column))
                 .expect("the require string resolves");
-            assert!(target.path().ends_with("foo.lua"), "{target}");
+            assert!(target.path().as_str().ends_with("foo.lua"), "{}", target.as_str());
         }
         assert_eq!(target_at(&document, &uri, &settings, Position::new(0, 19)), None);
         assert_eq!(target_at(&document, &uri, &settings, Position::new(1, 6)), None);
@@ -213,7 +213,7 @@ mod tests {
         fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
         let main_path = directory.path().join("main.lua");
         fs::write(&main_path, text).expect("write main.lua");
-        let uri = Url::from_file_path(&main_path).expect("file path URI");
+        let uri = Uri::from_file_path(&main_path).expect("file path URI");
         let settings = ProjectSettings::default();
         let document =
             DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());

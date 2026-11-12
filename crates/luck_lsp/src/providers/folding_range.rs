@@ -1,6 +1,6 @@
 use luck_ast::{FunctionBody, Statement, TableConstructor, Visitor};
 use luck_token::Span;
-use tower_lsp::lsp_types::FoldingRange;
+use tower_lsp_server::ls_types::FoldingRange;
 
 use crate::document::DocumentState;
 

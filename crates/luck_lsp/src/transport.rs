@@ -2,7 +2,7 @@ use std::io::{self, Write as _};
 
 use tokio::io::{AsyncRead, AsyncWrite, split, stdin, stdout};
 use tokio::net::TcpListener;
-use tower_lsp::{Client, LspService, Server};
+use tower_lsp_server::{Client, LspService, Server};
 
 use crate::backend::Backend;
 
