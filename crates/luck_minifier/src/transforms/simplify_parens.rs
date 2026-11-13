@@ -126,7 +126,10 @@ impl Transform for ParenSimplifier {
     /// `("str"):method()` needs, but sheds any nested inside them. In front
     /// of a Luau instantiation they go too, unless they hold something
     /// `{}<<T>>` or `f()<<T>>` couldn't stand without.
-    fn transform_suffixed(&mut self, mut chain: SuffixedExpression) -> SuffixedExpression {
+    fn transform_suffixed(
+        &mut self,
+        mut chain: Box<SuffixedExpression>,
+    ) -> Box<SuffixedExpression> {
         let is_instantiated = matches!(chain.suffixes.first(), Suffix::TypeInstantiation { .. });
         // Out of the walk, which would strip the prefix's own parens.
         let prefix = chain.prefix.take();

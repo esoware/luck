@@ -1,9 +1,8 @@
-use luck_ast::Call;
-use luck_semantic::{SemanticAnalysis, StdlibEntry};
+use luck_semantic::{ResolvedCallee, StdlibEntry};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallPosition, CallSite, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MustUse;
@@ -22,13 +21,13 @@ impl NodeRule for MustUse {
     }
     fn on_call(
         &self,
-        call: Call<'_>,
-        position: CallPosition,
-        context: &LintContext<'_>,
+        site: &CallSite<'_>,
+        _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
+        let CallSite { call, position, callee } = *site;
         if position == CallPosition::Statement
-            && let Some(name) = must_use_name(context.semantic, call)
+            && let Some(name) = callee.and_then(must_use_name)
         {
             findings.push(
                 Finding::new(format!("return value of `{name}` is discarded"), call.span())
@@ -38,8 +37,7 @@ impl NodeRule for MustUse {
     }
 }
 
-fn must_use_name(semantic: &SemanticAnalysis, call: Call<'_>) -> Option<String> {
-    let callee = semantic.resolve_callee(call)?;
+fn must_use_name(callee: ResolvedCallee<'_>) -> Option<String> {
     if let StdlibEntry::Function(function) = callee.entry()
         && function.is_must_use
     {

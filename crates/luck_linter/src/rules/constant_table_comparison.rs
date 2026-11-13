@@ -25,6 +25,9 @@ impl NodeRule for ConstantTableComparison {
         let Expression::BinaryOp(run) = expr else {
             return;
         };
+        if !run.links.first().op.is_comparison() {
+            return;
+        }
         let is_table =
             |operand: Option<&Expression>| matches!(operand, Some(Expression::TableConstructor(_)));
         for pair in operator_pairs(run) {
@@ -34,7 +37,7 @@ impl NodeRule for ConstantTableComparison {
                 findings.push(
                     Finding::new(
                         "tables compare by identity, so a table literal never equals another value",
-                        pair.span,
+                        pair.span(),
                     )
                     .with_help("compare table contents instead"),
                 );

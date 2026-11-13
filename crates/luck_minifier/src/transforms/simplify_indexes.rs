@@ -73,7 +73,7 @@ impl IndexSimplifier {
 }
 
 impl Transform for IndexSimplifier {
-    fn transform_suffixed(&mut self, chain: SuffixedExpression) -> SuffixedExpression {
+    fn transform_suffixed(&mut self, chain: Box<SuffixedExpression>) -> Box<SuffixedExpression> {
         let mut walked = self.walk_suffixed(chain);
         for suffix in &mut walked.suffixes {
             if let Some(name) = self.field_for(suffix) {

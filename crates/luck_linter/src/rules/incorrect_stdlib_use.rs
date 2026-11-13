@@ -1,10 +1,10 @@
-use luck_ast::{Call, Expression};
-use luck_semantic::{ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction};
+use luck_ast::Expression;
+use luck_semantic::{ResolvedCallee, StdlibEntry, StdlibFunction};
 
 use crate::call::{has_multi_value_tail, positional_args, string_literal_value};
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
 
 /// How many allowed values a message lists. Generated sets (Roblox service
 /// and class names) run to hundreds of values.
@@ -27,17 +27,16 @@ impl NodeRule for IncorrectStdlibUse {
     }
     fn on_call(
         &self,
-        call: Call<'_>,
-        _position: CallPosition,
-        context: &LintContext<'_>,
+        site: &CallSite<'_>,
+        _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        check_call(call, context.semantic, findings);
+        check_call(site, findings);
     }
 }
 
-fn check_call(call: Call<'_>, semantic: &SemanticAnalysis, findings: &mut Vec<Finding>) {
-    let Some(callee) = semantic.resolve_callee(call) else {
+fn check_call(site: &CallSite<'_>, findings: &mut Vec<Finding>) {
+    let CallSite { call, callee: Some(callee), .. } = *site else {
         return;
     };
     let StdlibEntry::Function(function) = callee.entry() else {

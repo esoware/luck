@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use luck_ast::{Block, Call, Expression, Statement, SuffixedExpression, TableConstructor};
-use luck_semantic::SemanticAnalysis;
+use luck_semantic::{ResolvedCallee, SemanticAnalysis};
 use luck_token::Comment;
 
 use crate::config::LintConfig;
@@ -88,6 +88,16 @@ pub(crate) enum CallPosition {
     Expression,
 }
 
+/// A call the bus dispatches, where it stands, and what it calls.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CallSite<'ast> {
+    pub call: Call<'ast>,
+    pub position: CallPosition,
+    /// As [`SemanticAnalysis::resolve_callee`] gives it. The bus resolves a
+    /// chain's calls in one pass, once for every rule.
+    pub callee: Option<ResolvedCallee<'ast>>,
+}
+
 /// A rule that gets one callback per node from the bus's shared walk
 /// instead of walking the tree itself.
 pub(crate) trait NodeRule: Rule {
@@ -133,12 +143,11 @@ pub(crate) trait NodeRule: Rule {
 
     /// Runs for every call in every chain, the one a call statement makes
     /// included. A rule that subscribes to only one of `FunctionCallStmt`
-    /// and `FunctionCallExpr` must check `position`, because the driver's
-    /// debug check calls this for both.
+    /// and `FunctionCallExpr` must check the site's `position`, because the
+    /// driver's debug check calls this for both.
     fn on_call(
         &self,
-        _call: Call<'_>,
-        _position: CallPosition,
+        _site: &CallSite<'_>,
         _context: &LintContext<'_>,
         _findings: &mut Vec<Finding>,
     ) {

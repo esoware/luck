@@ -27,6 +27,9 @@ impl NodeRule for CompareNan {
         let Expression::BinaryOp(run) = expr else {
             return;
         };
+        if !run.links.first().op.is_comparison() {
+            return;
+        }
         for pair in operator_pairs(run) {
             let is_nan = |side: Option<&Expression>| {
                 side.is_some_and(|operand| is_nan_expr(operand, version))
@@ -35,7 +38,7 @@ impl NodeRule for CompareNan {
                 findings.push(
                     Finding::new(
                         "NaN (`0/0`) equals nothing, so this comparison always has the same result",
-                        pair.span,
+                        pair.span(),
                     )
                     .with_help("use `x ~= x` to check for NaN"),
                 );

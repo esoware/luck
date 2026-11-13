@@ -53,7 +53,7 @@ fn check_pair(pair: OperatorPair<'_>, findings: &mut Vec<Finding>) {
                 format!(
                     "chained comparison on the {side} side parses as `(a op b) op c`, not as a math-style chain"
                 ),
-                pair.span,
+                pair.span(),
             )
             .with_help(
                 "split into two boolean expressions joined with `and`, or parenthesize to make intent explicit",
@@ -90,7 +90,7 @@ fn check_pair(pair: OperatorPair<'_>, findings: &mut Vec<Finding>) {
                     "`not` applies only to the left operand, so this parses as `(not x) {} y`",
                     pair.op.static_text()
                 ),
-                pair.span,
+                pair.span(),
             )
             .with_help(help),
         );

@@ -108,8 +108,8 @@ impl SuffixedExpression {
     /// are fewer.
     #[must_use]
     pub fn head(&self, count: usize) -> ChainHead<'_> {
-        let suffixes = self.suffixes.get(..count).unwrap_or(&self.suffixes);
-        ChainHead { prefix: &self.prefix, suffixes }
+        let suffixes: &[Suffix] = &self.suffixes;
+        ChainHead { prefix: &self.prefix, suffixes: suffixes.get(..count).unwrap_or(suffixes) }
     }
 
     /// Every call in the chain, first to last.

@@ -282,7 +282,7 @@ impl Transform for Inliner {
 
     /// A value inlined as the prefix gets parentheses unless it can stand
     /// bare there, as `x["k"]` with `x = 37.5` becomes `(37.5)["k"]`.
-    fn transform_suffixed(&mut self, chain: SuffixedExpression) -> SuffixedExpression {
+    fn transform_suffixed(&mut self, chain: Box<SuffixedExpression>) -> Box<SuffixedExpression> {
         let mut walked = self.walk_suffixed(chain);
         if !is_prefix_expr(&walked.prefix) {
             walked.prefix = parenthesize(walked.prefix.take());

@@ -34,13 +34,13 @@ impl Transform for StatementSimplifier {
                 // condition can gain the `and` and a pair of parentheses.
                 if has_no_else(&outer_if)
                     && outer_if.block.last_stmt.is_none()
-                    && fits_at_depth(self.depth, 2, &outer_if.condition)
                     && matches!(
                         outer_if.block.stmts.as_slice(),
                         [Statement::IfStatement(inner_if)]
                             if has_no_else(inner_if)
                                 && fits_at_depth(self.depth, 2, &inner_if.condition)
                     )
+                    && fits_at_depth(self.depth, 2, &outer_if.condition)
                     && let Some(Statement::IfStatement(inner_if)) = outer_if.block.stmts.pop()
                 {
                     // Left for the merged `if`'s own walk, so the body is

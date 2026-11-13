@@ -63,8 +63,8 @@ Entries model:
 | `lib.rs` | Crate docs and the flat public surface |
 | `analysis.rs` | `SemanticAnalysis`, the `analyze()` entry points, and its scope and stdlib queries |
 | `scope.rs` | Scope tree data structures |
-| `builder.rs` | AST visitor that constructs the scope tree, exported as `build_scope_tree` for callers that need no stdlib |
-| `resolve.rs` | Conservative shape and callee resolution, and the local-shape pass |
+| `builder.rs` | AST visitor that constructs the scope tree, exported as `build_scope_tree` for callers that need no stdlib, and lists each local's initializer for the shape step |
+| `resolve.rs` | Conservative shape and callee resolution, each read forward from a chain's prefix, `ChainCallees` for a chain's calls in one pass, and the shapes of initialized locals |
 | `stdlib_model.rs` | Stdlib data model and its queries |
 | `stdlib_load.rs` | TOML deserialization, composition into the `StdlibLibrary` model, and the per-environment library instances |
 | `stdlib_data/` | Per-environment library data (+ generated Roblox data) |

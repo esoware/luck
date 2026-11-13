@@ -1,4 +1,4 @@
-use luck_ast::{Expression, Suffix, SuffixedExpression};
+use luck_ast::{ChainHead, Expression, Suffix, SuffixedExpression};
 use luck_token::Span;
 
 use crate::diagnostic::Finding;
@@ -30,17 +30,18 @@ impl NodeRule for RobloxUnknownEnumMember {
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        let stdlib = context.semantic.stdlib();
-        // Only the Roblox stdlib has an `Enum` global.
-        if !stdlib.globals.contains_key("Enum") {
-            return;
-        }
         let Expression::Name(root) = &chain.prefix else {
             return;
         };
-        if root.identifier() != Some("Enum")
-            || context.semantic.resolves_to_local("Enum", root.span)
-        {
+        if root.identifier() != Some("Enum") {
+            return;
+        }
+        // Only the Roblox stdlib has an `Enum` global.
+        let stdlib = context.semantic.stdlib();
+        let Some(mut entry) = stdlib.globals.get("Enum") else {
+            return;
+        };
+        if context.semantic.resolves_to_local("Enum", root.span) {
             return;
         }
         // A target's last field is stored to, not read.
@@ -48,8 +49,7 @@ impl NodeRule for RobloxUnknownEnumMember {
             ChainPosition::Value => chain.suffixes.len(),
             ChainPosition::AssignmentTarget => chain.suffixes.len().saturating_sub(1),
         };
-        let mut prefix = vec!["Enum"];
-        for suffix in chain.suffixes.iter().take(read_count) {
+        for (read_index, suffix) in (0usize..).zip(chain.suffixes.iter().take(read_count)) {
             let Suffix::Field(name) = suffix else {
                 return;
             };
@@ -58,21 +58,20 @@ impl NodeRule for RobloxUnknownEnumMember {
             };
             // Past the first unknown segment, nothing resolves, so the chain
             // warns once.
-            let Some(prefix_entry) = stdlib.lookup(&prefix) else {
+            let Some(member) = stdlib.child(entry, segment) else {
+                findings.push(unknown_member(chain.head(read_index), segment, name.span));
                 return;
             };
-            if stdlib.child(prefix_entry, segment).is_none() {
-                findings.push(unknown_member(&prefix, segment, name.span));
-                return;
-            }
-            prefix.push(segment);
+            entry = member;
         }
     }
 }
 
-fn unknown_member(prefix: &[&str], last_segment: &str, span: Span) -> Finding {
-    let prefix_path = prefix.join(".");
-    let message = match prefix.len() {
+/// `prefix` is the dotted path from `Enum` that has no `last_segment`.
+fn unknown_member(prefix: ChainHead<'_>, last_segment: &str, span: Span) -> Finding {
+    let segments = prefix.dotted_path().map(|path| path.segments).unwrap_or_default();
+    let prefix_path = segments.join(".");
+    let message = match segments.len() {
         1 => format!("unknown enum type `Enum.{last_segment}`"),
         2 => format!("`{last_segment}` is not an item of `{prefix_path}`"),
         _ => format!("`{last_segment}` is not a member of `{prefix_path}`"),

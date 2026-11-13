@@ -27,6 +27,9 @@ impl NodeRule for MisleadingAndOr {
         let Expression::BinaryOp(run) = expr else {
             return;
         };
+        if run.links.first().op != BinOp::Or {
+            return;
+        }
         for pair in operator_pairs(run) {
             if pair.op == BinOp::Or
                 && let Some(lhs) = pair.lhs
@@ -35,7 +38,7 @@ impl NodeRule for MisleadingAndOr {
                 && is_falsy_literal(&inner.links.last().operand)
             {
                 findings.push(
-                    Finding::new("`(x and FALSY) or y` always evaluates to `y`", pair.span)
+                    Finding::new("`(x and FALSY) or y` always evaluates to `y`", pair.span())
                         .with_help("use an `if` statement, or an if-then-else expression in Luau"),
                 );
             }

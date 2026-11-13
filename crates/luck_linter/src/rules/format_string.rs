@@ -8,7 +8,7 @@ use crate::format_pattern::{
     validate_os_date, validate_pack_format,
 };
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
 
 /// Both `string.format("...", ...)` and `("..."):format(...)` are checked.
 /// So are literal `string.gsub` replacements and `os.date` formats.
@@ -27,21 +27,14 @@ impl NodeRule for FormatString {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_call(
-        &self,
-        call: Call<'_>,
-        _position: CallPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let CallSite { call, callee: Some(_), .. } = *site else {
+            return;
+        };
         let semantic = context.semantic;
-        // A name filter first, since `resolve_callee` runs a lookup.
         let Some(dsl) = DslKind::of_call(call) else {
             return;
         };
-        if semantic.resolve_callee(call).is_none() {
-            return;
-        }
         findings.extend(check_dsl_literal(call, dsl, semantic.version));
         if dsl == DslKind::Gsub {
             findings.extend(check_gsub_replacement(call, semantic.version));

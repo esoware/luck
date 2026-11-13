@@ -1,9 +1,9 @@
-use luck_ast::{Call, Expression, FunctionArgs, Literal};
+use luck_ast::{Expression, FunctionArgs, Literal};
 use luck_token::{LuaVersion, Span, Token, TokenKind, index_to_offset, short_string_body};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
 
 /// Flags backslash escapes in short strings that the dialect doesn't define,
 /// which Lua 5.1 and Luau read as the bare character.
@@ -43,13 +43,8 @@ impl NodeRule for BadStringEscape {
         }
     }
 
-    fn on_call(
-        &self,
-        call: Call<'_>,
-        _position: CallPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let call = site.call;
         if let FunctionArgs::StringLiteral(literal) = call.args {
             check_literal(literal, context.semantic.version, findings);
         }

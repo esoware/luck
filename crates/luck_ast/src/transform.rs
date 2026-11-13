@@ -44,8 +44,9 @@ pub trait Transform {
         self.walk_assignment_target(target)
     }
     /// Reached from a call statement, an expression, and an assignment
-    /// target.
-    fn transform_suffixed(&mut self, chain: SuffixedExpression) -> SuffixedExpression {
+    /// target. The chain stays boxed, so a pass moves a pointer, not the
+    /// node.
+    fn transform_suffixed(&mut self, chain: Box<SuffixedExpression>) -> Box<SuffixedExpression> {
         self.walk_suffixed(chain)
     }
     /// Reached once for each call in a chain.
@@ -81,7 +82,7 @@ pub trait Transform {
         match stmt {
             Statement::Assignment(assignment) => walk_assignment(self, assignment),
             Statement::FunctionCall(chain) => {
-                Statement::FunctionCall(walk_boxed_suffixed(self, chain))
+                Statement::FunctionCall(self.transform_suffixed(chain))
             }
             Statement::DoBlock(do_block) => walk_do_block(self, do_block),
             Statement::WhileLoop(while_loop) => walk_while_loop(self, while_loop),
@@ -154,7 +155,7 @@ pub trait Transform {
             | Expression::Name(_)
             | Expression::Error(_)) => leaf,
             Expression::FunctionDef(function_def) => walk_function_def(self, function_def),
-            Expression::Suffixed(chain) => Expression::Suffixed(walk_boxed_suffixed(self, chain)),
+            Expression::Suffixed(chain) => Expression::Suffixed(self.transform_suffixed(chain)),
             Expression::Parenthesized(parenthesized) => walk_parenthesized(self, parenthesized),
             Expression::TableConstructor(table) => {
                 Expression::TableConstructor(walk_boxed_table(self, table))
@@ -175,7 +176,7 @@ pub trait Transform {
     fn walk_assignment_target(&mut self, target: Var) -> Var {
         match target {
             Var::Name(_) => target,
-            Var::Suffixed(chain) => Var::Suffixed(walk_boxed_suffixed(self, chain)),
+            Var::Suffixed(chain) => Var::Suffixed(self.transform_suffixed(chain)),
         }
     }
 
@@ -183,7 +184,7 @@ pub trait Transform {
     /// `Visitor` walk reaches them: an index, a call's explicit type
     /// arguments and then its arguments, or a Luau instantiation's type
     /// arguments.
-    fn walk_suffixed(&mut self, mut chain: SuffixedExpression) -> SuffixedExpression {
+    fn walk_suffixed(&mut self, mut chain: Box<SuffixedExpression>) -> Box<SuffixedExpression> {
         self.descend();
         chain.prefix = self.transform_expr(chain.prefix);
         for suffix in &mut chain.suffixes {
@@ -398,17 +399,6 @@ where
             *default = transform.transform_type(default.take());
         }
     }
-}
-
-fn walk_boxed_suffixed<T>(
-    transform: &mut T,
-    mut chain: Box<SuffixedExpression>,
-) -> Box<SuffixedExpression>
-where
-    T: Transform + ?Sized,
-{
-    *chain = transform.transform_suffixed(*chain);
-    chain
 }
 
 fn walk_boxed_table<T>(transform: &mut T, mut table: Box<TableConstructor>) -> Box<TableConstructor>
@@ -872,7 +862,10 @@ mod tests {
         }
 
         impl Transform for HookCounts {
-            fn transform_suffixed(&mut self, chain: SuffixedExpression) -> SuffixedExpression {
+            fn transform_suffixed(
+                &mut self,
+                chain: Box<SuffixedExpression>,
+            ) -> Box<SuffixedExpression> {
                 self.chains = self.chains.saturating_add(1);
                 self.walk_suffixed(chain)
             }

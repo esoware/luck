@@ -17,6 +17,16 @@ const GLOBAL_STAR_KEY: &str = "*";
 
 #[must_use]
 pub fn build(block: &Block, version: LuaVersion) -> ScopeTree {
+    build_with_initializers(block, version).0
+}
+
+/// The scope tree, and each local that a `local` statement with one
+/// initializer per name declares, with its initializer, in an order where a
+/// local comes before any initializer that can read it.
+pub(crate) fn build_with_initializers(
+    block: &Block,
+    version: LuaVersion,
+) -> (ScopeTree, Vec<(SymbolId, &Expression)>) {
     let mut builder = ScopeTreeBuilder {
         tree: ScopeTree {
             version,
@@ -35,14 +45,15 @@ pub fn build(block: &Block, version: LuaVersion) -> ScopeTree {
         has_free_name_bindings: false,
         is_in_type_function: false,
         type_names: FxHashSet::default(),
+        initialized_locals: Vec::new(),
     };
     builder.visit_block(block);
     builder.tree.is_env_assigned =
         version.has_env_upvalue() && builder.tree.assigned_globals.contains("_ENV");
-    builder.tree
+    (builder.tree, builder.initialized_locals)
 }
 
-struct ScopeTreeBuilder {
+struct ScopeTreeBuilder<'ast> {
     tree: ScopeTree,
     // The scope stack is never empty, so its top lives in `current_scope`
     // and reading it doesn't branch. `outer_scopes` holds the enclosing
@@ -67,9 +78,10 @@ struct ScopeTreeBuilder {
     is_in_type_function: bool,
     /// Luau: every type declared by a block entered so far.
     type_names: FxHashSet<CompactString>,
+    initialized_locals: Vec<(SymbolId, &'ast Expression)>,
 }
 
-impl ScopeTreeBuilder {
+impl<'ast> ScopeTreeBuilder<'ast> {
     fn push_scope(&mut self, kind: ScopeKind) {
         let id = ScopeId::from_index(self.tree.scopes.len());
         self.tree.scopes.push(Scope { parent: Some(self.current_scope), kind });
@@ -91,7 +103,7 @@ impl ScopeTreeBuilder {
         }
     }
 
-    fn visit_scoped_block(&mut self, kind: ScopeKind, block: &Block) {
+    fn visit_scoped_block(&mut self, kind: ScopeKind, block: &'ast Block) {
         self.push_scope(kind);
         self.visit_block(block);
         self.pop_scope();
@@ -191,7 +203,7 @@ impl ScopeTreeBuilder {
 
     /// Records a name as a reference of `kind`; an indexed or field target
     /// only reads its prefix and key.
-    fn reference_var(&mut self, var: &Var, kind: ReferenceKind) {
+    fn reference_var(&mut self, var: &'ast Var, kind: ReferenceKind) {
         match var {
             Var::Name(token) => {
                 if let TokenKind::Identifier(name) = &token.kind {
@@ -205,7 +217,7 @@ impl ScopeTreeBuilder {
     /// Luau: the annotations of a function's signature. The parameters, and
     /// a `local function`'s own name, bind after the whole signature parses,
     /// so a `typeof` here reads the enclosing scope.
-    fn visit_signature_annotations(&mut self, body: &FunctionBody) {
+    fn visit_signature_annotations(&mut self, body: &'ast FunctionBody) {
         for param in body.params.iter() {
             if let Some(annotation) = &param.type_annotation {
                 self.visit_type(annotation);
@@ -223,7 +235,7 @@ impl ScopeTreeBuilder {
 
     /// Binds `body`'s parameters in a new function scope and visits its
     /// block.
-    fn visit_function_scope(&mut self, body: &FunctionBody, is_method: bool) {
+    fn visit_function_scope(&mut self, body: &'ast FunctionBody, is_method: bool) {
         self.push_scope(ScopeKind::Function);
         if is_method {
             let span = Span::new(body.span.start, body.span.start);
@@ -244,7 +256,7 @@ impl ScopeTreeBuilder {
         self.pop_scope();
     }
 
-    fn visit_local_assignment(&mut self, local: &LocalAssignment) {
+    fn visit_local_assignment(&mut self, local: &'ast LocalAssignment) {
         // Annotations and initializers can't see the names being declared.
         for attributed in local.names.iter() {
             if let Some(annotation) = &attributed.type_annotation {
@@ -256,9 +268,13 @@ impl ScopeTreeBuilder {
                 self.visit_expr(expr);
             }
         }
-        for attributed in local.names.iter() {
+        let initializers = local.exprs.as_ref().filter(|exprs| exprs.len() == local.names.len());
+        for (position, attributed) in local.names.iter().enumerate() {
             if let TokenKind::Identifier(name) = &attributed.name.kind {
                 let id = self.declare_local(name, attributed.name.span, SymbolKind::Local);
+                if let Some(initializer) = initializers.and_then(|exprs| exprs.get(position)) {
+                    self.initialized_locals.push((id, initializer));
+                }
                 if local.is_exported {
                     self.mark_exported(id); // Luau
                 }
@@ -274,7 +290,7 @@ impl ScopeTreeBuilder {
         }
     }
 
-    fn visit_function_decl(&mut self, function_decl: &FunctionDecl) {
+    fn visit_function_decl(&mut self, function_decl: &'ast FunctionDecl) {
         // `function f()` writes `f`, but `function t.m()` and
         // `function t:m()` only read `t`. Recording a write would set off
         // unused and overwritten warnings on the usual module pattern
@@ -291,7 +307,7 @@ impl ScopeTreeBuilder {
         self.visit_function_scope(&function_decl.body, function_decl.name.method.is_some());
     }
 
-    fn visit_if_stmt(&mut self, if_stmt: &IfStatement) {
+    fn visit_if_stmt(&mut self, if_stmt: &'ast IfStatement) {
         self.visit_expr(&if_stmt.condition);
         self.visit_scoped_block(ScopeKind::Block, &if_stmt.block);
         for clause in &if_stmt.elseif_clauses {
@@ -303,7 +319,7 @@ impl ScopeTreeBuilder {
         }
     }
 
-    fn visit_numeric_for(&mut self, numeric_for: &NumericFor) {
+    fn visit_numeric_for(&mut self, numeric_for: &'ast NumericFor) {
         if let Some(annotation) = &numeric_for.type_annotation {
             self.visit_type(annotation);
         }
@@ -320,7 +336,7 @@ impl ScopeTreeBuilder {
         self.pop_scope();
     }
 
-    fn visit_generic_for(&mut self, generic_for: &GenericFor) {
+    fn visit_generic_for(&mut self, generic_for: &'ast GenericFor) {
         // Annotations and iterator expressions can't see the loop variables.
         for binding in generic_for.names.iter() {
             if let Some(annotation) = &binding.type_annotation {
@@ -341,7 +357,7 @@ impl ScopeTreeBuilder {
     }
 }
 
-impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
+impl<'ast> Visitor<'ast> for ScopeTreeBuilder<'ast> {
     fn visit_block(&mut self, block: &'ast Block) {
         // Luau: a type function sees every type of its block, earlier or later.
         if self.tree.version.has_type_syntax() {

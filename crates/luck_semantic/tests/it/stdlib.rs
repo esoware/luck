@@ -1,6 +1,6 @@
 use core::ptr;
 
-use luck_ast::{Expression, LastStatement, Statement};
+use luck_ast::{Expression, LastStatement, Statement, Suffix};
 use luck_semantic::{
     StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary,
     expand_replace_template, library_for,
@@ -1059,6 +1059,66 @@ fn resolve_last_call(source: &str) -> Option<String> {
         return None;
     };
     Some(analysis.resolve_callee(chain.last_call()?)?.name())
+}
+
+/// The callee of each call in the last statement's chain, from one
+/// `chain_callees`, asked for last to first when `is_reversed`. Each must
+/// match what `resolve_callee` gives the call alone.
+fn chain_callee_names(source: &str, is_reversed: bool) -> Vec<Option<String>> {
+    let parsed = luck_parser::parse(source, LuaVersion::Lua54);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let analysis = luck_semantic::analyze(&parsed.block, LuaVersion::Lua54);
+    let Some(Statement::FunctionCall(chain)) = parsed.block.stmts.last() else {
+        panic!("the last statement must be a call");
+    };
+    let call_indexes = chain
+        .suffixes
+        .iter()
+        .enumerate()
+        .filter(|(_, suffix)| matches!(suffix, Suffix::Call(_)))
+        .map(|(index, _)| index);
+    let mut calls: Vec<_> = call_indexes.zip(chain.calls()).collect();
+    if is_reversed {
+        calls.reverse();
+    }
+    let mut callees = analysis.chain_callees(chain);
+    let mut names = Vec::new();
+    for (index, call) in calls {
+        let name = callees.callee(index).map(|callee| callee.name());
+        assert_eq!(name, analysis.resolve_callee(call).map(|callee| callee.name()));
+        names.push(name);
+    }
+    if is_reversed {
+        names.reverse();
+    }
+    names
+}
+
+#[test]
+fn chain_callees_resolve_calls_in_either_order() {
+    // `string.rep` declares no return shape, unlike the derived `string:rep`.
+    for (source, expected) in [
+        ("string.rep('x', 2):upper():len()\n", &[Some("string.rep"), None, None][..]),
+        ("('x'):rep(2).x:upper()\n", &[Some("string:rep"), None]),
+        (
+            "('x'):rep(2):upper():len()\n",
+            &[Some("string:rep"), Some("string:upper"), Some("string:len")],
+        ),
+    ] {
+        let names: Vec<Option<String>> =
+            expected.iter().map(|name| name.map(str::to_owned)).collect();
+        assert_eq!(chain_callee_names(source, false), names, "{source}");
+        assert_eq!(chain_callee_names(source, true), names, "{source}");
+    }
+}
+
+#[test]
+fn chain_callees_resolve_a_long_method_chain() {
+    let source = format!("('x'){}:len()\n", ":upper()".repeat(2000));
+    let names = chain_callee_names(&source, false);
+    assert_eq!(names.len(), 2001);
+    assert!(names.iter().take(2000).all(|name| name.as_deref() == Some("string:upper")));
+    assert_eq!(names.last().cloned().flatten().as_deref(), Some("string:len"));
 }
 
 #[test]

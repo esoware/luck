@@ -4,11 +4,12 @@
 //! stdlib value that declares one, a string literal, a call whose entry
 //! declares a return shape, or a never-reassigned local initialized from
 //! one of those.
+//!
+//! A chain resolves from its prefix forward, a suffix at a time, so what it
+//! reads, or what any of its calls calls, costs one pass over it.
 
-use luck_ast::{
-    Block, ChainHead, DottedPath, Expression, Statement, Suffix, SuffixedExpression, Visitor,
-};
-use luck_token::{CompactString, Span, Token};
+use luck_ast::{ChainHead, Expression, Suffix, SuffixedExpression};
+use luck_token::{CompactString, Token};
 use rustc_hash::FxHashMap;
 
 use crate::scope::{ScopeTree, SymbolId};
@@ -16,16 +17,27 @@ use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
 pub(crate) type SymbolShapes = FxHashMap<SymbolId, CompactString>;
 
-/// The shape of what a chain reads up to and including a suffix, keyed by
-/// where the suffix starts. Only known shapes are kept.
-pub(crate) type SuffixShapes = FxHashMap<u32, CompactString>;
+/// What a chain's head reads, as far as it's known.
+#[derive(Debug, Clone, Copy, Default)]
+struct HeadState<'input> {
+    shape: Option<&'input CompactString>,
+    /// The stdlib entry the head names while it's a dotted path from the
+    /// host's global.
+    global: Option<&'input StdlibEntry>,
+}
 
-#[derive(Clone, Copy)]
+impl HeadState<'_> {
+    /// No suffix after an unknown head is known either.
+    const fn is_unknown(self) -> bool {
+        self.shape.is_none() && self.global.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct ShapeResolver<'input> {
     tree: &'input ScopeTree,
     library: &'input StdlibLibrary,
     symbol_shapes: &'input SymbolShapes,
-    suffix_shapes: &'input SuffixShapes,
 }
 
 impl<'input> ShapeResolver<'input> {
@@ -33,19 +45,16 @@ impl<'input> ShapeResolver<'input> {
         tree: &'input ScopeTree,
         library: &'input StdlibLibrary,
         symbol_shapes: &'input SymbolShapes,
-        suffix_shapes: &'input SuffixShapes,
     ) -> Self {
-        Self { tree, library, symbol_shapes, suffix_shapes }
+        Self { tree, library, symbol_shapes }
     }
 
     /// The shape of `expr`, when statically known. See the module docs for
     /// what "known" means.
     pub(crate) fn expr_shape(self, expr: &Expression) -> Option<&'input CompactString> {
         match expr {
-            Expression::Name(token) => self.name_shape_and_global(token).0,
-            Expression::Suffixed(chain) => {
-                self.suffix_shapes.get(&chain.suffixes.last().span().start)
-            }
+            Expression::Name(token) => self.name_state(token).shape,
+            Expression::Suffixed(_) => self.head_state(ChainHead::from(expr)).shape,
             Expression::Parenthesized(parenthesized) => self.expr_shape(&parenthesized.expr),
             // Literal strings carry the derived `string` receiver shape, so
             // `("x"):upper()` and `local s = "x" ... s:upper()` resolve.
@@ -68,91 +77,65 @@ impl<'input> ShapeResolver<'input> {
         }
     }
 
-    /// The shape of what `token` names, and the stdlib global it reads, if
-    /// it reads the host's.
-    fn name_shape_and_global(
-        self,
-        token: &Token,
-    ) -> (Option<&'input CompactString>, Option<&'input StdlibEntry>) {
-        let Some(name) = token.identifier() else {
-            return (None, None);
+    /// What `token` reads: a local's shape, or the host's global and its
+    /// shape.
+    fn name_state(self, token: &Token) -> HeadState<'input> {
+        let Some(reference) =
+            token.identifier().and_then(|name| self.tree.reference_at(name, token.span))
+        else {
+            return HeadState::default();
         };
-        match self.tree.resolved_symbol(name, token.span) {
-            Some(symbol_id) => (self.symbol_shapes.get(&symbol_id), None),
-            None if self.tree.reaches_host_global(name, token.span) => {
-                let global = self.library.globals.get(name);
-                (global.and_then(StdlibEntry::shape), global)
+        match reference.resolved {
+            Some(symbol_id) => {
+                HeadState { shape: self.symbol_shapes.get(&symbol_id), global: None }
             }
-            None => (None, None),
+            None if self.tree.is_host_global(reference) => {
+                let global = self.library.globals.get(&reference.name);
+                HeadState { shape: global.and_then(StdlibEntry::shape), global }
+            }
+            None => HeadState::default(),
         }
     }
 
-    fn head_shape(self, head: ChainHead<'_>) -> Option<&'input CompactString> {
-        head.suffixes.last().map_or_else(
-            || self.expr_shape(head.prefix),
-            |last| self.suffix_shapes.get(&last.span().start),
-        )
-    }
-
-    pub(crate) fn method_callee(
-        self,
-        receiver: ChainHead<'_>,
-        method_name: &str,
-    ) -> Option<(&'input CompactString, &'input StdlibEntry)> {
-        self.shape_method(self.head_shape(receiver)?, method_name)
-    }
-
-    /// Only method-flagged functions are colon-callable; a dot member
-    /// reached with `:` would receive a bogus self.
-    fn shape_method<'shape>(
-        self,
-        shape: &'shape CompactString,
-        method_name: &str,
-    ) -> Option<(&'shape CompactString, &'input StdlibEntry)> {
-        let entry = self.library.shape_member(shape, method_name)?;
-        let StdlibEntry::Function(function) = entry else {
-            return None;
-        };
-        if !function.is_method {
-            return None;
+    fn prefix_state(self, prefix: &Expression) -> HeadState<'input> {
+        if let Expression::Name(token) = prefix {
+            self.name_state(token)
+        } else {
+            HeadState { shape: self.expr_shape(prefix), global: None }
         }
-        Some((shape, entry))
     }
 
-    /// The path of a `Name(.Name)*` chain, root first. Any other link
-    /// (indexing, calls, parens) aborts, as does a root that doesn't reach
-    /// the host's global.
-    pub(crate) fn global_path(self, head: ChainHead<'_>) -> Option<Vec<&str>> {
-        let DottedPath { segments, root_span, .. } = head.dotted_path()?;
-        self.tree.reaches_host_global(segments.first()?, root_span).then_some(segments)
+    fn head_state(self, head: ChainHead<'_>) -> HeadState<'input> {
+        self.read(self.prefix_state(head.prefix), head.suffixes)
     }
 
-    /// The shape of a chain's head once `suffix` applies, and the stdlib
-    /// entry it names when it's still a dotted path from the host's global,
-    /// given the same for the head before it. A call accepts a method called
-    /// with `.`: passing self explicitly doesn't change what the call
-    /// returns.
-    fn after_suffix(
-        self,
-        suffix: &Suffix,
-        shape: Option<&CompactString>,
-        global: Option<&'input StdlibEntry>,
-    ) -> (Option<&'input CompactString>, Option<&'input StdlibEntry>) {
+    /// What a head that reads `state` reads once `suffixes` apply to it.
+    fn read(self, mut state: HeadState<'input>, suffixes: &[Suffix]) -> HeadState<'input> {
+        for suffix in suffixes {
+            if state.is_unknown() {
+                break;
+            }
+            state = self.after_suffix(suffix, state);
+        }
+        state
+    }
+
+    /// A call accepts a method called with `.`: passing self explicitly
+    /// doesn't change what the call returns.
+    fn after_suffix(self, suffix: &Suffix, state: HeadState<'input>) -> HeadState<'input> {
         match suffix {
             Suffix::Field(name) => {
-                let member = global
+                let member = state
+                    .global
                     .zip(name.identifier())
                     .and_then(|(parent, segment)| self.library.child(parent, segment));
-                (member.and_then(StdlibEntry::shape), member)
+                HeadState { shape: member.and_then(StdlibEntry::shape), global: member }
             }
             Suffix::Call(call) => {
-                let callee = call.method.as_ref().map_or(global, |method| {
-                    shape
-                        .zip(method.identifier())
-                        .and_then(|(receiver, name)| self.shape_method(receiver, name))
-                        .map(|(_, entry)| entry)
+                let callee = call.method.as_ref().map_or(state.global, |method| {
+                    self.shape_method(state.shape?, method.identifier()?)
                 });
-                let returns = match callee {
+                let shape = match callee {
                     Some(StdlibEntry::Function(function)) => function.returns_shape.as_ref(),
                     Some(
                         StdlibEntry::Constant(_)
@@ -161,10 +144,51 @@ impl<'input> ShapeResolver<'input> {
                     )
                     | None => None,
                 };
-                (returns, None)
+                HeadState { shape, global: None }
             }
-            Suffix::Index { .. } | Suffix::TypeInstantiation { .. } => (None, None),
+            Suffix::Index { .. } | Suffix::TypeInstantiation { .. } => HeadState::default(),
         }
+    }
+
+    /// Only method-flagged functions are colon-callable; a dot member
+    /// reached with `:` would receive a bogus self.
+    fn shape_method(self, shape: &str, method_name: &str) -> Option<&'input StdlibEntry> {
+        let entry = self.library.shape_member(shape, method_name)?;
+        matches!(entry, StdlibEntry::Function(function) if function.is_method).then_some(entry)
+    }
+
+    /// What a call with `method` after `head`, which reads `state`, calls.
+    fn callee(
+        self,
+        head: ChainHead<'input>,
+        state: HeadState<'input>,
+        method: Option<&'input Token>,
+    ) -> Option<ResolvedCallee<'input>> {
+        let Some(method_token) = method else {
+            let entry = state.global?;
+            // A method called with `.` passes self explicitly, which its
+            // declared arity doesn't count.
+            if matches!(entry, StdlibEntry::Function(function) if function.is_method) {
+                return None;
+            }
+            return Some(ResolvedCallee { path: CalleePath::Dotted(head), entry });
+        };
+        let method_name = method_token.identifier()?;
+        let shape = state.shape?;
+        let entry = self.shape_method(shape, method_name)?;
+        let base =
+            head.as_name().map_or(shape.as_str(), |token| token.identifier().unwrap_or(shape));
+        Some(ResolvedCallee { path: CalleePath::Method { base, method: method_name }, entry })
+    }
+
+    /// What a call with `method` after `head` calls, read from `head`'s
+    /// prefix.
+    pub(crate) fn head_callee(
+        self,
+        head: ChainHead<'input>,
+        method: Option<&'input Token>,
+    ) -> Option<ResolvedCallee<'input>> {
+        self.callee(head, self.head_state(head), method)
     }
 }
 
@@ -175,90 +199,110 @@ fn string_shape(library: &StdlibLibrary) -> Option<&CompactString> {
     library.shapes.get_key_value("string").map(|(name, _shape)| name)
 }
 
-/// The shape of every never-reassigned local whose initializer has a known
-/// shape, in `local` statements with one initializer per name, and of each
-/// chain up to each of its suffixes.
-///
-/// The walk is in source order, so a shaped local can seed later ones, and
-/// a chain is done before any chain around it.
-pub(crate) fn shapes(
+/// The shape of each never-reassigned local in `initialized_locals` whose
+/// initializer has a known shape. A local comes before any initializer that
+/// reads it, so a shaped local seeds later ones.
+pub(crate) fn symbol_shapes(
     tree: &ScopeTree,
     library: &StdlibLibrary,
-    block: &Block,
-) -> (SymbolShapes, SuffixShapes) {
-    let span_to_symbol: FxHashMap<Span, SymbolId> =
-        tree.symbols.iter().map(|symbol| (symbol.definition_span, symbol.id)).collect();
-    let mut pass = ShapePass {
-        tree,
-        library,
-        span_to_symbol,
-        symbol_shapes: SymbolShapes::default(),
-        suffix_shapes: SuffixShapes::default(),
-    };
-    pass.visit_block(block);
-    (pass.symbol_shapes, pass.suffix_shapes)
-}
-
-struct ShapePass<'input> {
-    tree: &'input ScopeTree,
-    library: &'input StdlibLibrary,
-    span_to_symbol: FxHashMap<Span, SymbolId>,
-    symbol_shapes: SymbolShapes,
-    suffix_shapes: SuffixShapes,
-}
-
-impl ShapePass<'_> {
-    const fn resolver(&self) -> ShapeResolver<'_> {
-        ShapeResolver::new(self.tree, self.library, &self.symbol_shapes, &self.suffix_shapes)
-    }
-
-    fn record_chain(&mut self, chain: &SuffixedExpression) {
-        let resolver = self.resolver();
-        let (mut shape, mut global) = if let Expression::Name(token) = &chain.prefix {
-            resolver.name_shape_and_global(token)
-        } else {
-            (resolver.expr_shape(&chain.prefix), None)
+    initialized_locals: &[(SymbolId, &Expression)],
+) -> SymbolShapes {
+    let mut shapes = SymbolShapes::default();
+    for &(symbol_id, initializer) in initialized_locals {
+        if tree.symbol(symbol_id).is_modified {
+            continue;
+        }
+        let resolver = ShapeResolver::new(tree, library, &shapes);
+        let Some(shape) = resolver.expr_shape(initializer).cloned() else {
+            continue;
         };
-        let mut known = Vec::new();
-        for suffix in &chain.suffixes {
-            // Once neither is known, no later suffix can be.
-            if shape.is_none() && global.is_none() {
-                break;
-            }
-            (shape, global) = resolver.after_suffix(suffix, shape, global);
-            if let Some(found) = shape {
-                known.push((suffix.span().start, found.clone()));
+        shapes.insert(symbol_id, shape);
+    }
+    shapes
+}
+
+/// A call's stdlib entry, and the path that reaches it.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedCallee<'call> {
+    path: CalleePath<'call>,
+    entry: &'call StdlibEntry,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CalleePath<'call> {
+    Method {
+        base: &'call str,
+        method: &'call str,
+    },
+    /// A head whose every suffix is a field.
+    Dotted(ChainHead<'call>),
+}
+
+impl<'call> ResolvedCallee<'call> {
+    /// Display path, such as `table.insert` or `game:GetService`.
+    #[must_use]
+    pub fn name(&self) -> String {
+        match self.path {
+            CalleePath::Method { base, method } => format!("{base}:{method}"),
+            CalleePath::Dotted(head) => {
+                head.dotted_path().map(|path| path.segments.join(".")).unwrap_or_default()
             }
         }
-        self.suffix_shapes.extend(known);
+    }
+
+    #[must_use]
+    pub const fn entry(&self) -> &'call StdlibEntry {
+        self.entry
     }
 }
 
-impl<'ast> Visitor<'ast> for ShapePass<'_> {
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
-        self.walk_stmt(stmt);
-        if let Statement::LocalAssignment(local) = stmt
-            && let Some(exprs) = &local.exprs
-            && local.names.len() == exprs.len()
-        {
-            for (attributed, expr) in local.names.iter().zip(exprs.iter()) {
-                let Some(shape) = self.resolver().expr_shape(expr).cloned() else {
-                    continue;
-                };
-                let Some(&symbol_id) = self.span_to_symbol.get(&attributed.name.span) else {
-                    continue;
-                };
-                if self.tree.symbol(symbol_id).is_modified {
-                    continue;
-                }
-                self.symbol_shapes.insert(symbol_id, shape);
-            }
-        }
+/// Resolves the calls of one chain, carrying what each suffix reads on to
+/// the next, so its calls resolve in one pass over it when asked for in
+/// order.
+#[derive(Debug, Clone, Copy)]
+pub struct ChainCallees<'chain> {
+    resolver: ShapeResolver<'chain>,
+    chain: &'chain SuffixedExpression,
+    prefix_state: HeadState<'chain>,
+    /// What the head of the first `read_count` suffixes reads.
+    state: HeadState<'chain>,
+    read_count: usize,
+}
+
+impl<'chain> ChainCallees<'chain> {
+    pub(crate) fn new(resolver: ShapeResolver<'chain>, chain: &'chain SuffixedExpression) -> Self {
+        let prefix_state = resolver.prefix_state(&chain.prefix);
+        Self { resolver, chain, prefix_state, state: prefix_state, read_count: 0 }
     }
 
-    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression) {
-        self.walk_suffixed(chain);
-        self.record_chain(chain);
+    #[must_use]
+    pub const fn chain(&self) -> &'chain SuffixedExpression {
+        self.chain
+    }
+
+    /// What the call at `index` calls, as
+    /// [`SemanticAnalysis::resolve_callee`](crate::SemanticAnalysis::resolve_callee)
+    /// gives it. `None` for a suffix that's no call.
+    ///
+    /// A call is read on from the one asked for before it, so one earlier in
+    /// the chain starts over from the prefix.
+    pub fn callee(&mut self, index: usize) -> Option<ResolvedCallee<'chain>> {
+        let suffixes: &'chain [Suffix] = &self.chain.suffixes;
+        let Suffix::Call(call) = suffixes.get(index)? else {
+            return None;
+        };
+        if index < self.read_count {
+            self.state = self.prefix_state;
+            self.read_count = 0;
+        }
+        let unread = suffixes.get(self.read_count..index).unwrap_or_default();
+        self.state = self.resolver.read(self.state, unread);
+        self.read_count = index;
+        let head = ChainHead {
+            prefix: &self.chain.prefix,
+            suffixes: suffixes.get(..index).unwrap_or_default(),
+        };
+        self.resolver.callee(head, self.state, call.method.as_ref())
     }
 }
 
@@ -324,9 +368,10 @@ mod tests {
     fn shapes_for(source: &str, library: &StdlibLibrary) -> (ScopeTree, SymbolShapes) {
         let parsed = luck_parser::parse(source, LuaVersion::Lua54);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        let tree = builder::build(&parsed.block, LuaVersion::Lua54);
-        let (symbol_shapes, _) = shapes(&tree, library, &parsed.block);
-        (tree, symbol_shapes)
+        let (tree, initialized_locals) =
+            builder::build_with_initializers(&parsed.block, LuaVersion::Lua54);
+        let shapes = symbol_shapes(&tree, library, &initialized_locals);
+        (tree, shapes)
     }
 
     fn shape_of<'shapes>(

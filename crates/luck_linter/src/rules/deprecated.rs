@@ -9,7 +9,7 @@ use crate::call::{positional_args, string_literal_value};
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit, comments_within};
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, ChainPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallPosition, CallSite, ChainPosition, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Deprecated;
@@ -30,14 +30,8 @@ impl NodeRule for Deprecated {
             NodeType::Suffixed,
         ])
     }
-    fn on_call(
-        &self,
-        call: Call<'_>,
-        position: CallPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        check_call(call, position, context, findings);
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        check_call(site, context, findings);
     }
     fn on_chain(
         &self,
@@ -50,13 +44,8 @@ impl NodeRule for Deprecated {
     }
 }
 
-fn check_call(
-    call: Call<'_>,
-    position: CallPosition,
-    context: &LintContext<'_>,
-    findings: &mut Vec<Finding>,
-) {
-    let Some(callee) = context.semantic.resolve_callee(call) else {
+fn check_call(site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    let CallSite { call, position, callee: Some(callee) } = *site else {
         return;
     };
     let entry = callee.entry();
@@ -264,38 +253,41 @@ fn check_field_accesses(
     semantic: &SemanticAnalysis,
     findings: &mut Vec<Finding>,
 ) {
-    let Expression::Name(root) = &chain.prefix else {
-        return;
-    };
-    let Some(root_name) = root.identifier() else {
-        return;
-    };
     // A target's last field is stored to, not read.
     let read_count = match position {
         ChainPosition::Value => chain.suffixes.len(),
         ChainPosition::AssignmentTarget => chain.suffixes.len().saturating_sub(1),
     };
-    let mut segments = vec![root_name];
-    for suffix in chain.suffixes.iter().take(read_count) {
+    let reads = chain.suffixes.get(..read_count).unwrap_or_default();
+    let (Expression::Name(root), Some(Suffix::Field(_))) = (&chain.prefix, reads.first()) else {
+        return;
+    };
+    let Some(root_name) = root.identifier() else {
+        return;
+    };
+    let stdlib = semantic.stdlib();
+    let Some(mut entry) = stdlib.globals.get(root_name) else {
+        return;
+    };
+    for (read_index, suffix) in (1usize..).zip(reads) {
         let Suffix::Field(name) = suffix else {
             return;
         };
-        let Some(segment) = name.identifier() else {
-            return;
-        };
-        segments.push(segment);
         // Nothing past an unknown path resolves either.
-        let Some(entry) = semantic.stdlib().lookup(&segments) else {
+        let Some(member) = name.identifier().and_then(|segment| stdlib.child(entry, segment))
+        else {
             return;
         };
+        entry = member;
         if matches!(entry, StdlibEntry::Function(_)) {
             continue;
         }
         if let Some(deprecation) = entry.deprecation()
             && !semantic.resolves_to_local(root_name, root.span)
         {
+            let path = chain.head(read_index).dotted_path().map(|path| path.segments.join("."));
             findings.push(
-                Finding::new(format!("`{}` is deprecated", segments.join(".")), name.span)
+                Finding::new(format!("`{}` is deprecated", path.unwrap_or_default()), name.span)
                     .with_help(deprecation.message.as_str()),
             );
         }

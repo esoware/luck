@@ -28,6 +28,9 @@ impl NodeRule for UnknownType {
         let Expression::BinaryOp(run) = expr else {
             return;
         };
+        if !run.links.first().op.is_comparison() {
+            return;
+        }
         for pair in operator_pairs(run) {
             if matches!(pair.op, BinOp::Eq | BinOp::Ne)
                 && let (Some(lhs), Some(rhs)) = (pair.lhs, pair.rhs)

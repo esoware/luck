@@ -24,10 +24,11 @@ pub(crate) enum NodeKind<'ast> {
     /// A chain in an expression, a call statement, or an assignment target.
     Chain(&'ast SuffixedExpression, ChainPosition),
     /// The call at `index` in a chain, other than the one a call statement
-    /// makes.
+    /// makes. A `u32` keeps the node at three words, and no source has more
+    /// suffixes than bytes.
     Call {
         chain: &'ast SuffixedExpression,
-        index: usize,
+        index: u32,
     },
 }
 
@@ -136,7 +137,7 @@ impl<'ast> Visitor<'ast> for NodeCollector<'ast> {
         } else {
             chain.suffixes.len()
         };
-        for (index, suffix) in chain.suffixes.iter().enumerate().take(expression_suffixes) {
+        for (index, suffix) in (0u32..).zip(chain.suffixes.iter().take(expression_suffixes)) {
             if matches!(suffix, Suffix::Call(_)) {
                 self.push_node(NodeKind::Call { chain, index }, NodeType::FunctionCallExpr);
             }
@@ -196,6 +197,12 @@ mod tests {
         );
         assert!(nodes.contains_any(NodeTypeSet::from_types(&[NodeType::BinaryOp])));
         assert!(!nodes.contains_any(NodeTypeSet::from_types(&[NodeType::WhileLoop])));
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn node_is_three_words() {
+        assert_eq!(size_of::<AstNode<'_>>(), 24);
     }
 
     #[test]

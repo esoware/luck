@@ -29,12 +29,15 @@ impl NodeRule for DivideByZero {
         let Expression::BinaryOp(run) = expr else {
             return;
         };
+        if run.precedence() != BinOp::Div.precedence() {
+            return;
+        }
         for pair in operator_pairs(run) {
             if let Some(op_name) = divisive_op_name(pair.op)
                 && let Some(divisor) = pair.rhs
                 && is_number_literal(divisor, 0.0, context.semantic.version)
             {
-                findings.push(zero_divisor_finding(op_name, pair.span));
+                findings.push(zero_divisor_finding(op_name, pair.span()));
             }
         }
     }

@@ -1,9 +1,9 @@
-use luck_ast::{Block, Call};
+use luck_ast::{Block, Call, SuffixedExpression};
 use luck_token::{CompactString, LuaVersion, Span, StdlibEnvironment};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::builder;
-use crate::resolve::{ShapeResolver, shapes};
+use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
 use crate::scope::{Reference, ScopeTree, Symbol, SymbolId};
 use crate::stdlib_load::library_for;
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
@@ -22,9 +22,6 @@ pub struct SemanticAnalysis {
     /// Shapes of never-reassigned locals initialized from a value of known
     /// shape, such as `local f = io.open(...)`.
     pub symbol_shapes: FxHashMap<SymbolId, CompactString>,
-    /// The shape of what each chain reads up to each of its suffixes, keyed
-    /// by where the suffix starts. Only known shapes are kept.
-    pub suffix_shapes: FxHashMap<u32, CompactString>,
 }
 
 /// Uses the [`StdlibEnvironment::Standalone`] stdlib, which is right for
@@ -43,44 +40,15 @@ pub fn analyze_with_environment(
     version: LuaVersion,
     environment: StdlibEnvironment,
 ) -> SemanticAnalysis {
-    let scope_tree = builder::build(block, version);
-    let (symbol_shapes, suffix_shapes) =
-        shapes(&scope_tree, library_for(version, environment), block);
+    let (scope_tree, initialized_locals) = builder::build_with_initializers(block, version);
+    let symbol_shapes =
+        symbol_shapes(&scope_tree, library_for(version, environment), &initialized_locals);
     SemanticAnalysis {
         scope_tree,
         extra_globals: FxHashSet::default(),
         version,
         environment,
         symbol_shapes,
-        suffix_shapes,
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ResolvedCallee<'call> {
-    path: CalleePath<'call>,
-    entry: &'call StdlibEntry,
-}
-
-#[derive(Debug, Clone)]
-enum CalleePath<'call> {
-    Method { base: &'call str, method: &'call str },
-    Dotted(Vec<&'call str>),
-}
-
-impl<'call> ResolvedCallee<'call> {
-    /// Display path, such as `table.insert` or `game:GetService`.
-    #[must_use]
-    pub fn name(&self) -> String {
-        match &self.path {
-            CalleePath::Method { base, method } => format!("{base}:{method}"),
-            CalleePath::Dotted(segments) => segments.join("."),
-        }
-    }
-
-    #[must_use]
-    pub const fn entry(&self) -> &'call StdlibEntry {
-        self.entry
     }
 }
 
@@ -132,36 +100,25 @@ impl SemanticAnalysis {
     /// Returns `None` for shadowed bases, unknown names, values of unknown
     /// shape, and calls whose `.` or `:` doesn't match the function's
     /// `is_method`.
+    ///
+    /// This reads the callee from its prefix, so for each call of a chain,
+    /// [`Self::chain_callees`] costs less.
     #[must_use]
     pub fn resolve_callee<'call>(&'call self, call: Call<'call>) -> Option<ResolvedCallee<'call>> {
-        let resolver = ShapeResolver::new(
-            &self.scope_tree,
-            self.stdlib(),
-            &self.symbol_shapes,
-            &self.suffix_shapes,
-        );
-        if let Some(method_token) = call.method {
-            let method_name = method_token.identifier()?;
-            let (shape, entry) = resolver.method_callee(call.callee, method_name)?;
-            let base = call
-                .callee
-                .as_name()
-                .map_or(shape.as_str(), |token| token.identifier().unwrap_or(shape));
-            return Some(ResolvedCallee {
-                path: CalleePath::Method { base, method: method_name },
-                entry,
-            });
-        }
-        let segments = resolver.global_path(call.callee)?;
-        let entry = self.stdlib().lookup(&segments)?;
-        // A method called with `.` passes self explicitly, which its declared
-        // arity doesn't count.
-        if let StdlibEntry::Function(function) = entry
-            && function.is_method
-        {
-            return None;
-        }
-        Some(ResolvedCallee { path: CalleePath::Dotted(segments), entry })
+        self.shape_resolver().head_callee(call.callee, call.method)
+    }
+
+    /// Resolves the calls of `chain` in one pass over it.
+    #[must_use]
+    pub fn chain_callees<'chain>(
+        &'chain self,
+        chain: &'chain SuffixedExpression,
+    ) -> ChainCallees<'chain> {
+        ChainCallees::new(self.shape_resolver(), chain)
+    }
+
+    fn shape_resolver(&self) -> ShapeResolver<'_> {
+        ShapeResolver::new(&self.scope_tree, self.stdlib(), &self.symbol_shapes)
     }
 
     /// With `local f = io.open(...)`, `["f", "read"]` resolves through the
