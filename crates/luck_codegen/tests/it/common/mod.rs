@@ -5,7 +5,7 @@ use luck_token::LuaVersion;
 pub(crate) fn assert_compacts_to(source: &str, expected: &str, version: LuaVersion) {
     let parsed = luck_parser::parse(source, version);
     assert!(parsed.errors.is_empty(), "parse errors for {source:?}: {:?}", parsed.errors);
-    let output = luck_codegen::compact(&parsed.block);
+    let output = luck_codegen::compact(&parsed.block).expect("a parsed tree prints");
     assert_eq!(output, expected, "input: {source:?}");
     let reparsed = luck_parser::parse(&output, version);
     assert!(
@@ -14,8 +14,8 @@ pub(crate) fn assert_compacts_to(source: &str, expected: &str, version: LuaVersi
         reparsed.errors
     );
     assert_eq!(
-        luck_codegen::compact(&reparsed.block),
-        output,
+        luck_codegen::compact(&reparsed.block).as_ref(),
+        Ok(&output),
         "compact output of {source:?} changed when compacted again"
     );
 }

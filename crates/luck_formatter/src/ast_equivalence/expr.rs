@@ -1,23 +1,21 @@
-use core::ops::ControlFlow::{self, Continue};
+use core::ops::ControlFlow::Continue;
 
 use luck_ast::{
-    ElseIfExprClause, Expression, Field, FunctionArgs, FunctionCall, FunctionDef, IfExpression,
-    InterpolatedString, TableConstructor, TypeInstantiation, Var, is_multi_value,
+    BinaryOp, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionCall, FunctionDef,
+    IfExpression, InterpolatedString, TableConstructor, TypeCast, TypeInstantiation, UnaryOp, Var,
+    is_multi_value,
 };
 use luck_token::LuaVersion;
 
 use super::function::{function_attributes_eq, function_body_eq};
 use super::types::type_eq;
 use super::{
-    AstDiff, at, at_index, differ, presence_eq, punctuated_eq, require, string_raw_eq,
-    token_text_eq,
+    Check, at, at_index, differ, presence_eq, punctuated_eq, require, string_raw_eq, token_text_eq,
 };
 
-pub(super) fn expr_eq(
-    left: &Expression,
-    right: &Expression,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+// Each kind is compared in a function of its own, so a level of nesting
+// holds only that comparison's temporaries on the stack.
+pub(super) fn expr_eq(left: &Expression, right: &Expression, version: LuaVersion) -> Check {
     match (left, right) {
         (Expression::Nil(_), Expression::Nil(_))
         | (Expression::False(_), Expression::False(_))
@@ -38,15 +36,8 @@ pub(super) fn expr_eq(
             require(number_raw_eq(&lhs.text, &rhs.text), "integer literals differ")
         }
         (Expression::Var(lhs), Expression::Var(rhs)) => var_eq(lhs, rhs, version),
-        (Expression::BinaryOp(lhs), Expression::BinaryOp(rhs)) => {
-            require(lhs.op == rhs.op, "binary op differs")?;
-            at("left", expr_eq(&lhs.lhs, &rhs.lhs, version))?;
-            at("right", expr_eq(&lhs.rhs, &rhs.rhs, version))
-        }
-        (Expression::UnaryOp(lhs), Expression::UnaryOp(rhs)) => {
-            require(lhs.op == rhs.op, "unary op differs")?;
-            at("operand", expr_eq(&lhs.operand, &rhs.operand, version))
-        }
+        (Expression::BinaryOp(lhs), Expression::BinaryOp(rhs)) => binary_op_eq(lhs, rhs, version),
+        (Expression::UnaryOp(lhs), Expression::UnaryOp(rhs)) => unary_op_eq(lhs, rhs, version),
         (Expression::Parenthesized(lhs), Expression::Parenthesized(rhs)) => {
             at("Parenthesized/expr", expr_eq(&lhs.expr, &rhs.expr, version))
         }
@@ -54,12 +45,10 @@ pub(super) fn expr_eq(
         // the nesting. Parens around a call or `...` truncate it to one value
         // and have to match.
         (Expression::Parenthesized(lhs), other) => {
-            require(!is_multi_value(&lhs.expr), "value-truncating parens differ")?;
-            expr_eq(&lhs.expr, other, version)
+            redundant_parens_eq(&lhs.expr, &lhs.expr, other, version)
         }
         (other, Expression::Parenthesized(rhs)) => {
-            require(!is_multi_value(&rhs.expr), "value-truncating parens differ")?;
-            expr_eq(other, &rhs.expr, version)
+            redundant_parens_eq(&rhs.expr, other, &rhs.expr, version)
         }
         (Expression::FunctionCall(lhs), Expression::FunctionCall(rhs)) => {
             at("FunctionCall", function_call_eq(lhs, rhs, version))
@@ -73,13 +62,7 @@ pub(super) fn expr_eq(
         (Expression::IfExpression(lhs), Expression::IfExpression(rhs)) => {
             if_expr_eq(lhs, rhs, version)
         }
-        (Expression::TypeCast(lhs), Expression::TypeCast(rhs)) => {
-            at("TypeCast/expr", expr_eq(&lhs.expr, &rhs.expr, version))?;
-            at(
-                "TypeCast/type_annotation",
-                type_eq(&lhs.type_annotation, &rhs.type_annotation, version),
-            )
-        }
+        (Expression::TypeCast(lhs), Expression::TypeCast(rhs)) => type_cast_eq(lhs, rhs, version),
         (Expression::TypeInstantiation(lhs), Expression::TypeInstantiation(rhs)) => {
             type_instantiation_eq(lhs, rhs, version)
         }
@@ -103,19 +86,49 @@ pub(super) fn expr_eq(
             | Expression::TypeCast(_)
             | Expression::TypeInstantiation(_),
             _,
-        ) => differ(format!(
-            "expression kind differs: `{}` vs `{}`",
-            expr_kind(left),
-            expr_kind(right)
-        )),
+        ) => expr_kinds_differ(left, right),
     }
+}
+
+fn binary_op_eq(left: &BinaryOp, right: &BinaryOp, version: LuaVersion) -> Check {
+    require(left.op == right.op, "binary op differs")?;
+    at("left", expr_eq(&left.lhs, &right.lhs, version))?;
+    at("right", expr_eq(&left.rhs, &right.rhs, version))
+}
+
+fn unary_op_eq(left: &UnaryOp, right: &UnaryOp, version: LuaVersion) -> Check {
+    require(left.op == right.op, "unary op differs")?;
+    at("operand", expr_eq(&left.operand, &right.operand, version))
+}
+
+/// Compares the two sides once one of them has shed the parentheses around
+/// `inner`.
+fn redundant_parens_eq(
+    inner: &Expression,
+    left: &Expression,
+    right: &Expression,
+    version: LuaVersion,
+) -> Check {
+    require(!is_multi_value(inner), "value-truncating parens differ")?;
+    expr_eq(left, right, version)
+}
+
+fn type_cast_eq(left: &TypeCast, right: &TypeCast, version: LuaVersion) -> Check {
+    at("TypeCast/expr", expr_eq(&left.expr, &right.expr, version))?;
+    at("TypeCast/type_annotation", type_eq(&left.type_annotation, &right.type_annotation, version))
+}
+
+#[cold]
+#[inline(never)]
+fn expr_kinds_differ(left: &Expression, right: &Expression) -> Check {
+    differ(format!("expression kind differs: `{}` vs `{}`", expr_kind(left), expr_kind(right)))
 }
 
 fn interpolated_string_eq(
     left: &InterpolatedString,
     right: &InterpolatedString,
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     require(left.segments.len() == right.segments.len(), "interpolated segment count differs")?;
     for (i, (lhs, rhs)) in left.segments.iter().zip(&right.segments).enumerate() {
         at_index("segments", i, token_text_eq(&lhs.literal, &rhs.literal))?;
@@ -131,11 +144,7 @@ fn interpolated_string_eq(
     Continue(())
 }
 
-fn function_def_eq(
-    left: &FunctionDef,
-    right: &FunctionDef,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn function_def_eq(left: &FunctionDef, right: &FunctionDef, version: LuaVersion) -> Check {
     at("FunctionDef", function_attributes_eq(&left.attributes, &right.attributes, version))?;
     at("FunctionDef/body", function_body_eq(&left.body, &right.body, version))
 }
@@ -144,7 +153,7 @@ fn type_instantiation_eq(
     left: &TypeInstantiation,
     right: &TypeInstantiation,
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     at("TypeInstantiation/expr", expr_eq(&left.expr, &right.expr, version))?;
     at(
         "TypeInstantiation/type_args",
@@ -152,11 +161,7 @@ fn type_instantiation_eq(
     )
 }
 
-fn if_expr_eq(
-    left: &IfExpression,
-    right: &IfExpression,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn if_expr_eq(left: &IfExpression, right: &IfExpression, version: LuaVersion) -> Check {
     at("IfExpression/condition", expr_eq(&left.condition, &right.condition, version))?;
     at("IfExpression/then_expr", expr_eq(&left.then_expr, &right.then_expr, version))?;
     require(
@@ -174,7 +179,7 @@ fn if_expr_eq(
     at("IfExpression/else_expr", expr_eq(&left.else_expr, &right.else_expr, version))
 }
 
-pub(super) fn var_eq(left: &Var, right: &Var, version: LuaVersion) -> ControlFlow<AstDiff> {
+pub(super) fn var_eq(left: &Var, right: &Var, version: LuaVersion) -> Check {
     match (left, right) {
         (Var::Name(lhs), Var::Name(rhs)) => token_text_eq(lhs, rhs),
         (Var::FieldAccess(lhs), Var::FieldAccess(rhs)) => {
@@ -193,7 +198,7 @@ pub(super) fn function_call_eq(
     left: &FunctionCall,
     right: &FunctionCall,
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     at("callee", expr_eq(&left.callee, &right.callee, version))?;
     presence_eq(
         left.method.as_ref(),
@@ -210,7 +215,7 @@ pub(super) fn function_call_eq(
     at("args", args_eq(&left.args, &right.args, version))
 }
 
-fn args_eq(left: &FunctionArgs, right: &FunctionArgs, version: LuaVersion) -> ControlFlow<AstDiff> {
+fn args_eq(left: &FunctionArgs, right: &FunctionArgs, version: LuaVersion) -> Check {
     match (left, right) {
         (
             FunctionArgs::Parenthesized { args: lhs, .. },
@@ -249,11 +254,7 @@ fn args_eq(left: &FunctionArgs, right: &FunctionArgs, version: LuaVersion) -> Co
     }
 }
 
-fn table_eq(
-    left: &TableConstructor,
-    right: &TableConstructor,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn table_eq(left: &TableConstructor, right: &TableConstructor, version: LuaVersion) -> Check {
     if left.fields.len() != right.fields.len() {
         return differ(format!(
             "table field count differs: {} vs {}",
@@ -267,7 +268,7 @@ fn table_eq(
     Continue(())
 }
 
-fn field_eq(left: &Field, right: &Field, version: LuaVersion) -> ControlFlow<AstDiff> {
+fn field_eq(left: &Field, right: &Field, version: LuaVersion) -> Check {
     match (left, right) {
         (
             Field::Named { name: left_name, value: left_value, .. },

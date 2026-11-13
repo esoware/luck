@@ -123,21 +123,31 @@ impl Parser<'_> {
     }
 
     /// Grammar: `pars ::= '(' [litlist] ')' | littable | STRING`. A string or
-    /// table argument becomes a one-element argument list.
-    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
+    /// table argument becomes a one-element argument list, so every form
+    /// nests its arguments one level, as the list it prints back as does.
     fn parse_attribute_args(&mut self) -> Option<Punctuated<Expression>> {
+        if !matches!(
+            self.peek(),
+            TokenKind::LeftParen | TokenKind::StringLiteral(_) | TokenKind::LeftBrace
+        ) || !self.enter_depth()
+        {
+            return None;
+        }
+        let args = self.parse_attribute_arg_list();
+        self.exit_depth();
+        args
+    }
+
+    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
+    fn parse_attribute_arg_list(&mut self) -> Option<Punctuated<Expression>> {
         match self.peek() {
             TokenKind::LeftParen => {
                 self.advance_span();
-                if !self.enter_depth() {
-                    return None;
-                }
                 let args = if matches!(self.peek(), TokenKind::RightParen) {
                     Punctuated::empty()
                 } else {
                     self.parse_expr_list()
                 };
-                self.exit_depth();
                 self.expect(&TokenKind::RightParen);
                 for expr in args.iter() {
                     if !is_attribute_literal(expr) {

@@ -10,7 +10,7 @@ use luck_config::{
     BuildConfig, check_output_paths, config_directory, discover_config, load_or_discover_config,
     resolve_build_config,
 };
-use luck_core::{native_path, normalize_path};
+use luck_resolver::{native_path, normalize_path};
 use luck_token::{LuaVersion, chunk_start, has_shebang};
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 

@@ -29,10 +29,6 @@
 
 mod diagnostic;
 mod lua_target;
-mod path;
-mod source_io;
 
 pub use diagnostic::{Diagnostic, DiagnosticSeverity};
 pub use lua_target::LuaTarget;
-pub use path::{native_path, normalize_path};
-pub use source_io::read_source_file;

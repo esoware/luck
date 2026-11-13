@@ -63,7 +63,7 @@ fn generated_programs_parse_cleanly() {
 fn compact_output_reparses() {
     for program in programs() {
         let parsed = parse_cleanly(&program, "generator", &program.source);
-        let compacted = luck_codegen::compact(&parsed.block);
+        let compacted = luck_codegen::compact(&parsed.block).unwrap();
         parse_cleanly(&program, "compact", &compacted);
     }
 }
@@ -108,7 +108,7 @@ fn format_block_without_source_reparses_and_keeps_ast_structure() {
     for program in programs() {
         let Program { source, version, label } = &program;
         let original = parse_cleanly(&program, "generator", source);
-        let via_ast = format_block(&original.block, Comments::none(), &options);
+        let via_ast = format_block(&original.block, Comments::none(), &options).unwrap();
         let reparsed = parse_cleanly(&program, "format_block", &via_ast);
         if let Err(diff) = blocks_equivalent(&original.block, &reparsed.block, *version) {
             panic!(

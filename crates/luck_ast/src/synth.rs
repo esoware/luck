@@ -80,7 +80,8 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 /// - **Loud failure on invalid names.** [`Synth::identifier`] asserts, in release
 ///   builds too, that its argument is an identifier, so hostile input such
 ///   as bytecode debug info or obfuscated names fails fast instead of
-///   producing output that won't re-parse.
+///   producing output that won't re-parse. Every constructor that takes a
+///   name goes through it and says so under `# Panics`.
 ///
 /// # What the caller still owes
 ///
@@ -102,14 +103,20 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 ///   [`is_valid_identifier`] / [`is_valid_identifier_in`] and rename them
 ///   yourself. Sanitized names are deterministic but can collide, so
 ///   deduplication is up to the caller.
-/// - **Nesting depth.** Every traversal, drop and clone included, recurses
-///   once per level of nesting, so keep the tree within the 256 levels
-///   `luck_parser` accepts. Each link of an operator, call, index, or field
+/// - **Nesting depth.** No constructor counts it. Every traversal, drop and
+///   clone included, recurses once per level of nesting, so keep the tree
+///   within [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH), the deepest
+///   `luck_parser` builds. Each link of an operator, call, index, or field
 ///   chain counts as a level.
+///   [`block_nesting_depth`](crate::block_nesting_depth) and
+///   [`expr_nesting_depth`](crate::expr_nesting_depth) measure a tree of any
+///   depth without recursing past the cap. Both printers return an error for
+///   a deeper tree, but dropping or cloning one can still overflow the stack.
 ///
 /// To format the result, pass it to `luck_formatter::format_block`, with any
 /// [`SyntheticComment`]s wrapped in `Comments::synthetic`. For compact
-/// output, call `luck_codegen::compact`.
+/// output, call `luck_codegen::compact`. Both return an error for a tree
+/// nested past the cap.
 ///
 /// # Usage
 ///
@@ -209,6 +216,11 @@ impl Synth {
     /// not be identifiers belong in [`Synth::field_or_index`],
     /// [`Synth::record`], or [`Synth::string`], or need
     /// [`sanitize_identifier`] / [`sanitize_identifier_in`] first.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` isn't an identifier under the pinned version, or in
+    /// any dialect when none is pinned.
     #[must_use]
     pub fn identifier(&self, name: &str) -> Token {
         self.token(TokenKind::Identifier(self.identifier_name(name)))

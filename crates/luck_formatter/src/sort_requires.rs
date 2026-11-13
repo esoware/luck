@@ -21,8 +21,9 @@ use luck_token::{
     Comment, CommentKind, CommentPosition, LuaVersion, Span, has_line_break, index_to_offset,
     line_breaks, offset_to_index,
 };
+use rustc_hash::FxHashSet;
 
-use crate::comments::{is_code_free, own_line_start};
+use crate::comments::{is_code_free, own_line_start, region_ending_after};
 use crate::directive::{Directive, format_off_regions};
 use crate::format_block::has_blank_line;
 
@@ -114,10 +115,8 @@ impl<'source> RunCollector<'source> {
                 has_blank_line(self.source, previous, stmt_start, self.version)
             });
 
-            let is_disabled = self
-                .disabled_ranges
-                .iter()
-                .any(|range| stmt_start < range.end && stmt_end > range.start);
+            let is_disabled = region_ending_after(&self.disabled_ranges, stmt_start)
+                .is_some_and(|range| range.start < stmt_end);
 
             let comments_above = self.comments_above(stmt_start);
             let has_comment_since_last_line = current_lines.last().is_some_and(|last_line| {
@@ -153,8 +152,9 @@ impl<'source> RunCollector<'source> {
     /// Keeps `lines` as a run when it has two or more lines and sorting can't
     /// change what they read, then empties it.
     fn flush_run(&mut self, lines: &mut Vec<SortableLine<'source>>) {
+        let keys: FxHashSet<&str> = lines.iter().map(|line| line.key).collect();
         let has_dependency = lines.iter().any(|line| {
-            lines.iter().any(|other| other.key == line.callee || Some(other.key) == line.path_root)
+            keys.contains(line.callee) || line.path_root.is_some_and(|root| keys.contains(root))
         });
         if lines.len() >= 2 && !has_dependency {
             self.runs.push(mem::take(lines));

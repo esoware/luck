@@ -1,17 +1,15 @@
 # luck_core
 
-Dialect targets, diagnostics, and path helpers shared across the luck toolchain.
+Dialect targets and diagnostics shared across the luck toolchain.
 
 ## Overview
 
-`luck_core` sits one level above `luck_token` and holds the types that crates share when neither depends on the other: the dialect a user names, diagnostics, source loading, and the path form modules are keyed on. It has no configuration types. Each tool owns its options, and `luck_config` reads `luck.json` into them.
+`luck_core` sits one level above `luck_token` and holds the types that crates share when neither depends on the other: the dialect a user names and diagnostics. It touches no files and depends on nothing but `luck_token`, so it links anywhere the core pipeline does. It has no configuration types. Each tool owns its options, and `luck_config` reads `luck.json` into them.
 
 ## Key features
 
 - **Build targets.** `LuaTarget` enumerates the supported flavors (Lua 5.1 through 5.5, standalone Luau, and Roblox Luau) and parses from common string forms (`"lua54"`, `"5.4"`, `"luau"`, `"roblox"`). It projects onto the two independent axes the rest of the workspace keys off: `lua_version()` (syntax) and `stdlib_environment()` (stdlib).
 - **Diagnostics.** `Diagnostic` carries a code, message, severity, file path, span, and help text. Its numbered `E002`-`E012` / `W001`-`W007` constructors, such as `Diagnostic::e008`, live in `diagnostic/codes.rs` and are the only way to build one with an `E` or `W` code.
-- **Source loading.** `read_source_file` reads a file with SIMD UTF-8 validation, matching `fs::read_to_string`'s error behavior.
-- **Path form.** `normalize_path` gives the canonical, forward-slash form the resolver and bundler key modules on, and `native_path` turns such a path back into the platform's separators for filesystem calls.
 
 Every item is exported once, from the crate root.
 

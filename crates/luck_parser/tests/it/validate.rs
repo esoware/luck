@@ -1,3 +1,4 @@
+use core::fmt::Write as _;
 use core::ops::Range;
 
 use luck_parser::ParseError;
@@ -381,4 +382,52 @@ fn continue_until_ignores_typeof_in_the_condition() {
     let source = "repeat if a then continue end local x = f() until (y :: typeof(x)) == 1";
     let errors = check(source, LuaVersion::Luau);
     assert!(errors.is_empty(), "luau compiles this program: {errors:?}");
+}
+
+#[test]
+fn goto_errors_come_in_source_order_whatever_their_names() {
+    let source = "goto zeta\ngoto alpha\ndo goto mid goto zeta end\ngoto beta\n\
+                  do local x = 1 goto late end local y = 2 ::late:: print(y)\n\
+                  goto late2 local z = 3 ::late2:: print(z)";
+    let messages: Vec<(usize, String)> = check(source, LuaVersion::Lua54)
+        .into_iter()
+        .map(|error| (error.span.start.try_into().unwrap(), error.message))
+        .collect();
+    let at = |needle: &str| source.find(needle).expect("the source holds the statement");
+    let unresolved = |name: &str| format!("no visible label `{name}` for `goto`");
+    let into_scope = |name: &str| format!("`goto {name}` jumps into the scope of a local");
+    assert_eq!(
+        messages,
+        [
+            (at("goto late end"), into_scope("late")),
+            (at("goto late2"), into_scope("late2")),
+            (at("goto zeta\n"), unresolved("zeta")),
+            (at("goto alpha"), unresolved("alpha")),
+            (at("goto mid"), unresolved("mid")),
+            (at("goto zeta end"), unresolved("zeta")),
+            (at("goto beta"), unresolved("beta")),
+        ]
+    );
+}
+
+#[test]
+fn many_forward_gotos_resolve_without_rescanning_the_pending_ones() {
+    // Each label takes the gotos waiting for its name. Found by walking every
+    // pending goto, this takes minutes.
+    let count = 60_000u32;
+    let mut source = String::new();
+    for index in 0..count {
+        writeln!(source, "goto l{index}").unwrap();
+    }
+    for index in 0..count {
+        writeln!(source, "::l{index}::").unwrap();
+    }
+    assert_no_errors(&check(&source, LuaVersion::Lua54));
+
+    let mut nested = String::new();
+    for index in 0..count {
+        writeln!(nested, "do goto l{index} end").unwrap();
+    }
+    nested.push_str("::l0::\n");
+    assert_eq!(check(&nested, LuaVersion::Lua54).len(), 59_999, "all but one label is missing");
 }

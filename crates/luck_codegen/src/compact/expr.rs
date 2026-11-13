@@ -1,7 +1,8 @@
 use luck_ast::{
     BinaryOp, Expression, Field, FieldAccess, FunctionArgs, FunctionCall, FunctionDef,
-    IfExpression, IndexExpression, InterpolatedString, ParenthesizedExpression, TableConstructor,
-    TypeCast, TypeInstantiation, UnaryOp, Var, expr_starts_with_brace,
+    IfExpression, IndexExpression, InterpolatedString, MAX_NESTING_DEPTH, ParenthesizedExpression,
+    TableConstructor, TypeCast, TypeInstantiation, UnaryOp, Var, expr_starts_with_brace,
+    regrouped_levels,
 };
 use luck_token::TokenKind;
 
@@ -63,17 +64,20 @@ impl CompactPrinter {
     }
 
     pub(super) fn emit_function_call(&mut self, call: &FunctionCall) {
-        self.emit_expr(&call.callee);
-        if let Some(method_name) = &call.method {
-            self.emit_fixed(":");
-            self.emit_token(method_name);
+        if self.descend() {
+            self.emit_expr(&call.callee);
+            if let Some(method_name) = &call.method {
+                self.emit_fixed(":");
+                self.emit_token(method_name);
+            }
+            if let Some(type_args) = &call.explicit_type_args {
+                self.emit_fixed("<<");
+                self.emit_punctuated(&type_args.args, ",", Self::emit_type);
+                self.emit_fixed(">>");
+            }
+            self.emit_function_args(&call.args);
         }
-        if let Some(type_args) = &call.explicit_type_args {
-            self.emit_fixed("<<");
-            self.emit_punctuated(&type_args.args, ",", Self::emit_type);
-            self.emit_fixed(">>");
-        }
-        self.emit_function_args(&call.args);
+        self.ascend();
     }
 
     fn emit_function_args(&mut self, function_args: &FunctionArgs) {
@@ -91,17 +95,23 @@ impl CompactPrinter {
     }
 
     fn emit_parenthesized_expr(&mut self, parenthesized: &ParenthesizedExpression) {
-        self.emit_fixed("(");
-        self.emit_expr(&parenthesized.expr);
-        self.emit_fixed(")");
+        if self.descend() {
+            self.emit_fixed("(");
+            self.emit_expr(&parenthesized.expr);
+            self.emit_fixed(")");
+        }
+        self.ascend();
     }
 
     fn emit_table_constructor(&mut self, table: &TableConstructor) {
-        self.emit_fixed("{");
-        // A trailing separator the source carried is dropped; it costs bytes
-        // and changes nothing.
-        self.emit_joined(&table.fields.items, ",", Self::emit_field);
-        self.emit_fixed("}");
+        if self.descend() {
+            self.emit_fixed("{");
+            // A trailing separator the source carried is dropped; it costs bytes
+            // and changes nothing.
+            self.emit_joined(&table.fields.items, ",", Self::emit_field);
+            self.emit_fixed("}");
+        }
+        self.ascend();
     }
 
     fn emit_field(&mut self, field: &Field) {
@@ -125,83 +135,120 @@ impl CompactPrinter {
     }
 
     fn emit_index_expr(&mut self, index: &IndexExpression) {
-        self.emit_expr(&index.prefix);
-        self.emit_fixed("[");
-        self.emit_expr(&index.index);
-        self.emit_fixed("]");
+        if self.descend() {
+            self.emit_expr(&index.prefix);
+            self.emit_fixed("[");
+            self.emit_expr(&index.index);
+            self.emit_fixed("]");
+        }
+        self.ascend();
     }
 
     fn emit_field_access(&mut self, field: &FieldAccess) {
-        self.emit_expr(&field.prefix);
-        self.emit_fixed(".");
-        self.emit_token(&field.name);
+        if self.descend() {
+            self.emit_expr(&field.prefix);
+            self.emit_fixed(".");
+            self.emit_token(&field.name);
+        }
+        self.ascend();
     }
 
     fn emit_binary_op(&mut self, binary_op: &BinaryOp) {
-        self.emit_expr(&binary_op.lhs);
-        self.emit_fixed(binary_op.op.static_text());
-        self.emit_expr(&binary_op.rhs);
+        if self.descend() {
+            // An operand that regroups when read back counts at the depth it
+            // ends up at.
+            let (lhs_levels, rhs_levels) = regrouped_levels(binary_op);
+            self.emit_regrouped(&binary_op.lhs, lhs_levels);
+            self.emit_fixed(binary_op.op.static_text());
+            self.emit_regrouped(&binary_op.rhs, rhs_levels);
+        }
+        self.ascend();
+    }
+
+    fn emit_regrouped(&mut self, operand: &Expression, levels: usize) {
+        self.depth = self.depth.saturating_add(levels);
+        if self.depth > MAX_NESTING_DEPTH {
+            self.is_too_deep = true;
+        } else {
+            self.emit_expr(operand);
+        }
+        self.depth = self.depth.saturating_sub(levels);
     }
 
     fn emit_unary_op(&mut self, unary_op: &UnaryOp) {
-        self.emit_fixed(unary_op.op.static_text());
-        self.emit_expr(&unary_op.operand);
+        if self.descend() {
+            self.emit_fixed(unary_op.op.static_text());
+            self.emit_expr(&unary_op.operand);
+        }
+        self.ascend();
     }
 
     fn emit_if_expr(&mut self, if_expr: &IfExpression) {
-        self.emit_fixed("if");
-        self.emit_expr(&if_expr.condition);
-        self.emit_fixed("then");
-        self.emit_expr(&if_expr.then_expr);
-        for clause in &if_expr.elseif_clauses {
-            self.emit_fixed("elseif");
-            self.emit_expr(&clause.condition);
+        if self.descend() {
+            self.emit_fixed("if");
+            self.emit_expr(&if_expr.condition);
             self.emit_fixed("then");
-            self.emit_expr(&clause.expr);
+            self.emit_expr(&if_expr.then_expr);
+            for clause in &if_expr.elseif_clauses {
+                self.emit_fixed("elseif");
+                self.emit_expr(&clause.condition);
+                self.emit_fixed("then");
+                self.emit_expr(&clause.expr);
+            }
+            self.emit_fixed("else");
+            self.emit_expr(&if_expr.else_expr);
         }
-        self.emit_fixed("else");
-        self.emit_expr(&if_expr.else_expr);
+        self.ascend();
     }
 
     fn emit_interpolated_string(&mut self, interpolated: &InterpolatedString) {
-        // The braces follow expression presence, not token kind: a plain
-        // `` `text` `` lexes as a Begin("") + End(text) pair with no
-        // expression and must print without braces.
-        self.output.print_ascii_byte(b'`');
-        for segment in &interpolated.segments {
-            if let TokenKind::InterpolatedStringBegin(text)
-            | TokenKind::InterpolatedStringMiddle(text)
-            | TokenKind::InterpolatedStringEnd(text) = &segment.literal.kind
-            {
-                self.output.print_str(text);
-            }
-            if let Some(expr) = &segment.expr {
-                self.output.print_ascii_byte(b'{');
-                // `{{` is a parse error in Luau: an expression starting with a
-                // table constructor needs a space after the interpolation
-                // opener.
-                if expr_starts_with_brace(expr) {
-                    self.output.print_ascii_byte(b' ');
+        if self.descend() {
+            // The braces follow expression presence, not token kind: a plain
+            // `` `text` `` lexes as a Begin("") + End(text) pair with no
+            // expression and must print without braces.
+            self.output.print_ascii_byte(b'`');
+            for segment in &interpolated.segments {
+                if let TokenKind::InterpolatedStringBegin(text)
+                | TokenKind::InterpolatedStringMiddle(text)
+                | TokenKind::InterpolatedStringEnd(text) = &segment.literal.kind
+                {
+                    self.output.print_str(text);
                 }
-                self.previous = PieceClass::Other;
-                self.emit_expr(expr);
-                self.output.print_ascii_byte(b'}');
+                if let Some(expr) = &segment.expr {
+                    self.output.print_ascii_byte(b'{');
+                    // `{{` is a parse error in Luau: an expression starting with a
+                    // table constructor needs a space after the interpolation
+                    // opener.
+                    if expr_starts_with_brace(expr) {
+                        self.output.print_ascii_byte(b' ');
+                    }
+                    self.previous = PieceClass::Other;
+                    self.emit_expr(expr);
+                    self.output.print_ascii_byte(b'}');
+                }
             }
+            self.output.print_ascii_byte(b'`');
+            self.previous = PieceClass::Other;
         }
-        self.output.print_ascii_byte(b'`');
-        self.previous = PieceClass::Other;
+        self.ascend();
     }
 
     fn emit_type_cast(&mut self, cast: &TypeCast) {
-        self.emit_expr(&cast.expr);
-        self.emit_fixed("::");
-        self.emit_type(&cast.type_annotation);
+        if self.descend() {
+            self.emit_expr(&cast.expr);
+            self.emit_fixed("::");
+            self.emit_type(&cast.type_annotation);
+        }
+        self.ascend();
     }
 
     fn emit_type_instantiation(&mut self, instantiation: &TypeInstantiation) {
-        self.emit_expr(&instantiation.expr);
-        self.emit_fixed("<<");
-        self.emit_punctuated(&instantiation.type_args.args, ",", Self::emit_type);
-        self.emit_fixed(">>");
+        if self.descend() {
+            self.emit_expr(&instantiation.expr);
+            self.emit_fixed("<<");
+            self.emit_punctuated(&instantiation.type_args.args, ",", Self::emit_type);
+            self.emit_fixed(">>");
+        }
+        self.ascend();
     }
 }

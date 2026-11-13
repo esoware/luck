@@ -13,6 +13,7 @@ AST-level minification for Lua and Luau.
 - **Scope-aware renaming.** `rename_locals` resolves every reference to its binding and lets bindings whose live scopes don't overlap share the same short name.
 - **Metamethod-safe.** Purity checks treat a variable read, and arithmetic, comparison, concatenation, or indexing involving one, as impure, because any of them can dispatch through a metamethod with side effects. A literal operation that can raise, such as `1 // 0`, counts as impure too.
 - **Idempotent output.** `minify(minify(x)) == minify(x)` is a hard invariant, enforced by tests.
+- **Output within the nesting cap.** A rewrite that nests an expression deeper, such as inlining a local, chaining `if`/`return` guards into `and`/`or`, merging conditions, or negating one, first checks that the result stays within `luck_ast::MAX_NESTING_DEPTH`, and leaves the code as written when it wouldn't. Input the parser accepts always minifies to output it accepts.
 
 ## Architecture
 
@@ -38,10 +39,10 @@ Tail (runs only when `rename_locals` or `lift_locals` is enabled): when renaming
 
 ### Transforms
 
-Every transform implements `Transform` from `luck_ast`, overriding only the hooks it needs and delegating to `self.walk_*` for the default recursion. Matches over AST variants are exhaustive, so a new variant can't silently bypass a pass.
+Every transform implements `Transform` from `luck_ast`, overriding only the hooks it needs and delegating to `self.walk_*` for the default recursion. Matches over AST variants are exhaustive, so a new variant can't silently bypass a pass. A pass that moves an expression deeper tracks how deep its walk is through the `descend`/`ascend` hooks and asks `fits_at_depth` in `expr.rs` before it rewrites.
 
 ### Scope and naming
 
-The renamer does its own scope analysis in `rename_locals/analyzer.rs`. It resolves each reference to a binding (a reference that resolves to none is a global), records the scopes each binding is live in, including closures that capture it, and lets bindings whose live scopes don't overlap share a name. The most-referenced bindings get the shortest names.
+The renamer does its own scope analysis in `rename_locals/analyzer.rs`. It resolves each reference to a binding (a reference that resolves to none is a global), records the scopes each binding is live in, including closures that capture it, and lets bindings whose live scopes don't overlap share a name. The most-referenced bindings get the shortest names. `rename_locals/scope_claims.rs` records which slots and candidate names each scope has taken, with the first free one per scope, so a claim costs a hash insert per live scope whatever the scope count.
 
 `rename_locals/candidate_pool.rs` maps an index to a candidate identifier via a single `name_for_index` function, shortest names first. The first characters tried spell `luck`/`LUCK` before falling through the rest of the alphabet (`l`, `u`, `c`, `k`, `L`, `U`, `C`, `K`, `a`, `b`, `d`, ...), and multi-character names mix in digits from the second character on. The renamer's `CandidatePool` walks that sequence, skipping keywords, globals read where the binding is live, and names another binding already wears in an overlapping scope.

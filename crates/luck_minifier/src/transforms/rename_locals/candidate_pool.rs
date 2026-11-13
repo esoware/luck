@@ -1,7 +1,6 @@
 use luck_token::{CompactString, LuaVersion, TokenKind};
-use rustc_hash::FxHashSet;
 
-use super::scope_set::ScopeSet;
+use super::scope_claims::ScopeClaims;
 
 const FIRST_CHARS: &[u8] = b"luckLUCKabdefghijmnopqrstvwxyzABDEFGHIJMNOPQRSTVWXYZ_";
 const REST_CHARS: &[u8] = b"luckLUCKabdefghijmnopqrstvwxyz_ABDEFGHIJMNOPQRSTVWXYZ0123456789";
@@ -31,59 +30,57 @@ fn char_at(alphabet: &[u8], index: usize) -> Option<char> {
 struct Candidate {
     name: CompactString,
     is_reserved: bool,
-    // Scopes where some slot already wears the name. Slots that are never
-    // live in the same scope can share it.
-    taken_scopes: ScopeSet,
 }
 
-impl Candidate {
-    fn is_available(&self, live_scopes: &ScopeSet, forbidden_names: &FxHashSet<&str>) -> bool {
-        !live_scopes.intersects(&self.taken_scopes)
-            && !self.is_reserved
-            && !forbidden_names.contains(self.name.as_str())
-    }
-
-    fn claim(&mut self, live_scopes: &ScopeSet) -> CompactString {
-        self.taken_scopes.union_with(live_scopes);
-        self.name.clone()
-    }
-}
-
-/// Every slot scans candidates from index 0, so each name and its keyword
-/// check are computed once and shared.
+/// Each name and its keyword check are computed once and shared by every
+/// slot.
 pub(super) struct CandidatePool {
     version: LuaVersion,
     candidates: Vec<Candidate>,
+    /// Per scope, the candidates no slot live there can take: one a slot
+    /// already wears, or the name of a global read there.
+    unavailable: ScopeClaims,
 }
 
 impl CandidatePool {
-    pub(super) const fn new(version: LuaVersion) -> Self {
-        Self { version, candidates: Vec::new() }
+    pub(super) fn new(version: LuaVersion) -> Self {
+        Self { version, candidates: Vec::new(), unavailable: ScopeClaims::default() }
     }
 
+    /// The first candidate that no slot live in one of `live_scopes` wears,
+    /// that isn't a keyword, and that `reads_global` doesn't find read in one
+    /// of them. Slots that are never live in the same scope can share a name.
     pub(super) fn pick(
         &mut self,
-        live_scopes: &ScopeSet,
-        forbidden_names: &FxHashSet<&str>,
+        live_scopes: &[usize],
+        reads_global: impl Fn(usize, &str) -> bool,
     ) -> CompactString {
-        if let Some(candidate) = self
-            .candidates
-            .iter_mut()
-            .find(|candidate| candidate.is_available(live_scopes, forbidden_names))
-        {
-            return candidate.claim(live_scopes);
-        }
+        // Every candidate below a scope's first free one is unavailable there.
+        let mut index =
+            live_scopes.iter().map(|&scope| self.unavailable.first_free(scope)).max().unwrap_or(0);
         loop {
-            let name = name_for_index(self.candidates.len());
-            let is_reserved = TokenKind::is_reserved(&name, self.version);
-            let mut candidate = Candidate { name, is_reserved, taken_scopes: ScopeSet::default() };
-            let claimed_name = candidate
-                .is_available(live_scopes, forbidden_names)
-                .then(|| candidate.claim(live_scopes));
-            self.candidates.push(candidate);
-            if let Some(claimed) = claimed_name {
-                return claimed;
+            while self.candidates.len() <= index {
+                let name = name_for_index(self.candidates.len());
+                let is_reserved = TokenKind::is_reserved(&name, self.version);
+                self.candidates.push(Candidate { name, is_reserved });
             }
+            let Some(candidate) = self.candidates.get(index) else {
+                return CompactString::default();
+            };
+            // A keyword or a global's name is recorded where it rules the
+            // candidate out, so that scope's first free one moves past it.
+            if candidate.is_reserved {
+                self.unavailable.claim(live_scopes, index);
+            } else if let Some(scope) = live_scopes.iter().copied().find(|&scope| {
+                self.unavailable.is_claimed(scope, index) || reads_global(scope, &candidate.name)
+            }) {
+                self.unavailable.claim(&[scope], index);
+            } else {
+                let name = candidate.name.clone();
+                self.unavailable.claim(live_scopes, index);
+                return name;
+            }
+            index = index.saturating_add(1);
         }
     }
 }
@@ -91,6 +88,8 @@ impl CandidatePool {
 #[cfg(test)]
 mod tests {
     use core::iter::repeat_with;
+
+    use rustc_hash::FxHashSet;
 
     use super::*;
 
@@ -118,22 +117,47 @@ mod tests {
 
     #[test]
     fn pick_skips_reserved_words() {
-        let mut live_scopes = ScopeSet::default();
-        live_scopes.insert(0);
-        let forbidden_names = FxHashSet::default();
         // Every one- and two-character name, so each two-letter keyword
         // comes up.
         let pick_count = FIRST_CHARS.len() * (REST_CHARS.len() + 1);
         for version in LuaVersion::ALL {
             let mut pool = CandidatePool::new(version);
             let names: FxHashSet<CompactString> =
-                repeat_with(|| pool.pick(&live_scopes, &forbidden_names))
-                    .take(pick_count)
-                    .collect();
+                repeat_with(|| pool.pick(&[0], |_, _| false)).take(pick_count).collect();
             assert_eq!(names.len(), pick_count, "{version:?}");
             for keyword in ["do", "if", "in", "or"] {
                 assert!(!names.contains(keyword), "{keyword} {version:?}");
             }
         }
+    }
+
+    #[test]
+    fn slots_that_share_no_scope_share_a_name() {
+        let mut pool = CandidatePool::new(LuaVersion::Lua54);
+        assert_eq!(pool.pick(&[0, 1], |_, _| false), "l");
+        assert_eq!(pool.pick(&[1, 2], |_, _| false), "u");
+        assert_eq!(pool.pick(&[2, 3], |_, _| false), "l");
+        assert_eq!(pool.pick(&[4], |_, _| false), "l");
+        assert_eq!(pool.pick(&[0, 4], |_, _| false), "u");
+    }
+
+    #[test]
+    fn pick_skips_a_global_read_in_any_live_scope() {
+        let mut pool = CandidatePool::new(LuaVersion::Lua54);
+        let reads_global = |scope: usize, name: &str| scope == 3 && (name == "l" || name == "c");
+        assert_eq!(pool.pick(&[1, 3], reads_global), "u");
+        assert_eq!(pool.pick(&[3], reads_global), "k");
+        assert_eq!(pool.pick(&[1], reads_global), "l");
+    }
+
+    #[test]
+    fn a_pick_among_many_live_slots_starts_past_the_names_they_wear() {
+        let mut pool = CandidatePool::new(LuaVersion::Lua54);
+        for _ in 0..5_000u32 {
+            pool.pick(&[0], |_, _| false);
+        }
+        // Without each scope's first free candidate, every pick rescans the
+        // names before it.
+        assert!(pool.unavailable.first_free(0) >= 5_000);
     }
 }

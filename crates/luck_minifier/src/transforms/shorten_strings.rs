@@ -11,9 +11,11 @@ struct StringShortener {
     version: LuaVersion,
 }
 
-impl Transform for StringShortener {
-    fn transform_expr(&mut self, expr: Expression) -> Expression {
-        match self.walk_expr(expr) {
+impl StringShortener {
+    // Out of line, so an expression nested below holds only the walk's frame,
+    // not these temporaries.
+    fn shorten_literal(&self, walked: Expression) -> Expression {
+        match walked {
             Expression::StringLiteral(literal) => {
                 if let Some(bytes) = decode_string(&literal.text, self.version) {
                     let candidate = encode_string(&bytes);
@@ -45,6 +47,13 @@ impl Transform for StringShortener {
             | Expression::TypeInstantiation(_)
             | Expression::Error(_)) => other,
         }
+    }
+}
+
+impl Transform for StringShortener {
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        let walked = self.walk_expr(expr);
+        self.shorten_literal(walked)
     }
 }
 

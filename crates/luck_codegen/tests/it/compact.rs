@@ -1,5 +1,7 @@
-use luck_ast::Synth;
-use luck_token::LuaVersion;
+use luck_ast::{
+    Block, Expression, LastStatement, MAX_NESTING_DEPTH, Synth, Var, block_nesting_depth,
+};
+use luck_token::{BinOp, LuaVersion, TokenKind, UnOp};
 
 use crate::common::assert_compacts_to;
 
@@ -10,9 +12,9 @@ fn output_capacity_hint_never_changes_output() {
             format!("--{}\nlocal value = - -1; return value .. 'é'", "comment ".repeat(8192));
         let parsed = luck_parser::parse(&source, version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        let expected = luck_codegen::compact(&parsed.block);
+        let expected = luck_codegen::compact(&parsed.block).unwrap();
         for capacity in [0, 1, expected.len(), expected.len() + 1, source.len()] {
-            let output = luck_codegen::compact_with_capacity(&parsed.block, capacity);
+            let output = luck_codegen::compact_with_capacity(&parsed.block, capacity).unwrap();
             assert_eq!(output, expected);
             assert_compacts_to(&output, &expected, version);
         }
@@ -20,8 +22,96 @@ fn output_capacity_hint_never_changes_output() {
     let synth = Synth::new();
     let block = synth.block(Vec::new(), Some(synth.return_(vec![synth.string("source-free")])));
     let expected = luck_codegen::compact(&block);
-    for capacity in [0, 1, expected.len(), 1024] {
+    for capacity in [0, 1, 1024] {
         assert_eq!(luck_codegen::compact_with_capacity(&block, capacity), expected);
+    }
+}
+
+#[test]
+fn a_capacity_hint_the_allocator_cannot_meet_is_dropped() {
+    let synth = Synth::new();
+    let block = synth.block(Vec::new(), Some(synth.return_(vec![synth.number("1")])));
+    for capacity in [usize::MAX, isize::MAX.unsigned_abs()] {
+        let output = luck_codegen::compact_with_capacity(&block, capacity);
+        assert_eq!(output.as_deref(), Ok("return 1"), "capacity {capacity}");
+    }
+}
+
+/// Nests its operand exactly one level deeper.
+type Wrap = fn(&Synth, Expression) -> Expression;
+
+/// `return x`, with `wrap` applied to `x` until the block nests `depth` deep.
+fn nested_return(depth: usize, wrap: Wrap) -> Block {
+    let synth = Synth::new();
+    let mut expr = synth.name_expr("x");
+    for _ in 1..depth {
+        expr = wrap(&synth, expr);
+    }
+    let block = synth.block(Vec::new(), Some(synth.return_(vec![expr])));
+    assert_eq!(block_nesting_depth(&block), depth, "each wrap adds one level");
+    block
+}
+
+fn single_level_wraps() -> Vec<(&'static str, Wrap)> {
+    vec![
+        ("parentheses", |synth, expr| synth.parenthesized(expr)),
+        ("unary operator", |synth, expr| synth.unary_op(UnOp::Not, expr)),
+        ("left operand", |synth, expr| synth.binary_op(expr, BinOp::Or, synth.number("1"))),
+        ("right operand", |synth, expr| synth.binary_op(synth.number("1"), BinOp::Concat, expr)),
+        ("call argument", |synth, expr| synth.call(synth.name_expr("f"), vec![expr])),
+        ("index", |synth, expr| synth.index(synth.name_expr("t"), expr)),
+        ("table", |synth, expr| synth.array(vec![expr])),
+    ]
+}
+
+#[test]
+fn a_tree_at_the_nesting_cap_prints_and_reparses() {
+    for (label, wrap) in single_level_wraps() {
+        let block = nested_return(MAX_NESTING_DEPTH, wrap);
+        let output = luck_codegen::compact(&block).expect(label);
+        let reparsed = luck_parser::parse(output, LuaVersion::Lua54);
+        assert!(reparsed.errors.is_empty(), "{label}: {:?}", reparsed.errors.first());
+        assert_eq!(block_nesting_depth(&reparsed.block), MAX_NESTING_DEPTH, "{label}");
+    }
+}
+
+#[test]
+fn a_tree_past_the_nesting_cap_is_an_error() {
+    for (label, wrap) in single_level_wraps() {
+        let block = nested_return(MAX_NESTING_DEPTH + 1, wrap);
+        let error = luck_codegen::compact(&block).expect_err(label);
+        assert!(error.message.contains("maximum nesting depth exceeded"), "{label}: {error:?}");
+    }
+}
+
+#[test]
+fn a_chain_far_past_the_nesting_cap_is_refused_without_walking_down_it() {
+    let synth = Synth::new();
+    let mut chain = synth.name_expr("x");
+    for _ in 0..200_000u32 {
+        chain = synth.binary_op(chain, BinOp::Add, synth.number("1"));
+    }
+    let block = synth.block(Vec::new(), Some(synth.return_(vec![chain])));
+    assert_eq!(luck_codegen::compact(&block).ok(), None);
+
+    // Dropped whole, a tree this deep recurses once per level.
+    let Some(LastStatement::Return(mut return_stmt)) = block.last_stmt.map(|last| *last) else {
+        panic!("the block ends in its return");
+    };
+    let mut expr = return_stmt.exprs.items.pop().expect("the return has its value");
+    while let Expression::BinaryOp(mut binary_op) = expr {
+        expr = binary_op.lhs.take();
+    }
+}
+
+#[test]
+fn a_token_out_of_place_prints_its_spelling() {
+    let synth = Synth::new();
+    for kind in [TokenKind::End, TokenKind::Plus, TokenKind::DotDotDot, TokenKind::Return] {
+        let spelling = kind.static_text().expect("the kind has a fixed spelling");
+        let name = Expression::Var(Var::Name(synth.token(kind)));
+        let block = synth.block(vec![synth.local(&["x"], vec![name])], None);
+        assert_eq!(luck_codegen::compact(&block), Ok(format!("local x={spelling}")));
     }
 }
 

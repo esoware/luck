@@ -194,10 +194,7 @@ impl Parser<'_> {
                     can_take_separator = true;
                 }
                 _ => {
-                    let span = self.current_span();
-                    self.error(span, format!("unexpected token {}", self.peek()));
-                    self.synchronize();
-                    stmts.push(Statement::Error(span));
+                    stmts.push(self.report_unexpected_in_block());
                     can_take_separator = true;
                 }
             }
@@ -210,6 +207,15 @@ impl Parser<'_> {
             if stmts.is_empty() && last_stmt.is_none() { start_span } else { self.previous_span };
 
         Block { span: start_span.merge(end_span), stmts, last_stmt }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn report_unexpected_in_block(&mut self) -> Statement {
+        let span = self.current_span();
+        self.error(span, format!("unexpected token {}", self.peek()));
+        self.synchronize();
+        Statement::Error(span)
     }
 
     fn parse_loop_block(&mut self) -> Block {
@@ -301,24 +307,27 @@ impl Parser<'_> {
                 self.parse_global_stmt()
             }
             TokenKind::Identifier(_) | TokenKind::LeftParen => self.parse_assignment_or_call(),
-            _ => {
-                let span = self.current_span();
-                let kind = self.peek();
-                let hint = match kind {
-                    TokenKind::End => " (extra `end` without matching block)",
-                    TokenKind::Else | TokenKind::ElseIf => {
-                        " (`else`/`elseif` without matching `if`)"
-                    }
-                    TokenKind::Until => " (`until` without matching `repeat`)",
-                    TokenKind::RightParen => " (unmatched `)`)",
-                    TokenKind::RightBrace => " (unmatched `}`)",
-                    _ => "",
-                };
-                self.error(span, format!("unexpected token {kind}{hint}"));
-                self.synchronize();
-                Statement::Error(span)
-            }
+            _ => self.report_unexpected_stmt_start(),
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
+    fn report_unexpected_stmt_start(&mut self) -> Statement {
+        let span = self.current_span();
+        let kind = self.peek();
+        let hint = match kind {
+            TokenKind::End => " (extra `end` without matching block)",
+            TokenKind::Else | TokenKind::ElseIf => " (`else`/`elseif` without matching `if`)",
+            TokenKind::Until => " (`until` without matching `repeat`)",
+            TokenKind::RightParen => " (unmatched `)`)",
+            TokenKind::RightBrace => " (unmatched `}`)",
+            _ => "",
+        };
+        self.error(span, format!("unexpected token {kind}{hint}"));
+        self.synchronize();
+        Statement::Error(span)
     }
 
     fn parse_return_stmt(&mut self) -> LastStatement {
@@ -359,24 +368,10 @@ impl Parser<'_> {
 
         let mut elseif_clauses = Vec::new();
         while matches!(self.peek(), TokenKind::ElseIf) {
-            let elseif_span = self.advance_span();
-            let elseif_condition = self.parse_expr(0);
-            self.expect_keyword(&TokenKind::Then, Construct::IfStatement);
-            let elseif_block = self.parse_block();
-            let span = elseif_span.merge(elseif_block.span);
-            elseif_clauses.push(ElseIfClause {
-                span,
-                condition: elseif_condition,
-                block: elseif_block,
-            });
+            elseif_clauses.push(self.parse_elseif_clause());
         }
 
-        let else_clause = matches!(self.peek(), TokenKind::Else).then(|| {
-            let else_span = self.advance_span();
-            let else_block = self.parse_block();
-            let span = else_span.merge(else_block.span);
-            ElseClause { span, block: else_block }
-        });
+        let else_clause = matches!(self.peek(), TokenKind::Else).then(|| self.parse_else_clause());
 
         let end_span = self.expect_keyword(&TokenKind::End, Construct::IfStatement);
         let span = if_span.merge(end_span);
@@ -388,6 +383,20 @@ impl Parser<'_> {
             else_clause,
             block,
         }))
+    }
+
+    fn parse_elseif_clause(&mut self) -> ElseIfClause {
+        let elseif_span = self.advance_span();
+        let condition = self.parse_expr(0);
+        self.expect_keyword(&TokenKind::Then, Construct::IfStatement);
+        let block = self.parse_block();
+        ElseIfClause { span: elseif_span.merge(block.span), condition, block }
+    }
+
+    fn parse_else_clause(&mut self) -> ElseClause {
+        let else_span = self.advance_span();
+        let block = self.parse_block();
+        ElseClause { span: else_span.merge(block.span), block }
     }
 
     fn parse_while_loop(&mut self) -> Statement {
@@ -500,53 +509,62 @@ impl Parser<'_> {
         if self.version.has_compound_assignment()
             && let Some(op) = CompoundOp::from_token_kind(self.peek())
         {
-            self.advance_span();
-            let rhs = self.parse_expr(0);
-            let var = self.assignment_target(expr);
-            let span = var.span().merge(rhs.span());
-            return Statement::CompoundAssignment(Box::new(CompoundAssignment {
-                span,
-                var,
-                op,
-                expr: rhs,
-            }));
+            return self.parse_compound_assignment(expr, op);
         }
 
         // Assignment: `varlist = explist`.
         if matches!(self.peek(), TokenKind::Comma | TokenKind::Equal) {
-            let mut target_exprs = vec![expr];
-            while self.eat(&TokenKind::Comma) {
-                target_exprs.push(self.parse_expr(0));
-            }
-
-            let equal = self.expect(&TokenKind::Equal);
-
-            let values = self.parse_expr_list();
-
-            // Targets convert after the values parse, which decides how an
-            // invalid target's error sorts among others at the same position.
-            let vars: Vec<Var> = target_exprs
-                .into_iter()
-                .map(|target_expr| self.assignment_target(target_expr))
-                .collect();
-            let targets = Punctuated::from_items(vars);
-            let end_span = values.last().map_or(equal, Expression::span);
-            let start_span = targets.first().map_or(equal, Var::span);
-            let span = start_span.merge(end_span);
-
-            return Statement::Assignment(Box::new(Assignment { span, targets, values }));
+            return self.parse_assignment(expr);
         }
 
         if let Expression::FunctionCall(call) = expr {
             Statement::FunctionCall(call)
         } else {
-            let span = expr.span();
-            self.error(
-                span,
-                "expected function call or assignment (expressions are not valid statements)",
-            );
-            Statement::Error(span)
+            self.report_expression_stmt(&expr)
         }
+    }
+
+    fn parse_compound_assignment(&mut self, target: Expression, op: CompoundOp) -> Statement {
+        self.advance_span();
+        let rhs = self.parse_expr(0);
+        let var = self.assignment_target(target);
+        let span = var.span().merge(rhs.span());
+        Statement::CompoundAssignment(Box::new(CompoundAssignment { span, var, op, expr: rhs }))
+    }
+
+    fn parse_assignment(&mut self, first_target: Expression) -> Statement {
+        let mut target_exprs = vec![first_target];
+        while self.eat(&TokenKind::Comma) {
+            target_exprs.push(self.parse_expr(0));
+        }
+
+        let equal = self.expect(&TokenKind::Equal);
+
+        let values = self.parse_expr_list();
+
+        // Targets convert after the values parse, which decides how an
+        // invalid target's error sorts among others at the same position.
+        let vars: Vec<Var> = target_exprs
+            .into_iter()
+            .map(|target_expr| self.assignment_target(target_expr))
+            .collect();
+        let targets = Punctuated::from_items(vars);
+        let end_span = values.last().map_or(equal, Expression::span);
+        let start_span = targets.first().map_or(equal, Var::span);
+        let span = start_span.merge(end_span);
+
+        Statement::Assignment(Box::new(Assignment { span, targets, values }))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn report_expression_stmt(&mut self, expr: &Expression) -> Statement {
+        let span = expr.span();
+        self.error(
+            span,
+            "expected function call or assignment (expressions are not valid statements)",
+        );
+        Statement::Error(span)
     }
 
     /// Unwrap an assignment target, or record an error and return a

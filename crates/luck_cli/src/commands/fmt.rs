@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use luck_config::{LuckConfig, resolved_format_config};
-use luck_core::{LuaTarget, read_source_file};
+use luck_core::LuaTarget;
+use luck_resolver::read_source_file;
 
 use crate::exit::{Exit, usage_error};
 use crate::output::read_stdin_source;

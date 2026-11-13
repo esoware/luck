@@ -36,6 +36,7 @@ Other recurring miscompile classes:
 - **Integer/float subtype (5.3+).** `1` and `1.0` differ observably (`math.type`, `tostring`, `//`), so no version-blind numeric rewrites.
 - **String escapes.** Token payloads are raw source text, not decoded values, so never compare or concatenate string literals textually.
 - **Attributes.** `<close>` locals have scope-exit side effects and `<const>` affects validity, so never remove, merge, or move an attributed local.
+- **Nesting depth.** The parser refuses a tree nested past `luck_ast::MAX_NESTING_DEPTH`, so a rewrite that puts an expression under more levels than it had (an operator, a call, parentheses, or a deeper position) can emit output that won't reparse. Track the walk's depth with the `descend`/`ascend` hooks, ask `fits_at_depth` in `src/expr.rs` before the rewrite, and test it on input nested to the cap.
 
 ## 5. Tests (all four)
 

@@ -4,36 +4,75 @@ mod function;
 mod stmt;
 mod types;
 
-use luck_ast::{Block, Punctuated};
-use luck_token::{CodeBuffer, Token, TokenKind};
+use luck_ast::{Block, MAX_NESTING_DEPTH, Punctuated};
+use luck_token::{CodeBuffer, SourceError, Token, TokenKind};
 
 use crate::separator::{PieceClass, needs_space};
 
 /// The output starts with no reserved capacity. Use
 /// [`compact_with_capacity`] when there's a useful size estimate.
-#[must_use]
-pub fn compact(block: &Block) -> String {
+///
+/// # Errors
+///
+/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
+/// which `luck_parser` never builds and would refuse to read back.
+pub fn compact(block: &Block) -> Result<String, SourceError> {
     compact_with_capacity(block, 0)
 }
 
-/// The hint only affects allocation, never the output.
+/// The hint only affects allocation, never the output, and one the allocator
+/// can't meet is dropped.
 ///
 /// A previous output's length makes a good one. Source length over-reserves for comment-heavy
 /// input, and a transformed AST can print longer than its source.
-#[must_use]
-pub fn compact_with_capacity(block: &Block, capacity: usize) -> String {
-    let mut printer =
-        CompactPrinter { output: CodeBuffer::with_capacity(capacity), previous: PieceClass::Other };
+///
+/// # Errors
+///
+/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
+/// which `luck_parser` never builds and would refuse to read back.
+pub fn compact_with_capacity(block: &Block, capacity: usize) -> Result<String, SourceError> {
+    let mut printer = CompactPrinter {
+        output: CodeBuffer::with_capacity(capacity),
+        previous: PieceClass::Other,
+        depth: 0,
+        is_too_deep: false,
+    };
     printer.emit_block(block);
-    printer.output.into_string()
+    if printer.is_too_deep {
+        return Err(SourceError {
+            span: block.span,
+            message: format!(
+                "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
+            ),
+        });
+    }
+    Ok(printer.output.into_string())
 }
 
 struct CompactPrinter {
     output: CodeBuffer,
     previous: PieceClass,
+    /// Levels open where the printer is, as [`MAX_NESTING_DEPTH`] counts them.
+    depth: usize,
+    is_too_deep: bool,
 }
 
 impl CompactPrinter {
+    /// Enter a level of nesting, the levels `luck_ast::Visitor::descend`
+    /// counts. Past the cap nothing more prints, so the printer's own stack
+    /// stays bounded on a tree of any depth.
+    const fn descend(&mut self) -> bool {
+        self.depth = self.depth.saturating_add(1);
+        if self.depth > MAX_NESTING_DEPTH {
+            self.is_too_deep = true;
+        }
+        !self.is_too_deep
+    }
+
+    const fn ascend(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
     /// Print one piece, preceded by a space if it would otherwise merge with
     /// the previous one.
     #[expect(
@@ -57,23 +96,22 @@ impl CompactPrinter {
         self.emit_piece(text, PieceClass::of_fixed(text));
     }
 
-    /// Fixed-spelling kinds (`Type::Singleton` carries `nil`/`true`/`false`)
-    /// fall through to their static text.
+    /// Every kind prints what the formatter prints for it: the text it
+    /// carries, or its fixed spelling.
     #[expect(
         clippy::wildcard_enum_match_arm,
-        reason = "any other token takes the default path, and naming the rest of TokenKind adds nothing"
+        reason = "every other kind has a fixed spelling, which static_text matches exhaustively"
     )]
     fn emit_token(&mut self, token: &Token) {
         match &token.kind {
             TokenKind::Identifier(text) => self.emit_piece(text, PieceClass::Word),
             TokenKind::Number(text) => self.emit_piece(text, PieceClass::Number),
-            TokenKind::StringLiteral(text) => self.emit_piece(text, PieceClass::Other),
-            TokenKind::Nil => self.emit_fixed("nil"),
-            TokenKind::True => self.emit_fixed("true"),
-            TokenKind::False => self.emit_fixed("false"),
-            other => {
-                debug_assert!(false, "unexpected token kind in AST: {other:?}");
-            }
+            TokenKind::StringLiteral(text)
+            | TokenKind::InterpolatedStringBegin(text)
+            | TokenKind::InterpolatedStringMiddle(text)
+            | TokenKind::InterpolatedStringEnd(text) => self.emit_piece(text, PieceClass::Other),
+            // `Eof` has no spelling, so it prints nothing.
+            fixed => self.emit_fixed(fixed.static_text().unwrap_or_default()),
         }
     }
 

@@ -1,3 +1,5 @@
+use core::fmt::Write as _;
+
 use luck_formatter::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,
     SpaceAfterFunction, format, format_and_verify,
@@ -462,4 +464,36 @@ fn collapse_with_preserved_gaps_keeps_a_valid_layout() {
         output == "if a then\n\n\tx = 1\n\nend\n" || output == "if a then x = 1 end\n",
         "the body must be indented or collapsed, not left at column 0 with a ` end` line: {output:?}"
     );
+}
+
+#[test]
+fn a_long_run_of_requires_sorts_without_comparing_every_pair() {
+    // Whether one line of a run reads another's binding is a lookup per line.
+    // Checked pair by pair, this takes minutes.
+    let count = 180_000usize;
+    let mut source = String::new();
+    for index in 0..count {
+        let module = index.wrapping_mul(7919).rem_euclid(count);
+        writeln!(source, "local m{index} = require(\"mod{module}\")").unwrap();
+    }
+    let output = format_once(&source, LuaVersion::Lua54, &FormatOptions::default());
+    assert_eq!(output.len(), source.len(), "sorting moves lines and changes none");
+    assert!(output.starts_with("local m0 = require(\"mod0\")\nlocal m1 = "), "sorted by name");
+}
+
+#[test]
+fn many_format_off_regions_format_without_rescanning_the_regions() {
+    // Each statement asks which region comes next. Answered by walking the
+    // regions from the first, this takes minutes.
+    let mut source = String::new();
+    for index in 0..140_000u32 {
+        writeln!(
+            source,
+            "-- luck: format off\nx{index}  =  {index}\n-- luck: format on\ny{index}   =   {index}"
+        )
+        .unwrap();
+    }
+    let output = format_once(&source, LuaVersion::Lua54, &FormatOptions::default());
+    assert!(output.starts_with("-- luck: format off\nx0  =  0\n-- luck: format on\ny0 = 0\n"));
+    assert!(output.ends_with("x139999  =  139999\n-- luck: format on\ny139999 = 139999\n"));
 }

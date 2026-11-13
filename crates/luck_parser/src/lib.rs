@@ -3,10 +3,11 @@
 //! Pratt expression parser with recursive descent statement parsing for Lua
 //! 5.1-5.5 and Luau.
 //!
-//! Nesting is capped at 256 levels, and every link of an operator, call,
-//! index, or field chain counts as one, so no consumer of the tree needs more
-//! than a bounded stack. Error recovery reports multiple parse errors in a
-//! single pass.
+//! A source that parses without error gives a tree at most
+//! [`luck_ast::MAX_NESTING_DEPTH`] levels deep, measured as
+//! [`luck_ast::block_nesting_depth`] measures it, so no consumer of the tree
+//! needs more than a bounded stack. Error recovery reports multiple parse
+//! errors in a single pass.
 //!
 //! # Usage
 //!
@@ -23,6 +24,8 @@
     test,
     expect(clippy::missing_panics_doc, reason = "a Panics section says nothing about a test")
 )]
+
+extern crate alloc;
 
 mod parse_result;
 mod parser;

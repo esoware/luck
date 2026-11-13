@@ -1,7 +1,8 @@
 use std::path::Path;
 
-use luck_core::{Diagnostic, normalize_path};
+use luck_core::Diagnostic;
 
+use crate::path::normalize_path;
 use crate::{ResolveRequest, ResolvedModule};
 
 /// # Errors

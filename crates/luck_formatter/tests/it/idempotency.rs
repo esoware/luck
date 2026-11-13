@@ -81,3 +81,21 @@ if true then end
 ";
     formatted(input);
 }
+
+#[test]
+fn call_parentheses_never_format_valid_input_past_the_nesting_cap() {
+    // `f{...}` gains parentheses by default, so a bare table argument has to
+    // count toward the cap as the parenthesized one it prints as does.
+    let options = luck_formatter::FormatOptions::default();
+    for nesting in [100usize, 126, 127, 128, 129, 200, 255] {
+        let source = format!("return {}{}\n", "f{".repeat(nesting), "}".repeat(nesting));
+        let first = luck_formatter::format(&source, luck_token::LuaVersion::Lua54, &options);
+        if !first.errors.is_empty() {
+            continue;
+        }
+        let second = luck_formatter::format(&first.output, luck_token::LuaVersion::Lua54, &options);
+        assert!(second.errors.is_empty(), "nesting {nesting}: {:?}", second.errors.first());
+        assert!(second.output == first.output, "nesting {nesting}: not idempotent");
+    }
+    assert!(formatted(&format!("return {}{}\n", "f{".repeat(127), "}".repeat(127))).len() > 254);
+}

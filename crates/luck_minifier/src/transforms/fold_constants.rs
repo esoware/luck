@@ -18,9 +18,11 @@ struct ConstantFolder {
     version: LuaVersion,
 }
 
-impl Transform for ConstantFolder {
-    fn transform_expr(&mut self, expr: Expression) -> Expression {
-        match self.walk_expr(expr) {
+impl ConstantFolder {
+    // Out of line, so an expression nested below holds only the walk's frame,
+    // not these temporaries.
+    fn fold_expr(&self, walked: Expression) -> Expression {
+        match walked {
             Expression::BinaryOp(mut binary_op) => {
                 match fold_binary(&binary_op.lhs, binary_op.op, &binary_op.rhs, self.version) {
                     Some(BinaryFold::Literal(literal)) => literal,
@@ -51,6 +53,13 @@ impl Transform for ConstantFolder {
             | Expression::TypeInstantiation(_)
             | Expression::Error(_)) => other,
         }
+    }
+}
+
+impl Transform for ConstantFolder {
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        let walked = self.walk_expr(expr);
+        self.fold_expr(walked)
     }
 }
 

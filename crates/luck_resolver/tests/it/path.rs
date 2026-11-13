@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use luck_core::normalize_path;
+use luck_resolver::normalize_path;
 
 #[test]
 fn normalize_path_keeps_a_volume_guid_path_absolute() {

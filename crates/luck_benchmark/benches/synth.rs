@@ -134,7 +134,7 @@ fn bench_synth(criterion: &mut Criterion) {
     group.bench_function(BenchmarkId::from_parameter("format"), |bencher| {
         bencher.iter_with_setup_wrapper(|runner| {
             let comments = Comments::none();
-            runner.run(|| format_block(black_box(&block), comments, &options));
+            let _unused = runner.run(|| format_block(black_box(&block), comments, &options));
         });
     });
 

@@ -878,6 +878,7 @@ dependencies = [
  "luck_lsp",
  "luck_minifier",
  "luck_parser",
+ "luck_resolver",
  "luck_token",
  "mimalloc-safe",
  "notify-debouncer-mini",
@@ -923,8 +924,6 @@ name = "luck_core"
 version = "0.5.0"
 dependencies = [
  "luck_token",
- "simdutf8",
- "tempfile",
 ]
 
 [[package]]
@@ -1037,6 +1036,7 @@ dependencies = [
  "luck_token",
  "rustc-hash",
  "serde_json",
+ "simdutf8",
  "tempfile",
 ]
 

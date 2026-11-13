@@ -11,9 +11,10 @@
 //! - `lexer` - Tokenizer (always on)
 //! - `ast` - AST nodes, `Visitor`, `Transform`, `span()` accessors (always on)
 //! - `parser` - Pratt + recursive-descent parser (always on)
-//! - `core` - Dialect targets, diagnostics, path helpers (always on)
+//! - `core` - Dialect targets, diagnostics (always on)
 //! - `codegen` - Compact printer (feature `codegen`)
-//! - `resolver` - Module resolution (feature `resolver`)
+//! - `resolver` - Module resolution, source loading, path form (feature
+//!   `resolver`)
 //! - `bundler` - Dependency graph and lazy-loader bundling (feature `bundler`,
 //!   enables `resolver`)
 //! - `minifier` - AST transform pipeline (feature `minifier`)

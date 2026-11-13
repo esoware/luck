@@ -41,64 +41,71 @@ impl ParenSimplifier {
     }
 }
 
+// Out of line, so an expression nested below holds only the walk's frame,
+// not these temporaries.
+fn strip_parens(walked: Expression) -> Expression {
+    match walked {
+        Expression::Parenthesized(mut paren) => {
+            let inner = paren.expr.take();
+            if can_remove_parens(&inner) { inner } else { parenthesize(inner) }
+        }
+        Expression::BinaryOp(mut binary_op) => {
+            if let Expression::Parenthesized(paren) = &mut binary_op.lhs {
+                let inner = paren.expr.take();
+                binary_op.lhs = if can_unwrap_in_binop_lhs(&inner, binary_op.op) {
+                    inner
+                } else {
+                    parenthesize(inner)
+                };
+            }
+            if let Expression::Parenthesized(paren) = &mut binary_op.rhs {
+                let inner = paren.expr.take();
+                binary_op.rhs = if can_unwrap_in_binop_rhs(&inner, binary_op.op) {
+                    inner
+                } else {
+                    parenthesize(inner)
+                };
+            }
+            Expression::BinaryOp(binary_op)
+        }
+        Expression::UnaryOp(mut unop) => {
+            if let Expression::Parenthesized(paren) = &mut unop.operand {
+                let inner = paren.expr.take();
+                unop.operand =
+                    if can_unwrap_in_unary(&inner) { inner } else { parenthesize(inner) };
+            }
+            Expression::UnaryOp(unop)
+        }
+        // Luau: the walk stripped these parens, but `{}<<T>>` doesn't
+        // parse, so anything that isn't a valid prefix gets them back.
+        Expression::TypeInstantiation(mut instantiation) => {
+            if !is_prefix_expr(&instantiation.expr) {
+                instantiation.expr = parenthesize(instantiation.expr.take());
+            }
+            Expression::TypeInstantiation(instantiation)
+        }
+        other @ (Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Var(_)
+        | Expression::FunctionCall(_)
+        | Expression::TableConstructor(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::Error(_)) => other,
+    }
+}
+
 impl Transform for ParenSimplifier {
     fn transform_expr(&mut self, expr: Expression) -> Expression {
-        match self.walk_expr(expr) {
-            Expression::Parenthesized(mut paren) => {
-                let inner = paren.expr.take();
-                if can_remove_parens(&inner) { inner } else { parenthesize(inner) }
-            }
-            Expression::BinaryOp(mut binary_op) => {
-                if let Expression::Parenthesized(paren) = &mut binary_op.lhs {
-                    let inner = paren.expr.take();
-                    binary_op.lhs = if can_unwrap_in_binop_lhs(&inner, binary_op.op) {
-                        inner
-                    } else {
-                        parenthesize(inner)
-                    };
-                }
-                if let Expression::Parenthesized(paren) = &mut binary_op.rhs {
-                    let inner = paren.expr.take();
-                    binary_op.rhs = if can_unwrap_in_binop_rhs(&inner, binary_op.op) {
-                        inner
-                    } else {
-                        parenthesize(inner)
-                    };
-                }
-                Expression::BinaryOp(binary_op)
-            }
-            Expression::UnaryOp(mut unop) => {
-                if let Expression::Parenthesized(paren) = &mut unop.operand {
-                    let inner = paren.expr.take();
-                    unop.operand =
-                        if can_unwrap_in_unary(&inner) { inner } else { parenthesize(inner) };
-                }
-                Expression::UnaryOp(unop)
-            }
-            // Luau: the walk stripped these parens, but `{}<<T>>` doesn't
-            // parse, so anything that isn't a valid prefix gets them back.
-            Expression::TypeInstantiation(mut instantiation) => {
-                if !is_prefix_expr(&instantiation.expr) {
-                    instantiation.expr = parenthesize(instantiation.expr.take());
-                }
-                Expression::TypeInstantiation(instantiation)
-            }
-            other @ (Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
-            | Expression::TableConstructor(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_)) => other,
-        }
+        let walked = self.walk_expr(expr);
+        strip_parens(walked)
     }
 
     // f("str") becomes f"str", and f({...}) becomes f{...}.

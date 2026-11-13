@@ -1,7 +1,8 @@
 use core::mem;
 
 use luck_ast::{
-    Block, Expression, FunctionBody, Statement, Transform, Var, Visitor, is_prefix_expr,
+    Block, Expression, FunctionBody, Statement, Transform, Var, Visitor, expr_nesting_depth,
+    is_prefix_expr,
 };
 use luck_token::{BinOp, CompactString, LuaVersion, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -12,7 +13,7 @@ use crate::binding::{
 };
 use crate::expr::{
     MAX_ADDED_DEPTH, binds_looser_than_unary, can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs,
-    is_closed_literal_expr, parenthesize,
+    fits_at_depth, is_closed_literal_expr, parenthesize,
 };
 
 /// This pass works on names, not bindings, so every candidate must be
@@ -47,20 +48,32 @@ fn find_inline_candidates(
         declarations: FxHashMap::default(),
         declared_names: FxHashSet::default(),
         shadowed_names: FxHashSet::default(),
-        reference_counts: FxHashMap::default(),
+        references: FxHashMap::default(),
         open_declarations: FxHashSet::default(),
         opened_in_scope: Vec::new(),
+        depth: 0,
         version,
     };
     scanner.visit_block(block);
 
+    // The value can gain parentheses where it lands, and a cast inside it a
+    // second pair.
     scanner
         .declarations
         .into_iter()
-        .filter(|(name, _)| {
-            !scanner.shadowed_names.contains(name) && scanner.reference_counts.get(name) == Some(&1)
+        .filter(|(name, initializer)| {
+            !scanner.shadowed_names.contains(name)
+                && scanner.references.get(name).is_some_and(|reference| {
+                    reference.count == 1 && fits_at_depth(reference.depth, 2, initializer)
+                })
         })
         .collect()
+}
+
+/// How often a candidate is read, and how deep its last read sits.
+struct Reference {
+    count: usize,
+    depth: usize,
 }
 
 struct CandidateScanner {
@@ -70,11 +83,13 @@ struct CandidateScanner {
     // initializers is a literal.
     declared_names: FxHashSet<CompactString>,
     shadowed_names: FxHashSet<CompactString>,
-    reference_counts: FxHashMap<CompactString, usize>,
+    references: FxHashMap<CompactString, Reference>,
     /// Candidates whose scope the walk is inside.
     open_declarations: FxHashSet<CompactString>,
     /// `open_declarations` in opening order, to close them per scope.
     opened_in_scope: Vec<CompactString>,
+    /// Levels of nesting open where the walk is.
+    depth: usize,
     version: LuaVersion,
 }
 
@@ -103,6 +118,15 @@ impl CandidateScanner {
 }
 
 impl<'ast> Visitor<'ast> for CandidateScanner {
+    fn descend(&mut self) -> bool {
+        self.depth = self.depth.saturating_add(1);
+        true
+    }
+
+    fn ascend(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
     fn visit_block(&mut self, block: &'ast Block) {
         let scope_start = self.opened_in_scope.len();
         self.walk_block(block);
@@ -128,7 +152,9 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
                         self.declared_names.insert(name.into());
                         // Each pass can inline into the last one's results, so
                         // without a bound a run of locals nests without limit.
-                        if is_closed_literal_expr(expr) && literal_depth(expr) <= MAX_ADDED_DEPTH {
+                        if is_closed_literal_expr(expr)
+                            && expr_nesting_depth(expr) <= MAX_ADDED_DEPTH
+                        {
                             self.declarations.insert(name.into(), expr.clone());
                             self.open_declaration(name);
                         }
@@ -223,10 +249,10 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
             let name = identifier_name(token);
             if !self.open_declarations.contains(name) {
                 self.shadow(name);
-            } else if let Some(count) = self.reference_counts.get_mut(name) {
-                *count = count.saturating_add(1);
+            } else if let Some(reference) = self.references.get_mut(name) {
+                reference.count = reference.count.saturating_add(1);
             } else {
-                self.reference_counts.insert(name.into(), 1);
+                self.references.insert(name.into(), Reference { count: 1, depth: self.depth });
             }
         }
         self.walk_var(var);
@@ -299,38 +325,6 @@ impl Transform for Inliner {
             return initializer.clone();
         }
         walked
-    }
-}
-
-/// Levels of nesting in a closed literal expression, where only operators,
-/// parentheses, and casts nest.
-fn literal_depth(expr: &Expression) -> usize {
-    match expr {
-        Expression::Parenthesized(paren) => literal_depth(&paren.expr).saturating_add(1),
-        Expression::UnaryOp(unop) => literal_depth(&unop.operand).saturating_add(1),
-        Expression::BinaryOp(binary_op) => {
-            literal_depth(&binary_op.lhs).max(literal_depth(&binary_op.rhs)).saturating_add(1)
-        }
-        // Luau
-        Expression::TypeCast(cast) => literal_depth(&cast.expr).saturating_add(1),
-        // Luau
-        Expression::TypeInstantiation(instantiation) => {
-            literal_depth(&instantiation.expr).saturating_add(1)
-        }
-        Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Var(_)
-        | Expression::FunctionCall(_)
-        | Expression::TableConstructor(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::Error(_) => 0,
     }
 }
 

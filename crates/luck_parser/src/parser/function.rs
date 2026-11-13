@@ -12,23 +12,24 @@ use super::{FunctionScope, Parser};
 )]
 impl Parser<'_> {
     pub(super) fn parse_function_body(&mut self) -> FunctionBody {
+        if !self.enter_depth() {
+            let span = self.current_span();
+            return FunctionBody {
+                span,
+                generics: None,
+                params: Punctuated::empty(),
+                vararg: None,
+                return_type: None,
+                block: Block { span, stmts: Vec::new(), last_stmt: None },
+            };
+        }
+
         // Luau puts the generic list before the parens: `function f<T>(x: T)`.
         let generics = (self.version.has_type_syntax() && matches!(self.peek(), TokenKind::Less))
             .then(|| Box::new(self.parse_generic_type_list(GenericsOwner::Function)));
 
         let open = self.expect(&TokenKind::LeftParen);
         let start_span = generics.as_ref().map_or(open, |list| list.span);
-
-        if !self.enter_depth() {
-            return FunctionBody {
-                span: start_span,
-                generics,
-                params: Punctuated::empty(),
-                vararg: None,
-                return_type: None,
-                block: Block { span: start_span, stmts: Vec::new(), last_stmt: None },
-            };
-        }
 
         let (params, vararg) = self.parse_params();
 

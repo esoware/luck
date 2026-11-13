@@ -1,4 +1,4 @@
-use core::ops::ControlFlow::{self, Continue};
+use core::ops::ControlFlow::Continue;
 
 use luck_ast::{
     FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, NamedType, TableType, Type,
@@ -8,8 +8,7 @@ use luck_token::{LuaVersion, Token, TokenKind};
 
 use super::expr::expr_eq;
 use super::{
-    AstDiff, at, at_index, differ, presence_eq, punctuated_eq, require, string_raw_eq,
-    token_text_eq,
+    Check, at, at_index, differ, presence_eq, punctuated_eq, require, string_raw_eq, token_text_eq,
 };
 
 /// A dropped annotation is data loss, so presence has to match too.
@@ -17,7 +16,7 @@ pub(super) fn type_annotation_eq(
     left: Option<&Type>,
     right: Option<&Type>,
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     presence_eq(left, right, "type annotation presence differs", |lhs, rhs| {
         type_eq(lhs, rhs, version)
     })
@@ -26,7 +25,7 @@ pub(super) fn type_annotation_eq(
 /// Structural equivalence of two Luau types, tolerating the formatter's
 /// semantics-neutral rewrites (redundant parens, leading union/intersection
 /// separators, and `,`/`;` table-field separators).
-pub(super) fn type_eq(left: &Type, right: &Type, version: LuaVersion) -> ControlFlow<AstDiff> {
+pub(super) fn type_eq(left: &Type, right: &Type, version: LuaVersion) -> Check {
     let left_ty = unwrap_redundant_type(left);
     let right_ty = unwrap_redundant_type(right);
     match (left_ty, right_ty) {
@@ -124,7 +123,7 @@ fn unwrap_redundant_type(ty: &Type) -> &Type {
     }
 }
 
-fn named_type_eq(left: &NamedType, right: &NamedType, version: LuaVersion) -> ControlFlow<AstDiff> {
+fn named_type_eq(left: &NamedType, right: &NamedType, version: LuaVersion) -> Check {
     presence_eq(
         left.prefix.as_ref(),
         right.prefix.as_ref(),
@@ -135,17 +134,13 @@ fn named_type_eq(left: &NamedType, right: &NamedType, version: LuaVersion) -> Co
     at("generics", type_args_eq(left.generics.as_ref(), right.generics.as_ref(), version))
 }
 
-fn type_args_eq(
-    left: Option<&TypeArgs>,
-    right: Option<&TypeArgs>,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn type_args_eq(left: Option<&TypeArgs>, right: Option<&TypeArgs>, version: LuaVersion) -> Check {
     presence_eq(left, right, "type argument list presence differs", |lhs, rhs| {
         punctuated_eq(&lhs.args, &rhs.args, version, type_eq)
     })
 }
 
-fn table_type_eq(left: &TableType, right: &TableType, version: LuaVersion) -> ControlFlow<AstDiff> {
+fn table_type_eq(left: &TableType, right: &TableType, version: LuaVersion) -> Check {
     if left.fields.len() != right.fields.len() {
         return differ(format!(
             "table type field count differs: {} vs {}",
@@ -160,7 +155,7 @@ fn table_type_eq(left: &TableType, right: &TableType, version: LuaVersion) -> Co
     Continue(())
 }
 
-fn type_field_eq(left: &TypeField, right: &TypeField, version: LuaVersion) -> ControlFlow<AstDiff> {
+fn type_field_eq(left: &TypeField, right: &TypeField, version: LuaVersion) -> Check {
     match (left, right) {
         (
             TypeField::Named { access: left_access, name: left_name, value: left_value, .. },
@@ -192,15 +187,11 @@ fn type_field_eq(left: &TypeField, right: &TypeField, version: LuaVersion) -> Co
 }
 
 /// `read`/`write` modifiers are semantic, so presence and text have to match.
-fn access_modifier_eq(left: Option<&Token>, right: Option<&Token>) -> ControlFlow<AstDiff> {
+fn access_modifier_eq(left: Option<&Token>, right: Option<&Token>) -> Check {
     presence_eq(left, right, "access modifier presence differs", token_text_eq)
 }
 
-fn function_type_eq(
-    left: &FunctionType,
-    right: &FunctionType,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn function_type_eq(left: &FunctionType, right: &FunctionType, version: LuaVersion) -> Check {
     at("generics", generics_eq(left.generics.as_ref(), right.generics.as_ref(), version))?;
     at("params", punctuated_eq(&left.params, &right.params, version, function_type_param_eq))?;
     at("return_type", type_eq(&left.return_type, &right.return_type, version))
@@ -210,7 +201,7 @@ fn function_type_param_eq(
     left: &FunctionTypeParam,
     right: &FunctionTypeParam,
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     // Function-type param names are documentation in Luau, but the formatter
     // never drops them, so compare presence and text strictly.
     presence_eq(
@@ -228,7 +219,7 @@ pub(super) fn generics_eq(
     left: Option<&GenericTypeList>,
     right: Option<&GenericTypeList>,
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     presence_eq(left, right, "generic parameter list presence differs", |lhs, rhs| {
         punctuated_eq(&lhs.params, &rhs.params, version, generic_param_eq)
     })
@@ -238,7 +229,7 @@ fn generic_param_eq(
     left: &GenericTypeParam,
     right: &GenericTypeParam,
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     token_text_eq(&left.name, &right.name)?;
     require(left.is_pack == right.is_pack, "generic pack marker presence differs")?;
     presence_eq(
@@ -251,7 +242,7 @@ fn generic_param_eq(
 
 /// A bare `Type::Name` against a `NamedType`, reporting at the paths
 /// `named_type_eq` uses.
-fn simple_named_type_eq(name: &str, named: &NamedType) -> ControlFlow<AstDiff> {
+fn simple_named_type_eq(name: &str, named: &NamedType) -> Check {
     if named.prefix.is_some() {
         return differ("named type module presence differs");
     }

@@ -20,6 +20,10 @@ use crate::types::{GenericTypeList, Type};
 impl Synth {
     /// For attributes, generics, typed parameters, varargs, or a return
     /// type, use [`Synth::function_decl_full`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `method` or a name in `name_path` or `params` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn function_decl(
         &self,
@@ -38,6 +42,10 @@ impl Synth {
     }
 
     /// Build `attributes` with [`Synth::function_attribute`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `method` or a name in `name_path` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn function_decl_full(
         &self,
@@ -56,6 +64,10 @@ impl Synth {
     }
 
     /// For attributes or a full signature, use [`Synth::local_function_full`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` or a name in `params` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn local_function(&self, name: &str, params: &[&str], body: Block) -> Statement {
         self.local_function_full(
@@ -67,6 +79,10 @@ impl Synth {
     }
 
     /// Build `attributes` with [`Synth::function_attribute`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn local_function_full(
         &self,
@@ -80,6 +96,9 @@ impl Synth {
         ))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn const_function(
         &self,
@@ -94,6 +113,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn export_function(
         &self,
@@ -126,6 +148,9 @@ impl Synth {
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn global_function(
         &self,
@@ -150,6 +175,10 @@ impl Synth {
     }
 
     /// For type annotations or Lua 5.4 attributes, use [`Synth::local_full`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if a name in `names` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn local(&self, names: &[&str], exprs: Vec<Expression>) -> Statement {
         self.local_full(
@@ -213,6 +242,10 @@ impl Synth {
     /// One declared name for [`Synth::local_full`] / [`Synth::global_declaration`],
     /// with an optional Luau type annotation or Lua 5.4+ attribute (`"const"`
     /// or `"close"`). No dialect has both.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` or `attribute` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn attributed_name(
         &self,
@@ -245,6 +278,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `attribute` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn global_star(&self, attribute: Option<&str>) -> Statement {
         Statement::GlobalStar(Box::new(GlobalStar {
@@ -368,6 +404,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `label` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn goto_(&self, label: &str) -> Statement {
         Statement::Goto(Box::new(GotoStatement {
@@ -376,6 +415,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn label(&self, name: &str) -> Statement {
         Statement::Label(Box::new(LabelStatement {
@@ -419,6 +461,9 @@ impl Synth {
         Block { span: self.next_span(), stmts, last_stmt: last.map(Box::new) }
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn type_declaration(
         &self,
@@ -436,6 +481,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn type_function(
         &self,

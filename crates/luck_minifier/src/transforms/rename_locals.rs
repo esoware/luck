@@ -2,7 +2,7 @@ mod analyzer;
 mod candidate_pool;
 mod globals;
 mod renamer;
-mod scope_set;
+mod scope_claims;
 
 use luck_ast::{Block, Transform as _, Visitor as _};
 use luck_token::LuaVersion;
@@ -11,7 +11,9 @@ use self::analyzer::Analyzer;
 use self::globals::renamable_globals;
 use self::renamer::Renamer;
 
-pub(crate) fn rename(block: Block, version: LuaVersion, rename_globals: bool) -> Block {
+/// Returns `None` when the renamer's walk falls out of step with the
+/// analyzer's, which leaves no tree worth keeping.
+pub(crate) fn rename(block: Block, version: LuaVersion, rename_globals: bool) -> Option<Block> {
     // Opt-in, since renamed globals end up under new `_G` keys.
     let root_globals = if rename_globals { renamable_globals(&block, version) } else { Vec::new() };
 
@@ -21,15 +23,17 @@ pub(crate) fn rename(block: Block, version: LuaVersion, rename_globals: bool) ->
     let mut analyzer = Analyzer::new(version);
     analyzer.declare_root_globals(&root_globals);
     analyzer.visit_block(&block);
-    let binding_names = analyzer.binding_names();
 
-    let mut renamer = Renamer::new(binding_names, version);
+    let mut renamer = Renamer::new(analyzer.renamed_bindings(), version);
     renamer.declare_root_globals(&root_globals);
-    renamer.transform_block(block)
+    let output = renamer.transform_block(block);
+    renamer.is_in_step().then_some(output)
 }
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use super::*;
     use crate::fixtures::{assert_reparses, run_pass};
 
@@ -38,9 +42,40 @@ mod tests {
     }
 
     fn apply_version(source: &str, version: LuaVersion) -> String {
-        let output = run_pass(source, version, |block| rename(block, version, true));
+        let output = run_pass(source, version, |block| {
+            rename(block, version, true).expect("the walks stay in step")
+        });
         assert_reparses(&output, version);
         output
+    }
+
+    #[test]
+    fn many_locals_live_at_once_rename_without_rescanning_slots_or_names() {
+        // Each local needs a slot and a name of its own. Looking either up
+        // from the first one every time takes minutes at this size.
+        let mut source = String::new();
+        for local in 0..120_000u32 {
+            let _unused = writeln!(source, "local a{local} = f({local})");
+        }
+        source.push_str("return a0, a119999");
+        let result = apply(&source);
+        // The two locals read twice take the two shortest names.
+        assert!(
+            result.starts_with("local l=f(0)local c=f(1)local k=f(2)"),
+            "{:?}",
+            result.get(..60)
+        );
+        assert!(result.ends_with("return l,u"), "the output ends in the return");
+    }
+
+    #[test]
+    fn many_sibling_scopes_share_one_name() {
+        let mut source = String::new();
+        for scope in 0..20_000u32 {
+            let _unused = writeln!(source, "do local x{scope} = f() g(x{scope}) end");
+        }
+        let result = apply(&source);
+        assert_eq!(result, "do local l=f()g(l)end ".repeat(20_000).trim_end());
     }
 
     #[test]

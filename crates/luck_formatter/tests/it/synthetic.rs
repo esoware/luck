@@ -6,8 +6,9 @@
 //! the original text to lean on.
 
 use luck_ast::{
-    Block, FieldSpec, FunctionSignature, InterpolatedStringPart, Synth, SyntheticComment,
-    TypeFieldAccess, TypeFieldSpec,
+    Block, Expression, FieldSpec, FunctionSignature, InterpolatedStringPart, LastStatement,
+    MAX_NESTING_DEPTH, Synth, SyntheticComment, TypeFieldAccess, TypeFieldSpec,
+    block_nesting_depth,
 };
 use luck_formatter::{
     CollapseSimpleStatement, Comments, FormatOptions, blocks_equivalent, format_block,
@@ -17,7 +18,8 @@ use luck_token::{BinOp, LuaVersion, TokenKind, UnOp, decode_string};
 /// Format a synthetic block and assert the output re-parses cleanly under
 /// `version` into an equivalent tree. Returns the output.
 fn assert_roundtrips_in(block: &Block, version: LuaVersion) -> String {
-    let output = format_block(block, Comments::none(), &FormatOptions::default());
+    let output = format_block(block, Comments::none(), &FormatOptions::default())
+        .expect("the block nests within the cap");
     let reparsed = luck_parser::parse(&output, version);
     assert!(
         reparsed.errors.is_empty(),
@@ -96,7 +98,7 @@ fn composite_types_preserve_grouping() {
                 synth.block(vec![synth.type_declaration(false, "Result", None, type_value)], None);
             for width in [1, 60, 80, 120] {
                 let options = FormatOptions { line_width: width, ..FormatOptions::default() };
-                let output = format_block(&block, Comments::none(), &options);
+                let output = format_block(&block, Comments::none(), &options).unwrap();
                 let parsed = luck_parser::parse(&output, LuaVersion::Luau);
                 assert!(parsed.errors.is_empty(), "{output}: {:?}", parsed.errors);
                 blocks_equivalent(&block, &parsed.block, LuaVersion::Luau)
@@ -561,7 +563,8 @@ fn synthetic_comments_placed_around_stmt() {
         &block,
         Comments::synthetic(vec![leading, trailing]),
         &FormatOptions::default(),
-    );
+    )
+    .unwrap();
 
     assert!(output.contains("-- leading note"), "leading comment missing: {output}");
     assert!(output.contains("-- trailing note"), "trailing comment missing: {output}");
@@ -591,7 +594,8 @@ fn dangling_comment_prints_inside_empty_function() {
     let block = synth.block(vec![stmt], None);
 
     let output =
-        format_block(&block, Comments::synthetic(vec![dangling]), &FormatOptions::default());
+        format_block(&block, Comments::synthetic(vec![dangling]), &FormatOptions::default())
+            .unwrap();
     let comment_line = output
         .lines()
         .position(|line| line.contains("-- unreachable"))
@@ -608,14 +612,15 @@ fn requested_blank_lines_separate_stmts() {
     let blank_anchor = second.span().start;
     let block = synth.block(vec![first, second], None);
 
-    let plain_output = format_block(&block, Comments::none(), &FormatOptions::default());
+    let plain_output = format_block(&block, Comments::none(), &FormatOptions::default()).unwrap();
     assert!(!plain_output.contains("\n\n"), "no blank expected by default: {plain_output:?}");
 
     let spaced_output = format_block(
         &block,
         Comments::synthetic(vec![]).with_blank_before([blank_anchor]),
         &FormatOptions::default(),
-    );
+    )
+    .unwrap();
     assert!(
         spaced_output.contains("local a = 1\n\nlocal b = 2"),
         "requested blank missing: {spaced_output:?}"
@@ -626,7 +631,7 @@ fn requested_blank_lines_separate_stmts() {
 fn empty_block_formats_to_parseable_output() {
     let synth = Synth::new();
     let block = synth.block(vec![], None);
-    let output = format_block(&block, Comments::none(), &FormatOptions::default());
+    let output = format_block(&block, Comments::none(), &FormatOptions::default()).unwrap();
     let reparsed = luck_parser::parse(&output, LuaVersion::Luau);
     assert!(reparsed.errors.is_empty(), "empty block produced unparseable output: {output:?}");
 }
@@ -652,7 +657,7 @@ fn synthetic_comment_on_a_collapsible_body_keeps_it_expanded() {
         ..FormatOptions::default()
     };
 
-    let output = format_block(&block, Comments::synthetic(vec![trailing]), &options);
+    let output = format_block(&block, Comments::synthetic(vec![trailing]), &options).unwrap();
 
     assert_eq!(output, "if a then\n\tlocal x = 1 -- why\nend\n");
 }
@@ -665,7 +670,8 @@ fn multi_line_synthetic_comment_stays_a_comment() {
     let block = synth.block(vec![stmt], None);
 
     let output =
-        format_block(&block, Comments::synthetic(vec![comment]), &FormatOptions::default());
+        format_block(&block, Comments::synthetic(vec![comment]), &FormatOptions::default())
+            .unwrap();
 
     let reparsed = luck_parser::parse(&output, LuaVersion::Lua54);
     assert_eq!(
@@ -673,4 +679,50 @@ fn multi_line_synthetic_comment_stays_a_comment() {
         1,
         "every line of a comment must stay commented out: {output:?}"
     );
+}
+
+/// `return x`, with `x` under `wraps` unary operators.
+fn nested_negations(wraps: usize) -> Block {
+    let synth = Synth::new();
+    let mut expr = synth.name_expr("x");
+    for _ in 0..wraps {
+        expr = synth.unary_op(UnOp::Not, expr);
+    }
+    synth.block(vec![], Some(synth.return_(vec![expr])))
+}
+
+#[test]
+fn a_tree_at_the_nesting_cap_formats_and_reparses() {
+    let block = nested_negations(MAX_NESTING_DEPTH - 1);
+    assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH, "the tree sits at the cap");
+    assert_roundtrips_in(&block, LuaVersion::Lua54);
+}
+
+#[test]
+fn a_tree_past_the_nesting_cap_is_an_error_instead_of_output_that_cannot_reparse() {
+    let block = nested_negations(MAX_NESTING_DEPTH);
+    let error = format_block(&block, Comments::none(), &FormatOptions::default())
+        .expect_err("the tree nests one level too deep");
+    assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");
+}
+
+#[test]
+fn a_chain_far_past_the_nesting_cap_is_refused_without_walking_down_it() {
+    let synth = Synth::new();
+    let mut chain = synth.name_expr("x");
+    for _ in 0..200_000u32 {
+        chain = synth.binary_op(chain, BinOp::Add, synth.number("1"));
+    }
+    let block = synth.block(vec![], Some(synth.return_(vec![chain])));
+    assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH + 1, "measuring stops there");
+    assert_eq!(format_block(&block, Comments::none(), &FormatOptions::default()).ok(), None);
+
+    // Dropped whole, a tree this deep recurses once per level.
+    let Some(LastStatement::Return(mut return_stmt)) = block.last_stmt.map(|last| *last) else {
+        panic!("the block ends in its return");
+    };
+    let mut expr = return_stmt.exprs.items.pop().expect("the return has its value");
+    while let Expression::BinaryOp(mut binary_op) = expr {
+        expr = binary_op.lhs.take();
+    }
 }

@@ -29,11 +29,17 @@ pub enum TypeFieldAccess {
     reason = "the synthesizer is one type with its constructors split by node family"
 )]
 impl Synth {
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_named(&self, name: &str) -> Type {
         Type::Name { name: self.identifier_name(name), span: self.next_span() }
     }
 
+    /// # Panics
+    ///
+    /// Panics if `module` or `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_qualified(&self, module: &str, name: &str) -> Type {
         Type::Named(Box::new(NamedType {
@@ -44,6 +50,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_generic(&self, name: &str, args: Vec<Type>) -> Type {
         Type::Named(Box::new(NamedType {
@@ -134,6 +143,9 @@ impl Synth {
         self.ty_table(vec![TypeFieldSpec::Array(element)])
     }
 
+    /// # Panics
+    ///
+    /// Panics if a field's name isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_record(&self, fields: Vec<(&str, Type)>) -> Type {
         self.ty_table(
@@ -147,6 +159,10 @@ impl Synth {
     /// Named fields and indexers can take a `read`/`write` access modifier.
     /// Luau allows the `{ T }` shorthand only alone, so an array element
     /// beside other fields becomes its `[number]: T` long form.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a [`TypeFieldSpec::Named`] name isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_table(&self, fields: Vec<TypeFieldSpec<'_>>) -> Type {
         let span = self.next_span();
@@ -194,6 +210,10 @@ impl Synth {
     }
 
     /// Each parameter is `(optional name, type)`. For a pack return, pass a [`Synth::ty_pack`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if a parameter's name isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_function_full(
         &self,
@@ -245,6 +265,9 @@ impl Synth {
         Type::Variadic(Box::new(VariadicType { span: self.next_span(), type_value: element }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_generic_pack(&self, name: &str) -> Type {
         Type::GenericPack(Box::new(GenericPackType {
@@ -254,6 +277,10 @@ impl Synth {
     }
 
     /// Each pair is a name and whether it's a pack (`T...`). Defaults aren't supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a parameter's name isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn generic_type_list(&self, params: Vec<(&str, bool)>) -> GenericTypeList {
         let span = self.next_span();

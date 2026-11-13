@@ -1,7 +1,11 @@
+use core::mem;
+
 use luck_ast::{
-    AttributedName, FunctionBody, IfStatement, Parameter, Punctuated, Statement, Transform, Var,
+    AttributedName, Block, FunctionBody, FunctionDecl, GenericFor, GlobalDeclaration,
+    GlobalFunction, IfStatement, LocalAssignment, LocalFunction, NumericFor, Parameter, Punctuated,
+    RepeatLoop, Statement, Transform, Var,
 };
-use luck_token::{CompactString, LuaVersion};
+use luck_token::{CompactString, LuaVersion, Span};
 use rustc_hash::FxHashMap;
 
 use crate::binding::{
@@ -9,25 +13,47 @@ use crate::binding::{
     identifier_token,
 };
 
+/// A binding as the analyzer declared it, and the name it gets.
+pub(super) struct RenamedBinding {
+    original_name: CompactString,
+    new_name: CompactString,
+}
+
+impl RenamedBinding {
+    pub(super) const fn new(original_name: CompactString, new_name: CompactString) -> Self {
+        Self { original_name, new_name }
+    }
+}
+
 /// Declares bindings in the order the analyzer did, so binding ids line up,
 /// and rewrites every declaration and reference to its binding's new name.
 pub(super) struct Renamer {
-    binding_new_names: Vec<CompactString>,
+    bindings: Vec<RenamedBinding>,
     next_binding_id: usize,
+    /// Whether a declaration didn't match the analyzer's binding at its id.
+    /// The names handed out from there on belong to other bindings, so the
+    /// tree is wrong.
+    is_out_of_step: bool,
     name_stacks: FxHashMap<CompactString, Vec<CompactString>>,
     scope_binding_names: Vec<Vec<CompactString>>,
     version: LuaVersion,
 }
 
 impl Renamer {
-    pub(super) fn new(binding_new_names: Vec<CompactString>, version: LuaVersion) -> Self {
+    pub(super) fn new(bindings: Vec<RenamedBinding>, version: LuaVersion) -> Self {
         Self {
-            binding_new_names,
+            bindings,
             next_binding_id: 0,
+            is_out_of_step: false,
             name_stacks: FxHashMap::default(),
             scope_binding_names: vec![Vec::new()],
             version,
         }
+    }
+
+    /// Whether the walk declared exactly the analyzer's bindings, in order.
+    pub(super) const fn is_in_step(&self) -> bool {
+        !self.is_out_of_step && self.next_binding_id == self.bindings.len()
     }
 
     pub(super) fn declare_root_globals(&mut self, names: &[&str]) {
@@ -37,11 +63,13 @@ impl Renamer {
     }
 
     fn declare_binding(&mut self, original: &str) -> CompactString {
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "out-of-step walks must panic; a fallback would emit wrong Lua"
-        )]
-        let new_name = self.binding_new_names[self.next_binding_id].clone();
+        let new_name = match self.bindings.get(self.next_binding_id) {
+            Some(binding) if binding.original_name == original => binding.new_name.clone(),
+            Some(_) | None => {
+                self.is_out_of_step = true;
+                original.into()
+            }
+        };
         self.next_binding_id = self.next_binding_id.saturating_add(1);
         let original_name = CompactString::from(original);
         if let Some(scope_names) = self.scope_binding_names.last_mut() {
@@ -77,29 +105,108 @@ impl Renamer {
         original.into()
     }
 
+    /// Transforms a block in a scope of its own, in place.
+    fn transform_scoped_block(&mut self, block: &mut Block) {
+        let empty = Block { span: Span::default(), stmts: Vec::new(), last_stmt: None };
+        self.enter_scope();
+        *block = self.transform_block(mem::replace(block, empty));
+        self.exit_scope();
+    }
+
     fn transform_if_scoped(&mut self, mut if_stmt: Box<IfStatement>) -> Box<IfStatement> {
         if_stmt.condition = self.transform_expr(if_stmt.condition);
-        self.enter_scope();
-        if_stmt.block = self.transform_block(if_stmt.block);
-        self.exit_scope();
-        if_stmt.elseif_clauses = if_stmt
-            .elseif_clauses
-            .into_iter()
-            .map(|mut clause| {
-                clause.condition = self.transform_expr(clause.condition);
-                self.enter_scope();
-                clause.block = self.transform_block(clause.block);
-                self.exit_scope();
-                clause
-            })
-            .collect();
-        if_stmt.else_clause = if_stmt.else_clause.map(|mut else_clause| {
-            self.enter_scope();
-            else_clause.block = self.transform_block(else_clause.block);
-            self.exit_scope();
-            else_clause
-        });
+        self.transform_scoped_block(&mut if_stmt.block);
+        for clause in &mut if_stmt.elseif_clauses {
+            clause.condition = self.transform_expr(clause.condition.take());
+            self.transform_scoped_block(&mut clause.block);
+        }
+        if let Some(else_clause) = &mut if_stmt.else_clause {
+            self.transform_scoped_block(&mut else_clause.block);
+        }
         if_stmt
+    }
+
+    // Each statement below is renamed in a function of its own, so a level of
+    // nesting holds only that statement's temporaries on the stack.
+    fn rename_local(&mut self, mut local: Box<LocalAssignment>) -> Statement {
+        // RHS before LHS: `local x = x` reads the outer x.
+        local.exprs = local.exprs.map(|exprs| self.walk_punctuated_exprs(exprs));
+        local.names = self.declare_attributed_names(local.names);
+        Statement::LocalAssignment(local)
+    }
+
+    fn rename_local_function(&mut self, mut local_function: Box<LocalFunction>) -> Statement {
+        self.transform_signature_annotations(&mut local_function.body);
+        let new_name = self.declare_binding(identifier_name(&local_function.name));
+        local_function.name = identifier_token(new_name);
+        local_function.body = self.transform_function_scope(local_function.body, false);
+        Statement::LocalFunction(local_function)
+    }
+
+    fn rename_function_decl(&mut self, mut function_declaration: Box<FunctionDecl>) -> Statement {
+        self.transform_signature_annotations(&mut function_declaration.body);
+        function_declaration.body = self.transform_function_scope(
+            function_declaration.body,
+            function_declaration.name.method.is_some(),
+        );
+        if let Some(root_name) = function_declaration.name.names.first_mut() {
+            let resolved = self.resolve_name(identifier_name(root_name));
+            *root_name = identifier_token(resolved);
+        }
+        Statement::FunctionDecl(function_declaration)
+    }
+
+    fn rename_repeat_loop(&mut self, mut repeat_loop: Box<RepeatLoop>) -> Statement {
+        self.enter_scope();
+        repeat_loop.block = self.transform_block(repeat_loop.block);
+        repeat_loop.condition = self.transform_expr(repeat_loop.condition);
+        self.exit_scope();
+        Statement::RepeatLoop(repeat_loop)
+    }
+
+    fn rename_numeric_for(&mut self, mut numeric_for: Box<NumericFor>) -> Statement {
+        numeric_for.start = self.transform_expr(numeric_for.start);
+        numeric_for.limit = self.transform_expr(numeric_for.limit);
+        numeric_for.step = numeric_for.step.map(|step| self.transform_expr(step));
+        // Luau
+        numeric_for.type_annotation = numeric_for.type_annotation.map(|ty| self.transform_type(ty));
+        self.enter_scope();
+        let new_name = self.declare_binding(identifier_name(&numeric_for.name));
+        numeric_for.name = identifier_token(new_name);
+        numeric_for.block = self.transform_block(numeric_for.block);
+        self.exit_scope();
+        Statement::NumericFor(numeric_for)
+    }
+
+    fn rename_generic_for(&mut self, mut generic_for: Box<GenericFor>) -> Statement {
+        generic_for.exprs = self.walk_punctuated_exprs(generic_for.exprs);
+        self.transform_param_annotations(&mut generic_for.names);
+        self.enter_scope();
+        generic_for.names = self.declare_params(generic_for.names);
+        generic_for.block = self.transform_block(generic_for.block);
+        self.exit_scope();
+        Statement::GenericFor(generic_for)
+    }
+
+    /// Lua 5.5: declared like a local, so it shadows a same-named local until
+    /// its scope ends, but it keeps its name.
+    fn rename_global_function(&mut self, mut global_function: Box<GlobalFunction>) -> Statement {
+        self.declare_binding(identifier_name(&global_function.name));
+        global_function.body = self.transform_function_body(global_function.body);
+        Statement::GlobalFunction(global_function)
+    }
+
+    // Lua 5.5
+    fn rename_global_declaration(
+        &mut self,
+        mut global_declaration: Box<GlobalDeclaration>,
+    ) -> Statement {
+        global_declaration.exprs =
+            global_declaration.exprs.map(|exprs| self.walk_punctuated_exprs(exprs));
+        for attributed in global_declaration.names.iter() {
+            self.declare_binding(identifier_name(&attributed.name));
+        }
+        Statement::GlobalDeclaration(global_declaration)
     }
 
     fn declare_attributed_names(
@@ -175,92 +282,33 @@ impl Renamer {
 impl Transform for Renamer {
     fn transform_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
-            Statement::LocalAssignment(mut local) => {
-                // RHS before LHS: `local x = x` reads the outer x.
-                local.exprs = local.exprs.map(|exprs| self.walk_punctuated_exprs(exprs));
-                local.names = self.declare_attributed_names(local.names);
-                Statement::LocalAssignment(local)
-            }
-            Statement::LocalFunction(mut local_function) => {
-                self.transform_signature_annotations(&mut local_function.body);
-                let new_name = self.declare_binding(identifier_name(&local_function.name));
-                local_function.name = identifier_token(new_name);
-                local_function.body = self.transform_function_scope(local_function.body, false);
-                Statement::LocalFunction(local_function)
-            }
-            Statement::FunctionDecl(mut function_declaration) => {
-                self.transform_signature_annotations(&mut function_declaration.body);
-                function_declaration.body = self.transform_function_scope(
-                    function_declaration.body,
-                    function_declaration.name.method.is_some(),
-                );
-                if let Some(root_name) = function_declaration.name.names.first_mut() {
-                    let resolved = self.resolve_name(identifier_name(root_name));
-                    *root_name = identifier_token(resolved);
-                }
-                Statement::FunctionDecl(function_declaration)
+            Statement::LocalAssignment(local) => self.rename_local(local),
+            Statement::LocalFunction(local_function) => self.rename_local_function(local_function),
+            Statement::FunctionDecl(function_declaration) => {
+                self.rename_function_decl(function_declaration)
             }
             Statement::DoBlock(mut do_block) => {
-                self.enter_scope();
-                do_block.block = self.transform_block(do_block.block);
-                self.exit_scope();
+                self.transform_scoped_block(&mut do_block.block);
                 Statement::DoBlock(do_block)
             }
             Statement::WhileLoop(mut while_loop) => {
                 while_loop.condition = self.transform_expr(while_loop.condition);
-                self.enter_scope();
-                while_loop.block = self.transform_block(while_loop.block);
-                self.exit_scope();
+                self.transform_scoped_block(&mut while_loop.block);
                 Statement::WhileLoop(while_loop)
             }
-            Statement::RepeatLoop(mut repeat_loop) => {
-                self.enter_scope();
-                repeat_loop.block = self.transform_block(repeat_loop.block);
-                repeat_loop.condition = self.transform_expr(repeat_loop.condition);
-                self.exit_scope();
-                Statement::RepeatLoop(repeat_loop)
-            }
+            Statement::RepeatLoop(repeat_loop) => self.rename_repeat_loop(repeat_loop),
             Statement::IfStatement(if_stmt) => {
                 Statement::IfStatement(self.transform_if_scoped(if_stmt))
             }
-            Statement::NumericFor(mut numeric_for) => {
-                numeric_for.start = self.transform_expr(numeric_for.start);
-                numeric_for.limit = self.transform_expr(numeric_for.limit);
-                numeric_for.step = numeric_for.step.map(|step| self.transform_expr(step));
-                // Luau
-                numeric_for.type_annotation =
-                    numeric_for.type_annotation.map(|ty| self.transform_type(ty));
-                self.enter_scope();
-                let new_name = self.declare_binding(identifier_name(&numeric_for.name));
-                numeric_for.name = identifier_token(new_name);
-                numeric_for.block = self.transform_block(numeric_for.block);
-                self.exit_scope();
-                Statement::NumericFor(numeric_for)
-            }
-            Statement::GenericFor(mut generic_for) => {
-                generic_for.exprs = self.walk_punctuated_exprs(generic_for.exprs);
-                self.transform_param_annotations(&mut generic_for.names);
-                self.enter_scope();
-                generic_for.names = self.declare_params(generic_for.names);
-                generic_for.block = self.transform_block(generic_for.block);
-                self.exit_scope();
-                Statement::GenericFor(generic_for)
-            }
-            // Lua 5.5: declared like a local, so it shadows a same-named local
-            // until its scope ends, but it keeps its name.
-            Statement::GlobalFunction(mut global_function) => {
-                self.declare_binding(identifier_name(&global_function.name));
-                global_function.body = self.transform_function_body(global_function.body);
-                Statement::GlobalFunction(global_function)
+            Statement::NumericFor(numeric_for) => self.rename_numeric_for(numeric_for),
+            Statement::GenericFor(generic_for) => self.rename_generic_for(generic_for),
+            // Lua 5.5
+            Statement::GlobalFunction(global_function) => {
+                self.rename_global_function(global_function)
             }
             // Lua 5.5
-            Statement::GlobalDeclaration(mut global_declaration) => {
-                global_declaration.exprs =
-                    global_declaration.exprs.map(|exprs| self.walk_punctuated_exprs(exprs));
-                for attributed in global_declaration.names.iter() {
-                    self.declare_binding(identifier_name(&attributed.name));
-                }
-                Statement::GlobalDeclaration(global_declaration)
+            Statement::GlobalDeclaration(global_declaration) => {
+                self.rename_global_declaration(global_declaration)
             }
             // `walk_stmt` visits these in the same order as the
             // analyzer's `Visitor` walk, which keeps the binding ids in step.
@@ -290,5 +338,45 @@ impl Transform for Renamer {
     fn transform_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
         self.transform_signature_annotations(&mut body);
         self.transform_function_scope(body, false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixtures::parse;
+
+    fn binding(original_name: &str, new_name: &str) -> RenamedBinding {
+        RenamedBinding::new(original_name.into(), new_name.into())
+    }
+
+    fn is_in_step_after(source: &str, bindings: Vec<RenamedBinding>) -> bool {
+        let mut renamer = Renamer::new(bindings, LuaVersion::Lua54);
+        let _renamed = renamer.transform_block(parse(source, LuaVersion::Lua54));
+        renamer.is_in_step()
+    }
+
+    #[test]
+    fn a_walk_that_declares_the_analyzers_bindings_is_in_step() {
+        let bindings = vec![binding("first", "l"), binding("second", "u")];
+        assert!(is_in_step_after("local first = 1 local second = first", bindings));
+    }
+
+    #[test]
+    fn a_walk_past_the_analyzers_bindings_is_out_of_step() {
+        assert!(!is_in_step_after("local first = 1", Vec::new()));
+        assert!(!is_in_step_after("local first, second = 1, 2", vec![binding("first", "l")]));
+    }
+
+    #[test]
+    fn a_walk_short_of_the_analyzers_bindings_is_out_of_step() {
+        let bindings = vec![binding("first", "l"), binding("second", "u")];
+        assert!(!is_in_step_after("local first = 1", bindings));
+    }
+
+    #[test]
+    fn a_walk_that_declares_another_name_is_out_of_step() {
+        let bindings = vec![binding("second", "l"), binding("first", "u")];
+        assert!(!is_in_step_after("local first = 1 local second = first", bindings));
     }
 }

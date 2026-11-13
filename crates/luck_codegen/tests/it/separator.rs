@@ -177,7 +177,7 @@ fn space_keeps_a_type_instantiation_close_from_forming_greater_equal() {
     let source = "local x = f<<T>> == 1";
     let parsed = luck_parser::parse(source, LuaVersion::Luau);
     assert!(parsed.errors.is_empty(), "parse errors for {source:?}: {:?}", parsed.errors);
-    let output = luck_codegen::compact(&parsed.block);
+    let output = luck_codegen::compact(&parsed.block).unwrap();
     let reparsed = luck_parser::parse(output.as_str(), LuaVersion::Luau);
     assert!(
         reparsed.errors.is_empty(),

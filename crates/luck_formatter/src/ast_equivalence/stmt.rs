@@ -1,18 +1,19 @@
-use core::ops::ControlFlow::{self, Continue};
+use core::ops::ControlFlow::Continue;
 
 use luck_ast::{
     Assignment, AttributedName, Block, CompoundAssignment, ElseIfClause, Expression, FunctionDecl,
-    GenericFor, GlobalDeclaration, IfStatement, LastStatement, LocalAssignment, LocalFunction,
-    NumericFor, Statement, TypeDeclaration, TypeDeclarationValue,
+    GenericFor, GlobalDeclaration, GlobalFunction, GlobalStar, IfStatement, LastStatement,
+    LocalAssignment, LocalFunction, NumericFor, RepeatLoop, Statement, TypeDeclaration,
+    TypeDeclarationValue, WhileLoop,
 };
 use luck_token::LuaVersion;
 
 use super::expr::{expr_eq, function_call_eq, var_eq};
 use super::function::{function_attributes_eq, function_body_eq, param_eq};
 use super::types::{generics_eq, type_annotation_eq, type_eq};
-use super::{AstDiff, at, at_index, differ, presence_eq, punctuated_eq, require, token_text_eq};
+use super::{Check, at, at_index, differ, presence_eq, punctuated_eq, require, token_text_eq};
 
-pub(super) fn block_eq(left: &Block, right: &Block, version: LuaVersion) -> ControlFlow<AstDiff> {
+pub(super) fn block_eq(left: &Block, right: &Block, version: LuaVersion) -> Check {
     // The formatter drops `;` empty statements and adds one before a
     // statement starting with `(`, so empty statements don't count.
     let is_counted = |stmt: &&Statement| !matches!(stmt, Statement::EmptyStatement(_));
@@ -37,7 +38,9 @@ pub(super) fn block_eq(left: &Block, right: &Block, version: LuaVersion) -> Cont
     )
 }
 
-fn stmt_eq(left: &Statement, right: &Statement, version: LuaVersion) -> ControlFlow<AstDiff> {
+// Each kind is compared in a function of its own, so a level of nesting
+// holds only that comparison's temporaries on the stack.
+fn stmt_eq(left: &Statement, right: &Statement, version: LuaVersion) -> Check {
     match (left, right) {
         (Statement::Assignment(lhs), Statement::Assignment(rhs)) => {
             assignment_eq(lhs, rhs, version)
@@ -48,13 +51,9 @@ fn stmt_eq(left: &Statement, right: &Statement, version: LuaVersion) -> ControlF
         (Statement::DoBlock(lhs), Statement::DoBlock(rhs)) => {
             at("DoBlock", block_eq(&lhs.block, &rhs.block, version))
         }
-        (Statement::WhileLoop(lhs), Statement::WhileLoop(rhs)) => {
-            at("WhileLoop/condition", condition_eq(&lhs.condition, &rhs.condition, version))?;
-            at("WhileLoop/block", block_eq(&lhs.block, &rhs.block, version))
-        }
+        (Statement::WhileLoop(lhs), Statement::WhileLoop(rhs)) => while_loop_eq(lhs, rhs, version),
         (Statement::RepeatLoop(lhs), Statement::RepeatLoop(rhs)) => {
-            at("RepeatLoop/block", block_eq(&lhs.block, &rhs.block, version))?;
-            at("RepeatLoop/condition", condition_eq(&lhs.condition, &rhs.condition, version))
+            repeat_loop_eq(lhs, rhs, version)
         }
         (Statement::IfStatement(lhs), Statement::IfStatement(rhs)) => if_stmt_eq(lhs, rhs, version),
         (Statement::NumericFor(lhs), Statement::NumericFor(rhs)) => {
@@ -70,23 +69,12 @@ fn stmt_eq(left: &Statement, right: &Statement, version: LuaVersion) -> ControlF
             local_function_eq(lhs, rhs, version)
         }
         (Statement::GlobalFunction(lhs), Statement::GlobalFunction(rhs)) => {
-            at("GlobalFunction/name", token_text_eq(&lhs.name, &rhs.name))?;
-            at("GlobalFunction/body", function_body_eq(&lhs.body, &rhs.body, version))
+            global_function_eq(lhs, rhs, version)
         }
         (Statement::LocalAssignment(lhs), Statement::LocalAssignment(rhs)) => {
             local_assignment_eq(lhs, rhs, version)
         }
-        (Statement::GlobalStar(lhs), Statement::GlobalStar(rhs)) => presence_eq(
-            lhs.attribute.as_ref(),
-            rhs.attribute.as_ref(),
-            "`GlobalStar` attribute presence differs",
-            |left_attribute, right_attribute| {
-                at(
-                    "GlobalStar/attribute",
-                    token_text_eq(&left_attribute.name, &right_attribute.name),
-                )
-            },
-        ),
+        (Statement::GlobalStar(lhs), Statement::GlobalStar(rhs)) => global_star_eq(lhs, rhs),
         (Statement::EmptyStatement(_), Statement::EmptyStatement(_))
         | (Statement::Break(_), Statement::Break(_))
         | (Statement::Error(_), Statement::Error(_)) => Continue(()),
@@ -128,21 +116,47 @@ fn stmt_eq(left: &Statement, right: &Statement, version: LuaVersion) -> ControlF
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_),
             _,
-        ) => differ(format!(
-            "statement kind differs: `{}` vs `{}`",
-            stmt_kind(left),
-            stmt_kind(right)
-        )),
+        ) => stmt_kinds_differ(left, right),
     }
+}
+
+fn while_loop_eq(left: &WhileLoop, right: &WhileLoop, version: LuaVersion) -> Check {
+    at("WhileLoop/condition", condition_eq(&left.condition, &right.condition, version))?;
+    at("WhileLoop/block", block_eq(&left.block, &right.block, version))
+}
+
+fn repeat_loop_eq(left: &RepeatLoop, right: &RepeatLoop, version: LuaVersion) -> Check {
+    at("RepeatLoop/block", block_eq(&left.block, &right.block, version))?;
+    at("RepeatLoop/condition", condition_eq(&left.condition, &right.condition, version))
+}
+
+// Lua 5.5
+fn global_function_eq(left: &GlobalFunction, right: &GlobalFunction, version: LuaVersion) -> Check {
+    at("GlobalFunction/name", token_text_eq(&left.name, &right.name))?;
+    at("GlobalFunction/body", function_body_eq(&left.body, &right.body, version))
+}
+
+// Lua 5.5
+fn global_star_eq(left: &GlobalStar, right: &GlobalStar) -> Check {
+    presence_eq(
+        left.attribute.as_ref(),
+        right.attribute.as_ref(),
+        "`GlobalStar` attribute presence differs",
+        |left_attribute, right_attribute| {
+            at("GlobalStar/attribute", token_text_eq(&left_attribute.name, &right_attribute.name))
+        },
+    )
+}
+
+#[cold]
+#[inline(never)]
+fn stmt_kinds_differ(left: &Statement, right: &Statement) -> Check {
+    differ(format!("statement kind differs: `{}` vs `{}`", stmt_kind(left), stmt_kind(right)))
 }
 
 /// A condition reads one truth value, so its parens are redundant whatever
 /// they hold, and the formatter drops them.
-fn condition_eq(
-    left: &Expression,
-    right: &Expression,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn condition_eq(left: &Expression, right: &Expression, version: LuaVersion) -> Check {
     expr_eq(unwrap_parens(left), unwrap_parens(right), version)
 }
 
@@ -154,11 +168,7 @@ fn unwrap_parens(expr: &Expression) -> &Expression {
     current
 }
 
-fn assignment_eq(
-    left: &Assignment,
-    right: &Assignment,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn assignment_eq(left: &Assignment, right: &Assignment, version: LuaVersion) -> Check {
     at("Assignment/targets", punctuated_eq(&left.targets, &right.targets, version, var_eq))?;
     at("Assignment/values", punctuated_eq(&left.values, &right.values, version, expr_eq))
 }
@@ -167,17 +177,13 @@ fn compound_assignment_eq(
     left: &CompoundAssignment,
     right: &CompoundAssignment,
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     require(left.op == right.op, "compound operator differs")?;
     at("CompoundAssignment/var", var_eq(&left.var, &right.var, version))?;
     at("CompoundAssignment/expr", expr_eq(&left.expr, &right.expr, version))
 }
 
-fn if_stmt_eq(
-    left: &IfStatement,
-    right: &IfStatement,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn if_stmt_eq(left: &IfStatement, right: &IfStatement, version: LuaVersion) -> Check {
     at("IfStatement/condition", condition_eq(&left.condition, &right.condition, version))?;
     at("IfStatement/block", block_eq(&left.block, &right.block, version))?;
     require(left.elseif_clauses.len() == right.elseif_clauses.len(), "`elseif` count differs")?;
@@ -197,11 +203,7 @@ fn if_stmt_eq(
     )
 }
 
-fn numeric_for_eq(
-    left: &NumericFor,
-    right: &NumericFor,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn numeric_for_eq(left: &NumericFor, right: &NumericFor, version: LuaVersion) -> Check {
     at("NumericFor/name", token_text_eq(&left.name, &right.name))?;
     at(
         "NumericFor/type_annotation",
@@ -218,21 +220,13 @@ fn numeric_for_eq(
     at("NumericFor/block", block_eq(&left.block, &right.block, version))
 }
 
-fn generic_for_eq(
-    left: &GenericFor,
-    right: &GenericFor,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn generic_for_eq(left: &GenericFor, right: &GenericFor, version: LuaVersion) -> Check {
     at("GenericFor/names", punctuated_eq(&left.names, &right.names, version, param_eq))?;
     at("GenericFor/exprs", punctuated_eq(&left.exprs, &right.exprs, version, expr_eq))?;
     at("GenericFor/block", block_eq(&left.block, &right.block, version))
 }
 
-fn function_decl_eq(
-    left: &FunctionDecl,
-    right: &FunctionDecl,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn function_decl_eq(left: &FunctionDecl, right: &FunctionDecl, version: LuaVersion) -> Check {
     require(left.name.names.len() == right.name.names.len(), "`FunctionDecl` name length differs")?;
     for (i, (lhs, rhs)) in left.name.names.iter().zip(&right.name.names).enumerate() {
         at_index("FunctionDecl/name/names", i, token_text_eq(lhs, rhs))?;
@@ -247,11 +241,7 @@ fn function_decl_eq(
     at("FunctionDecl/body", function_body_eq(&left.body, &right.body, version))
 }
 
-fn local_function_eq(
-    left: &LocalFunction,
-    right: &LocalFunction,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn local_function_eq(left: &LocalFunction, right: &LocalFunction, version: LuaVersion) -> Check {
     at("LocalFunction/name", token_text_eq(&left.name, &right.name))?;
     require(left.is_const == right.is_const, "`LocalFunction` const-ness differs")?;
     require(left.is_exported == right.is_exported, "`LocalFunction` export differs")?;
@@ -263,7 +253,7 @@ fn local_assignment_eq(
     left: &LocalAssignment,
     right: &LocalAssignment,
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     require(left.is_const == right.is_const, "`LocalAssignment` const-ness differs")?;
     require(left.is_exported == right.is_exported, "`LocalAssignment` export differs")?;
     at(
@@ -282,7 +272,7 @@ fn global_declaration_eq(
     left: &GlobalDeclaration,
     right: &GlobalDeclaration,
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     at(
         "GlobalDeclaration/names",
         punctuated_eq(&left.names, &right.names, version, attributed_name_eq),
@@ -299,7 +289,7 @@ fn type_declaration_eq(
     left: &TypeDeclaration,
     right: &TypeDeclaration,
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     require(left.is_exported == right.is_exported, "`TypeDeclaration` export differs")?;
     at("TypeDeclaration/name", token_text_eq(&left.name, &right.name))?;
     at(
@@ -319,11 +309,7 @@ fn type_declaration_eq(
     }
 }
 
-fn attributed_name_eq(
-    left: &AttributedName,
-    right: &AttributedName,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn attributed_name_eq(left: &AttributedName, right: &AttributedName, version: LuaVersion) -> Check {
     token_text_eq(&left.name, &right.name)?;
     at(
         "type_annotation",
@@ -337,11 +323,7 @@ fn attributed_name_eq(
     )
 }
 
-fn last_stmt_eq(
-    left: &LastStatement,
-    right: &LastStatement,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+fn last_stmt_eq(left: &LastStatement, right: &LastStatement, version: LuaVersion) -> Check {
     match (left, right) {
         (LastStatement::Return(lhs), LastStatement::Return(rhs)) => {
             at("Return/exprs", punctuated_eq(&lhs.exprs, &rhs.exprs, version, expr_eq))

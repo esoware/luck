@@ -10,7 +10,8 @@ use luck_config::{
     CONFIG_FILE_NAME, LuckConfig, ProjectConfig, ProjectFilter, discover_config, glob_set,
     load_or_discover_config, load_with_extends,
 };
-use luck_core::{LuaTarget, native_path, normalize_path};
+use luck_core::LuaTarget;
+use luck_resolver::{native_path, normalize_path};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 

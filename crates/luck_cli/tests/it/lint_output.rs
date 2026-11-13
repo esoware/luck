@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use luck_core::normalize_path;
+use luck_resolver::normalize_path;
 use predicates::prelude::*;
 use tempfile::TempDir;
 

@@ -672,3 +672,18 @@ fn unix_line_endings_normalize_a_block_comment() {
         "`line_endings = unix` must not leave a CRLF inside a comment"
     );
 }
+
+#[test]
+fn a_long_commented_argument_list_formats_without_rescanning_its_comments() {
+    // Each argument asks whether a comment falls inside it. Answered by
+    // walking the pending comments from the first, this takes minutes.
+    let arguments: Vec<String> =
+        (0..450_000u32).map(|index| format!("--[[c{index}]] {index}")).collect();
+    let output = format_once(
+        &format!("f({})\n", arguments.join(", ")),
+        LuaVersion::Lua54,
+        &FormatOptions::default(),
+    );
+    assert!(output.starts_with("f(\n\t--[[c0]]\n\t0, --[[c1]]\n"), "{:?}", output.get(..40));
+    assert!(output.ends_with("\t449998, --[[c449999]]\n\t449999\n)\n"), "the list closes last");
+}

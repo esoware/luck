@@ -1,6 +1,8 @@
+use core::mem;
+
 use luck_ast::{
-    Assignment, AttributedName, Block, Expression, FunctionBody, FunctionDef, LocalAssignment,
-    LocalFunction, Punctuated, Statement, Transform, Type, Var, Visitor,
+    Assignment, AttributedName, Block, Expression, FunctionBody, FunctionDef, IfStatement,
+    LocalAssignment, LocalFunction, Punctuated, Statement, Transform, Type, Var, Visitor,
 };
 use luck_token::{CompactString, LuaVersion, Span};
 use rustc_hash::FxHashSet;
@@ -454,11 +456,18 @@ impl LiftRewriter<'_> {
         self.rewrite_block_in_frame(block, FxHashSet::default())
     }
 
-    fn rewrite_block_in_frame(&mut self, block: Block, frame: FxHashSet<CompactString>) -> Block {
+    fn rewrite_block_in_frame(
+        &mut self,
+        mut block: Block,
+        frame: FxHashSet<CompactString>,
+    ) -> Block {
         self.scope_names.push(frame);
-        let stmts = block.stmts.into_iter().map(|stmt| self.rewrite_stmt(stmt)).collect();
+        for stmt in &mut block.stmts {
+            let placeholder = Statement::Error(Span::default());
+            *stmt = self.rewrite_stmt(mem::replace(stmt, placeholder));
+        }
         self.scope_names.pop();
-        Block { span: block.span, stmts, last_stmt: block.last_stmt }
+        block
     }
 
     fn rewrite_local(&mut self, local: Box<LocalAssignment>) -> Statement {
@@ -515,41 +524,48 @@ impl LiftRewriter<'_> {
         }))
     }
 
+    /// Rewrites a nested block in place, in a frame of the names its
+    /// statement binds.
+    fn rewrite_nested(&mut self, block: &mut Block, frame: FxHashSet<CompactString>) {
+        let empty = Block { span: Span::default(), stmts: Vec::new(), last_stmt: None };
+        *block = self.rewrite_block_in_frame(mem::replace(block, empty), frame);
+    }
+
+    fn rewrite_if_blocks(&mut self, if_stmt: &mut IfStatement) {
+        self.rewrite_nested(&mut if_stmt.block, FxHashSet::default());
+        for clause in &mut if_stmt.elseif_clauses {
+            self.rewrite_nested(&mut clause.block, FxHashSet::default());
+        }
+        if let Some(else_clause) = &mut if_stmt.else_clause {
+            self.rewrite_nested(&mut else_clause.block, FxHashSet::default());
+        }
+    }
+
+    // Each arm rewrites its block through `rewrite_nested`, so a level of
+    // nesting holds only that call's temporaries on the stack.
     fn rewrite_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
             Statement::LocalAssignment(local) => self.rewrite_local(local),
             Statement::LocalFunction(local_function) => self.rewrite_local_function(local_function),
             Statement::DoBlock(mut do_block) => {
-                do_block.block = self.rewrite_block(do_block.block);
+                self.rewrite_nested(&mut do_block.block, FxHashSet::default());
                 Statement::DoBlock(do_block)
             }
             Statement::WhileLoop(mut while_loop) => {
-                while_loop.block = self.rewrite_block(while_loop.block);
+                self.rewrite_nested(&mut while_loop.block, FxHashSet::default());
                 Statement::WhileLoop(while_loop)
             }
             Statement::RepeatLoop(mut repeat_loop) => {
-                repeat_loop.block = self.rewrite_block(repeat_loop.block);
+                self.rewrite_nested(&mut repeat_loop.block, FxHashSet::default());
                 Statement::RepeatLoop(repeat_loop)
             }
             Statement::IfStatement(mut if_stmt) => {
-                if_stmt.block = self.rewrite_block(if_stmt.block);
-                if_stmt.elseif_clauses = if_stmt
-                    .elseif_clauses
-                    .into_iter()
-                    .map(|mut clause| {
-                        clause.block = self.rewrite_block(clause.block);
-                        clause
-                    })
-                    .collect();
-                if_stmt.else_clause = if_stmt.else_clause.map(|mut else_clause| {
-                    else_clause.block = self.rewrite_block(else_clause.block);
-                    else_clause
-                });
+                self.rewrite_if_blocks(&mut if_stmt);
                 Statement::IfStatement(if_stmt)
             }
             Statement::NumericFor(mut numeric_for) => {
                 let frame = FxHashSet::from_iter([identifier_name(&numeric_for.name).into()]);
-                numeric_for.block = self.rewrite_block_in_frame(numeric_for.block, frame);
+                self.rewrite_nested(&mut numeric_for.block, frame);
                 Statement::NumericFor(numeric_for)
             }
             Statement::GenericFor(mut generic_for) => {
@@ -558,7 +574,7 @@ impl LiftRewriter<'_> {
                     .iter()
                     .map(|param| identifier_name(&param.name).into())
                     .collect();
-                generic_for.block = self.rewrite_block_in_frame(generic_for.block, frame);
+                self.rewrite_nested(&mut generic_for.block, frame);
                 Statement::GenericFor(generic_for)
             }
             // Nothing to rewrite at this level. Function bodies get their own
@@ -619,7 +635,8 @@ mod tests {
 
     fn rename_and_lift(source: &str) -> String {
         let output = run_pass(source, LuaVersion::Lua54, |block| {
-            lift(rename(block, LuaVersion::Lua54, true), LuaVersion::Lua54)
+            let renamed = rename(block, LuaVersion::Lua54, true).expect("the walks stay in step");
+            lift(renamed, LuaVersion::Lua54)
         });
         assert_reparses(&output, LuaVersion::Lua54);
         output

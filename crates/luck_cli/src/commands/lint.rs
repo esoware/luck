@@ -5,8 +5,9 @@ use std::path::{self, Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, ValueEnum};
 use luck_config::LuckConfig;
-use luck_core::{Diagnostic, LuaTarget, normalize_path, read_source_file};
+use luck_core::{Diagnostic, LuaTarget};
 use luck_linter::{Category, LintConfig, LintDiagnostic, RuleLevel, Severity};
+use luck_resolver::{normalize_path, read_source_file};
 use luck_token::LuaVersion;
 
 use crate::exit::{Exit, operation_error, usage_error};

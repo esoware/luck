@@ -1,14 +1,16 @@
 use core::mem;
 
 use luck_ast::{
-    BinaryOp, Block, DoBlock, ElseClause, Expression, FunctionBody, IfStatement, LastStatement,
+    BinaryOp, Block, DoBlock, Expression, FunctionBody, IfStatement, LastStatement,
     LocalAssignment, Punctuated, Statement, Transform, UnaryOp, Var, Visitor,
 };
 use luck_token::{BinOp, CompactString, LuaVersion, Span, UnOp};
 use rustc_hash::FxHashSet;
 
 use crate::binding::{has_attributed_or_env_name, identifier_name, is_env_binding};
-use crate::expr::{binds_looser_than_unary, extract_boolean, is_nil, is_pure_expr, parenthesize};
+use crate::expr::{
+    binds_looser_than_unary, extract_boolean, fits_at_depth, is_nil, is_pure_expr, parenthesize,
+};
 
 pub(crate) fn remove(mut block: Block, version: LuaVersion) -> Block {
     loop {
@@ -16,6 +18,7 @@ pub(crate) fn remove(mut block: Block, version: LuaVersion) -> Block {
             referenced_names: collect_all_references(&block),
             version,
             has_changed: false,
+            depth: 0,
         };
         block = remover.transform_block(block);
         if !remover.has_changed {
@@ -107,6 +110,8 @@ struct DeadCodeRemover {
     referenced_names: FxHashSet<CompactString>,
     version: LuaVersion,
     has_changed: bool,
+    /// Levels of nesting open where the walk is.
+    depth: usize,
 }
 
 fn constant_truthiness(expr: &Expression) -> Option<bool> {
@@ -178,89 +183,131 @@ fn is_redundant_ternary(outer: &BinaryOp) -> bool {
 }
 
 impl DeadCodeRemover {
-    fn simplify_if(&mut self, mut if_stmt: IfStatement) -> Statement {
+    // Each rewrite is a function of its own, so a level of nested `if`s holds
+    // only the one it takes on the stack.
+    fn simplify_if(&mut self, mut if_stmt: Box<IfStatement>) -> Statement {
         if let Some(is_truthy) = constant_truthiness(&if_stmt.condition) {
             if is_truthy {
-                self.has_changed = true;
-                let new_block = self.transform_block(if_stmt.block);
-                return Statement::DoBlock(Box::new(DoBlock {
-                    span: Span::default(),
-                    block: new_block,
-                }));
+                return self.keep_only_block(take_block(&mut if_stmt.block));
             }
             // Elseif arms must be promoted before the else is considered:
             // taking the else first would drop them.
-            let mut clauses = mem::take(&mut if_stmt.elseif_clauses).into_iter();
-            if let Some(first_elseif) = clauses.next() {
-                self.has_changed = true;
-                let else_clause = if_stmt.else_clause.take();
-                let new_condition = self.transform_expr(first_elseif.condition);
-                let new_block = self.transform_block(first_elseif.block);
-                let new_if = IfStatement {
-                    span: Span::default(),
-                    condition: new_condition,
-                    block: new_block,
-                    elseif_clauses: clauses.collect(),
-                    else_clause,
-                };
-                return self.transform_stmt(Statement::IfStatement(Box::new(new_if)));
+            if !if_stmt.elseif_clauses.is_empty() {
+                return self.promote_first_elseif(if_stmt);
             }
             if let Some(else_clause) = if_stmt.else_clause.take() {
-                self.has_changed = true;
-                let new_block = self.transform_block(else_clause.block);
-                return Statement::DoBlock(Box::new(DoBlock {
-                    span: Span::default(),
-                    block: new_block,
-                }));
+                return self.keep_only_block(else_clause.block);
             }
         }
 
+        // The `not` and its parentheses nest the condition two levels deeper.
         if if_stmt.block.stmts.is_empty()
             && if_stmt.block.last_stmt.is_none()
             && if_stmt.elseif_clauses.is_empty()
-            && let Some(else_clause) = if_stmt.else_clause.take()
+            && if_stmt.else_clause.is_some()
+            && fits_at_depth(self.depth, 2, &if_stmt.condition)
         {
-            self.has_changed = true;
-            let negated = negate_expr(if_stmt.condition);
-            let new_block = self.transform_block(else_clause.block);
-            let new_if = IfStatement {
-                span: Span::default(),
-                condition: negated,
-                block: new_block,
-                elseif_clauses: Vec::new(),
-                else_clause: None,
-            };
-            return Statement::IfStatement(Box::new(new_if));
+            return self.negate_into_else(if_stmt);
         }
 
-        match if_stmt {
-            IfStatement {
-                condition: Expression::UnaryOp(mut unop),
-                block,
-                elseif_clauses,
-                else_clause: Some(else_clause),
-                ..
-            } if matches!(unop.op, UnOp::Not) && elseif_clauses.is_empty() => {
+        if matches!(&if_stmt.condition, Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Not))
+            && if_stmt.elseif_clauses.is_empty()
+            && if_stmt.else_clause.is_some()
+        {
+            return self.swap_negated_branches(if_stmt);
+        }
+        self.walk_stmt(Statement::IfStatement(if_stmt))
+    }
+
+    fn keep_only_block(&mut self, block: Block) -> Statement {
+        self.has_changed = true;
+        let new_block = self.transform_block(block);
+        Statement::DoBlock(Box::new(DoBlock { span: Span::default(), block: new_block }))
+    }
+
+    fn promote_first_elseif(&mut self, mut if_stmt: Box<IfStatement>) -> Statement {
+        self.has_changed = true;
+        let first_elseif = if_stmt.elseif_clauses.remove(0);
+        if_stmt.span = Span::default();
+        if_stmt.condition = self.transform_expr(first_elseif.condition);
+        if_stmt.block = self.transform_block(first_elseif.block);
+        self.transform_stmt(Statement::IfStatement(if_stmt))
+    }
+
+    fn negate_into_else(&mut self, mut if_stmt: Box<IfStatement>) -> Statement {
+        self.has_changed = true;
+        if_stmt.span = Span::default();
+        if_stmt.condition = negate_expr(if_stmt.condition.take());
+        if let Some(else_clause) = if_stmt.else_clause.take() {
+            if_stmt.block = self.transform_block(else_clause.block);
+        }
+        Statement::IfStatement(if_stmt)
+    }
+
+    /// `if not c then A else B end` becomes `if c then B else A end`.
+    fn swap_negated_branches(&mut self, mut if_stmt: Box<IfStatement>) -> Statement {
+        self.has_changed = true;
+        if_stmt.span = Span::default();
+        if let Expression::UnaryOp(mut unop) = if_stmt.condition.take() {
+            if_stmt.condition = unop.operand.take();
+        }
+        if let Some(else_clause) = &mut if_stmt.else_clause {
+            let then_block = take_block(&mut if_stmt.block);
+            if_stmt.block = self.transform_block(take_block(&mut else_clause.block));
+            else_clause.span = Span::default();
+            else_clause.block = self.transform_block(then_block);
+        }
+        Statement::IfStatement(if_stmt)
+    }
+
+    // Out of line, so an expression nested below holds only the walk's frame,
+    // not these temporaries.
+    fn fold_redundant_ternary(&mut self, walked: Expression) -> Expression {
+        match walked {
+            // `cond and X or X` folds to `X` when both branches are identical
+            // and the condition is pure.
+            Expression::BinaryOp(mut outer) if is_redundant_ternary(&outer) => {
                 self.has_changed = true;
-                let new_if = IfStatement {
-                    span: Span::default(),
-                    condition: unop.operand.take(),
-                    block: self.transform_block(else_clause.block),
-                    elseif_clauses: Vec::new(),
-                    else_clause: Some(ElseClause {
-                        span: Span::default(),
-                        block: self.transform_block(block),
-                    }),
-                };
-                Statement::IfStatement(Box::new(new_if))
+                outer.rhs.take()
             }
-            other => self.walk_stmt(Statement::IfStatement(Box::new(other))),
+            other @ (Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Var(_)
+            | Expression::FunctionCall(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::BinaryOp(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::TypeInstantiation(_)
+            | Expression::Error(_)) => other,
         }
     }
 }
 
+fn take_block(block: &mut Block) -> Block {
+    mem::replace(block, Block { span: Span::default(), stmts: Vec::new(), last_stmt: None })
+}
+
 impl Transform for DeadCodeRemover {
+    fn descend(&mut self) {
+        self.depth = self.depth.saturating_add(1);
+    }
+
+    fn ascend(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
     fn transform_block(&mut self, block: Block) -> Block {
+        self.descend();
         let mut new_stmts: Vec<Statement> = Vec::new();
         for stmt in block.stmts {
             let transformed = self.transform_stmt(stmt);
@@ -287,12 +334,15 @@ impl Transform for DeadCodeRemover {
             *last = self.transform_last_stmt(*last);
             last
         });
+        self.ascend();
 
         Block { span: block.span, stmts: new_stmts, last_stmt }
     }
 
     fn transform_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
+        self.descend();
         body.block = self.transform_block(body.block);
+        self.ascend();
         // Only a bare `return` is removable. `return nil` returns one value,
         // and `select('#', f())` observes the difference.
         if let Some(LastStatement::Return(return_stmt)) = body.block.last_stmt.as_deref()
@@ -306,7 +356,7 @@ impl Transform for DeadCodeRemover {
 
     fn transform_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
-            Statement::IfStatement(if_stmt) => self.simplify_if(*if_stmt),
+            Statement::IfStatement(if_stmt) => self.simplify_if(if_stmt),
             // `repeat ... until true` runs once, so it becomes a `do` block
             // unless its body has its own `break` or `continue`, which a `do`
             // block would rebind to an outer loop (or make invalid).
@@ -367,33 +417,8 @@ impl Transform for DeadCodeRemover {
     }
 
     fn transform_expr(&mut self, expr: Expression) -> Expression {
-        match self.walk_expr(expr) {
-            // `cond and X or X` folds to `X` when both branches are identical
-            // and the condition is pure.
-            Expression::BinaryOp(mut outer) if is_redundant_ternary(&outer) => {
-                self.has_changed = true;
-                outer.rhs.take()
-            }
-            other @ (Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::BinaryOp(_)
-            | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
-            | Expression::Error(_)) => other,
-        }
+        let walked = self.walk_expr(expr);
+        self.fold_redundant_ternary(walked)
     }
 }
 

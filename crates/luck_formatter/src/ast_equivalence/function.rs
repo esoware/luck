@@ -1,4 +1,4 @@
-use core::ops::ControlFlow::{self, Continue};
+use core::ops::ControlFlow::Continue;
 
 use luck_ast::{FunctionAttribute, FunctionBody, Parameter};
 use luck_token::LuaVersion;
@@ -6,7 +6,7 @@ use luck_token::LuaVersion;
 use super::expr::expr_eq;
 use super::stmt::block_eq;
 use super::types::{generics_eq, type_annotation_eq};
-use super::{AstDiff, at, at_index, presence_eq, punctuated_eq, require, token_text_eq};
+use super::{Check, at, at_index, presence_eq, punctuated_eq, require, token_text_eq};
 
 /// Attributes have to match in order, by name and arguments, since losing one
 /// such as `@native` changes how the function is compiled.
@@ -14,7 +14,7 @@ pub(super) fn function_attributes_eq(
     left: &[FunctionAttribute],
     right: &[FunctionAttribute],
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     require(left.len() == right.len(), "attribute count differs")?;
     for (index, (lhs, rhs)) in left.iter().zip(right).enumerate() {
         at_index("attributes", index, token_text_eq(&lhs.name, &rhs.name))?;
@@ -38,7 +38,7 @@ pub(super) fn function_body_eq(
     left: &FunctionBody,
     right: &FunctionBody,
     version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+) -> Check {
     at("generics", generics_eq(left.generics.as_deref(), right.generics.as_deref(), version))?;
     at("params", punctuated_eq(&left.params, &right.params, version, param_eq))?;
     presence_eq(
@@ -69,11 +69,7 @@ pub(super) fn function_body_eq(
     at("block", block_eq(&left.block, &right.block, version))
 }
 
-pub(super) fn param_eq(
-    left: &Parameter,
-    right: &Parameter,
-    version: LuaVersion,
-) -> ControlFlow<AstDiff> {
+pub(super) fn param_eq(left: &Parameter, right: &Parameter, version: LuaVersion) -> Check {
     token_text_eq(&left.name, &right.name)?;
     at(
         "type_annotation",

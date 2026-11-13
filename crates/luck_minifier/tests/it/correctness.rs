@@ -1,3 +1,5 @@
+use core::fmt::Write as _;
+
 use crate::common::{minify_lua54, reparses};
 
 const MODULE_SOURCE: &str = r#"
@@ -180,4 +182,81 @@ fn long_if_return_run_minifies_within_the_depth_cap() {
     let source = format!("{}return 0\n", "if a then return 1 end\n".repeat(6000));
     let output = minify_lua54(&source);
     assert!(reparses(&output), "flat guards must minify to Lua that reparses: {output}");
+}
+
+/// The output reparses, is no longer than the compact input, and is a
+/// fixpoint. Returns it.
+fn assert_minifies_within_the_depth_cap(source: &str) -> String {
+    let output = minify_lua54(source);
+    assert!(reparses(&output), "output must reparse");
+    assert!(minify_lua54(&output) == output, "output must be a fixpoint");
+    output
+}
+
+fn nested(open: &str, count: usize, innermost: &str, close: &str) -> String {
+    format!("{}{innermost}{}", open.repeat(count), close.repeat(count))
+}
+
+#[test]
+fn a_local_is_not_inlined_where_its_value_would_nest_past_the_cap() {
+    // The initializer is 30 levels deep, and its one use sits 241 levels in.
+    let initializer = vec!["#\"a\""; 31].join("+");
+    let source = format!("local x = {initializer}\nreturn {}\n", nested("{", 240, "x", "}"));
+    let output = assert_minifies_within_the_depth_cap(&source);
+    assert!(output.starts_with("local "), "the local must stay declared");
+
+    let shallow = format!("local x = {initializer}\nreturn {}\n", nested("{", 200, "x", "}"));
+    let inlined = assert_minifies_within_the_depth_cap(&shallow);
+    assert!(inlined.starts_with("return"), "the local fits where it's used");
+}
+
+#[test]
+fn an_if_return_run_is_not_chained_where_its_values_would_nest_past_the_cap() {
+    let deep_table = nested("{", 245, "1", "}");
+    let mut source = String::new();
+    for guard in 0..30u32 {
+        writeln!(source, "if a{guard} then return {deep_table} end").unwrap();
+    }
+    source.push_str("return 0\n");
+    let output = assert_minifies_within_the_depth_cap(&source);
+    assert!(output.starts_with("if a0 then"), "the first guards must stay statements");
+    assert!(output.ends_with("or 0"), "the last guards still fit in a chain");
+}
+
+#[test]
+fn if_return_chains_in_nested_functions_do_not_compound_past_the_cap() {
+    // Each function's chain nests the function inside it 30 levels deeper.
+    let mut guards = String::new();
+    for guard in 0..30u32 {
+        write!(guards, "if a{guard} then return 1 end ").unwrap();
+    }
+    let mut source = String::from("return 0");
+    for _ in 0..12u32 {
+        source = format!("{guards}if b then return function() {source} end end return 0");
+    }
+    assert_minifies_within_the_depth_cap(&source);
+}
+
+#[test]
+fn nested_ifs_are_not_merged_where_the_condition_would_nest_past_the_cap() {
+    let deep_condition = nested("f(", 254, "a", ")");
+    let source = format!("if {deep_condition} then if b then if c then x() end end end\n");
+    let output = assert_minifies_within_the_depth_cap(&source);
+    assert!(output.contains("b and c"), "the inner conditions still merge");
+
+    // Two levels shallower, the condition fits under both `and`s.
+    let fitting = nested("f(", 252, "a", ")");
+    let merged = format!("if a then if b then if {fitting} then x() end end end\n");
+    assert!(assert_minifies_within_the_depth_cap(&merged).starts_with("if a and b and f("));
+}
+
+#[test]
+fn an_empty_then_branch_is_not_negated_where_the_condition_would_nest_past_the_cap() {
+    let condition = format!("{} == b", nested("{", 254, "", "}"));
+    let source = format!("if {condition} then else x() end\n");
+    let output = assert_minifies_within_the_depth_cap(&source);
+    assert!(output.contains("else"), "the branches must stay as written");
+
+    let shallow = "if a == b then else x() end\n";
+    assert_eq!(assert_minifies_within_the_depth_cap(shallow), "if not(a==b)then x()end");
 }

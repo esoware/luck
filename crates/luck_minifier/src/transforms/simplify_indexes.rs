@@ -1,3 +1,5 @@
+use core::mem;
+
 use luck_ast::{
     Block, Expression, Field, FieldAccess, Literal, TableConstructor, Transform, Var,
     is_multi_value, is_valid_identifier_in,
@@ -15,6 +17,52 @@ struct IndexSimplifier {
 }
 
 impl IndexSimplifier {
+    // Out of line, so an expression nested below holds only the walk's frame,
+    // not these temporaries.
+    fn simplify_index(&self, walked: Var) -> Var {
+        match walked {
+            // t["foo"] becomes t.foo when "foo" is a valid identifier.
+            Var::Index(mut index_expr) => {
+                if let Expression::StringLiteral(literal) = &index_expr.index
+                    && let Some(name) = short_string_body(&literal.text)
+                    && is_valid_identifier_in(name, self.version)
+                {
+                    return Var::FieldAccess(Box::new(FieldAccess {
+                        span: Span::default(),
+                        prefix: index_expr.prefix.take(),
+                        name: identifier_token(name.into()),
+                    }));
+                }
+                Var::Index(index_expr)
+            }
+            other @ (Var::Name(_) | Var::FieldAccess(_)) => other,
+        }
+    }
+
+    fn simplify_field(&mut self, field: Field, can_use_implicit: bool) -> Field {
+        match field {
+            // {[1]="a", [2]="b"} becomes {"a", "b"} when the keys run
+            // sequentially from 1.
+            Field::Bracketed { value, .. } if can_use_implicit => {
+                Field::Positional { span: Span::default(), value: self.transform_expr(value) }
+            }
+            Field::Bracketed { span, key: Expression::StringLiteral(literal), value } => {
+                self.simplify_string_key(span, literal, value)
+            }
+            Field::Bracketed { span, key, value } => Field::Bracketed {
+                span,
+                key: self.transform_expr(key),
+                value: self.transform_expr(value),
+            },
+            Field::Named { span, name, value } => {
+                Field::Named { span, name, value: self.transform_expr(value) }
+            }
+            Field::Positional { span, value } => {
+                Field::Positional { span, value: self.transform_expr(value) }
+            }
+        }
+    }
+
     /// A key that isn't a plain quoted string, such as a long-bracket one, leaves the field as it is.
     fn simplify_string_key(&mut self, span: Span, literal: Literal, value: Expression) -> Field {
         let Some(name) = short_string_body(&literal.text) else {
@@ -39,49 +87,19 @@ impl IndexSimplifier {
 
 impl Transform for IndexSimplifier {
     fn transform_var(&mut self, var: Var) -> Var {
-        match self.walk_var(var) {
-            // t["foo"] becomes t.foo when "foo" is a valid identifier.
-            Var::Index(mut index_expr) => {
-                if let Expression::StringLiteral(literal) = &index_expr.index
-                    && let Some(name) = short_string_body(&literal.text)
-                    && is_valid_identifier_in(name, self.version)
-                {
-                    return Var::FieldAccess(Box::new(FieldAccess {
-                        span: Span::default(),
-                        prefix: index_expr.prefix.take(),
-                        name: identifier_token(name.into()),
-                    }));
-                }
-                Var::Index(index_expr)
-            }
-            other @ (Var::Name(_) | Var::FieldAccess(_)) => other,
-        }
+        let walked = self.walk_var(var);
+        self.simplify_index(walked)
     }
 
     fn transform_table_constructor(&mut self, mut table: TableConstructor) -> TableConstructor {
         let can_use_implicit = is_sequential_from_one(&table.fields.items);
-
-        table.fields = table.fields.map_items(|field| match field {
-            // {[1]="a", [2]="b"} becomes {"a", "b"} when the keys run
-            // sequentially from 1.
-            Field::Bracketed { value, .. } if can_use_implicit => {
-                Field::Positional { span: Span::default(), value: self.transform_expr(value) }
-            }
-            Field::Bracketed { span, key: Expression::StringLiteral(literal), value } => {
-                self.simplify_string_key(span, literal, value)
-            }
-            Field::Bracketed { span, key, value } => Field::Bracketed {
-                span,
-                key: self.transform_expr(key),
-                value: self.transform_expr(value),
-            },
-            Field::Named { span, name, value } => {
-                Field::Named { span, name, value: self.transform_expr(value) }
-            }
-            Field::Positional { span, value } => {
-                Field::Positional { span, value: self.transform_expr(value) }
-            }
-        });
+        for field in &mut table.fields.items {
+            let placeholder = Field::Positional {
+                span: Span::default(),
+                value: Expression::Error(Span::default()),
+            };
+            *field = self.simplify_field(mem::replace(field, placeholder), can_use_implicit);
+        }
         table
     }
 }

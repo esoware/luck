@@ -34,14 +34,17 @@ impl CompactPrinter {
     }
 
     fn emit_named_type(&mut self, named: &NamedType) {
-        if let Some(module) = &named.prefix {
-            self.emit_token(module);
-            self.emit_fixed(".");
+        if self.descend() {
+            if let Some(module) = &named.prefix {
+                self.emit_token(module);
+                self.emit_fixed(".");
+            }
+            self.emit_token(&named.name);
+            if let Some(generics) = &named.generics {
+                self.emit_type_args(generics);
+            }
         }
-        self.emit_token(&named.name);
-        if let Some(generics) = &named.generics {
-            self.emit_type_args(generics);
-        }
+        self.ascend();
     }
 
     fn emit_type_args(&mut self, args: &TypeArgs) {
@@ -51,17 +54,23 @@ impl CompactPrinter {
     }
 
     fn emit_typeof_type(&mut self, typeof_type: &TypeofType) {
-        self.emit_fixed("typeof");
-        self.emit_fixed("(");
-        self.emit_expr(&typeof_type.expr);
-        self.emit_fixed(")");
+        if self.descend() {
+            self.emit_fixed("typeof");
+            self.emit_fixed("(");
+            self.emit_expr(&typeof_type.expr);
+            self.emit_fixed(")");
+        }
+        self.ascend();
     }
 
     fn emit_table_type(&mut self, table: &TableType) {
-        self.emit_fixed("{");
-        // Trailing separators are dropped, as in table constructors.
-        self.emit_joined(&table.fields.items, ",", Self::emit_type_field);
-        self.emit_fixed("}");
+        if self.descend() {
+            self.emit_fixed("{");
+            // Trailing separators are dropped, as in table constructors.
+            self.emit_joined(&table.fields.items, ",", Self::emit_type_field);
+            self.emit_fixed("}");
+        }
+        self.ascend();
     }
 
     fn emit_type_field(&mut self, field: &TypeField) {
@@ -96,14 +105,17 @@ impl CompactPrinter {
     }
 
     fn emit_function_type(&mut self, function: &FunctionType) {
-        if let Some(generics) = &function.generics {
-            self.emit_generic_type_list(generics);
+        if self.descend() {
+            if let Some(generics) = &function.generics {
+                self.emit_generic_type_list(generics);
+            }
+            self.emit_fixed("(");
+            self.emit_punctuated(&function.params, ",", Self::emit_function_type_param);
+            self.emit_fixed(")");
+            self.emit_fixed("->");
+            self.emit_type(&function.return_type);
         }
-        self.emit_fixed("(");
-        self.emit_punctuated(&function.params, ",", Self::emit_function_type_param);
-        self.emit_fixed(")");
-        self.emit_fixed("->");
-        self.emit_type(&function.return_type);
+        self.ascend();
     }
 
     fn emit_function_type_param(&mut self, param: &FunctionTypeParam) {
@@ -115,39 +127,57 @@ impl CompactPrinter {
     }
 
     fn emit_optional_type(&mut self, optional: &OptionalType) {
-        self.emit_type(&optional.type_value);
-        self.emit_fixed("?");
+        if self.descend() {
+            self.emit_type(&optional.type_value);
+            self.emit_fixed("?");
+        }
+        self.ascend();
     }
 
     fn emit_union_type(&mut self, union: &UnionType) {
-        if union.has_leading_pipe {
-            self.emit_fixed("|");
+        if self.descend() {
+            if union.has_leading_pipe {
+                self.emit_fixed("|");
+            }
+            self.emit_punctuated(&union.types, "|", Self::emit_type);
         }
-        self.emit_punctuated(&union.types, "|", Self::emit_type);
+        self.ascend();
     }
 
     fn emit_intersection_type(&mut self, intersection: &IntersectionType) {
-        if intersection.has_leading_ampersand {
-            self.emit_fixed("&");
+        if self.descend() {
+            if intersection.has_leading_ampersand {
+                self.emit_fixed("&");
+            }
+            self.emit_punctuated(&intersection.types, "&", Self::emit_type);
         }
-        self.emit_punctuated(&intersection.types, "&", Self::emit_type);
+        self.ascend();
     }
 
     fn emit_parenthesized_type(&mut self, parenthesized: &ParenthesizedType) {
-        self.emit_fixed("(");
-        self.emit_type(&parenthesized.type_value);
-        self.emit_fixed(")");
+        if self.descend() {
+            self.emit_fixed("(");
+            self.emit_type(&parenthesized.type_value);
+            self.emit_fixed(")");
+        }
+        self.ascend();
     }
 
     fn emit_type_pack(&mut self, pack: &TypePack) {
-        self.emit_fixed("(");
-        self.emit_punctuated(&pack.types, ",", Self::emit_type);
-        self.emit_fixed(")");
+        if self.descend() {
+            self.emit_fixed("(");
+            self.emit_punctuated(&pack.types, ",", Self::emit_type);
+            self.emit_fixed(")");
+        }
+        self.ascend();
     }
 
     fn emit_variadic_type(&mut self, variadic: &VariadicType) {
-        self.emit_fixed("...");
-        self.emit_type(&variadic.type_value);
+        if self.descend() {
+            self.emit_fixed("...");
+            self.emit_type(&variadic.type_value);
+        }
+        self.ascend();
     }
 
     fn emit_generic_pack_type(&mut self, generic_pack: &GenericPackType) {

@@ -55,26 +55,33 @@ pub fn minify(
     // equivalents (paren wrappers, span-less tokens), so a pass matching the
     // parsed shape could miss work that a round trip would expose. Converging
     // on emitted text is what keeps minify(minify(x)) == minify(x).
-    let mut previous_output = luck_codegen::compact(&block);
+    //
+    // A round whose tree doesn't print or reparse is dropped, so the output
+    // is always text the parser has read back.
+    let mut previous_output = luck_codegen::compact(&block).map_err(|error| vec![error])?;
     for _ in 0..MAX_PIPELINE_ROUNDS {
         block = apply_core_transforms(block, config, version);
         block = apply_tail_transforms(block, config, version, previous_output.len());
-        let output = luck_codegen::compact_with_capacity(&block, previous_output.len());
+        let Ok(output) = luck_codegen::compact_with_capacity(&block, previous_output.len()) else {
+            debug_assert!(false, "a minified round nested past the parser's cap");
+            break;
+        };
         if output == previous_output {
             break;
         }
         // The parser hands its owned source back, so the round's output isn't
         // copied to reparse it.
         let reparsed = luck_parser::parse(output, version);
-        previous_output = reparsed.source;
         debug_assert!(
             reparsed.errors.is_empty(),
-            "minified round output failed to reparse: {:?}\noutput:\n{previous_output}",
-            reparsed.errors
+            "minified round output failed to reparse: {:?}\noutput:\n{}",
+            reparsed.errors,
+            reparsed.source
         );
         if !reparsed.errors.is_empty() {
             break;
         }
+        previous_output = reparsed.source;
         block = reparsed.block;
     }
 
@@ -150,12 +157,23 @@ fn apply_tail_transforms(
     // stops. The last iteration is usually the best, so the reparse below
     // rarely runs. Outputs move between the two slots instead of being
     // copied, since each one is the size of the whole chunk.
-    let mut last_output = luck_codegen::compact_with_capacity(&block, output_capacity);
+    //
+    // No tail pass nests the tree deeper, so one that doesn't print came in
+    // that way, and the caller drops the round.
+    let Ok(mut last_output) = luck_codegen::compact_with_capacity(&block, output_capacity) else {
+        return block;
+    };
     // The shortest output of an iteration before the last, the first on ties.
     let mut best_earlier_output: Option<String> = None;
     for round in 0..MAX_PIPELINE_ROUNDS {
         if config.rename_locals {
-            block = transforms::rename_locals::rename(block, version, config.rename_globals);
+            let renamed = transforms::rename_locals::rename(block, version, config.rename_globals);
+            let Some(renamed_block) = renamed else {
+                debug_assert!(false, "the renamer fell out of step with its analyzer");
+                // `last_output` is the tree as it stood before the rename.
+                return luck_parser::parse(last_output, version).block;
+            };
+            block = renamed_block;
         }
 
         if config.lift_locals {
@@ -167,7 +185,9 @@ fn apply_tail_transforms(
             block = transforms::merge_locals::merge(block, version);
         }
 
-        let output = luck_codegen::compact_with_capacity(&block, last_output.len());
+        let Ok(output) = luck_codegen::compact_with_capacity(&block, last_output.len()) else {
+            return block;
+        };
         if output == last_output {
             break;
         }

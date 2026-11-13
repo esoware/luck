@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::Path;
 
-use luck_core::normalize_path;
 use luck_resolver::ResolveRequest;
+use luck_resolver::normalize_path;
 use luck_token::Span;
 use tempfile::TempDir;
 

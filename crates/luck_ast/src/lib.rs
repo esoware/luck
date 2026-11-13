@@ -9,9 +9,11 @@
 //! minifier's passes do. Override the `visit_*` or `transform_*` method you
 //! care about and call `self.walk_*` to recurse.
 //!
-//! Every traversal recurses on the plain stack. `luck_parser` caps nesting at
-//! 256 levels, chain links included, and a tree built with [`Synth`] has to
-//! stay within the same cap.
+//! Every traversal recurses on the plain stack, once per level of nesting.
+//! `luck_parser` builds no tree deeper than [`MAX_NESTING_DEPTH`]. Nothing
+//! checks a tree built with [`Synth`] as it grows, so measure one with
+//! [`block_nesting_depth`] or [`expr_nesting_depth`], which are safe at any
+//! depth.
 //!
 //! # Usage
 //!
@@ -33,6 +35,7 @@
 
 extern crate alloc;
 
+mod depth;
 mod expr;
 mod function;
 #[cfg(test)]
@@ -46,6 +49,7 @@ mod transform;
 mod types;
 mod visitor;
 
+pub use depth::{MAX_NESTING_DEPTH, block_nesting_depth, expr_nesting_depth, regrouped_levels};
 pub use expr::{
     BinaryOp, ElseIfExprClause, Expression, Field, FieldAccess, FunctionArgs, FunctionCall,
     FunctionDef, IfExpression, IndexExpression, InterpolatedString, InterpolatedStringSegment,

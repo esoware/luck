@@ -137,11 +137,13 @@ impl Synth {
         }
         let must_avoid_level_zero = content.contains("[[")
             && self.version.is_none_or(LuaVersion::has_long_bracket_nesting_error);
-        let mut equals = if must_avoid_level_zero { "=".to_owned() } else { String::new() };
-        // The closer's first byte can finish a delimiter begun in content.
-        while content.contains(&format!("]{equals}]")) || content.ends_with(&format!("]{equals}")) {
-            equals.push('=');
+        let mut level = usize::from(must_avoid_level_zero);
+        for taken_level in taken_closer_levels(content) {
+            if taken_level == level {
+                level = level.saturating_add(1);
+            }
         }
+        let equals = "=".repeat(level);
         // Lua swallows a newline directly after the opening bracket.
         let leading_newline = if content.starts_with('\n') { "\n" } else { "" };
         Expression::StringLiteral(Literal {
@@ -207,6 +209,22 @@ impl Synth {
     }
 }
 
+/// The `=` count of every closer in `content`, ascending.
+///
+/// A closer is a `]=*]`, or a `]=*` the content ends with, which the
+/// literal's own closer would finish. One pass finds them all, where asking
+/// about each level in turn rereads the content once per level.
+fn taken_closer_levels(content: &str) -> Vec<usize> {
+    let mut pieces = content.split(']');
+    // What comes before the first `]` belongs to no closer.
+    pieces.next();
+    let mut levels: Vec<usize> =
+        pieces.filter(|piece| piece.trim_start_matches('=').is_empty()).map(str::len).collect();
+    levels.sort_unstable();
+    levels.dedup();
+    levels
+}
+
 /// Escapes interpolated-string segment text. The lexer stores segment text
 /// as written, escapes included, so synthesized text needs them too.
 fn escape_interpolated_text(text: &str) -> CompactString {
@@ -234,6 +252,10 @@ fn decimal_escape(byte_value: u32) -> String {
 
 #[cfg(test)]
 mod tests {
+    use core::iter;
+    use core::time::Duration;
+    use std::time::Instant;
+
     use super::*;
 
     fn number_text(expr: Expression) -> CompactString {
@@ -384,6 +406,57 @@ mod tests {
 
         // A trailing `]` at level 0 would merge with the closer.
         assert_eq!(string_text(synth.long_string("x]")), "[=[x]]=]");
+    }
+
+    #[test]
+    fn long_string_skips_every_level_a_closer_in_the_content_takes() {
+        let synth = Synth::new();
+        for (content, expected) in [
+            ("]]", "[=[]]]=]"),
+            ("]=]", "[==[]=]]==]"),
+            ("]] ]=] ]===]", "[==[]] ]=] ]===]]==]"),
+            ("]]]=]==]", "[===[]]]=]==]]===]"),
+            ("a]=", "[[a]=]]"),
+            ("]] a]=", "[==[]] a]=]==]"),
+            ("]=x] ]", "[=[]=x] ]]=]"),
+            ("=]", "[=[=]]=]"),
+        ] {
+            assert_eq!(string_text(synth.long_string(content)), expected, "{content}");
+        }
+        let lua51 = Synth::new().with_version(LuaVersion::Lua51);
+        assert_eq!(string_text(lua51.long_string("[[ ]=]")), "[==[[[ ]=]]==]");
+    }
+
+    #[test]
+    fn long_string_reads_its_content_once_however_many_levels_it_takes() {
+        // A closer at every level up to about 2,800.
+        let mut content = String::new();
+        let mut level = 0usize;
+        while content.len() < 4_000_000 {
+            content.push(']');
+            content.push_str(&"=".repeat(level));
+            content.push(']');
+            level = level.saturating_add(1);
+        }
+        let plain = "x".repeat(content.len());
+        let synth = Synth::new();
+        let fastest = |text: &str| {
+            iter::repeat_with(|| {
+                let start = Instant::now();
+                let literal = string_text(synth.long_string(text));
+                assert!(literal.len() > text.len(), "the literal wraps its content");
+                start.elapsed()
+            })
+            .take(3)
+            .min()
+            .unwrap_or_default()
+        };
+        // Asking about each level in turn reads this content 2,800 times.
+        let budget = fastest(&plain).saturating_mul(40).saturating_add(Duration::from_millis(20));
+        let taken = fastest(&content);
+        assert!(taken < budget, "{taken:?} against a budget of {budget:?}");
+        let expected_open = format!("[{}[", "=".repeat(level));
+        assert!(string_text(synth.long_string(&content)).starts_with(&expected_open));
     }
 
     #[test]

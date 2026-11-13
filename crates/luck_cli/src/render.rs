@@ -6,7 +6,8 @@ use core::ops::Range;
 use std::io::{self, Write};
 
 use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
-use luck_core::{Diagnostic, DiagnosticSeverity, native_path, read_source_file};
+use luck_core::{Diagnostic, DiagnosticSeverity};
+use luck_resolver::{native_path, read_source_file};
 use luck_token::{LuaVersion, SourceError, chunk_start, line_breaks, offset_to_index};
 use rustc_hash::FxHashMap;
 

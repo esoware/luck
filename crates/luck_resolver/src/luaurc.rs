@@ -2,8 +2,9 @@ use core::ops::Deref;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use luck_core::native_path;
 use rustc_hash::FxHashMap;
+
+use crate::path::native_path;
 
 #[derive(Debug)]
 pub(crate) enum AliasTarget {
@@ -304,12 +305,12 @@ fn after_long_bracket(text: &[u8], level: usize) -> Option<&[u8]> {
 mod tests {
     use core::ptr;
 
-    use luck_core::normalize_path;
     use luck_token::{LuaVersion, Span};
 
     use super::*;
     use crate::fixtures::{luau_project, project_with, request, write_files};
     use crate::luau::ModuleProbes;
+    use crate::path::normalize_path;
     use crate::{ResolveRequest, Resolver, luau};
 
     #[test]

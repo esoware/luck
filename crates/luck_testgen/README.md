@@ -37,6 +37,10 @@ Determinism matters most. A single xorshift64\* `Rng` (`rng.rs`) drives every ch
 
 These sweeps back the formatter and minifier guarantees. Strengthen them instead of working around them.
 
+## Stack tests
+
+`tests/it/stack.rs` runs every stage (parse, validate, clone, compact, format, verified format, and minify) over one source per construct nested to the parser's cap, each on a thread with 1 MiB of stack, which is what a Windows main thread and a wasm module get. Test builds are unoptimized, where frames are largest, and a stage that outgrows the budget takes the test process down. A new recursive stage or a new nesting construct belongs in it.
+
 ## Fixtures
 
 `fixtures.rs` holds the one definition of the shared `tests/fixtures/` tree: `collect_fixture_files` walks it, `detect_version` reads a fixture's dialect from its path, and `is_error_fixture` marks the deliberately invalid `errors/` trees. The parser, codegen, formatter, and lexer harnesses all dev-depend on it, so a new dialect directory is one edit.

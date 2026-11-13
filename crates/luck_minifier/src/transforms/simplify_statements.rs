@@ -4,15 +4,38 @@ use luck_ast::{
 };
 use luck_token::{BinOp, Span};
 
-use crate::expr::{MAX_ADDED_DEPTH, ends_in_if_expr, is_always_truthy, parenthesize};
+use crate::expr::{
+    MAX_ADDED_DEPTH, ends_in_if_expr, fits_at_depth, is_always_truthy, parenthesize,
+};
 
 pub(crate) fn simplify(block: Block) -> Block {
-    StatementSimplifier.transform_block(block)
+    StatementSimplifier { depth: 0 }.transform_block(block)
 }
 
-struct StatementSimplifier;
+struct StatementSimplifier {
+    /// Levels of nesting open where the walk is.
+    depth: usize,
+}
+
+impl StatementSimplifier {
+    /// Whether `outer and inner` still nests within the parser's cap. Each
+    /// condition can gain the operator and a pair of parentheses, and `outer`
+    /// sinks under every `and` that `inner` starts with.
+    fn can_merge_conditions(&self, outer: &Expression, inner: &Expression) -> bool {
+        let outer_levels = spine_links(inner, BinOp::And).saturating_add(2);
+        fits_at_depth(self.depth, outer_levels, outer) && fits_at_depth(self.depth, 2, inner)
+    }
+}
 
 impl Transform for StatementSimplifier {
+    fn descend(&mut self) {
+        self.depth = self.depth.saturating_add(1);
+    }
+
+    fn ascend(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
     fn transform_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
             Statement::IfStatement(mut outer_if) => {
@@ -22,15 +45,22 @@ impl Transform for StatementSimplifier {
                     && outer_if.block.last_stmt.is_none()
                     && matches!(
                         outer_if.block.stmts.as_slice(),
-                        [Statement::IfStatement(inner_if)] if has_no_else(inner_if)
+                        [Statement::IfStatement(inner_if)]
+                            if has_no_else(inner_if)
+                                && self.can_merge_conditions(
+                                    &outer_if.condition,
+                                    &inner_if.condition
+                                )
                     )
                     && let Some(Statement::IfStatement(inner_if)) = outer_if.block.stmts.pop()
                 {
-                    let combined_condition = logical(
-                        self.transform_expr(outer_if.condition),
+                    // Walked as one expression, so a rewrite inside either
+                    // condition sees the depth it ends up at.
+                    let combined_condition = self.transform_expr(logical(
+                        outer_if.condition,
                         BinOp::And,
-                        self.transform_expr(inner_if.condition),
-                    );
+                        inner_if.condition,
+                    ));
                     let merged_block = self.transform_block(inner_if.block);
                     let merged_if = IfStatement {
                         span: Span::default(),
@@ -67,14 +97,16 @@ impl Transform for StatementSimplifier {
     }
 
     fn transform_block(&mut self, block: Block) -> Block {
-        try_convert_if_return_chain(self.walk_block(block))
+        let walked = self.walk_block(block);
+        // The walk has stepped back out of the block, which is one level in.
+        try_convert_if_return_chain(walked, self.depth.saturating_add(1))
     }
 }
 
 /// Converts `if c1 then return X end; if c2 then return Y end; return Z`
 /// into `return c1 and X or c2 and Y or Z` when `X` and `Y` are always
-/// truthy.
-fn try_convert_if_return_chain(mut block: Block) -> Block {
+/// truthy. `level` is the block's own level of nesting.
+fn try_convert_if_return_chain(mut block: Block, level: usize) -> Block {
     let Some(LastStatement::Return(return_stmt)) = block.last_stmt.as_deref_mut() else {
         return block;
     };
@@ -89,21 +121,27 @@ fn try_convert_if_return_chain(mut block: Block) -> Block {
 
     // Each guard nests the chain one level deeper, and the fallback may hold
     // the chain an earlier round built, so a long run converts only its tail.
-    let mut built_links = 0usize;
-    let mut spine: &Expression = fallback_expr;
-    while let Expression::BinaryOp(binary_op) = spine
-        && binary_op.op == BinOp::Or
-    {
-        built_links = built_links.saturating_add(1);
-        spine = &binary_op.lhs;
+    let built_links = spine_links(fallback_expr, BinOp::Or);
+    if !fits_at_depth(level, 1, fallback_expr) {
+        return block;
     }
-    let link_count = block
-        .stmts
-        .iter()
-        .rev()
-        .take_while(|stmt| is_chain_link(stmt))
-        .take(MAX_ADDED_DEPTH.saturating_sub(built_links))
-        .count();
+    // A guard sits under the fallback's `or` links, the one that joins it,
+    // and one for each guard after it.
+    let mut guard_level = level.saturating_add(built_links).saturating_add(1);
+    let mut link_count = 0usize;
+    for stmt in block.stmts.iter().rev().take(MAX_ADDED_DEPTH.saturating_sub(built_links)) {
+        let is_link = match extract_if_return_guard(stmt) {
+            Some((condition, return_expr)) => {
+                guard_level = guard_level.saturating_add(1);
+                is_always_truthy(return_expr) && guard_fits(guard_level, condition, return_expr)
+            }
+            None => matches!(stmt, Statement::EmptyStatement(_)),
+        };
+        if !is_link {
+            break;
+        }
+        link_count = link_count.saturating_add(1);
+    }
     let chain_start = block.stmts.len().saturating_sub(link_count);
     let has_guard = block
         .stmts
@@ -130,12 +168,29 @@ fn try_convert_if_return_chain(mut block: Block) -> Block {
     block
 }
 
-/// Whether a statement can sit in a trailing if-return chain: a truthy guard,
-/// or an empty statement between guards.
-fn is_chain_link(stmt: &Statement) -> bool {
-    matches!(stmt, Statement::EmptyStatement(_))
-        || extract_if_return_guard(stmt)
-            .is_some_and(|(_, return_expr)| is_always_truthy(return_expr))
+/// Whether `condition and return_expr` still nests within the parser's cap
+/// at `guard_level`.
+///
+/// Each side can gain the operator and a pair of parentheses, and the
+/// condition sinks under every `and` the return value starts with.
+fn guard_fits(guard_level: usize, condition: &Expression, return_expr: &Expression) -> bool {
+    let condition_levels = spine_links(return_expr, BinOp::And).saturating_add(2);
+    fits_at_depth(guard_level, condition_levels, condition)
+        && fits_at_depth(guard_level, 2, return_expr)
+}
+
+/// How many `op` links `expr` starts with: the ones a left operand joined on
+/// `op` ends up under.
+fn spine_links(expr: &Expression, op: BinOp) -> usize {
+    let mut links = 0usize;
+    let mut spine = expr;
+    while let Expression::BinaryOp(binary_op) = spine
+        && binary_op.op == op
+    {
+        links = links.saturating_add(1);
+        spine = &binary_op.lhs;
+    }
+    links
 }
 
 fn extract_if_return_guard(stmt: &Statement) -> Option<(&Expression, &Expression)> {
@@ -174,6 +229,9 @@ const fn has_no_else(if_stmt: &IfStatement) -> bool {
 /// A nested operand of the same operator stays bare on either side, because
 /// `and` and `or` are associative. An if-expression as `rhs` prints last, so
 /// only one in `lhs` can swallow an operator.
+///
+/// A bare `rhs` on the same operator reads back as the tail of one chain,
+/// with `lhs` under every link of it, which is how the walkers count it.
 fn logical(left_operand: Expression, op: BinOp, right_operand: Expression) -> Expression {
     let left = if binds_looser(&left_operand, op) || ends_in_if_expr(&left_operand) {
         parenthesize(left_operand)

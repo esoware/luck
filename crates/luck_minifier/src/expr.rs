@@ -1,5 +1,6 @@
 use luck_ast::{
-    BinaryOp, Expression, Field, Literal, ParenthesizedExpression, Var, unwrap_parentheses,
+    BinaryOp, Expression, Field, Literal, MAX_NESTING_DEPTH, ParenthesizedExpression, Var,
+    expr_nesting_depth, unwrap_parentheses,
 };
 use luck_token::{BinOp, LuaNumber, NumberSubtypes, OperandSide, Span, UnOp, parse_lua_number};
 
@@ -287,9 +288,18 @@ pub(crate) fn is_closed_literal_expr(expr: &Expression) -> bool {
     literal_kind(expr).is_some()
 }
 
-/// How many levels of nesting a rewrite may add. The parser caps nesting at
-/// 256 levels, chain links included, and the output has to reparse.
+/// How many levels of nesting a rewrite may add, so a run of rewrites can't
+/// trade a flat program for one nested to the parser's cap.
 pub(crate) const MAX_ADDED_DEPTH: usize = 32;
+
+/// Whether `expr` still nests within the parser's cap once it sits
+/// `added_levels` below `depth`, the level a pass's walk has reached.
+///
+/// The output has to reparse, so a rewrite that moves an expression deeper
+/// asks first.
+pub(crate) fn fits_at_depth(depth: usize, added_levels: usize, expr: &Expression) -> bool {
+    depth.saturating_add(added_levels).saturating_add(expr_nesting_depth(expr)) <= MAX_NESTING_DEPTH
+}
 
 /// Whether `expr` evaluates into exactly one register with no temporaries.
 pub(crate) const fn is_single_register_value(expr: &Expression) -> bool {

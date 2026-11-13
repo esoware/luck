@@ -5,15 +5,15 @@ use luck_core::Diagnostic;
 use luck_token::{LuaVersion, Span};
 
 use crate::luau::ModuleProbes;
-
-/// Lua 5.x search path templates used when `search_paths` is unset or empty.
-pub const DEFAULT_SEARCH_PATHS: &[&str] = &["?.lua", "?/init.lua"];
 use crate::luaurc::AliasCache;
 use crate::{lua, luau};
 
+/// Lua 5.x search path templates used when `search_paths` is unset or empty.
+pub const DEFAULT_SEARCH_PATHS: &[&str] = &["?.lua", "?/init.lua"];
+
 #[derive(Debug)]
 pub struct ResolvedModule {
-    /// In the [`normalize_path`](luck_core::normalize_path) form.
+    /// In the [`normalize_path`](crate::normalize_path) form.
     pub path: String,
     pub warnings: Vec<Diagnostic>,
 }
@@ -22,7 +22,7 @@ pub struct ResolvedModule {
 pub struct ResolveRequest<'request> {
     /// The require string, e.g. `"foo.bar"`, `"./sibling"`, or `"@alias/mod"`.
     pub module: &'request str,
-    /// In the [`normalize_path`](luck_core::normalize_path) form.
+    /// In the [`normalize_path`](crate::normalize_path) form.
     pub from_file: &'request str,
     pub span: Span,
 }

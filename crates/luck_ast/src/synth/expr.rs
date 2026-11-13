@@ -79,6 +79,9 @@ fn ends_with_type_cast(expr: &Expression) -> bool {
 }
 
 impl Synth {
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn name_var(&self, name: &str) -> Var {
         Var::Name(self.identifier(name))
@@ -93,6 +96,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn field_var(&self, prefix: Expression, name: &str) -> Var {
         Var::FieldAccess(Box::new(FieldAccess {
@@ -102,6 +108,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn name_expr(&self, name: &str) -> Expression {
         Expression::Var(self.name_var(name))
@@ -112,6 +121,9 @@ impl Synth {
         Expression::Var(self.index_var(prefix, index))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn field(&self, prefix: Expression, name: &str) -> Expression {
         Expression::Var(self.field_var(prefix, name))
@@ -279,6 +291,9 @@ impl Synth {
         self.call_node(callee, None, None, self.parenthesized_args(args))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn method_call(
         &self,
@@ -289,6 +304,9 @@ impl Synth {
         self.call_node(receiver, Some(name), None, self.parenthesized_args(args))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn method_call_with_types(
         &self,
@@ -300,6 +318,9 @@ impl Synth {
         self.call_node(receiver, Some(name), Some(type_args), self.parenthesized_args(args))
     }
 
+    /// # Panics
+    ///
+    /// Panics if a [`FieldSpec::Named`] key isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn call_table(&self, callee: Expression, fields: Vec<FieldSpec<'_>>) -> Expression {
         let args = FunctionArgs::TableConstructor(Box::new(self.table_constructor(fields)));
@@ -316,6 +337,9 @@ impl Synth {
         self.call_node(callee, None, None, args)
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` or a [`FieldSpec::Named`] key isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn method_call_table(
         &self,
@@ -327,6 +351,9 @@ impl Synth {
         self.call_node(receiver, Some(name), None, args)
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn method_call_string(
         &self,
@@ -363,6 +390,9 @@ impl Synth {
         FunctionArgs::Parenthesized { span: self.next_span(), args: Punctuated::from_items(args) }
     }
 
+    /// # Panics
+    ///
+    /// Panics if a [`FieldSpec::Named`] key isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn table(&self, fields: Vec<FieldSpec<'_>>) -> Expression {
         Expression::TableConstructor(Box::new(self.table_constructor(fields)))
@@ -409,6 +439,10 @@ impl Synth {
 
     /// For attributes, generics, typed parameters, varargs, or a return type, use
     /// [`Synth::function_def_full`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if a name in `params` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn function_def(&self, params: &[&str], body: Block) -> Expression {
         self.function_def_full(

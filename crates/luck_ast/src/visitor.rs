@@ -1,3 +1,4 @@
+use crate::depth::regrouped_levels;
 use crate::expr::{Expression, Field, FunctionArgs, FunctionCall, TableConstructor, Var};
 use crate::function::FunctionBody;
 use crate::punctuated::Punctuated;
@@ -11,6 +12,20 @@ use crate::types::{GenericTypeList, Type, TypeField};
 /// keep recursing. The `walk_*` methods are the default recursion, so
 /// overriding one instead of its hook would leave nothing to fall back on.
 pub trait Visitor<'ast> {
+    /// Called by the walkers on entering each level of nesting, and always
+    /// paired with [`Visitor::ascend`]. Returning `false` skips what the
+    /// level holds.
+    ///
+    /// A level is a block, a function body, a table constructor, a call, an
+    /// index or field access, an operator, a parenthesized expression, a Luau
+    /// if-expression, interpolated string, cast, or instantiation, or a Luau
+    /// type that holds other types or an expression. These are the levels
+    /// [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH) caps.
+    fn descend(&mut self) -> bool {
+        true
+    }
+    fn ascend(&mut self) {}
+
     fn visit_block(&mut self, block: &'ast Block) {
         self.walk_block(block);
     }
@@ -45,12 +60,15 @@ pub trait Visitor<'ast> {
     }
 
     fn walk_block(&mut self, block: &'ast Block) {
-        for stmt in &block.stmts {
-            self.visit_stmt(stmt);
+        if self.descend() {
+            for stmt in &block.stmts {
+                self.visit_stmt(stmt);
+            }
+            if let Some(last) = &block.last_stmt {
+                self.visit_last_stmt(last);
+            }
         }
-        if let Some(last) = &block.last_stmt {
-            self.visit_last_stmt(last);
-        }
+        self.ascend();
     }
 
     fn walk_stmt(&mut self, stmt: &'ast Statement) {
@@ -188,47 +206,74 @@ pub trait Visitor<'ast> {
                 self.visit_function_call(call);
             }
             Expression::Parenthesized(parenthesized) => {
-                self.visit_expr(&parenthesized.expr);
+                if self.descend() {
+                    self.visit_expr(&parenthesized.expr);
+                }
+                self.ascend();
             }
             Expression::TableConstructor(table) => {
                 self.visit_table_constructor(table);
             }
             Expression::BinaryOp(binary_op) => {
-                self.visit_expr(&binary_op.lhs);
-                self.visit_expr(&binary_op.rhs);
+                if self.descend() {
+                    let (lhs_levels, rhs_levels) = regrouped_levels(binary_op);
+                    if lhs_levels == 0 && rhs_levels == 0 {
+                        self.visit_expr(&binary_op.lhs);
+                        self.visit_expr(&binary_op.rhs);
+                    } else {
+                        visit_regrouped(self, &binary_op.lhs, lhs_levels);
+                        visit_regrouped(self, &binary_op.rhs, rhs_levels);
+                    }
+                }
+                self.ascend();
             }
             Expression::UnaryOp(unary_op) => {
-                self.visit_expr(&unary_op.operand);
+                if self.descend() {
+                    self.visit_expr(&unary_op.operand);
+                }
+                self.ascend();
             }
             // Luau
             Expression::IfExpression(if_expr) => {
-                self.visit_expr(&if_expr.condition);
-                self.visit_expr(&if_expr.then_expr);
-                for clause in &if_expr.elseif_clauses {
-                    self.visit_expr(&clause.condition);
-                    self.visit_expr(&clause.expr);
+                if self.descend() {
+                    self.visit_expr(&if_expr.condition);
+                    self.visit_expr(&if_expr.then_expr);
+                    for clause in &if_expr.elseif_clauses {
+                        self.visit_expr(&clause.condition);
+                        self.visit_expr(&clause.expr);
+                    }
+                    self.visit_expr(&if_expr.else_expr);
                 }
-                self.visit_expr(&if_expr.else_expr);
+                self.ascend();
             }
             // Luau
             Expression::InterpolatedString(interpolated_string) => {
-                for segment in &interpolated_string.segments {
-                    if let Some(interpolated) = &segment.expr {
-                        self.visit_expr(interpolated);
+                if self.descend() {
+                    for segment in &interpolated_string.segments {
+                        if let Some(interpolated) = &segment.expr {
+                            self.visit_expr(interpolated);
+                        }
                     }
                 }
+                self.ascend();
             }
             // Luau
             Expression::TypeCast(cast) => {
-                self.visit_expr(&cast.expr);
-                self.visit_type(&cast.type_annotation);
+                if self.descend() {
+                    self.visit_expr(&cast.expr);
+                    self.visit_type(&cast.type_annotation);
+                }
+                self.ascend();
             }
             // Luau
             Expression::TypeInstantiation(instantiation) => {
-                self.visit_expr(&instantiation.expr);
-                for arg in instantiation.type_args.args.iter() {
-                    self.visit_type(arg);
+                if self.descend() {
+                    self.visit_expr(&instantiation.expr);
+                    for arg in instantiation.type_args.args.iter() {
+                        self.visit_type(arg);
+                    }
                 }
+                self.ascend();
             }
         }
     }
@@ -237,23 +282,32 @@ pub trait Visitor<'ast> {
         match var {
             Var::Name(_) => {}
             Var::Index(index_expr) => {
-                self.visit_expr(&index_expr.prefix);
-                self.visit_expr(&index_expr.index);
+                if self.descend() {
+                    self.visit_expr(&index_expr.prefix);
+                    self.visit_expr(&index_expr.index);
+                }
+                self.ascend();
             }
             Var::FieldAccess(field_access) => {
-                self.visit_expr(&field_access.prefix);
+                if self.descend() {
+                    self.visit_expr(&field_access.prefix);
+                }
+                self.ascend();
             }
         }
     }
 
     fn walk_function_call(&mut self, call: &'ast FunctionCall) {
-        self.visit_expr(&call.callee);
-        if let Some(type_args) = &call.explicit_type_args {
-            for type_arg in type_args.args.iter() {
-                self.visit_type(type_arg);
+        if self.descend() {
+            self.visit_expr(&call.callee);
+            if let Some(type_args) = &call.explicit_type_args {
+                for type_arg in type_args.args.iter() {
+                    self.visit_type(type_arg);
+                }
             }
+            self.walk_function_args(&call.args);
         }
-        self.walk_function_args(&call.args);
+        self.ascend();
     }
 
     fn walk_function_args(&mut self, args: &'ast FunctionArgs) {
@@ -271,96 +325,111 @@ pub trait Visitor<'ast> {
     }
 
     fn walk_table_constructor(&mut self, table: &'ast TableConstructor) {
-        for field in table.fields.iter() {
-            match field {
-                Field::Bracketed { key, value, .. } => {
-                    self.visit_expr(key);
-                    self.visit_expr(value);
-                }
-                Field::Named { value, .. } | Field::Positional { value, .. } => {
-                    self.visit_expr(value);
+        if self.descend() {
+            for field in table.fields.iter() {
+                match field {
+                    Field::Bracketed { key, value, .. } => {
+                        self.visit_expr(key);
+                        self.visit_expr(value);
+                    }
+                    Field::Named { value, .. } | Field::Positional { value, .. } => {
+                        self.visit_expr(value);
+                    }
                 }
             }
         }
+        self.ascend();
     }
 
     fn walk_function_body(&mut self, body: &'ast FunctionBody) {
-        if let Some(generics) = &body.generics {
-            self.visit_generic_type_list(generics);
-        }
-        for param in body.params.iter() {
-            if let Some(param_type) = &param.type_annotation {
-                self.visit_type(param_type);
+        if self.descend() {
+            if let Some(generics) = &body.generics {
+                self.visit_generic_type_list(generics);
             }
+            for param in body.params.iter() {
+                if let Some(param_type) = &param.type_annotation {
+                    self.visit_type(param_type);
+                }
+            }
+            if let Some(vararg) = &body.vararg
+                && let Some(vararg_type) = &vararg.type_annotation
+            {
+                self.visit_type(vararg_type);
+            }
+            if let Some(return_type) = &body.return_type {
+                self.visit_type(return_type);
+            }
+            self.visit_block(&body.block);
         }
-        if let Some(vararg) = &body.vararg
-            && let Some(vararg_type) = &vararg.type_annotation
-        {
-            self.visit_type(vararg_type);
-        }
-        if let Some(return_type) = &body.return_type {
-            self.visit_type(return_type);
-        }
-        self.visit_block(&body.block);
+        self.ascend();
     }
 
     fn walk_type(&mut self, type_value: &'ast Type) {
-        match type_value {
-            Type::Named(named) => {
-                if let Some(generics) = &named.generics {
-                    for arg in generics.args.iter() {
-                        self.visit_type(arg);
-                    }
-                }
-            }
-            // typeof embeds a real expression, so semantic passes must see it.
-            Type::Typeof(typeof_type) => {
-                self.visit_expr(&typeof_type.expr);
-            }
-            Type::Table(table) => {
-                for field in table.fields.iter() {
-                    match field {
-                        TypeField::Named { value, .. } | TypeField::Array { value, .. } => {
-                            self.visit_type(value);
-                        }
-                        TypeField::Indexer { key, value, .. } => {
-                            self.visit_type(key);
-                            self.visit_type(value);
-                        }
-                    }
-                }
-            }
-            Type::Function(function_type) => {
-                if let Some(generics) = &function_type.generics {
-                    self.visit_generic_type_list(generics);
-                }
-                for param in function_type.params.iter() {
-                    self.visit_type(&param.type_value);
-                }
-                self.visit_type(&function_type.return_type);
-            }
-            Type::Optional(optional) => {
-                self.visit_type(&optional.type_value);
-            }
-            Type::Union(union) => {
-                for item in union.types.iter() {
-                    self.visit_type(item);
-                }
-            }
-            Type::Intersection(intersection) => {
-                for item in intersection.types.iter() {
-                    self.visit_type(item);
-                }
-            }
-            Type::Parenthesized(parenthesized) => self.visit_type(&parenthesized.type_value),
-            Type::Pack(pack) => {
-                for item in pack.types.iter() {
-                    self.visit_type(item);
-                }
-            }
-            Type::Variadic(variadic) => self.visit_type(&variadic.type_value),
-            Type::Name { .. } | Type::Singleton(_) | Type::GenericPack(_) | Type::Error(_) => {}
+        if matches!(
+            type_value,
+            Type::Name { .. } | Type::Singleton(_) | Type::GenericPack(_) | Type::Error(_)
+        ) {
+            return;
         }
+        if self.descend() {
+            match type_value {
+                Type::Named(named) => {
+                    if let Some(generics) = &named.generics {
+                        for arg in generics.args.iter() {
+                            self.visit_type(arg);
+                        }
+                    }
+                }
+                // typeof embeds a real expression, so semantic passes must see it.
+                Type::Typeof(typeof_type) => {
+                    self.visit_expr(&typeof_type.expr);
+                }
+                Type::Table(table) => {
+                    for field in table.fields.iter() {
+                        match field {
+                            TypeField::Named { value, .. } | TypeField::Array { value, .. } => {
+                                self.visit_type(value);
+                            }
+                            TypeField::Indexer { key, value, .. } => {
+                                self.visit_type(key);
+                                self.visit_type(value);
+                            }
+                        }
+                    }
+                }
+                Type::Function(function_type) => {
+                    if let Some(generics) = &function_type.generics {
+                        self.visit_generic_type_list(generics);
+                    }
+                    for param in function_type.params.iter() {
+                        self.visit_type(&param.type_value);
+                    }
+                    self.visit_type(&function_type.return_type);
+                }
+                Type::Optional(optional) => {
+                    self.visit_type(&optional.type_value);
+                }
+                Type::Union(union) => {
+                    for item in union.types.iter() {
+                        self.visit_type(item);
+                    }
+                }
+                Type::Intersection(intersection) => {
+                    for item in intersection.types.iter() {
+                        self.visit_type(item);
+                    }
+                }
+                Type::Parenthesized(parenthesized) => self.visit_type(&parenthesized.type_value),
+                Type::Pack(pack) => {
+                    for item in pack.types.iter() {
+                        self.visit_type(item);
+                    }
+                }
+                Type::Variadic(variadic) => self.visit_type(&variadic.type_value),
+                Type::Name { .. } | Type::Singleton(_) | Type::GenericPack(_) | Type::Error(_) => {}
+            }
+        }
+        self.ascend();
     }
 
     fn walk_generic_type_list(&mut self, generics: &'ast GenericTypeList) {
@@ -377,6 +446,26 @@ pub trait Visitor<'ast> {
                 self.visit_type(name_type);
             }
         }
+    }
+}
+
+/// Visits an operand `levels` deeper than it sits in the tree, where it
+/// ends up once its operator is printed and read back.
+fn visit_regrouped<'ast, V>(visitor: &mut V, operand: &'ast Expression, levels: usize)
+where
+    V: Visitor<'ast> + ?Sized,
+{
+    let mut entered = 0usize;
+    let mut is_open = true;
+    while is_open && entered < levels {
+        is_open = visitor.descend();
+        entered = entered.saturating_add(1);
+    }
+    if is_open {
+        visitor.visit_expr(operand);
+    }
+    for _ in 0..entered {
+        visitor.ascend();
     }
 }
 

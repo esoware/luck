@@ -29,15 +29,18 @@ impl AstDiff {
         Self { path: path.into(), reason: reason.into() }
     }
 
-    fn within(mut self, segment: &str) -> Self {
+    fn nest_within(&mut self, segment: &str) {
         self.path = if self.path.is_empty() {
             segment.to_owned()
         } else {
             format!("{segment}/{}", self.path)
         };
-        self
     }
 }
+
+/// A divergence travels boxed, so a comparison that matches moves one word
+/// through each level of the tree instead of two strings.
+type Check = ControlFlow<Box<AstDiff>>;
 
 /// String literals compare by the bytes they decode to in that dialect.
 ///
@@ -47,23 +50,29 @@ impl AstDiff {
 pub fn blocks_equivalent(left: &Block, right: &Block, version: LuaVersion) -> Result<(), AstDiff> {
     match at("block", stmt::block_eq(left, right, version)) {
         Continue(()) => Ok(()),
-        Break(diff) => Err(diff),
+        Break(diff) => Err(*diff),
     }
 }
 
-fn differ(reason: impl Into<String>) -> ControlFlow<AstDiff> {
-    Break(AstDiff::new(String::new(), reason))
+fn differ(reason: impl Into<String>) -> Check {
+    Break(Box::new(AstDiff::new(String::new(), reason)))
 }
 
-fn at(segment: &str, check: ControlFlow<AstDiff>) -> ControlFlow<AstDiff> {
-    check.map_break(|diff| diff.within(segment))
+fn at(segment: &str, check: Check) -> Check {
+    check.map_break(|mut diff| {
+        diff.nest_within(segment);
+        diff
+    })
 }
 
-fn at_index(name: &str, index: usize, check: ControlFlow<AstDiff>) -> ControlFlow<AstDiff> {
-    check.map_break(|diff| diff.within(&format!("{name}[{index}]")))
+fn at_index(name: &str, index: usize, check: Check) -> Check {
+    check.map_break(|mut diff| {
+        diff.nest_within(&format!("{name}[{index}]"));
+        diff
+    })
 }
 
-fn require(is_satisfied: bool, reason: &str) -> ControlFlow<AstDiff> {
+fn require(is_satisfied: bool, reason: &str) -> Check {
     if is_satisfied { Continue(()) } else { differ(reason) }
 }
 
@@ -71,8 +80,8 @@ fn presence_eq<T>(
     left: Option<&T>,
     right: Option<&T>,
     presence_reason: &str,
-    item_eq: impl FnOnce(&T, &T) -> ControlFlow<AstDiff>,
-) -> ControlFlow<AstDiff>
+    item_eq: impl FnOnce(&T, &T) -> Check,
+) -> Check
 where
     T: ?Sized,
 {
@@ -87,8 +96,8 @@ fn punctuated_eq<T>(
     left: &Punctuated<T>,
     right: &Punctuated<T>,
     version: LuaVersion,
-    item_eq: fn(&T, &T, LuaVersion) -> ControlFlow<AstDiff>,
-) -> ControlFlow<AstDiff> {
+    item_eq: fn(&T, &T, LuaVersion) -> Check,
+) -> Check {
     let left_count = left.len();
     let right_count = right.len();
     if left_count != right_count {
@@ -100,7 +109,7 @@ fn punctuated_eq<T>(
     Continue(())
 }
 
-fn token_text_eq(left: &Token, right: &Token) -> ControlFlow<AstDiff> {
+fn token_text_eq(left: &Token, right: &Token) -> Check {
     // `TokenKind::Identifier` carries the name, so comparing kinds compares
     // spelling.
     require(left.kind == right.kind, "token kind differs")

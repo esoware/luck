@@ -1,8 +1,10 @@
 use alloc::collections::VecDeque;
 use std::path::Path;
 
-use luck_core::{Diagnostic, native_path, normalize_path, read_source_file};
-use luck_resolver::{ResolveRequest, ResolvedModule, Resolver};
+use luck_core::Diagnostic;
+use luck_resolver::{
+    ResolveRequest, ResolvedModule, Resolver, native_path, normalize_path, read_source_file,
+};
 use luck_token::{CommentKind, LuaVersion, Span, leading_hot_comments};
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};

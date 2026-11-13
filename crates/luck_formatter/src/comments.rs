@@ -181,14 +181,15 @@ impl Comments {
             return None;
         };
         let reached = self.last_printed_end().map_or(position, |end| end.max(position));
-        disabled_ranges.iter().find(|region| region.end > reached).cloned()
+        region_ending_after(disabled_ranges, reached).cloned()
     }
 
     pub(crate) fn overlaps_disabled_region(&self, span: Span) -> bool {
         match &self.store {
-            Store::Sourced { disabled_ranges, .. } => disabled_ranges
-                .iter()
-                .any(|region| region.start < span.end && span.start < region.end),
+            Store::Sourced { disabled_ranges, .. } => {
+                region_ending_after(disabled_ranges, span.start)
+                    .is_some_and(|region| region.start < span.end)
+            }
             Store::Synthetic { .. } | Store::Empty => false,
         }
     }
@@ -342,7 +343,10 @@ impl Comments {
             }
             Store::Synthetic { .. } | Store::Empty => &[],
         };
-        pending.iter().find(|c| c.span.start >= start).is_some_and(|c| c.span.start < end)
+        // Sorted by position, so the first one at or past `start` is found
+        // without walking the comments before it.
+        let first_index = pending.partition_point(|c| c.span.start < start);
+        pending.get(first_index).is_some_and(|c| c.span.start < end)
     }
 
     pub(crate) const fn checkpoint(&self) -> CommentsCheckpoint {
@@ -770,10 +774,13 @@ fn disabled_region_limit(
     printed_count: usize,
 ) -> u32 {
     let position = printed_end(comments, printed_count).unwrap_or(0);
-    disabled_ranges
-        .iter()
-        .find(|region| region.end > position)
-        .map_or(u32::MAX, |region| region.start)
+    region_ending_after(disabled_ranges, position).map_or(u32::MAX, |region| region.start)
+}
+
+/// The first of `regions` that ends past `position`. `format off` regions are
+/// sorted and apart, so their ends are in order too.
+pub(crate) fn region_ending_after(regions: &[Range<u32>], position: u32) -> Option<&Range<u32>> {
+    regions.get(regions.partition_point(|region| region.end <= position))
 }
 
 fn take_pending_while<'comments, F>(
