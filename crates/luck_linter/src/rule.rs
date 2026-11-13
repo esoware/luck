@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use luck_ast::{Block, Expression, FunctionCall, Statement, TableConstructor};
+use luck_ast::{Block, Call, Expression, Statement, SuffixedExpression, TableConstructor};
 use luck_semantic::SemanticAnalysis;
 use luck_token::Comment;
 
@@ -73,6 +73,14 @@ pub(crate) trait WholeRule: Rule {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding>;
 }
 
+/// An assignment target's chain reads everything but what its last suffix
+/// stores to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChainPosition {
+    Value,
+    AssignmentTarget,
+}
+
 /// A fix's replacement must parse as a statement in statement position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CallPosition {
@@ -91,8 +99,8 @@ pub(crate) trait NodeRule: Rule {
     fn on_stmt(&self, _stmt: &Statement, _context: &LintContext<'_>, _findings: &mut Vec<Finding>) {
     }
 
-    /// Never gets an `Expression::FunctionCall`, which goes to
-    /// [`Self::on_call`], or an `Expression::TableConstructor`, which goes
+    /// Never gets an `Expression::Suffixed`, which goes to
+    /// [`Self::on_chain`], or an `Expression::TableConstructor`, which goes
     /// to [`Self::on_table`].
     fn on_expr(
         &self,
@@ -112,13 +120,24 @@ pub(crate) trait NodeRule: Rule {
     ) {
     }
 
-    /// Runs for every call the bus reaches, in either position. A rule that
-    /// subscribes to only one of `FunctionCallStmt` and `FunctionCallExpr`
-    /// must check `position`, because the driver's debug check calls this
-    /// for both.
+    /// Runs for every chain, in an expression, a call statement, or an
+    /// assignment target.
+    fn on_chain(
+        &self,
+        _chain: &SuffixedExpression,
+        _position: ChainPosition,
+        _context: &LintContext<'_>,
+        _findings: &mut Vec<Finding>,
+    ) {
+    }
+
+    /// Runs for every call in every chain, the one a call statement makes
+    /// included. A rule that subscribes to only one of `FunctionCallStmt`
+    /// and `FunctionCallExpr` must check `position`, because the driver's
+    /// debug check calls this for both.
     fn on_call(
         &self,
-        _call: &FunctionCall,
+        _call: Call<'_>,
         _position: CallPosition,
         _context: &LintContext<'_>,
         _findings: &mut Vec<Finding>,

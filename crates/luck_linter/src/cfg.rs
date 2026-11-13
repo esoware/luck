@@ -222,9 +222,12 @@ impl<'ast> GraphBuilder<'ast, '_> {
 
     fn stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
-            Statement::FunctionCall(call) => {
-                let node = self.code(call.span);
-                if is_global_call(call, "error", self.semantic) {
+            Statement::FunctionCall(chain) => {
+                let node = self.code(chain.span);
+                if chain
+                    .last_call()
+                    .is_some_and(|call| is_global_call(call, "error", self.semantic))
+                {
                     self.connect(node, Exit::Error.node());
                     self.cursor = None;
                 }
@@ -382,14 +385,13 @@ fn literal_truth(condition: &Expression) -> Option<bool> {
         | Expression::TableConstructor(_)
         | Expression::FunctionDef(_) => Some(true),
         Expression::VarArg(_)
-        | Expression::Var(_)
-        | Expression::FunctionCall(_)
+        | Expression::Name(_)
+        | Expression::Suffixed(_)
         | Expression::Parenthesized(_)
         | Expression::BinaryOp(_)
         | Expression::UnaryOp(_)
         | Expression::IfExpression(_)
         | Expression::TypeCast(_)
-        | Expression::TypeInstantiation(_)
         | Expression::Error(_) => None,
     }
 }
@@ -444,8 +446,8 @@ impl<'ast> Visitor<'ast> for DecisionPoints {
     fn visit_expr(&mut self, expr: &'ast Expression) {
         match expr {
             Expression::BinaryOp(node) => {
-                if matches!(node.op, BinOp::And | BinOp::Or) {
-                    self.count += 1;
+                if matches!(node.links.first().op, BinOp::And | BinOp::Or) {
+                    self.count += u32::try_from(node.links.len()).unwrap_or(u32::MAX);
                 }
             }
             // Luau
@@ -458,14 +460,13 @@ impl<'ast> Visitor<'ast> for DecisionPoints {
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::UnaryOp(_)
             | Expression::InterpolatedString(_)
             | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
             | Expression::Error(_) => {}
         }
         self.walk_expr(expr);

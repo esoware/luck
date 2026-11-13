@@ -1,4 +1,4 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Literal};
+use luck_ast::{Call, Expression, FunctionArgs, Literal};
 use luck_token::{LuaVersion, Span, Token, TokenKind, index_to_offset, short_string_body};
 
 use crate::diagnostic::Finding;
@@ -45,12 +45,12 @@ impl NodeRule for BadStringEscape {
 
     fn on_call(
         &self,
-        call: &FunctionCall,
+        call: Call<'_>,
         _position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        if let FunctionArgs::StringLiteral(literal) = &call.args {
+        if let FunctionArgs::StringLiteral(literal) = call.args {
             check_literal(literal, context.semantic.version, findings);
         }
     }

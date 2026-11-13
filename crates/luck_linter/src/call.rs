@@ -1,31 +1,28 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Var, is_multi_value};
+use luck_ast::{Call, Expression, FunctionArgs, Suffix, is_multi_value};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, Token, short_string_body};
 
 /// Whether `call` is a plain `name(...)` call to the host's global `name`. A
 /// method call, or a `name` the chunk shadows or rebinds, is user code.
-pub(crate) fn is_global_call(call: &FunctionCall, name: &str, semantic: &SemanticAnalysis) -> bool {
+pub(crate) fn is_global_call(call: Call<'_>, name: &str, semantic: &SemanticAnalysis) -> bool {
     call.method.is_none()
-        && matches!(
-            &call.callee,
-            Expression::Var(Var::Name(token))
-                if token.identifier() == Some(name)
-                    && semantic.reaches_host_global(name, token.span)
-        )
+        && call.callee.as_name().is_some_and(|token| {
+            token.identifier() == Some(name) && semantic.reaches_host_global(name, token.span)
+        })
 }
 
-/// `None` for a method call.
-pub(crate) fn dotted_callee(call: &FunctionCall) -> Option<(&Token, &str)> {
+/// The root and the field of a `root.field(...)` call. `None` for a method
+/// call.
+pub(crate) fn dotted_callee(call: Call<'_>) -> Option<(&Token, &str)> {
     if call.method.is_some() {
         return None;
     }
-    let Expression::Var(Var::FieldAccess(field_access)) = &call.callee else {
+    let (Expression::Name(root), [Suffix::Field(field)]) =
+        (call.callee.prefix, call.callee.suffixes)
+    else {
         return None;
     };
-    let Expression::Var(Var::Name(root)) = &field_access.prefix else {
-        return None;
-    };
-    Some((root, field_access.name.identifier()?))
+    Some((root, field.identifier()?))
 }
 
 /// `f"..."` and `f{...}` pass one argument, which isn't in the list.
@@ -38,7 +35,7 @@ pub(crate) const fn positional_args(function_args: &FunctionArgs) -> (&[Expressi
 
 /// Whether the last argument, or the last value of an assignment, is a call
 /// or `...`, which can expand to any number of values, none included.
-pub(crate) const fn has_multi_value_tail(args: &[Expression]) -> bool {
+pub(crate) fn has_multi_value_tail(args: &[Expression]) -> bool {
     matches!(args.last(), Some(last) if is_multi_value(last))
 }
 

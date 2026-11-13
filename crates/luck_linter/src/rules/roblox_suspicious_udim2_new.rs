@@ -1,4 +1,4 @@
-use luck_ast::FunctionCall;
+use luck_ast::Call;
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -23,7 +23,7 @@ impl NodeRule for RobloxSuspiciousUdim2New {
     }
     fn on_call(
         &self,
-        call: &FunctionCall,
+        call: Call<'_>,
         position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
@@ -49,7 +49,7 @@ impl NodeRule for RobloxSuspiciousUdim2New {
         findings.push(
             Finding::new(
                 "`UDim2.new` takes 4 components (`xScale`, `xOffset`, `yScale`, `yOffset`)",
-                call.span,
+                call.span(),
             )
             .with_help(format!("did you mean to use `{suggestion}`?")),
         );

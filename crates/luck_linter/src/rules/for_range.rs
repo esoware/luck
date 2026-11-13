@@ -1,4 +1,4 @@
-use luck_ast::{Expression, NumericFor, Statement, Var};
+use luck_ast::{Expression, NumericFor, Statement};
 use luck_token::{LuaVersion, UnOp};
 
 use crate::diagnostic::Finding;
@@ -156,9 +156,8 @@ fn limit_landing_problem(
 fn is_length_of_identifier(expr: &Expression) -> bool {
     if let Expression::UnaryOp(unary) = expr
         && unary.op == UnOp::Len
-        && let Expression::Var(var) = &unary.operand
     {
-        return matches!(var, Var::Name(_));
+        return matches!(unary.operand, Expression::Name(_));
     }
     false
 }

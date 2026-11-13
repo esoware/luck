@@ -1,4 +1,4 @@
-use luck_ast::{FunctionArgs, FunctionCall};
+use luck_ast::{Call, FunctionArgs};
 use luck_token::{LuaVersion, Span, has_line_break};
 
 use crate::diagnostic::Finding;
@@ -22,7 +22,7 @@ impl NodeRule for AmbiguousNewlineCall {
     }
     fn on_call(
         &self,
-        call: &FunctionCall,
+        call: Call<'_>,
         _position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
@@ -31,8 +31,8 @@ impl NodeRule for AmbiguousNewlineCall {
     }
 }
 
-fn check_call(call: &FunctionCall, source: &str, version: LuaVersion) -> Option<Finding> {
-    let FunctionArgs::Parenthesized { span: args_span, .. } = &call.args else {
+fn check_call(call: Call<'_>, source: &str, version: LuaVersion) -> Option<Finding> {
+    let FunctionArgs::Parenthesized { span: args_span, .. } = call.args else {
         return None;
     };
     let prefix_end = call

@@ -1,4 +1,6 @@
-use luck_ast::{Block, Expression, GenericFor, LocalAssignment, NumericFor, Statement, Var};
+use luck_ast::{
+    Block, Expression, GenericFor, LocalAssignment, NumericFor, Statement, Suffix, Var,
+};
 use luck_semantic::{ScopeTree, SemanticAnalysis};
 use luck_token::{Span, Token, UnOp};
 
@@ -155,9 +157,10 @@ fn is_numeric_clone(loop_node: &NumericFor, destination: &Token, tree: &ScopeTre
         && has_unit_step
         && copied_value(&loop_node.block, destination, &loop_node.name, tree).is_some_and(
             |copied| {
-                matches!(copied, Expression::Var(Var::Index(copied_index))
-                    if is_same_binding(&copied_index.prefix, source_table, tree)
-                        && is_read_of_local(&copied_index.index, &loop_node.name, tree))
+                index_read(copied).is_some_and(|(prefix, index)| {
+                    is_same_binding(prefix, source_table, tree)
+                        && is_read_of_local(index, &loop_node.name, tree)
+                })
             },
         )
 }
@@ -175,22 +178,37 @@ fn copied_value<'ast>(
     let [Statement::Assignment(assignment)] = body.stmts.as_slice() else {
         return None;
     };
-    let ([Var::Index(target)], [value]) =
+    let ([Var::Suffixed(target)], [value]) =
         (assignment.targets.items.as_slice(), assignment.values.items.as_slice())
     else {
         return None;
     };
-    (is_read_of_local(&target.prefix, destination, tree)
-        && is_read_of_local(&target.index, key, tree))
-    .then_some(value)
+    let [Suffix::Index { index, .. }] = &*target.suffixes else {
+        return None;
+    };
+    (is_read_of_local(&target.prefix, destination, tree) && is_read_of_local(index, key, tree))
+        .then_some(value)
+}
+
+/// The table and the key of `table[key]`.
+fn index_read(expr: &Expression) -> Option<(&Expression, &Expression)> {
+    let Expression::Suffixed(chain) = expr else {
+        return None;
+    };
+    let [Suffix::Index { index, .. }] = &*chain.suffixes else {
+        return None;
+    };
+    Some((&chain.prefix, index))
 }
 
 /// A shadowed one is a user iterator, not a table walk.
 fn is_pairs_call(expr: &Expression, semantic: &SemanticAnalysis) -> bool {
-    let Expression::FunctionCall(call) = expr else {
+    let Expression::Suffixed(chain) = expr else {
         return false;
     };
-    is_global_call(call, "pairs", semantic) || is_global_call(call, "ipairs", semantic)
+    chain.last_call().is_some_and(|call| {
+        is_global_call(call, "pairs", semantic) || is_global_call(call, "ipairs", semantic)
+    })
 }
 
 fn length_of_name(expr: &Expression) -> Option<&Token> {
@@ -200,7 +218,7 @@ fn length_of_name(expr: &Expression) -> Option<&Token> {
     if unary.op != UnOp::Len {
         return None;
     }
-    let Expression::Var(Var::Name(token)) = &unary.operand else {
+    let Expression::Name(token) = &unary.operand else {
         return None;
     };
     Some(token)
@@ -212,14 +230,14 @@ fn declaration_of(name: &Token, tree: &ScopeTree) -> Option<Span> {
 }
 
 fn is_read_of_local(expr: &Expression, declaration: &Token, tree: &ScopeTree) -> bool {
-    matches!(expr, Expression::Var(Var::Name(token))
+    matches!(expr, Expression::Name(token)
         if declaration_of(token, tree) == Some(declaration.span))
 }
 
 /// Whether `expr` is the same name as `source`, resolving the same way, so a
 /// loop variable that shadows it doesn't count.
 fn is_same_binding(expr: &Expression, source: &Token, tree: &ScopeTree) -> bool {
-    matches!(expr, Expression::Var(Var::Name(token))
+    matches!(expr, Expression::Name(token)
         if token.identifier() == source.identifier()
             && declaration_of(token, tree) == declaration_of(source, tree))
 }

@@ -39,7 +39,7 @@ These sweeps back the formatter and minifier guarantees. Strengthen them instead
 
 ## Stack tests
 
-`tests/it/stack.rs` runs every stage (parse, validate, clone, compact, format, verified format, and minify) over one source per construct nested to the parser's cap, each on a thread with 1 MiB of stack, which is what a Windows main thread and a wasm module get. Test builds are unoptimized, where frames are largest, and a stage that outgrows the budget takes the test process down. A new recursive stage or a new nesting construct belongs in it.
+`tests/it/stack.rs` runs every stage (parse, validate, clone, compact, format, verified format, and minify) over one source per construct nested to the parser's cap, and over one per kind of run of operators or suffixes far longer than it, each on a thread with 1 MiB of stack, which is what a Windows main thread and a wasm module get. Test builds are unoptimized, where frames are largest, and a stage that outgrows the budget takes the test process down. A new recursive stage or a new nesting construct belongs in it.
 
 ## Fixtures
 

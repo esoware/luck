@@ -2,7 +2,7 @@
 //! after the colon) gets no member completion. The dangling colon doesn't
 //! parse, so there's no AST to resolve the receiver from.
 
-use luck_ast::{FunctionArgs, FunctionCall, Literal};
+use luck_ast::{Call, FunctionArgs, Literal};
 use luck_semantic::{StdlibEntry, StdlibFunction};
 use luck_token::{Span, TokenKind, index_to_offset};
 use rustc_hash::FxHashSet;
@@ -176,8 +176,8 @@ fn constant_value_completions(
     Some(items)
 }
 
-const fn call_arg_count(call: &FunctionCall) -> usize {
-    match &call.args {
+const fn call_arg_count(call: Call<'_>) -> usize {
+    match call.args {
         FunctionArgs::Parenthesized { args, .. } => args.len(),
         FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => 1,
     }

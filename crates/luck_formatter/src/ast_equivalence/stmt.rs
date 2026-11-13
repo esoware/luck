@@ -8,7 +8,7 @@ use luck_ast::{
 };
 use luck_token::LuaVersion;
 
-use super::expr::{expr_eq, function_call_eq, var_eq};
+use super::expr::{expr_eq, suffixed_eq, var_eq};
 use super::function::{function_attributes_eq, function_body_eq, param_eq};
 use super::types::{generics_eq, type_annotation_eq, type_eq};
 use super::{Check, at, at_index, differ, presence_eq, punctuated_eq, require, token_text_eq};
@@ -46,7 +46,7 @@ fn stmt_eq(left: &Statement, right: &Statement, version: LuaVersion) -> Check {
             assignment_eq(lhs, rhs, version)
         }
         (Statement::FunctionCall(lhs), Statement::FunctionCall(rhs)) => {
-            at("FunctionCall", function_call_eq(lhs, rhs, version))
+            at("FunctionCall", suffixed_eq(lhs, rhs, version))
         }
         (Statement::DoBlock(lhs), Statement::DoBlock(rhs)) => {
             at("DoBlock", block_eq(&lhs.block, &rhs.block, version))

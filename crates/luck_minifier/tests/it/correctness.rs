@@ -199,8 +199,8 @@ fn nested(open: &str, count: usize, innermost: &str, close: &str) -> String {
 
 #[test]
 fn a_local_is_not_inlined_where_its_value_would_nest_past_the_cap() {
-    // The initializer is 30 levels deep, and its one use sits 241 levels in.
-    let initializer = vec!["#\"a\""; 31].join("+");
+    // The initializer is 31 levels deep, and its one use sits 241 levels in.
+    let initializer = format!("{}#\"a\"{}", "#\"a\"+(".repeat(15), ")".repeat(15));
     let source = format!("local x = {initializer}\nreturn {}\n", nested("{", 240, "x", "}"));
     let output = assert_minifies_within_the_depth_cap(&source);
     assert!(output.starts_with("local "), "the local must stay declared");
@@ -211,16 +211,20 @@ fn a_local_is_not_inlined_where_its_value_would_nest_past_the_cap() {
 }
 
 #[test]
-fn an_if_return_run_is_not_chained_where_its_values_would_nest_past_the_cap() {
-    let deep_table = nested("{", 245, "1", "}");
+fn an_if_return_run_stops_at_a_guard_whose_value_would_nest_past_the_cap() {
     let mut source = String::new();
     for guard in 0..30u32 {
-        writeln!(source, "if a{guard} then return {deep_table} end").unwrap();
+        writeln!(source, "if a{guard} then return {{}} end").unwrap();
+    }
+    writeln!(source, "if deep then return {} end", nested("{", 253, "1", "}")).unwrap();
+    for guard in 30..60u32 {
+        writeln!(source, "if a{guard} then return {{}} end").unwrap();
     }
     source.push_str("return 0\n");
     let output = assert_minifies_within_the_depth_cap(&source);
-    assert!(output.starts_with("if a0 then"), "the first guards must stay statements");
-    assert!(output.ends_with("or 0"), "the last guards still fit in a chain");
+    assert!(output.starts_with("if a0 then"), "the guards before it must stay statements");
+    assert!(output.contains("if deep then"), "the deep guard must stay a statement");
+    assert!(output.ends_with("a59 and{}or 0"), "the guards after it make one chain: {output}");
 }
 
 #[test]

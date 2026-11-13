@@ -44,8 +44,8 @@ impl NumberShortener {
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::BinaryOp(_)
@@ -53,7 +53,6 @@ impl NumberShortener {
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
             | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
             | Expression::Error(_)) => other,
         }
     }

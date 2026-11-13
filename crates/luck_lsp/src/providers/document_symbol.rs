@@ -4,8 +4,8 @@
 )]
 
 use luck_ast::{
-    Assignment, Block, Expression, FunctionBody, FunctionName, Statement, TypeDeclarationValue,
-    Var, Visitor,
+    Assignment, Block, Expression, FunctionBody, FunctionName, Statement, Suffix,
+    TypeDeclarationValue, Var, Visitor,
 };
 use luck_token::{Span, Token};
 use tower_lsp_server::ls_types::{DocumentSymbol, SymbolKind};
@@ -121,11 +121,12 @@ impl SymbolEmitter<'_> {
             };
             let (label, selection_span) = match var {
                 Var::Name(token) => (token.identifier(), token.span),
-                Var::FieldAccess(access) => (
-                    access.name.identifier().map(|_| access.span.text(self.document.text())),
-                    access.span,
-                ),
-                Var::Index(_) => continue,
+                Var::Suffixed(chain) => {
+                    let Suffix::Field(name) = chain.suffixes.last() else {
+                        continue;
+                    };
+                    (name.identifier().map(|_| chain.span.text(self.document.text())), chain.span)
+                }
             };
             if let Some(name) = label {
                 self.push_function(

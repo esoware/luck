@@ -1,6 +1,10 @@
-use luck_ast::{ElseIfExprClause, Expression, LastStatement, Statement, TypeDeclarationValue, Var};
+use luck_ast::{
+    ElseIfExprClause, Expression, LastStatement, Statement, Suffix, TypeDeclarationValue, Var,
+};
 
-use crate::common::{assert_no_errors, local_value, parse_luau};
+use crate::common::{
+    assert_no_errors, chain, chain_shape, local_value, parse_luau, run_operands, target_chain,
+};
 
 #[test]
 fn compound_assign_plus() {
@@ -22,12 +26,11 @@ fn compound_assign_index() {
     let result = parse_luau("t[i] *= 2");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] {
-        assert!(matches!(&compound_assignment.var, Var::Index(_)));
-        assert_eq!(compound_assignment.op, luck_token::CompoundOp::Mul);
-    } else {
+    let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] else {
         panic!("expected CompoundAssignment");
-    }
+    };
+    assert_eq!(chain_shape(target_chain(&compound_assignment.var)), "t[]");
+    assert_eq!(compound_assignment.op, luck_token::CompoundOp::Mul);
 }
 
 #[test]
@@ -35,12 +38,11 @@ fn compound_assign_field_concat() {
     let result = parse_luau(r#"a.b ..= "c""#);
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] {
-        assert!(matches!(&compound_assignment.var, Var::FieldAccess(_)));
-        assert_eq!(compound_assignment.op, luck_token::CompoundOp::Concat);
-    } else {
+    let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] else {
         panic!("expected CompoundAssignment");
-    }
+    };
+    assert_eq!(chain_shape(target_chain(&compound_assignment.var)), "a.b");
+    assert_eq!(compound_assignment.op, luck_token::CompoundOp::Concat);
 }
 
 #[test]
@@ -192,12 +194,9 @@ fn type_cast_on_literals_and_tables() {
 fn type_cast_binds_tighter_than_binary_op() {
     let result = parse_luau("local x = a + b :: number");
     assert_no_errors(&result);
-    let expr = local_value(&result);
-    let Expression::BinaryOp(binary_op) = expr else {
-        panic!("expected top-level BinaryOp, got {expr:?}");
-    };
+    let operands = run_operands(local_value(&result));
     assert!(
-        matches!(binary_op.rhs, Expression::TypeCast(_)),
+        matches!(operands[1], Expression::TypeCast(_)),
         "cast must bind to the right operand: a + (b :: number)"
     );
 }
@@ -537,13 +536,12 @@ fn explicit_type_instantiation_is_a_suffix() {
     let Some(LastStatement::Return(return_stmt)) = result.block.last_stmt.as_deref() else {
         panic!("expected return");
     };
-    let Some(Expression::FunctionCall(call)) = return_stmt.exprs.first() else {
-        panic!("expected call");
-    };
-    let Expression::TypeInstantiation(instantiation) = &call.callee else {
+    let call = chain(return_stmt.exprs.first().expect("a returned value"));
+    assert_eq!(chain_shape(call), "module.f<<>>()");
+    let Some(Suffix::TypeInstantiation { type_args, .. }) = call.suffixes.get(1) else {
         panic!("expected explicit type instantiation");
     };
-    assert_eq!(instantiation.type_args.args.len(), 2);
+    assert_eq!(type_args.args.len(), 2);
 
     for source in [
         "return f<<number>>",
@@ -558,7 +556,8 @@ fn explicit_type_instantiation_is_a_suffix() {
     let Some(LastStatement::Return(method_return)) = method.block.last_stmt.as_deref() else {
         panic!("expected return");
     };
-    let Some(Expression::FunctionCall(method_call)) = method_return.exprs.first() else {
+    let method_chain = chain(method_return.exprs.first().expect("a returned value"));
+    let Suffix::Call(method_call) = method_chain.suffixes.last() else {
         panic!("expected method call");
     };
     assert_eq!(

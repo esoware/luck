@@ -1,9 +1,10 @@
 use luck_ast::{
-    Block, Expression, FunctionArgs, FunctionBody, FunctionCall, Statement, Var, Visitor,
+    Block, Call, Expression, FunctionArgs, FunctionBody, Statement, Suffix, SuffixedExpression,
+    Var, Visitor,
 };
 use luck_core::Diagnostic;
 use luck_semantic::{ScopeId, ScopeKind, ScopeTree, StdlibEntry, SymbolId};
-use luck_token::{LuaVersion, Span, StdlibEnvironment, decode_string};
+use luck_token::{LuaVersion, Span, StdlibEnvironment, Token, decode_string};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::dynamic_require::DynamicRequire;
@@ -162,13 +163,13 @@ struct RequireFinder<'input> {
 }
 
 impl RequireFinder<'_> {
-    fn handle_call(&mut self, call: &FunctionCall) {
+    fn handle_call(&mut self, call: Call<'_>) {
         let Some(callee_span) = require_callee_span(call) else {
             return;
         };
         self.direct_callee_spans.insert(callee_span);
         if !self.scope_tree.reaches_host_global("require", callee_span) {
-            self.diags.push(Diagnostic::w005_shadowed(self.file_path, call.span));
+            self.diags.push(Diagnostic::w005_shadowed(self.file_path, call.span()));
             return;
         }
 
@@ -178,9 +179,9 @@ impl RequireFinder<'_> {
             Some(require_string) if is_standard_library(&require_string, self.version) => {}
             Some(require_string) => {
                 if !self.seen_require_strings.insert(require_string.clone()) {
-                    self.diags.push(Diagnostic::w001(self.file_path, call.span, &require_string));
+                    self.diags.push(Diagnostic::w001(self.file_path, call.span(), &require_string));
                 }
-                self.sites.push(RequireSite { require_string, call_span: call.span });
+                self.sites.push(RequireSite { require_string, call_span: call.span() });
             }
             // `require(expr)` can't be resolved statically. Aborting the whole
             // bundle over one such call is rarely what the author wants, so by
@@ -189,17 +190,17 @@ impl RequireFinder<'_> {
         }
     }
 
-    fn handle_dynamic_call(&mut self, call: &FunctionCall, callee_span: Span) {
+    fn handle_dynamic_call(&mut self, call: Call<'_>, callee_span: Span) {
         match self.dynamic_require {
             DynamicRequire::Error => {
-                self.diags.push(Diagnostic::e002(self.file_path, call.span));
+                self.diags.push(Diagnostic::e002(self.file_path, call.span()));
                 return;
             }
             DynamicRequire::Warn if self.version.is_luau() => {
-                self.diags.push(Diagnostic::w007_runtime(self.file_path, call.span));
+                self.diags.push(Diagnostic::w007_runtime(self.file_path, call.span()));
             }
             DynamicRequire::Warn => {
-                self.diags.push(Diagnostic::w007_loader_fallback(self.file_path, call.span));
+                self.diags.push(Diagnostic::w007_loader_fallback(self.file_path, call.span()));
             }
             DynamicRequire::Allow => {}
         }
@@ -222,11 +223,22 @@ impl RequireFinder<'_> {
 
     /// W005 for `_G.require` or `_ENV.require`, the global `require` reached
     /// through its table rather than a direct call.
-    fn flag_global_table_require(&mut self, var: &Var) {
-        if let Some((table_name, table_span)) = global_table_require(var, self.version)
+    fn flag_global_table_require(&mut self, chain: &SuffixedExpression) {
+        if let Some((table_name, table_span)) = global_table_require(chain, self.version)
             && self.scope_tree.reaches_host_global(table_name, table_span)
         {
-            self.diags.push(Diagnostic::w005_aliased(self.file_path, var.span()));
+            self.diags.push(Diagnostic::w005_aliased(self.file_path, chain.head(1).span()));
+        }
+    }
+
+    /// Lua 5.1: a read of the global `arg`, outside every vararg function.
+    fn note_arg_read(&mut self, name: &Token) {
+        if self.vararg_function_depth == 0
+            && self.version.has_implicit_vararg_table()
+            && name.identifier() == Some("arg")
+            && !self.scope_tree.resolves_to_local("arg", name.span)
+        {
+            self.has_global_arg_read = true;
         }
     }
 }
@@ -253,20 +265,22 @@ impl<'ast> Visitor<'ast> for RequireFinder<'_> {
         if self.function_depth == 0 && matches!(expr, Expression::VarArg(_)) {
             self.has_vararg_read = true;
         }
+        if let Expression::Name(name) = expr {
+            self.note_arg_read(name);
+        }
         self.walk_expr(expr);
     }
 
-    fn visit_var(&mut self, var: &'ast Var) {
-        self.flag_global_table_require(var);
-        if let Var::Name(token) = var
-            && self.vararg_function_depth == 0
-            && self.version.has_implicit_vararg_table()
-            && token.identifier() == Some("arg")
-            && !self.scope_tree.resolves_to_local("arg", token.span)
-        {
-            self.has_global_arg_read = true;
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
+        if let Var::Name(name) = target {
+            self.note_arg_read(name);
         }
-        self.walk_var(var);
+        self.walk_assignment_target(target);
+    }
+
+    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression) {
+        self.flag_global_table_require(chain);
+        self.walk_suffixed(chain);
     }
 
     fn visit_function_body(&mut self, body: &'ast FunctionBody) {
@@ -280,9 +294,9 @@ impl<'ast> Visitor<'ast> for RequireFinder<'_> {
         self.function_depth = self.function_depth.saturating_sub(1);
     }
 
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+    fn visit_call(&mut self, call: Call<'ast>) {
         self.handle_call(call);
-        self.walk_function_call(call);
+        self.walk_call(call);
     }
 }
 
@@ -299,28 +313,25 @@ fn is_standard_library(name: &str, version: LuaVersion) -> bool {
             ))
 }
 
-/// When `var` reads the field `require` of the global table (`_G`, or `_ENV`
-/// on Lua 5.2+), that table's name and span, which decide whether the access
-/// reaches the host's global table.
-fn global_table_require(var: &Var, version: LuaVersion) -> Option<(&str, Span)> {
-    let (prefix, is_require_key) = match var {
-        Var::FieldAccess(field_access) => {
-            (&field_access.prefix, field_access.name.identifier() == Some("require"))
+/// Whether `suffix` reads the field `key`, as `.key` or `["key"]`.
+fn is_key(suffix: &Suffix, key: &str, version: LuaVersion) -> bool {
+    match suffix {
+        Suffix::Field(name) => name.identifier() == Some(key),
+        Suffix::Index { index: Expression::StringLiteral(literal), .. } => {
+            decode_string(&literal.text, version).is_some_and(|value| *value == *key.as_bytes())
         }
-        Var::Index(index_expr) => {
-            let is_require_string = matches!(
-                &index_expr.index,
-                Expression::StringLiteral(literal)
-                    if decode_string(&literal.text, version).is_some_and(|v| *v == *b"require")
-            );
-            (&index_expr.prefix, is_require_string)
-        }
-        Var::Name(_) => return None,
-    };
-    if !is_require_key {
+        Suffix::Index { .. } | Suffix::Call(_) | Suffix::TypeInstantiation { .. } => false,
+    }
+}
+
+/// When `chain` starts by reading the field `require` of the global table
+/// (`_G`, or `_ENV` on Lua 5.2+), that table's name and span, which decide
+/// whether the access reaches the host's global table.
+fn global_table_require(chain: &SuffixedExpression, version: LuaVersion) -> Option<(&str, Span)> {
+    if !is_key(chain.suffixes.first(), "require", version) {
         return None;
     }
-    let Expression::Var(Var::Name(token)) = prefix else {
+    let Expression::Name(token) = &chain.prefix else {
         return None;
     };
     let table_name = token.identifier()?;
@@ -330,20 +341,18 @@ fn global_table_require(var: &Var, version: LuaVersion) -> Option<(&str, Span)> 
 
 /// The callee token span when `call` is a direct, non-method call of a
 /// variable named `require` (whatever that name resolves to).
-fn require_callee_span(call: &FunctionCall) -> Option<Span> {
+fn require_callee_span(call: Call<'_>) -> Option<Span> {
     if call.method.is_some() {
         return None;
     }
-    let Expression::Var(Var::Name(token)) = &call.callee else {
-        return None;
-    };
+    let token = call.callee.as_name()?;
     (token.identifier() == Some("require")).then_some(token.span)
 }
 
 /// Escapes are resolved and a long string's leading newline is stripped.
 /// `None` if it doesn't decode or the result isn't UTF-8.
-fn literal_require_string(call: &FunctionCall, version: LuaVersion) -> Option<String> {
-    let literal = match &call.args {
+fn literal_require_string(call: Call<'_>, version: LuaVersion) -> Option<String> {
+    let literal = match call.args {
         FunctionArgs::Parenthesized { args, .. } => {
             let [Expression::StringLiteral(literal)] = args.items.as_slice() else {
                 return None;
@@ -359,33 +368,14 @@ fn literal_require_string(call: &FunctionCall, version: LuaVersion) -> Option<St
 /// The span of the `package` name when an assignment target is, or indexes
 /// into, `package.loaded` or `package["loaded"]`.
 fn package_loaded_root(target: &Var, version: LuaVersion) -> Option<Span> {
-    let mut var = target;
-    loop {
-        let (prefix, is_loaded_key) = match var {
-            Var::FieldAccess(field_access) => {
-                (&field_access.prefix, field_access.name.identifier() == Some("loaded"))
-            }
-            Var::Index(index_expr) => {
-                let is_loaded_string = matches!(
-                    &index_expr.index,
-                    Expression::StringLiteral(literal)
-                        if decode_string(&literal.text, version).is_some_and(|v| *v == *b"loaded")
-                );
-                (&index_expr.prefix, is_loaded_string)
-            }
-            Var::Name(_) => return None,
-        };
-        if is_loaded_key
-            && let Expression::Var(Var::Name(token)) = prefix
-            && token.identifier() == Some("package")
-        {
-            return Some(token.span);
-        }
-        let Expression::Var(prefix_var) = prefix else {
-            return None;
-        };
-        var = prefix_var;
-    }
+    let Var::Suffixed(chain) = target else {
+        return None;
+    };
+    let Expression::Name(token) = &chain.prefix else {
+        return None;
+    };
+    (token.identifier() == Some("package") && is_key(chain.suffixes.first(), "loaded", version))
+        .then_some(token.span)
 }
 
 #[cfg(test)]

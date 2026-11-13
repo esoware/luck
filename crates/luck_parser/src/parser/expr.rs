@@ -1,10 +1,10 @@
 use luck_ast::{
-    BinaryOp, ElseIfExprClause, Expression, Field, FieldAccess, FunctionArgs, FunctionCall,
-    FunctionDef, IfExpression, IndexExpression, InterpolatedString, InterpolatedStringSegment,
-    ParenthesizedExpression, Punctuated, TableConstructor, TypeArgs, TypeCast, TypeInstantiation,
-    UnaryOp, Var,
+    BinaryLink, BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs,
+    FunctionDef, IfExpression, InterpolatedString, InterpolatedStringSegment, OneOrMore,
+    ParenthesizedExpression, Punctuated, Suffix, SuffixedExpression, TableConstructor, TypeArgs,
+    TypeCast, UnaryOp,
 };
-use luck_token::{Associativity, BinOp, Span, Token, TokenKind, UnOp};
+use luck_token::{BinOp, Span, Token, TokenKind, UnOp};
 
 use super::Parser;
 
@@ -13,43 +13,57 @@ use super::Parser;
     reason = "the parser is one type with its grammar split by file"
 )]
 impl Parser<'_> {
-    /// Left-associative chains grow in a loop and only right operands
-    /// recurse, but every operator nests its left operand one level deeper,
-    /// so each one counts toward the depth cap from that operand's deepest
-    /// level.
+    /// Each precedence level's operators run in a loop into one node, so a
+    /// run of any length is one level of nesting, counted toward the depth
+    /// cap from its first operand's deepest level.
     #[inline]
     pub(super) fn parse_expr(&mut self, min_precedence: u8) -> Expression {
         let level = self.nesting_depth;
         let outer_deepest_level = self.begin_operand();
         let mut lhs = self.parse_prefix();
 
-        while let Some(op) = BinOp::from_token_kind(self.peek()) {
-            // Luau's lexer emits `&` and `|` for the type grammar only; they
-            // aren't binary operators there.
-            if op.is_bitwise() && !self.version.has_bitwise_ops() {
-                break;
-            }
-            let (precedence, associativity) = op.precedence();
+        while let Some(op) = self.peek_binary_op() {
+            let precedence = op.precedence().0;
             if precedence < min_precedence {
                 break;
             }
             self.advance_span();
-            let rhs_min_precedence = if associativity == Associativity::Right {
-                precedence
-            } else {
-                precedence.saturating_add(1)
-            };
-            // A wrapper built here anyway would put the tree past the cap.
+            // A run built here anyway would put the tree past the cap.
             if !self.enter_wrapper(level) {
                 break;
             }
-            let rhs = self.parse_expr(rhs_min_precedence);
+            lhs = self.parse_binary_run(lhs, op, precedence);
             self.nesting_depth = level;
-            lhs = binary_op(lhs, op, rhs);
         }
 
         self.end_operand(outer_deepest_level);
         lhs
+    }
+
+    fn peek_binary_op(&self) -> Option<BinOp> {
+        let op = BinOp::from_token_kind(self.peek())?;
+        // Luau's lexer emits `&` and `|` for the type grammar only; they
+        // aren't binary operators there.
+        (!op.is_bitwise() || self.version.has_bitwise_ops()).then_some(op)
+    }
+
+    /// The run of operators at `precedence` that `first` and the consumed
+    /// `op` start. Its operands bind tighter, so a right-associative run
+    /// loops like a left-associative one and only the grouping differs.
+    fn parse_binary_run(&mut self, first: Expression, op: BinOp, precedence: u8) -> Expression {
+        let operand_precedence = precedence.saturating_add(1);
+        let first_link = BinaryLink { op, operand: self.parse_expr(operand_precedence) };
+        let start = self.binary_links.len();
+        while let Some(next_op) =
+            self.peek_binary_op().filter(|next_op| next_op.precedence().0 == precedence)
+        {
+            self.advance_span();
+            let operand = self.parse_expr(operand_precedence);
+            self.binary_links.push(BinaryLink { op: next_op, operand });
+        }
+        let links = OneOrMore::from_first(first_link, self.binary_links.drain(start..));
+        let span = first.span().merge(links.last().operand.span());
+        Expression::BinaryOp(Box::new(BinaryOp { span, first, links }))
     }
 
     pub(super) fn parse_expr_list(&mut self) -> Punctuated<Expression> {
@@ -160,7 +174,7 @@ impl Parser<'_> {
     }
 
     fn parse_name(&mut self) -> Expression {
-        Expression::Var(Var::Name(self.advance()))
+        Expression::Name(self.advance())
     }
 
     #[cold]
@@ -192,85 +206,76 @@ impl Parser<'_> {
         }
     }
 
-    /// Each suffix nests what it follows one level deeper, so each one counts
-    /// toward the depth cap from the deepest level so far. One the cap
-    /// refuses is left unconsumed.
-    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
-    fn parse_suffixes(&mut self, mut expr: Expression) -> Expression {
+    /// The suffixes after `prefix` loop into one node, so a run of any
+    /// length is one level of nesting, counted toward the depth cap from the
+    /// prefix's deepest level. A run the cap refuses is left unconsumed.
+    fn parse_suffixes(&mut self, prefix: Expression) -> Expression {
         let level = self.nesting_depth;
-        loop {
-            let is_at_suffix = match self.peek() {
-                TokenKind::Less => self.is_at_type_instantiation(),
-                TokenKind::Dot
-                | TokenKind::LeftBracket
-                | TokenKind::Colon
-                | TokenKind::LeftParen
-                | TokenKind::LeftBrace
-                | TokenKind::StringLiteral(_) => true,
-                _ => false,
-            };
-            if !is_at_suffix || !self.enter_wrapper(level) {
-                break;
-            }
-            match self.peek() {
-                // Luau: explicit type-parameter instantiation is a suffix,
-                // so it composes with field access, indexing, and calls.
-                TokenKind::Less => self.parse_instantiation_suffix(&mut expr),
-                TokenKind::Dot => self.parse_field_suffix(&mut expr),
-                TokenKind::LeftBracket => self.parse_index_suffix(&mut expr),
-                TokenKind::Colon => self.parse_method_suffix(&mut expr),
-                _ => self.parse_call_suffix(&mut expr),
-            }
-            self.nesting_depth = level;
+        if !self.is_at_suffix() || !self.enter_wrapper(level) {
+            return prefix;
         }
-        expr
+        let first = self.parse_suffix();
+        let start = self.suffixes.len();
+        while self.is_at_suffix() {
+            let suffix = self.parse_suffix();
+            self.suffixes.push(suffix);
+        }
+        self.nesting_depth = level;
+        let suffixes = OneOrMore::from_first(first, self.suffixes.drain(start..));
+        let span = prefix.span().merge(suffixes.last().span());
+        Expression::Suffixed(Box::new(SuffixedExpression { span, prefix, suffixes }))
     }
 
-    fn parse_instantiation_suffix(&mut self, expr: &mut Expression) {
-        let (type_args, close) = self.parse_type_instantiation();
-        let span = expr.span().merge(close);
-        *expr = Expression::TypeInstantiation(Box::new(TypeInstantiation {
-            span,
-            expr: expr.take(),
-            type_args,
-        }));
+    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token ends the run")]
+    const fn is_at_suffix(&self) -> bool {
+        match self.peek() {
+            TokenKind::Less => self.is_at_type_instantiation(),
+            TokenKind::Dot
+            | TokenKind::LeftBracket
+            | TokenKind::Colon
+            | TokenKind::LeftParen
+            | TokenKind::LeftBrace
+            | TokenKind::StringLiteral(_) => true,
+            _ => false,
+        }
     }
 
-    fn parse_field_suffix(&mut self, expr: &mut Expression) {
+    #[expect(clippy::wildcard_enum_match_arm, reason = "every other suffix is a call's arguments")]
+    fn parse_suffix(&mut self) -> Suffix {
+        match self.peek() {
+            // Luau: explicit type-parameter instantiation is a suffix, so it
+            // composes with field access, indexing, and calls.
+            TokenKind::Less => {
+                let open = self.current_span();
+                let (type_args, close) = self.parse_type_instantiation();
+                Suffix::TypeInstantiation { span: open.merge(close), type_args }
+            }
+            TokenKind::Dot => {
+                self.advance_span();
+                Suffix::Field(self.expect_identifier_recover())
+            }
+            TokenKind::LeftBracket => {
+                let open = self.advance_span();
+                let index = self.parse_expr(0);
+                let close = self.expect(&TokenKind::RightBracket);
+                Suffix::Index { span: open.merge(close), index }
+            }
+            TokenKind::Colon => self.parse_method_suffix(),
+            _ => Suffix::Call(CallSuffix {
+                method: None,
+                explicit_type_args: None,
+                args: self.parse_function_args(),
+            }),
+        }
+    }
+
+    fn parse_method_suffix(&mut self) -> Suffix {
         self.advance_span();
-        let name = self.expect_identifier_recover();
-        let span = expr.span().merge(name.span);
-        *expr = Expression::Var(Var::FieldAccess(Box::new(FieldAccess {
-            span,
-            prefix: expr.take(),
-            name,
-        })));
-    }
-
-    fn parse_index_suffix(&mut self, expr: &mut Expression) {
-        self.advance_span();
-        let index = self.parse_expr(0);
-        let close = self.expect(&TokenKind::RightBracket);
-        let span = expr.span().merge(close);
-        *expr = Expression::Var(Var::Index(Box::new(IndexExpression {
-            span,
-            prefix: expr.take(),
-            index,
-        })));
-    }
-
-    fn parse_method_suffix(&mut self, expr: &mut Expression) {
-        self.advance_span();
-        let method_name = self.expect_identifier_recover();
+        let method = Some(self.expect_identifier_recover());
         let explicit_type_args =
             self.is_at_type_instantiation().then(|| Box::new(self.parse_type_instantiation().0));
         let args = self.parse_function_args();
-        *expr = function_call(expr.take(), args, Some(method_name), explicit_type_args);
-    }
-
-    fn parse_call_suffix(&mut self, expr: &mut Expression) {
-        let args = self.parse_function_args();
-        *expr = function_call(expr.take(), args, None, None);
+        Suffix::Call(CallSuffix { method, explicit_type_args, args })
     }
 
     const fn is_at_type_instantiation(&self) -> bool {
@@ -403,8 +408,9 @@ impl Parser<'_> {
         span
     }
 
-    /// The arguments sit one level under the call, which the suffix loop has
-    /// already counted, so the parentheses add none of their own.
+    /// The arguments sit one level under the run of suffixes, which
+    /// [`Self::parse_suffixes`] has already counted, so the parentheses add
+    /// none of their own.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_function_args(&mut self) -> FunctionArgs {
         match self.peek() {
@@ -532,25 +538,4 @@ impl Parser<'_> {
         let span = name.span.merge(value.span());
         Field::Named { span, name, value }
     }
-}
-
-fn binary_op(lhs: Expression, op: BinOp, rhs: Expression) -> Expression {
-    let span = lhs.span().merge(rhs.span());
-    Expression::BinaryOp(Box::new(BinaryOp { span, lhs, op, rhs }))
-}
-
-fn function_call(
-    callee: Expression,
-    args: FunctionArgs,
-    method: Option<Token>,
-    explicit_type_args: Option<Box<TypeArgs>>,
-) -> Expression {
-    let span = callee.span().merge(args.span());
-    Expression::FunctionCall(Box::new(FunctionCall {
-        span,
-        callee,
-        args,
-        method,
-        explicit_type_args,
-    }))
 }

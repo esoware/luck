@@ -1,5 +1,5 @@
 use luck_ast::{
-    AttributedName, Block, FunctionBody, FunctionDecl, GenericFor, GlobalDeclaration,
+    AttributedName, Block, Expression, FunctionBody, FunctionDecl, GenericFor, GlobalDeclaration,
     GlobalFunction, IfStatement, LocalAssignment, LocalFunction, NumericFor, Parameter, Punctuated,
     RepeatLoop, Statement, Transform, Var,
 };
@@ -322,14 +322,20 @@ impl Transform for Renamer {
         }
     }
 
-    fn transform_var(&mut self, var: Var) -> Var {
-        match var {
-            Var::Name(name) => {
-                let resolved = self.resolve_name(identifier_name(&name));
-                Var::Name(identifier_token(resolved))
-            }
-            other @ (Var::Index(_) | Var::FieldAccess(_)) => self.walk_var(other),
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        if let Expression::Name(name) = &expr {
+            let resolved = self.resolve_name(identifier_name(name));
+            return Expression::Name(identifier_token(resolved));
         }
+        self.walk_expr(expr)
+    }
+
+    fn transform_assignment_target(&mut self, target: Var) -> Var {
+        if let Var::Name(name) = &target {
+            let resolved = self.resolve_name(identifier_name(name));
+            return Var::Name(identifier_token(resolved));
+        }
+        self.walk_assignment_target(target)
     }
 
     fn transform_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {

@@ -1,7 +1,7 @@
 use crate::expr::{
-    BinaryOp, ElseIfExprClause, Expression, Field, FieldAccess, FunctionArgs, FunctionCall,
-    FunctionDef, IfExpression, IndexExpression, InterpolatedString, InterpolatedStringSegment,
-    ParenthesizedExpression, TableConstructor, TypeCast, TypeInstantiation, UnaryOp, Var,
+    BinaryLink, BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs,
+    FunctionDef, IfExpression, InterpolatedString, InterpolatedStringSegment,
+    ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
 use crate::function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
 use crate::stmt::{
@@ -45,21 +45,21 @@ fn ast_node_layouts() {
     let layouts = layouts! {
         Expression => 40,
         Var => 40,
-        FunctionCall => 136,
+        SuffixedExpression => 136,
+        Suffix => 88,
+        CallSuffix => 88,
         FunctionArgs => 40,
         BinaryOp => 96,
+        BinaryLink => 48,
         UnaryOp => 56,
         ParenthesizedExpression => 48,
         TableConstructor => 40,
-        IndexExpression => 88,
-        FieldAccess => 88,
         FunctionDef => 168,
         IfExpression => 152,
         ElseIfExprClause => 88,
         InterpolatedString => 32,
         InterpolatedStringSegment => 80,
         TypeCast => 88,
-        TypeInstantiation => 88,
         Statement => 16,
         LastStatement => 16,
         Assignment => 72,

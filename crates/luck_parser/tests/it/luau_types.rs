@@ -273,7 +273,7 @@ fn typeof_type() {
     let Type::Typeof(typeof_type) = alias_type("type X = typeof(game.Workspace)") else {
         panic!("expected Typeof");
     };
-    assert!(matches!(typeof_type.expr, Expression::Var(_)));
+    assert!(matches!(typeof_type.expr, Expression::Suffixed(_)));
 }
 
 #[test]

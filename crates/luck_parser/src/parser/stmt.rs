@@ -517,7 +517,8 @@ impl Parser<'_> {
             return self.parse_assignment(expr);
         }
 
-        if let Expression::FunctionCall(call) = expr {
+        let is_call = matches!(&expr, Expression::Suffixed(chain) if chain.is_call());
+        if is_call && let Expression::Suffixed(call) = expr {
             Statement::FunctionCall(call)
         } else {
             self.report_expression_stmt(&expr)
@@ -570,12 +571,30 @@ impl Parser<'_> {
     /// Unwrap an assignment target, or record an error and return a
     /// placeholder name when `expr` isn't a variable.
     fn assignment_target(&mut self, expr: Expression) -> Var {
-        if let Expression::Var(var) = expr {
-            var
-        } else {
-            let span = expr.span();
-            self.error(span, "invalid assignment target");
-            Var::Name(Self::recovery_identifier(span))
+        match expr {
+            Expression::Name(token) => Var::Name(token),
+            Expression::Suffixed(chain) if chain.is_var() => Var::Suffixed(chain),
+            invalid @ (Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Suffixed(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::BinaryOp(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::Error(_)) => {
+                let span = invalid.span();
+                self.error(span, "invalid assignment target");
+                Var::Name(Self::recovery_identifier(span))
+            }
         }
     }
 

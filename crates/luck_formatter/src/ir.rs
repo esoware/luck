@@ -289,6 +289,46 @@ where
     })
 }
 
+/// `count` groups, each inside the one before, all opened before `content`.
+/// It ends them innermost first through the [`OpenGroups`] it gets, and any it
+/// leaves open end after it.
+///
+/// Laid out this way, the groups wrap what they share at the front, as a
+/// method chain does its receiver, without nesting a call per group.
+pub(crate) fn nested_groups<Content>(count: usize, content: Content) -> impl Format
+where
+    Content: Fn(&mut Formatter, &mut OpenGroups),
+{
+    format_with(move |f| {
+        for _ in 0..count {
+            let id = f.group_id();
+            f.push(FormatElement::Tag(Tag::StartGroup(id)));
+        }
+        let mut groups = OpenGroups { open: count };
+        content(f, &mut groups);
+        for _ in 0..groups.open {
+            f.push(FormatElement::Tag(Tag::EndGroup));
+        }
+    })
+}
+
+/// The groups of a [`nested_groups`] still open.
+#[derive(Debug)]
+pub(crate) struct OpenGroups {
+    open: usize,
+}
+
+impl OpenGroups {
+    /// Ends the innermost group still open. Content between ends has to
+    /// close every group of its own first.
+    pub(crate) fn end_innermost(&mut self, f: &mut Formatter) {
+        if let Some(remaining) = self.open.checked_sub(1) {
+            self.open = remaining;
+            f.push(FormatElement::Tag(Tag::EndGroup));
+        }
+    }
+}
+
 /// Group with a caller-allocated id, so other elements can reference its
 /// break decision via `if_group_breaks`.
 pub(crate) fn group_with_id<T>(id: GroupId, content: T) -> impl Format

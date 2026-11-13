@@ -1,6 +1,7 @@
 use luck_token::{BinOp, CompactString, Span, Token, UnOp};
 
 use crate::function::{FunctionAttribute, FunctionBody};
+use crate::one_or_more::OneOrMore;
 use crate::punctuated::Punctuated;
 use crate::types::{Type, TypeArgs};
 
@@ -21,8 +22,8 @@ pub enum Expression {
     StringLiteral(Literal),
     VarArg(Span),
     FunctionDef(Box<FunctionDef>),
-    Var(Var),
-    FunctionCall(Box<FunctionCall>),
+    Name(Token),
+    Suffixed(Box<SuffixedExpression>),
     Parenthesized(Box<ParenthesizedExpression>),
     TableConstructor(Box<TableConstructor>),
     BinaryOp(Box<BinaryOp>),
@@ -30,7 +31,6 @@ pub enum Expression {
     IfExpression(Box<IfExpression>),
     InterpolatedString(Box<InterpolatedString>),
     TypeCast(Box<TypeCast>),
-    TypeInstantiation(Box<TypeInstantiation>),
     Error(Span),
 }
 
@@ -41,23 +41,56 @@ pub struct Literal {
     pub span: Span,
 }
 
+/// An assignment target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Var {
     Name(Token),
-    Index(Box<IndexExpression>),
-    FieldAccess(Box<FieldAccess>),
+    /// A chain whose last suffix is a field or an index.
+    Suffixed(Box<SuffixedExpression>),
+}
+
+/// A name or a parenthesized expression and the run of fields, indexes,
+/// calls, and Luau instantiations after it, as one node however long the
+/// run: `a.b[c]:d(e)` is `a` and four suffixes.
+///
+/// The last suffix decides what the whole is: a call, or a [`Var`] that can
+/// be assigned to.
+///
+/// `prefix` is never itself a suffixed expression, so a run adds one level of
+/// nesting whatever its length. The parser and `Synth` keep it that way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuffixedExpression {
+    pub span: Span,
+    pub prefix: Expression,
+    pub suffixes: OneOrMore<Suffix>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionCall {
-    pub span: Span,
-    pub callee: Expression,
-    pub args: FunctionArgs,
+pub enum Suffix {
+    /// A field, `.name`.
+    Field(Token),
+    /// `[index]`, where `span` covers the brackets.
+    Index {
+        span: Span,
+        index: Expression,
+    },
+    Call(CallSuffix),
+    /// Luau: `<<T>>`, where `span` covers the outer angle brackets.
+    TypeInstantiation {
+        span: Span,
+        type_args: TypeArgs,
+    },
+}
+
+/// `(args)`, `{...}`, or `"..."`, or with `method`, `:name` before them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallSuffix {
     pub method: Option<Token>,
     /// Luau: explicit type arguments between a method name and its call
-    /// arguments (`receiver:method<<T>>()`). Non-method instantiation is an
-    /// [`Expression::TypeInstantiation`] instead.
+    /// arguments (`receiver:method<<T>>()`). Non-method instantiation is a
+    /// [`Suffix::TypeInstantiation`] instead.
     pub explicit_type_args: Option<Box<TypeArgs>>,
+    pub args: FunctionArgs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,12 +104,29 @@ pub enum FunctionArgs {
     StringLiteral(Literal),
 }
 
+/// A run of binary operators that share one precedence level, as one node
+/// however long the run: `a + b - c` is `a` and two links.
+///
+/// A left-associative level groups from the left, so that run is
+/// `(a + b) - c`. The right-associative `..` and `^` group from the right, so
+/// `a .. b .. c` is `a .. (b .. c)`.
+///
+/// An operand is never a bare run at the same level where it would merge
+/// into this one when printed, since that is what reading the printed run
+/// back gives. The parser and `Synth` keep it that way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinaryOp {
     pub span: Span,
-    pub lhs: Expression,
+    pub first: Expression,
+    /// Every operator here shares one precedence level.
+    pub links: OneOrMore<BinaryLink>,
+}
+
+/// An operator and the operand after it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BinaryLink {
     pub op: BinOp,
-    pub rhs: Expression,
+    pub operand: Expression,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,20 +153,6 @@ pub enum Field {
     Bracketed { span: Span, key: Expression, value: Expression },
     Named { span: Span, name: Token, value: Expression },
     Positional { span: Span, value: Expression },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IndexExpression {
-    pub span: Span,
-    pub prefix: Expression,
-    pub index: Expression,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FieldAccess {
-    pub span: Span,
-    pub prefix: Expression,
-    pub name: Token,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,11 +196,4 @@ pub struct TypeCast {
     pub span: Span,
     pub expr: Expression,
     pub type_annotation: Type,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeInstantiation {
-    pub span: Span,
-    pub expr: Expression,
-    pub type_args: TypeArgs,
 }

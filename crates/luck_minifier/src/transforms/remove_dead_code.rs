@@ -1,6 +1,6 @@
 use luck_ast::{
     BinaryOp, Block, DoBlock, Expression, FunctionBody, IfStatement, LastStatement,
-    LocalAssignment, Punctuated, Statement, Transform, UnaryOp, Var, Visitor,
+    LocalAssignment, OneOrMore, Punctuated, Statement, Transform, UnaryOp, Var, Visitor,
 };
 use luck_token::{BinOp, CompactString, LuaVersion, Span, UnOp};
 use rustc_hash::FxHashSet;
@@ -80,15 +80,22 @@ struct ReferenceCollector {
 }
 
 impl<'ast> Visitor<'ast> for ReferenceCollector {
-    fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(name) = var {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if let Expression::Name(name) = expr {
             self.references.insert(identifier_name(name).into());
         }
-        self.walk_var(var);
+        self.walk_expr(expr);
+    }
+
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
+        if let Var::Name(name) = target {
+            self.references.insert(identifier_name(name).into());
+        }
+        self.walk_assignment_target(target);
     }
 
     // `function M.f()` reads `M` and `function f()` writes `f`, and neither
-    // root is a `Var`.
+    // root is a name expression or an assignment target.
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
         if let Statement::FunctionDecl(function_decl) = stmt
             && let Some(root) = function_decl.name.names.first()
@@ -167,18 +174,22 @@ fn is_dead_branch(stmt: &Statement) -> bool {
     }
 }
 
+/// `cond and X or X`, which a run of `or`s starts with when its first two
+/// operands are that.
 fn is_redundant_ternary(outer: &BinaryOp) -> bool {
-    matches!(
-        &outer.lhs,
-        Expression::BinaryOp(inner)
-            if matches!(outer.op, BinOp::Or)
-                && matches!(inner.op, BinOp::And)
-                && inner.rhs == outer.rhs
-                && is_pure_expr(&inner.lhs)
-                // X must be pure too: a call that returns a falsy value runs
-                // twice in the original but once here.
-                && is_pure_expr(&outer.rhs)
-    )
+    let Expression::BinaryOp(inner) = &outer.first else {
+        return false;
+    };
+    let alternative = &outer.links.first().operand;
+    let conditions = inner.links.split_last().map_or(&[][..], |(_, before_last)| before_last);
+    outer.links.first().op == BinOp::Or
+        && inner.links.first().op == BinOp::And
+        && inner.links.last().operand == *alternative
+        && is_pure_expr(&inner.first)
+        && conditions.iter().all(|link| is_pure_expr(&link.operand))
+        // X must be pure too: a call that returns a falsy value runs twice in
+        // the original but once here.
+        && is_pure_expr(alternative)
 }
 
 impl DeadCodeRemover {
@@ -267,7 +278,17 @@ impl DeadCodeRemover {
             // and the condition is pure.
             Expression::BinaryOp(outer) if is_redundant_ternary(&outer) => {
                 self.has_changed = true;
-                truncate_multi_value(outer.rhs)
+                let BinaryOp { span, links, .. } = *outer;
+                let mut rest = links.into_vec();
+                let kept = truncate_multi_value(rest.remove(0).operand);
+                match OneOrMore::from_vec(rest) {
+                    Some(rest_links) => Expression::BinaryOp(Box::new(BinaryOp {
+                        span,
+                        first: kept,
+                        links: rest_links,
+                    })),
+                    None => kept,
+                }
             }
             other @ (Expression::Nil(_)
             | Expression::False(_)
@@ -277,8 +298,8 @@ impl DeadCodeRemover {
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::BinaryOp(_)
@@ -286,7 +307,6 @@ impl DeadCodeRemover {
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
             | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
             | Expression::Error(_)) => other,
         }
     }
@@ -421,7 +441,7 @@ fn negate_expr(expr: Expression) -> Expression {
     // Only wrap in `not`. Inverting a comparison operator would change which
     // metamethod is called, __lt instead of __le and so on.
     let needs_parens =
-        matches!(&expr, Expression::BinaryOp(binary_op) if binds_looser_than_unary(binary_op.op));
+        matches!(&expr, Expression::BinaryOp(binary_op) if binds_looser_than_unary(binary_op));
     let operand = if needs_parens { parenthesize(expr) } else { expr };
     Expression::UnaryOp(Box::new(UnaryOp { span: Span::default(), op: UnOp::Not, operand }))
 }
@@ -456,10 +476,9 @@ fn classify_dead_local(
             };
             if exprs.iter().all(is_pure_expr) {
                 DeadLocalAction::Remove
-            } else if exprs
-                .iter()
-                .all(|expr| is_pure_expr(expr) || matches!(expr, Expression::FunctionCall(_)))
-            {
+            } else if exprs.iter().all(|expr| {
+                is_pure_expr(expr) || matches!(expr, Expression::Suffixed(chain) if chain.is_call())
+            }) {
                 DeadLocalAction::ExtractCalls
             } else {
                 DeadLocalAction::Keep
@@ -508,8 +527,10 @@ fn classify_dead_local(
 
 fn call_stmts(local: LocalAssignment) -> impl Iterator<Item = Statement> {
     local.exprs.into_iter().flat_map(Punctuated::into_items).filter_map(|expr| {
-        if let Expression::FunctionCall(call) = expr {
-            Some(Statement::FunctionCall(call))
+        if let Expression::Suffixed(chain) = expr
+            && chain.is_call()
+        {
+            Some(Statement::FunctionCall(chain))
         } else {
             None
         }
@@ -695,9 +716,9 @@ mod tests {
             if let Some(last) = &mut block.last_stmt
                 && let LastStatement::Return(return_stmt) = &mut **last
                 && let Some(Expression::BinaryOp(outer)) = return_stmt.exprs.items.first_mut()
-                && let Expression::BinaryOp(inner) = &mut outer.lhs
+                && let Expression::BinaryOp(inner) = &mut outer.first
             {
-                inner.rhs = outer.rhs.clone();
+                inner.links.last_mut().operand = outer.links.first().operand.clone();
             }
             remove(block, LuaVersion::Lua54)
         });

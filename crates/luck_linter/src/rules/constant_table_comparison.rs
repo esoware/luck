@@ -1,6 +1,7 @@
 use luck_ast::Expression;
 use luck_token::BinOp;
 
+use crate::binary::operator_pairs;
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, impl_rule};
@@ -21,18 +22,23 @@ impl NodeRule for ConstantTableComparison {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
     fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        if let Expression::BinaryOp(binary_op) = expr
-            && matches!(binary_op.op, BinOp::Eq | BinOp::Ne)
-            && (matches!(&binary_op.lhs, Expression::TableConstructor(_))
-                || matches!(&binary_op.rhs, Expression::TableConstructor(_)))
-        {
-            findings.push(
-                Finding::new(
-                    "tables compare by identity, so a table literal never equals another value",
-                    binary_op.span,
-                )
-                .with_help("compare table contents instead"),
-            );
+        let Expression::BinaryOp(run) = expr else {
+            return;
+        };
+        let is_table =
+            |operand: Option<&Expression>| matches!(operand, Some(Expression::TableConstructor(_)));
+        for pair in operator_pairs(run) {
+            if matches!(pair.op, BinOp::Eq | BinOp::Ne)
+                && (is_table(pair.lhs) || is_table(pair.rhs))
+            {
+                findings.push(
+                    Finding::new(
+                        "tables compare by identity, so a table literal never equals another value",
+                        pair.span,
+                    )
+                    .with_help("compare table contents instead"),
+                );
+            }
         }
     }
 }

@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Var, Visitor};
+use luck_ast::{Call, Expression, FunctionArgs, Visitor};
 use luck_resolver::{ResolveRequest, Resolver, normalize_path};
 use luck_token::decode_string;
 use tower_lsp_server::ls_types::{DocumentLink, Position, Uri};
@@ -69,18 +69,18 @@ struct LinkCollector<'document> {
 }
 
 impl<'ast> Visitor<'ast> for LinkCollector<'_> {
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+    fn visit_call(&mut self, call: Call<'ast>) {
         self.try_record(call);
-        self.walk_function_call(call);
+        self.walk_call(call);
     }
 }
 
 impl LinkCollector<'_> {
-    fn try_record(&mut self, call: &FunctionCall) {
+    fn try_record(&mut self, call: Call<'_>) {
         if call.method.is_some() {
             return;
         }
-        let Expression::Var(Var::Name(token)) = &call.callee else {
+        let Some(token) = call.callee.as_name() else {
             return;
         };
         // A local `require`, a local `_ENV`, or a rebound global isn't the
@@ -90,7 +90,7 @@ impl LinkCollector<'_> {
         {
             return;
         }
-        let literal = match &call.args {
+        let literal = match call.args {
             FunctionArgs::Parenthesized { args, .. } => {
                 let [Expression::StringLiteral(literal)] = args.items.as_slice() else {
                     return;

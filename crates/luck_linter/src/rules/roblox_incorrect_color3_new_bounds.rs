@@ -1,4 +1,4 @@
-use luck_ast::FunctionCall;
+use luck_ast::Call;
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -23,7 +23,7 @@ impl NodeRule for RobloxIncorrectColor3NewBounds {
     }
     fn on_call(
         &self,
-        call: &FunctionCall,
+        call: Call<'_>,
         position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
@@ -40,7 +40,7 @@ impl NodeRule for RobloxIncorrectColor3NewBounds {
             .any(|v| !(0.0f64..=1.0f64).contains(&v));
         if has_out_of_bounds {
             findings.push(
-                Finding::new("`Color3.new` components are on a 0 to 1 scale", call.span)
+                Finding::new("`Color3.new` components are on a 0 to 1 scale", call.span())
                     .with_help("use `Color3.fromRGB` for 0 to 255 values"),
             );
         }

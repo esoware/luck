@@ -360,9 +360,12 @@ mod tests {
             let Expression::BinaryOp(division) = synth.number_f64(f64::from_bits(bits)) else {
                 panic!("expected NaN expression");
             };
-            assert_eq!(division.op, BinOp::Div);
-            assert!(matches!(&division.lhs, Expression::Number(literal) if literal.text == "0"));
-            assert!(matches!(&division.rhs, Expression::Number(literal) if literal.text == "0"));
+            let [link] = &*division.links else {
+                panic!("expected one division");
+            };
+            assert_eq!(link.op, BinOp::Div);
+            assert!(matches!(&division.first, Expression::Number(literal) if literal.text == "0"));
+            assert!(matches!(&link.operand, Expression::Number(literal) if literal.text == "0"));
         }
     }
 

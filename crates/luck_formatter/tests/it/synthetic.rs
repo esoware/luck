@@ -707,13 +707,13 @@ fn a_tree_past_the_nesting_cap_is_an_error_instead_of_output_that_cannot_reparse
 }
 
 #[test]
-fn a_chain_far_past_the_nesting_cap_is_refused_without_walking_down_it() {
+fn a_tree_far_past_the_nesting_cap_is_refused_without_walking_down_it() {
     let synth = Synth::new();
-    let mut chain = synth.name_expr("x");
+    let mut nested = synth.name_expr("x");
     for _ in 0..200_000u32 {
-        chain = synth.binary_op(chain, BinOp::Add, synth.number("1"));
+        nested = synth.parenthesized(nested);
     }
-    let block = synth.block(vec![], Some(synth.return_(vec![chain])));
+    let block = synth.block(vec![], Some(synth.return_(vec![nested])));
     assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH + 1, "measuring stops there");
     assert_eq!(format_block(&block, Comments::none(), &FormatOptions::default()).ok(), None);
 
@@ -722,7 +722,23 @@ fn a_chain_far_past_the_nesting_cap_is_refused_without_walking_down_it() {
         panic!("the block ends in its return");
     };
     let mut expr = return_stmt.exprs.items.pop().expect("the return has its value");
-    while let Expression::BinaryOp(mut binary_op) = expr {
-        expr = binary_op.lhs.take();
+    while let Expression::Parenthesized(mut parenthesized) = expr {
+        expr = parenthesized.expr.take();
     }
+}
+
+#[test]
+fn a_run_of_any_length_formats_as_one_level() {
+    let synth = Synth::new();
+    let mut sum = synth.name_expr("x");
+    let mut methods = synth.name_expr("object");
+    for _ in 0..50_000u32 {
+        sum = synth.binary_op(sum, BinOp::Add, synth.number("1"));
+    }
+    for _ in 0..2_000u32 {
+        methods = synth.method_call(methods, "next", Vec::new());
+    }
+    let block = synth.block(vec![], Some(synth.return_(vec![sum, methods])));
+    assert_eq!(block_nesting_depth(&block), 2);
+    assert_roundtrips_in(&block, LuaVersion::Lua54);
 }

@@ -1,5 +1,3 @@
-use core::iter::repeat_n;
-
 use luck_ast::{MAX_NESTING_DEPTH, Visitor, block_nesting_depth};
 use luck_parser::parse;
 use luck_token::LuaVersion;
@@ -32,28 +30,33 @@ fn parens_past_the_depth_cap_are_an_error() {
     assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
 }
 
+/// Stock Lua loops over left-associative operators and suffixes, so a run of
+/// them is valid there however long it gets. Here each run is one level of
+/// nesting, and so is a right-associative one.
 #[test]
-fn left_associative_chain_past_the_depth_cap_is_an_error() {
-    let additions = repeat_n("1", 3000).collect::<Vec<_>>().join("+");
-    let source = format!("local x = {additions}");
-    let result = parse(&source, LuaVersion::Lua54);
-    assert!(has_depth_limit_error(&result), "{:?}", result.errors.first());
-}
-
-#[test]
-fn chains_under_the_depth_cap_parse() {
+fn a_run_of_any_length_is_one_level() {
     for (version, source) in [
-        (LuaVersion::Lua54, format!("return 1{}", "+1".repeat(200))),
-        (LuaVersion::Lua54, format!("return a{}", ".b".repeat(200))),
-        (LuaVersion::Lua54, format!("return f{}", "()".repeat(200))),
-        (LuaVersion::Lua54, format!("return t{}", "[1]".repeat(200))),
-        (LuaVersion::Luau, format!("type X = number{}", "?".repeat(200))),
+        (LuaVersion::Lua54, format!("return 1{}", "+1".repeat(200_000))),
+        (LuaVersion::Lua54, format!("return a{}", " or a".repeat(200_000))),
+        (LuaVersion::Lua54, format!("return a{}", " < a == a".repeat(100_000))),
+        (LuaVersion::Lua54, format!("return \"a\"{}", "..\"a\"".repeat(200_000))),
+        (LuaVersion::Lua54, format!("return 2{}", "^2".repeat(200_000))),
+        (LuaVersion::Lua54, format!("return a{}", ".b".repeat(200_000))),
+        (LuaVersion::Lua54, format!("return f{}", "()".repeat(200_000))),
+        (LuaVersion::Lua54, format!("return a{}", ":m()".repeat(200_000))),
+        (LuaVersion::Lua54, format!("return t{}", "[1]".repeat(200_000))),
+        (LuaVersion::Lua54, format!("return f{}", "\"s\"".repeat(200_000))),
+        (LuaVersion::Lua54, format!("return a{}", ".b[1]:m()()\"s\"".repeat(50_000))),
+        (LuaVersion::Lua54, format!("a{} = 1", ".b".repeat(200_000))),
+        (LuaVersion::Lua54, format!("f{}", "()".repeat(200_000))),
+        (LuaVersion::Luau, format!("return f{}", "<<T>>".repeat(200_000))),
+        (LuaVersion::Luau, format!("a{} += 1", "[1]".repeat(200_000))),
     ] {
         let result = parse(&source, version);
-        assert!(result.errors.is_empty(), "{version:?}: {:?}", result.errors.first());
+        assert!(result.errors.is_empty(), "{:?}: {:?}", source.get(..20), result.errors.first());
+        assert_eq!(block_nesting_depth(&result.block), 2, "{:?}", source.get(..20));
     }
 }
-
 #[test]
 fn blocks_past_the_depth_cap_are_an_error() {
     let source = format!("{}local x = 1{}", "do ".repeat(500), " end".repeat(500));
@@ -77,32 +80,6 @@ fn functions_past_the_depth_cap_are_an_error() {
     let source = format!("local x = {prefix}1{suffix}");
     let result = parse(&source, LuaVersion::Lua54);
     assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
-}
-
-#[test]
-fn concat_chain_past_the_depth_cap_is_an_error() {
-    // `..` is right-associative, so each operator recurses. This must hit the
-    // depth cap, not overflow the stack.
-    let concats = repeat_n("\"a\"", 50_000).collect::<Vec<_>>().join("..");
-    let source = format!("local x = {concats}");
-    let result = parse(&source, LuaVersion::Lua54);
-    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
-}
-
-#[test]
-fn power_chain_past_the_depth_cap_is_an_error() {
-    let powers = repeat_n("2", 50_000).collect::<Vec<_>>().join("^");
-    let source = format!("local x = {powers}");
-    let result = parse(&source, LuaVersion::Lua54);
-    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
-}
-
-#[test]
-fn concat_chain_under_the_depth_cap_parses() {
-    let concats = repeat_n("\"a\"", 100).collect::<Vec<_>>().join("..");
-    let source = format!("local x = {concats}");
-    let result = parse(&source, LuaVersion::Lua54);
-    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
 }
 
 fn has_depth_limit_error(result: &luck_parser::ParseResult) -> bool {
@@ -135,22 +112,6 @@ fn nested_attribute_arguments_count_toward_the_depth_cap() {
     let source = format!("return {}1{}", "@[deprecated(".repeat(300), ")]".repeat(300));
     let result = parse(&source, LuaVersion::Luau);
     assert!(has_depth_limit_error(&result), "attribute nesting past the cap must report the limit");
-}
-
-#[test]
-fn long_binary_chain_reports_the_depth_cap() {
-    let source = format!("return 1{}", "+1".repeat(200_000));
-    let result = parse(&source, LuaVersion::Lua54);
-    assert!(has_depth_limit_error(&result), "{:?}", result.errors.first());
-}
-
-#[test]
-fn long_suffix_chains_report_the_depth_cap() {
-    for link in [".b", "()", "[1]", ":m()", "\"s\""] {
-        let source = format!("return a{}", link.repeat(200_000));
-        let result = parse(&source, LuaVersion::Lua54);
-        assert!(has_depth_limit_error(&result), "{link}: {:?}", result.errors.first());
-    }
 }
 
 #[test]
@@ -197,17 +158,14 @@ fn shapes() -> Vec<Shape> {
         lua("parenthesized table calls", 1, 2, |n| {
             format!("return {}{}", "f({".repeat(n), "})".repeat(n))
         }),
-        lua("string calls", 1, 1, |n| format!("return f{}", "\"s\"".repeat(n))),
         lua("indexes", 1, 1, |n| format!("return {}x{}", "a[".repeat(n), "]".repeat(n))),
         lua("unary operators", 1, 1, |n| format!("return {}x", "not ".repeat(n))),
-        lua("left-associative operators", 1, 1, |n| format!("return x{}", "+x".repeat(n))),
-        lua("right-associative operators", 1, 1, |n| format!("return x{}", "..x".repeat(n))),
-        lua("fields", 1, 1, |n| format!("return a{}", ".b".repeat(n))),
-        lua("call chain", 1, 1, |n| format!("return f{}", "()".repeat(n))),
-        lua("method chain", 1, 1, |n| format!("return a{}", ":m()".repeat(n))),
-        lua("index chain", 1, 1, |n| format!("return a{}", "[1]".repeat(n))),
-        lua("assignment target", 1, 1, |n| format!("a{} = 1", ".b".repeat(n))),
-        lua("call statement", 1, 1, |n| format!("f{}", "()".repeat(n))),
+        lua("runs in parentheses", 1, 2, |n| {
+            format!("return {}x{}", "(".repeat(n), "+x)".repeat(n))
+        }),
+        lua("chains in parentheses", 1, 2, |n| {
+            format!("return {}x{}", "(".repeat(n), ").b".repeat(n))
+        }),
         lua("functions", 1, 2, |n| {
             format!("return {}x{}", "function() return ".repeat(n), " end".repeat(n))
         }),
@@ -217,20 +175,20 @@ fn shapes() -> Vec<Shape> {
             format!("{}{}", "if a then else ".repeat(n), "end ".repeat(n))
         }),
         lua("loops", 1, 1, |n| format!("{}{}", "while a do ".repeat(n), "end ".repeat(n))),
-        lua("operators over parentheses", 101, 1, |n| {
-            format!("return {}x{}{}", "(".repeat(100), ")".repeat(100), "+x".repeat(n))
+        lua("operators over parentheses", 2, 1, |n| {
+            format!("return {}x{}{}", "(".repeat(n), ")".repeat(n), "+x".repeat(300))
         }),
-        lua("fields over parentheses", 101, 1, |n| {
-            format!("return {}x{}{}", "(".repeat(100), ")".repeat(100), ".b".repeat(n))
+        lua("fields over parentheses", 2, 1, |n| {
+            format!("return {}x{}{}", "(".repeat(n), ")".repeat(n), ".b".repeat(300))
         }),
-        lua("fields over a call's arguments", 102, 1, |n| {
-            format!("return f({}x{}){}", "(".repeat(100), ")".repeat(100), ".b".repeat(n))
+        lua("fields over a call's arguments", 2, 1, |n| {
+            format!("return f({}x{}){}", "(".repeat(n), ")".repeat(n), ".b".repeat(300))
         }),
-        lua("operators over a right operand", 102, 1, |n| {
-            format!("return x+{}x{}{}", "(".repeat(100), ")".repeat(100), "+x".repeat(n))
+        lua("operators over a later operand", 2, 1, |n| {
+            format!("return x+{}x{}{}", "(".repeat(n), ")".repeat(n), "+x".repeat(300))
         }),
-        lua("parentheses under a long chain", 2, 1, |n| {
-            format!("return x{}+{}x{}", "+x".repeat(50), "(".repeat(n), ")".repeat(n))
+        lua("assignment target over parentheses", 2, 1, |n| {
+            format!("{}x{}{} = 1", "(".repeat(n), ")".repeat(n), ".b".repeat(300))
         }),
         luau("if expressions", 1, 1, |n| format!("return {}x", "if a then b else ".repeat(n))),
         luau("interpolated strings", 1, 1, |n| {
@@ -243,7 +201,9 @@ fn shapes() -> Vec<Shape> {
         luau("cast over parentheses", 2, 1, |n| {
             format!("return {}x{} :: T", "(".repeat(n), ")".repeat(n))
         }),
-        luau("instantiations", 1, 1, |n| format!("return f{}", "<<T>>".repeat(n))),
+        luau("instantiations over parentheses", 2, 1, |n| {
+            format!("return {}f{}{}", "(".repeat(n), ")".repeat(n), "<<T>>".repeat(300))
+        }),
         luau("optional types", 1, 1, |n| format!("type X = T{}", "?".repeat(n))),
         luau("table types", 1, 1, |n| format!("type X = {}T{}", "{".repeat(n), "}".repeat(n))),
         luau("parenthesized types", 1, 1, |n| {
@@ -309,16 +269,15 @@ fn the_cap_bounds_the_depth_of_the_tree_exactly() {
     }
 }
 
+/// A run wraps its first operand, so it counts once from that operand's
+/// deepest level. Its other operands sit one level in, however many there
+/// are.
 #[test]
-fn a_chain_counts_from_its_deepest_operand() {
+fn a_run_counts_once_from_its_first_operand() {
     for (label, source) in [
         (
             "operators over parentheses",
             format!("return {}x{}{}", "(".repeat(255), ")".repeat(255), "+1".repeat(255)),
-        ),
-        (
-            "operators over a right operand",
-            format!("return 1+{}x{}{}", "(".repeat(254), ")".repeat(254), "+1".repeat(255)),
         ),
         (
             "fields over parentheses",
@@ -334,19 +293,13 @@ fn a_chain_counts_from_its_deepest_operand() {
     }
     let optionals = format!("type X = {}T{}{}", "{".repeat(254), "}".repeat(254), "?".repeat(255));
     assert!(has_depth_limit_error(&parse(optionals, LuaVersion::Luau)));
-}
 
-#[test]
-fn chains_nested_in_parentheses_cannot_compound_past_the_cap() {
-    // Level `j` of parentheses is followed by a chain of `255 - j` links.
-    let mut source = format!("1{}", "+1".repeat(205));
-    for paren_level in (0..50usize).rev() {
-        source = format!("({source}){}", "+1".repeat(255 - paren_level));
-    }
-    let result = parse(format!("return {source}"), LuaVersion::Lua54);
-    assert!(has_depth_limit_error(&result), "{:?}", result.errors.first());
+    let later_operand =
+        format!("return 1+{}x{}{}", "(".repeat(254), ")".repeat(254), "+1".repeat(255));
+    let result = parse(later_operand, LuaVersion::Lua54);
+    assert!(result.errors.is_empty(), "{:?}", result.errors.first());
+    assert_eq!(block_nesting_depth(&result.block), MAX_NESTING_DEPTH);
 }
-
 /// Counts every level, where `block_nesting_depth` stops just past the cap.
 struct Levels {
     depth: usize,
@@ -372,9 +325,7 @@ fn a_tree_with_errors_stays_within_reach_of_the_cap() {
         format!("return {}", "{".repeat(5000)),
         format!("return {}", "f(".repeat(5000)),
         format!("return x{}", "+(x".repeat(5000)),
-        format!("return x{}", "+x".repeat(5000)),
-        format!("return x{}", ".b".repeat(5000)),
-        format!("return x{}", "+-".repeat(5000)),
+        format!("return x{}", ".b[(x".repeat(5000)),
         "do ".repeat(5000),
         "function f() ".repeat(5000),
         format!("return {}", "function() return ".repeat(5000)),

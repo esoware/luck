@@ -1,6 +1,6 @@
 use luck_token::{CompoundOp, Span, Token};
 
-use crate::expr::{Expression, FunctionCall, Var};
+use crate::expr::{Expression, SuffixedExpression, Var};
 use crate::function::{FunctionAttribute, FunctionBody, Parameter};
 use crate::punctuated::Punctuated;
 use crate::types::{GenericTypeList, Type};
@@ -19,7 +19,8 @@ pub struct Block {
 )]
 pub enum Statement {
     Assignment(Box<Assignment>),
-    FunctionCall(Box<FunctionCall>),
+    /// A chain that ends in a call.
+    FunctionCall(Box<SuffixedExpression>),
     DoBlock(Box<DoBlock>),
     WhileLoop(Box<WhileLoop>),
     RepeatLoop(Box<RepeatLoop>),

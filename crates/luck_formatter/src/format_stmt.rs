@@ -72,12 +72,9 @@ fn assigned<Values>(values: Values, items: &[Expression]) -> impl Format
 where
     Values: Format,
 {
-    let is_bracketed = matches!(
-        items,
-        [Expression::TableConstructor(_)
-            | Expression::FunctionDef(_)
-            | Expression::FunctionCall(_)]
-    );
+    let is_bracketed =
+        matches!(items, [Expression::TableConstructor(_) | Expression::FunctionDef(_)])
+            || matches!(items, [Expression::Suffixed(chain)] if chain.is_call());
     format_with(move |f| {
         if is_bracketed {
             values.fmt(f);

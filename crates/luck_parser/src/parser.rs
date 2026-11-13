@@ -8,7 +8,7 @@ mod types;
 use core::mem;
 use core::ops::Range;
 
-use luck_ast::{Block, Literal, MAX_NESTING_DEPTH};
+use luck_ast::{BinaryLink, Block, Literal, MAX_NESTING_DEPTH, Suffix};
 use luck_lexer::Lexer;
 use luck_token::{Comment, CompactString, LuaVersion, Span, Token, TokenKind, has_line_break};
 use rustc_hash::FxHashSet;
@@ -55,6 +55,12 @@ struct Parser<'source> {
     deepest_level: usize,
     /// The chunk's own block is 1.
     block_depth: u32,
+    /// The links of every binary run being parsed, innermost last. Each run
+    /// takes its own off the end when it closes, so each gets one exact
+    /// allocation however long it grows.
+    binary_links: Vec<BinaryLink>,
+    /// The suffix runs being parsed, kept like `binary_links`.
+    suffixes: Vec<Suffix>,
     function_scope: FunctionScope,
     has_module_return: bool,
     has_value_exports: bool,
@@ -97,6 +103,8 @@ impl<'source> Parser<'source> {
             nesting_depth: 0,
             deepest_level: 0,
             block_depth: 0,
+            binary_links: Vec::new(),
+            suffixes: Vec::new(),
             function_scope: FunctionScope { is_chunk: true, is_vararg: true, is_in_loop: false },
             has_module_return: false,
             has_value_exports: false,
@@ -297,9 +305,10 @@ impl<'source> Parser<'source> {
         self.deepest_level = self.deepest_level.max(outer_deepest_level);
     }
 
-    /// Count a node that wraps the operand parsed so far at `level`: a binary
-    /// operator, a suffix, a cast, or a type operator. Everything in the
-    /// operand moves one level down, so the cap applies to its deepest level.
+    /// Count a node that wraps the operand parsed so far at `level`: a run of
+    /// binary operators or suffixes, a cast, or a type operator. Everything in
+    /// the operand moves one level down, so the cap applies to its deepest
+    /// level.
     ///
     /// On success the parser stands one level in, where the wrapper's other
     /// children go, and the caller steps back to `level` after them.

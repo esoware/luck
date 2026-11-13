@@ -34,6 +34,26 @@ fn two_module_project() -> TempDir {
     directory
 }
 
+/// One run of each kind, each far past the nesting cap. A run is one level
+/// of nesting however long it is.
+fn long_runs_project() -> TempDir {
+    const LINKS: usize = 100_000;
+    let source = format!(
+        "local a = ...\nlocal sum = a{}\nlocal text = a{}\nlocal either = a{}\n\
+         local field = a{}\na{} = a{}\na{}\nreturn sum, text, either, field\n",
+        "+a".repeat(LINKS),
+        "..a".repeat(LINKS),
+        " and a or a".repeat(LINKS),
+        ".b".repeat(LINKS),
+        "[1]".repeat(LINKS),
+        "()".repeat(LINKS),
+        ":m()".repeat(LINKS),
+    );
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.lua", &source);
+    directory
+}
+
 #[cfg(windows)]
 fn set_directory_listing(directory: &Path, is_allowed: bool) {
     use std::process::Command;
@@ -146,6 +166,34 @@ fn lint_counts_a_file_reached_twice_once() {
 }
 
 #[test]
+fn lint_survives_long_runs() {
+    let directory = long_runs_project();
+
+    let output = run(directory.path(), &["lint", "main.lua"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0i32),
+        "`lint` must finish instead of overflowing its stack:\n{}",
+        stderr_text(&output)
+    );
+}
+
+#[test]
+fn minify_survives_long_runs() {
+    let directory = long_runs_project();
+
+    let output = run(directory.path(), &["minify", "main.lua", "-o", "minified.lua"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0i32),
+        "`minify` must finish instead of overflowing its stack:\n{}",
+        stderr_text(&output)
+    );
+}
+
+#[test]
 fn minify_missing_input_exits_usage() {
     let directory = TempDir::new().unwrap();
 
@@ -174,6 +222,20 @@ fn graph_resolves_modules_next_to_the_entry_as_bundle_does() {
         output.status.code(),
         Some(0i32),
         "`graph` must find the modules `bundle` finds for the same entry:\n{}",
+        stderr_text(&output)
+    );
+}
+
+#[test]
+fn bundle_survives_long_runs() {
+    let directory = long_runs_project();
+
+    let output = run(directory.path(), &["bundle", "main.lua", "-o", "bundle.lua"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0i32),
+        "`bundle` must finish instead of overflowing its stack:\n{}",
         stderr_text(&output)
     );
 }
@@ -386,6 +448,20 @@ fn fmt_applies_a_path_scoped_editorconfig_section_from_a_subdirectory() {
     assert!(
         formatted.contains("\n   return 1"),
         "the section matches this file whichever directory runs `fmt`:\n{formatted}"
+    );
+}
+
+#[test]
+fn fmt_survives_long_runs() {
+    let directory = long_runs_project();
+
+    let output = run(directory.path(), &["fmt", "main.lua"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0i32),
+        "`fmt` must finish instead of overflowing its stack:\n{}",
+        stderr_text(&output)
     );
 }
 

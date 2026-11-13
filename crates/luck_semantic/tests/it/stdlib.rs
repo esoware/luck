@@ -1049,16 +1049,16 @@ fn resolve_last_call(source: &str) -> Option<String> {
         StdlibEnvironment::Roblox,
     );
     let last_stmt = parsed.block.stmts.last()?;
-    let call = if let Statement::FunctionCall(call) = last_stmt {
-        call
+    let chain = if let Statement::FunctionCall(chain) = last_stmt {
+        chain
     } else if let Statement::LocalAssignment(local) = last_stmt
-        && let Some(Expression::FunctionCall(call)) = local.exprs.as_ref()?.iter().last()
+        && let Some(Expression::Suffixed(chain)) = local.exprs.as_ref()?.iter().last()
     {
-        call
+        chain
     } else {
         return None;
     };
-    Some(analysis.resolve_callee(call)?.name())
+    Some(analysis.resolve_callee(chain.last_call()?)?.name())
 }
 
 #[test]
@@ -1442,7 +1442,7 @@ fn math_pow_fix_groups_a_compound_base() {
     assert!(
         matches!(
             returned_expr(&replacement, version),
-            Expression::BinaryOp(binary_op) if binary_op.op == BinOp::Pow
+            Expression::BinaryOp(binary_op) if binary_op.links.first().op == BinOp::Pow
         ),
         "with a = 2, math.pow(a + 1, 2) is 9.0, so the fix must raise the whole base, but \
          `{replacement}` is 3.0"

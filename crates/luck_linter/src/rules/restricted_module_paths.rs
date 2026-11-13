@@ -1,4 +1,4 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall};
+use luck_ast::{Call, Expression, FunctionArgs};
 use luck_token::short_string_body;
 
 use crate::call::is_global_call;
@@ -23,7 +23,7 @@ impl NodeRule for RestrictedModulePaths {
     }
     fn on_call(
         &self,
-        call: &FunctionCall,
+        call: Call<'_>,
         _position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
@@ -32,7 +32,7 @@ impl NodeRule for RestrictedModulePaths {
     }
 }
 
-fn check_call(call: &FunctionCall, context: &LintContext<'_>) -> Option<Finding> {
+fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
     let restricted_paths = &context.config.rules.restricted_module_paths.as_ref()?.options()?.paths;
     if restricted_paths.is_empty() {
         return None;
@@ -42,7 +42,7 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>) -> Option<Finding>
     if !is_global_call(call, "require", context.semantic) {
         return None;
     }
-    let literal = match &call.args {
+    let literal = match call.args {
         // A computed path like `require(x .. y)` can't be checked.
         FunctionArgs::Parenthesized { args, .. } => {
             let Some(Expression::StringLiteral(literal)) = args.first() else {

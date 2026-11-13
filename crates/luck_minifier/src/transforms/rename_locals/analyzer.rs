@@ -456,11 +456,18 @@ impl<'ast> Visitor<'ast> for Analyzer {
         }
     }
 
-    fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(name) = var {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if let Expression::Name(name) = expr {
             self.reference_name(identifier_name(name));
         }
-        self.walk_var(var);
+        self.walk_expr(expr);
+    }
+
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
+        if let Var::Name(name) = target {
+            self.reference_name(identifier_name(name));
+        }
+        self.walk_assignment_target(target);
     }
 
     fn visit_function_body(&mut self, body: &'ast FunctionBody) {

@@ -1,5 +1,7 @@
-use crate::depth::regrouped_levels;
-use crate::expr::{Expression, Field, FunctionArgs, FunctionCall, TableConstructor, Var};
+use crate::chain::Call;
+use crate::expr::{
+    Expression, Field, FunctionArgs, Suffix, SuffixedExpression, TableConstructor, Var,
+};
 use crate::function::FunctionBody;
 use crate::punctuated::Punctuated;
 use crate::stmt::{AttributedName, Block, LastStatement, Statement, TypeDeclarationValue};
@@ -16,11 +18,12 @@ pub trait Visitor<'ast> {
     /// paired with [`Visitor::ascend`]. Returning `false` skips what the
     /// level holds.
     ///
-    /// A level is a block, a function body, a table constructor, a call, an
-    /// index or field access, an operator, a parenthesized expression, a Luau
-    /// if-expression, interpolated string, cast, or instantiation, or a Luau
-    /// type that holds other types or an expression. These are the levels
-    /// [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH) caps.
+    /// A level is a block, a function body, a table constructor, a run of
+    /// suffixes, a run of binary operators, a unary operator, a parenthesized
+    /// expression, a Luau if-expression, interpolated string, or cast, or a
+    /// Luau type that holds other types or an expression. These are the
+    /// levels [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH) caps. However
+    /// long a run is, it's one level.
     fn descend(&mut self) -> bool {
         true
     }
@@ -38,12 +41,20 @@ pub trait Visitor<'ast> {
     fn visit_expr(&mut self, expr: &'ast Expression) {
         self.walk_expr(expr);
     }
-    fn visit_var(&mut self, var: &'ast Var) {
-        self.walk_var(var);
+    /// Reached from assignments and Luau compound assignments. A name read
+    /// as a value is an [`Expression::Name`] instead.
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
+        self.walk_assignment_target(target);
     }
-    /// Reached from both a call statement and a call expression.
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
-        self.walk_function_call(call);
+    /// Reached from a call statement, an expression, and an assignment
+    /// target.
+    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression) {
+        self.walk_suffixed(chain);
+    }
+    /// Reached once for each call in a chain, after the part of the chain
+    /// before it. The walk of that chain visits the callee, not this hook's.
+    fn visit_call(&mut self, call: Call<'ast>) {
+        self.walk_call(call);
     }
     /// Reached from both a table expression and a `f{...}` argument.
     fn visit_table_constructor(&mut self, table: &'ast TableConstructor) {
@@ -74,14 +85,14 @@ pub trait Visitor<'ast> {
     fn walk_stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::Assignment(assignment) => {
-                for var in assignment.targets.iter() {
-                    self.visit_var(var);
+                for target in assignment.targets.iter() {
+                    self.visit_assignment_target(target);
                 }
                 for expr in assignment.values.iter() {
                     self.visit_expr(expr);
                 }
             }
-            Statement::FunctionCall(call_stmt) => self.visit_function_call(call_stmt),
+            Statement::FunctionCall(chain) => self.visit_suffixed(chain),
             Statement::DoBlock(do_block) => self.visit_block(&do_block.block),
             Statement::WhileLoop(while_loop) => {
                 self.visit_expr(&while_loop.condition);
@@ -140,7 +151,7 @@ pub trait Visitor<'ast> {
             }
             // Luau
             Statement::CompoundAssignment(compound) => {
-                self.visit_var(&compound.var);
+                self.visit_assignment_target(&compound.var);
                 self.visit_expr(&compound.expr);
             }
             // Lua 5.5
@@ -195,16 +206,12 @@ pub trait Visitor<'ast> {
             | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
+            | Expression::Name(_)
             | Expression::Error(_) => {}
             Expression::FunctionDef(function_def) => {
                 self.visit_function_body(&function_def.body);
             }
-            Expression::Var(var) => {
-                self.visit_var(var);
-            }
-            Expression::FunctionCall(call) => {
-                self.visit_function_call(call);
-            }
+            Expression::Suffixed(chain) => self.visit_suffixed(chain),
             Expression::Parenthesized(parenthesized) => {
                 if self.descend() {
                     self.visit_expr(&parenthesized.expr);
@@ -216,9 +223,10 @@ pub trait Visitor<'ast> {
             }
             Expression::BinaryOp(binary_op) => {
                 if self.descend() {
-                    let (lhs_levels, rhs_levels) = regrouped_levels(binary_op);
-                    visit_regrouped(self, &binary_op.lhs, lhs_levels);
-                    visit_regrouped(self, &binary_op.rhs, rhs_levels);
+                    self.visit_expr(&binary_op.first);
+                    for link in &binary_op.links {
+                        self.visit_expr(&link.operand);
+                    }
                 }
                 self.ascend();
             }
@@ -260,49 +268,44 @@ pub trait Visitor<'ast> {
                 }
                 self.ascend();
             }
-            // Luau
-            Expression::TypeInstantiation(instantiation) => {
-                if self.descend() {
-                    self.visit_expr(&instantiation.expr);
-                    for arg in instantiation.type_args.args.iter() {
-                        self.visit_type(arg);
+        }
+    }
+
+    fn walk_assignment_target(&mut self, target: &'ast Var) {
+        match target {
+            Var::Name(_) => {}
+            Var::Suffixed(chain) => self.visit_suffixed(chain),
+        }
+    }
+
+    fn walk_suffixed(&mut self, chain: &'ast SuffixedExpression) {
+        if self.descend() {
+            self.visit_expr(&chain.prefix);
+            for (i, suffix) in chain.suffixes.iter().enumerate() {
+                match suffix {
+                    Suffix::Field(_) => {}
+                    Suffix::Index { index, .. } => self.visit_expr(index),
+                    Suffix::Call(call) => self.visit_call(Call::new(chain.head(i), call)),
+                    // Luau
+                    Suffix::TypeInstantiation { type_args, .. } => {
+                        for type_arg in type_args.args.iter() {
+                            self.visit_type(type_arg);
+                        }
                     }
                 }
-                self.ascend();
             }
-        }
-    }
-
-    fn walk_var(&mut self, var: &'ast Var) {
-        match var {
-            Var::Name(_) => {}
-            Var::Index(index_expr) => {
-                if self.descend() {
-                    self.visit_expr(&index_expr.prefix);
-                    self.visit_expr(&index_expr.index);
-                }
-                self.ascend();
-            }
-            Var::FieldAccess(field_access) => {
-                if self.descend() {
-                    self.visit_expr(&field_access.prefix);
-                }
-                self.ascend();
-            }
-        }
-    }
-
-    fn walk_function_call(&mut self, call: &'ast FunctionCall) {
-        if self.descend() {
-            self.visit_expr(&call.callee);
-            if let Some(type_args) = &call.explicit_type_args {
-                for type_arg in type_args.args.iter() {
-                    self.visit_type(type_arg);
-                }
-            }
-            self.walk_function_args(&call.args);
         }
         self.ascend();
+    }
+
+    /// Explicit type arguments, then the arguments.
+    fn walk_call(&mut self, call: Call<'ast>) {
+        if let Some(type_args) = call.explicit_type_args {
+            for type_arg in type_args.args.iter() {
+                self.visit_type(type_arg);
+            }
+        }
+        self.walk_function_args(call.args);
     }
 
     fn walk_function_args(&mut self, args: &'ast FunctionArgs) {
@@ -444,31 +447,6 @@ pub trait Visitor<'ast> {
     }
 }
 
-/// Visits an operand `levels` deeper than it sits in the tree, where it
-/// ends up once its operator is printed and read back.
-#[expect(
-    clippy::inline_always,
-    reason = "keeps a debug build's binary-operator recursion at one frame per level"
-)]
-#[inline(always)]
-fn visit_regrouped<'ast, V>(visitor: &mut V, operand: &'ast Expression, levels: usize)
-where
-    V: Visitor<'ast> + ?Sized,
-{
-    let mut entered = 0usize;
-    let mut is_open = true;
-    while is_open && entered < levels {
-        is_open = visitor.descend();
-        entered = entered.saturating_add(1);
-    }
-    if is_open {
-        visitor.visit_expr(operand);
-    }
-    for _ in 0..entered {
-        visitor.ascend();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use luck_token::BinOp;
@@ -495,9 +473,9 @@ mod tests {
             self.expressions = self.expressions.saturating_add(1);
             self.walk_expr(expr);
         }
-        fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+        fn visit_call(&mut self, call: Call<'ast>) {
             self.calls = self.calls.saturating_add(1);
-            self.walk_function_call(call);
+            self.walk_call(call);
         }
         fn visit_table_constructor(&mut self, table: &'ast TableConstructor) {
             self.tables = self.tables.saturating_add(1);

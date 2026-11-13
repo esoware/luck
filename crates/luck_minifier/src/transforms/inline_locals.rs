@@ -1,8 +1,8 @@
 use luck_ast::{
-    Block, Expression, FunctionBody, Statement, Transform, Var, Visitor, expr_nesting_depth,
-    is_prefix_expr,
+    Block, Expression, FunctionBody, Statement, SuffixedExpression, Transform, Var, Visitor,
+    expr_nesting_depth, is_prefix_expr,
 };
-use luck_token::{BinOp, CompactString, LuaVersion};
+use luck_token::{BinOp, CompactString, LuaVersion, OperandSide};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::binding::{
@@ -11,7 +11,7 @@ use crate::binding::{
 };
 use crate::expr::{
     MAX_ADDED_DEPTH, binds_looser_than_unary, can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs,
-    fits_at_depth, is_closed_literal_expr, parenthesize,
+    fits_at_depth, inner_operand_side, is_closed_literal_expr, parenthesize,
 };
 
 /// This pass works on names, not bindings, so every candidate must be
@@ -242,8 +242,8 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
         self.walk_function_body(body);
     }
 
-    fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(token) = var {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if let Expression::Name(token) = expr {
             let name = identifier_name(token);
             if !self.open_declarations.contains(name) {
                 self.shadow(name);
@@ -253,7 +253,7 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
                 self.references.insert(name.into(), Reference { count: 1, depth: self.depth });
             }
         }
-        self.walk_var(var);
+        self.walk_expr(expr);
     }
 }
 
@@ -280,55 +280,27 @@ impl Transform for Inliner {
         Block { span: block.span, stmts, last_stmt }
     }
 
-    fn transform_stmt(&mut self, stmt: Statement) -> Statement {
-        let walked = self.walk_stmt(stmt);
-        // A call statement holds its `FunctionCall` outside any `Expression`,
-        // so `transform_expr` never guards its callee.
-        if let Statement::FunctionCall(mut call_stmt) = walked {
-            call_stmt.callee = ensure_prefix(call_stmt.callee.take());
-            return Statement::FunctionCall(call_stmt);
+    /// A value inlined as the prefix gets parentheses unless it can stand
+    /// bare there, as `x["k"]` with `x = 37.5` becomes `(37.5)["k"]`.
+    fn transform_suffixed(&mut self, chain: SuffixedExpression) -> SuffixedExpression {
+        let mut walked = self.walk_suffixed(chain);
+        if !is_prefix_expr(&walked.prefix) {
+            walked.prefix = parenthesize(walked.prefix.take());
         }
+        walked.splice_prefix();
         walked
-    }
-
-    fn transform_var(&mut self, var: Var) -> Var {
-        match self.walk_var(var) {
-            Var::Index(mut index_expr) => {
-                index_expr.prefix = ensure_prefix(index_expr.prefix.take());
-                Var::Index(index_expr)
-            }
-            Var::FieldAccess(mut field_access) => {
-                field_access.prefix = ensure_prefix(field_access.prefix.take());
-                Var::FieldAccess(field_access)
-            }
-            name @ Var::Name(_) => name,
-        }
     }
 
     fn transform_expr(&mut self, mut expr: Expression) -> Expression {
         self.inline_operands(&mut expr);
         let walked = self.walk_expr(expr);
-        if let Expression::FunctionCall(mut call) = walked {
-            call.callee = ensure_prefix(call.callee.take());
-            return Expression::FunctionCall(call);
-        }
-        // Luau
-        if let Expression::TypeInstantiation(mut instantiation) = walked {
-            instantiation.expr = ensure_prefix(instantiation.expr.take());
-            return Expression::TypeInstantiation(instantiation);
-        }
-        if let Expression::Var(Var::Name(name)) = &walked
+        if let Expression::Name(name) = &walked
             && let Some(initializer) = self.candidates.get(identifier_name(name))
         {
             return initializer.clone();
         }
         walked
     }
-}
-
-/// `x["k"]` with `x = 37.5` has to become `(37.5)["k"]`.
-fn ensure_prefix(expr: Expression) -> Expression {
-    if is_prefix_expr(&expr) { expr } else { parenthesize(expr) }
 }
 
 #[derive(Clone, Copy)]
@@ -348,7 +320,7 @@ fn keeps_grouping(expr: &Expression, position: OperandPosition) -> bool {
             OperandPosition::Right(op) => can_unwrap_in_binop_rhs(expr, op),
             OperandPosition::Unary => !matches!(
                 expr,
-                Expression::BinaryOp(binary_op) if binds_looser_than_unary(binary_op.op)
+                Expression::BinaryOp(binary_op) if binds_looser_than_unary(binary_op)
             ),
             OperandPosition::Cast => false,
         },
@@ -366,13 +338,12 @@ fn keeps_grouping(expr: &Expression, position: OperandPosition) -> bool {
         | Expression::False(_)
         | Expression::VarArg(_)
         | Expression::FunctionDef(_)
-        | Expression::Var(_)
-        | Expression::FunctionCall(_)
+        | Expression::Name(_)
+        | Expression::Suffixed(_)
         | Expression::Parenthesized(_)
         | Expression::TableConstructor(_)
         | Expression::IfExpression(_)
         | Expression::InterpolatedString(_)
-        | Expression::TypeInstantiation(_)
         | Expression::Error(_) => true,
     }
 }
@@ -380,7 +351,7 @@ fn keeps_grouping(expr: &Expression, position: OperandPosition) -> bool {
 /// The operand `expr` prints last, which is what a following token lands on.
 fn last_operand(expr: &mut Expression) -> &mut Expression {
     match expr {
-        Expression::BinaryOp(binary_op) => last_operand(&mut binary_op.rhs),
+        Expression::BinaryOp(binary_op) => last_operand(&mut binary_op.links.last_mut().operand),
         Expression::UnaryOp(unop) => last_operand(&mut unop.operand),
         operand @ (Expression::Number(_)
         | Expression::Integer(_)
@@ -390,14 +361,13 @@ fn last_operand(expr: &mut Expression) -> &mut Expression {
         | Expression::False(_)
         | Expression::VarArg(_)
         | Expression::FunctionDef(_)
-        | Expression::Var(_)
-        | Expression::FunctionCall(_)
+        | Expression::Name(_)
+        | Expression::Suffixed(_)
         | Expression::Parenthesized(_)
         | Expression::TableConstructor(_)
         | Expression::IfExpression(_)
         | Expression::InterpolatedString(_)
         | Expression::TypeCast(_)
-        | Expression::TypeInstantiation(_)
         | Expression::Error(_)) => operand,
     }
 }
@@ -415,14 +385,34 @@ impl Inliner {
     /// Only in an operand position can a replacement regroup, so only there does it
     /// gain parens. Anywhere else it stays bare, since `return (1+2)` is longer
     /// than `return 1+2` and `simplify_parens` wouldn't strip those parens.
+    ///
+    /// A run inlined bare where it would merge into its operator's run joins
+    /// it, so a run of locals inlines without nesting.
     fn inline_operands(&mut self, expr: &mut Expression) {
         match expr {
             Expression::BinaryOp(binary_op) => {
-                if binary_op.op == BinOp::Lt {
-                    self.close_cast_before_less_than(&mut binary_op.lhs);
+                // The operand before each `<` is checked while it's still a
+                // name.
+                let mut before = &mut binary_op.first;
+                for link in &mut binary_op.links {
+                    if link.op == BinOp::Lt {
+                        self.close_cast_before_less_than(before);
+                    }
+                    before = &mut link.operand;
                 }
-                self.inline_operand(&mut binary_op.lhs, OperandPosition::Left(binary_op.op));
-                self.inline_operand(&mut binary_op.rhs, OperandPosition::Right(binary_op.op));
+                let op = binary_op.links.first().op;
+                let inner_position = match inner_operand_side(binary_op) {
+                    OperandSide::Left => OperandPosition::Left(op),
+                    OperandSide::Right => OperandPosition::Right(op),
+                };
+                self.inline_operand(&mut binary_op.first, OperandPosition::Left(op));
+                if let Some((last, inner)) = binary_op.links.split_last_mut() {
+                    for link in inner {
+                        self.inline_operand(&mut link.operand, inner_position);
+                    }
+                    self.inline_operand(&mut last.operand, OperandPosition::Right(op));
+                }
+                binary_op.splice_operands();
             }
             Expression::UnaryOp(unop) => {
                 self.inline_operand(&mut unop.operand, OperandPosition::Unary);
@@ -441,19 +431,18 @@ impl Inliner {
             | Expression::False(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
-            | Expression::TypeInstantiation(_)
             | Expression::Error(_) => {}
         }
     }
 
     fn inline_operand(&self, operand: &mut Expression, position: OperandPosition) {
-        if let Expression::Var(Var::Name(name)) = operand
+        if let Expression::Name(name) = operand
             && let Some(initializer) = self.candidates.get(identifier_name(name))
         {
             let replacement = initializer.clone();
@@ -469,7 +458,7 @@ impl Inliner {
     /// cast inlined just before `<` needs parens of its own. A cast that was
     /// already there parsed fine, so only inlining can cause this.
     fn close_cast_before_less_than(&mut self, left: &mut Expression) {
-        if let Expression::Var(Var::Name(name)) = last_operand(left)
+        if let Expression::Name(name) = last_operand(left)
             && let Some(initializer) = self.candidates.get_mut(identifier_name(name))
         {
             let cast = last_operand(initializer);
@@ -758,6 +747,19 @@ mod tests {
 
     #[test]
     fn stops_inlining_a_run_of_locals_before_it_nests_past_the_depth_cap() {
+        // Each value needs parentheses where the next one uses it.
+        let mut source = String::from("local x0 = 1\n");
+        for (i, previous) in (1..300u32).zip(0u32..) {
+            let _unused = writeln!(source, "local x{i} = x{previous} * 2 + 1");
+        }
+        source.push_str("return x299\n");
+        let result = apply(&source);
+        assert_reparses(&result, LuaVersion::Lua54);
+        assert!(result.contains("local"), "the run must stop inlining partway: {result}");
+    }
+
+    #[test]
+    fn inlines_a_run_of_locals_that_joins_one_run_of_operators() {
         let mut source = String::from("local x0 = 1\n");
         for (i, previous) in (1..300u32).zip(0u32..) {
             let _unused = writeln!(source, "local x{i} = x{previous} + 1");
@@ -765,7 +767,7 @@ mod tests {
         source.push_str("return x299\n");
         let result = apply(&source);
         assert_reparses(&result, LuaVersion::Lua54);
-        assert!(result.contains("local"), "the run must stop inlining partway: {result}");
+        assert_eq!(result, format!("return 1{}", "+1".repeat(299)));
     }
 
     #[test]

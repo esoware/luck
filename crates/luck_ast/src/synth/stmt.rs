@@ -316,9 +316,13 @@ impl Synth {
     #[must_use]
     #[expect(clippy::panic, reason = "documented panic")]
     pub fn call_stmt(&self, call_expr: Expression) -> Statement {
-        let Expression::FunctionCall(mut call) = call_expr else {
+        let Expression::Suffixed(mut call) = call_expr else {
             panic!("synth: call_stmt requires a function-call expression, got {call_expr:?}");
         };
+        assert!(
+            call.is_call(),
+            "synth: call_stmt requires a function-call expression, got {call:?}"
+        );
         // The statement takes the call's span, so give it a fresh one: two
         // statements wrapping clones of one call need distinct comment anchors.
         call.span = self.next_span();

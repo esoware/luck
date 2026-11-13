@@ -1,5 +1,5 @@
-use luck_ast::{Block, FunctionBody, Parameter, Statement, Transform, Var, Visitor};
-use luck_token::Span;
+use luck_ast::{Block, Expression, FunctionBody, Parameter, Statement, Transform, Var, Visitor};
+use luck_token::{Span, Token};
 
 use crate::binding::{identifier_name, identifier_token};
 
@@ -17,14 +17,27 @@ fn count_self_references(body: &FunctionBody) -> usize {
 
 struct SelfCounter(usize);
 
-impl<'ast> Visitor<'ast> for SelfCounter {
-    fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(name) = var
-            && identifier_name(name) == "self"
-        {
+impl SelfCounter {
+    fn count(&mut self, name: &Token) {
+        if identifier_name(name) == "self" {
             self.0 = self.0.saturating_add(1);
         }
-        self.walk_var(var);
+    }
+}
+
+impl<'ast> Visitor<'ast> for SelfCounter {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if let Expression::Name(name) = expr {
+            self.count(name);
+        }
+        self.walk_expr(expr);
+    }
+
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
+        if let Var::Name(name) = target {
+            self.count(name);
+        }
+        self.walk_assignment_target(target);
     }
 
     // Skips nested functions. A nested method binds its own `self`, and

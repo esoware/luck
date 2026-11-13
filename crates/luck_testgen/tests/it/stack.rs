@@ -1,5 +1,6 @@
-//! Input nested to the parser's cap has to run through every stage on the
-//! smallest stack luck gets embedded on, in an unoptimized build too.
+//! Input nested to the parser's cap, and runs far longer than it, have to run
+//! through every stage on the smallest stack luck gets embedded on, in an
+//! unoptimized build too.
 
 use std::thread;
 
@@ -27,10 +28,11 @@ fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
         format!("return {}", wrapped("{[1]=", 255, "1", "}")),
         format!("return {}", wrapped("f{", 127, "", "}")),
         format!("return {}x", "not ".repeat(255)),
-        format!("return x{}", "+x".repeat(255)),
-        format!("return x{}", "..x".repeat(255)),
-        format!("return a{}", ".b".repeat(255)),
-        format!("return f{}", "()".repeat(255)),
+        format!("return {}x{}", "(".repeat(127), "+x)".repeat(127)),
+        format!("return {}", wrapped("x..(", 127, "x", ")")),
+        format!("return {}", wrapped("x^-", 127, "x", "")),
+        format!("return {}a{}", "(".repeat(127), ").b".repeat(127)),
+        format!("return {}f{}", "(".repeat(127), ")()".repeat(127)),
         format!("return {}", wrapped("function() return ", 127, "1", " end")),
         wrapped("x = function() ", 127, "x = 1", " end"),
         wrapped("local function f() ", 127, "local x = 1", " end"),
@@ -61,10 +63,35 @@ fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
         .collect()
 }
 
+/// One source per kind of run, each one level of nesting however long.
+fn long_runs() -> Vec<(LuaVersion, String)> {
+    const LINKS: usize = 20_000;
+    let lua = [
+        format!("return x{}", "+x".repeat(LINKS)),
+        format!("return 1{}", "+1".repeat(LINKS)),
+        format!("return x{}", " < x == x".repeat(LINKS)),
+        format!("return x{}", " and x or x".repeat(LINKS)),
+        format!("return x{}", "..x".repeat(LINKS)),
+        format!("return 2{}", "^2".repeat(LINKS)),
+        format!("return a{}", ".b".repeat(LINKS)),
+        format!("return f{}", "()".repeat(LINKS)),
+        format!("return a{}", ":m()".repeat(LINKS)),
+        format!("return a{}", ".b[x]:m(x)\"s\"{}".repeat(LINKS)),
+        format!("a{} = 1", "[x]".repeat(LINKS)),
+        format!("f{}", "()".repeat(LINKS)),
+    ];
+    let luau =
+        [format!("return f{}", "<<T>>".repeat(LINKS)), format!("a{} += 1", ".b".repeat(LINKS))];
+    lua.into_iter()
+        .map(|source| (LuaVersion::Lua54, source))
+        .chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
+        .collect()
+}
+
 /// Runs `stage` over every source, each on a thread with [`STACK_BYTES`] of
 /// stack. Overflowing it takes the whole test process down.
 fn run_on_the_smallest_stack(stage: fn(&str, LuaVersion)) {
-    for (version, source) in sources_at_the_nesting_cap() {
+    for (version, source) in sources_at_the_nesting_cap().into_iter().chain(long_runs()) {
         let worker = thread::Builder::new()
             .stack_size(STACK_BYTES)
             .spawn(move || stage(&source, version))

@@ -2,8 +2,9 @@ use core::fmt::{self, Write as _};
 
 use crate::document::DocumentState;
 
-/// How much of a dump to keep. Pretty-printing indents each nesting level, so
-/// a long `a + b + ...` chain's dump grows with the square of its length.
+/// How much of a dump to keep. Pretty-printing puts every field of every node
+/// on an indented line of its own, so a large file's dump runs to many times
+/// its size.
 const MAX_DUMP_BYTES: usize = 8 * 1024 * 1024;
 
 pub(crate) fn syntax_tree(document: &DocumentState) -> String {
@@ -37,8 +38,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn long_chains_dump_within_the_bound() {
-        let chain = vec!["1"; 200].join("+");
+    fn large_files_dump_within_the_bound() {
+        let chain = vec!["1"; 2000].join("+");
         let text = format!("local x = {chain}\n").repeat(40);
         let document = DocumentState::new(text, 1, LuaTarget::Lua54, FxHashSet::default());
         let dump = syntax_tree(&document);

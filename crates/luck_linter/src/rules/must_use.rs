@@ -1,4 +1,4 @@
-use luck_ast::FunctionCall;
+use luck_ast::Call;
 use luck_semantic::{SemanticAnalysis, StdlibEntry};
 
 use crate::diagnostic::Finding;
@@ -22,7 +22,7 @@ impl NodeRule for MustUse {
     }
     fn on_call(
         &self,
-        call: &FunctionCall,
+        call: Call<'_>,
         position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
@@ -31,14 +31,14 @@ impl NodeRule for MustUse {
             && let Some(name) = must_use_name(context.semantic, call)
         {
             findings.push(
-                Finding::new(format!("return value of `{name}` is discarded"), call.span)
+                Finding::new(format!("return value of `{name}` is discarded"), call.span())
                     .with_help("assign the result or remove the call"),
             );
         }
     }
 }
 
-fn must_use_name(semantic: &SemanticAnalysis, call: &FunctionCall) -> Option<String> {
+fn must_use_name(semantic: &SemanticAnalysis, call: Call<'_>) -> Option<String> {
     let callee = semantic.resolve_callee(call)?;
     if let StdlibEntry::Function(function) = callee.entry()
         && function.is_must_use

@@ -9,6 +9,10 @@
 //! minifier's passes do. Override the `visit_*` or `transform_*` method you
 //! care about and call `self.walk_*` to recurse.
 //!
+//! A run of suffixes (`a.b[c]:d()`) is one [`SuffixedExpression`], and a
+//! run of binary operators at one precedence level (`a + b - c`) is one
+//! [`BinaryOp`], so however long a run gets, it nests one level.
+//!
 //! Every traversal recurses on the plain stack, once per level of nesting.
 //! `luck_parser` builds no tree deeper than [`MAX_NESTING_DEPTH`]. Nothing
 //! checks a tree built with [`Synth`] as it grows, so measure one with
@@ -35,11 +39,13 @@
 
 extern crate alloc;
 
+mod chain;
 mod depth;
 mod expr;
 mod function;
 #[cfg(test)]
 mod layout;
+mod one_or_more;
 mod punctuated;
 mod query;
 mod span;
@@ -49,17 +55,19 @@ mod transform;
 mod types;
 mod visitor;
 
-pub use depth::{MAX_NESTING_DEPTH, block_nesting_depth, expr_nesting_depth, regrouped_levels};
+pub use chain::{Call, ChainHead};
+pub use depth::{MAX_NESTING_DEPTH, block_nesting_depth, expr_nesting_depth};
 pub use expr::{
-    BinaryOp, ElseIfExprClause, Expression, Field, FieldAccess, FunctionArgs, FunctionCall,
-    FunctionDef, IfExpression, IndexExpression, InterpolatedString, InterpolatedStringSegment,
-    Literal, ParenthesizedExpression, TableConstructor, TypeCast, TypeInstantiation, UnaryOp, Var,
+    BinaryLink, BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs,
+    FunctionDef, IfExpression, InterpolatedString, InterpolatedStringSegment, Literal,
+    ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
 pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
+pub use one_or_more::OneOrMore;
 pub use punctuated::Punctuated;
 pub use query::{
-    DottedPath, dotted_path, expr_starts_with_brace, is_multi_value, is_prefix_expr,
-    stmt_starts_with_paren, unwrap_parentheses,
+    DottedPath, expr_starts_with_brace, is_multi_value, is_prefix_expr, stmt_starts_with_paren,
+    unwrap_parentheses,
 };
 pub use stmt::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,

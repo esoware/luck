@@ -413,14 +413,17 @@ impl<'ast> Visitor<'ast> for IneligibleScanner {
             let registers = self.active_locals.saturating_add(self.statement_expr_nodes);
             self.peak_registers = self.peak_registers.max(registers);
         }
+        if let Expression::Name(name) = expr {
+            self.reference(identifier_name(name));
+        }
         self.walk_expr(expr);
     }
 
-    fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(name) = var {
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
+        if let Var::Name(name) = target {
             self.reference(identifier_name(name));
         }
-        self.walk_var(var);
+        self.walk_assignment_target(target);
     }
 
     /// A nested closure, which sees the body's bindings as upvalues.

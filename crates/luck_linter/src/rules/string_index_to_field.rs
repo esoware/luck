@@ -1,10 +1,10 @@
-use luck_ast::{Expression, Statement, Var};
+use luck_ast::{ChainHead, Expression, Suffix, SuffixedExpression};
 use luck_token::{LuaVersion, Span, TokenKind, short_string_body};
 
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{ChainPosition, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StringIndexToField;
@@ -18,60 +18,25 @@ impl_rule!(
 );
 
 impl NodeRule for StringIndexToField {
-    // Assignment targets are `Var`s but not expressions, so the statements
-    // that hold them are checked too.
     fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[
-            NodeType::Var,
-            NodeType::Assignment,
-            NodeType::CompoundAssignment,
-        ])
+        NodeTypeSet::from_types(&[NodeType::Suffixed])
     }
-    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let version = context.semantic.version;
-        match stmt {
-            Statement::Assignment(assignment) => {
-                for target in assignment.targets.iter() {
-                    findings.extend(check_var(target, version));
-                }
-            }
-            // Luau
-            Statement::CompoundAssignment(compound_assignment) => {
-                findings.extend(check_var(&compound_assignment.var, version));
-            }
-            Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-    }
-    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        if let Expression::Var(var) = expr {
-            findings.extend(check_var(var, context.semantic.version));
+    fn on_chain(
+        &self,
+        chain: &SuffixedExpression,
+        _position: ChainPosition,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
+        for (position, suffix) in chain.suffixes.iter().enumerate() {
+            findings.extend(check_index(chain.head(position), suffix, context.semantic.version));
         }
     }
 }
 
-fn check_var(var: &Var, version: LuaVersion) -> Option<Finding> {
-    let Var::Index(index_expr) = var else {
-        return None;
-    };
-    let Expression::StringLiteral(literal) = &index_expr.index else {
+fn check_index(head: ChainHead<'_>, suffix: &Suffix, version: LuaVersion) -> Option<Finding> {
+    let Suffix::Index { span: index_span, index: Expression::StringLiteral(literal) } = suffix
+    else {
         return None;
     };
     // The body is the raw spelling. The shape check rejects the `\` of any
@@ -81,8 +46,8 @@ fn check_var(var: &Var, version: LuaVersion) -> Option<Finding> {
         return None;
     }
 
-    // Replace everything after the prefix, brackets included.
-    let span = Span::new(index_expr.prefix.span().end, index_expr.span.end);
+    // Replace everything after the head, brackets included.
+    let span = Span::new(head.span().end, index_span.end);
     Some(
         Finding::new(format!("`[\"{name}\"]` is equivalent to `.{name}`"), span)
             .with_help("prefer dot access for identifier-safe keys")

@@ -5,7 +5,7 @@ use core::mem;
 
 use luck_token::Span;
 
-use crate::expr::{Expression, Field, FunctionArgs, Var};
+use crate::expr::{Expression, Field, FunctionArgs, Suffix, Var};
 use crate::punctuated::Punctuated;
 use crate::stmt::{Block, LastStatement, Statement};
 use crate::types::{Type, TypeField};
@@ -90,8 +90,8 @@ impl Expression {
                 literal.span
             }
             Self::FunctionDef(expr) => expr.span,
-            Self::Var(expr) => expr.span(),
-            Self::FunctionCall(expr) => expr.span,
+            Self::Name(token) => token.span,
+            Self::Suffixed(expr) => expr.span,
             Self::Parenthesized(expr) => expr.span,
             Self::TableConstructor(expr) => expr.span,
             Self::BinaryOp(expr) => expr.span,
@@ -102,8 +102,6 @@ impl Expression {
             Self::InterpolatedString(expr) => expr.span,
             // Luau
             Self::TypeCast(expr) => expr.span,
-            // Luau
-            Self::TypeInstantiation(expr) => expr.span,
         }
     }
 
@@ -120,8 +118,23 @@ impl Var {
     pub fn span(&self) -> Span {
         match self {
             Self::Name(token) => token.span,
-            Self::Index(expr) => expr.span,
-            Self::FieldAccess(expr) => expr.span,
+            Self::Suffixed(chain) => chain.span,
+        }
+    }
+}
+
+impl Suffix {
+    /// A field's span is its name's, and a method call's starts at the
+    /// method's name.
+    #[must_use]
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Field(name) => name.span,
+            Self::Index { span, .. } | Self::TypeInstantiation { span, .. } => *span,
+            Self::Call(call) => {
+                let args_span = call.args.span();
+                call.method.as_ref().map_or(args_span, |method| method.span.merge(args_span))
+            }
         }
     }
 }

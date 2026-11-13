@@ -1,8 +1,8 @@
 use core::mem;
 
 use luck_ast::{
-    Block, FunctionBody, FunctionDecl, GenericFor, IfStatement, LocalAssignment, NumericFor,
-    Statement, TypeDeclarationValue, Var, Visitor,
+    Block, Expression, FunctionBody, FunctionDecl, GenericFor, IfStatement, LocalAssignment,
+    NumericFor, Statement, TypeDeclarationValue, Var, Visitor,
 };
 use luck_token::{CompactString, LuaVersion, Span, TokenKind};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -198,7 +198,7 @@ impl ScopeTreeBuilder {
                     self.reference_name(name, token.span, kind);
                 }
             }
-            Var::Index(_) | Var::FieldAccess(_) => self.walk_var(var),
+            Var::Suffixed(chain) => self.visit_suffixed(chain),
         }
     }
 
@@ -460,8 +460,13 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder {
 
     // A method name is a field selector, not a variable, so no walk reaches
     // it here.
-    fn visit_var(&mut self, var: &'ast Var) {
-        self.reference_var(var, ReferenceKind::Read);
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if let Expression::Name(token) = expr
+            && let TokenKind::Identifier(name) = &token.kind
+        {
+            self.reference_name(name, token.span, ReferenceKind::Read);
+        }
+        self.walk_expr(expr);
     }
 }
 

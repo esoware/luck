@@ -1,4 +1,4 @@
-use luck_ast::{Expression, FunctionCall};
+use luck_ast::{Call, Expression};
 use luck_semantic::{ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction};
 
 use crate::call::{has_multi_value_tail, positional_args, string_literal_value};
@@ -27,7 +27,7 @@ impl NodeRule for IncorrectStdlibUse {
     }
     fn on_call(
         &self,
-        call: &FunctionCall,
+        call: Call<'_>,
         _position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
@@ -36,14 +36,14 @@ impl NodeRule for IncorrectStdlibUse {
     }
 }
 
-fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, findings: &mut Vec<Finding>) {
+fn check_call(call: Call<'_>, semantic: &SemanticAnalysis, findings: &mut Vec<Finding>) {
     let Some(callee) = semantic.resolve_callee(call) else {
         return;
     };
     let StdlibEntry::Function(function) = callee.entry() else {
         return;
     };
-    let (args, arg_count) = positional_args(&call.args);
+    let (args, arg_count) = positional_args(call.args);
     // A trailing call or `...` can expand to any number of values, so the
     // minimum and overload checks skip it.
     let has_multi_value_tail = has_multi_value_tail(args);
@@ -66,7 +66,7 @@ fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, findings: &mut V
         None
     };
     match arity_message {
-        Some(message) => findings.push(Finding::new(message, call.span)),
+        Some(message) => findings.push(Finding::new(message, call.span())),
         None => findings.extend(invalid_constant_args(&callee, function, args, arg_count)),
     }
 }

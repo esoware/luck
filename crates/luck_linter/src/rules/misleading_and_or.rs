@@ -1,6 +1,7 @@
 use luck_ast::Expression;
 use luck_token::BinOp;
 
+use crate::binary::operator_pairs;
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, impl_rule};
@@ -23,16 +24,18 @@ impl NodeRule for MisleadingAndOr {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
     fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        if let Expression::BinaryOp(outer) = expr
-            && outer.op == BinOp::Or
-        {
-            let lhs = unparenthesize(&outer.lhs);
-            if let Expression::BinaryOp(inner) = lhs
-                && inner.op == BinOp::And
-                && is_falsy_literal(&inner.rhs)
+        let Expression::BinaryOp(run) = expr else {
+            return;
+        };
+        for pair in operator_pairs(run) {
+            if pair.op == BinOp::Or
+                && let Some(lhs) = pair.lhs
+                && let Expression::BinaryOp(inner) = unparenthesize(lhs)
+                && inner.links.first().op == BinOp::And
+                && is_falsy_literal(&inner.links.last().operand)
             {
                 findings.push(
-                    Finding::new("`(x and FALSY) or y` always evaluates to `y`", outer.span)
+                    Finding::new("`(x and FALSY) or y` always evaluates to `y`", pair.span)
                         .with_help("use an `if` statement, or an if-then-else expression in Luau"),
                 );
             }

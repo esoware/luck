@@ -1,8 +1,9 @@
-use luck_ast::{DottedPath, Expression, Var, dotted_path};
+use luck_ast::{Expression, Suffix, SuffixedExpression};
+use luck_token::Span;
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{ChainPosition, LintContext, NodeRule, impl_rule};
 
 /// Indexing `Enum` with an unknown name throws at runtime on Roblox, so a
 /// typo here is always a bug. Only the first segment that fails to resolve is
@@ -20,49 +21,64 @@ impl_rule!(
 
 impl NodeRule for RobloxUnknownEnumMember {
     fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::Var])
+        NodeTypeSet::from_types(&[NodeType::Suffixed])
     }
-    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let Expression::Var(var @ Var::FieldAccess(_)) = expr else {
-            return;
-        };
+    fn on_chain(
+        &self,
+        chain: &SuffixedExpression,
+        position: ChainPosition,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         let stdlib = context.semantic.stdlib();
         // Only the Roblox stdlib has an `Enum` global.
         if !stdlib.globals.contains_key("Enum") {
             return;
         }
-        let Some(DottedPath { segments, root_span, leaf_span }) = dotted_path(var) else {
+        let Expression::Name(root) = &chain.prefix else {
             return;
         };
-        let Some((last_segment, prefix)) = segments.split_last() else {
-            return;
-        };
-        if prefix.first() != Some(&"Enum") {
+        if root.identifier() != Some("Enum")
+            || context.semantic.resolves_to_local("Enum", root.span)
+        {
             return;
         }
-        // A broken prefix is reported by the inner access, so this node only
-        // checks its last segment.
-        let Some(prefix_entry) = stdlib.lookup(prefix) else {
-            return;
+        // A target's last field is stored to, not read.
+        let read_count = match position {
+            ChainPosition::Value => chain.suffixes.len(),
+            ChainPosition::AssignmentTarget => chain.suffixes.len().saturating_sub(1),
         };
-        if stdlib.child(prefix_entry, last_segment).is_some() {
-            return;
+        let mut prefix = vec!["Enum"];
+        for suffix in chain.suffixes.iter().take(read_count) {
+            let Suffix::Field(name) = suffix else {
+                return;
+            };
+            let Some(segment) = name.identifier() else {
+                return;
+            };
+            // Past the first unknown segment, nothing resolves, so the chain
+            // warns once.
+            let Some(prefix_entry) = stdlib.lookup(&prefix) else {
+                return;
+            };
+            if stdlib.child(prefix_entry, segment).is_none() {
+                findings.push(unknown_member(&prefix, segment, name.span));
+                return;
+            }
+            prefix.push(segment);
         }
-        if context.semantic.resolves_to_local("Enum", root_span) {
-            return;
-        }
-        let prefix_path = prefix.join(".");
-        let message = match segments.len() {
-            2 => format!("unknown enum type `Enum.{last_segment}`"),
-            3 => format!("`{last_segment}` is not an item of `{prefix_path}`"),
-            _ => format!("`{last_segment}` is not a member of `{prefix_path}`"),
-        };
-        findings.push(
-            Finding::new(message, leaf_span).with_help(
-                "enum data is generated from the Roblox API dump, so check the spelling",
-            ),
-        );
     }
+}
+
+fn unknown_member(prefix: &[&str], last_segment: &str, span: Span) -> Finding {
+    let prefix_path = prefix.join(".");
+    let message = match prefix.len() {
+        1 => format!("unknown enum type `Enum.{last_segment}`"),
+        2 => format!("`{last_segment}` is not an item of `{prefix_path}`"),
+        _ => format!("`{last_segment}` is not a member of `{prefix_path}`"),
+    };
+    Finding::new(message, span)
+        .with_help("enum data is generated from the Roblox API dump, so check the spelling")
 }
 
 #[cfg(test)]

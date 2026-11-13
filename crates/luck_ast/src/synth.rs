@@ -106,8 +106,9 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 /// - **Nesting depth.** No constructor counts it. Every traversal, drop and
 ///   clone included, recurses once per level of nesting, so keep the tree
 ///   within [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH), the deepest
-///   `luck_parser` builds. Each link of an operator, call, index, or field
-///   chain counts as a level.
+///   `luck_parser` builds. A run of suffixes, or of binary operators at one
+///   level, is one level however long it gets, and the constructors join a
+///   run they extend rather than nest it.
 ///   [`block_nesting_depth`](crate::block_nesting_depth) and
 ///   [`expr_nesting_depth`](crate::expr_nesting_depth) measure a tree of any
 ///   depth without recursing past the cap. Both printers return an error for
@@ -257,7 +258,7 @@ mod tests {
     use rustc_hash::FxHashSet;
 
     use super::*;
-    use crate::expr::{Expression, Var};
+    use crate::expr::{Expression, Suffix};
 
     #[test]
     fn spans_are_monotonic() {
@@ -357,10 +358,11 @@ mod tests {
         let shared = Synth::new().with_version(LuaVersion::Luau).share();
         // `goto` is an identifier only under the pinned Luau dialect, so the
         // dot form proves the pin carried over.
-        assert!(matches!(
-            shared.field_or_index(shared.name_expr("t"), "goto"),
-            Expression::Var(Var::FieldAccess(_))
-        ));
+        let Expression::Suffixed(chain) = shared.field_or_index(shared.name_expr("t"), "goto")
+        else {
+            panic!("expected a field");
+        };
+        assert!(matches!(chain.suffixes.last(), Suffix::Field(_)));
     }
 
     #[test]

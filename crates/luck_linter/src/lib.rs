@@ -27,6 +27,7 @@
 
 extern crate alloc;
 
+mod binary;
 mod bus;
 mod call;
 mod cfg;

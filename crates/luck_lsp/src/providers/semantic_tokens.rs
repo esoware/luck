@@ -5,8 +5,8 @@
 use alloc::collections::BTreeMap;
 
 use luck_ast::{
-    Expression, Field, FunctionCall, GenericTypeList, Statement, TableConstructor, Type,
-    TypeDeclarationValue, TypeField, Var, Visitor,
+    Call, ChainHead, Expression, Field, GenericTypeList, Statement, Suffix, TableConstructor, Type,
+    TypeDeclarationValue, TypeField, Visitor,
 };
 use luck_semantic::{StdlibEntry, SymbolKind};
 use luck_token::{Span, Token, TokenKind, index_to_offset, offset_to_index};
@@ -294,37 +294,43 @@ impl Classifier<'_> {
         }
     }
 
-    fn callee(&mut self, expr: &Expression) {
-        let mut current = expr;
+    /// The name a call calls, through parentheses, casts, and Luau type
+    /// instantiations.
+    fn callee(&mut self, callee: ChainHead<'_>) {
+        let mut current = callee;
         loop {
-            current = match current {
-                Expression::Var(Var::Name(name)) => {
-                    self.retype(name.span, TYPE_FUNCTION);
+            current = match current.split_last() {
+                Some((_, Suffix::Field(name))) => {
+                    self.retype(name.span, TYPE_METHOD);
                     return;
                 }
-                Expression::Var(Var::FieldAccess(access)) => {
-                    self.retype(access.name.span, TYPE_METHOD);
-                    return;
-                }
-                Expression::Parenthesized(parenthesized) => &parenthesized.expr,
-                Expression::TypeInstantiation(instantiation) => &instantiation.expr, // Luau
-                Expression::TypeCast(cast) => &cast.expr,                            // Luau
-                Expression::Nil(_)
-                | Expression::False(_)
-                | Expression::True(_)
-                | Expression::Number(_)
-                | Expression::Integer(_)
-                | Expression::StringLiteral(_)
-                | Expression::VarArg(_)
-                | Expression::FunctionDef(_)
-                | Expression::Var(Var::Index(_))
-                | Expression::FunctionCall(_)
-                | Expression::TableConstructor(_)
-                | Expression::BinaryOp(_)
-                | Expression::UnaryOp(_)
-                | Expression::IfExpression(_)
-                | Expression::InterpolatedString(_)
-                | Expression::Error(_) => return,
+                Some((before, Suffix::TypeInstantiation { .. })) => before, // Luau
+                Some((_, Suffix::Index { .. } | Suffix::Call(_))) => return,
+                None => match current.prefix {
+                    Expression::Name(name) => {
+                        self.retype(name.span, TYPE_FUNCTION);
+                        return;
+                    }
+                    Expression::Parenthesized(parenthesized) => {
+                        ChainHead::from(&parenthesized.expr)
+                    }
+                    Expression::TypeCast(cast) => ChainHead::from(&cast.expr), // Luau
+                    Expression::Nil(_)
+                    | Expression::False(_)
+                    | Expression::True(_)
+                    | Expression::Number(_)
+                    | Expression::Integer(_)
+                    | Expression::StringLiteral(_)
+                    | Expression::VarArg(_)
+                    | Expression::FunctionDef(_)
+                    | Expression::Suffixed(_)
+                    | Expression::TableConstructor(_)
+                    | Expression::BinaryOp(_)
+                    | Expression::UnaryOp(_)
+                    | Expression::IfExpression(_)
+                    | Expression::InterpolatedString(_)
+                    | Expression::Error(_) => return,
+                },
             };
         }
     }
@@ -405,19 +411,12 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
         self.walk_stmt(stmt);
     }
 
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
-        self.visit_expr(&call.callee);
-        if let Some(method) = &call.method {
-            self.retype(method.span, TYPE_METHOD);
-        } else {
-            self.callee(&call.callee);
+    fn visit_call(&mut self, call: Call<'ast>) {
+        match call.method {
+            Some(method) => self.retype(method.span, TYPE_METHOD),
+            None => self.callee(call.callee),
         }
-        if let Some(arguments) = &call.explicit_type_args {
-            for argument in arguments.args.iter() {
-                self.visit_type(argument);
-            }
-        }
-        self.walk_function_args(&call.args);
+        self.walk_call(call);
     }
 
     fn visit_table_constructor(&mut self, table: &'ast TableConstructor) {

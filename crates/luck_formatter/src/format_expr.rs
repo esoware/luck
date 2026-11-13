@@ -2,14 +2,15 @@
 //! synthetic ASTs stay printable.
 
 use luck_ast::{
-    BinaryOp, Expression, FieldAccess, IfExpression, InterpolatedString, ParenthesizedExpression,
-    UnaryOp, Var, expr_starts_with_brace,
+    BinaryOp, CallSuffix, Expression, IfExpression, InterpolatedString, ParenthesizedExpression,
+    Suffix, SuffixedExpression, UnaryOp, Var, expr_starts_with_brace,
 };
-use luck_token::{BinOp, CompactString, Token, TokenKind, UnOp};
+use luck_token::{CompactString, TokenKind, UnOp};
 
 use crate::format_type::ExplicitTypeArgs;
 use crate::ir::{
-    Format, Formatter, format_with, group, indent, soft_line, soft_line_or_space, space, token,
+    Format, Formatter, format_with, group, indent, nested_groups, soft_line, soft_line_or_space,
+    space, token,
 };
 use crate::numbers::normalize_number;
 use crate::quotes::normalize_quote;
@@ -31,13 +32,13 @@ impl Format for Expression {
                 f.write_text(normalized);
             }
 
-            Self::Var(var) => var.fmt(f),
+            Self::Name(name) => name.fmt(f),
+            Self::Suffixed(chain) => chain.fmt(f),
             Self::BinaryOp(binary_op) => binary_op.fmt(f),
             Self::UnaryOp(unary_op) => unary_op.fmt(f),
             Self::Parenthesized(parenthesized) => parenthesized.fmt(f),
             Self::TableConstructor(table) => table.fmt(f),
 
-            Self::FunctionCall(call) => call.fmt(f),
             Self::FunctionDef(function_def) => {
                 // Luau attributes stay on the same line as `function` here.
                 for attribute in &function_def.attributes {
@@ -52,10 +53,6 @@ impl Format for Expression {
             Self::TypeCast(cast) => {
                 (&cast.expr, space(), token("::"), space(), &cast.type_annotation).fmt(f);
             }
-            // Luau
-            Self::TypeInstantiation(instantiation) => {
-                (&instantiation.expr, ExplicitTypeArgs(&instantiation.type_args)).fmt(f);
-            }
 
             // A parse-recovery placeholder has no text to print.
             Self::Error(_) => {}
@@ -67,10 +64,7 @@ impl Format for Var {
     fn fmt(&self, f: &mut Formatter) {
         match self {
             Self::Name(name) => name.fmt(f),
-            Self::FieldAccess(access) => access.fmt(f),
-            Self::Index(index) => {
-                (&index.prefix, BracketedKey(&index.index)).fmt(f);
-            }
+            Self::Suffixed(chain) => chain.fmt(f),
         }
     }
 }
@@ -94,15 +88,11 @@ fn starts_with_bracket(expr: &Expression) -> bool {
     loop {
         current = match current {
             Expression::StringLiteral(literal) => return literal.text.starts_with('['),
-            Expression::BinaryOp(binary_op) => &binary_op.lhs,
+            Expression::BinaryOp(binary_op) => &binary_op.first,
             // Luau
             Expression::TypeCast(cast) => &cast.expr,
-            // Luau
-            Expression::TypeInstantiation(instantiation) => &instantiation.expr,
-            Expression::FunctionCall(call) => &call.callee,
-            Expression::Var(Var::Index(index)) => &index.prefix,
-            Expression::Var(Var::FieldAccess(access)) => &access.prefix,
-            Expression::Var(Var::Name(_))
+            Expression::Suffixed(chain) => &chain.prefix,
+            Expression::Name(_)
             | Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
@@ -120,88 +110,83 @@ fn starts_with_bracket(expr: &Expression) -> bool {
     }
 }
 
-fn collect_access_chain(access: &FieldAccess) -> (&Expression, Vec<&Token>) {
-    let mut names = vec![&access.name];
-    let mut current = &access.prefix;
-    while let Expression::Var(var) = current {
-        match var {
-            Var::FieldAccess(inner) => {
-                names.push(&inner.name);
-                current = &inner.prefix;
-            }
-            Var::Name(_) | Var::Index(_) => break,
-        }
-    }
-    names.reverse();
-    (current, names)
-}
-
-/// A dot chain of three or more accesses gets its own group so it can break
-/// one segment per line; shorter chains stay glued to their prefix.
+/// A chain lays out run by run, where a run is calls in a row, fields in a
+/// row, or a lone index or instantiation.
 ///
-/// The root stays outside the group, so a break inside it, as in a callback
-/// it's passed, doesn't break the chain after it.
-impl Format for FieldAccess {
+/// Calls with two or more `:` methods among them break before each method
+/// when the chain doesn't fit, in a group that starts at the chain's prefix.
+/// Three or more fields break before each `.`, in a group of their own, so a
+/// break before them, as in a callback passed earlier, doesn't break them.
+impl Format for SuffixedExpression {
     fn fmt(&self, f: &mut Formatter) {
-        let (root, names) = collect_access_chain(self);
-        if names.len() >= 3 {
-            (
-                root,
-                group(indent(format_with(|indented| {
-                    for name in &names {
-                        (soft_line(), token("."), *name).fmt(indented);
+        let method_chains = runs(&self.suffixes).filter(|run| is_method_chain(run)).count();
+        nested_groups(method_chains, |chained, groups| {
+            self.prefix.fmt(chained);
+            for run in runs(&self.suffixes) {
+                match run {
+                    [Suffix::Call(_), ..] if is_method_chain(run) => {
+                        indent(format_with(|indented| {
+                            for call in calls(run) {
+                                if call.method.is_some() {
+                                    soft_line().fmt(indented);
+                                }
+                                call.fmt(indented);
+                            }
+                        }))
+                        .fmt(chained);
+                        groups.end_innermost(chained);
                     }
-                }))),
-            )
-                .fmt(f);
-        } else {
-            (&self.prefix, token("."), &self.name).fmt(f);
-        }
-    }
-}
-
-/// A chain is a run of operators at one precedence level. An operand that
-/// binds tighter keeps a group of its own, so `a == b or c == d` breaks at
-/// `or` alone.
-///
-/// Runs of the right-associative `..` or `^` nest on the right.
-///
-/// Left nested, each level would be its own group and re-run `fits` over its remainder, which is
-/// quadratic on long concat chains. Splicing them in keeps the emitted text the same and lays the
-/// run out like a left-associative chain.
-fn collect_binary_chain(binary_op: &BinaryOp) -> (&Expression, Vec<(BinOp, &Expression)>) {
-    let mut parts = Vec::new();
-    let mut current = binary_op;
-    loop {
-        parts.push((current.op, &current.rhs));
-        let Expression::BinaryOp(left_binary_op) = &current.lhs else {
-            break;
-        };
-        if left_binary_op.op.precedence().0 != current.op.precedence().0 {
-            break;
-        }
-        current = left_binary_op;
-    }
-    parts.reverse();
-
-    let mut flattened: Vec<(BinOp, &Expression)> = Vec::with_capacity(parts.len());
-    for (mut op, mut right) in parts {
-        while let Expression::BinaryOp(inner) = right {
-            let is_same_right_associative_op =
-                matches!((op, inner.op), (BinOp::Concat, BinOp::Concat) | (BinOp::Pow, BinOp::Pow));
-            if !is_same_right_associative_op {
-                break;
+                    [Suffix::Field(_), _, _, ..] => group(indent(format_with(|indented| {
+                        for suffix in run {
+                            if let Suffix::Field(name) = suffix {
+                                (soft_line(), token("."), name).fmt(indented);
+                            }
+                        }
+                    })))
+                    .fmt(chained),
+                    _ => {
+                        for suffix in run {
+                            write_suffix(chained, suffix);
+                        }
+                    }
+                }
             }
-            flattened.push((op, &inner.lhs));
-            op = inner.op;
-            right = &inner.rhs;
-        }
-        flattened.push((op, right));
+        })
+        .fmt(f);
     }
-
-    (&current.lhs, flattened)
 }
 
+fn write_suffix(f: &mut Formatter, suffix: &Suffix) {
+    match suffix {
+        Suffix::Field(name) => (token("."), name).fmt(f),
+        Suffix::Index { index, .. } => BracketedKey(index).fmt(f),
+        Suffix::Call(call) => call.fmt(f),
+        // Luau
+        Suffix::TypeInstantiation { type_args, .. } => ExplicitTypeArgs(type_args).fmt(f),
+    }
+}
+
+/// Calls in a row and fields in a row each make one run, and every other
+/// suffix a run of its own.
+fn runs(suffixes: &[Suffix]) -> impl Iterator<Item = &[Suffix]> {
+    suffixes.chunk_by(|left, right| {
+        matches!(
+            (left, right),
+            (Suffix::Call(_), Suffix::Call(_)) | (Suffix::Field(_), Suffix::Field(_))
+        )
+    })
+}
+
+fn calls(run: &[Suffix]) -> impl Iterator<Item = &CallSuffix> {
+    run.iter().filter_map(|suffix| if let Suffix::Call(call) = suffix { Some(call) } else { None })
+}
+
+fn is_method_chain(run: &[Suffix]) -> bool {
+    calls(run).filter(|call| call.method.is_some()).count() >= 2
+}
+
+/// An operand that binds tighter keeps a group of its own, so
+/// `a == b or c == d` breaks at `or` alone.
 impl Format for BinaryOp {
     fn fmt(&self, f: &mut Formatter) {
         write_binary_chain(f, self, true);
@@ -219,18 +204,17 @@ impl Format for LevelChain<'_> {
 }
 
 fn write_binary_chain(f: &mut Formatter, binary_op: &BinaryOp, is_indented: bool) {
-    let (first, chain) = collect_binary_chain(binary_op);
     let operators = format_with(|lines| {
-        for (op, right_expr) in &chain {
-            (soft_line_or_space(), token(op.static_text()), space(), *right_expr).fmt(lines);
+        for link in &binary_op.links {
+            (soft_line_or_space(), token(link.op.static_text()), space(), &link.operand).fmt(lines);
         }
     });
-    // One group over the whole chain, so it's either flat or breaks before
+    // One group over the whole run, so it's either flat or breaks before
     // every operator.
     if is_indented {
-        group((first, indent(&operators))).fmt(f);
+        group((&binary_op.first, indent(&operators))).fmt(f);
     } else {
-        group((first, &operators)).fmt(f);
+        group((&binary_op.first, &operators)).fmt(f);
     }
 }
 

@@ -1,4 +1,4 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall};
+use luck_ast::{Call, Expression, FunctionArgs};
 use luck_semantic::SemanticAnalysis;
 use luck_token::BinOp;
 
@@ -25,7 +25,7 @@ impl NodeRule for TypeCheckInsideCall {
     }
     fn on_call(
         &self,
-        call: &FunctionCall,
+        call: Call<'_>,
         _position: CallPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
@@ -34,20 +34,22 @@ impl NodeRule for TypeCheckInsideCall {
     }
 }
 
-fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<Finding> {
+fn check_call(call: Call<'_>, semantic: &SemanticAnalysis) -> Option<Finding> {
     if !is_global_call(call, "type", semantic) && !is_global_call(call, "typeof", semantic) {
         return None;
     }
-    let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+    let FunctionArgs::Parenthesized { args, .. } = call.args else {
         return None;
     };
     let [Expression::BinaryOp(binary_op)] = args.items.as_slice() else {
         return None;
     };
-    matches!(binary_op.op, BinOp::Eq | BinOp::Ne).then(|| {
+    // A run of comparisons groups from the left, so its last one is
+    // outermost.
+    matches!(binary_op.links.last().op, BinOp::Eq | BinOp::Ne).then(|| {
         Finding::new(
             "comparison is inside the `type()` call, did you mean `type(x) == \"string\"`?",
-            call.span,
+            call.span(),
         )
         .with_help("move the comparison outside: `type(x) == \"string\"`")
     })

@@ -1,12 +1,12 @@
+use core::iter;
+
 use luck_ast::{
-    BinaryOp, Block, Expression, IfStatement, LastStatement, Punctuated, ReturnStatement,
-    Statement, Transform, is_multi_value,
+    BinaryLink, BinaryOp, Block, Expression, IfStatement, LastStatement, OneOrMore, Punctuated,
+    ReturnStatement, Statement, Transform, is_multi_value,
 };
 use luck_token::{BinOp, Span};
 
-use crate::expr::{
-    MAX_ADDED_DEPTH, ends_in_if_expr, fits_at_depth, is_always_truthy, parenthesize,
-};
+use crate::expr::{ends_in_if_expr, fits_at_depth, is_always_truthy, parenthesize};
 
 pub(crate) fn simplify(block: Block) -> Block {
     StatementSimplifier { depth: 0 }.transform_block(block)
@@ -30,18 +30,16 @@ impl Transform for StatementSimplifier {
         match stmt {
             Statement::IfStatement(mut outer_if) => {
                 // `if a then if b then X end end` becomes `if a and b then X end`.
-                // The check guarantees the pop yields the inner `if`.
+                // The check guarantees the pop yields the inner `if`. Each
+                // condition can gain the `and` and a pair of parentheses.
                 if has_no_else(&outer_if)
                     && outer_if.block.last_stmt.is_none()
+                    && fits_at_depth(self.depth, 2, &outer_if.condition)
                     && matches!(
                         outer_if.block.stmts.as_slice(),
                         [Statement::IfStatement(inner_if)]
                             if has_no_else(inner_if)
-                                && conjunction_fits(
-                                    self.depth,
-                                    &outer_if.condition,
-                                    &inner_if.condition
-                                )
+                                && fits_at_depth(self.depth, 2, &inner_if.condition)
                     )
                     && let Some(Statement::IfStatement(inner_if)) = outer_if.block.stmts.pop()
                 {
@@ -50,7 +48,11 @@ impl Transform for StatementSimplifier {
                     // the depth it ends up at.
                     let merged_if = IfStatement {
                         span: Span::default(),
-                        condition: logical(outer_if.condition, BinOp::And, inner_if.condition),
+                        condition: logical(
+                            BinOp::And,
+                            outer_if.condition,
+                            iter::once(inner_if.condition),
+                        ),
                         block: inner_if.block,
                         elseif_clauses: Vec::new(),
                         else_clause: None,
@@ -105,27 +107,22 @@ fn try_convert_if_return_chain(mut block: Block, level: usize) -> Block {
         return block;
     }
 
-    // Each guard nests the chain one level deeper, and the fallback may hold
-    // the chain an earlier round built, so a long run converts only its tail.
-    let built_links = spine_links(fallback_expr, BinOp::Or);
-    // A guard sits under the fallback's `or` links, the one that joins it,
-    // and one for each guard after it.
-    let mut guard_level = level.saturating_add(built_links).saturating_add(1);
-    let mut link_count = 0usize;
-    for stmt in block.stmts.iter().rev().take(MAX_ADDED_DEPTH.saturating_sub(built_links)) {
-        let is_link = match extract_if_return_guard(stmt) {
+    // The guards and the fallback make one run of `or`s whatever its length,
+    // and each guard's condition and value sit in a run of `and`s under it,
+    // each maybe in parentheses.
+    let link_count = block
+        .stmts
+        .iter()
+        .rev()
+        .take_while(|stmt| match extract_if_return_guard(stmt) {
             Some((condition, return_expr)) => {
-                guard_level = guard_level.saturating_add(1);
                 is_always_truthy(return_expr)
-                    && conjunction_fits(guard_level, condition, return_expr)
+                    && fits_at_depth(level, 3, condition)
+                    && fits_at_depth(level, 3, return_expr)
             }
             None => matches!(stmt, Statement::EmptyStatement(_)),
-        };
-        if !is_link {
-            break;
-        }
-        link_count = link_count.saturating_add(1);
-    }
+        })
+        .count();
     let chain_start = block.stmts.len().saturating_sub(link_count);
     let has_guard = block
         .stmts
@@ -136,43 +133,20 @@ fn try_convert_if_return_chain(mut block: Block, level: usize) -> Block {
     }
 
     let fallback = fallback_expr.take();
-    // Left-nested, the shape the parser builds for the printed chain.
-    let guards = block
-        .stmts
-        .drain(chain_start..)
-        .filter_map(into_guard_parts)
-        .map(|(condition, return_expr)| logical(condition, BinOp::And, return_expr))
-        .reduce(|earlier, guard| logical(earlier, BinOp::Or, guard));
-    let result_expr = match guards {
-        Some(chain) => logical(chain, BinOp::Or, fallback),
-        None => fallback,
+    let result_expr = {
+        let mut guards = block.stmts.drain(chain_start..).filter_map(into_guard_parts).map(
+            |(condition, return_expr)| logical(BinOp::And, condition, iter::once(return_expr)),
+        );
+        match guards.next() {
+            Some(first_guard) => {
+                logical(BinOp::Or, first_guard, guards.chain(iter::once(fallback)))
+            }
+            None => fallback,
+        }
     };
     **return_stmt =
         ReturnStatement { span: Span::default(), exprs: Punctuated::from_item(result_expr) };
     block
-}
-
-/// Whether `lhs and rhs` still nests within the parser's cap at `level`.
-///
-/// Each side can gain the operator and a pair of parentheses, and `lhs`
-/// sinks under every `and` that `rhs` starts with.
-fn conjunction_fits(level: usize, lhs: &Expression, rhs: &Expression) -> bool {
-    let lhs_levels = spine_links(rhs, BinOp::And).saturating_add(2);
-    fits_at_depth(level, lhs_levels, lhs) && fits_at_depth(level, 2, rhs)
-}
-
-/// How many `op` links `expr` starts with: the ones a left operand joined on
-/// `op` ends up under.
-fn spine_links(expr: &Expression, op: BinOp) -> usize {
-    let mut links = 0usize;
-    let mut spine = expr;
-    while let Expression::BinaryOp(binary_op) = spine
-        && binary_op.op == op
-    {
-        links = links.saturating_add(1);
-        spine = &binary_op.lhs;
-    }
-    links
 }
 
 fn extract_if_return_guard(stmt: &Statement) -> Option<(&Expression, &Expression)> {
@@ -208,25 +182,39 @@ const fn has_no_else(if_stmt: &IfStatement) -> bool {
     if_stmt.elseif_clauses.is_empty() && if_stmt.else_clause.is_none()
 }
 
-/// A nested operand of the same operator stays bare on either side, because
-/// `and` and `or` are associative. An if-expression as `rhs` prints last, so
-/// only one in `lhs` can swallow an operator.
+/// `first` and each of `rest` joined by `op`, which is `and` or `or`.
 ///
-/// A bare `rhs` on the same operator reads back as the tail of one chain,
-/// with `lhs` under every link of it, which is how the walkers count it.
-fn logical(left_operand: Expression, op: BinOp, right_operand: Expression) -> Expression {
-    let left = if binds_looser(&left_operand, op) || ends_in_if_expr(&left_operand) {
-        parenthesize(left_operand)
-    } else {
-        left_operand
+/// Both are associative, so an operand that is a bare run of `op` joins the
+/// run. Only an if-expression printed last can't swallow an operator, so one
+/// anywhere else gets parentheses.
+fn logical<Rest>(op: BinOp, first: Expression, rest: Rest) -> Expression
+where
+    Rest: IntoIterator<Item = Expression>,
+{
+    let wrap = |operand: Expression, is_last: bool| {
+        if binds_looser(&operand, op) || (!is_last && ends_in_if_expr(&operand)) {
+            parenthesize(operand)
+        } else {
+            operand
+        }
     };
-    let right =
-        if binds_looser(&right_operand, op) { parenthesize(right_operand) } else { right_operand };
-    Expression::BinaryOp(Box::new(BinaryOp { span: Span::default(), lhs: left, op, rhs: right }))
+    let mut others = rest.into_iter().peekable();
+    let first_operand = wrap(first, others.peek().is_none());
+    let mut wrapped = Vec::new();
+    while let Some(operand) = others.next() {
+        let is_last = others.peek().is_none();
+        wrapped.push(BinaryLink { op, operand: wrap(operand, is_last) });
+    }
+    let Some(links) = OneOrMore::from_vec(wrapped) else {
+        return first_operand;
+    };
+    let mut run = BinaryOp { span: Span::default(), first: first_operand, links };
+    run.splice_operands();
+    Expression::BinaryOp(Box::new(run))
 }
 
 fn binds_looser(operand: &Expression, op: BinOp) -> bool {
-    matches!(operand, Expression::BinaryOp(inner) if inner.op.precedence().0 < op.precedence().0)
+    matches!(operand, Expression::BinaryOp(inner) if inner.precedence().0 < op.precedence().0)
 }
 
 #[cfg(test)]
@@ -367,9 +355,9 @@ mod tests {
     }
 
     #[test]
-    fn converts_only_the_tail_of_a_long_if_return_run() {
+    fn converts_a_long_if_return_run_into_one_run_of_ors() {
         let result = apply(&format!("{}return 0\n", "if a then return 1 end\n".repeat(300)));
         assert_reparses(&result, LuaVersion::Lua54);
-        assert_eq!(result.matches("if").count(), 300 - MAX_ADDED_DEPTH, "{result}");
+        assert_eq!(result, format!("return {}0", "a and 1 or ".repeat(300)));
     }
 }

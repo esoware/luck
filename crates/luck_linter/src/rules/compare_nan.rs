@@ -1,6 +1,7 @@
 use luck_ast::{Expression, unwrap_parentheses};
 use luck_token::{BinOp, LuaVersion};
 
+use crate::binary::operator_pairs;
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::is_number_literal;
@@ -23,17 +24,22 @@ impl NodeRule for CompareNan {
     }
     fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let version = context.semantic.version;
-        if let Expression::BinaryOp(binary_op) = expr
-            && matches!(binary_op.op, BinOp::Eq | BinOp::Ne)
-            && (is_nan_expr(&binary_op.lhs, version) || is_nan_expr(&binary_op.rhs, version))
-        {
-            findings.push(
-                Finding::new(
-                    "NaN (`0/0`) equals nothing, so this comparison always has the same result",
-                    binary_op.span,
-                )
-                .with_help("use `x ~= x` to check for NaN"),
-            );
+        let Expression::BinaryOp(run) = expr else {
+            return;
+        };
+        for pair in operator_pairs(run) {
+            let is_nan = |side: Option<&Expression>| {
+                side.is_some_and(|operand| is_nan_expr(operand, version))
+            };
+            if matches!(pair.op, BinOp::Eq | BinOp::Ne) && (is_nan(pair.lhs) || is_nan(pair.rhs)) {
+                findings.push(
+                    Finding::new(
+                        "NaN (`0/0`) equals nothing, so this comparison always has the same result",
+                        pair.span,
+                    )
+                    .with_help("use `x ~= x` to check for NaN"),
+                );
+            }
         }
     }
 }
@@ -41,12 +47,15 @@ impl NodeRule for CompareNan {
 /// Whether `expr` divides a zero literal by a zero literal, each in any
 /// spelling, parentheses aside.
 fn is_nan_expr(expr: &Expression, version: LuaVersion) -> bool {
-    let Expression::BinaryOp(binary_op) = unwrap_parentheses(expr) else {
+    let Expression::BinaryOp(run) = unwrap_parentheses(expr) else {
         return false;
     };
-    binary_op.op == BinOp::Div
-        && is_number_literal(&binary_op.lhs, 0.0, version)
-        && is_number_literal(&binary_op.rhs, 0.0, version)
+    let [division] = &*run.links else {
+        return false;
+    };
+    division.op == BinOp::Div
+        && is_number_literal(&run.first, 0.0, version)
+        && is_number_literal(&division.operand, 0.0, version)
 }
 
 #[cfg(test)]

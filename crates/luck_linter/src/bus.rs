@@ -1,6 +1,6 @@
 use core::cell::RefCell;
 
-use luck_ast::{Expression, Statement};
+use luck_ast::{Call, Statement, Suffix};
 use rayon::prelude::*;
 
 use crate::diagnostic::Finding;
@@ -26,15 +26,21 @@ fn dispatch(
     findings: &mut Vec<Finding>,
 ) {
     match node.kind {
-        NodeKind::Statement(Statement::FunctionCall(call)) => {
-            rule.on_call(call, CallPosition::Statement, context, findings);
+        NodeKind::Statement(Statement::FunctionCall(chain)) => {
+            if let Some(call) = chain.last_call() {
+                rule.on_call(call, CallPosition::Statement, context, findings);
+            }
         }
-        NodeKind::Expression(Expression::FunctionCall(call)) => {
-            rule.on_call(call, CallPosition::Expression, context, findings);
+        NodeKind::Call { chain, index } => {
+            if let Some(Suffix::Call(suffix)) = chain.suffixes.get(index) {
+                let call = Call::new(chain.head(index), suffix);
+                rule.on_call(call, CallPosition::Expression, context, findings);
+            }
         }
         NodeKind::Statement(stmt) => rule.on_stmt(stmt, context, findings),
         NodeKind::Expression(expr) => rule.on_expr(expr, context, findings),
         NodeKind::Table(table) => rule.on_table(table, context, findings),
+        NodeKind::Chain(chain, position) => rule.on_chain(chain, position, context, findings),
         // In the node table for suppression, with no hook of their own.
         NodeKind::LastStatement(_) => {}
     }

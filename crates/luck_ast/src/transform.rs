@@ -1,8 +1,6 @@
-use crate::depth::regrouped_levels;
 use crate::expr::{
-    BinaryOp, Expression, Field, FunctionArgs, FunctionCall, FunctionDef, IfExpression,
-    InterpolatedString, ParenthesizedExpression, TableConstructor, TypeCast, TypeInstantiation,
-    UnaryOp, Var,
+    BinaryOp, Expression, Field, FunctionArgs, FunctionDef, IfExpression, InterpolatedString,
+    ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
 use crate::function::{FunctionBody, Parameter};
 use crate::punctuated::Punctuated;
@@ -40,13 +38,17 @@ pub trait Transform {
     fn transform_expr(&mut self, expr: Expression) -> Expression {
         self.walk_expr(expr)
     }
-    fn transform_var(&mut self, var: Var) -> Var {
-        self.walk_var(var)
+    /// Reached from assignments and Luau compound assignments. A name read
+    /// as a value is an [`Expression::Name`] instead.
+    fn transform_assignment_target(&mut self, target: Var) -> Var {
+        self.walk_assignment_target(target)
     }
-    /// Reached from both a call statement and a call expression.
-    fn transform_function_call(&mut self, call: FunctionCall) -> FunctionCall {
-        self.walk_function_call(call)
+    /// Reached from a call statement, an expression, and an assignment
+    /// target.
+    fn transform_suffixed(&mut self, chain: SuffixedExpression) -> SuffixedExpression {
+        self.walk_suffixed(chain)
     }
+    /// Reached once for each call in a chain.
     fn transform_function_args(&mut self, args: FunctionArgs) -> FunctionArgs {
         self.walk_function_args(args)
     }
@@ -78,7 +80,9 @@ pub trait Transform {
     fn walk_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
             Statement::Assignment(assignment) => walk_assignment(self, assignment),
-            Statement::FunctionCall(call) => Statement::FunctionCall(walk_boxed_call(self, call)),
+            Statement::FunctionCall(chain) => {
+                Statement::FunctionCall(walk_boxed_suffixed(self, chain))
+            }
             Statement::DoBlock(do_block) => walk_do_block(self, do_block),
             Statement::WhileLoop(while_loop) => walk_while_loop(self, while_loop),
             Statement::RepeatLoop(repeat_loop) => walk_repeat_loop(self, repeat_loop),
@@ -147,10 +151,10 @@ pub trait Transform {
             | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
+            | Expression::Name(_)
             | Expression::Error(_)) => leaf,
             Expression::FunctionDef(function_def) => walk_function_def(self, function_def),
-            Expression::Var(var) => Expression::Var(self.transform_var(var)),
-            Expression::FunctionCall(call) => Expression::FunctionCall(walk_boxed_call(self, call)),
+            Expression::Suffixed(chain) => Expression::Suffixed(walk_boxed_suffixed(self, chain)),
             Expression::Parenthesized(parenthesized) => walk_parenthesized(self, parenthesized),
             Expression::TableConstructor(table) => {
                 Expression::TableConstructor(walk_boxed_table(self, table))
@@ -165,43 +169,41 @@ pub trait Transform {
             }
             // Luau
             Expression::TypeCast(cast) => walk_type_cast(self, cast),
-            // Luau
-            Expression::TypeInstantiation(instantiation) => {
-                walk_type_instantiation(self, instantiation)
-            }
         }
     }
 
-    fn walk_var(&mut self, var: Var) -> Var {
-        match var {
-            Var::Name(_) => var,
-            Var::Index(mut index_expr) => {
-                self.descend();
-                index_expr.prefix = self.transform_expr(index_expr.prefix);
-                index_expr.index = self.transform_expr(index_expr.index);
-                self.ascend();
-                Var::Index(index_expr)
-            }
-            Var::FieldAccess(mut field_access) => {
-                self.descend();
-                field_access.prefix = self.transform_expr(field_access.prefix);
-                self.ascend();
-                Var::FieldAccess(field_access)
-            }
+    fn walk_assignment_target(&mut self, target: Var) -> Var {
+        match target {
+            Var::Name(_) => target,
+            Var::Suffixed(chain) => Var::Suffixed(walk_boxed_suffixed(self, chain)),
         }
     }
 
-    /// Rewrites the callee, then any explicit type arguments, then the
-    /// arguments, in source order as the `Visitor` walk reaches them.
-    fn walk_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
+    /// Rewrites the prefix, then each suffix in source order, as the
+    /// `Visitor` walk reaches them: an index, a call's explicit type
+    /// arguments and then its arguments, or a Luau instantiation's type
+    /// arguments.
+    fn walk_suffixed(&mut self, mut chain: SuffixedExpression) -> SuffixedExpression {
         self.descend();
-        call.callee = self.transform_expr(call.callee);
-        if let Some(type_args) = &mut call.explicit_type_args {
-            walk_types(self, &mut type_args.args.items);
+        chain.prefix = self.transform_expr(chain.prefix);
+        for suffix in &mut chain.suffixes {
+            match suffix {
+                Suffix::Field(_) => {}
+                Suffix::Index { index, .. } => *index = self.transform_expr(index.take()),
+                Suffix::Call(call) => {
+                    if let Some(type_args) = &mut call.explicit_type_args {
+                        walk_types(self, &mut type_args.args.items);
+                    }
+                    call.args = self.transform_function_args(call.args.take());
+                }
+                // Luau
+                Suffix::TypeInstantiation { type_args, .. } => {
+                    walk_types(self, &mut type_args.args.items);
+                }
+            }
         }
-        call.args = self.transform_function_args(call.args);
         self.ascend();
-        call
+        chain
     }
 
     fn walk_function_args(&mut self, args: FunctionArgs) -> FunctionArgs {
@@ -329,8 +331,8 @@ pub trait Transform {
         exprs
     }
 
-    fn walk_punctuated_vars(&mut self, vars: Punctuated<Var>) -> Punctuated<Var> {
-        vars.map_items(|var| self.transform_var(var))
+    fn walk_assignment_targets(&mut self, targets: Punctuated<Var>) -> Punctuated<Var> {
+        targets.map_items(|target| self.transform_assignment_target(target))
     }
 
     fn walk_punctuated_params(
@@ -398,12 +400,15 @@ where
     }
 }
 
-fn walk_boxed_call<T>(transform: &mut T, mut call: Box<FunctionCall>) -> Box<FunctionCall>
+fn walk_boxed_suffixed<T>(
+    transform: &mut T,
+    mut chain: Box<SuffixedExpression>,
+) -> Box<SuffixedExpression>
 where
     T: Transform + ?Sized,
 {
-    *call = transform.transform_function_call(*call);
-    call
+    *chain = transform.transform_suffixed(*chain);
+    chain
 }
 
 fn walk_boxed_table<T>(transform: &mut T, mut table: Box<TableConstructor>) -> Box<TableConstructor>
@@ -418,7 +423,7 @@ fn walk_assignment<T>(transform: &mut T, mut assignment: Box<Assignment>) -> Sta
 where
     T: Transform + ?Sized,
 {
-    assignment.targets = transform.walk_punctuated_vars(assignment.targets);
+    assignment.targets = transform.walk_assignment_targets(assignment.targets);
     walk_exprs(transform, &mut assignment.values.items);
     Statement::Assignment(assignment)
 }
@@ -537,7 +542,7 @@ fn walk_compound_assignment<T>(
 where
     T: Transform + ?Sized,
 {
-    compound.var = transform.transform_var(compound.var);
+    compound.var = transform.transform_assignment_target(compound.var);
     compound.expr = transform.transform_expr(compound.expr);
     Statement::CompoundAssignment(compound)
 }
@@ -591,22 +596,9 @@ where
     T: Transform + ?Sized,
 {
     transform.descend();
-    // An operand that regroups when printed is walked at the depth it ends
-    // up at.
-    let (lhs_levels, rhs_levels) = regrouped_levels(&binary_op);
-    for _ in 0..lhs_levels {
-        transform.descend();
-    }
-    binary_op.lhs = transform.transform_expr(binary_op.lhs);
-    for _ in 0..lhs_levels {
-        transform.ascend();
-    }
-    for _ in 0..rhs_levels {
-        transform.descend();
-    }
-    binary_op.rhs = transform.transform_expr(binary_op.rhs);
-    for _ in 0..rhs_levels {
-        transform.ascend();
+    binary_op.first = transform.transform_expr(binary_op.first);
+    for link in &mut binary_op.links {
+        link.operand = transform.transform_expr(link.operand.take());
     }
     transform.ascend();
     Expression::BinaryOp(binary_op)
@@ -667,21 +659,6 @@ where
     cast.type_annotation = transform.transform_type(cast.type_annotation);
     transform.ascend();
     Expression::TypeCast(cast)
-}
-
-// Luau
-fn walk_type_instantiation<T>(
-    transform: &mut T,
-    mut instantiation: Box<TypeInstantiation>,
-) -> Expression
-where
-    T: Transform + ?Sized,
-{
-    transform.descend();
-    instantiation.expr = transform.transform_expr(instantiation.expr);
-    walk_types(transform, &mut instantiation.type_args.args.items);
-    transform.ascend();
-    Expression::TypeInstantiation(instantiation)
 }
 
 fn walk_named_type<T>(transform: &mut T, mut named: Box<NamedType>) -> Type
@@ -778,8 +755,8 @@ mod tests {
                 | Expression::StringLiteral(_)
                 | Expression::VarArg(_)
                 | Expression::FunctionDef(_)
-                | Expression::Var(_)
-                | Expression::FunctionCall(_)
+                | Expression::Name(_)
+                | Expression::Suffixed(_)
                 | Expression::Parenthesized(_)
                 | Expression::TableConstructor(_)
                 | Expression::BinaryOp(_)
@@ -787,7 +764,6 @@ mod tests {
                 | Expression::IfExpression(_)
                 | Expression::InterpolatedString(_)
                 | Expression::TypeCast(_)
-                | Expression::TypeInstantiation(_)
                 | Expression::Error(_) => {}
             }
             self.walk_expr(expr);
@@ -889,16 +865,16 @@ mod tests {
     fn hooks_fire_in_stmt_and_expr_positions() {
         #[derive(Debug, Default, PartialEq, Eq)]
         struct HookCounts {
-            calls: usize,
+            chains: usize,
             args: usize,
             tables: usize,
             bodies: usize,
         }
 
         impl Transform for HookCounts {
-            fn transform_function_call(&mut self, call: FunctionCall) -> FunctionCall {
-                self.calls = self.calls.saturating_add(1);
-                self.walk_function_call(call)
+            fn transform_suffixed(&mut self, chain: SuffixedExpression) -> SuffixedExpression {
+                self.chains = self.chains.saturating_add(1);
+                self.walk_suffixed(chain)
             }
             fn transform_function_args(&mut self, args: FunctionArgs) -> FunctionArgs {
                 self.args = self.args.saturating_add(1);
@@ -927,6 +903,6 @@ mod tests {
         );
         let mut counts = HookCounts::default();
         counts.transform_block(block);
-        assert_eq!(counts, HookCounts { calls: 2, args: 2, tables: 2, bodies: 1 });
+        assert_eq!(counts, HookCounts { chains: 1, args: 2, tables: 2, bodies: 1 });
     }
 }

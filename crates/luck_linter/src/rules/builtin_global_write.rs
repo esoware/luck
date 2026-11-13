@@ -1,4 +1,4 @@
-use luck_ast::{DottedPath, Expression, FunctionName, Statement, Var, Visitor, dotted_path};
+use luck_ast::{DottedPath, FunctionName, Statement, Suffix, Var, Visitor};
 use luck_semantic::{SemanticAnalysis, StdlibEntry};
 use luck_token::{Span, Token};
 
@@ -83,18 +83,20 @@ impl FieldWriteChecker<'_> {
     }
 
     fn check_var_target(&mut self, var: &Var) {
-        let (prefix, leaf, span) = match var {
-            // Whole-name writes surface as unresolved Write references.
-            Var::Name(_) => return,
-            Var::Index(index) => (&index.prefix, None, index.span),
-            Var::FieldAccess(field_access) => {
-                (&field_access.prefix, field_access.name.identifier(), field_access.span)
-            }
-        };
-        let Expression::Var(container) = prefix else {
+        // Whole-name writes surface as unresolved Write references.
+        let Var::Suffixed(chain) = var else {
             return;
         };
-        let Some(DottedPath { segments, root_span, .. }) = dotted_path(container) else {
+        let Some((container, last)) = chain.head(chain.suffixes.len()).split_last() else {
+            return;
+        };
+        let leaf = match last {
+            Suffix::Field(name) => name.identifier(),
+            Suffix::Index { .. } => None,
+            Suffix::Call(_) | Suffix::TypeInstantiation { .. } => return,
+        };
+        let span = chain.span;
+        let Some(DottedPath { segments, root_span, .. }) = container.dotted_path() else {
             return;
         };
         if !self.writes_namespace_member(&segments, root_span, leaf) {

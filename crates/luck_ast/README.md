@@ -21,9 +21,13 @@ Abstract syntax tree definitions and traversal infrastructure for Lua 5.1-5.5 an
 
 A `Block` is the fundamental unit: a sequence of `Statement`s followed by an optional `LastStatement`. Every function body, loop body, and `do...end` contains one.
 
-`Expression` covers literals (`Nil`, `False`, `True`, `Number`, Luau `Integer`, `StringLiteral`, `VarArg`), compound forms (`BinaryOp`, `UnaryOp`, `Parenthesized`, `TableConstructor`, `FunctionDef`, `FunctionCall`, `Var`), and Luau extensions (`IfExpression`, `InterpolatedString`, `TypeCast`, `TypeInstantiation`).
+`Expression` covers literals (`Nil`, `False`, `True`, `Number`, Luau `Integer`, `StringLiteral`, `VarArg`), `Name`, compound forms (`Suffixed`, `BinaryOp`, `UnaryOp`, `Parenthesized`, `TableConstructor`, `FunctionDef`), and Luau extensions (`IfExpression`, `InterpolatedString`, `TypeCast`).
+
+A run is one node however long it gets. A `SuffixedExpression` is a prefix and the suffixes after it, each a field, an index, a call or method call, or a Luau type instantiation, so `a.b[c]:d()` is one node. A `BinaryOp` is a first operand and the links after it, each an operator and its operand, all at one precedence level, so `a + b - c` is one node. A left-associative level groups from the left, and the right-associative `..` and `^` group from the right. Both keep their tail in a `OneOrMore`, which holds a lone item inline and two or more in one slice of exactly their length. `ChainHead` borrows a chain's prefix and its first few suffixes as one expression, and `Call` borrows one call in a chain with that head as its callee.
 
 `Statement` covers the imperative side: `Assignment`, `FunctionCall`, `DoBlock`, `WhileLoop`, `RepeatLoop`, `IfStatement`, `NumericFor`, `GenericFor`, `FunctionDecl`, `LocalFunction`, `LocalAssignment`, plus the version-gated statements `Goto` / `Label` and mid-block `Break` (5.2+), attribute-bearing `LocalAssignment` (5.4+), `GlobalDeclaration` / `GlobalFunction` / `GlobalStar` (5.5), `CompoundAssignment` and `TypeDeclaration` (Luau). Flags on the declaration nodes mark exported and `const` Luau locals and functions.
+
+A `FunctionCall` statement holds a chain that ends in a call, and an assignment target is a `Var`, a name or a chain that ends in a field or an index.
 
 `LastStatement` has four variants: `Return`, `Break`, `Continue` (Luau), `Error`.
 
@@ -45,17 +49,17 @@ The Luau type grammar lives in `types.rs` as its own `Type` node family, held to
 
 `Transform` takes each node by value and returns a replacement. Override a `transform_*` hook, then call `self.walk_*` to apply default recursion before or after your rewrite. Every minifier pass uses this pattern.
 
-The hooks cover blocks, statements, last statements, expressions, vars, function calls, table constructors, function bodies, and types. `Visitor` also hooks generic type lists, and `Transform` call arguments. A call or table constructor reaches its hook whether it sits in a statement, an expression, or a `f{...}` argument. The `walk_*` methods are the default recursion and are never overridden, so a hook can always fall back on them. `Transform` rewrites a call's arguments before its explicit type arguments, while `Visitor` visits them in source order.
+The hooks cover blocks, statements, last statements, expressions, assignment targets, suffixed expressions, table constructors, function bodies, and types. `Visitor` also hooks each call in a chain and generic type lists, and `Transform` each call's arguments. A chain reaches its hook whether it's an expression, a call statement, or an assignment target, and a table constructor whether it's an expression or a `f{...}` argument. The `walk_*` methods are the default recursion and are never overridden, so a hook can always fall back on them. Both traits reach a chain's suffixes in source order.
 
 The difference is ownership. `Visitor` borrows, so it can only read. `Transform` consumes, so it can restructure, replace, or remove nodes.
 
 ### Nesting depth
 
-Every traversal recurses once per level of nesting, drop and clone included, so the depth of a tree is what bounds their stack. `depth.rs` defines the level and the cap, `MAX_NESTING_DEPTH` (256). A level is a block, a function body, a table constructor, a call, an index or field access, an operator, a parenthesized expression, a Luau if-expression, interpolated string, cast, or instantiation, or a Luau type that holds other types or an expression. Names, literals, and statements add none.
+Every traversal recurses once per level of nesting, drop and clone included, so the depth of a tree is what bounds their stack. `depth.rs` defines the level and the cap, `MAX_NESTING_DEPTH` (256). A level is a block, a function body, a table constructor, a run of suffixes, a run of binary operators, a unary operator, a parenthesized expression, a Luau if-expression, interpolated string, or cast, or a Luau type that holds other types or an expression. Names, literals, and statements add none, and a run is one level however long it gets, so the depth of a parsed tree is the source's real nesting.
 
 The walkers call `descend` on entering each level and `ascend` on leaving it, on both traits, so a pass tracks its depth by overriding the pair. `Visitor::descend` returns whether to walk what the level holds. `block_nesting_depth` and `expr_nesting_depth` measure a tree that way and stop at one past the cap, so they are safe on a tree of any depth. `luck_parser` builds no tree deeper than the cap, and `luck_codegen::compact` and `luck_formatter::format_block` return an error for one that is. Nothing checks a `Synth` tree as it grows, and dropping or cloning one nested far past the cap can overflow the stack.
 
-Depth is counted on the tree as it prints. An operand that is a bare operator of its parent's precedence on the side the parent doesn't associate to, such as `a or (b or c)` built with no `Parenthesized` node, regroups when printed and read back. `regrouped_levels` gives the levels that adds, and the walkers and the compact printer count them.
+A rewrite can leave a run as a bare operand of a run at its own level, such as `a or (b or c)` built with no `Parenthesized` node, or a chain as another chain's prefix. Each prints as one run and reads back as one, so a tree is never shallower than what it prints. `BinaryOp::splice_operands` and `SuffixedExpression::splice_prefix` merge them back into one node, and `Synth` merges as it builds.
 
 ### Structural queries
 

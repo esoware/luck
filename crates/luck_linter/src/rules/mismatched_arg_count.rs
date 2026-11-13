@@ -1,4 +1,4 @@
-use luck_ast::{Expression, FunctionBody, FunctionCall, Statement, Var, Visitor};
+use luck_ast::{Call, Expression, FunctionBody, Statement, Visitor};
 use luck_semantic::ScopeTree;
 use luck_token::{LuaVersion, Span};
 use rustc_hash::FxHashMap;
@@ -125,11 +125,11 @@ struct CallChecker<'source> {
 }
 
 impl CallChecker<'_> {
-    fn check_call(&mut self, call: &FunctionCall) {
+    fn check_call(&mut self, call: Call<'_>) {
         if call.method.is_some() {
             return;
         }
-        let Expression::Var(Var::Name(token)) = &call.callee else {
+        let Some(token) = call.callee.as_name() else {
             return;
         };
         let Some(name) = token.identifier() else {
@@ -141,7 +141,7 @@ impl CallChecker<'_> {
         if signature.has_vararg {
             return;
         }
-        let (args, arg_count) = positional_args(&call.args);
+        let (args, arg_count) = positional_args(call.args);
         // A trailing call or `...` can expand to nothing, so only the args
         // before it are sure to be passed.
         let guaranteed_arg_count =
@@ -157,7 +157,7 @@ impl CallChecker<'_> {
                      which accepts only {} (defined on line {line})",
                     signature.param_count
                 ),
-                call.span,
+                call.span(),
             )
             .with_help("extra arguments are silently discarded"),
         );
@@ -165,9 +165,9 @@ impl CallChecker<'_> {
 }
 
 impl<'ast> Visitor<'ast> for CallChecker<'_> {
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+    fn visit_call(&mut self, call: Call<'ast>) {
         self.check_call(call);
-        self.walk_function_call(call);
+        self.walk_call(call);
     }
 }
 

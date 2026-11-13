@@ -63,10 +63,10 @@ fn var_name(var: &Var) -> Option<&str> {
 }
 
 fn expr_var_name(expr: &Expression) -> Option<&str> {
-    let Expression::Var(var) = expr else {
+    let Expression::Name(token) = expr else {
         return None;
     };
-    var_name(var)
+    token.identifier()
 }
 
 #[cfg(test)]

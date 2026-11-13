@@ -1,10 +1,10 @@
 use core::mem;
 
 use luck_ast::{
-    Block, Expression, Field, FieldAccess, Literal, TableConstructor, Transform, Var,
+    Block, Expression, Field, Literal, Suffix, SuffixedExpression, TableConstructor, Transform,
     is_multi_value, is_valid_identifier_in,
 };
-use luck_token::{LuaVersion, Span, short_string_body};
+use luck_token::{LuaVersion, Span, Token, short_string_body};
 
 use crate::binding::identifier_token;
 
@@ -17,26 +17,13 @@ struct IndexSimplifier {
 }
 
 impl IndexSimplifier {
-    // Out of line, so an expression nested below holds only the walk's frame,
-    // not these temporaries.
-    fn simplify_index(&self, walked: Var) -> Var {
-        match walked {
-            // t["foo"] becomes t.foo when "foo" is a valid identifier.
-            Var::Index(mut index_expr) => {
-                if let Expression::StringLiteral(literal) = &index_expr.index
-                    && let Some(name) = short_string_body(&literal.text)
-                    && is_valid_identifier_in(name, self.version)
-                {
-                    return Var::FieldAccess(Box::new(FieldAccess {
-                        span: Span::default(),
-                        prefix: index_expr.prefix.take(),
-                        name: identifier_token(name.into()),
-                    }));
-                }
-                Var::Index(index_expr)
-            }
-            other @ (Var::Name(_) | Var::FieldAccess(_)) => other,
-        }
+    /// `t["foo"]` becomes `t.foo` when `foo` is a valid identifier.
+    fn field_for(&self, suffix: &Suffix) -> Option<Token> {
+        let Suffix::Index { index: Expression::StringLiteral(literal), .. } = suffix else {
+            return None;
+        };
+        let name = short_string_body(&literal.text)?;
+        is_valid_identifier_in(name, self.version).then(|| identifier_token(name.into()))
     }
 
     fn simplify_field(&mut self, field: Field, can_use_implicit: bool) -> Field {
@@ -86,9 +73,14 @@ impl IndexSimplifier {
 }
 
 impl Transform for IndexSimplifier {
-    fn transform_var(&mut self, var: Var) -> Var {
-        let walked = self.walk_var(var);
-        self.simplify_index(walked)
+    fn transform_suffixed(&mut self, chain: SuffixedExpression) -> SuffixedExpression {
+        let mut walked = self.walk_suffixed(chain);
+        for suffix in &mut walked.suffixes {
+            if let Some(name) = self.field_for(suffix) {
+                *suffix = Suffix::Field(name);
+            }
+        }
+        walked
     }
 
     fn transform_table_constructor(&mut self, mut table: TableConstructor) -> TableConstructor {

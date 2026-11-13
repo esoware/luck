@@ -2,7 +2,7 @@ use luck_ast::Expression;
 use luck_parser::ParseResult;
 use luck_token::{BinOp, LuaVersion, UnOp};
 
-use crate::common::{assert_no_errors, local_value};
+use crate::common::{assert_no_errors, local_value, run_operands, run_ops};
 
 fn parse_lua53(source: &str) -> ParseResult {
     luck_parser::parse(source, LuaVersion::Lua53)
@@ -14,15 +14,8 @@ fn bitwise_and_or_precedence() {
     let result = parse_lua53("local x = a & b | c");
     assert_no_errors(&result);
     let expr = local_value(&result);
-    if let Expression::BinaryOp(outer) = expr {
-        assert!(matches!(outer.op, BinOp::BitOr), "expected Pipe at top, got {:?}", outer.op);
-        assert!(
-            matches!(&outer.lhs, Expression::BinaryOp(inner) if matches!(inner.op, BinOp::BitAnd)),
-            "expected Ampersand on left"
-        );
-    } else {
-        panic!("expected BinaryOp, got {expr:?}");
-    }
+    assert_eq!(run_ops(expr), [BinOp::BitOr]);
+    assert_eq!(run_ops(run_operands(expr)[0]), [BinOp::BitAnd]);
 }
 
 #[test]
@@ -41,24 +34,14 @@ fn unary_bitwise_not() {
 fn floor_division() {
     let result = parse_lua53("local x = a // b");
     assert_no_errors(&result);
-    let expr = local_value(&result);
-    if let Expression::BinaryOp(binary_op) = expr {
-        assert!(matches!(binary_op.op, BinOp::FloorDiv));
-    } else {
-        panic!("expected BinaryOp, got {expr:?}");
-    }
+    assert_eq!(run_ops(local_value(&result)), [BinOp::FloorDiv]);
 }
 
 #[test]
 fn left_shift() {
     let result = parse_lua53("local x = a << 3");
     assert_no_errors(&result);
-    let expr = local_value(&result);
-    if let Expression::BinaryOp(binary_op) = expr {
-        assert!(matches!(binary_op.op, BinOp::Shl));
-    } else {
-        panic!("expected BinaryOp, got {expr:?}");
-    }
+    assert_eq!(run_ops(local_value(&result)), [BinOp::Shl]);
 }
 
 #[test]
@@ -68,32 +51,15 @@ fn shift_and_bitwise_precedence() {
     let result = parse_lua53("local x = a >> b & c");
     assert_no_errors(&result);
     let expr = local_value(&result);
-    if let Expression::BinaryOp(outer) = expr {
-        assert!(matches!(outer.op, BinOp::BitAnd), "expected Ampersand at top, got {:?}", outer.op);
-        if let Expression::BinaryOp(inner) = &outer.lhs {
-            assert!(
-                matches!(inner.op, BinOp::Shr),
-                "expected ShiftRight on left, got {:?}",
-                inner.op
-            );
-        } else {
-            panic!("expected BinaryOp on left");
-        }
-    } else {
-        panic!("expected BinaryOp, got {expr:?}");
-    }
+    assert_eq!(run_ops(expr), [BinOp::BitAnd]);
+    assert_eq!(run_ops(run_operands(expr)[0]), [BinOp::Shr]);
 }
 
 #[test]
 fn bitwise_xor() {
     let result = parse_lua53("local x = a ~ b");
     assert_no_errors(&result);
-    let expr = local_value(&result);
-    if let Expression::BinaryOp(binary_op) = expr {
-        assert!(matches!(binary_op.op, BinOp::BitXor));
-    } else {
-        panic!("expected BinaryOp, got {expr:?}");
-    }
+    assert_eq!(run_ops(local_value(&result)), [BinOp::BitXor]);
 }
 
 #[test]

@@ -32,7 +32,7 @@ impl CompactPrinter {
     fn emit_stmt(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Assignment(assignment) => self.emit_assignment(assignment),
-            Statement::FunctionCall(call) => self.emit_function_call(call),
+            Statement::FunctionCall(call) => self.emit_suffixed(call),
             Statement::DoBlock(block) => self.emit_do_block(block),
             Statement::WhileLoop(while_loop) => self.emit_while_loop(while_loop),
             Statement::RepeatLoop(repeat_loop) => self.emit_repeat_loop(repeat_loop),

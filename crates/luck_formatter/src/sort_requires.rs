@@ -14,8 +14,7 @@ use core::mem;
 use core::ops::Range;
 
 use luck_ast::{
-    Block, Expression, FunctionArgs, FunctionCall, LocalAssignment, Punctuated, Statement, Var,
-    dotted_path,
+    Block, ChainHead, Expression, FunctionArgs, LocalAssignment, Punctuated, Statement, Suffix,
 };
 use luck_token::{
     Comment, CommentKind, CommentPosition, LuaVersion, Span, has_line_break, index_to_offset,
@@ -295,13 +294,13 @@ fn pure_require_reads<'source>(
     source: &'source str,
     expr: &Expression,
 ) -> Option<(&'source str, Option<&'source str>)> {
-    let Expression::FunctionCall(call) = expr else {
+    let Expression::Suffixed(chain) = expr else {
         return None;
     };
-    let FunctionCall { callee: Expression::Var(Var::Name(callee)), method, args, .. } = &**call
-    else {
+    let (Expression::Name(callee), [Suffix::Call(call)]) = (&chain.prefix, &*chain.suffixes) else {
         return None;
     };
+    let (method, args) = (&call.method, &call.args);
     let callee_name = callee.span.text(source);
 
     if let Some(method_name) = method {
@@ -318,10 +317,10 @@ fn pure_require_reads<'source>(
     let FunctionArgs::Parenthesized { args: path_args, .. } = args else {
         return None;
     };
-    let [Expression::Var(path)] = path_args.items.as_slice() else {
+    let [path] = path_args.items.as_slice() else {
         return None;
     };
-    let root_span = dotted_path(path)?.root_span;
+    let root_span = ChainHead::from(path).dotted_path()?.root_span;
     Some((callee_name, Some(root_span.text(source))))
 }
 

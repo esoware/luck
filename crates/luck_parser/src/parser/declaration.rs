@@ -1,7 +1,7 @@
 use luck_ast::{
     Attribute, AttributedName, Expression, FunctionAttribute, FunctionDecl, FunctionName,
     GlobalDeclaration, GlobalFunction, GlobalStar, LocalAssignment, LocalFunction, Punctuated,
-    Statement, TypeDeclaration, TypeDeclarationValue,
+    Statement, TypeDeclaration, TypeDeclarationValue, is_multi_value,
 };
 use luck_token::{Span, Token, TokenKind};
 
@@ -187,11 +187,7 @@ impl Parser<'_> {
         // that a last call or `...` may supply the rest.
         if kind.is_const()
             && !exprs.as_ref().is_some_and(|values| {
-                values.len() == names.len()
-                    || matches!(
-                        values.last(),
-                        Some(Expression::FunctionCall(_) | Expression::VarArg(_))
-                    )
+                values.len() == names.len() || values.last().is_some_and(is_multi_value)
             })
         {
             self.error(span, "missing initializer in `const` declaration");

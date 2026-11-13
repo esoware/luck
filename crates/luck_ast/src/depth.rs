@@ -1,6 +1,4 @@
-use luck_token::Associativity;
-
-use crate::expr::{BinaryOp, Expression};
+use crate::expr::Expression;
 use crate::function::FunctionAttribute;
 use crate::stmt::{Block, Statement};
 use crate::visitor::Visitor;
@@ -32,48 +30,6 @@ pub fn expr_nesting_depth(expr: &Expression) -> usize {
     let mut meter = DepthMeter { depth: 0, deepest: 0 };
     meter.visit_expr(expr);
     meter.deepest
-}
-
-/// How many levels deeper each operand of `binary_op` sits once the tree is
-/// printed and read back, left operand first.
-///
-/// Printing drops the grouping of an operand that is a bare operator of its
-/// parent's precedence on the side the parent doesn't associate to. `a or (b
-/// or c)` built with no `Parenthesized` node reads back as `(a or b) or c`,
-/// with `a` one level deeper. The walkers count these levels, so a tree's
-/// depth is its depth as printed. The parser builds no such tree, and for
-/// one of its own both counts are zero.
-#[must_use]
-pub fn regrouped_levels(binary_op: &BinaryOp) -> (usize, usize) {
-    let (precedence, associativity) = binary_op.op.precedence();
-    match associativity {
-        Associativity::Left => (bare_links(&binary_op.rhs, precedence), 0),
-        Associativity::Right => (0, bare_links(&binary_op.lhs, precedence)),
-    }
-}
-
-/// Operators of `precedence` that `expr` joins with no parentheses between
-/// them, counted to one past the cap.
-fn bare_links(expr: &Expression, precedence: u8) -> usize {
-    let is_link = |candidate: &Expression| matches!(candidate, Expression::BinaryOp(inner) if inner.op.precedence().0 == precedence);
-    if !is_link(expr) {
-        return 0;
-    }
-    let mut links = 0usize;
-    let mut pending = vec![expr];
-    while let Some(next) = pending.pop() {
-        if let Expression::BinaryOp(inner) = next
-            && is_link(next)
-        {
-            links = links.saturating_add(1);
-            if links > MAX_NESTING_DEPTH {
-                break;
-            }
-            pending.push(&inner.lhs);
-            pending.push(&inner.rhs);
-        }
-    }
-    links
 }
 
 struct DepthMeter {
@@ -130,7 +86,8 @@ mod tests {
     use luck_token::{BinOp, Span, UnOp};
 
     use super::*;
-    use crate::expr::{UnaryOp, Var};
+    use crate::expr::{BinaryLink, BinaryOp, UnaryOp};
+    use crate::one_or_more::OneOrMore;
     use crate::synth::{FunctionSignature, Synth};
 
     fn return_depth(expr: Expression) -> usize {
@@ -158,6 +115,7 @@ mod tests {
             ("string call", synth.call_string(leaf(), "s")),
             ("index", synth.index(leaf(), leaf())),
             ("field", synth.field(leaf(), "y")),
+            ("instantiation", synth.type_instantiation(leaf(), vec![synth.ty_named("T")])),
             ("table", synth.array(vec![leaf()])),
             ("empty table", synth.table(Vec::new())),
         ] {
@@ -190,56 +148,37 @@ mod tests {
     }
 
     #[test]
-    fn a_left_chain_nests_one_level_per_link() {
+    fn a_run_is_one_level_however_long() {
         let synth = Synth::new();
-        let mut chain = synth.name_expr("x");
-        for _ in 0..40u32 {
-            chain = synth.binary_op(chain, BinOp::Add, synth.number("1"));
+        let mut sum = synth.name_expr("x");
+        let mut path = synth.name_expr("t");
+        let mut concat = synth.name_expr("s");
+        for _ in 0..300u32 {
+            sum = synth.binary_op(sum, BinOp::Sub, synth.number("1"));
+            path = synth.method_call(synth.field(path, "a"), "m", Vec::new());
+            concat = synth.binary_op(synth.name_expr("s"), BinOp::Concat, concat);
         }
-        assert_eq!(expr_nesting_depth(&chain), 40);
-        assert_eq!(return_depth(chain), 41);
+        for run in [sum, path, concat] {
+            assert_eq!(expr_nesting_depth(&run), 1);
+            assert_eq!(return_depth(run), 2);
+        }
     }
 
     #[test]
-    fn a_bare_chain_on_the_side_its_operator_does_not_group_to_counts_as_it_prints() {
-        let leaf = |name: &str| Expression::Var(Var::Name(Synth::new().identifier(name)));
-        let bare = |lhs: Expression, op: BinOp, rhs: Expression| {
-            Expression::BinaryOp(Box::new(BinaryOp { span: Span::default(), lhs, op, rhs }))
+    fn a_bare_run_nested_in_a_run_counts_its_own_level() {
+        // `(a .. b) .. c` built with no parentheses prints `a .. b .. c`,
+        // which reads back as one run, so the tree is never shallower than
+        // what it prints.
+        let leaf = |name: &str| Synth::new().name_expr(name);
+        let run = |first: Expression, op: BinOp, operand: Expression| {
+            Expression::BinaryOp(Box::new(BinaryOp {
+                span: Span::default(),
+                first,
+                links: OneOrMore::new(BinaryLink { op, operand }),
+            }))
         };
-        // `a or (b or (c or d))` with no parentheses prints `a or b or c or d`,
-        // which nests `a` under three operators.
-        let right_nested = bare(
-            leaf("a"),
-            BinOp::Or,
-            bare(leaf("b"), BinOp::Or, bare(leaf("c"), BinOp::Or, leaf("d"))),
-        );
-        assert_eq!(expr_nesting_depth(&right_nested), 3);
-        let Expression::BinaryOp(root) = &right_nested else {
-            panic!("the chain is a binary operator");
-        };
-        assert_eq!(regrouped_levels(root), (2, 0));
-
-        // `(a .. b) .. c` with no parentheses prints `a .. b .. c`, which
-        // nests `c` under both operators.
-        let left_nested = bare(bare(leaf("a"), BinOp::Concat, leaf("b")), BinOp::Concat, leaf("c"));
-        assert_eq!(expr_nesting_depth(&left_nested), 2);
-
-        // A chain grouped the way its operator reads sinks nothing.
-        let parsed_shape = bare(bare(leaf("a"), BinOp::Or, leaf("b")), BinOp::Or, leaf("c"));
-        let Expression::BinaryOp(parsed_root) = &parsed_shape else {
-            panic!("the chain is a binary operator");
-        };
-        assert_eq!(regrouped_levels(parsed_root), (0, 0));
-        assert_eq!(expr_nesting_depth(&parsed_shape), 2);
-
-        // Two bare chains under one operator read back as one long chain.
-        let pair = |first: &str, second: &str| bare(leaf(first), BinOp::Or, leaf(second));
-        let balanced = bare(
-            bare(pair("a", "b"), BinOp::Or, pair("c", "d")),
-            BinOp::Or,
-            bare(pair("e", "f"), BinOp::Or, pair("g", "h")),
-        );
-        assert_eq!(expr_nesting_depth(&balanced), 7);
+        let nested = run(run(leaf("a"), BinOp::Concat, leaf("b")), BinOp::Concat, leaf("c"));
+        assert_eq!(expr_nesting_depth(&nested), 2);
     }
 
     #[test]

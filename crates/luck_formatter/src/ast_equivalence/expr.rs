@@ -1,11 +1,11 @@
 use core::ops::ControlFlow::Continue;
 
 use luck_ast::{
-    BinaryOp, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionCall, FunctionDef,
-    IfExpression, InterpolatedString, TableConstructor, TypeCast, TypeInstantiation, UnaryOp, Var,
-    is_multi_value,
+    BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionDef,
+    IfExpression, InterpolatedString, Suffix, SuffixedExpression, TableConstructor, TypeCast,
+    UnaryOp, Var, is_multi_value, unwrap_parentheses,
 };
-use luck_token::LuaVersion;
+use luck_token::{Associativity, BinOp, LuaVersion};
 
 use super::function::{function_attributes_eq, function_body_eq};
 use super::types::type_eq;
@@ -35,8 +35,13 @@ pub(super) fn expr_eq(left: &Expression, right: &Expression, version: LuaVersion
         (Expression::Integer(lhs), Expression::Integer(rhs)) => {
             require(number_raw_eq(&lhs.text, &rhs.text), "integer literals differ")
         }
-        (Expression::Var(lhs), Expression::Var(rhs)) => var_eq(lhs, rhs, version),
-        (Expression::BinaryOp(lhs), Expression::BinaryOp(rhs)) => binary_op_eq(lhs, rhs, version),
+        (Expression::Name(lhs), Expression::Name(rhs)) => token_text_eq(lhs, rhs),
+        (Expression::Suffixed(lhs), Expression::Suffixed(rhs)) => {
+            at("Suffixed", suffixed_eq(lhs, rhs, version))
+        }
+        (Expression::BinaryOp(lhs), Expression::BinaryOp(rhs)) => {
+            at("BinaryOp", binary_op_eq(lhs, rhs, version))
+        }
         (Expression::UnaryOp(lhs), Expression::UnaryOp(rhs)) => unary_op_eq(lhs, rhs, version),
         (Expression::Parenthesized(lhs), Expression::Parenthesized(rhs)) => {
             at("Parenthesized/expr", expr_eq(&lhs.expr, &rhs.expr, version))
@@ -50,9 +55,6 @@ pub(super) fn expr_eq(left: &Expression, right: &Expression, version: LuaVersion
         (other, Expression::Parenthesized(rhs)) => {
             redundant_parens_eq(&rhs.expr, other, &rhs.expr, version)
         }
-        (Expression::FunctionCall(lhs), Expression::FunctionCall(rhs)) => {
-            at("FunctionCall", function_call_eq(lhs, rhs, version))
-        }
         (Expression::FunctionDef(lhs), Expression::FunctionDef(rhs)) => {
             function_def_eq(lhs, rhs, version)
         }
@@ -63,9 +65,6 @@ pub(super) fn expr_eq(left: &Expression, right: &Expression, version: LuaVersion
             if_expr_eq(lhs, rhs, version)
         }
         (Expression::TypeCast(lhs), Expression::TypeCast(rhs)) => type_cast_eq(lhs, rhs, version),
-        (Expression::TypeInstantiation(lhs), Expression::TypeInstantiation(rhs)) => {
-            type_instantiation_eq(lhs, rhs, version)
-        }
         (
             Expression::Nil(_)
             | Expression::False(_)
@@ -76,24 +75,83 @@ pub(super) fn expr_eq(left: &Expression, right: &Expression, version: LuaVersion
             | Expression::StringLiteral(_)
             | Expression::Number(_)
             | Expression::Integer(_)
-            | Expression::Var(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::BinaryOp(_)
             | Expression::UnaryOp(_)
-            | Expression::FunctionCall(_)
             | Expression::FunctionDef(_)
             | Expression::TableConstructor(_)
             | Expression::IfExpression(_)
-            | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_),
+            | Expression::TypeCast(_),
             _,
         ) => expr_kinds_differ(left, right),
     }
 }
 
+/// Parentheses that group a run the way its level associates anyway, as in
+/// `(a + b) + c`, may come and go, so the run they hold counts as part of the
+/// one around it.
 fn binary_op_eq(left: &BinaryOp, right: &BinaryOp, version: LuaVersion) -> Check {
-    require(left.op == right.op, "binary op differs")?;
-    at("left", expr_eq(&left.lhs, &right.lhs, version))?;
-    at("right", expr_eq(&left.rhs, &right.rhs, version))
+    let (left_operands, left_ops) = run_parts(left);
+    let (right_operands, right_ops) = run_parts(right);
+    require(left_ops == right_ops, "binary operators differ")?;
+    for (i, (lhs, rhs)) in left_operands.into_iter().zip(right_operands).enumerate() {
+        at_index("operands", i, expr_eq(lhs, rhs, version))?;
+    }
+    Continue(())
+}
+
+/// Every operand and operator of `run`, a run at its level spliced in where
+/// it sits first under a left-associative level or last under a
+/// right-associative one.
+fn run_parts(run: &BinaryOp) -> (Vec<&Expression>, Vec<BinOp>) {
+    let (level, associativity) = run.precedence();
+    let mut operands = Vec::new();
+    let mut ops = Vec::new();
+    match associativity {
+        Associativity::Left => {
+            let mut spine = vec![run];
+            let mut innermost = run;
+            while let Some(inner) = same_level_run(&innermost.first, level) {
+                spine.push(inner);
+                innermost = inner;
+            }
+            operands.push(&innermost.first);
+            for spine_run in spine.iter().rev() {
+                for link in &spine_run.links {
+                    ops.push(link.op);
+                    operands.push(&link.operand);
+                }
+            }
+        }
+        Associativity::Right => {
+            let mut current = run;
+            operands.push(&current.first);
+            loop {
+                for link in &current.links {
+                    ops.push(link.op);
+                    operands.push(&link.operand);
+                }
+                let Some(inner) = same_level_run(&current.links.last().operand, level) else {
+                    break;
+                };
+                operands.pop();
+                operands.push(&inner.first);
+                current = inner;
+            }
+        }
+    }
+    (operands, ops)
+}
+
+fn same_level_run(operand: &Expression, level: u8) -> Option<&BinaryOp> {
+    if let Expression::BinaryOp(inner) = unwrap_parentheses(operand)
+        && inner.precedence().0 == level
+    {
+        Some(inner)
+    } else {
+        None
+    }
 }
 
 fn unary_op_eq(left: &UnaryOp, right: &UnaryOp, version: LuaVersion) -> Check {
@@ -149,18 +207,6 @@ fn function_def_eq(left: &FunctionDef, right: &FunctionDef, version: LuaVersion)
     at("FunctionDef/body", function_body_eq(&left.body, &right.body, version))
 }
 
-fn type_instantiation_eq(
-    left: &TypeInstantiation,
-    right: &TypeInstantiation,
-    version: LuaVersion,
-) -> Check {
-    at("TypeInstantiation/expr", expr_eq(&left.expr, &right.expr, version))?;
-    at(
-        "TypeInstantiation/type_args",
-        punctuated_eq(&left.type_args.args, &right.type_args.args, version, type_eq),
-    )
-}
-
 fn if_expr_eq(left: &IfExpression, right: &IfExpression, version: LuaVersion) -> Check {
     at("IfExpression/condition", expr_eq(&left.condition, &right.condition, version))?;
     at("IfExpression/then_expr", expr_eq(&left.then_expr, &right.then_expr, version))?;
@@ -182,24 +228,64 @@ fn if_expr_eq(left: &IfExpression, right: &IfExpression, version: LuaVersion) ->
 pub(super) fn var_eq(left: &Var, right: &Var, version: LuaVersion) -> Check {
     match (left, right) {
         (Var::Name(lhs), Var::Name(rhs)) => token_text_eq(lhs, rhs),
-        (Var::FieldAccess(lhs), Var::FieldAccess(rhs)) => {
-            at("prefix", expr_eq(&lhs.prefix, &rhs.prefix, version))?;
-            at("name", token_text_eq(&lhs.name, &rhs.name))
-        }
-        (Var::Index(lhs), Var::Index(rhs)) => {
-            at("prefix", expr_eq(&lhs.prefix, &rhs.prefix, version))?;
-            at("index", expr_eq(&lhs.index, &rhs.index, version))
-        }
-        (Var::Name(_) | Var::FieldAccess(_) | Var::Index(_), _) => differ("var kind differs"),
+        (Var::Suffixed(lhs), Var::Suffixed(rhs)) => suffixed_eq(lhs, rhs, version),
+        (Var::Name(_) | Var::Suffixed(_), _) => differ("var kind differs"),
     }
 }
 
-pub(super) fn function_call_eq(
-    left: &FunctionCall,
-    right: &FunctionCall,
+/// A prefix that parentheses or nothing more than a missing splice set
+/// apart counts as part of the chain around it, as in `(a.b).c`, unless the
+/// parentheses truncate a call.
+pub(super) fn suffixed_eq(
+    left: &SuffixedExpression,
+    right: &SuffixedExpression,
     version: LuaVersion,
 ) -> Check {
-    at("callee", expr_eq(&left.callee, &right.callee, version))?;
+    let (left_prefix, left_suffixes) = chain_parts(left);
+    let (right_prefix, right_suffixes) = chain_parts(right);
+    require(left_suffixes.len() == right_suffixes.len(), "suffix count differs")?;
+    at("prefix", expr_eq(left_prefix, right_prefix, version))?;
+    for (i, (lhs, rhs)) in left_suffixes.into_iter().zip(right_suffixes).enumerate() {
+        at_index("suffixes", i, suffix_eq(lhs, rhs, version))?;
+    }
+    Continue(())
+}
+
+fn chain_parts(chain: &SuffixedExpression) -> (&Expression, Vec<&Suffix>) {
+    let mut levels = vec![chain];
+    let mut innermost = chain;
+    while let Expression::Suffixed(inner) = unwrap_parentheses(&innermost.prefix)
+        && (matches!(innermost.prefix, Expression::Suffixed(_)) || !inner.is_call())
+    {
+        levels.push(inner);
+        innermost = inner;
+    }
+    let suffixes = levels.iter().rev().flat_map(|level| level.suffixes.iter()).collect();
+    (&innermost.prefix, suffixes)
+}
+
+fn suffix_eq(left: &Suffix, right: &Suffix, version: LuaVersion) -> Check {
+    match (left, right) {
+        (Suffix::Field(lhs), Suffix::Field(rhs)) => at("name", token_text_eq(lhs, rhs)),
+        (Suffix::Index { index: lhs, .. }, Suffix::Index { index: rhs, .. }) => {
+            at("index", expr_eq(lhs, rhs, version))
+        }
+        (Suffix::Call(lhs), Suffix::Call(rhs)) => at("Call", call_eq(lhs, rhs, version)),
+        (
+            Suffix::TypeInstantiation { type_args: lhs, .. },
+            Suffix::TypeInstantiation { type_args: rhs, .. },
+        ) => at("TypeInstantiation", punctuated_eq(&lhs.args, &rhs.args, version, type_eq)),
+        (
+            Suffix::Field(_)
+            | Suffix::Index { .. }
+            | Suffix::Call(_)
+            | Suffix::TypeInstantiation { .. },
+            _,
+        ) => differ("suffix kind differs"),
+    }
+}
+
+fn call_eq(left: &CallSuffix, right: &CallSuffix, version: LuaVersion) -> Check {
     presence_eq(
         left.method.as_ref(),
         right.method.as_ref(),
@@ -322,8 +408,8 @@ const fn expr_kind(expr: &Expression) -> &'static str {
         Expression::StringLiteral(_) => "StringLiteral",
         Expression::VarArg(_) => "VarArg",
         Expression::FunctionDef(_) => "FunctionDef",
-        Expression::Var(_) => "Var",
-        Expression::FunctionCall(_) => "FunctionCall",
+        Expression::Name(_) => "Name",
+        Expression::Suffixed(_) => "Suffixed",
         Expression::Parenthesized(_) => "Parenthesized",
         Expression::TableConstructor(_) => "TableConstructor",
         Expression::BinaryOp(_) => "BinaryOp",
@@ -334,8 +420,6 @@ const fn expr_kind(expr: &Expression) -> &'static str {
         Expression::InterpolatedString(_) => "InterpolatedString",
         // Luau
         Expression::TypeCast(_) => "TypeCast",
-        // Luau
-        Expression::TypeInstantiation(_) => "TypeInstantiation",
         Expression::Error(_) => "Error",
     }
 }

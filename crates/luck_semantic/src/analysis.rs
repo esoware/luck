@@ -1,9 +1,9 @@
-use luck_ast::{Block, Expression, FunctionCall, Var};
+use luck_ast::{Block, Call};
 use luck_token::{CompactString, LuaVersion, Span, StdlibEnvironment};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::builder;
-use crate::resolve::{ShapeResolver, symbol_shapes};
+use crate::resolve::{ShapeResolver, shapes};
 use crate::scope::{Reference, ScopeTree, Symbol, SymbolId};
 use crate::stdlib_load::library_for;
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
@@ -22,6 +22,9 @@ pub struct SemanticAnalysis {
     /// Shapes of never-reassigned locals initialized from a value of known
     /// shape, such as `local f = io.open(...)`.
     pub symbol_shapes: FxHashMap<SymbolId, CompactString>,
+    /// The shape of what each chain reads up to each of its suffixes, keyed
+    /// by where the suffix starts. Only known shapes are kept.
+    pub suffix_shapes: FxHashMap<u32, CompactString>,
 }
 
 /// Uses the [`StdlibEnvironment::Standalone`] stdlib, which is right for
@@ -41,13 +44,15 @@ pub fn analyze_with_environment(
     environment: StdlibEnvironment,
 ) -> SemanticAnalysis {
     let scope_tree = builder::build(block, version);
-    let symbol_shapes = symbol_shapes(&scope_tree, library_for(version, environment), block);
+    let (symbol_shapes, suffix_shapes) =
+        shapes(&scope_tree, library_for(version, environment), block);
     SemanticAnalysis {
         scope_tree,
         extra_globals: FxHashSet::default(),
         version,
         environment,
         symbol_shapes,
+        suffix_shapes,
     }
 }
 
@@ -128,25 +133,26 @@ impl SemanticAnalysis {
     /// shape, and calls whose `.` or `:` doesn't match the function's
     /// `is_method`.
     #[must_use]
-    pub fn resolve_callee<'call>(
-        &'call self,
-        call: &'call FunctionCall,
-    ) -> Option<ResolvedCallee<'call>> {
-        let resolver = ShapeResolver::new(&self.scope_tree, self.stdlib(), &self.symbol_shapes);
-        if let Some(method_token) = &call.method {
+    pub fn resolve_callee<'call>(&'call self, call: Call<'call>) -> Option<ResolvedCallee<'call>> {
+        let resolver = ShapeResolver::new(
+            &self.scope_tree,
+            self.stdlib(),
+            &self.symbol_shapes,
+            &self.suffix_shapes,
+        );
+        if let Some(method_token) = call.method {
             let method_name = method_token.identifier()?;
-            let (shape, entry) = resolver.method_callee(&call.callee, method_name)?;
-            let base = if let Expression::Var(Var::Name(token)) = &call.callee {
-                token.identifier().unwrap_or(shape)
-            } else {
-                shape.as_str()
-            };
+            let (shape, entry) = resolver.method_callee(call.callee, method_name)?;
+            let base = call
+                .callee
+                .as_name()
+                .map_or(shape.as_str(), |token| token.identifier().unwrap_or(shape));
             return Some(ResolvedCallee {
                 path: CalleePath::Method { base, method: method_name },
                 entry,
             });
         }
-        let segments = resolver.global_path(&call.callee)?;
+        let segments = resolver.global_path(call.callee)?;
         let entry = self.stdlib().lookup(&segments)?;
         // A method called with `.` passes self explicitly, which its declared
         // arity doesn't count.
@@ -312,10 +318,10 @@ mod tests {
         let parsed = luck_parser::parse(source, version);
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let analysis = analyze(&parsed.block, version);
-        let Some(Statement::FunctionCall(call)) = parsed.block.stmts.last() else {
+        let Some(Statement::FunctionCall(chain)) = parsed.block.stmts.last() else {
             panic!("the last statement must be a call");
         };
-        analysis.resolve_callee(call).map(|callee| callee.name())
+        analysis.resolve_callee(chain.last_call()?).map(|callee| callee.name())
     }
 
     fn unknown_globals(source: &str) -> Vec<String> {

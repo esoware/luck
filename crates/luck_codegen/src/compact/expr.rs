@@ -1,8 +1,7 @@
 use luck_ast::{
-    BinaryOp, Expression, Field, FieldAccess, FunctionArgs, FunctionCall, FunctionDef,
-    IfExpression, IndexExpression, InterpolatedString, MAX_NESTING_DEPTH, ParenthesizedExpression,
-    TableConstructor, TypeCast, TypeInstantiation, UnaryOp, Var, expr_starts_with_brace,
-    regrouped_levels,
+    BinaryOp, Expression, Field, FunctionArgs, FunctionDef, IfExpression, InterpolatedString,
+    ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
+    expr_starts_with_brace,
 };
 use luck_token::TokenKind;
 
@@ -27,8 +26,8 @@ impl CompactPrinter {
                 self.emit_piece(&literal.text, PieceClass::Other);
             }
             Expression::FunctionDef(function) => self.emit_function_definition(function),
-            Expression::Var(var) => self.emit_var(var),
-            Expression::FunctionCall(call) => self.emit_function_call(call),
+            Expression::Name(token) => self.emit_token(token),
+            Expression::Suffixed(chain) => self.emit_suffixed(chain),
             Expression::Parenthesized(parenthesized) => {
                 self.emit_parenthesized_expr(parenthesized);
             }
@@ -41,10 +40,6 @@ impl CompactPrinter {
             Expression::InterpolatedString(string) => self.emit_interpolated_string(string),
             // Luau
             Expression::TypeCast(cast) => self.emit_type_cast(cast),
-            // Luau
-            Expression::TypeInstantiation(instantiation) => {
-                self.emit_type_instantiation(instantiation);
-            }
             Expression::Error(_) => {}
         }
     }
@@ -52,8 +47,7 @@ impl CompactPrinter {
     pub(super) fn emit_var(&mut self, var: &Var) {
         match var {
             Var::Name(token) => self.emit_token(token),
-            Var::Index(index) => self.emit_index_expr(index),
-            Var::FieldAccess(field) => self.emit_field_access(field),
+            Var::Suffixed(chain) => self.emit_suffixed(chain),
         }
     }
 
@@ -63,21 +57,46 @@ impl CompactPrinter {
         self.emit_function_body(&function_definition.body);
     }
 
-    pub(super) fn emit_function_call(&mut self, call: &FunctionCall) {
+    pub(super) fn emit_suffixed(&mut self, chain: &SuffixedExpression) {
         if self.descend() {
-            self.emit_expr(&call.callee);
-            if let Some(method_name) = &call.method {
-                self.emit_fixed(":");
-                self.emit_token(method_name);
+            self.emit_expr(&chain.prefix);
+            for suffix in &chain.suffixes {
+                self.emit_suffix(suffix);
             }
-            if let Some(type_args) = &call.explicit_type_args {
+        }
+        self.ascend();
+    }
+
+    fn emit_suffix(&mut self, suffix: &Suffix) {
+        match suffix {
+            Suffix::Field(name) => {
+                self.emit_fixed(".");
+                self.emit_token(name);
+            }
+            Suffix::Index { index, .. } => {
+                self.emit_fixed("[");
+                self.emit_expr(index);
+                self.emit_fixed("]");
+            }
+            Suffix::Call(call) => {
+                if let Some(method_name) = &call.method {
+                    self.emit_fixed(":");
+                    self.emit_token(method_name);
+                }
+                if let Some(type_args) = &call.explicit_type_args {
+                    self.emit_fixed("<<");
+                    self.emit_punctuated(&type_args.args, ",", Self::emit_type);
+                    self.emit_fixed(">>");
+                }
+                self.emit_function_args(&call.args);
+            }
+            // Luau
+            Suffix::TypeInstantiation { type_args, .. } => {
                 self.emit_fixed("<<");
                 self.emit_punctuated(&type_args.args, ",", Self::emit_type);
                 self.emit_fixed(">>");
             }
-            self.emit_function_args(&call.args);
         }
-        self.ascend();
     }
 
     fn emit_function_args(&mut self, function_args: &FunctionArgs) {
@@ -134,45 +153,15 @@ impl CompactPrinter {
         }
     }
 
-    fn emit_index_expr(&mut self, index: &IndexExpression) {
-        if self.descend() {
-            self.emit_expr(&index.prefix);
-            self.emit_fixed("[");
-            self.emit_expr(&index.index);
-            self.emit_fixed("]");
-        }
-        self.ascend();
-    }
-
-    fn emit_field_access(&mut self, field: &FieldAccess) {
-        if self.descend() {
-            self.emit_expr(&field.prefix);
-            self.emit_fixed(".");
-            self.emit_token(&field.name);
-        }
-        self.ascend();
-    }
-
     fn emit_binary_op(&mut self, binary_op: &BinaryOp) {
         if self.descend() {
-            // An operand that regroups when read back counts at the depth it
-            // ends up at.
-            let (lhs_levels, rhs_levels) = regrouped_levels(binary_op);
-            self.emit_regrouped(&binary_op.lhs, lhs_levels);
-            self.emit_fixed(binary_op.op.static_text());
-            self.emit_regrouped(&binary_op.rhs, rhs_levels);
+            self.emit_expr(&binary_op.first);
+            for link in &binary_op.links {
+                self.emit_fixed(link.op.static_text());
+                self.emit_expr(&link.operand);
+            }
         }
         self.ascend();
-    }
-
-    fn emit_regrouped(&mut self, operand: &Expression, levels: usize) {
-        self.depth = self.depth.saturating_add(levels);
-        if self.depth > MAX_NESTING_DEPTH {
-            self.is_too_deep = true;
-        } else {
-            self.emit_expr(operand);
-        }
-        self.depth = self.depth.saturating_sub(levels);
     }
 
     fn emit_unary_op(&mut self, unary_op: &UnaryOp) {
@@ -238,16 +227,6 @@ impl CompactPrinter {
             self.emit_expr(&cast.expr);
             self.emit_fixed("::");
             self.emit_type(&cast.type_annotation);
-        }
-        self.ascend();
-    }
-
-    fn emit_type_instantiation(&mut self, instantiation: &TypeInstantiation) {
-        if self.descend() {
-            self.emit_expr(&instantiation.expr);
-            self.emit_fixed("<<");
-            self.emit_punctuated(&instantiation.type_args.args, ",", Self::emit_type);
-            self.emit_fixed(">>");
         }
         self.ascend();
     }

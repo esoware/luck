@@ -365,29 +365,35 @@ fn fuse_bare_locals(stmts: Vec<Statement>, version: LuaVersion) -> Vec<Statement
     fused_stmts
 }
 
-/// `Visitor` reaches every node, closure bodies included. Assignment targets
-/// go through `visit_var` too, so writes count as well as reads.
+/// `Visitor` reaches every node, closure bodies included, and assignment
+/// targets too, so writes count as well as reads.
 struct ReferenceFinder<'names> {
     names: &'names FxHashSet<CompactString>,
     has_reference: bool,
 }
 
 impl<'ast> Visitor<'ast> for ReferenceFinder<'_> {
-    fn visit_var(&mut self, var: &'ast Var) {
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
         if self.has_reference {
             return;
         }
-        if let Var::Name(name) = var
+        if let Var::Name(name) = target
             && self.names.contains(identifier_name(name))
         {
             self.has_reference = true;
             return;
         }
-        self.walk_var(var);
+        self.walk_assignment_target(target);
     }
 
     fn visit_expr(&mut self, expr: &'ast Expression) {
         if self.has_reference {
+            return;
+        }
+        if let Expression::Name(name) = expr
+            && self.names.contains(identifier_name(name))
+        {
+            self.has_reference = true;
             return;
         }
         self.walk_expr(expr);

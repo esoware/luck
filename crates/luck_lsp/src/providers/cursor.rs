@@ -1,6 +1,9 @@
 use core::slice;
 
-use luck_ast::{Block, Expression, FieldAccess, FunctionArgs, FunctionCall, Literal, Var, Visitor};
+use luck_ast::{
+    Block, Call, ChainHead, Expression, FunctionArgs, Literal, Suffix, SuffixedExpression, Var,
+    Visitor,
+};
 use luck_semantic::{ScopeTree, SymbolId, SymbolKind};
 use luck_token::{CommentKind, Span, Token, TokenKind, offset_to_index};
 
@@ -73,45 +76,35 @@ fn unterminated_text_kind(text: &str) -> TextKind {
     }
 }
 
-/// The plain-name chain ending at `access` (`a.b.c`), root first, and the
-/// root's span.
+/// The plain-name path `head` ends with (`a.b.c`), root first, and the
+/// root's span: a name, or the fields it ends in and the name before them.
 ///
 /// A chain broken by an index expression, a call, or a non-name prefix
-/// yields only the trailing segments that are plain names. `None` when
-/// `access` itself isn't named by an identifier.
-fn field_access_chain(access: &FieldAccess) -> Option<(Vec<&str>, Span)> {
-    let mut path = vec![access.name.identifier()?];
-    let mut root_span = access.name.span;
-    let mut prefix: &Expression = &access.prefix;
-    while let Expression::Var(Var::FieldAccess(inner)) = prefix {
-        let Some(name) = inner.name.identifier() else {
+/// yields only the trailing fields that are plain names. `None` when `head`
+/// ends in nothing named by an identifier.
+fn name_path(head: ChainHead<'_>) -> Option<(Vec<&str>, Span)> {
+    let Some((mut before, Suffix::Field(name))) = head.split_last() else {
+        let token = head.as_name()?;
+        return Some((vec![token.identifier()?], token.span));
+    };
+    let mut path = vec![name.identifier()?];
+    let mut root_span = name.span;
+    while let Some((earlier, Suffix::Field(inner))) = before.split_last() {
+        let Some(segment) = inner.identifier() else {
             break;
         };
-        path.push(name);
-        root_span = inner.name.span;
-        prefix = &inner.prefix;
+        path.push(segment);
+        root_span = inner.span;
+        before = earlier;
     }
-    if let Expression::Var(Var::Name(token)) = prefix
-        && let Some(name) = token.identifier()
+    if let Some(token) = before.as_name()
+        && let Some(segment) = token.identifier()
     {
-        path.push(name);
+        path.push(segment);
         root_span = token.span;
     }
     path.reverse();
     Some((path, root_span))
-}
-
-/// The name chain of a call's callee expression, not counting any `:method`
-/// name, and the root's span.
-fn callee_chain(callee: &Expression) -> Option<(Vec<&str>, Span)> {
-    let Expression::Var(var) = callee else {
-        return None;
-    };
-    match var {
-        Var::Name(token) => Some((vec![token.identifier()?], token.span)),
-        Var::FieldAccess(access) => field_access_chain(access),
-        Var::Index(_) => None,
-    }
 }
 
 /// The `Name(.Name)*` chain `tokens` ends with, root first, and the root's
@@ -197,12 +190,40 @@ impl<'ast> NodeFinder<'ast> {
         }
     }
 
-    fn record_call(&mut self, call: &'ast FunctionCall) {
-        let (mut path, mut root_span) = callee_chain(&call.callee)
+    fn record_name(&mut self, token: &'ast Token) {
+        if let Some(name) = token.identifier() {
+            self.try_set(CursorNode::Identifier { name, span: token.span });
+        }
+    }
+
+    /// Of the field accesses and calls in `chain`, only the shortest one
+    /// that reaches the cursor can be the smallest node there.
+    fn record_chain(&mut self, chain: &'ast SuffixedExpression) {
+        for (index, suffix) in chain.suffixes.iter().enumerate() {
+            let head = chain.head(index.saturating_add(1));
+            let full_span = head.span();
+            if !touches(full_span, self.offset) {
+                continue;
+            }
+            match suffix {
+                Suffix::Field(_) => {
+                    if let Some((path, root_span)) = name_path(head) {
+                        self.try_set(CursorNode::DottedPath { path, root_span, full_span });
+                    }
+                }
+                Suffix::Call(call) => self.record_call(Call::new(chain.head(index), call)),
+                Suffix::Index { .. } | Suffix::TypeInstantiation { .. } => continue,
+            }
+            return;
+        }
+    }
+
+    fn record_call(&mut self, call: Call<'ast>) {
+        let (mut path, mut root_span) = name_path(call.callee)
             .map_or_else(|| (Vec::new(), None), |(path, span)| (path, Some(span)));
         // The method name is a path segment too: `game:GetService(...)`
         // resolves as `["game", "GetService"]` through shaped lookup.
-        if let Some(method_token) = &call.method {
+        if let Some(method_token) = call.method {
             if let Some(name) = method_token.identifier()
                 && !path.is_empty()
             {
@@ -212,43 +233,36 @@ impl<'ast> NodeFinder<'ast> {
                 root_span = None;
             }
         }
-        self.try_set(CursorNode::Call { path, root_span, full_span: call.span });
+        self.try_set(CursorNode::Call { path, root_span, full_span: call.span() });
     }
 }
 
 impl<'ast> Visitor<'ast> for NodeFinder<'ast> {
-    fn visit_var(&mut self, var: &'ast Var) {
-        match var {
-            Var::Name(token) => {
-                if let Some(name) = token.identifier() {
-                    self.try_set(CursorNode::Identifier { name, span: token.span });
-                }
-            }
-            Var::FieldAccess(access) => {
-                if let Some((path, root_span)) = field_access_chain(access) {
-                    self.try_set(CursorNode::DottedPath {
-                        path,
-                        root_span,
-                        full_span: access.span,
-                    });
-                }
-                self.walk_var(var);
-            }
-            Var::Index(_) => self.walk_var(var),
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if let Expression::Name(token) = expr {
+            self.record_name(token);
         }
+        self.walk_expr(expr);
     }
 
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
-        self.record_call(call);
-        self.walk_function_call(call);
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
+        if let Var::Name(token) = target {
+            self.record_name(token);
+        }
+        self.walk_assignment_target(target);
+    }
+
+    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression) {
+        self.record_chain(chain);
+        self.walk_suffixed(chain);
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CallSite<'ast> {
-    /// The call node, so consumers can resolve the callee semantically
-    /// (shaped locals, shadow checks).
-    pub call: &'ast FunctionCall,
+    /// The call, so consumers can resolve the callee semantically (shaped
+    /// locals, shadow checks).
+    pub call: Call<'ast>,
     pub active_param: usize,
 }
 
@@ -267,16 +281,16 @@ struct CallSiteFinder<'document> {
 }
 
 impl<'document> Visitor<'document> for CallSiteFinder<'document> {
-    fn visit_function_call(&mut self, call: &'document FunctionCall) {
+    fn visit_call(&mut self, call: Call<'document>) {
         self.try_record(call);
-        self.walk_function_call(call);
+        self.walk_call(call);
     }
 }
 
 impl<'document> CallSiteFinder<'document> {
-    fn try_record(&mut self, call: &'document FunctionCall) {
+    fn try_record(&mut self, call: Call<'document>) {
         // `f"..."` and `f{...}` have no parens for the cursor to be inside.
-        let FunctionArgs::Parenthesized { span: parens, args } = &call.args else {
+        let FunctionArgs::Parenthesized { span: parens, args } = call.args else {
             return;
         };
         // An unclosed list ends where the parser stopped, so the end still
@@ -307,7 +321,7 @@ impl<'document> CallSiteFinder<'document> {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StringArgSite<'ast> {
-    pub call: &'ast FunctionCall,
+    pub call: Call<'ast>,
     pub arg_index: usize,
     pub literal: &'ast Literal,
 }
@@ -326,9 +340,9 @@ struct StringArgFinder<'ast> {
 }
 
 impl<'ast> Visitor<'ast> for StringArgFinder<'ast> {
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+    fn visit_call(&mut self, call: Call<'ast>) {
         self.try_record(call);
-        self.walk_function_call(call);
+        self.walk_call(call);
     }
 }
 
@@ -339,8 +353,8 @@ impl<'ast> StringArgFinder<'ast> {
         self.offset > span.start && self.offset < span.end
     }
 
-    fn try_record(&mut self, call: &'ast FunctionCall) {
-        let site = match &call.args {
+    fn try_record(&mut self, call: Call<'ast>) {
+        let site = match call.args {
             FunctionArgs::Parenthesized { args, .. } => {
                 args.iter().enumerate().find_map(|(index, arg)| {
                     if let Expression::StringLiteral(literal) = arg

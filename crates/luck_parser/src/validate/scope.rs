@@ -9,8 +9,8 @@
 use core::mem;
 
 use luck_ast::{
-    Attribute, AttributedName, Block, FunctionBody, FunctionDecl, GenericFor, NumericFor,
-    Punctuated, RepeatLoop, Statement, Type, TypeDeclarationValue, Var, Visitor,
+    Attribute, AttributedName, Block, Expression, FunctionBody, FunctionDecl, GenericFor,
+    NumericFor, Punctuated, RepeatLoop, Statement, Type, TypeDeclarationValue, Var, Visitor,
 };
 use luck_token::{LuaVersion, Span, Token};
 
@@ -185,7 +185,7 @@ impl<'ast> ScopeChecker<'ast> {
             Var::Name(token) => self.check_name(token, true),
             // `t.x = 1` and `t[k] = 1` mutate the table, not the binding, and
             // const doesn't freeze contents.
-            Var::FieldAccess(_) | Var::Index(_) => self.walk_var(target),
+            Var::Suffixed(chain) => self.visit_suffixed(chain),
         }
     }
 
@@ -407,13 +407,13 @@ impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
         self.bindings.truncate(bindings_base);
     }
 
-    fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(token) = var
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if let Expression::Name(token) = expr
             && self.checks_reads()
         {
             self.check_name(token, false);
         }
-        self.walk_var(var);
+        self.walk_expr(expr);
     }
 
     // Types generate no code, so outside the type-function pass a `typeof`
