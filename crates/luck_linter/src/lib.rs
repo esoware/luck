@@ -30,6 +30,7 @@ extern crate alloc;
 mod bus;
 mod call;
 mod cfg;
+mod config;
 mod diagnostic;
 mod driver;
 mod fix;
@@ -49,10 +50,10 @@ mod suppression;
 mod underscore_fix;
 mod uninitialized;
 
-pub use luck_core::{
-    CyclomaticComplexityOptions, LintConfig, RestrictedModulePathsOptions, RuleLevel, RuleSetting,
+pub use config::{
+    CategoryLevels, CyclomaticComplexityOptions, LintConfig, RestrictedModulePathsOptions,
+    RuleLevel, RuleSetting, RuleSettings,
 };
-
 pub use diagnostic::{Category, LintDiagnostic, Severity};
 pub use driver::{lint, lint_analyzed, lint_parsed, lint_target};
 pub use fix::{

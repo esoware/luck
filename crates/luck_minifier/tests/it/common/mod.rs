@@ -1,4 +1,4 @@
-use luck_core::TransformConfig;
+use luck_minifier::TransformConfig;
 use luck_minifier::minify;
 use luck_token::LuaVersion;
 

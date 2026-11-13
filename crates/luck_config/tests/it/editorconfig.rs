@@ -1,7 +1,7 @@
 use core::time::Duration;
 use std::path::Path;
 
-use luck_core::resolved_format_config;
+use luck_config::resolved_format_config;
 
 use crate::common::{finishes_within, in_directory, project_with};
 

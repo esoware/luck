@@ -6,10 +6,11 @@ use std::time::Instant;
 
 use clap::Args;
 use luck_bundler::{BundleOptions, bundle};
-use luck_core::{
+use luck_config::{
     BuildConfig, check_output_paths, config_directory, discover_config, load_or_discover_config,
-    native_path, normalize_path, resolve_build_config,
+    resolve_build_config,
 };
+use luck_core::{native_path, normalize_path};
 use luck_token::{LuaVersion, chunk_start, has_shebang};
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 

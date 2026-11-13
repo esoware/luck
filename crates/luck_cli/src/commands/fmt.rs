@@ -4,7 +4,8 @@ use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_core::{LuaTarget, LuckConfig, read_source_file, resolved_format_config};
+use luck_config::{LuckConfig, resolved_format_config};
+use luck_core::{LuaTarget, read_source_file};
 
 use crate::exit::{Exit, usage_error};
 use crate::output::read_stdin_source;

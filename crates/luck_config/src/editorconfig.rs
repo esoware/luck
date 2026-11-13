@@ -9,7 +9,7 @@ use std::path::{self, Path};
 use rustc_hash::FxHashMap;
 
 use self::glob::SectionGlob;
-use super::format_config::{FormatConfig, IndentStyle, LineEndings};
+use crate::format_config::{FormatConfig, IndentStyle, LineEndings};
 
 const EDITORCONFIG_FILE_NAME: &str = ".editorconfig";
 

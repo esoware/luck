@@ -1,8 +1,7 @@
 use alloc::borrow::Cow;
 
 use luck_ast::{
-    Block, Expression, Literal, Transform, UnaryOp, ensure_sufficient_stack, is_multi_value,
-    unwrap_parentheses,
+    Block, Expression, Literal, Transform, UnaryOp, is_multi_value, unwrap_parentheses,
 };
 use luck_token::{
     BinOp, CompactString, LuaNumber, LuaVersion, NumberSubtypes, Span, UnOp, decode_string,
@@ -79,8 +78,7 @@ fn extract_lua_number(expr: &Expression, subtypes: NumberSubtypes) -> Option<Lua
     match expr {
         Expression::Number(literal) => parse_lua_number(&literal.text, subtypes),
         Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
-            ensure_sufficient_stack(|| extract_lua_number(&unop.operand, subtypes))
-                .map(negate_number)
+            extract_lua_number(&unop.operand, subtypes).map(negate_number)
         }
         Expression::Parenthesized(paren) => {
             extract_lua_number(unwrap_parentheses(&paren.expr), subtypes)

@@ -4,9 +4,9 @@ use core::error::Error;
 use core::fmt;
 use core::ops::Range;
 
-use luck_core::LintConfig;
 use luck_token::{Comment, LuaVersion, Span};
 
+use crate::config::LintConfig;
 use crate::diagnostic::LintDiagnostic;
 use crate::driver::lint;
 
@@ -185,7 +185,7 @@ fn fixpoint_within(
 
 #[cfg(test)]
 mod tests {
-    use luck_core::RuleLevel;
+    use crate::config::RuleLevel;
 
     use super::*;
     use crate::fixtures::diagnostic;

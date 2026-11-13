@@ -21,7 +21,8 @@ use std::io::Write as _;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use luck_benchmark::{test_files, test_projects};
-use luck_core::{LuaTarget, TransformConfig};
+use luck_core::LuaTarget;
+use luck_minifier::TransformConfig;
 
 const SNAPSHOT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/minsize.snap");
 const REGENERATE_COMMAND: &str =

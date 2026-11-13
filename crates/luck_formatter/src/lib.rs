@@ -52,10 +52,8 @@ mod verify;
 pub use ast_equivalence::{AstDiff, blocks_equivalent};
 pub use comments::Comments;
 pub use format::{FormatError, FormatResult, format, format_block, format_range};
-pub use format_options::FormatOptions;
-// Defined in `luck_core` so config parsing can deserialize straight into them.
-pub use luck_core::{
-    BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, HexCase, IndentStyle, LineEndings,
-    QuoteStyle, SpaceAfterFunction,
+pub use format_options::{
+    BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,
+    IndentStyle, LineEndings, QuoteStyle, SpaceAfterFunction,
 };
 pub use verify::format_and_verify;

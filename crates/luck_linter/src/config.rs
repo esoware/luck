@@ -1,16 +1,18 @@
-//! They live here, not in `luck_linter`, so `luck.json` deserializes without
-//! depending on the linter. `luck_linter` re-exports them.
+//! The `lint` section of `luck.json`. The linter owns its shape, since rule
+//! names are its keys and each rule decides the options it takes.
 
 use alloc::collections::BTreeMap;
 use core::fmt;
+use core::hash::Hash;
 use core::marker::PhantomData;
 
+use luck_core::DiagnosticSeverity;
+use rustc_hash::FxHashSet;
 use serde::de::{
     Deserialize, Deserializer, Error, IgnoredAny, IntoDeserializer as _, SeqAccess, Visitor,
 };
 
-use super::luck_config::concat;
-use crate::diagnostic::DiagnosticSeverity;
+use crate::diagnostic::Category;
 
 /// Linter settings from luck.json.
 // `Serialize` prints it back in the shape it parses, for `--print-config`.
@@ -36,11 +38,13 @@ pub struct LintConfig {
 }
 
 impl LintConfig {
-    /// `extra_globals` concatenates base-first without repeats, and a
-    /// category or rule that `self` sets replaces the base's level for it. A
-    /// bare level keeps the base's options, as `-D` does, and options from
-    /// both sides merge: `paths` concatenate and `self`'s `max` wins.
-    pub(super) fn merge_onto(self, base: Self) -> Self {
+    /// Layers `self` over `base`, as `extends` does. `extra_globals`
+    /// concatenates base-first without repeats, and a category or rule that
+    /// `self` sets replaces the base's level for it. A bare level keeps the
+    /// base's options, as `-D` does, and options from both sides merge:
+    /// `paths` concatenate and `self`'s `max` wins.
+    #[must_use]
+    pub fn merge_onto(self, base: Self) -> Self {
         Self {
             categories: self.categories.merge_onto(base.categories),
             rules: self.rules.merge_onto(base.rules),
@@ -68,45 +72,6 @@ impl RuleLevel {
             Self::Off => None,
             Self::Warn => Some(DiagnosticSeverity::Warning),
             Self::Error => Some(DiagnosticSeverity::Error),
-        }
-    }
-}
-
-/// A group of lint rules, which `categories` sets the level of together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Category {
-    /// Outright wrong or useless code.
-    Correctness,
-    /// Most likely wrong or useless.
-    Suspicious,
-    /// Idiomatic code style.
-    Style,
-    /// Performance improvements.
-    Performance,
-}
-
-impl Category {
-    /// The name `luck.json`, `--rules`, and `--print-config` spell it with.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Correctness => "correctness",
-            Self::Suspicious => "suspicious",
-            Self::Style => "style",
-            Self::Performance => "performance",
-        }
-    }
-
-    /// Parses a `-A`/`-W`/`-D` flag value, case-insensitively, or `None` when
-    /// it names no category.
-    #[must_use]
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name.to_ascii_lowercase().as_str() {
-            "correctness" => Some(Self::Correctness),
-            "suspicious" => Some(Self::Suspicious),
-            "style" => Some(Self::Style),
-            "performance" | "perf" => Some(Self::Performance),
-            _ => None,
         }
     }
 }
@@ -382,20 +347,28 @@ pub struct RestrictedModulePathsOptions {
     pub paths: Vec<String>,
 }
 
+/// `base` followed by the items of `child` it lacks, so a file layered twice
+/// through `extends` can't double a list.
+fn concat<T>(child: Vec<T>, mut base: Vec<T>) -> Vec<T>
+where
+    T: Eq + Hash,
+{
+    let present: FxHashSet<&T> = base.iter().collect();
+    let added: Vec<T> = child.into_iter().filter(|item| !present.contains(item)).collect();
+    base.extend(added);
+    base
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::parse_luck_config;
 
     fn lint_config(lint_json: &str) -> LintConfig {
-        parse_luck_config(&format!(r#"{{ "lint": {lint_json} }}"#))
-            .expect("deserialize")
-            .lint
-            .expect("lint present")
+        serde_json::from_str(lint_json).expect("deserialize")
     }
 
     fn lint_error(lint_json: &str) -> String {
-        parse_luck_config(&format!(r#"{{ "lint": {lint_json} }}"#)).unwrap_err()
+        serde_json::from_str::<LintConfig>(lint_json).unwrap_err().to_string()
     }
 
     const CATEGORIES: [Category; 4] =

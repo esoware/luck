@@ -13,9 +13,12 @@ use super::Parser;
     reason = "the parser is one type with its grammar split by file"
 )]
 impl Parser<'_> {
-    /// Left-associative chains grow in a loop; only right operands recurse.
+    /// Left-associative chains grow in a loop and only right operands
+    /// recurse, but every operator nests the tree one level deeper, so each
+    /// one counts toward the depth cap until the chain ends.
     #[inline]
     pub(super) fn parse_expr(&mut self, min_precedence: u8) -> Expression {
+        let chain_depth = self.nesting_depth;
         let mut lhs = self.parse_prefix();
 
         while let Some(op) = BinOp::from_token_kind(self.peek()) {
@@ -34,23 +37,22 @@ impl Parser<'_> {
             } else {
                 precedence.saturating_add(1)
             };
-            // Right-associative chains (`..`, `^`) recurse once per operator,
-            // so a long one would overflow the stack without this guard.
             if !self.enter_depth() {
                 let span = lhs.span().merge(op_span);
-                return Expression::BinaryOp(Box::new(BinaryOp {
+                lhs = Expression::BinaryOp(Box::new(BinaryOp {
                     span,
                     lhs,
                     op,
                     rhs: Expression::Error(op_span),
                 }));
+                break;
             }
             let rhs = self.parse_expr(rhs_min_precedence);
-            self.exit_depth();
             let span = lhs.span().merge(rhs.span());
             lhs = Expression::BinaryOp(Box::new(BinaryOp { span, lhs, op, rhs }));
         }
 
+        self.nesting_depth = chain_depth;
         lhs
     }
 
@@ -169,8 +171,11 @@ impl Parser<'_> {
         }
     }
 
+    /// Each suffix nests the chain one level deeper, so each one counts
+    /// toward the depth cap until the chain ends.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_suffixes(&mut self, mut expr: Expression) -> Expression {
+        let chain_depth = self.nesting_depth;
         loop {
             match self.peek() {
                 // Luau: explicit type-parameter instantiation is a suffix,
@@ -197,7 +202,8 @@ impl Parser<'_> {
                 TokenKind::LeftBracket => {
                     let open = self.advance_span();
                     if !self.enter_depth() {
-                        return Expression::Error(open);
+                        expr = Expression::Error(open);
+                        break;
                     }
                     let index = self.parse_expr(0);
                     self.exit_depth();
@@ -238,7 +244,11 @@ impl Parser<'_> {
                 }
                 _ => break,
             }
+            if !self.enter_depth() {
+                break;
+            }
         }
+        self.nesting_depth = chain_depth;
         expr
     }
 

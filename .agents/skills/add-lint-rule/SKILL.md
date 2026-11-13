@@ -9,7 +9,7 @@ Rules are stateless `Rule` impls reporting `Finding`s, and everything they see a
 
 ## 1. Pick a category
 
-`Category` lives in `luck_core` (re-exported as `luck_linter::Category`): `Correctness` (the only default-on category, which requires zero false positives on valid, idiomatic Lua), `Suspicious` (off, with intentional false positives allowed), `Style`, `Performance`. The rule goes in `Suspicious` unless you can prove zero false positives, including on the module pattern (`local t = {} function t:m() end return t`), branch initialization (`local x if c then x = 1 end`), and closures.
+`Category` lives in `luck_linter`'s `diagnostic.rs`: `Correctness` (the only default-on category, which requires zero false positives on valid, idiomatic Lua), `Suspicious` (off, with intentional false positives allowed), `Style`, `Performance`. The rule goes in `Suspicious` unless you can prove zero false positives, including on the module pattern (`local t = {} function t:m() end return t`), branch initialization (`local x if c then x = 1 end`), and closures.
 
 ## 2. Pick the shape
 

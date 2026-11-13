@@ -2,8 +2,7 @@ use core::ops::ControlFlow::{self, Continue};
 
 use luck_ast::{
     ElseIfExprClause, Expression, Field, FunctionArgs, FunctionCall, FunctionDef, IfExpression,
-    InterpolatedString, TableConstructor, TypeInstantiation, Var, ensure_sufficient_stack,
-    is_multi_value,
+    InterpolatedString, TableConstructor, TypeInstantiation, Var, is_multi_value,
 };
 use luck_token::LuaVersion;
 
@@ -39,30 +38,28 @@ pub(super) fn expr_eq(
             require(number_raw_eq(&lhs.text, &rhs.text), "integer literals differ")
         }
         (Expression::Var(lhs), Expression::Var(rhs)) => var_eq(lhs, rhs, version),
-        (Expression::BinaryOp(lhs), Expression::BinaryOp(rhs)) => ensure_sufficient_stack(|| {
+        (Expression::BinaryOp(lhs), Expression::BinaryOp(rhs)) => {
             require(lhs.op == rhs.op, "binary op differs")?;
             at("left", expr_eq(&lhs.lhs, &rhs.lhs, version))?;
             at("right", expr_eq(&lhs.rhs, &rhs.rhs, version))
-        }),
-        (Expression::UnaryOp(lhs), Expression::UnaryOp(rhs)) => ensure_sufficient_stack(|| {
+        }
+        (Expression::UnaryOp(lhs), Expression::UnaryOp(rhs)) => {
             require(lhs.op == rhs.op, "unary op differs")?;
             at("operand", expr_eq(&lhs.operand, &rhs.operand, version))
-        }),
+        }
         (Expression::Parenthesized(lhs), Expression::Parenthesized(rhs)) => {
-            ensure_sufficient_stack(|| {
-                at("Parenthesized/expr", expr_eq(&lhs.expr, &rhs.expr, version))
-            })
+            at("Parenthesized/expr", expr_eq(&lhs.expr, &rhs.expr, version))
         }
         // Redundant parens may come and go, so `(x)` matches `x` however deep
         // the nesting. Parens around a call or `...` truncate it to one value
         // and have to match.
         (Expression::Parenthesized(lhs), other) => {
             require(!is_multi_value(&lhs.expr), "value-truncating parens differ")?;
-            ensure_sufficient_stack(|| expr_eq(&lhs.expr, other, version))
+            expr_eq(&lhs.expr, other, version)
         }
         (other, Expression::Parenthesized(rhs)) => {
             require(!is_multi_value(&rhs.expr), "value-truncating parens differ")?;
-            ensure_sufficient_stack(|| expr_eq(other, &rhs.expr, version))
+            expr_eq(other, &rhs.expr, version)
         }
         (Expression::FunctionCall(lhs), Expression::FunctionCall(rhs)) => {
             at("FunctionCall", function_call_eq(lhs, rhs, version))
@@ -77,9 +74,7 @@ pub(super) fn expr_eq(
             if_expr_eq(lhs, rhs, version)
         }
         (Expression::TypeCast(lhs), Expression::TypeCast(rhs)) => {
-            ensure_sufficient_stack(|| {
-                at("TypeCast/expr", expr_eq(&lhs.expr, &rhs.expr, version))
-            })?;
+            at("TypeCast/expr", expr_eq(&lhs.expr, &rhs.expr, version))?;
             at(
                 "TypeCast/type_annotation",
                 type_eq(&lhs.type_annotation, &rhs.type_annotation, version),
@@ -150,9 +145,7 @@ fn type_instantiation_eq(
     right: &TypeInstantiation,
     version: LuaVersion,
 ) -> ControlFlow<AstDiff> {
-    ensure_sufficient_stack(|| {
-        at("TypeInstantiation/expr", expr_eq(&left.expr, &right.expr, version))
-    })?;
+    at("TypeInstantiation/expr", expr_eq(&left.expr, &right.expr, version))?;
     at(
         "TypeInstantiation/type_args",
         punctuated_eq(&left.type_args.args, &right.type_args.args, version, type_eq),
@@ -185,13 +178,13 @@ pub(super) fn var_eq(left: &Var, right: &Var, version: LuaVersion) -> ControlFlo
     match (left, right) {
         (Var::Name(lhs), Var::Name(rhs)) => token_text_eq(lhs, rhs),
         (Var::FieldAccess(lhs), Var::FieldAccess(rhs)) => {
-            ensure_sufficient_stack(|| at("prefix", expr_eq(&lhs.prefix, &rhs.prefix, version)))?;
+            at("prefix", expr_eq(&lhs.prefix, &rhs.prefix, version))?;
             at("name", token_text_eq(&lhs.name, &rhs.name))
         }
-        (Var::Index(lhs), Var::Index(rhs)) => ensure_sufficient_stack(|| {
+        (Var::Index(lhs), Var::Index(rhs)) => {
             at("prefix", expr_eq(&lhs.prefix, &rhs.prefix, version))?;
             at("index", expr_eq(&lhs.index, &rhs.index, version))
-        }),
+        }
         (Var::Name(_) | Var::FieldAccess(_) | Var::Index(_), _) => differ("var kind differs"),
     }
 }
@@ -201,7 +194,7 @@ pub(super) fn function_call_eq(
     right: &FunctionCall,
     version: LuaVersion,
 ) -> ControlFlow<AstDiff> {
-    ensure_sufficient_stack(|| at("callee", expr_eq(&left.callee, &right.callee, version)))?;
+    at("callee", expr_eq(&left.callee, &right.callee, version))?;
     presence_eq(
         left.method.as_ref(),
         right.method.as_ref(),

@@ -3,8 +3,8 @@
     reason = "a test panics to fail, so a Panics section says nothing"
 )]
 
-use luck_core::TransformConfig;
 use luck_formatter::{Comments, FormatOptions, blocks_equivalent, format, format_block};
+use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
 use luck_testgen::{generate_full, generate_runtime_safe};
 use luck_token::LuaVersion;

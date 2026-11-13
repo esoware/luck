@@ -3,8 +3,9 @@ use std::path::{self, Path, PathBuf};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::CONFIG_FILE_NAME;
-use super::luck_config::LuckConfig;
+use crate::config::LuckConfig;
+
+pub const CONFIG_FILE_NAME: &str = "luck.json";
 
 /// How many files one `extends` chain may stack. Each level is a recursive
 /// call, and no real project comes close.

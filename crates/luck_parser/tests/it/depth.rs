@@ -32,11 +32,25 @@ fn parens_past_the_depth_cap_are_an_error() {
 }
 
 #[test]
-fn long_left_associative_chain_stays_under_the_depth_cap() {
+fn left_associative_chain_past_the_depth_cap_is_an_error() {
     let additions = repeat_n("1", 3000).collect::<Vec<_>>().join("+");
     let source = format!("local x = {additions}");
     let result = parse(&source, LuaVersion::Lua54);
-    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert!(has_depth_limit_error(&result), "{:?}", result.errors.first());
+}
+
+#[test]
+fn chains_under_the_depth_cap_parse() {
+    for (version, source) in [
+        (LuaVersion::Lua54, format!("return 1{}", "+1".repeat(200))),
+        (LuaVersion::Lua54, format!("return a{}", ".b".repeat(200))),
+        (LuaVersion::Lua54, format!("return f{}", "()".repeat(200))),
+        (LuaVersion::Lua54, format!("return t{}", "[1]".repeat(200))),
+        (LuaVersion::Luau, format!("type X = number{}", "?".repeat(200))),
+    ] {
+        let result = parse(&source, version);
+        assert!(result.errors.is_empty(), "{version:?}: {:?}", result.errors.first());
+    }
 }
 
 #[test]
@@ -123,34 +137,24 @@ fn nested_attribute_arguments_count_toward_the_depth_cap() {
 }
 
 #[test]
-fn long_binary_chain_does_not_overflow_the_stack() {
+fn long_binary_chain_reports_the_depth_cap() {
     let source = format!("return 1{}", "+1".repeat(200_000));
     let result = parse(&source, LuaVersion::Lua54);
-    assert!(
-        result.errors.is_empty() || has_depth_limit_error(&result),
-        "a long chain parses or reports the limit: {:?}",
-        result.errors.first()
-    );
+    assert!(has_depth_limit_error(&result), "{:?}", result.errors.first());
 }
 
 #[test]
-fn long_suffix_chain_does_not_overflow_the_stack() {
-    let source = format!("return a{}", ".b".repeat(200_000));
-    let result = parse(&source, LuaVersion::Lua54);
-    assert!(
-        result.errors.is_empty() || has_depth_limit_error(&result),
-        "a long chain parses or reports the limit: {:?}",
-        result.errors.first()
-    );
+fn long_suffix_chains_report_the_depth_cap() {
+    for link in [".b", "()", "[1]", ":m()", "\"s\""] {
+        let source = format!("return a{}", link.repeat(200_000));
+        let result = parse(&source, LuaVersion::Lua54);
+        assert!(has_depth_limit_error(&result), "{link}: {:?}", result.errors.first());
+    }
 }
 
 #[test]
-fn long_optional_type_chain_does_not_overflow_the_stack() {
+fn long_optional_type_chain_reports_the_depth_cap() {
     let source = format!("type X = number{}", "?".repeat(200_000));
     let result = parse(&source, LuaVersion::Luau);
-    assert!(
-        result.errors.is_empty() || has_depth_limit_error(&result),
-        "a long chain parses or reports the limit: {:?}",
-        result.errors.first()
-    );
+    assert!(has_depth_limit_error(&result), "{:?}", result.errors.first());
 }

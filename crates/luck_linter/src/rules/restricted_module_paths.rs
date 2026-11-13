@@ -74,10 +74,10 @@ fn path_matches(path: &str, pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::{LintConfig, RestrictedModulePathsOptions, RuleLevel, RuleSetting};
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::config::{LintConfig, RestrictedModulePathsOptions, RuleLevel, RuleSetting};
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule_with_config;
 

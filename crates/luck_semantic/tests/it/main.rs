@@ -11,6 +11,5 @@ extern crate alloc;
 mod common;
 
 mod drift;
-mod large_input;
 mod roblox_api;
 mod stdlib;

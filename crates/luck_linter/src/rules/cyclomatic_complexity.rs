@@ -56,10 +56,10 @@ fn check_function(function: FunctionNode<'_>, context: &LintContext<'_>) -> Opti
 
 #[cfg(test)]
 mod tests {
-    use luck_core::{CyclomaticComplexityOptions, LintConfig, RuleLevel, RuleSetting};
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::config::{CyclomaticComplexityOptions, LintConfig, RuleLevel, RuleSetting};
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule_with_config;
 

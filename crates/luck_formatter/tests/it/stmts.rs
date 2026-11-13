@@ -1,7 +1,7 @@
 use luck_formatter::{FormatOptions, IndentStyle};
 use luck_token::LuaVersion;
 
-use crate::common::{assert_format, assert_format_with, format_once, formatted};
+use crate::common::{assert_format, assert_format_with, format_once, formatted, formatted_with};
 
 #[test]
 fn if_stmt() {
@@ -252,4 +252,58 @@ fn empty_do_block_has_no_blank_line() {
         "do\nend\n",
         "`block_newline_gaps = never` strips blank lines at the start and end of every block body"
     );
+}
+
+fn narrow() -> FormatOptions {
+    FormatOptions { line_width: 30, ..FormatOptions::default() }
+}
+
+#[test]
+fn assigned_values_move_to_the_next_line_when_only_it_fits_them() {
+    for (source, expected, version) in [
+        (
+            "local alpha, beta = gamma + delta, 1\n",
+            "local alpha, beta =\n\tgamma + delta, 1\n",
+            LuaVersion::Lua54,
+        ),
+        (
+            "alpha.beta.gamma = (x - 1) / 99\n",
+            "alpha.beta.gamma =\n\t(x - 1) / 99\n",
+            LuaVersion::Lua54,
+        ),
+        (
+            "global alpha_value = (x - 1) / 99\n",
+            "global alpha_value =\n\t(x - 1) / 99\n",
+            LuaVersion::Lua55,
+        ),
+        (
+            "counter_value_x += (x - 1) / 99\n",
+            "counter_value_x +=\n\t(x - 1) / 99\n",
+            LuaVersion::Luau,
+        ),
+    ] {
+        assert_format_with(source, expected, version, &narrow());
+    }
+}
+
+#[test]
+fn assigned_values_that_fit_neither_line_hang_from_the_equals() {
+    assert_format_with(
+        "local alpha = first_operand_name + second_operand_name\n",
+        "local alpha = first_operand_name\n\t+ second_operand_name\n",
+        LuaVersion::Lua54,
+        &narrow(),
+    );
+}
+
+#[test]
+fn a_lone_table_function_or_call_stays_on_the_equals_line() {
+    for (source, first_line) in [
+        ("local value = { first = 1, second = 2 }\n", "local value = {"),
+        ("local value = function() return 1 end\n", "local value = function()"),
+        ("local value = call_something(first, second)\n", "local value = call_something("),
+    ] {
+        let output = formatted_with(source, LuaVersion::Lua54, &narrow());
+        assert_eq!(output.lines().next(), Some(first_line), "{output}");
+    }
 }

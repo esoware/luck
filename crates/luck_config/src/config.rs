@@ -3,17 +3,15 @@
 use core::hash::Hash;
 use std::path::Path;
 
+use luck_core::LuaTarget;
+use luck_linter::LintConfig;
+use luck_resolver::DEFAULT_SEARCH_PATHS;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::dynamic_require::DynamicRequire;
-use super::filter::ProjectFilter;
-use super::format_config::FormatConfig;
-use super::lint_config::LintConfig;
-use super::transform_config::TransformConfig;
-use crate::lua_target::LuaTarget;
-
-/// Lua 5.x search path templates used when `search_paths` is unset or empty.
-pub const DEFAULT_SEARCH_PATHS: &[&str] = &["?.lua", "?/init.lua"];
+use crate::dynamic_require::DynamicRequire;
+use crate::filter::ProjectFilter;
+use crate::format_config::FormatConfig;
+use crate::transform_config::TransformConfig;
 
 /// One of the two `luck.json` keys that name a dialect by file extension.
 ///
@@ -47,7 +45,8 @@ impl DialectKey {
 
 /// One entry of a multi-entry build: the file to bundle and where to write
 /// the bundle, both relative to the `luck.json` directory.
-#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EntryConfig {
     pub entry: String,
@@ -58,7 +57,8 @@ pub struct EntryConfig {
 ///
 /// Its `minify` and `transforms` replace the top-level ones. `--release` and
 /// `--dev` select the `release` and `dev` profiles.
-#[derive(Debug, Clone, Copy, Default, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ProfileOverrides {
     pub minify: Option<bool>,
@@ -66,7 +66,8 @@ pub struct ProfileOverrides {
 }
 
 /// Top-level luck.json configuration.
-#[derive(Debug, Clone, Default, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct LuckConfig {
     /// Dialect for `.lua` files (default `lua54`). Any dialect is accepted:
@@ -141,7 +142,7 @@ impl LuckConfig {
     /// Every other key, including `entries`, `profiles`, and `transforms`,
     /// comes whole from `self` when set there and from `base` otherwise.
     #[must_use]
-    pub(super) fn merge_onto(self, base: Self) -> Self {
+    pub(crate) fn merge_onto(self, base: Self) -> Self {
         Self {
             lua: self.lua.or(base.lua),
             luau: self.luau.or(base.luau),
@@ -178,7 +179,7 @@ where
 
 /// `base` followed by the items of `child` it lacks, so a file layered twice
 /// through `extends` can't double a list.
-pub(super) fn concat<T>(child: Vec<T>, mut base: Vec<T>) -> Vec<T>
+fn concat<T>(child: Vec<T>, mut base: Vec<T>) -> Vec<T>
 where
     T: Eq + Hash,
 {
@@ -190,8 +191,39 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
-    use crate::config::parse_luck_config;
+    use crate::load::parse_luck_config;
+
+    const COMMITTED_SCHEMA_PATH: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../editors/vscode/schemas/luckrc.schema.json");
+
+    /// Shared by the regenerator and the drift check so they can't disagree.
+    fn luckrc_schema_json() -> String {
+        let schema = schemars::schema_for!(LuckConfig);
+        let mut pretty = serde_json::to_string_pretty(&schema).expect("schema serializes");
+        pretty.push('\n');
+        pretty
+    }
+
+    #[test]
+    #[ignore = "writes the committed schema; run with --ignored to refresh"]
+    fn regenerate_luckrc_schema() {
+        fs::write(COMMITTED_SCHEMA_PATH, luckrc_schema_json()).expect("write schema");
+    }
+
+    #[test]
+    fn luckrc_schema_is_up_to_date() {
+        // core.autocrlf may have checked the file out with CRLF endings.
+        let committed =
+            fs::read_to_string(COMMITTED_SCHEMA_PATH).expect("read schema").replace("\r\n", "\n");
+        assert_eq!(
+            committed,
+            luckrc_schema_json(),
+            "luckrc.schema.json is stale; regenerate it with `just schema`"
+        );
+    }
 
     #[test]
     fn parses_dialect_and_build_keys() {

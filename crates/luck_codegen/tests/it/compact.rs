@@ -1,11 +1,7 @@
 use luck_ast::Synth;
 use luck_token::LuaVersion;
 
-use crate::common::{assert_compact_fits_worker_stack, assert_compacts_to};
-
-/// Long enough to exhaust a worker stack, and accepted at this length by the
-/// stock Lua 5.1 and 5.4 compilers and by Luau for the optional-type chain.
-const CHAIN_LINKS: usize = 200_000;
+use crate::common::assert_compacts_to;
 
 #[test]
 fn output_capacity_hint_never_changes_output() {
@@ -277,31 +273,4 @@ fn luau_types_compact_to_minimal_whitespace() {
     ] {
         assert_compacts_to(source, expected, LuaVersion::Luau);
     }
-}
-
-#[test]
-fn compact_survives_a_long_left_associative_operator_chain() {
-    assert_compact_fits_worker_stack(
-        "compact::compact_survives_a_long_left_associative_operator_chain",
-        &format!("return a{}", " + a".repeat(CHAIN_LINKS)),
-        LuaVersion::Lua54,
-    );
-}
-
-#[test]
-fn compact_survives_a_long_suffix_chain() {
-    assert_compact_fits_worker_stack(
-        "compact::compact_survives_a_long_suffix_chain",
-        &format!("return a{}", ".b".repeat(CHAIN_LINKS)),
-        LuaVersion::Lua54,
-    );
-}
-
-#[test]
-fn compact_survives_a_long_optional_type_chain() {
-    assert_compact_fits_worker_stack(
-        "compact::compact_survives_a_long_optional_type_chain",
-        &format!("type A = T{}", "?".repeat(CHAIN_LINKS)),
-        LuaVersion::Luau,
-    );
 }

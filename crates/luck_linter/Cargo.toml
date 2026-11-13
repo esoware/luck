@@ -23,3 +23,8 @@ luck_token    = { workspace = true }
 
 rayon      = { workspace = true }
 rustc-hash = { workspace = true }
+schemars   = { workspace = true }
+serde      = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

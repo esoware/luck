@@ -6,7 +6,7 @@ use alloc::collections::BTreeMap;
 
 use luck_ast::{
     Expression, Field, FunctionCall, GenericTypeList, Statement, TableConstructor, Type,
-    TypeDeclarationValue, TypeField, Var, Visitor, ensure_sufficient_stack,
+    TypeDeclarationValue, TypeField, Var, Visitor,
 };
 use luck_semantic::{StdlibEntry, SymbolKind};
 use luck_token::{Span, Token, TokenKind, index_to_offset, offset_to_index};
@@ -406,7 +406,7 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
     }
 
     fn visit_function_call(&mut self, call: &'ast FunctionCall) {
-        ensure_sufficient_stack(|| self.visit_expr(&call.callee));
+        self.visit_expr(&call.callee);
         if let Some(method) = &call.method {
             self.retype(method.span, TYPE_METHOD);
         } else {

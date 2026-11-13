@@ -1,13 +1,12 @@
 use std::path::{Path, PathBuf};
 
+use luck_bundler::DynamicRequire;
+use luck_core::LuaTarget;
+use luck_minifier::TransformConfig;
 use rustc_hash::FxHashSet;
 
-use super::CONFIG_FILE_NAME;
-use super::dynamic_require::DynamicRequire;
-use super::load::ProjectConfig;
-use super::luck_config::{LuckConfig, ProfileOverrides};
-use super::transform_config::TransformConfig;
-use crate::lua_target::LuaTarget;
+use crate::config::{LuckConfig, ProfileOverrides};
+use crate::load::{CONFIG_FILE_NAME, ProjectConfig};
 use crate::path::canonicalize_existing;
 
 #[derive(Debug, Clone)]
@@ -38,11 +37,13 @@ pub fn resolve_build_config(
     let profile_overrides = select_profile(config, profile)?;
     let minify =
         profile_overrides.and_then(|overrides| overrides.minify).or(config.minify).unwrap_or(false);
-    let transforms = profile_overrides
+    let transforms: TransformConfig = profile_overrides
         .and_then(|overrides| overrides.transforms)
         .or(config.transforms)
-        .unwrap_or_default();
-    let dynamic_require = config.dynamic_require.unwrap_or_default();
+        .unwrap_or_default()
+        .into();
+    let dynamic_require: DynamicRequire =
+        config.dynamic_require.map(Into::into).unwrap_or_default();
     let search_paths = config.search_paths_or_default();
     let luck_preamble = config.luck_preamble.unwrap_or(false);
 
@@ -171,7 +172,7 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::config::parse_luck_config;
+    use crate::load::parse_luck_config;
 
     #[test]
     fn rejects_empty_entries() {

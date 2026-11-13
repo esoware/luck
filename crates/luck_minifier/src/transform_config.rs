@@ -1,11 +1,7 @@
 /// Turns individual minifier passes on or off. Every pass except
 /// `rename_globals` is on by default.
-#[derive(Debug, Clone, Copy, serde::Deserialize, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "each bool is an independent key of the transforms object in luck.json"
-)]
+#[derive(Debug, Clone, Copy)]
+#[expect(clippy::struct_excessive_bools, reason = "each bool turns one independent pass on or off")]
 pub struct TransformConfig {
     pub remove_dead_code: bool,
     pub simplify_statements: bool,
@@ -55,13 +51,5 @@ mod tests {
         assert!(config.fold_constants);
         assert!(config.rename_locals);
         assert!(!config.rename_globals);
-    }
-
-    #[test]
-    fn omitted_keys_keep_their_defaults() {
-        let json = r#"{"fold_constants": false}"#;
-        let config: TransformConfig = serde_json::from_str(json).expect("deserialize failed");
-        assert!(!config.fold_constants);
-        assert!(config.rename_locals);
     }
 }

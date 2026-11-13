@@ -13,7 +13,7 @@ Always recurse through `self.walk_*`, because hand-rolled recursion misses neste
 
 ## 2. Config flag
 
-Every pass gets a bool on `TransformConfig` (`luck_core/src/config/transform_config.rs`), then `just schema` (the drift test fails if skipped).
+Every pass gets a bool on `TransformConfig` (`luck_minifier/src/transform_config.rs`), with its default there, and the same field on its `luck.json` shape and both conversions in `luck_config/src/transform_config.rs`, then `just schema` (the drift test fails if skipped).
 
 ## 3. Wire into the pipeline
 
@@ -46,4 +46,4 @@ Other recurring miscompile classes:
 
 ## 6. Gate and bump
 
-`just lint && just test -p luck_minifier -p luck_core`. New transform = minor bump of `luck_minifier` AND `luck_core` (new config field): follow `.agents/skills/bump-versions/SKILL.md`.
+`just lint && just test -p luck_minifier -p luck_config`. New transform = minor bump of `luck_minifier` AND `luck_config` (new config field): follow `.agents/skills/bump-versions/SKILL.md`.

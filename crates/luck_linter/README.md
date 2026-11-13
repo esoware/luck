@@ -8,7 +8,7 @@ Rule-based linter for Lua and Luau with scope-aware analysis.
 
 ## Key features
 
-- **Four categories.** Correctness, Suspicious, Style, and Performance (`luck_core::Category`). Correctness rules run by default, each at its own severity, and the other three are opt-in. In `luck.json`, `categories` sets a category to `off`, `warn`, or `error`, which every rule in it then reports at, and `rules` sets one rule, which wins over its category.
+- **Four categories.** Correctness, Suspicious, Style, and Performance (`Category`). Correctness rules run by default, each at its own severity, and the other three are opt-in. In `luck.json`, `categories` sets a category to `off`, `warn`, or `error`, which every rule in it then reports at, and `rules` sets one rule, which wins over its category.
 - **Auto-fix.** Rules with a safe fix attach `TextEdit`s to their diagnostic, and `apply_fixes` applies them in a single pass, dropping a fix whole when it overlaps another.
 - **Suppression comments.** `-- luck: allow(rule_name)` suppresses the rule for the statement that follows, or for the statement it trails on the same line. `deny(...)` and `warn(...)` set the severity instead, `allow(...) start` and `allow(...) end` bound a region, `-- #luck: allow(...)` covers the whole file, and `*` matches every rule.
 - **Semantic-aware.** Unused/undefined variable, incorrect stdlib usage, and similar rules query `luck_semantic`'s `ScopeTree` and stdlib resolution instead of tracking scopes themselves.
@@ -54,7 +54,8 @@ A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix`
 | `node_type.rs` | `NodeType`, one discriminant per statement, last-statement, and expression variant, and the `NodeTypeSet` bitset node rules declare |
 | `cfg.rs` | `FlowGraph`, the control-flow graph of a block that rules ask how it ends and what can run, and the decision points `cyclomatic_complexity` counts |
 | `local_flow.rs` | `LocalFlow`, what each function's control flow says about its locals, shared by the rules that follow a local's value and computed once per chunk |
-| `diagnostic.rs` | `LintDiagnostic`, the `Finding` rules report, `Severity` and `Category` from `luck_core`, and the `line_column` positions that messages quote |
+| `diagnostic.rs` | `LintDiagnostic`, the `Finding` rules report, `Severity` (`luck_core`'s `DiagnosticSeverity`), `Category`, and the `line_column` positions that messages quote |
+| `config.rs` | `LintConfig`, the `lint` section of `luck.json`: category and rule levels, typed options for the rules that take them, `extra_globals`, the `extends` merge, and the serde impls that keep option errors specific |
 | `suppression.rs` | `-- luck:` directive parsing, shared with `invalid_lint_filter`, and suppression |
 | `fix.rs` | `Fix` and `TextEdit`, and auto-fix application |
 | `format_pattern.rs` | Validators for `string.format`, pattern, `string.pack`, `gsub` replacement, and `os.date` literals |

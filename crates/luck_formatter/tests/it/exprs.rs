@@ -1,5 +1,3 @@
-use std::thread;
-
 use luck_formatter::FormatOptions;
 use luck_token::LuaVersion;
 
@@ -60,25 +58,4 @@ fn multi_assignment() {
 #[test]
 fn condition_parens_removed() {
     assert_format("if (x) then\ny = 1\nend\n", "if x then\n\ty = 1\nend\n");
-}
-
-#[test]
-fn long_chains_format_on_the_worker_stack() {
-    const LINKS: usize = 100_000;
-    let cases = [(" + a", "\n\t+ a"), (".b", "\n\t.b")].map(|(link, formatted_link)| {
-        (
-            format!("return a{}\n", link.repeat(LINKS)),
-            format!("return a{}\n", formatted_link.repeat(LINKS)),
-        )
-    });
-    thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || {
-            for (source, expected) in &cases {
-                assert_format(source, expected);
-            }
-        })
-        .expect("spawn formatting thread")
-        .join()
-        .expect("formatting a long chain must not overflow the stack");
 }

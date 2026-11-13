@@ -1,4 +1,4 @@
-use luck_core::{FormatConfig, parse_luck_config};
+use luck_config::{FormatConfig, parse_luck_config};
 use luck_formatter::{FormatOptions, IndentStyle};
 
 #[test]

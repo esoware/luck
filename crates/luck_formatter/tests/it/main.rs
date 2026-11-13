@@ -9,7 +9,6 @@ mod comments;
 mod equivalence;
 mod exprs;
 mod fixtures;
-mod format_options;
 mod functions;
 mod idempotency;
 mod luau;

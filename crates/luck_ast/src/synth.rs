@@ -102,6 +102,10 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 ///   [`is_valid_identifier`] / [`is_valid_identifier_in`] and rename them
 ///   yourself. Sanitized names are deterministic but can collide, so
 ///   deduplication is up to the caller.
+/// - **Nesting depth.** Every traversal, drop and clone included, recurses
+///   once per level of nesting, so keep the tree within the 256 levels
+///   `luck_parser` accepts. Each link of an operator, call, index, or field
+///   chain counts as a level.
 ///
 /// To format the result, pass it to `luck_formatter::format_block`, with any
 /// [`SyntheticComment`]s wrapped in `Comments::synthetic`. For compact

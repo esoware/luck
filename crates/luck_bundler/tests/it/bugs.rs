@@ -5,10 +5,9 @@
 
 use std::fs;
 use std::path::Path;
-use std::thread::Builder;
 
-use luck_bundler::{BundleOptions, BundleResult, LineMapEntry, bundle};
-use luck_core::{Diagnostic, DynamicRequire};
+use luck_bundler::{BundleOptions, BundleResult, DynamicRequire, LineMapEntry, bundle};
+use luck_core::Diagnostic;
 use luck_semantic::{ScopeId, ScopeKind, ScopeTree, SymbolId};
 use luck_token::LuaVersion;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -519,24 +518,4 @@ fn multiline_require_keeps_its_lone_cr_line_breaks() {
         "the call spanned two extra lines:\n{}",
         result.output
     );
-}
-
-#[test]
-fn long_left_associative_chain_does_not_overflow_the_stack() {
-    let mut huge = "return 1".to_owned();
-    huge.push_str(&"+1".repeat(400_000));
-    huge.push('\n');
-    let directory = write_project(&[
-        ("main.lua", b"return require(\"huge\")\n"),
-        ("huge.lua", huge.as_bytes()),
-    ]);
-    let joined = Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || {
-            bundle_project(directory.path(), "main.lua", LuaVersion::Lua54)
-                .map(|result| result.output.len())
-        })
-        .expect("spawn")
-        .join();
-    assert!(joined.is_ok(), "bundling a long expression must return, not abort");
 }

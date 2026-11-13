@@ -146,38 +146,6 @@ fn lint_counts_a_file_reached_twice_once() {
 }
 
 #[test]
-fn lint_survives_a_long_operator_chain() {
-    let directory = TempDir::new().unwrap();
-    let source = format!("local a = 1\nlocal x = a{}\nreturn x\n", "+a".repeat(8_000));
-    write_file(directory.path(), "main.lua", &source);
-
-    let output = run(directory.path(), &["lint", "main.lua"]);
-
-    assert_eq!(
-        output.status.code(),
-        Some(0i32),
-        "stock Lua accepts this chain, so `lint` must finish instead of overflowing its stack:\n{}",
-        stderr_text(&output)
-    );
-}
-
-#[test]
-fn minify_survives_a_long_operator_chain() {
-    let directory = TempDir::new().unwrap();
-    let source = format!("local a = 1\nlocal x = a{}\nreturn x\n", "+a".repeat(8_000));
-    write_file(directory.path(), "main.lua", &source);
-
-    let output = run(directory.path(), &["minify", "main.lua", "-o", "minified.lua"]);
-
-    assert_eq!(
-        output.status.code(),
-        Some(0i32),
-        "stock Lua accepts this chain, so `minify` must finish instead of overflowing its stack:\n{}",
-        stderr_text(&output)
-    );
-}
-
-#[test]
 fn minify_missing_input_exits_usage() {
     let directory = TempDir::new().unwrap();
 

@@ -83,15 +83,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ar_archive_writer"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "523e5e187fff36fcb8d1d19ccf0ca4ca43ec3d158316057f66dc6f72716bc5ec"
-dependencies = [
- "object",
-]
-
-[[package]]
 name = "ariadne"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -827,7 +818,6 @@ version = "0.5.0"
 dependencies = [
  "luck_token",
  "rustc-hash",
- "stacker",
 ]
 
 [[package]]
@@ -881,6 +871,7 @@ dependencies = [
  "globset",
  "ignore",
  "luck_bundler",
+ "luck_config",
  "luck_core",
  "luck_formatter",
  "luck_linter",
@@ -909,16 +900,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "luck_core"
+name = "luck_config"
 version = "0.5.0"
 dependencies = [
  "globset",
  "json5",
- "luck_token",
+ "luck_bundler",
+ "luck_core",
+ "luck_formatter",
+ "luck_linter",
+ "luck_minifier",
+ "luck_resolver",
  "rustc-hash",
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "luck_core"
+version = "0.5.0"
+dependencies = [
+ "luck_token",
  "simdutf8",
  "tempfile",
 ]
@@ -928,7 +932,6 @@ name = "luck_formatter"
 version = "0.5.0"
 dependencies = [
  "luck_ast",
- "luck_core",
  "luck_lexer",
  "luck_parser",
  "luck_testgen",
@@ -957,6 +960,9 @@ dependencies = [
  "luck_token",
  "rayon",
  "rustc-hash",
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -964,6 +970,7 @@ name = "luck_lsp"
 version = "0.5.0"
 dependencies = [
  "luck_ast",
+ "luck_config",
  "luck_core",
  "luck_formatter",
  "luck_lexer",
@@ -986,6 +993,7 @@ dependencies = [
  "luck_ast",
  "luck_bundler",
  "luck_codegen",
+ "luck_config",
  "luck_core",
  "luck_formatter",
  "luck_lexer",
@@ -1004,7 +1012,6 @@ dependencies = [
  "itoa",
  "luck_ast",
  "luck_codegen",
- "luck_core",
  "luck_parser",
  "luck_token",
  "rustc-hash",
@@ -1052,7 +1059,6 @@ name = "luck_testgen"
 version = "0.0.0"
 dependencies = [
  "luck_codegen",
- "luck_core",
  "luck_formatter",
  "luck_minifier",
  "luck_parser",
@@ -1185,15 +1191,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "object"
-version = "0.39.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
-dependencies = [
- "memchr",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1281,16 +1278,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "psm"
-version = "0.1.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622"
-dependencies = [
- "ar_archive_writer",
- "cc",
 ]
 
 [[package]]
@@ -1600,19 +1587,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "stacker"
-version = "0.1.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "707f49d46706bacf8a2b00d51dace3f9de527c13eec3778f570c411f89e69967"
-dependencies = [
- "cc",
- "cfg-if",
- "libc",
- "psm",
  "windows-sys 0.61.2",
 ]
 

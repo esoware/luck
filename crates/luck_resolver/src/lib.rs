@@ -51,4 +51,4 @@ mod luau;
 mod luaurc;
 mod resolver;
 
-pub use resolver::{ResolveRequest, ResolvedModule, Resolver};
+pub use resolver::{DEFAULT_SEARCH_PATHS, ResolveRequest, ResolvedModule, Resolver};

@@ -436,10 +436,10 @@ fn choose_prefix(modules: &[ModuleInfo]) -> String {
 mod tests {
     use core::fmt::Write as _;
 
-    use luck_core::DynamicRequire;
     use rustc_hash::FxHashMap;
 
     use super::*;
+    use crate::dynamic_require::DynamicRequire;
     use crate::require_extraction::extract_requires;
 
     struct ModuleFixture {

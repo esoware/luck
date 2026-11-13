@@ -1,8 +1,7 @@
 use core::mem;
 
 use luck_ast::{
-    Block, Expression, FunctionBody, Statement, Transform, Var, Visitor, ensure_sufficient_stack,
-    is_prefix_expr,
+    Block, Expression, FunctionBody, Statement, Transform, Var, Visitor, is_prefix_expr,
 };
 use luck_token::{BinOp, CompactString, LuaVersion, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -12,7 +11,7 @@ use crate::binding::{
     identifier_name,
 };
 use crate::expr::{
-    binds_looser_than_unary, can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs,
+    MAX_ADDED_DEPTH, binds_looser_than_unary, can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs,
     is_closed_literal_expr, parenthesize,
 };
 
@@ -127,7 +126,9 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
                         self.shadowed_names.insert(name.into());
                     } else {
                         self.declared_names.insert(name.into());
-                        if is_closed_literal_expr(expr) {
+                        // Each pass can inline into the last one's results, so
+                        // without a bound a run of locals nests without limit.
+                        if is_closed_literal_expr(expr) && literal_depth(expr) <= MAX_ADDED_DEPTH {
                             self.declarations.insert(name.into(), expr.clone());
                             self.open_declaration(name);
                         }
@@ -301,6 +302,38 @@ impl Transform for Inliner {
     }
 }
 
+/// Levels of nesting in a closed literal expression, where only operators,
+/// parentheses, and casts nest.
+fn literal_depth(expr: &Expression) -> usize {
+    match expr {
+        Expression::Parenthesized(paren) => literal_depth(&paren.expr).saturating_add(1),
+        Expression::UnaryOp(unop) => literal_depth(&unop.operand).saturating_add(1),
+        Expression::BinaryOp(binary_op) => {
+            literal_depth(&binary_op.lhs).max(literal_depth(&binary_op.rhs)).saturating_add(1)
+        }
+        // Luau
+        Expression::TypeCast(cast) => literal_depth(&cast.expr).saturating_add(1),
+        // Luau
+        Expression::TypeInstantiation(instantiation) => {
+            literal_depth(&instantiation.expr).saturating_add(1)
+        }
+        Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::Nil(_)
+        | Expression::True(_)
+        | Expression::False(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Var(_)
+        | Expression::FunctionCall(_)
+        | Expression::TableConstructor(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::Error(_) => 0,
+    }
+}
+
 /// `x["k"]` with `x = 37.5` has to become `(37.5)["k"]`.
 fn ensure_prefix(expr: Expression) -> Expression {
     if is_prefix_expr(&expr) { expr } else { parenthesize(expr) }
@@ -355,12 +388,8 @@ fn keeps_grouping(expr: &Expression, position: OperandPosition) -> bool {
 /// The operand `expr` prints last, which is what a following token lands on.
 fn last_operand(expr: &mut Expression) -> &mut Expression {
     match expr {
-        Expression::BinaryOp(binary_op) => {
-            ensure_sufficient_stack(move || last_operand(&mut binary_op.rhs))
-        }
-        Expression::UnaryOp(unop) => {
-            ensure_sufficient_stack(move || last_operand(&mut unop.operand))
-        }
+        Expression::BinaryOp(binary_op) => last_operand(&mut binary_op.rhs),
+        Expression::UnaryOp(unop) => last_operand(&mut unop.operand),
         operand @ (Expression::Number(_)
         | Expression::Integer(_)
         | Expression::StringLiteral(_)
@@ -462,6 +491,8 @@ impl Inliner {
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use super::*;
     use crate::fixtures::{assert_reparses, run_pass};
 
@@ -732,6 +763,18 @@ mod tests {
         // `return 42 + 1`.
         let result = apply("local x = 42\nlocal y = x + 1\nreturn y\n");
         assert!(!result.contains("local"), "Both should be inlined: {result}");
+    }
+
+    #[test]
+    fn stops_inlining_a_run_of_locals_before_it_nests_past_the_depth_cap() {
+        let mut source = String::from("local x0 = 1\n");
+        for (i, previous) in (1..300u32).zip(0u32..) {
+            let _unused = writeln!(source, "local x{i} = x{previous} + 1");
+        }
+        source.push_str("return x299\n");
+        let result = apply(&source);
+        assert_reparses(&result, LuaVersion::Lua54);
+        assert!(result.contains("local"), "the run must stop inlining partway: {result}");
     }
 
     #[test]

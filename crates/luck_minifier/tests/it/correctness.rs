@@ -1,5 +1,3 @@
-use std::thread::Builder;
-
 use crate::common::{minify_lua54, reparses};
 
 const MODULE_SOURCE: &str = r#"
@@ -177,25 +175,9 @@ fn table_code_keeps_globals_and_fields() {
     assert!(result.contains("label"), "Field 'label' missing: {result}");
 }
 
-fn minify_on_a_cli_sized_stack(source: String) -> String {
-    Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || minify_lua54(&source))
-        .expect("spawn minify thread")
-        .join()
-        .expect("minify thread panicked")
-}
-
 #[test]
-fn long_if_return_chain_does_not_overflow_the_stack() {
+fn long_if_return_run_minifies_within_the_depth_cap() {
     let source = format!("{}return 0\n", "if a then return 1 end\n".repeat(6000));
-    let output = minify_on_a_cli_sized_stack(source);
-    assert!(reparses(&output), "flat guards must minify to valid Lua, not abort the process");
-}
-
-#[test]
-fn long_operator_chain_does_not_overflow_the_stack() {
-    let source = format!("return a{}\n", " + a".repeat(6000));
-    let output = minify_on_a_cli_sized_stack(source);
-    assert!(reparses(&output), "a chain the parser accepts must not abort the process");
+    let output = minify_lua54(&source);
+    assert!(reparses(&output), "flat guards must minify to Lua that reparses: {output}");
 }

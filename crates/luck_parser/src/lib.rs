@@ -3,8 +3,10 @@
 //! Pratt expression parser with recursive descent statement parsing for Lua
 //! 5.1-5.5 and Luau.
 //!
-//! Nesting is depth-limited so pathological input can't overflow the stack,
-//! and error recovery reports multiple parse errors in a single pass.
+//! Nesting is capped at 256 levels, and every link of an operator, call,
+//! index, or field chain counts as one, so no consumer of the tree needs more
+//! than a bounded stack. Error recovery reports multiple parse errors in a
+//! single pass.
 //!
 //! # Usage
 //!

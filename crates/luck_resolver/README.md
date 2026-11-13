@@ -21,7 +21,7 @@ The cache lives on the resolver, not in global state, and is never invalidated. 
 
 ## Key features
 
-- **Lua 5.x template paths.** Substitutes the module name, with dots turned into slashes, into template strings (`./?.lua`, `./lib/?/init.lua`, ...) and returns the first hit. An empty list means `luck_core::DEFAULT_SEARCH_PATHS`, so builds and editor links read `"search_paths": []` the same way.
+- **Lua 5.x template paths.** Substitutes the module name, with dots turned into slashes, into template strings (`./?.lua`, `./lib/?/init.lua`, ...) and returns the first hit. An empty list means `DEFAULT_SEARCH_PATHS`, so builds and editor links read `"search_paths": []` the same way.
 - **Luau relative imports.** `./module`, `../module`, with init-file resolution and `.luau` / `.lua` extension probing. A require is walked one component at a time, as Luau's navigator does.
 - **Luau aliases.** `@utils` and similar prefixes resolve through `.luaurc` files discovered up the directory tree, with the closest definition winning. An alias may name another alias, as in `"outer": "@inner/sub"`.
 - **`@self`** is a built-in Luau alias for the current module, with no `.luaurc` entry needed: `@self/x` is `dir/x` from `dir/init.luau` and `main/x` from `main.luau`. A `.luaurc` alias named `self` can't override it and raises W004.

@@ -1,5 +1,5 @@
 use clap::Args;
-use luck_core::TransformConfig;
+use luck_minifier::TransformConfig;
 
 /// Declare both polarities of every pass from one list. The `overrides_with`
 /// ids are generated from the field identifiers, so a flag can only ever

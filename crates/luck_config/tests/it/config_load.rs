@@ -2,7 +2,7 @@ use core::time::Duration;
 use std::fs;
 use std::path::Path;
 
-use luck_core::{discover_config, load_with_extends};
+use luck_config::{discover_config, load_with_extends};
 use tempfile::TempDir;
 
 use crate::common::{finishes_within, in_directory, project_with};

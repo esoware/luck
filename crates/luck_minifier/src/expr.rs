@@ -1,6 +1,5 @@
 use luck_ast::{
-    BinaryOp, Expression, Field, Literal, ParenthesizedExpression, Var, ensure_sufficient_stack,
-    unwrap_parentheses,
+    BinaryOp, Expression, Field, Literal, ParenthesizedExpression, Var, unwrap_parentheses,
 };
 use luck_token::{BinOp, LuaNumber, NumberSubtypes, OperandSide, Span, UnOp, parse_lua_number};
 
@@ -88,19 +87,15 @@ fn literal_kind(expr: &Expression) -> Option<LiteralKind> {
         | Expression::False(_)
         | Expression::Integer(_) => Some(LiteralKind::Other),
         Expression::Parenthesized(paren) => literal_kind(unwrap_parentheses(&paren.expr)),
-        Expression::UnaryOp(unop) => ensure_sufficient_stack(|| {
+        Expression::UnaryOp(unop) => {
             let operand = literal_kind(&unop.operand)?;
             unary_literal_kind(unop.op, operand)
-        }),
-        Expression::BinaryOp(binary_op) => {
-            ensure_sufficient_stack(|| binary_literal_kind(binary_op))
         }
+        Expression::BinaryOp(binary_op) => binary_literal_kind(binary_op),
         // Luau: casts and type arguments are erased before evaluation.
-        Expression::TypeCast(cast) => ensure_sufficient_stack(|| literal_kind(&cast.expr)),
+        Expression::TypeCast(cast) => literal_kind(&cast.expr),
         // Luau
-        Expression::TypeInstantiation(instantiation) => {
-            ensure_sufficient_stack(|| literal_kind(&instantiation.expr))
-        }
+        Expression::TypeInstantiation(instantiation) => literal_kind(&instantiation.expr),
         Expression::VarArg(_)
         | Expression::FunctionDef(_)
         | Expression::Var(_)
@@ -220,10 +215,8 @@ fn is_effect_free(expr: &Expression, can_read_names: bool) -> bool {
             if matches!(binary_op.op, BinOp::And | BinOp::Or) {
                 // and/or never invoke metamethods, so they are pure whenever
                 // both operands are.
-                ensure_sufficient_stack(|| {
-                    is_effect_free(&binary_op.lhs, can_read_names)
-                        && is_effect_free(&binary_op.rhs, can_read_names)
-                })
+                is_effect_free(&binary_op.lhs, can_read_names)
+                    && is_effect_free(&binary_op.rhs, can_read_names)
             } else {
                 literal_kind(expr).is_some()
             }
@@ -245,11 +238,11 @@ fn is_effect_free(expr: &Expression, can_read_names: bool) -> bool {
         // Luau type casts are transparent wrappers, so purity is the inner
         // expression's.
         Expression::TypeCast(cast) => {
-            ensure_sufficient_stack(|| is_effect_free(&cast.expr, can_read_names))
+            is_effect_free(&cast.expr, can_read_names)
         }
         // Luau: explicit type arguments aren't evaluated at runtime.
         Expression::TypeInstantiation(instantiation) => {
-            ensure_sufficient_stack(|| is_effect_free(&instantiation.expr, can_read_names))
+            is_effect_free(&instantiation.expr, can_read_names)
         }
         Expression::FunctionCall(_)
         | Expression::IfExpression(_)
@@ -293,6 +286,10 @@ fn is_valid_table_key(key: &Expression) -> bool {
 pub(crate) fn is_closed_literal_expr(expr: &Expression) -> bool {
     literal_kind(expr).is_some()
 }
+
+/// How many levels of nesting a rewrite may add. The parser caps nesting at
+/// 256 levels, chain links included, and the output has to reparse.
+pub(crate) const MAX_ADDED_DEPTH: usize = 32;
 
 /// Whether `expr` evaluates into exactly one register with no temporaries.
 pub(crate) const fn is_single_register_value(expr: &Expression) -> bool {

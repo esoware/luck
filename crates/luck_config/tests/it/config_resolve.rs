@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use luck_core::{ProjectConfig, load_or_discover_config, resolve_build_config};
+use luck_config::{ProjectConfig, load_or_discover_config, resolve_build_config};
 
 use crate::common::project_with;
 

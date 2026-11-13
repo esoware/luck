@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use luck_bundler::{BundleOptions, BundleResult, DependencyGraph, bundle};
-use luck_core::{Diagnostic, DynamicRequire};
+use luck_bundler::{BundleOptions, BundleResult, DependencyGraph, DynamicRequire, bundle};
+use luck_core::Diagnostic;
 use luck_token::LuaVersion;
 use tempfile::TempDir;
 

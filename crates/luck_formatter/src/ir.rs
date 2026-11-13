@@ -45,6 +45,10 @@ pub(crate) enum Tag {
     /// a call's function or table argument does. Closed by `EndGroup`.
     StartHuggedGroup(GroupId),
     EndGroup,
+    /// A group that doesn't fit flat where it starts tries the next line, one
+    /// indent deeper, before it breaks in place.
+    StartNextLineGroup(GroupId),
+    EndNextLineGroup,
     StartIndent,
     EndIndent,
     /// Content indented only when the referenced group expanded.
@@ -295,6 +299,19 @@ where
         f.push(FormatElement::Tag(Tag::StartGroup(id)));
         content.fmt(f);
         f.push(FormatElement::Tag(Tag::EndGroup));
+    })
+}
+
+/// See [`Tag::StartNextLineGroup`].
+pub(crate) fn next_line_group<T>(content: T) -> impl Format
+where
+    T: Format,
+{
+    format_with(move |f| {
+        let id = f.group_id();
+        f.push(FormatElement::Tag(Tag::StartNextLineGroup(id)));
+        content.fmt(f);
+        f.push(FormatElement::Tag(Tag::EndNextLineGroup));
     })
 }
 

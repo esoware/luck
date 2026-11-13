@@ -70,7 +70,7 @@ bench *args:
 
 # Regenerate editors/vscode/schemas/luckrc.schema.json after a config type changes
 schema:
-  cargo test -p luck_core regenerate_luckrc_schema -- --ignored
+  cargo test -p luck_config regenerate_luckrc_schema -- --ignored
 
 # Regenerate roblox_api.toml and roblox_enums.toml from the live Roblox API dump
 roblox-api:

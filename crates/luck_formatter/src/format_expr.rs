@@ -3,7 +3,7 @@
 
 use luck_ast::{
     BinaryOp, Expression, FieldAccess, IfExpression, InterpolatedString, ParenthesizedExpression,
-    UnaryOp, Var, ensure_sufficient_stack, expr_starts_with_brace,
+    UnaryOp, Var, expr_starts_with_brace,
 };
 use luck_token::{BinOp, CompactString, Token, TokenKind, UnOp};
 
@@ -49,13 +49,13 @@ impl Format for Expression {
             Self::IfExpression(if_expr) => if_expr.fmt(f), // Luau
             Self::InterpolatedString(interpolated) => interpolated.fmt(f), // Luau
             // Luau
-            Self::TypeCast(cast) => ensure_sufficient_stack(|| {
+            Self::TypeCast(cast) => {
                 (&cast.expr, space(), token("::"), space(), &cast.type_annotation).fmt(f);
-            }),
+            }
             // Luau
-            Self::TypeInstantiation(instantiation) => ensure_sufficient_stack(|| {
+            Self::TypeInstantiation(instantiation) => {
                 (&instantiation.expr, ExplicitTypeArgs(&instantiation.type_args)).fmt(f);
-            }),
+            }
 
             // A parse-recovery placeholder has no text to print.
             Self::Error(_) => {}
@@ -68,9 +68,9 @@ impl Format for Var {
         match self {
             Self::Name(name) => name.fmt(f),
             Self::FieldAccess(access) => access.fmt(f),
-            Self::Index(index) => ensure_sufficient_stack(|| {
+            Self::Index(index) => {
                 (&index.prefix, BracketedKey(&index.index)).fmt(f);
-            }),
+            }
         }
     }
 }
@@ -144,21 +144,19 @@ fn collect_access_chain(access: &FieldAccess) -> (&Expression, Vec<&Token>) {
 impl Format for FieldAccess {
     fn fmt(&self, f: &mut Formatter) {
         let (root, names) = collect_access_chain(self);
-        ensure_sufficient_stack(|| {
-            if names.len() >= 3 {
-                (
-                    root,
-                    group(indent(format_with(|indented| {
-                        for name in &names {
-                            (soft_line(), token("."), *name).fmt(indented);
-                        }
-                    }))),
-                )
-                    .fmt(f);
-            } else {
-                (&self.prefix, token("."), &self.name).fmt(f);
-            }
-        });
+        if names.len() >= 3 {
+            (
+                root,
+                group(indent(format_with(|indented| {
+                    for name in &names {
+                        (soft_line(), token("."), *name).fmt(indented);
+                    }
+                }))),
+            )
+                .fmt(f);
+        } else {
+            (&self.prefix, token("."), &self.name).fmt(f);
+        }
     }
 }
 
@@ -229,13 +227,11 @@ fn write_binary_chain(f: &mut Formatter, binary_op: &BinaryOp, is_indented: bool
     });
     // One group over the whole chain, so it's either flat or breaks before
     // every operator.
-    ensure_sufficient_stack(|| {
-        if is_indented {
-            group((first, indent(&operators))).fmt(f);
-        } else {
-            group((first, &operators)).fmt(f);
-        }
-    });
+    if is_indented {
+        group((first, indent(&operators))).fmt(f);
+    } else {
+        group((first, &operators)).fmt(f);
+    }
 }
 
 /// `-` right before a nested unary `-` would form `--` and start a comment, so
@@ -251,13 +247,13 @@ impl Format for UnaryOp {
         if self.op == UnOp::Not || is_double_minus_hazard(self.op, &self.operand) {
             space().fmt(f);
         }
-        ensure_sufficient_stack(|| self.operand.fmt(f));
+        self.operand.fmt(f);
     }
 }
 
 impl Format for ParenthesizedExpression {
     fn fmt(&self, f: &mut Formatter) {
-        ensure_sufficient_stack(|| (token("("), &self.expr, token(")")).fmt(f));
+        (token("("), &self.expr, token(")")).fmt(f);
     }
 }
 

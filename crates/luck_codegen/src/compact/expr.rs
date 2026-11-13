@@ -1,7 +1,7 @@
 use luck_ast::{
     BinaryOp, Expression, Field, FieldAccess, FunctionArgs, FunctionCall, FunctionDef,
     IfExpression, IndexExpression, InterpolatedString, ParenthesizedExpression, TableConstructor,
-    TypeCast, TypeInstantiation, UnaryOp, Var, ensure_sufficient_stack, expr_starts_with_brace,
+    TypeCast, TypeInstantiation, UnaryOp, Var, expr_starts_with_brace,
 };
 use luck_token::TokenKind;
 
@@ -63,7 +63,7 @@ impl CompactPrinter {
     }
 
     pub(super) fn emit_function_call(&mut self, call: &FunctionCall) {
-        ensure_sufficient_stack(|| self.emit_expr(&call.callee));
+        self.emit_expr(&call.callee);
         if let Some(method_name) = &call.method {
             self.emit_fixed(":");
             self.emit_token(method_name);
@@ -92,7 +92,7 @@ impl CompactPrinter {
 
     fn emit_parenthesized_expr(&mut self, parenthesized: &ParenthesizedExpression) {
         self.emit_fixed("(");
-        ensure_sufficient_stack(|| self.emit_expr(&parenthesized.expr));
+        self.emit_expr(&parenthesized.expr);
         self.emit_fixed(")");
     }
 
@@ -125,31 +125,27 @@ impl CompactPrinter {
     }
 
     fn emit_index_expr(&mut self, index: &IndexExpression) {
-        ensure_sufficient_stack(|| {
-            self.emit_expr(&index.prefix);
-            self.emit_fixed("[");
-            self.emit_expr(&index.index);
-            self.emit_fixed("]");
-        });
+        self.emit_expr(&index.prefix);
+        self.emit_fixed("[");
+        self.emit_expr(&index.index);
+        self.emit_fixed("]");
     }
 
     fn emit_field_access(&mut self, field: &FieldAccess) {
-        ensure_sufficient_stack(|| self.emit_expr(&field.prefix));
+        self.emit_expr(&field.prefix);
         self.emit_fixed(".");
         self.emit_token(&field.name);
     }
 
     fn emit_binary_op(&mut self, binary_op: &BinaryOp) {
-        ensure_sufficient_stack(|| {
-            self.emit_expr(&binary_op.lhs);
-            self.emit_fixed(binary_op.op.static_text());
-            self.emit_expr(&binary_op.rhs);
-        });
+        self.emit_expr(&binary_op.lhs);
+        self.emit_fixed(binary_op.op.static_text());
+        self.emit_expr(&binary_op.rhs);
     }
 
     fn emit_unary_op(&mut self, unary_op: &UnaryOp) {
         self.emit_fixed(unary_op.op.static_text());
-        ensure_sufficient_stack(|| self.emit_expr(&unary_op.operand));
+        self.emit_expr(&unary_op.operand);
     }
 
     fn emit_if_expr(&mut self, if_expr: &IfExpression) {
@@ -197,13 +193,13 @@ impl CompactPrinter {
     }
 
     fn emit_type_cast(&mut self, cast: &TypeCast) {
-        ensure_sufficient_stack(|| self.emit_expr(&cast.expr));
+        self.emit_expr(&cast.expr);
         self.emit_fixed("::");
         self.emit_type(&cast.type_annotation);
     }
 
     fn emit_type_instantiation(&mut self, instantiation: &TypeInstantiation) {
-        ensure_sufficient_stack(|| self.emit_expr(&instantiation.expr));
+        self.emit_expr(&instantiation.expr);
         self.emit_fixed("<<");
         self.emit_punctuated(&instantiation.type_args.args, ",", Self::emit_type);
         self.emit_fixed(">>");

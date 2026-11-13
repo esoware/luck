@@ -12,6 +12,10 @@
 //! fit flat. It stays flat while hugged groups expand in its place: first
 //! only those a forced break expands anyway, then all of them. That is how
 //! `f(a, function()` keeps its head on one line.
+//!
+//! A next-line group that doesn't fit flat where it starts is measured again
+//! from the start of the next line, one indent deeper. If it fits there, the
+//! printer breaks the line before it and prints it flat.
 
 use core::mem::take;
 
@@ -58,6 +62,7 @@ pub(crate) fn print(
         modes: Vec::new(),
         group_modes: vec![None; group_count],
         hugs: vec![Vec::new(); group_count],
+        next_line_moves: Vec::new(),
         suffixes: Vec::new(),
         is_pending_space: false,
         is_pending_indent: !base_indent.is_empty(),
@@ -77,16 +82,21 @@ enum Region {
 impl Region {
     const fn opens(self, element: &FormatElement) -> bool {
         match self {
-            Self::Group => {
-                matches!(element, FormatElement::Tag(Tag::StartGroup(_) | Tag::StartHuggedGroup(_)))
-            }
+            Self::Group => matches!(
+                element,
+                FormatElement::Tag(
+                    Tag::StartGroup(_) | Tag::StartHuggedGroup(_) | Tag::StartNextLineGroup(_)
+                )
+            ),
             Self::Entry => matches!(element, FormatElement::Tag(Tag::StartEntry)),
         }
     }
 
     const fn closes(self, element: &FormatElement) -> bool {
         match self {
-            Self::Group => matches!(element, FormatElement::Tag(Tag::EndGroup)),
+            Self::Group => {
+                matches!(element, FormatElement::Tag(Tag::EndGroup | Tag::EndNextLineGroup))
+            }
             Self::Entry => matches!(element, FormatElement::Tag(Tag::EndEntry)),
         }
     }
@@ -133,6 +143,9 @@ struct Printer {
     group_modes: Vec<Option<PrintMode>>,
     /// The hugged groups each group holds, in order, by the holder's id.
     hugs: Vec<Vec<Hug>>,
+    /// Per open next-line group, whether it moved to the next line, so its
+    /// end takes back the indent it added.
+    next_line_moves: Vec<bool>,
     suffixes: Vec<FormatElement>,
     is_pending_space: bool,
     is_pending_indent: bool,
@@ -154,13 +167,13 @@ fn propagate_expand(
     for (index, element) in elements.iter().enumerate() {
         let content_start = index.saturating_add(1);
         match element {
-            FormatElement::Tag(Tag::StartGroup(id)) => {
+            FormatElement::Tag(Tag::StartGroup(id) | Tag::StartNextLineGroup(id)) => {
                 open_groups.push(OpenGroup { id: *id, content_start, is_hugged: false });
             }
             FormatElement::Tag(Tag::StartHuggedGroup(id)) => {
                 open_groups.push(OpenGroup { id: *id, content_start, is_hugged: true });
             }
-            FormatElement::Tag(Tag::EndGroup) => {
+            FormatElement::Tag(Tag::EndGroup | Tag::EndNextLineGroup) => {
                 open_groups.pop();
             }
             FormatElement::Tag(Tag::StartLineSuffix) => is_in_suffix = true,
@@ -268,6 +281,40 @@ impl Printer {
                     *group_mode = Some(mode);
                 }
                 self.modes.push(mode);
+            }
+            Tag::StartNextLineGroup(id) => {
+                let next_line_indent =
+                    self.indent_columns().saturating_add(self.columns_per_indent);
+                let (mode, is_moved) = match self.group_mode(id) {
+                    Some(forced) => (forced, false),
+                    None if self.current_mode() == PrintMode::Flat
+                        || self.fits(rest, Region::Group, 0) =>
+                    {
+                        (PrintMode::Flat, false)
+                    }
+                    None if self.fits_from(rest, Region::Group, next_line_indent, 1) => {
+                        (PrintMode::Flat, true)
+                    }
+                    None => (PrintMode::Expanded, false),
+                };
+                if let Some(group_mode) = self.group_modes.get_mut(id.index()) {
+                    *group_mode = Some(mode);
+                }
+                if is_moved {
+                    self.emit_newline(false);
+                    self.indent_level = self.indent_level.saturating_add(1);
+                    // Written now, so an indent inside the flat content
+                    // can't deepen this line.
+                    self.flush_indent();
+                }
+                self.next_line_moves.push(is_moved);
+                self.modes.push(mode);
+            }
+            Tag::EndNextLineGroup => {
+                self.modes.pop();
+                if self.next_line_moves.pop() == Some(true) {
+                    self.indent_level = self.indent_level.saturating_sub(1);
+                }
             }
             Tag::StartFlat => self.modes.push(PrintMode::Flat),
             Tag::EndGroup | Tag::EndFlat => {

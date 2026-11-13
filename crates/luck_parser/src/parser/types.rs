@@ -209,14 +209,21 @@ impl Parser<'_> {
         Punctuated::from_items(members)
     }
 
+    /// Each `?` nests the type one level deeper, so each one counts toward
+    /// the depth cap until the run ends.
     fn parse_postfix_type(&mut self, primary: Type) -> Type {
+        let chain_depth = self.nesting_depth;
         let mut result = primary;
         // `?` stacks (`T??`), which Luau also accepts.
         while matches!(self.peek(), TokenKind::Question) {
             let question = self.advance_span();
             let span = result.span().merge(question);
             result = Type::Optional(Box::new(OptionalType { span, type_value: result }));
+            if !self.enter_depth() {
+                break;
+            }
         }
+        self.nesting_depth = chain_depth;
         result
     }
 

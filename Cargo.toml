@@ -18,6 +18,7 @@ rust-version = "1.99.1"
 luck_ast       = { version = "0.5.0", path = "crates/luck_ast" }
 luck_bundler   = { version = "0.5.0", path = "crates/luck_bundler" }
 luck_codegen   = { version = "0.5.0", path = "crates/luck_codegen" }
+luck_config    = { version = "0.5.0", path = "crates/luck_config" }
 luck_core      = { version = "0.5.0", path = "crates/luck_core" }
 luck_formatter = { version = "0.5.0", path = "crates/luck_formatter" }
 luck_lexer     = { version = "0.5.0", path = "crates/luck_lexer" }
@@ -53,7 +54,6 @@ schemars              = "1"
 serde                 = { version = "1", features = ["derive"] }
 serde_json            = "1"
 simdutf8              = { version = "0.1.5", features = ["aarch64_neon"] }
-stacker               = "0.1"
 tar                   = "0.4"
 tempfile              = "3"
 tokio                 = "1"

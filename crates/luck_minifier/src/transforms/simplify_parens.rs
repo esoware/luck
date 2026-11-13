@@ -1,7 +1,4 @@
-use luck_ast::{
-    Block, Expression, FunctionArgs, FunctionCall, Transform, Var, ensure_sufficient_stack,
-    is_prefix_expr,
-};
+use luck_ast::{Block, Expression, FunctionArgs, FunctionCall, Transform, Var, is_prefix_expr};
 
 use crate::expr::{
     binds_looser_than_unary, can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, ends_in_if_expr,
@@ -150,21 +147,21 @@ impl Transform for ParenSimplifier {
 
     fn transform_var(&mut self, var: Var) -> Var {
         match var {
-            Var::FieldAccess(mut field_access) => ensure_sufficient_stack(|| {
+            Var::FieldAccess(mut field_access) => {
                 field_access.prefix = self.transform_prefix(field_access.prefix.take());
                 Var::FieldAccess(field_access)
-            }),
-            Var::Index(mut index_expr) => ensure_sufficient_stack(|| {
+            }
+            Var::Index(mut index_expr) => {
                 index_expr.prefix = self.transform_prefix(index_expr.prefix.take());
                 index_expr.index = self.transform_expr(index_expr.index.take());
                 Var::Index(index_expr)
-            }),
+            }
             name @ Var::Name(_) => self.walk_var(name),
         }
     }
 
     fn transform_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
-        call.callee = ensure_sufficient_stack(|| self.transform_prefix(call.callee.take()));
+        call.callee = self.transform_prefix(call.callee.take());
         call.explicit_type_args = call.explicit_type_args.take().map(|mut type_args| {
             *type_args = self.walk_type_args(*type_args);
             type_args

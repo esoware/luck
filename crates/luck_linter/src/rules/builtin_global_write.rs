@@ -170,10 +170,10 @@ impl<'ast> Visitor<'ast> for FieldWriteChecker<'_> {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LintConfig;
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::config::LintConfig;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{run_rule, run_rule_roblox, run_rule_with_config};
 

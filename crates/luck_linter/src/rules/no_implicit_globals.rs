@@ -42,10 +42,10 @@ impl WholeRule for NoImplicitGlobals {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LintConfig;
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::config::LintConfig;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule_with_config;
 

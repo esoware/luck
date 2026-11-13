@@ -48,7 +48,7 @@ pub enum Var {
     FieldAccess(Box<FieldAccess>),
 }
 
-#[derive(Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCall {
     pub span: Span,
     pub callee: Expression,
@@ -71,7 +71,7 @@ pub enum FunctionArgs {
     StringLiteral(Literal),
 }
 
-#[derive(Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinaryOp {
     pub span: Span,
     pub lhs: Expression,
@@ -79,14 +79,14 @@ pub struct BinaryOp {
     pub rhs: Expression,
 }
 
-#[derive(Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnaryOp {
     pub span: Span,
     pub op: UnOp,
     pub operand: Expression,
 }
 
-#[derive(Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParenthesizedExpression {
     pub span: Span,
     pub expr: Expression,
@@ -105,14 +105,14 @@ pub enum Field {
     Positional { span: Span, value: Expression },
 }
 
-#[derive(Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexExpression {
     pub span: Span,
     pub prefix: Expression,
     pub index: Expression,
 }
 
-#[derive(Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldAccess {
     pub span: Span,
     pub prefix: Expression,
@@ -155,14 +155,14 @@ pub struct InterpolatedStringSegment {
     pub expr: Option<Expression>,
 }
 
-#[derive(Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeCast {
     pub span: Span,
     pub expr: Expression,
     pub type_annotation: Type,
 }
 
-#[derive(Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeInstantiation {
     pub span: Span,
     pub expr: Expression,

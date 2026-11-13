@@ -4,8 +4,44 @@ use crate::fix::Fix;
 
 pub type Severity = luck_core::DiagnosticSeverity;
 
-/// Defined in `luck_core` so the config can deserialize it.
-pub use luck_core::Category;
+/// A group of lint rules, which `categories` sets the level of together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Category {
+    /// Outright wrong or useless code.
+    Correctness,
+    /// Most likely wrong or useless.
+    Suspicious,
+    /// Idiomatic code style.
+    Style,
+    /// Performance improvements.
+    Performance,
+}
+
+impl Category {
+    /// The name `luck.json`, `--rules`, and `--print-config` spell it with.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Correctness => "correctness",
+            Self::Suspicious => "suspicious",
+            Self::Style => "style",
+            Self::Performance => "performance",
+        }
+    }
+
+    /// Parses a `-A`/`-W`/`-D` flag value, case-insensitively, or `None` when
+    /// it names no category.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "correctness" => Some(Self::Correctness),
+            "suspicious" => Some(Self::Suspicious),
+            "style" => Some(Self::Style),
+            "performance" | "perf" => Some(Self::Performance),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LintDiagnostic {

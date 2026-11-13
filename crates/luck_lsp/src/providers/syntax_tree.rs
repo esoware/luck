@@ -37,9 +37,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_long_chain_dumps_within_the_bound() {
-        let chain = vec!["1"; 50_000].join("+");
-        let text = format!("local x = {chain}\n");
+    fn long_chains_dump_within_the_bound() {
+        let chain = vec!["1"; 200].join("+");
+        let text = format!("local x = {chain}\n").repeat(40);
         let document = DocumentState::new(text, 1, LuaTarget::Lua54, FxHashSet::default());
         let dump = syntax_tree(&document);
         assert!(dump.len() <= MAX_DUMP_BYTES.saturating_add(64), "{}", dump.len());

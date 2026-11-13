@@ -10,7 +10,7 @@ The parser consumes a token stream from `luck_lexer` and produces an AST from `l
 
 - **Pratt expression parsing.** One precedence table covers every Lua version, from `or` and `and` through comparisons, bitwise operators, concatenation, arithmetic, unary operators, and power. Bitwise operators only bind where the version has them.
 - **Recursive descent for statements.** Control flow, declarations, and assignments parse top-down.
-- **Depth limiting.** Nesting caps at 256 levels to protect the host stack. This is a tool resource limit, not a dialect grammar rule or an emulation of a VM's configurable compiler limits, and deeply nested valid programs can exceed it.
+- **Depth limiting.** Nesting caps at 256 levels to protect the host stack, and every link of an operator, call, index, field, or `?` chain counts as a level, as in Luau's parser. Every consumer recurses over the tree, so the cap is what bounds their stack. This is a tool resource limit, not a dialect grammar rule or an emulation of a VM's configurable compiler limits, and deeply nested valid programs can exceed it.
 - **Error recovery.** On failure, the parser records a `SourceError` and skips to the next statement start or block boundary, so one pass reports many errors.
 - **Construct-aware errors.** A compound statement that is missing one of its own keywords says which construct expected it: ``missing `then` in if-statement``.
 - **Version-gated syntax.** Goto and labels (5.2+), bitwise operators (5.3+), local attributes (5.4+), `global` declarations, leading attributes, and named varargs (5.5), plus the Luau extensions. `global` is an ordinary name, as in stock 5.5 builds, and opens a declaration only at the start of a statement when `<`, a name, `*`, or `function` follows. The Luau extensions cover 64-bit integer literals, explicit type instantiation, value exports, and the full Luau type grammar.
@@ -23,7 +23,7 @@ The parser pulls tokens from `luck_lexer` one at a time, with one token of looka
 
 ### Expression parsing
 
-Each binary operator has a precedence level and an associativity, defined in `luck_token`. `parse_expr(min_precedence)` parses a unary operator or a primary expression with its suffix chain (field access, indexing, calls, method calls, Luau type instantiation) and any Luau `::` cast, then loops over binary operators whose precedence is at least `min_precedence`. A left-associative operator parses its right operand one level higher, so chains like `a + b + c` grow in the loop, while the right-associative `..` and `^` recurse, under the depth limit.
+Each binary operator has a precedence level and an associativity, defined in `luck_token`. `parse_expr(min_precedence)` parses a unary operator or a primary expression with its suffix chain (field access, indexing, calls, method calls, Luau type instantiation) and any Luau `::` cast, then loops over binary operators whose precedence is at least `min_precedence`. A left-associative operator parses its right operand one level higher, so chains like `a + b + c` grow in the loop, while the right-associative `..` and `^` recurse. Either way each operator counts toward the depth limit until the chain ends, and so does each suffix.
 
 ### Statement parsing
 

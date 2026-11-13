@@ -1,7 +1,6 @@
 use crate::expr::{Expression, Field, FunctionArgs, FunctionCall, TableConstructor, Var};
 use crate::function::FunctionBody;
 use crate::punctuated::Punctuated;
-use crate::stack::ensure_sufficient_stack;
 use crate::stmt::{AttributedName, Block, LastStatement, Statement, TypeDeclarationValue};
 use crate::types::{GenericTypeList, Type, TypeField};
 
@@ -189,17 +188,17 @@ pub trait Visitor<'ast> {
                 self.visit_function_call(call);
             }
             Expression::Parenthesized(parenthesized) => {
-                ensure_sufficient_stack(|| self.visit_expr(&parenthesized.expr));
+                self.visit_expr(&parenthesized.expr);
             }
             Expression::TableConstructor(table) => {
                 self.visit_table_constructor(table);
             }
-            Expression::BinaryOp(binary_op) => ensure_sufficient_stack(|| {
+            Expression::BinaryOp(binary_op) => {
                 self.visit_expr(&binary_op.lhs);
                 self.visit_expr(&binary_op.rhs);
-            }),
+            }
             Expression::UnaryOp(unary_op) => {
-                ensure_sufficient_stack(|| self.visit_expr(&unary_op.operand));
+                self.visit_expr(&unary_op.operand);
             }
             // Luau
             Expression::IfExpression(if_expr) => {
@@ -221,12 +220,12 @@ pub trait Visitor<'ast> {
             }
             // Luau
             Expression::TypeCast(cast) => {
-                ensure_sufficient_stack(|| self.visit_expr(&cast.expr));
+                self.visit_expr(&cast.expr);
                 self.visit_type(&cast.type_annotation);
             }
             // Luau
             Expression::TypeInstantiation(instantiation) => {
-                ensure_sufficient_stack(|| self.visit_expr(&instantiation.expr));
+                self.visit_expr(&instantiation.expr);
                 for arg in instantiation.type_args.args.iter() {
                     self.visit_type(arg);
                 }
@@ -237,18 +236,18 @@ pub trait Visitor<'ast> {
     fn walk_var(&mut self, var: &'ast Var) {
         match var {
             Var::Name(_) => {}
-            Var::Index(index_expr) => ensure_sufficient_stack(|| {
+            Var::Index(index_expr) => {
                 self.visit_expr(&index_expr.prefix);
                 self.visit_expr(&index_expr.index);
-            }),
+            }
             Var::FieldAccess(field_access) => {
-                ensure_sufficient_stack(|| self.visit_expr(&field_access.prefix));
+                self.visit_expr(&field_access.prefix);
             }
         }
     }
 
     fn walk_function_call(&mut self, call: &'ast FunctionCall) {
-        ensure_sufficient_stack(|| self.visit_expr(&call.callee));
+        self.visit_expr(&call.callee);
         if let Some(type_args) = &call.explicit_type_args {
             for type_arg in type_args.args.iter() {
                 self.visit_type(type_arg);
@@ -341,7 +340,7 @@ pub trait Visitor<'ast> {
                 self.visit_type(&function_type.return_type);
             }
             Type::Optional(optional) => {
-                ensure_sufficient_stack(|| self.visit_type(&optional.type_value));
+                self.visit_type(&optional.type_value);
             }
             Type::Union(union) => {
                 for item in union.types.iter() {

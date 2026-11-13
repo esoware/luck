@@ -2,8 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_bundler::{BundleOptions, LineMapEntry, bundle};
-use luck_core::{DynamicRequire, LuaTarget, check_output_paths};
+use luck_bundler::{BundleOptions, DynamicRequire, LineMapEntry, bundle};
+use luck_config::check_output_paths;
+use luck_core::LuaTarget;
 
 use crate::exit::{Exit, fail_with_diags, fail_with_source_errors, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
@@ -63,7 +64,7 @@ impl BundleArgs {
         let target = resolve_configured_target(&config, self.target, &self.entry)?;
         let version = target.lua_version();
         let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require);
-        let transforms = self.minify_flags.apply_to(config.transforms.unwrap_or_default());
+        let transforms = self.minify_flags.apply_to(config.transforms.unwrap_or_default().into());
 
         let (entry_path, project_root) = entry_and_root(&self.entry)?;
 

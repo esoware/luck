@@ -4,7 +4,6 @@
 use luck_ast::{
     FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, IntersectionType,
     NamedType, TableType, Type, TypeArgs, TypeField, TypeofType, UnionType,
-    ensure_sufficient_stack,
 };
 
 use luck_token::TokenKind;
@@ -24,7 +23,7 @@ impl Format for Type {
             Self::Table(table) => table.fmt(f),
             Self::Function(function) => function.fmt(f),
             Self::Optional(optional) => {
-                ensure_sufficient_stack(|| (&optional.type_value, token("?")).fmt(f));
+                (&optional.type_value, token("?")).fmt(f);
             }
             Self::Union(union) => union.fmt(f),
             Self::Intersection(intersection) => intersection.fmt(f),

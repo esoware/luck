@@ -1,9 +1,9 @@
 use core::mem;
 
 use luck_ast::Block;
-use luck_core::TransformConfig;
 use luck_token::{CommentKind, LuaVersion, SourceError, leading_hot_comments};
 
+use crate::transform_config::TransformConfig;
 use crate::transforms;
 
 /// Measured corpora converge in two outer rounds, so the cap only bounds

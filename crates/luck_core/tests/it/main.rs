@@ -6,10 +6,4 @@
     reason = "a test panics to fail, so a Panics section says nothing"
 )]
 
-mod common;
-
-mod config_filter;
-mod config_load;
-mod config_resolve;
-mod editorconfig;
 mod path;

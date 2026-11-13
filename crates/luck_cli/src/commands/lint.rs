@@ -4,7 +4,8 @@ use std::io::{self, BufWriter, Write as _};
 use std::path::{self, Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, ValueEnum};
-use luck_core::{Diagnostic, LuaTarget, LuckConfig, normalize_path, read_source_file};
+use luck_config::LuckConfig;
+use luck_core::{Diagnostic, LuaTarget, normalize_path, read_source_file};
 use luck_linter::{Category, LintConfig, LintDiagnostic, RuleLevel, Severity};
 use luck_token::LuaVersion;
 

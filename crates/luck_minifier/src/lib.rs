@@ -18,7 +18,7 @@
 //! # Usage
 //!
 //! ```
-//! use luck_core::TransformConfig;
+//! use luck_minifier::TransformConfig;
 //! use luck_token::LuaVersion;
 //!
 //! let output = luck_minifier::minify("return 1 + 2", LuaVersion::Lua54, &TransformConfig::default()).unwrap();
@@ -41,6 +41,8 @@ mod expr;
 mod fixtures;
 mod limits;
 mod pipeline;
+mod transform_config;
 mod transforms;
 
 pub use pipeline::minify;
+pub use transform_config::TransformConfig;

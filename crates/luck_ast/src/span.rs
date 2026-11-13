@@ -1,9 +1,12 @@
-//! `span()` accessors for the node enums, kept in one place instead of beside
-//! each node type.
+//! `span()` accessors, and `take()` where a node enum has a childless
+//! placeholder, kept in one place instead of beside each node type.
+
+use core::mem;
 
 use luck_token::Span;
 
 use crate::expr::{Expression, Field, FunctionArgs, Var};
+use crate::punctuated::Punctuated;
 use crate::stmt::{LastStatement, Statement};
 use crate::types::{Type, TypeField};
 
@@ -80,6 +83,13 @@ impl Expression {
             Self::TypeInstantiation(expr) => expr.span,
         }
     }
+
+    /// Moves the value out of a `&mut` and leaves an error placeholder
+    /// behind. Assign the replacement back.
+    #[must_use]
+    pub fn take(&mut self) -> Self {
+        mem::replace(self, Self::Error(Span::default()))
+    }
 }
 
 impl Var {
@@ -101,6 +111,13 @@ impl FunctionArgs {
             Self::TableConstructor(table) => table.span,
             Self::StringLiteral(literal) => literal.span,
         }
+    }
+
+    /// Moves the value out of a `&mut` and leaves an empty list behind, as
+    /// [`Expression::take`] does.
+    #[must_use]
+    pub fn take(&mut self) -> Self {
+        mem::replace(self, Self::Parenthesized { span: Span::default(), args: Punctuated::empty() })
     }
 }
 
@@ -133,6 +150,13 @@ impl Type {
             Self::Variadic(node) => node.span,
             Self::GenericPack(node) => node.span,
         }
+    }
+
+    /// Moves the value out of a `&mut` and leaves an error placeholder
+    /// behind, as [`Expression::take`] does.
+    #[must_use]
+    pub fn take(&mut self) -> Self {
+        mem::replace(self, Self::Error(Span::default()))
     }
 }
 

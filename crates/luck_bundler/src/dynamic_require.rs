@@ -2,8 +2,7 @@ use core::str::FromStr;
 
 /// How the bundler treats a `require` whose argument isn't a string literal
 /// and so can't be resolved at build time.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum DynamicRequire {
     /// Fail the bundle (E002).
     Error,

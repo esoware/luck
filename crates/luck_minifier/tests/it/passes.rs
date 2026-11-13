@@ -1,4 +1,4 @@
-use luck_core::TransformConfig;
+use luck_minifier::TransformConfig;
 use luck_token::LuaVersion;
 
 use crate::common::{minify_lua54, minify_luau, minify_with, reparses};

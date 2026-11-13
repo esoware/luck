@@ -1,10 +1,13 @@
 use alloc::borrow::Cow;
 use std::path::Path;
 
-use luck_core::{DEFAULT_SEARCH_PATHS, Diagnostic};
+use luck_core::Diagnostic;
 use luck_token::{LuaVersion, Span};
 
 use crate::luau::ModuleProbes;
+
+/// Lua 5.x search path templates used when `search_paths` is unset or empty.
+pub const DEFAULT_SEARCH_PATHS: &[&str] = &["?.lua", "?/init.lua"];
 use crate::luaurc::AliasCache;
 use crate::{lua, luau};
 

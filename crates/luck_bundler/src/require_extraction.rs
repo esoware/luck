@@ -1,10 +1,12 @@
 use luck_ast::{
     Block, Expression, FunctionArgs, FunctionBody, FunctionCall, Statement, Var, Visitor,
 };
-use luck_core::{Diagnostic, DynamicRequire};
+use luck_core::Diagnostic;
 use luck_semantic::{ScopeId, ScopeKind, ScopeTree, StdlibEntry, SymbolId};
 use luck_token::{LuaVersion, Span, StdlibEnvironment, decode_string};
 use rustc_hash::{FxHashMap, FxHashSet};
+
+use crate::dynamic_require::DynamicRequire;
 
 /// A `require("literal")` call that reaches the global `require`.
 #[derive(Debug)]

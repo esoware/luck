@@ -13,8 +13,7 @@
 //! ```no_run
 //! use std::path::Path;
 //!
-//! use luck_bundler::BundleOptions;
-//! use luck_core::DynamicRequire;
+//! use luck_bundler::{BundleOptions, DynamicRequire};
 //! use luck_token::LuaVersion;
 //!
 //! let options = BundleOptions {
@@ -38,6 +37,7 @@
 extern crate alloc;
 
 mod bundle;
+mod dynamic_require;
 mod emitter;
 mod exports;
 mod graph;
@@ -47,6 +47,7 @@ mod relative_path;
 mod require_extraction;
 
 pub use bundle::{BundleResult, bundle};
+pub use dynamic_require::DynamicRequire;
 pub use emitter::LineMapEntry;
 pub use graph::{BundleOptions, DependencyGraph};
 pub use module::{Dependency, ModuleId, ModuleInfo};

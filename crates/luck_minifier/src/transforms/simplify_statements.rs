@@ -4,7 +4,7 @@ use luck_ast::{
 };
 use luck_token::{BinOp, Span};
 
-use crate::expr::{ends_in_if_expr, is_always_truthy, parenthesize};
+use crate::expr::{MAX_ADDED_DEPTH, ends_in_if_expr, is_always_truthy, parenthesize};
 
 pub(crate) fn simplify(block: Block) -> Block {
     StatementSimplifier.transform_block(block)
@@ -87,7 +87,23 @@ fn try_convert_if_return_chain(mut block: Block) -> Block {
         return block;
     }
 
-    let link_count = block.stmts.iter().rev().take_while(|stmt| is_chain_link(stmt)).count();
+    // Each guard nests the chain one level deeper, and the fallback may hold
+    // the chain an earlier round built, so a long run converts only its tail.
+    let mut built_links = 0usize;
+    let mut spine: &Expression = fallback_expr;
+    while let Expression::BinaryOp(binary_op) = spine
+        && binary_op.op == BinOp::Or
+    {
+        built_links = built_links.saturating_add(1);
+        spine = &binary_op.lhs;
+    }
+    let link_count = block
+        .stmts
+        .iter()
+        .rev()
+        .take_while(|stmt| is_chain_link(stmt))
+        .take(MAX_ADDED_DEPTH.saturating_sub(built_links))
+        .count();
     let chain_start = block.stmts.len().saturating_sub(link_count);
     let has_guard = block
         .stmts
@@ -308,5 +324,12 @@ mod tests {
             !result.contains("if"),
             "All chained if-return guards with truthy values should be converted, got: {result}"
         );
+    }
+
+    #[test]
+    fn converts_only_the_tail_of_a_long_if_return_run() {
+        let result = apply(&format!("{}return 0\n", "if a then return 1 end\n".repeat(300)));
+        assert_reparses(&result, LuaVersion::Lua54);
+        assert_eq!(result.matches("if").count(), 300 - MAX_ADDED_DEPTH, "{result}");
     }
 }

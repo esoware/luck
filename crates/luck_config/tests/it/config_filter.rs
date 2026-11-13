@@ -1,4 +1,4 @@
-use luck_core::ProjectFilter;
+use luck_config::ProjectFilter;
 
 use crate::common::project_with;
 
