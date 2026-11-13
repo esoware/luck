@@ -204,8 +204,8 @@ fn propagate_expand(
                     mark_expanded(&open_groups, group_modes);
                 }
             }
-            FormatElement::Text(content) | FormatElement::Verbatim(content) => {
-                if !is_in_suffix && content.contains('\n') {
+            FormatElement::Text(_, width) | FormatElement::Verbatim(_, width) => {
+                if !is_in_suffix && width.columns().is_none() {
                     mark_expanded(&open_groups, group_modes);
                 }
             }
@@ -251,9 +251,9 @@ impl Printer {
         rest: &'elements [FormatElement],
     ) -> &'elements [FormatElement] {
         match element {
-            FormatElement::Token(content) => self.emit_text(content),
-            FormatElement::Text(content) => self.emit_text(content),
-            FormatElement::Verbatim(content) => self.emit_verbatim(content),
+            FormatElement::Token(content) => self.emit_text(content, Some(content.len())),
+            FormatElement::Text(content, width) => self.emit_text(content, width.columns()),
+            FormatElement::Verbatim(content, width) => self.emit_verbatim(content, width.columns()),
             FormatElement::Space => self.is_pending_space = true,
             FormatElement::Line(mode) => self.print_line(*mode),
             FormatElement::ExpandParent => {}
@@ -459,8 +459,8 @@ impl Printer {
                     remaining = entry_remaining.get(1..).unwrap_or_default();
                 }
                 FormatElement::Token(_)
-                | FormatElement::Text(_)
-                | FormatElement::Verbatim(_)
+                | FormatElement::Text(..)
+                | FormatElement::Verbatim(..)
                 | FormatElement::Space
                 | FormatElement::ExpandParent
                 | FormatElement::LineSuffixBoundary
@@ -553,13 +553,13 @@ impl Printer {
             }
             match element {
                 FormatElement::Token(content) => {
-                    used_width = used_width.saturating_add(content.width());
+                    used_width = used_width.saturating_add(content.len());
                 }
-                FormatElement::Text(content) | FormatElement::Verbatim(content) => {
-                    if content.contains('\n') {
+                FormatElement::Text(_, width) | FormatElement::Verbatim(_, width) => {
+                    let Some(columns) = width.columns() else {
                         return false;
-                    }
-                    used_width = used_width.saturating_add(content.width());
+                    };
+                    used_width = used_width.saturating_add(columns);
                 }
                 FormatElement::Space | FormatElement::Line(LineMode::SoftOrSpace) => {
                     used_width = used_width.saturating_add(1);
@@ -589,7 +589,8 @@ impl Printer {
         true
     }
 
-    fn emit_text(&mut self, content: &str) {
+    /// `columns` is `None` for text that spans lines.
+    fn emit_text(&mut self, content: &str, columns: Option<usize>) {
         if self.is_pending_indent {
             self.flush_indent();
         }
@@ -599,22 +600,22 @@ impl Printer {
             self.display_column = self.display_column.saturating_add(1);
         }
         self.output.print_str(content);
-        match content.rsplit_once('\n') {
-            Some((_, last_line)) => {
-                // Multi-line text: the column restarts from its last line.
-                self.line_start = self.output.len().saturating_sub(last_line.len());
-                self.display_column = last_line.width();
-            }
-            None => self.display_column = self.display_column.saturating_add(content.width()),
+        if let Some(width) = columns {
+            self.display_column = self.display_column.saturating_add(width);
+        } else {
+            // The column restarts from the last line.
+            let last_line = content.rsplit_once('\n').map_or(content, |(_, last_line)| last_line);
+            self.line_start = self.output.len().saturating_sub(last_line.len());
+            self.display_column = last_line.width();
         }
     }
 
     /// Copy source text, which brings its own indentation and keeps any
     /// trailing whitespace. Text ending in a line break leaves the next line to
     /// the printer's indent.
-    fn emit_verbatim(&mut self, content: &str) {
+    fn emit_verbatim(&mut self, content: &str, columns: Option<usize>) {
         self.is_pending_indent = false;
-        self.emit_text(content);
+        self.emit_text(content, columns);
         self.line_start = self.output.len();
         self.is_pending_indent = content.ends_with(['\n', '\r']);
     }
@@ -642,12 +643,12 @@ impl Printer {
         let mut suffixes = take(&mut self.suffixes);
         for element in &suffixes {
             match element {
-                FormatElement::Token(content) => self.emit_text(content),
-                FormatElement::Text(content) => self.emit_text(content),
+                FormatElement::Token(content) => self.emit_text(content, Some(content.len())),
+                FormatElement::Text(content, width) => self.emit_text(content, width.columns()),
                 FormatElement::Space => self.is_pending_space = true,
                 // `Formatter::write_line_suffix` writes only a space and
                 // text, so nothing structural can reach a suffix body.
-                FormatElement::Verbatim(_)
+                FormatElement::Verbatim(..)
                 | FormatElement::Line(_)
                 | FormatElement::ExpandParent
                 | FormatElement::LineSuffixBoundary

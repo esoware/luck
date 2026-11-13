@@ -8,6 +8,7 @@
 //! elements, which is what keeps every tag paired.
 
 use luck_token::CompactString;
+use unicode_width::UnicodeWidthStr as _;
 
 use crate::comments::{Comments, CommentsCheckpoint};
 use crate::{FormatOptions, printer};
@@ -74,10 +75,11 @@ pub(crate) enum Tag {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FormatElement {
+    /// ASCII, so as many columns wide as it is long.
     Token(&'static str),
     /// May contain newlines (long strings); the printer measures from the last line.
-    Text(CompactString),
-    Verbatim(CompactString),
+    Text(CompactString, TextWidth),
+    Verbatim(CompactString, TextWidth),
     Space,
     Line(LineMode),
     /// Force every enclosing group to expand without printing anything.
@@ -86,6 +88,32 @@ pub(crate) enum FormatElement {
     /// can't swallow what follows.
     LineSuffixBoundary,
     Tag(Tag),
+}
+
+/// Taken once, as the text enters the stream, because the printer measures a
+/// text again for every layout it tries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TextWidth(u32);
+
+impl TextWidth {
+    const MULTILINE: Self = Self(u32::MAX);
+
+    fn of(text: &str) -> Self {
+        if text.contains('\n') {
+            return Self::MULTILINE;
+        }
+        // Without a line break, `width` counts every ASCII character as one
+        // column.
+        let columns = if text.is_ascii() { text.len() } else { text.width() };
+        // Any width past the line's compares the same, and `MULTILINE` takes
+        // `u32::MAX`.
+        Self(u32::try_from(columns).unwrap_or(u32::MAX).min(u32::MAX - 1))
+    }
+
+    /// `None` for text that spans lines.
+    pub(crate) fn columns(self) -> Option<usize> {
+        (self != Self::MULTILINE).then(|| usize::try_from(self.0).unwrap_or(usize::MAX))
+    }
 }
 
 pub(crate) trait Format {
@@ -181,13 +209,17 @@ impl Formatter {
     /// Moves `content` into the stream, where a reusable [`Format`] value
     /// would have to copy it.
     pub(crate) fn write_text(&mut self, content: impl Into<CompactString>) {
-        self.elements.push(FormatElement::Text(content.into()));
+        let text = content.into();
+        let width = TextWidth::of(&text);
+        self.elements.push(FormatElement::Text(text, width));
     }
 
     /// Text ending in a line break leaves the next line to the printer's
     /// indent. Any other starts at its own column.
     pub(crate) fn write_verbatim(&mut self, content: impl Into<CompactString>) {
-        self.elements.push(FormatElement::Verbatim(content.into()));
+        let text = content.into();
+        let width = TextWidth::of(&text);
+        self.elements.push(FormatElement::Verbatim(text, width));
     }
 
     /// Writes a space and `text` as a line suffix, printed just before the
@@ -199,7 +231,7 @@ impl Formatter {
     pub(crate) fn write_line_suffix(&mut self, text: CompactString) {
         self.push(FormatElement::Tag(Tag::StartLineSuffix));
         self.push(FormatElement::Space);
-        self.push(FormatElement::Text(text));
+        self.write_text(text);
         self.push(FormatElement::Tag(Tag::EndLineSuffix));
     }
 
@@ -248,6 +280,7 @@ impl Format for StaticToken {
 }
 
 pub(crate) const fn token(content: &'static str) -> StaticToken {
+    debug_assert!(content.is_ascii(), "a token is measured by its length");
     StaticToken(content)
 }
 

@@ -1008,10 +1008,9 @@ mod tests {
         let mut f = formatter_over(Comments::synthetic(synthetic));
 
         assert!(!write_leading_comments(&mut f, 5));
-        let has_prefixed = f
-            .elements()
-            .iter()
-            .any(|element| matches!(element, FormatElement::Text(text) if text == "-- upvalue u0"));
+        let has_prefixed = f.elements().iter().any(
+            |element| matches!(element, FormatElement::Text(text, _) if text == "-- upvalue u0"),
+        );
         assert!(has_prefixed, "marker prefix added to bare text");
 
         write_trailing_comments(&mut f, 5, 0);
@@ -1036,7 +1035,7 @@ mod tests {
         let mut f = formatter_over(comments);
         write_dangling_comments(&mut f, 9);
         let is_emitted = f.elements().iter().any(
-            |element| matches!(element, FormatElement::Text(text) if text == "-- unreachable"),
+            |element| matches!(element, FormatElement::Text(text, _) if text == "-- unreachable"),
         );
         assert!(is_emitted);
         assert!(!f.comments().has_dangling_comments(9));
@@ -1074,7 +1073,7 @@ mod tests {
             .elements()
             .iter()
             .filter_map(|element| {
-                if let FormatElement::Text(text) = element { Some(text.as_str()) } else { None }
+                if let FormatElement::Text(text, _) = element { Some(text.as_str()) } else { None }
             })
             .collect();
         assert_eq!(texts, vec!["-- first", "-- second"]);

@@ -482,6 +482,19 @@ fn a_long_run_of_requires_sorts_without_comparing_every_pair() {
 }
 
 #[test]
+fn a_long_string_heading_a_long_chain_formats_without_remeasuring_it() {
+    // Each `:` run opens a group at the string. Measured again by every group,
+    // the string takes minutes.
+    let mut source = format!("local x = (\"{}\")", "a".repeat(4_000_000));
+    for _ in 0..8_000u32 {
+        source.push_str(":b():c().d");
+    }
+    source.push('\n');
+    let output = format_once(&source, LuaVersion::Lua54, &FormatOptions::default());
+    assert_eq!(output.matches("\n\t:b()\n\t:c().d").count(), 8_000, "every method breaks");
+}
+
+#[test]
 fn many_format_off_regions_format_without_rescanning_the_regions() {
     // Each statement asks which region comes next. Answered by walking the
     // regions from the first, this takes minutes.
