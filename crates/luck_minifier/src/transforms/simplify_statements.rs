@@ -17,16 +17,6 @@ struct StatementSimplifier {
     depth: usize,
 }
 
-impl StatementSimplifier {
-    /// Whether `outer and inner` still nests within the parser's cap. Each
-    /// condition can gain the operator and a pair of parentheses, and `outer`
-    /// sinks under every `and` that `inner` starts with.
-    fn can_merge_conditions(&self, outer: &Expression, inner: &Expression) -> bool {
-        let outer_levels = spine_links(inner, BinOp::And).saturating_add(2);
-        fits_at_depth(self.depth, outer_levels, outer) && fits_at_depth(self.depth, 2, inner)
-    }
-}
-
 impl Transform for StatementSimplifier {
     fn descend(&mut self) {
         self.depth = self.depth.saturating_add(1);
@@ -47,25 +37,21 @@ impl Transform for StatementSimplifier {
                         outer_if.block.stmts.as_slice(),
                         [Statement::IfStatement(inner_if)]
                             if has_no_else(inner_if)
-                                && self.can_merge_conditions(
+                                && conjunction_fits(
+                                    self.depth,
                                     &outer_if.condition,
                                     &inner_if.condition
                                 )
                     )
                     && let Some(Statement::IfStatement(inner_if)) = outer_if.block.stmts.pop()
                 {
-                    // Walked as one expression, so a rewrite inside either
-                    // condition sees the depth it ends up at.
-                    let combined_condition = self.transform_expr(logical(
-                        outer_if.condition,
-                        BinOp::And,
-                        inner_if.condition,
-                    ));
-                    let merged_block = self.transform_block(inner_if.block);
+                    // Left for the merged `if`'s own walk, so the body is
+                    // walked once and a rewrite inside either condition sees
+                    // the depth it ends up at.
                     let merged_if = IfStatement {
                         span: Span::default(),
-                        condition: combined_condition,
-                        block: merged_block,
+                        condition: logical(outer_if.condition, BinOp::And, inner_if.condition),
+                        block: inner_if.block,
                         elseif_clauses: Vec::new(),
                         else_clause: None,
                     };
@@ -122,9 +108,6 @@ fn try_convert_if_return_chain(mut block: Block, level: usize) -> Block {
     // Each guard nests the chain one level deeper, and the fallback may hold
     // the chain an earlier round built, so a long run converts only its tail.
     let built_links = spine_links(fallback_expr, BinOp::Or);
-    if !fits_at_depth(level, 1, fallback_expr) {
-        return block;
-    }
     // A guard sits under the fallback's `or` links, the one that joins it,
     // and one for each guard after it.
     let mut guard_level = level.saturating_add(built_links).saturating_add(1);
@@ -133,7 +116,8 @@ fn try_convert_if_return_chain(mut block: Block, level: usize) -> Block {
         let is_link = match extract_if_return_guard(stmt) {
             Some((condition, return_expr)) => {
                 guard_level = guard_level.saturating_add(1);
-                is_always_truthy(return_expr) && guard_fits(guard_level, condition, return_expr)
+                is_always_truthy(return_expr)
+                    && conjunction_fits(guard_level, condition, return_expr)
             }
             None => matches!(stmt, Statement::EmptyStatement(_)),
         };
@@ -147,7 +131,7 @@ fn try_convert_if_return_chain(mut block: Block, level: usize) -> Block {
         .stmts
         .get(chain_start..)
         .is_some_and(|chain| chain.iter().any(|stmt| extract_if_return_guard(stmt).is_some()));
-    if !has_guard {
+    if !has_guard || !fits_at_depth(level, 1, fallback_expr) {
         return block;
     }
 
@@ -168,15 +152,13 @@ fn try_convert_if_return_chain(mut block: Block, level: usize) -> Block {
     block
 }
 
-/// Whether `condition and return_expr` still nests within the parser's cap
-/// at `guard_level`.
+/// Whether `lhs and rhs` still nests within the parser's cap at `level`.
 ///
-/// Each side can gain the operator and a pair of parentheses, and the
-/// condition sinks under every `and` the return value starts with.
-fn guard_fits(guard_level: usize, condition: &Expression, return_expr: &Expression) -> bool {
-    let condition_levels = spine_links(return_expr, BinOp::And).saturating_add(2);
-    fits_at_depth(guard_level, condition_levels, condition)
-        && fits_at_depth(guard_level, 2, return_expr)
+/// Each side can gain the operator and a pair of parentheses, and `lhs`
+/// sinks under every `and` that `rhs` starts with.
+fn conjunction_fits(level: usize, lhs: &Expression, rhs: &Expression) -> bool {
+    let lhs_levels = spine_links(rhs, BinOp::And).saturating_add(2);
+    fits_at_depth(level, lhs_levels, lhs) && fits_at_depth(level, 2, rhs)
 }
 
 /// How many `op` links `expr` starts with: the ones a left operand joined on

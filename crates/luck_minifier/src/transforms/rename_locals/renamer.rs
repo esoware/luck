@@ -1,11 +1,9 @@
-use core::mem;
-
 use luck_ast::{
     AttributedName, Block, FunctionBody, FunctionDecl, GenericFor, GlobalDeclaration,
     GlobalFunction, IfStatement, LocalAssignment, LocalFunction, NumericFor, Parameter, Punctuated,
     RepeatLoop, Statement, Transform, Var,
 };
-use luck_token::{CompactString, LuaVersion, Span};
+use luck_token::{CompactString, LuaVersion};
 use rustc_hash::FxHashMap;
 
 use crate::binding::{
@@ -107,9 +105,8 @@ impl Renamer {
 
     /// Transforms a block in a scope of its own, in place.
     fn transform_scoped_block(&mut self, block: &mut Block) {
-        let empty = Block { span: Span::default(), stmts: Vec::new(), last_stmt: None };
         self.enter_scope();
-        *block = self.transform_block(mem::replace(block, empty));
+        *block = self.transform_block(block.take());
         self.exit_scope();
     }
 

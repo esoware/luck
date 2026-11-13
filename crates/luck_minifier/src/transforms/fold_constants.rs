@@ -1,14 +1,12 @@
 use alloc::borrow::Cow;
 
-use luck_ast::{
-    Block, Expression, Literal, Transform, UnaryOp, is_multi_value, unwrap_parentheses,
-};
+use luck_ast::{Block, Expression, Literal, Transform, UnaryOp, unwrap_parentheses};
 use luck_token::{
     BinOp, CompactString, LuaNumber, LuaVersion, NumberSubtypes, Span, UnOp, decode_string,
     encode_string, parse_lua_number,
 };
 
-use crate::expr::{extract_boolean, int_to_float, is_nil, parenthesize};
+use crate::expr::{extract_boolean, int_to_float, is_nil, truncate_multi_value};
 
 pub(crate) fn fold(block: Block, version: LuaVersion) -> Block {
     ConstantFolder { version }.transform_block(block)
@@ -340,12 +338,6 @@ fn compare_numbers(lhs: LuaNumber, op: BinOp, rhs: LuaNumber) -> Option<bool> {
         | BinOp::Shl
         | BinOp::Shr => return None,
     })
-}
-
-/// Parenthesizes a call or `...` that replaces an `and`/`or`, which always
-/// yields one value.
-fn truncate_multi_value(expr: Expression) -> Expression {
-    if is_multi_value(&expr) { parenthesize(expr) } else { expr }
 }
 
 fn extract_string_bytes(expr: &Expression, version: LuaVersion) -> Option<Cow<'_, [u8]>> {

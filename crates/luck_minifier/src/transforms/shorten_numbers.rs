@@ -160,8 +160,10 @@ fn shorten_number(text: &str, subtypes: NumberSubtypes) -> Option<String> {
         let decimal = format_shortest_decimal(value, has_int_subtype && is_float_formed);
         candidates.push(decimal);
 
-        if let Some(exponent) = decimal_exponent(value)
-            && (exponent >= 3i32 || exponent <= -2i32)
+        // Scientific spelling is tried for exponents <= -2 or >= 3, which are
+        // exactly the magnitudes outside this range.
+        if !(0.1f64..1000.0f64).contains(&value.abs())
+            && let Some(exponent) = decimal_exponent(value)
             && let Ok(power_of_ten) = format!("1e{exponent}").parse::<f64>()
         {
             #[expect(

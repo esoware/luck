@@ -189,6 +189,10 @@ impl<'ast> ScopeChecker<'ast> {
         }
     }
 
+    fn open_block(&mut self) -> BlockStart {
+        self.gotos.open_block(self.bindings.len())
+    }
+
     fn close_block(&mut self, start: BlockStart) {
         self.bindings.truncate(start.active_vars());
         self.gotos.close_block(start);
@@ -235,7 +239,7 @@ impl<'ast> ScopeChecker<'ast> {
     /// The `until` condition sits inside the body's scope, so the body's
     /// locals stay active for it.
     fn visit_repeat_loop(&mut self, repeat_loop: &'ast RepeatLoop) {
-        let start = self.gotos.open_block(self.bindings.len());
+        let start = self.open_block();
         self.walk_statements(&repeat_loop.block, true, start.active_vars());
         let skipped_count =
             if self.is_type_function_pass { 0 } else { skipped_local_count(&repeat_loop.block) };
@@ -260,7 +264,7 @@ impl<'ast> ScopeChecker<'ast> {
         if let Some(step) = &numeric_for.step {
             self.visit_expr(step);
         }
-        let start = self.gotos.open_block(self.bindings.len());
+        let start = self.open_block();
         // Lua 5.5 makes the control variable read-only.
         self.declare_local(&numeric_for.name, self.version.has_const_for_variables());
         self.walk_statements(&numeric_for.block, false, start.active_vars());
@@ -276,7 +280,7 @@ impl<'ast> ScopeChecker<'ast> {
         for expr in generic_for.exprs.iter() {
             self.visit_expr(expr);
         }
-        let start = self.gotos.open_block(self.bindings.len());
+        let start = self.open_block();
         for (i, binding) in generic_for.names.iter().enumerate() {
             // Lua 5.5: only the first variable is the control variable.
             self.declare_local(&binding.name, i == 0 && self.version.has_const_for_variables());
@@ -306,7 +310,7 @@ impl<'ast> ScopeChecker<'ast> {
 
 impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
     fn visit_block(&mut self, block: &'ast Block) {
-        let start = self.gotos.open_block(self.bindings.len());
+        let start = self.open_block();
         self.walk_statements(block, false, start.active_vars());
         self.close_block(start);
     }

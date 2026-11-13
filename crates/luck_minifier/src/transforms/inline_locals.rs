@@ -1,10 +1,8 @@
-use core::mem;
-
 use luck_ast::{
     Block, Expression, FunctionBody, Statement, Transform, Var, Visitor, expr_nesting_depth,
     is_prefix_expr,
 };
-use luck_token::{BinOp, CompactString, LuaVersion, Span};
+use luck_token::{BinOp, CompactString, LuaVersion};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::binding::{
@@ -476,8 +474,7 @@ impl Inliner {
         {
             let cast = last_operand(initializer);
             if matches!(cast, Expression::TypeCast(_)) {
-                let placeholder = Expression::Nil(Span::default());
-                *cast = parenthesize(mem::replace(cast, placeholder));
+                *cast = parenthesize(cast.take());
             }
         }
     }

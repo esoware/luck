@@ -1,6 +1,6 @@
 use luck_ast::{
     BinaryOp, Expression, Field, Literal, MAX_NESTING_DEPTH, ParenthesizedExpression, Var,
-    expr_nesting_depth, unwrap_parentheses,
+    expr_nesting_depth, is_multi_value, unwrap_parentheses,
 };
 use luck_token::{BinOp, LuaNumber, NumberSubtypes, OperandSide, Span, UnOp, parse_lua_number};
 
@@ -366,6 +366,12 @@ pub(crate) const fn int_to_float(value: i64) -> f64 {
 
 pub(crate) fn parenthesize(expr: Expression) -> Expression {
     Expression::Parenthesized(Box::new(ParenthesizedExpression { span: Span::default(), expr }))
+}
+
+/// Parenthesizes a call or `...` that replaces an `and`/`or`, which always
+/// yields one value.
+pub(crate) fn truncate_multi_value(expr: Expression) -> Expression {
+    if is_multi_value(&expr) { parenthesize(expr) } else { expr }
 }
 
 /// Whether a binary expression on `op`, printed bare under a unary operator,

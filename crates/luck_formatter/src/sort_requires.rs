@@ -152,11 +152,13 @@ impl<'source> RunCollector<'source> {
     /// Keeps `lines` as a run when it has two or more lines and sorting can't
     /// change what they read, then empties it.
     fn flush_run(&mut self, lines: &mut Vec<SortableLine<'source>>) {
-        let keys: FxHashSet<&str> = lines.iter().map(|line| line.key).collect();
-        let has_dependency = lines.iter().any(|line| {
-            keys.contains(line.callee) || line.path_root.is_some_and(|root| keys.contains(root))
-        });
-        if lines.len() >= 2 && !has_dependency {
+        let is_sortable = lines.len() >= 2 && {
+            let keys: FxHashSet<&str> = lines.iter().map(|line| line.key).collect();
+            !lines.iter().any(|line| {
+                keys.contains(line.callee) || line.path_root.is_some_and(|root| keys.contains(root))
+            })
+        };
+        if is_sortable {
             self.runs.push(mem::take(lines));
         } else {
             lines.clear();

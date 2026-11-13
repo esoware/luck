@@ -1,5 +1,4 @@
-use luck_minifier::TransformConfig;
-use luck_minifier::minify;
+use luck_minifier::{TransformConfig, minify};
 use luck_token::LuaVersion;
 
 pub(crate) fn minify_with(source: &str, version: LuaVersion, config: &TransformConfig) -> String {

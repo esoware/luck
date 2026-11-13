@@ -1,5 +1,3 @@
-use core::mem;
-
 use luck_ast::{
     Assignment, AttributedName, Block, Expression, FunctionBody, FunctionDef, IfStatement,
     LocalAssignment, LocalFunction, Punctuated, Statement, Transform, Type, Var, Visitor,
@@ -61,7 +59,7 @@ impl Transform for Lifter {
             scope_names: Vec::new(),
             version: self.version,
         };
-        body.block = rewriter.rewrite_block(body.block);
+        body.block = rewriter.rewrite_block_in_frame(body.block, FxHashSet::default());
         body.block = self.transform_block(body.block);
 
         prepend_declaration(&mut body.block, &ordered_liftable_names);
@@ -452,10 +450,6 @@ impl LiftRewriter<'_> {
         self.scope_names.iter().any(|frame| frame.contains(name))
     }
 
-    fn rewrite_block(&mut self, block: Block) -> Block {
-        self.rewrite_block_in_frame(block, FxHashSet::default())
-    }
-
     fn rewrite_block_in_frame(
         &mut self,
         mut block: Block,
@@ -463,8 +457,7 @@ impl LiftRewriter<'_> {
     ) -> Block {
         self.scope_names.push(frame);
         for stmt in &mut block.stmts {
-            let placeholder = Statement::Error(Span::default());
-            *stmt = self.rewrite_stmt(mem::replace(stmt, placeholder));
+            *stmt = self.rewrite_stmt(stmt.take());
         }
         self.scope_names.pop();
         block
@@ -527,8 +520,7 @@ impl LiftRewriter<'_> {
     /// Rewrites a nested block in place, in a frame of the names its
     /// statement binds.
     fn rewrite_nested(&mut self, block: &mut Block, frame: FxHashSet<CompactString>) {
-        let empty = Block { span: Span::default(), stmts: Vec::new(), last_stmt: None };
-        *block = self.rewrite_block_in_frame(mem::replace(block, empty), frame);
+        *block = self.rewrite_block_in_frame(block.take(), frame);
     }
 
     fn rewrite_if_blocks(&mut self, if_stmt: &mut IfStatement) {

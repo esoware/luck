@@ -258,7 +258,7 @@ impl Analyzer {
         self.exit_scope();
     }
 
-    /// Returns each slot's live scopes, in ascending order.
+    /// Returns each slot's live scopes.
     fn assign_slots(&mut self) -> Vec<Vec<usize>> {
         let mut live_scopes_by_slot: Vec<Vec<usize>> = Vec::new();
         let mut live_slots = ScopeClaims::default();
@@ -285,9 +285,6 @@ impl Analyzer {
                 }
                 binding.slot = Some(slot);
             }
-        }
-        for live_scopes in &mut live_scopes_by_slot {
-            live_scopes.sort_unstable();
         }
         live_scopes_by_slot
     }

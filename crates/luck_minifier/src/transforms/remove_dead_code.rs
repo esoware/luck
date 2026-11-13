@@ -1,5 +1,3 @@
-use core::mem;
-
 use luck_ast::{
     BinaryOp, Block, DoBlock, Expression, FunctionBody, IfStatement, LastStatement,
     LocalAssignment, Punctuated, Statement, Transform, UnaryOp, Var, Visitor,
@@ -10,6 +8,7 @@ use rustc_hash::FxHashSet;
 use crate::binding::{has_attributed_or_env_name, identifier_name, is_env_binding};
 use crate::expr::{
     binds_looser_than_unary, extract_boolean, fits_at_depth, is_nil, is_pure_expr, parenthesize,
+    truncate_multi_value,
 };
 
 pub(crate) fn remove(mut block: Block, version: LuaVersion) -> Block {
@@ -188,7 +187,7 @@ impl DeadCodeRemover {
     fn simplify_if(&mut self, mut if_stmt: Box<IfStatement>) -> Statement {
         if let Some(is_truthy) = constant_truthiness(&if_stmt.condition) {
             if is_truthy {
-                return self.keep_only_block(take_block(&mut if_stmt.block));
+                return self.keep_only_block(if_stmt.block.take());
             }
             // Elseif arms must be promoted before the else is considered:
             // taking the else first would drop them.
@@ -237,7 +236,7 @@ impl DeadCodeRemover {
     fn negate_into_else(&mut self, mut if_stmt: Box<IfStatement>) -> Statement {
         self.has_changed = true;
         if_stmt.span = Span::default();
-        if_stmt.condition = negate_expr(if_stmt.condition.take());
+        if_stmt.condition = negate_expr(if_stmt.condition);
         if let Some(else_clause) = if_stmt.else_clause.take() {
             if_stmt.block = self.transform_block(else_clause.block);
         }
@@ -248,12 +247,12 @@ impl DeadCodeRemover {
     fn swap_negated_branches(&mut self, mut if_stmt: Box<IfStatement>) -> Statement {
         self.has_changed = true;
         if_stmt.span = Span::default();
-        if let Expression::UnaryOp(mut unop) = if_stmt.condition.take() {
-            if_stmt.condition = unop.operand.take();
+        if let Expression::UnaryOp(unop) = if_stmt.condition.take() {
+            if_stmt.condition = unop.operand;
         }
         if let Some(else_clause) = &mut if_stmt.else_clause {
-            let then_block = take_block(&mut if_stmt.block);
-            if_stmt.block = self.transform_block(take_block(&mut else_clause.block));
+            let then_block = if_stmt.block.take();
+            if_stmt.block = self.transform_block(else_clause.block.take());
             else_clause.span = Span::default();
             else_clause.block = self.transform_block(then_block);
         }
@@ -266,9 +265,9 @@ impl DeadCodeRemover {
         match walked {
             // `cond and X or X` folds to `X` when both branches are identical
             // and the condition is pure.
-            Expression::BinaryOp(mut outer) if is_redundant_ternary(&outer) => {
+            Expression::BinaryOp(outer) if is_redundant_ternary(&outer) => {
                 self.has_changed = true;
-                outer.rhs.take()
+                truncate_multi_value(outer.rhs)
             }
             other @ (Expression::Nil(_)
             | Expression::False(_)
@@ -291,10 +290,6 @@ impl DeadCodeRemover {
             | Expression::Error(_)) => other,
         }
     }
-}
-
-fn take_block(block: &mut Block) -> Block {
-    mem::replace(block, Block { span: Span::default(), stmts: Vec::new(), last_stmt: None })
 }
 
 impl Transform for DeadCodeRemover {
@@ -691,5 +686,21 @@ mod tests {
                 "a table key of `{k}` raises at runtime, so it must stay: {result}"
             );
         }
+    }
+
+    #[test]
+    fn keeps_one_value_when_folding_a_vararg_ternary() {
+        let result = run_pass("return true and ... or ...\n", LuaVersion::Lua54, |mut block| {
+            // Parsed `...`s differ by span, so the fold needs both to share one.
+            if let Some(last) = &mut block.last_stmt
+                && let LastStatement::Return(return_stmt) = &mut **last
+                && let Some(Expression::BinaryOp(outer)) = return_stmt.exprs.items.first_mut()
+                && let Expression::BinaryOp(inner) = &mut outer.lhs
+            {
+                inner.rhs = outer.rhs.clone();
+            }
+            remove(block, LuaVersion::Lua54)
+        });
+        assert_eq!(result, "return(...)");
     }
 }

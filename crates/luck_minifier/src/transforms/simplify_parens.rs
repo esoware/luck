@@ -16,9 +16,7 @@ impl ParenSimplifier {
     /// needs, but strips any nested inside them.
     fn transform_prefix(&mut self, prefix: Expression) -> Expression {
         match prefix {
-            Expression::Parenthesized(mut paren) => {
-                parenthesize(self.transform_expr(paren.expr.take()))
-            }
+            Expression::Parenthesized(paren) => parenthesize(self.transform_expr(paren.expr)),
             other @ (Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
@@ -45,8 +43,8 @@ impl ParenSimplifier {
 // not these temporaries.
 fn strip_parens(walked: Expression) -> Expression {
     match walked {
-        Expression::Parenthesized(mut paren) => {
-            let inner = paren.expr.take();
+        Expression::Parenthesized(paren) => {
+            let inner = paren.expr;
             if can_remove_parens(&inner) { inner } else { parenthesize(inner) }
         }
         Expression::BinaryOp(mut binary_op) => {
@@ -80,7 +78,7 @@ fn strip_parens(walked: Expression) -> Expression {
         // parse, so anything that isn't a valid prefix gets them back.
         Expression::TypeInstantiation(mut instantiation) => {
             if !is_prefix_expr(&instantiation.expr) {
-                instantiation.expr = parenthesize(instantiation.expr.take());
+                instantiation.expr = parenthesize(instantiation.expr);
             }
             Expression::TypeInstantiation(instantiation)
         }
@@ -155,12 +153,12 @@ impl Transform for ParenSimplifier {
     fn transform_var(&mut self, var: Var) -> Var {
         match var {
             Var::FieldAccess(mut field_access) => {
-                field_access.prefix = self.transform_prefix(field_access.prefix.take());
+                field_access.prefix = self.transform_prefix(field_access.prefix);
                 Var::FieldAccess(field_access)
             }
             Var::Index(mut index_expr) => {
-                index_expr.prefix = self.transform_prefix(index_expr.prefix.take());
-                index_expr.index = self.transform_expr(index_expr.index.take());
+                index_expr.prefix = self.transform_prefix(index_expr.prefix);
+                index_expr.index = self.transform_expr(index_expr.index);
                 Var::Index(index_expr)
             }
             name @ Var::Name(_) => self.walk_var(name),
@@ -168,12 +166,12 @@ impl Transform for ParenSimplifier {
     }
 
     fn transform_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
-        call.callee = self.transform_prefix(call.callee.take());
-        call.explicit_type_args = call.explicit_type_args.take().map(|mut type_args| {
+        call.callee = self.transform_prefix(call.callee);
+        call.explicit_type_args = call.explicit_type_args.map(|mut type_args| {
             *type_args = self.walk_type_args(*type_args);
             type_args
         });
-        call.args = self.transform_function_args(call.args.take());
+        call.args = self.transform_function_args(call.args);
         call
     }
 }

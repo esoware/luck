@@ -7,8 +7,7 @@
 use std::path::Path;
 
 use luck_ast::{Expression, FunctionArgs, FunctionCall, Var, Visitor};
-use luck_resolver::normalize_path;
-use luck_resolver::{ResolveRequest, Resolver};
+use luck_resolver::{ResolveRequest, Resolver, normalize_path};
 use luck_token::decode_string;
 use tower_lsp_server::ls_types::{DocumentLink, Position, Uri};
 

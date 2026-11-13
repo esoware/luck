@@ -1,7 +1,3 @@
-use core::mem;
-
-use luck_token::Span;
-
 use crate::depth::regrouped_levels;
 use crate::expr::{
     BinaryOp, Expression, Field, FunctionArgs, FunctionCall, FunctionDef, IfExpression,
@@ -68,12 +64,10 @@ pub trait Transform {
     fn walk_block(&mut self, mut block: Block) -> Block {
         self.descend();
         for stmt in &mut block.stmts {
-            let placeholder = Statement::Error(Span::default());
-            *stmt = self.transform_stmt(mem::replace(stmt, placeholder));
+            *stmt = self.transform_stmt(stmt.take());
         }
         if let Some(last) = &mut block.last_stmt {
-            let placeholder = LastStatement::Error(Span::default());
-            **last = self.transform_last_stmt(mem::replace(&mut **last, placeholder));
+            **last = self.transform_last_stmt(last.take());
         }
         self.ascend();
         block
@@ -124,10 +118,10 @@ pub trait Transform {
         if_stmt.block = self.transform_block(if_stmt.block);
         for clause in &mut if_stmt.elseif_clauses {
             clause.condition = self.transform_expr(clause.condition.take());
-            clause.block = self.transform_block(take_block(&mut clause.block));
+            clause.block = self.transform_block(clause.block.take());
         }
         if let Some(clause) = &mut if_stmt.else_clause {
-            clause.block = self.transform_block(take_block(&mut clause.block));
+            clause.block = self.transform_block(clause.block.take());
         }
         if_stmt
     }
@@ -183,14 +177,14 @@ pub trait Transform {
             Var::Name(_) => var,
             Var::Index(mut index_expr) => {
                 self.descend();
-                index_expr.prefix = self.transform_expr(index_expr.prefix.take());
-                index_expr.index = self.transform_expr(index_expr.index.take());
+                index_expr.prefix = self.transform_expr(index_expr.prefix);
+                index_expr.index = self.transform_expr(index_expr.index);
                 self.ascend();
                 Var::Index(index_expr)
             }
             Var::FieldAccess(mut field_access) => {
                 self.descend();
-                field_access.prefix = self.transform_expr(field_access.prefix.take());
+                field_access.prefix = self.transform_expr(field_access.prefix);
                 self.ascend();
                 Var::FieldAccess(field_access)
             }
@@ -201,11 +195,11 @@ pub trait Transform {
     /// arguments, in source order as the `Visitor` walk reaches them.
     fn walk_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
         self.descend();
-        call.callee = self.transform_expr(call.callee.take());
+        call.callee = self.transform_expr(call.callee);
         if let Some(type_args) = &mut call.explicit_type_args {
             walk_types(self, &mut type_args.args.items);
         }
-        call.args = self.transform_function_args(call.args.take());
+        call.args = self.transform_function_args(call.args);
         self.ascend();
         call
     }
@@ -268,7 +262,7 @@ pub trait Transform {
             Type::Function(function_type) => walk_function_type(self, function_type),
             Type::Optional(mut optional) => {
                 self.descend();
-                optional.type_value = self.transform_type(optional.type_value.take());
+                optional.type_value = self.transform_type(optional.type_value);
                 self.ascend();
                 Type::Optional(optional)
             }
@@ -286,7 +280,7 @@ pub trait Transform {
             }
             Type::Parenthesized(mut parenthesized) => {
                 self.descend();
-                parenthesized.type_value = self.transform_type(parenthesized.type_value.take());
+                parenthesized.type_value = self.transform_type(parenthesized.type_value);
                 self.ascend();
                 Type::Parenthesized(parenthesized)
             }
@@ -298,7 +292,7 @@ pub trait Transform {
             }
             Type::Variadic(mut variadic) => {
                 self.descend();
-                variadic.type_value = self.transform_type(variadic.type_value.take());
+                variadic.type_value = self.transform_type(variadic.type_value);
                 self.ascend();
                 Type::Variadic(variadic)
             }
@@ -351,10 +345,6 @@ pub trait Transform {
         walk_types(self, &mut types.items);
         types
     }
-}
-
-fn take_block(block: &mut Block) -> Block {
-    mem::replace(block, Block { span: Span::default(), stmts: Vec::new(), last_stmt: None })
 }
 
 fn walk_exprs<T>(transform: &mut T, exprs: &mut [Expression])

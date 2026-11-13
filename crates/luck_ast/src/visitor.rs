@@ -217,13 +217,8 @@ pub trait Visitor<'ast> {
             Expression::BinaryOp(binary_op) => {
                 if self.descend() {
                     let (lhs_levels, rhs_levels) = regrouped_levels(binary_op);
-                    if lhs_levels == 0 && rhs_levels == 0 {
-                        self.visit_expr(&binary_op.lhs);
-                        self.visit_expr(&binary_op.rhs);
-                    } else {
-                        visit_regrouped(self, &binary_op.lhs, lhs_levels);
-                        visit_regrouped(self, &binary_op.rhs, rhs_levels);
-                    }
+                    visit_regrouped(self, &binary_op.lhs, lhs_levels);
+                    visit_regrouped(self, &binary_op.rhs, rhs_levels);
                 }
                 self.ascend();
             }
@@ -451,6 +446,11 @@ pub trait Visitor<'ast> {
 
 /// Visits an operand `levels` deeper than it sits in the tree, where it
 /// ends up once its operator is printed and read back.
+#[expect(
+    clippy::inline_always,
+    reason = "keeps a debug build's binary-operator recursion at one frame per level"
+)]
+#[inline(always)]
 fn visit_regrouped<'ast, V>(visitor: &mut V, operand: &'ast Expression, levels: usize)
 where
     V: Visitor<'ast> + ?Sized,
