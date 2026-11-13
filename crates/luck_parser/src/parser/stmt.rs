@@ -8,6 +8,7 @@ use luck_ast::{
 use luck_token::{CompoundOp, Span, TokenKind};
 
 use super::Parser;
+use super::skip::ExprTail;
 
 /// A compound statement, as its missing-keyword errors name it.
 #[derive(Clone, Copy)]
@@ -129,12 +130,11 @@ const fn can_follow_last_stmt(kind: &TokenKind) -> bool {
     reason = "the parser is one type with its grammar split by file"
 )]
 impl Parser<'_> {
+    /// The caller has checked that the block fits.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     pub(super) fn parse_block(&mut self) -> Block {
         let start_span = self.current_span();
-        if !self.enter_depth() {
-            return Block { span: start_span, stmts: Vec::new(), last_stmt: None };
-        }
+        self.enter_depth();
         self.block_depth = self.block_depth.saturating_add(1);
 
         let mut stmts = Vec::new();
@@ -239,6 +239,15 @@ impl Parser<'_> {
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_stmt(&mut self) -> Statement {
         match self.peek() {
+            TokenKind::If
+            | TokenKind::While
+            | TokenKind::Do
+            | TokenKind::For
+            | TokenKind::Repeat
+                if !self.can_nest(1) =>
+            {
+                self.refuse_block_stmt()
+            }
             TokenKind::If => self.parse_if_stmt(),
             TokenKind::While => self.parse_while_loop(),
             TokenKind::Do => self.parse_do_block(),
@@ -309,6 +318,21 @@ impl Parser<'_> {
             TokenKind::Identifier(_) | TokenKind::LeftParen => self.parse_assignment_or_call(),
             _ => self.report_unexpected_stmt_start(),
         }
+    }
+
+    /// Refuse the compound statement at the current keyword, whose block
+    /// doesn't fit, skipping all of it.
+    #[cold]
+    #[inline(never)]
+    fn refuse_block_stmt(&mut self) -> Statement {
+        let start = self.current_span();
+        self.report_depth_limit(start);
+        let is_repeat = matches!(self.peek(), TokenKind::Repeat);
+        self.skip_nested();
+        if is_repeat {
+            self.skip_expr(ExprTail::Operators(0));
+        }
+        Statement::Error(start.merge(self.previous_span))
     }
 
     #[cold]
@@ -520,6 +544,9 @@ impl Parser<'_> {
         let is_call = matches!(&expr, Expression::Suffixed(chain) if chain.is_call());
         if is_call && let Expression::Suffixed(call) = expr {
             Statement::FunctionCall(call)
+        } else if let Expression::Error(span) = expr {
+            // Reported already.
+            Statement::Error(span)
         } else {
             self.report_expression_stmt(&expr)
         }
@@ -569,11 +596,13 @@ impl Parser<'_> {
     }
 
     /// Unwrap an assignment target, or record an error and return a
-    /// placeholder name when `expr` isn't a variable.
+    /// placeholder name when `expr` isn't a variable. An error expression has
+    /// been reported already.
     fn assignment_target(&mut self, expr: Expression) -> Var {
         match expr {
             Expression::Name(token) => Var::Name(token),
             Expression::Suffixed(chain) if chain.is_var() => Var::Suffixed(chain),
+            Expression::Error(span) => Var::Name(Self::recovery_identifier(span)),
             invalid @ (Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
@@ -589,8 +618,7 @@ impl Parser<'_> {
             | Expression::UnaryOp(_)
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_)) => {
+            | Expression::TypeCast(_)) => {
                 let span = invalid.span();
                 self.error(span, "invalid assignment target");
                 Var::Name(Self::recovery_identifier(span))

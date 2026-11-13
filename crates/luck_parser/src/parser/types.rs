@@ -10,6 +10,7 @@ use luck_ast::{
 use luck_token::{Span, Token, TokenKind, decode_string};
 
 use super::Parser;
+use super::skip::TypeExtent;
 
 /// Luau's flat type-suffix chain rejects `A | B & C`, `A? & B`, and the like.
 const MIXED_TYPE_MESSAGE: &str =
@@ -45,10 +46,11 @@ impl Parser<'_> {
         if self.is_at_generic_pack() {
             return self.parse_generic_pack();
         }
-        if !self.enter_depth() {
-            return Type::Error(self.current_span());
+        if !self.can_nest(1) {
+            return self.refuse_type(TypeExtent::Full);
         }
         let dots = self.advance_span();
+        self.enter_depth();
         let type_value = self.parse_type();
         self.exit_depth();
         let span = dots.merge(type_value.span());
@@ -74,11 +76,12 @@ impl Parser<'_> {
             return self.parse_type();
         }
         let level = self.nesting_depth;
-        let outer_deepest_level = self.begin_operand();
+        let outer = self.begin_operand();
         let mut first = self.parse_paren_or_function_type(true);
         // `parseReturnType` folds a suffix over `(T)` and over the `T` of
         // `(T, ...U)`, so `(A, B)?` and `() -> (A, B) | C` leave it unconsumed.
-        if matches!(first, Type::Parenthesized(_)) {
+        // A refused one could have been either, so it takes the suffix too.
+        if matches!(first, Type::Parenthesized(_) | Type::Error(_)) {
             first = self.parse_union_level(first);
         }
         if let Type::Pack(pack) = &mut first
@@ -92,7 +95,7 @@ impl Parser<'_> {
             self.nesting_depth = level;
             pack.span = pack.span.merge(element.span());
         }
-        self.end_operand(outer_deepest_level);
+        self.end_operand(outer);
         first
     }
 
@@ -103,11 +106,11 @@ impl Parser<'_> {
         if !matches!(self.peek(), TokenKind::LeftParen) {
             return self.parse_type();
         }
-        let outer_deepest_level = self.begin_operand();
+        let outer = self.begin_operand();
         let first = self.parse_paren_or_function_type(true);
         let result =
             if matches!(first, Type::Pack(_)) { first } else { self.parse_union_level(first) };
-        self.end_operand(outer_deepest_level);
+        self.end_operand(outer);
         result
     }
 
@@ -119,7 +122,7 @@ impl Parser<'_> {
     /// member already parsed, so it counts from that member's deepest level.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     pub(super) fn parse_type(&mut self) -> Type {
-        let outer_deepest_level = self.begin_operand();
+        let outer = self.begin_operand();
         let result = match self.peek() {
             // A leading separator, as in the multiline definition style:
             // `type T =` newline `| A` newline `| B`.
@@ -130,15 +133,16 @@ impl Parser<'_> {
                 self.parse_union_level(primary)
             }
         };
-        self.end_operand(outer_deepest_level);
+        self.end_operand(outer);
         result
     }
 
     fn parse_leading_pipe_union(&mut self) -> Type {
-        if !self.enter_depth() {
-            return Type::Error(self.current_span());
+        if !self.can_nest(1) {
+            return self.refuse_type(TypeExtent::Full);
         }
         let leading_pipe = self.advance_span();
+        self.enter_depth();
         let first = self.parse_union_member();
         let types = self.parse_union_members(first);
         self.exit_depth();
@@ -151,10 +155,11 @@ impl Parser<'_> {
     }
 
     fn parse_leading_ampersand_intersection(&mut self) -> Type {
-        if !self.enter_depth() {
-            return Type::Error(self.current_span());
+        if !self.can_nest(1) {
+            return self.refuse_type(TypeExtent::Full);
         }
         let leading_ampersand = self.advance_span();
+        self.enter_depth();
         let first = self.parse_intersection_member();
         let types = self.parse_intersection_members(first);
         self.exit_depth();
@@ -169,8 +174,11 @@ impl Parser<'_> {
     fn parse_union_level(&mut self, primary: Type) -> Type {
         let level = self.nesting_depth;
         let first = self.parse_intersection_level(primary);
-        if !matches!(self.peek(), TokenKind::Pipe) || !self.enter_wrapper(level) {
+        if !matches!(self.peek(), TokenKind::Pipe) {
             return first;
+        }
+        if !self.enter_wrapper(level) {
+            return self.refuse_type_wrapper(first.span(), level, TypeExtent::Full);
         }
         let start_span = first.span();
         let types = self.parse_union_members(first);
@@ -181,10 +189,10 @@ impl Parser<'_> {
 
     /// A member after the first, measured on its own.
     fn parse_union_member(&mut self) -> Type {
-        let outer_deepest_level = self.begin_operand();
+        let outer = self.begin_operand();
         let primary = self.parse_primary_type();
         let member = self.parse_intersection_level(primary);
-        self.end_operand(outer_deepest_level);
+        self.end_operand(outer);
         member
     }
 
@@ -208,8 +216,11 @@ impl Parser<'_> {
     fn parse_intersection_level(&mut self, primary: Type) -> Type {
         let level = self.nesting_depth;
         let first = self.parse_postfix_type(primary);
-        if !matches!(self.peek(), TokenKind::Ampersand) || !self.enter_wrapper(level) {
+        if !matches!(self.peek(), TokenKind::Ampersand) {
             return first;
+        }
+        if !self.enter_wrapper(level) {
+            return self.refuse_type_wrapper(first.span(), level, TypeExtent::UnionMember);
         }
         let start_span = first.span();
         let types = self.parse_intersection_members(first);
@@ -220,10 +231,10 @@ impl Parser<'_> {
 
     /// A member after the first, measured on its own.
     fn parse_intersection_member(&mut self) -> Type {
-        let outer_deepest_level = self.begin_operand();
+        let outer = self.begin_operand();
         let primary = self.parse_primary_type();
         let member = self.parse_postfix_type(primary);
-        self.end_operand(outer_deepest_level);
+        self.end_operand(outer);
         member
     }
 
@@ -250,13 +261,41 @@ impl Parser<'_> {
         let level = self.nesting_depth;
         let mut result = primary;
         // `?` stacks (`T??`), which Luau also accepts.
-        while matches!(self.peek(), TokenKind::Question) && self.enter_wrapper(level) {
+        while matches!(self.peek(), TokenKind::Question) {
+            if !self.enter_wrapper(level) {
+                return self.refuse_type_wrapper(
+                    result.span(),
+                    level,
+                    TypeExtent::IntersectionMember,
+                );
+            }
             self.nesting_depth = level;
             let question = self.advance_span();
             let span = result.span().merge(question);
             result = Type::Optional(Box::new(OptionalType { span, type_value: result }));
         }
         result
+    }
+
+    /// Refuse a `?`, intersection, or union wrapping the type from `start` at
+    /// `level`, skipping the rest of the type that `extent` of it takes.
+    #[cold]
+    #[inline(never)]
+    fn refuse_type_wrapper(&mut self, start: Span, level: usize, extent: TypeExtent) -> Type {
+        self.refuse_wrapper(level);
+        self.skip_type_tail(extent);
+        Type::Error(start.merge(self.previous_span))
+    }
+
+    /// Refuse the type at the current token, skipping as much of it as
+    /// `extent` takes.
+    #[cold]
+    #[inline(never)]
+    fn refuse_type(&mut self, extent: TypeExtent) -> Type {
+        let start = self.current_span();
+        self.report_depth_limit(start);
+        self.skip_type(extent);
+        Type::Error(start.merge(self.previous_span))
     }
 
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
@@ -269,6 +308,10 @@ impl Parser<'_> {
                 self.parse_typeof_type()
             }
             TokenKind::Identifier(_) => {
+                if matches!(self.peek_next(), TokenKind::Dot | TokenKind::Less) && !self.can_nest(1)
+                {
+                    return self.refuse_type(TypeExtent::Primary);
+                }
                 let name = self.advance();
                 self.parse_named_type(name)
             }
@@ -294,14 +337,15 @@ impl Parser<'_> {
     }
 
     fn parse_typeof_type(&mut self) -> Type {
+        if !self.can_nest(1) {
+            return self.refuse_type(TypeExtent::Primary);
+        }
         let typeof_span = self.advance_span();
         if !matches!(self.peek(), TokenKind::LeftParen) {
             self.report_expected(&TokenKind::LeftParen);
             return Type::Error(typeof_span);
         }
-        if !self.enter_depth() {
-            return Type::Error(typeof_span);
-        }
+        self.enter_depth();
         self.advance_span();
         let expr = self.parse_expr(0);
         self.exit_depth();
@@ -310,6 +354,7 @@ impl Parser<'_> {
         Type::Typeof(Box::new(TypeofType { span, expr }))
     }
 
+    /// The caller has checked that a qualified or generic name fits.
     fn parse_named_type(&mut self, first_name: Token) -> Type {
         if !matches!(self.peek(), TokenKind::Dot | TokenKind::Less) {
             #[expect(
@@ -321,9 +366,7 @@ impl Parser<'_> {
             };
             return Type::Name { name, span: first_name.span };
         }
-        if !self.enter_depth() {
-            return Type::Error(first_name.span);
-        }
+        self.enter_depth();
         let (prefix, name) = if self.eat(&TokenKind::Dot) {
             let name = self.expect_identifier_recover();
             (Some(first_name), name)
@@ -353,10 +396,13 @@ impl Parser<'_> {
             TokenKind::Greater | TokenKind::ShiftRight | TokenKind::GreaterEqual | TokenKind::Eof
         ) {
             loop {
+                let start = self.current_span().start;
                 let arg = self.parse_type_or_pack();
-                let is_error = matches!(arg, Type::Error(_));
+                // A refused argument is skipped whole, so only an error that
+                // read nothing ends the list.
+                let has_read = self.previous_span.end > start;
                 args.push(arg);
-                if !self.eat(&TokenKind::Comma) || is_error {
+                if !self.eat(&TokenKind::Comma) || !has_read {
                     break;
                 }
             }
@@ -396,13 +442,15 @@ impl Parser<'_> {
                             "default type parameters are only allowed in type alias declarations",
                         );
                     }
-                    // `(T)` in a pack position is a one-type pack.
+                    // `(T)` in a pack position is a one-type pack, and an error
+                    // has been reported already.
                     let is_pack_default = matches!(
                         default_type,
                         Type::Pack(_)
                             | Type::Variadic(_)
                             | Type::GenericPack(_)
                             | Type::Parenthesized(_)
+                            | Type::Error(_)
                     );
                     if dots.is_some() && !is_pack_default {
                         self.error(
@@ -458,20 +506,12 @@ impl Parser<'_> {
         }
     }
 
-    /// Split the leading `>` off the current two-character token, leaving
-    /// `remainder` as the current token.
-    fn split_close_angle(&mut self, remainder: TokenKind) -> Span {
-        let span = self.current.span;
-        let split_at = span.start.saturating_add(1);
-        self.current = Token::new(remainder, Span::new(split_at, span.end));
-        Span::new(span.start, split_at)
-    }
-
     fn parse_table_type(&mut self) -> Type {
-        if !self.enter_depth() {
-            return Type::Error(self.current_span());
+        if !self.can_nest(1) {
+            return Type::Error(self.refuse_group());
         }
         let open = self.advance_span(); // `{`
+        self.enter_depth();
         let mut fields = Punctuated::<TypeField>::empty();
 
         while !matches!(self.peek(), TokenKind::RightBrace | TokenKind::Eof) {
@@ -575,9 +615,10 @@ impl Parser<'_> {
     /// or, when `is_pack_allowed`, a pack such as `()` or `(T, ...U)`. A `->`
     /// after the `)` decides which.
     fn parse_paren_or_function_type(&mut self, is_pack_allowed: bool) -> Type {
-        if !self.enter_depth() {
-            return Type::Error(self.current_span());
+        if !self.can_nest(1) {
+            return self.refuse_type(TypeExtent::Primary);
         }
+        self.enter_depth();
         let parsed = self.parse_paren_or_function_members(is_pack_allowed);
         self.exit_depth();
         parsed
@@ -611,10 +652,13 @@ impl Parser<'_> {
             // Grammar: `TypeList ::= Type [',' TypeList] | ...Type`, so a
             // pack ends the list.
             let is_pack = self.is_at_type_pack();
+            let start = self.current_span().start;
             let param = self.parse_function_type_param(is_pack);
-            let is_error = matches!(param.type_value, Type::Error(_));
+            // A refused parameter is skipped whole, so only an error that
+            // read nothing ends the list.
+            let has_read = self.previous_span.end > start;
             params.push(param);
-            if is_pack || !self.eat(&TokenKind::Comma) || is_error {
+            if is_pack || !self.eat(&TokenKind::Comma) || !has_read {
                 return params;
             }
         }
@@ -681,9 +725,10 @@ impl Parser<'_> {
     }
 
     fn parse_generic_function_type(&mut self) -> Type {
-        if !self.enter_depth() {
-            return Type::Error(self.current_span());
+        if !self.can_nest(1) {
+            return self.refuse_type(TypeExtent::Primary);
         }
+        self.enter_depth();
         let generics = self.parse_generic_type_list(GenericsOwner::Function);
         let parsed = self.parse_function_type(generics);
         self.exit_depth();

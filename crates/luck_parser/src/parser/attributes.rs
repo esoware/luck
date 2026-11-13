@@ -23,6 +23,8 @@ fn is_constant_string(expr: &Expression) -> bool {
 /// Whether `expr` fits the grammar's `literal` production for attribute
 /// arguments: nil, booleans, numbers, strings, and tables of literals with
 /// plain-name or positional fields.
+///
+/// An error passes, since it has been reported already.
 fn is_attribute_literal(expr: &Expression) -> bool {
     match expr {
         Expression::Nil(_)
@@ -30,7 +32,8 @@ fn is_attribute_literal(expr: &Expression) -> bool {
         | Expression::False(_)
         | Expression::Number(_)
         | Expression::Integer(_)
-        | Expression::StringLiteral(_) => true,
+        | Expression::StringLiteral(_)
+        | Expression::Error(_) => true,
         // Luau
         Expression::InterpolatedString(_) => is_constant_string(expr),
         Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
@@ -47,8 +50,7 @@ fn is_attribute_literal(expr: &Expression) -> bool {
         | Expression::BinaryOp(_)
         | Expression::UnaryOp(_)
         | Expression::IfExpression(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => false,
+        | Expression::TypeCast(_) => false,
     }
 }
 
@@ -124,14 +126,16 @@ impl Parser<'_> {
     /// Grammar: `pars ::= '(' [litlist] ')' | littable | STRING`. A string or
     /// table argument becomes a one-element argument list, so every form
     /// nests its arguments one level, as the list it prints back as does.
+    /// Both that level and a table argument's fit, because the function's
+    /// body and block were checked to.
     fn parse_attribute_args(&mut self) -> Option<Punctuated<Expression>> {
         if !matches!(
             self.peek(),
             TokenKind::LeftParen | TokenKind::StringLiteral(_) | TokenKind::LeftBrace
-        ) || !self.enter_depth()
-        {
+        ) {
             return None;
         }
+        self.enter_depth();
         let args = self.parse_attribute_arg_list();
         self.exit_depth();
         args
@@ -218,7 +222,12 @@ impl Parser<'_> {
             return;
         };
         let Expression::TableConstructor(table) = arg else {
-            self.error(arg.span(), "`@deprecated` takes a table with `use` and `reason` fields");
+            if !matches!(arg, Expression::Error(_)) {
+                self.error(
+                    arg.span(),
+                    "`@deprecated` takes a table with `use` and `reason` fields",
+                );
+            }
             return;
         };
         for field in table.fields.iter() {
@@ -231,7 +240,7 @@ impl Parser<'_> {
                         );
                         continue;
                     }
-                    if !is_constant_string(value) {
+                    if !is_constant_string(value) && !matches!(value, Expression::Error(_)) {
                         self.error(value.span(), "`@deprecated` fields take constant strings");
                     }
                 }

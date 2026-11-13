@@ -1,7 +1,7 @@
 use core::mem;
 
-use luck_ast::{Block, FunctionBody, Parameter, Punctuated, Type, VarArgParam};
-use luck_token::{Token, TokenKind};
+use luck_ast::{FunctionBody, Parameter, Punctuated, Type, VarArgParam};
+use luck_token::{Span, Token, TokenKind};
 
 use super::types::GenericsOwner;
 use super::{FunctionScope, Parser};
@@ -11,18 +11,10 @@ use super::{FunctionScope, Parser};
     reason = "the parser is one type with its grammar split by file"
 )]
 impl Parser<'_> {
+    /// The caller has checked that the body and its block fit, before any
+    /// attributes on the function.
     pub(super) fn parse_function_body(&mut self) -> FunctionBody {
-        if !self.enter_depth() {
-            let span = self.current_span();
-            return FunctionBody {
-                span,
-                generics: None,
-                params: Punctuated::empty(),
-                vararg: None,
-                return_type: None,
-                block: Block { span, stmts: Vec::new(), last_stmt: None },
-            };
-        }
+        self.enter_depth();
 
         // Luau puts the generic list before the parens: `function f<T>(x: T)`.
         let generics = (self.version.has_type_syntax() && matches!(self.peek(), TokenKind::Less))
@@ -55,6 +47,21 @@ impl Parser<'_> {
         let span = start_span.merge(end_span);
 
         FunctionBody { span, generics, params, vararg, return_type, block }
+    }
+
+    /// Whether a function's body and block fit where the parser is.
+    pub(super) const fn can_nest_function(&self) -> bool {
+        self.can_nest(2)
+    }
+
+    /// Refuse the function whose `function` keyword is the current token,
+    /// skipping through its `end`, and return the span from `start`.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn refuse_function(&mut self, start: Span) -> Span {
+        self.report_depth_limit(self.current_span());
+        self.skip_nested();
+        start.merge(self.previous_span)
     }
 
     /// Parse the parameter list between a function's parens, stopping before

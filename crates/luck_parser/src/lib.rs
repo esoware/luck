@@ -3,10 +3,11 @@
 //! Pratt expression parser with recursive descent statement parsing for Lua
 //! 5.1-5.5 and Luau.
 //!
-//! A source that parses without error gives a tree at most
+//! Every tree it returns, with errors or without, is at most
 //! [`luck_ast::MAX_NESTING_DEPTH`] levels deep, measured as
 //! [`luck_ast::block_nesting_depth`] measures it, so no consumer of the tree
-//! needs more than a bounded stack. Error recovery reports multiple parse
+//! needs more than a bounded stack. A construct nested past the cap is one
+//! error, and parsing goes on after it. Error recovery reports multiple parse
 //! errors in a single pass.
 //!
 //! # Usage

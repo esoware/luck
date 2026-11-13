@@ -2,6 +2,7 @@ mod attributes;
 mod declaration;
 mod expr;
 mod function;
+mod skip;
 mod stmt;
 mod types;
 
@@ -53,6 +54,8 @@ struct Parser<'source> {
     /// that wraps a finished operand nests all of it one level deeper, so the
     /// wrapper counts from here.
     deepest_level: usize,
+    /// How many errors had been reported when the operand being parsed began.
+    operand_first_error: usize,
     /// The chunk's own block is 1.
     block_depth: u32,
     /// The links of every binary run being parsed, innermost last. Each run
@@ -69,6 +72,14 @@ struct Parser<'source> {
     /// the parser can't do without tracking locals.
     has_type_function: bool,
     errors: Vec<ParseError>,
+}
+
+/// What [`Parser::begin_operand`] saves of the operand around the one it
+/// begins.
+#[derive(Clone, Copy)]
+struct OuterOperand {
+    deepest_level: usize,
+    first_error: usize,
 }
 
 /// What the innermost function body, or the main chunk, allows. Entering a
@@ -102,6 +113,7 @@ impl<'source> Parser<'source> {
             version,
             nesting_depth: 0,
             deepest_level: 0,
+            operand_first_error: 0,
             block_depth: 0,
             binary_links: Vec::new(),
             suffixes: Vec::new(),
@@ -263,19 +275,22 @@ impl<'source> Parser<'source> {
         self.errors.push(ParseError { span, message: message.into() });
     }
 
-    /// Count one more level of nesting. Once nesting has reached
-    /// [`MAX_NESTING_DEPTH`], record the resource-limit error instead and
-    /// return false, leaving the count unchanged.
-    #[must_use]
-    fn enter_depth(&mut self) -> bool {
+    /// Whether `levels` more levels of nesting fit where the parser is.
+    ///
+    /// A construct that doesn't fit is refused: the parser reports it once,
+    /// skips its tokens without parsing them, and puts an error node where it
+    /// was. So no tree the parser returns, errors or not, nests deeper than
+    /// [`MAX_NESTING_DEPTH`], and recursion stops at the cap.
+    const fn can_nest(&self, levels: usize) -> bool {
         // A host-stack budget, independent of target VM compiler limits.
-        if self.nesting_depth >= MAX_NESTING_DEPTH {
-            self.report_depth_limit();
-            return false;
-        }
+        self.nesting_depth.saturating_add(levels) <= MAX_NESTING_DEPTH
+    }
+
+    /// Count one more level of nesting, which the caller has checked fits.
+    fn enter_depth(&mut self) {
+        debug_assert!(self.can_nest(1), "a level was entered past the cap");
         self.nesting_depth = self.nesting_depth.saturating_add(1);
         self.deepest_level = self.deepest_level.max(self.nesting_depth);
-        true
     }
 
     const fn exit_depth(&mut self) {
@@ -284,8 +299,7 @@ impl<'source> Parser<'source> {
 
     #[cold]
     #[inline(never)]
-    fn report_depth_limit(&mut self) {
-        let span = self.current_span();
+    fn report_depth_limit(&mut self, span: Span) {
         self.error(
             span,
             format!(
@@ -294,30 +308,70 @@ impl<'source> Parser<'source> {
         );
     }
 
+    /// Refuse the bracket or interpolated string the current token opens,
+    /// returning the span it covered.
+    #[cold]
+    #[inline(never)]
+    fn refuse_group(&mut self) -> Span {
+        let open = self.current_span();
+        self.report_depth_limit(open);
+        self.skip_nested();
+        open.merge(self.previous_span)
+    }
+
     /// Start measuring an operand at the current level. Hand the result to
     /// [`Self::end_operand`] once the operand is whole.
-    const fn begin_operand(&mut self) -> usize {
-        mem::replace(&mut self.deepest_level, self.nesting_depth)
+    const fn begin_operand(&mut self) -> OuterOperand {
+        OuterOperand {
+            deepest_level: mem::replace(&mut self.deepest_level, self.nesting_depth),
+            first_error: mem::replace(&mut self.operand_first_error, self.errors.len()),
+        }
     }
 
     /// Fold the finished operand's depth into that of the operand around it.
-    fn end_operand(&mut self, outer_deepest_level: usize) {
-        self.deepest_level = self.deepest_level.max(outer_deepest_level);
+    fn end_operand(&mut self, outer: OuterOperand) {
+        self.deepest_level = self.deepest_level.max(outer.deepest_level);
+        self.operand_first_error = outer.first_error;
     }
 
     /// Count a node that wraps the operand parsed so far at `level`: a run of
     /// binary operators or suffixes, a cast, or a type operator. Everything in
     /// the operand moves one level down, so the cap applies to its deepest
-    /// level.
+    /// level, and false counts nothing.
     ///
     /// On success the parser stands one level in, where the wrapper's other
     /// children go, and the caller steps back to `level` after them.
     #[must_use]
-    fn enter_wrapper(&mut self, level: usize) -> bool {
-        self.nesting_depth = self.deepest_level;
-        let has_entered = self.enter_depth();
-        self.nesting_depth = if has_entered { level.saturating_add(1) } else { level };
-        has_entered
+    const fn enter_wrapper(&mut self, level: usize) -> bool {
+        if self.deepest_level >= MAX_NESTING_DEPTH {
+            return false;
+        }
+        self.deepest_level = self.deepest_level.saturating_add(1);
+        self.nesting_depth = level.saturating_add(1);
+        true
+    }
+
+    /// Report a wrapper refused at the operator that opens it, then count the
+    /// error node that will replace the wrapper and its operand as a leaf at
+    /// `level`.
+    ///
+    /// An operand that already holds an error, often the refusal that cut it
+    /// off at the cap, has had its report, so the wrapper adds none.
+    fn refuse_wrapper(&mut self, level: usize) {
+        if self.errors.len() == self.operand_first_error {
+            self.report_depth_limit(self.current_span());
+        }
+        self.deepest_level = level;
+    }
+
+    /// Split the leading `>` off the current two-character token, leaving
+    /// `remainder` as the current token, and return the `>`'s span.
+    fn split_close_angle(&mut self, remainder: TokenKind) -> Span {
+        let span = self.current.span;
+        let split_at = span.start.saturating_add(1);
+        self.current = Token::new(remainder, Span::new(split_at, span.end));
+        self.previous_span = Span::new(span.start, split_at);
+        self.previous_span
     }
 
     /// Skip to the next statement start, block end, or closing bracket.

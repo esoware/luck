@@ -70,6 +70,9 @@ fn declaration_span(
 impl Parser<'_> {
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     pub(super) fn parse_attributed_function(&mut self) -> Statement {
+        if !self.can_nest_function() {
+            return self.refuse_attributed_function();
+        }
         let attributes = self.parse_function_attributes();
         match self.peek() {
             TokenKind::Local => self.parse_local_stmt(attributes),
@@ -87,7 +90,31 @@ impl Parser<'_> {
         }
     }
 
+    /// Refuse a function statement at its first attribute, skipping the
+    /// attributes, the keywords that declare it, and the function.
+    #[cold]
+    #[inline(never)]
+    fn refuse_attributed_function(&mut self) -> Statement {
+        let start = self.current_span();
+        self.report_depth_limit(start);
+        self.skip_attributes();
+        while matches!(self.peek(), TokenKind::Local)
+            || matches!(self.peek(), TokenKind::Identifier(name) if name == "export" || name == "const")
+        {
+            self.advance();
+        }
+        if matches!(self.peek(), TokenKind::Function) {
+            self.skip_nested();
+        }
+        Statement::Error(start.merge(self.previous_span))
+    }
+
     pub(super) fn parse_function_decl(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
+        if !self.can_nest_function() {
+            let start =
+                attributes.first().map_or_else(|| self.current_span(), |attribute| attribute.span);
+            return Statement::Error(self.refuse_function(start));
+        }
         let function_span = self.advance_span();
         let name = self.parse_function_name();
         let body = self.parse_function_body();
@@ -148,10 +175,13 @@ impl Parser<'_> {
         attributes: Vec<FunctionAttribute>,
         kind: LocalKind,
     ) -> Statement {
+        let start_span = attributes.first().map_or(local_span, |attribute| attribute.span);
+        if !self.can_nest_function() {
+            return Statement::Error(self.refuse_function(start_span));
+        }
         self.advance_span(); // `function`
         let name = self.expect_identifier_recover();
         let body = self.parse_function_body();
-        let start_span = attributes.first().map_or(local_span, |attribute| attribute.span);
         let span = start_span.merge(body.span);
 
         Statement::LocalFunction(Box::new(LocalFunction {
@@ -253,7 +283,11 @@ impl Parser<'_> {
         let global_span = self.advance_span();
 
         // `global function name(...) ... end`
-        if self.eat(&TokenKind::Function) {
+        if matches!(self.peek(), TokenKind::Function) {
+            if !self.can_nest_function() {
+                return Statement::Error(self.refuse_function(global_span));
+            }
+            self.advance_span();
             let name = self.expect_identifier_recover();
             let body = self.parse_function_body();
             let span = global_span.merge(body.span);
@@ -327,7 +361,11 @@ impl Parser<'_> {
 
         // `type function Name funcbody` takes no `=`, and the body is
         // ordinary Luau.
-        if self.eat(&TokenKind::Function) {
+        if matches!(self.peek(), TokenKind::Function) {
+            if !self.can_nest_function() {
+                return Statement::Error(self.refuse_function(start_span));
+            }
+            self.advance_span();
             self.has_type_function = true;
             let name = self.expect_identifier_recover();
             let body = self.parse_function_body();

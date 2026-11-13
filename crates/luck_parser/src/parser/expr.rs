@@ -7,6 +7,7 @@ use luck_ast::{
 use luck_token::{BinOp, Span, Token, TokenKind, UnOp};
 
 use super::Parser;
+use super::skip::{ExprTail, TypeExtent};
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -19,7 +20,7 @@ impl Parser<'_> {
     #[inline]
     pub(super) fn parse_expr(&mut self, min_precedence: u8) -> Expression {
         let level = self.nesting_depth;
-        let outer_deepest_level = self.begin_operand();
+        let outer = self.begin_operand();
         let mut lhs = self.parse_prefix();
 
         while let Some(op) = self.peek_binary_op() {
@@ -27,20 +28,40 @@ impl Parser<'_> {
             if precedence < min_precedence {
                 break;
             }
-            self.advance_span();
-            // A run built here anyway would put the tree past the cap.
             if !self.enter_wrapper(level) {
-                break;
+                lhs = self.refuse_binary_run(lhs.span(), precedence, level);
+                continue;
             }
+            self.advance_span();
             lhs = self.parse_binary_run(lhs, op, precedence);
             self.nesting_depth = level;
         }
 
-        self.end_operand(outer_deepest_level);
+        self.end_operand(outer);
         lhs
     }
 
-    fn peek_binary_op(&self) -> Option<BinOp> {
+    /// Refuse the run at `precedence` that the current operator would start
+    /// over the operand from `start`.
+    #[cold]
+    #[inline(never)]
+    fn refuse_binary_run(&mut self, start: Span, precedence: u8, level: usize) -> Expression {
+        self.refuse_wrapper(level);
+        self.skip_expr_tail(ExprTail::Operators(precedence));
+        Expression::Error(start.merge(self.previous_span))
+    }
+
+    /// Refuse the expression at the current token, skipping it with `tail`.
+    #[cold]
+    #[inline(never)]
+    fn refuse_expr(&mut self, tail: ExprTail) -> Expression {
+        let start = self.current_span();
+        self.report_depth_limit(start);
+        self.skip_expr(tail);
+        Expression::Error(start.merge(self.previous_span))
+    }
+
+    pub(super) fn peek_binary_op(&self) -> Option<BinOp> {
         let op = BinOp::from_token_kind(self.peek())?;
         // Luau's lexer emits `&` and `|` for the type grammar only; they
         // aren't binary operators there.
@@ -91,12 +112,13 @@ impl Parser<'_> {
     }
 
     fn parse_unary_op(&mut self, op: UnOp) -> Expression {
-        let op_span = self.advance_span();
         // Unary chains like `not not not x` recurse once per operator, so
         // they count toward the depth limit too.
-        if !self.enter_depth() {
-            return Expression::Error(op_span);
+        if !self.can_nest(1) {
+            return self.refuse_expr(ExprTail::Operators(UnOp::PRECEDENCE));
         }
+        let op_span = self.advance_span();
+        self.enter_depth();
         let operand = self.parse_expr(UnOp::PRECEDENCE);
         self.exit_depth();
         let span = op_span.merge(operand.span());
@@ -107,10 +129,10 @@ impl Parser<'_> {
     /// is a parse error there. A second `::` is left in place to fail as an
     /// unexpected token.
     fn parse_type_cast(&mut self, expr: Expression, level: usize) -> Expression {
-        if self.version.has_type_syntax()
-            && matches!(self.peek(), TokenKind::DoubleColon)
-            && self.enter_wrapper(level)
-        {
+        if self.version.has_type_syntax() && matches!(self.peek(), TokenKind::DoubleColon) {
+            if !self.enter_wrapper(level) {
+                return self.refuse_type_cast(expr.span(), level);
+            }
             self.advance_span();
             let type_annotation = self.parse_type();
             self.nesting_depth = level;
@@ -118,6 +140,15 @@ impl Parser<'_> {
             return Expression::TypeCast(Box::new(TypeCast { span, expr, type_annotation }));
         }
         expr
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn refuse_type_cast(&mut self, start: Span, level: usize) -> Expression {
+        self.refuse_wrapper(level);
+        self.advance();
+        self.skip_type(TypeExtent::Full);
+        Expression::Error(start.merge(self.previous_span))
     }
 
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
@@ -158,14 +189,18 @@ impl Parser<'_> {
     }
 
     fn parse_table_expr(&mut self) -> Expression {
+        if !self.can_nest(1) {
+            return Expression::Error(self.refuse_group());
+        }
         Expression::TableConstructor(Box::new(self.parse_table_constructor()))
     }
 
     fn parse_parenthesized(&mut self) -> Expression {
-        let open = self.advance_span();
-        if !self.enter_depth() {
-            return Expression::Error(open);
+        if !self.can_nest(1) {
+            return Expression::Error(self.refuse_group());
         }
+        let open = self.advance_span();
+        self.enter_depth();
         let expr = self.parse_expr(0);
         self.exit_depth();
         let close = self.expect(&TokenKind::RightParen);
@@ -208,11 +243,14 @@ impl Parser<'_> {
 
     /// The suffixes after `prefix` loop into one node, so a run of any
     /// length is one level of nesting, counted toward the depth cap from the
-    /// prefix's deepest level. A run the cap refuses is left unconsumed.
+    /// prefix's deepest level.
     fn parse_suffixes(&mut self, prefix: Expression) -> Expression {
         let level = self.nesting_depth;
-        if !self.is_at_suffix() || !self.enter_wrapper(level) {
+        if !self.is_at_suffix() {
             return prefix;
+        }
+        if !self.enter_wrapper(level) {
+            return self.refuse_suffixes(prefix.span(), level);
         }
         let first = self.parse_suffix();
         let start = self.suffixes.len();
@@ -226,8 +264,16 @@ impl Parser<'_> {
         Expression::Suffixed(Box::new(SuffixedExpression { span, prefix, suffixes }))
     }
 
+    #[cold]
+    #[inline(never)]
+    fn refuse_suffixes(&mut self, start: Span, level: usize) -> Expression {
+        self.refuse_wrapper(level);
+        self.skip_suffixes();
+        Expression::Error(start.merge(self.previous_span))
+    }
+
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token ends the run")]
-    const fn is_at_suffix(&self) -> bool {
+    pub(super) const fn is_at_suffix(&self) -> bool {
         match self.peek() {
             TokenKind::Less => self.is_at_type_instantiation(),
             TokenKind::Dot
@@ -294,10 +340,11 @@ impl Parser<'_> {
     }
 
     fn parse_if_expr(&mut self) -> Expression {
-        let if_span = self.advance_span();
-        if !self.enter_depth() {
-            return Expression::Error(if_span);
+        if !self.can_nest(1) {
+            return self.refuse_expr(ExprTail::Nothing);
         }
+        let if_span = self.advance_span();
+        self.enter_depth();
         let condition = self.parse_expr(0);
         self.expect(&TokenKind::Then);
         let then_expr = self.parse_expr(0);
@@ -330,16 +377,15 @@ impl Parser<'_> {
     }
 
     fn parse_interpolated_string(&mut self) -> Expression {
+        if !self.can_nest(1) {
+            return Expression::Error(self.refuse_group());
+        }
         let begin_token = self.advance();
         let start_span = begin_token.span;
         let mut segments = Vec::new();
-        // Past the cap the holes still parse, so the string's tokens are
-        // consumed and each hole reports the limit itself.
-        let has_entered = self.enter_depth();
+        self.enter_depth();
         let interpolated = self.parse_interpolated_segments(begin_token, &mut segments);
-        if has_entered {
-            self.exit_depth();
-        }
+        self.exit_depth();
         let span = start_span.merge(interpolated);
         Expression::InterpolatedString(Box::new(InterpolatedString { span, segments }))
     }
@@ -415,6 +461,15 @@ impl Parser<'_> {
     fn parse_function_args(&mut self) -> FunctionArgs {
         match self.peek() {
             TokenKind::LeftParen => self.parse_parenthesized_args(),
+            // `FunctionArgs` has no error node of its own, so a refused table
+            // stands as an error argument.
+            TokenKind::LeftBrace if !self.can_nest(1) => {
+                let span = self.refuse_group();
+                FunctionArgs::Parenthesized {
+                    span,
+                    args: Punctuated::from_item(Expression::Error(span)),
+                }
+            }
             TokenKind::LeftBrace => {
                 FunctionArgs::TableConstructor(Box::new(self.parse_table_constructor()))
             }
@@ -449,6 +504,9 @@ impl Parser<'_> {
     }
 
     fn parse_function_def(&mut self) -> Expression {
+        if !self.can_nest_function() {
+            return self.refuse_expr(ExprTail::Nothing);
+        }
         let attributes = self.parse_function_attributes();
         let start_span =
             attributes.first().map_or_else(|| self.current_span(), |attribute| attribute.span);
@@ -463,12 +521,10 @@ impl Parser<'_> {
         Expression::FunctionDef(Box::new(FunctionDef { span, attributes, body }))
     }
 
+    /// The caller has checked that the table fits.
     pub(super) fn parse_table_constructor(&mut self) -> TableConstructor {
         let start_span = self.advance_span(); // `{`
-
-        if !self.enter_depth() {
-            return TableConstructor { span: start_span, fields: Punctuated::empty() };
-        }
+        self.enter_depth();
 
         let mut fields = Punctuated::empty();
 

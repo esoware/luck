@@ -88,16 +88,74 @@ fn long_runs() -> Vec<(LuaVersion, String)> {
         .collect()
 }
 
+/// One source per construct, each nested far past the cap, which the parser
+/// skips without recursing.
+fn sources_past_the_nesting_cap() -> Vec<(LuaVersion, String)> {
+    const LEVELS: usize = 100_000;
+    let lua = [
+        format!("return {}", wrapped("(", LEVELS, "x", ")")),
+        format!("return {}", wrapped("f(", LEVELS, "x", ")")),
+        format!("return {}", wrapped("a[", LEVELS, "x", "]")),
+        format!("return {}", wrapped("{", LEVELS, "1", "}")),
+        format!("return {}", wrapped("f{", LEVELS, "", "}")),
+        format!("return {}x", "- ".repeat(LEVELS)),
+        format!("return {}", wrapped("x^-", LEVELS, "x", "")),
+        format!("return {}", wrapped("function() return ", LEVELS, "1", " end")),
+        wrapped("do ", LEVELS, "x = 1", " end"),
+        wrapped("if a then ", LEVELS, "x = 1", " end"),
+        wrapped("while a do ", LEVELS, "x = 1", " end"),
+        wrapped("repeat ", LEVELS, "x = 1", " until a"),
+        wrapped("local function f() ", LEVELS, "local x = 1", " end"),
+    ];
+    let luau = [
+        format!("return {}x", "if a then b else ".repeat(LEVELS)),
+        format!("return {}a{}", "if ".repeat(LEVELS), " then b else c".repeat(LEVELS)),
+        format!("return {}", wrapped("`{", LEVELS, "x", "}`")),
+        format!("return {}", wrapped("(", LEVELS, "x", " :: T)")),
+        format!("type X = {}", wrapped("{", LEVELS, "T", "}")),
+        format!("type X = {}", wrapped("A<", LEVELS, "T", ">")),
+        format!("type X = {}T", "() -> ".repeat(LEVELS)),
+        format!("type X = {}T", "() -> ...".repeat(LEVELS)),
+        format!("type X = T{}", "?".repeat(LEVELS)),
+        format!("type X = {}", wrapped("typeof(", LEVELS, "x", ")")),
+    ];
+    lua.into_iter()
+        .map(|source| (LuaVersion::Lua54, source))
+        .chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
+        .collect()
+}
+
 /// Runs `stage` over every source, each on a thread with [`STACK_BYTES`] of
 /// stack. Overflowing it takes the whole test process down.
 fn run_on_the_smallest_stack(stage: fn(&str, LuaVersion)) {
-    for (version, source) in sources_at_the_nesting_cap().into_iter().chain(long_runs()) {
+    run_each_on_the_smallest_stack(
+        sources_at_the_nesting_cap().into_iter().chain(long_runs()),
+        stage,
+    );
+}
+
+fn run_each_on_the_smallest_stack<Sources>(sources: Sources, stage: fn(&str, LuaVersion))
+where
+    Sources: IntoIterator<Item = (LuaVersion, String)>,
+{
+    for (version, source) in sources {
         let worker = thread::Builder::new()
             .stack_size(STACK_BYTES)
             .spawn(move || stage(&source, version))
             .expect("the thread starts");
         assert!(worker.join().is_ok(), "the stage panicked");
     }
+}
+
+#[test]
+fn parsing_past_the_cap_fits_the_smallest_stack() {
+    run_each_on_the_smallest_stack(sources_past_the_nesting_cap(), |source, version| {
+        let parsed = luck_parser::parse(source, version);
+        let [error] = parsed.errors.as_slice() else {
+            panic!("{:?}: {:?}", source.get(..20), parsed.errors.first());
+        };
+        assert!(error.message.contains("resource limit"), "{:?}: {error:?}", source.get(..20));
+    });
 }
 
 #[test]

@@ -1,4 +1,6 @@
-use luck_ast::{MAX_NESTING_DEPTH, Visitor, block_nesting_depth};
+use core::ops::Range;
+
+use luck_ast::{MAX_NESTING_DEPTH, Statement, Visitor, block_nesting_depth};
 use luck_parser::parse;
 use luck_token::LuaVersion;
 
@@ -263,7 +265,11 @@ fn the_cap_bounds_the_depth_of_the_tree_exactly() {
                 );
                 assert_eq!(block_nesting_depth(&result.block), depth, "{}", shape.name);
             } else {
-                assert!(has_depth_limit_error(&result), "{} at depth {depth}", shape.name);
+                let [error] = result.errors.as_slice() else {
+                    panic!("{} at depth {depth}: {:?}", shape.name, result.errors);
+                };
+                assert!(error.message.contains("luck parser resource limit"), "{}", shape.name);
+                assert!(block_nesting_depth(&result.block) <= MAX_NESTING_DEPTH, "{}", shape.name);
             }
         }
     }
@@ -319,26 +325,229 @@ impl Visitor<'_> for Levels {
 }
 
 #[test]
-fn a_tree_with_errors_stays_within_reach_of_the_cap() {
-    for source in [
+fn a_tree_with_errors_stays_within_the_cap() {
+    let lua = [
         format!("return {}", "(".repeat(5000)),
         format!("return {}", "{".repeat(5000)),
         format!("return {}", "f(".repeat(5000)),
         format!("return x{}", "+(x".repeat(5000)),
         format!("return x{}", ".b[(x".repeat(5000)),
+        format!("return {}x", "- ".repeat(5000)),
         "do ".repeat(5000),
         "function f() ".repeat(5000),
         format!("return {}", "function() return ".repeat(5000)),
-    ] {
-        let result = parse(source.as_str(), LuaVersion::Lua54);
+    ];
+    let luau = [
+        format!("return {}x", "if a then b else ".repeat(5000)),
+        format!("return {}", "`{".repeat(5000)),
+        format!("return {}x{}", "(".repeat(5000), " :: T)".repeat(5000)),
+        format!("type X = {}", "{".repeat(5000)),
+        format!("type X = {}T", "() -> ".repeat(5000)),
+        format!("type X = {}T", "A<".repeat(5000)),
+        format!("type X = T{}", "?".repeat(5000)),
+    ];
+    let sources = lua.into_iter().map(|source| (LuaVersion::Lua54, source));
+    for (version, source) in
+        sources.chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
+    {
+        let result = parse(source.as_str(), version);
         assert!(has_depth_limit_error(&result), "{:?}", result.errors.first());
         let mut levels = Levels { depth: 0, deepest: 0 };
         levels.visit_block(&result.block);
-        assert!(
-            levels.deepest <= MAX_NESTING_DEPTH + 2,
-            "{}: {:?}",
-            levels.deepest,
-            source.get(..20)
-        );
+        assert!(levels.deepest <= MAX_NESTING_DEPTH, "{}: {:?}", levels.deepest, source.get(..20));
+    }
+}
+
+const AFTER: &str = "\nlocal after = 1";
+
+/// `construct` as an expression nested at the cap, so anything but a name or
+/// a literal there is too deep.
+fn at_the_cap_in_an_expression(construct: &str) -> (String, String) {
+    let prefix = format!("local v = {}", "(".repeat(MAX_NESTING_DEPTH - 1));
+    let source = format!("{prefix}{construct}{}{AFTER}", ")".repeat(MAX_NESTING_DEPTH - 1));
+    (prefix, source)
+}
+
+/// `construct` as a statement in a block at the cap, so a statement that
+/// holds a block or an expression that nests is too deep.
+fn at_the_cap_in_a_block(construct: &str) -> (String, String) {
+    let prefix = "do ".repeat(MAX_NESTING_DEPTH - 1);
+    let source = format!("{prefix}{construct}{}{AFTER}", " end".repeat(MAX_NESTING_DEPTH - 1));
+    (prefix, source)
+}
+
+/// `construct` as a statement whose own block is at the cap, so a function's
+/// body and block don't both fit.
+fn under_the_cap_in_a_block(construct: &str) -> (String, String) {
+    let prefix = "do ".repeat(MAX_NESTING_DEPTH - 2);
+    let source = format!("{prefix}{construct}{}{AFTER}", " end".repeat(MAX_NESTING_DEPTH - 2));
+    (prefix, source)
+}
+
+/// `construct` as a type nested at the cap.
+fn at_the_cap_in_a_type(construct: &str) -> (String, String) {
+    let prefix = format!("type X = {}", "{".repeat(MAX_NESTING_DEPTH - 1));
+    let source = format!("{prefix}{construct}{}{AFTER}", "}".repeat(MAX_NESTING_DEPTH - 1));
+    (prefix, source)
+}
+
+/// `construct` after an operand that already reaches the cap, so a node
+/// wrapping that operand is too deep.
+fn over_an_operand_at_the_cap(construct: &str) -> (String, String) {
+    let deep = MAX_NESTING_DEPTH - 1;
+    let prefix = format!("local v = {}x{}", "(".repeat(deep), ")".repeat(deep));
+    (prefix.clone(), format!("{prefix}{construct}{AFTER}"))
+}
+
+/// The same, as the start of a statement.
+fn over_a_statement_at_the_cap(construct: &str) -> (String, String) {
+    let deep = MAX_NESTING_DEPTH - 1;
+    let prefix = format!("{}x{}", "(".repeat(deep), ")".repeat(deep));
+    (prefix.clone(), format!("{prefix}{construct}{AFTER}"))
+}
+
+/// The same, over a type.
+fn over_a_type_at_the_cap(construct: &str) -> (String, String) {
+    let deep = MAX_NESTING_DEPTH - 1;
+    let prefix = format!("type X = {}T{}", "{".repeat(deep), "}".repeat(deep));
+    (prefix.clone(), format!("{prefix}{construct}{AFTER}"))
+}
+
+/// A refused construct is one error at the token that would open the level
+/// past the cap, and is skipped whole, so the statement holding it ends where
+/// it would have and the next one parses.
+#[test]
+fn a_construct_past_the_cap_is_one_error_at_its_opener() {
+    type Build = fn(&str) -> (String, String);
+    let lua = LuaVersion::Lua54;
+    let luau = LuaVersion::Luau;
+    let cases: &[(Build, LuaVersion, &str, &str)] = &[
+        (at_the_cap_in_an_expression, lua, "(x)", "("),
+        (at_the_cap_in_an_expression, lua, "{f = function() if a then end end}", "{"),
+        (at_the_cap_in_an_expression, lua, "-a ^ -b ^ c", "-"),
+        (at_the_cap_in_an_expression, lua, "not a == b", "not"),
+        (at_the_cap_in_an_expression, lua, "#{1, 2} .. x", "#"),
+        (at_the_cap_in_an_expression, lua, "a + b * c", "+"),
+        (at_the_cap_in_an_expression, lua, "a.b[c]:d(e){f}\"g\" or h", "."),
+        (at_the_cap_in_an_expression, lua, "function() return (1) end", "function"),
+        (at_the_cap_in_an_expression, luau, "if a then b elseif c then d else e .. f", "if"),
+        (at_the_cap_in_an_expression, luau, "if if a then b else c then d else e", "if"),
+        (at_the_cap_in_an_expression, luau, "`a{b}c{`d{e}`}`", "`a{"),
+        (at_the_cap_in_an_expression, luau, "`plain`", "`plain`"),
+        (at_the_cap_in_an_expression, luau, "a :: (B) -> C | D", "::"),
+        (at_the_cap_in_an_expression, luau, "f<<A<B>>>(c)", "<"),
+        (at_the_cap_in_an_expression, luau, "@native @[deprecated{use = 'x'}] function() end", "@"),
+        (at_the_cap_in_a_block, lua, "do local t = {[1] = function() end} end", "do"),
+        (at_the_cap_in_a_block, lua, "while (function() return true end)() do break end", "while"),
+        (at_the_cap_in_a_block, lua, "for i = 1, f(2) do end", "for"),
+        (at_the_cap_in_a_block, lua, "for _ in function() end do end", "for"),
+        (at_the_cap_in_a_block, lua, "if a then elseif b then else end", "if"),
+        (at_the_cap_in_a_block, lua, "repeat local y = 1 until f(y) == 2", "repeat"),
+        (at_the_cap_in_a_block, lua, "local function f() end", "function"),
+        (at_the_cap_in_a_block, lua, "function a.b:c() end", "function"),
+        (at_the_cap_in_a_block, lua, "f(1)", "("),
+        (at_the_cap_in_a_block, lua, "a.b:c(1)", "."),
+        (at_the_cap_in_a_block, lua, "a.b, c = 1, 2", "."),
+        (at_the_cap_in_a_block, lua, "x = -1", "-"),
+        (at_the_cap_in_a_block, lua, "do goto l ::l:: end", "do"),
+        (at_the_cap_in_a_block, LuaVersion::Lua55, "global function g() end", "function"),
+        (at_the_cap_in_a_block, luau, "a.b += 1", "."),
+        (at_the_cap_in_a_block, luau, "while if a then b else c do end", "while"),
+        (at_the_cap_in_a_block, luau, "if if a then b else c then end", "if"),
+        (at_the_cap_in_a_block, luau, "repeat until if a then b else c", "repeat"),
+        (
+            at_the_cap_in_a_block,
+            luau,
+            "do local y = if a then function() if b then end end else nil; if c then end end",
+            "do",
+        ),
+        (at_the_cap_in_a_block, luau, "do local s = `{if a then \"x\" else \"y\"}` end", "do"),
+        (at_the_cap_in_a_block, luau, "do local x: {[string]: (A<B<C>>) -> D?} = nil end", "do"),
+        (at_the_cap_in_a_block, luau, "do x = y :: typeof(if a then b else c) end", "do"),
+        (
+            at_the_cap_in_a_block,
+            luau,
+            "local function f<T>(x: Array<T>): Array<T> if x then end return x end",
+            "function",
+        ),
+        (at_the_cap_in_a_block, luau, "type function t(x) return x end", "function"),
+        (at_the_cap_in_a_block, luau, "@native local function f() end", "@"),
+        (under_the_cap_in_a_block, lua, "local f = function() end", "function"),
+        (under_the_cap_in_a_block, luau, "const function f() end", "function"),
+        (under_the_cap_in_a_block, luau, "local x: A<{{T}}, B> = 1", "{"),
+        (under_the_cap_in_a_block, luau, "local x: ({{T}}, B) -> C = nil", "{"),
+        (under_the_cap_in_a_block, luau, "type P<T... = ({{T}})> = T", "{"),
+        (at_the_cap_in_a_type, luau, "A<B<C>>", "A"),
+        (at_the_cap_in_a_type, luau, "(A, ...B) -> ...C", "("),
+        (at_the_cap_in_a_type, luau, "<T>(T) -> T | U", "<"),
+        (at_the_cap_in_a_type, luau, "typeof(a < b)", "typeof"),
+        (at_the_cap_in_a_type, luau, "A? | B & C", "?"),
+        (at_the_cap_in_a_type, luau, "| A | B", "|"),
+        (at_the_cap_in_a_type, luau, "{read x: number, write y: string}", "{"),
+        (over_an_operand_at_the_cap, lua, " + 1 - 2", "+"),
+        (over_an_operand_at_the_cap, lua, " * 2 + 3", "*"),
+        (over_an_operand_at_the_cap, lua, ".a.b(1):c()", "."),
+        (over_an_operand_at_the_cap, luau, " :: T + 1", "::"),
+        (over_a_statement_at_the_cap, lua, ".a = 1", "."),
+        (over_a_statement_at_the_cap, lua, "(1)", "("),
+        (over_a_type_at_the_cap, luau, "? | U", "?"),
+        (over_a_type_at_the_cap, luau, " & U | V", "&"),
+    ];
+    for &(build, version, construct, opener) in cases {
+        let (prefix, source) = build(construct);
+        let result = parse(source.as_str(), version);
+        let [error] = result.errors.as_slice() else {
+            panic!("{construct}: {:?}", result.errors);
+        };
+        assert!(error.message.contains("luck parser resource limit"), "{construct}: {error:?}");
+        let offset = construct.find(opener).expect("the opener is in the construct");
+        assert_eq!(error.span.text(&source), opener, "{construct}");
+        assert_eq!(Range::<usize>::from(error.span).start, prefix.len() + offset, "{construct}");
+        let [_, Statement::LocalAssignment(after)] = result.block.stmts.as_slice() else {
+            panic!("{construct}: {:?}", result.block.stmts);
+        };
+        assert_eq!(after.names.first().and_then(|name| name.name.identifier()), Some("after"));
+    }
+}
+
+/// A wrapper over an operand that holds an error adds no error of its own, so
+/// a construct cut off at the cap is one error however many wrap it.
+#[test]
+fn a_wrapper_over_a_refused_operand_adds_no_error() {
+    for (version, construct) in [
+        (LuaVersion::Lua54, "(a).b(c) + d .. e"),
+        (LuaVersion::Lua54, "-a + b"),
+        (LuaVersion::Lua54, "{} == c"),
+        (LuaVersion::Luau, "(a)::T + 1"),
+        (LuaVersion::Luau, "if a then b else c :: T"),
+    ] {
+        let (_, source) = at_the_cap_in_an_expression(construct);
+        let result = parse(source.as_str(), version);
+        assert_eq!(result.errors.len(), 1, "{construct}: {:?}", result.errors);
+    }
+    let (_, source) = at_the_cap_in_a_type("{T}? & U | V");
+    assert_eq!(parse(source.as_str(), LuaVersion::Luau).errors.len(), 1);
+}
+
+#[test]
+fn an_operand_cut_off_at_the_cap_is_one_error_where_it_was_cut() {
+    let deep = format!("{}x{}", "(".repeat(MAX_NESTING_DEPTH), ")".repeat(MAX_NESTING_DEPTH));
+    let source = format!("local v = {deep}.b + 1 :: T .. 2");
+    let result = parse(source.as_str(), LuaVersion::Luau);
+    let [error] = result.errors.as_slice() else {
+        panic!("{:?}", result.errors);
+    };
+    let innermost = "local v = ".len() + MAX_NESTING_DEPTH - 1;
+    assert_eq!(Range::<usize>::from(error.span).start, innermost);
+}
+
+/// Each construct past the cap is its own error, as long as fixing one
+/// leaves the other too deep.
+#[test]
+fn separate_constructs_past_the_cap_are_separate_errors() {
+    for construct in ["print(1) print(2)", "local v, w = f(1), g(2)", "a.b, c[1] = 1, 2"] {
+        let (_, source) = at_the_cap_in_a_block(construct);
+        let result = parse(source.as_str(), LuaVersion::Lua54);
+        assert_eq!(result.errors.len(), 2, "{construct}: {:?}", result.errors);
     }
 }
