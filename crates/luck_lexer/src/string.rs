@@ -1,5 +1,5 @@
 use luck_token::{
-    CompactString, LuaVersion, Span, TokenKind, is_lua_whitespace, unicode_escape_codepoint,
+    CompactString, LuaVersion, TokenKind, is_lua_whitespace, unicode_escape_codepoint,
 };
 use memchr::memmem;
 
@@ -71,34 +71,38 @@ pub(crate) fn scan_short_string(
 pub(crate) enum InterpolatedSegmentEnd {
     OpenBrace,
     Backtick,
+    /// The line or the source ended before the closing backtick.
+    Unterminated,
 }
 
-/// Scan raw interpolated-string text up to an interpolation opener `{` or
-/// the closing backtick, consuming that delimiter. `start` is where the
-/// token began, at its backtick or the `}` that resumed the string.
+/// Scan one segment of raw interpolated-string text.
+///
+/// The segment ends at an interpolation opener `{`, the closing backtick, or
+/// the line break that leaves it unterminated, consuming the `{` or the
+/// backtick. `start` is where the token began, at its backtick or the `}`
+/// that resumed the string.
+///
+/// A malformed escape or a `{{` goes to `errors` and stays text, so a
+/// segment ends where it would have without it.
 ///
 /// Raw escapes stay intact, so the validated segment is copied once from the
 /// source.
-///
-/// # Errors
-///
-/// Returns a [`LexError`] for an unterminated string, a malformed escape, or
-/// a `{{`.
 pub(crate) fn scan_interpolated_segment(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
-) -> Result<(CompactString, InterpolatedSegmentEnd), LexError> {
+    errors: &mut Vec<LexError>,
+) -> (CompactString, InterpolatedSegmentEnd) {
     let segment_start = cursor.position();
     loop {
         match cursor.peek() {
             // Luau rejects unescaped line breaks in backtick strings, same as
             // in short strings.
             None | Some(b'\n' | b'\r') => {
-                return Err(lex_error(
-                    cursor.span_since(start),
-                    "unterminated interpolated string",
-                ));
+                errors
+                    .push(lex_error(cursor.span_since(start), "unterminated interpolated string"));
+                let text = cursor.text_since(segment_start).into();
+                return (text, InterpolatedSegmentEnd::Unterminated);
             }
             Some(b'\\') => {
                 cursor.advance();
@@ -109,27 +113,32 @@ pub(crate) fn scan_interpolated_segment(
                     }
                     // Consuming `\u{...}` whole also keeps its `{` from
                     // opening an interpolation.
-                    Some(escaped) => scan_escape(cursor, version, escaped)?,
+                    Some(escaped) => {
+                        if let Err(error) = scan_escape(cursor, version, escaped) {
+                            errors.push(error);
+                        }
+                    }
                     // The next iteration reports the unterminated string.
                     None => {}
                 }
             }
+            Some(b'{') if cursor.peek_next() == Some(b'{') => {
+                let position = cursor.position();
+                cursor.advance_by(2);
+                errors.push(lex_error(
+                    cursor.span_since(position),
+                    "`{{` is not allowed in interpolated strings, use `\\{` for a literal brace",
+                ));
+            }
             Some(b'{') => {
                 let text = cursor.text_since(segment_start).into();
                 cursor.advance();
-                if cursor.peek() == Some(b'{') {
-                    let position = cursor.position();
-                    return Err(lex_error(
-                        Span::from_indices(position.saturating_sub(1), position.saturating_add(1)),
-                        "`{{` is not allowed in interpolated strings, use `\\{` for a literal brace",
-                    ));
-                }
-                return Ok((text, InterpolatedSegmentEnd::OpenBrace));
+                return (text, InterpolatedSegmentEnd::OpenBrace);
             }
             Some(b'`') => {
                 let text = cursor.text_since(segment_start).into();
                 cursor.advance();
-                return Ok((text, InterpolatedSegmentEnd::Backtick));
+                return (text, InterpolatedSegmentEnd::Backtick);
             }
             Some(_) => {
                 cursor.advance();

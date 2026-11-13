@@ -11,9 +11,11 @@ use super::Parser;
 /// An open construct whose closing token the skip is looking for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Frame {
-    /// A bracket or an interpolated string. Everything inside is balanced, so
-    /// only brackets count there.
+    /// A bracket. Everything inside is balanced, so only brackets and
+    /// interpolated strings count there.
     Group,
+    /// A Luau interpolated string, closed by its `InterpolatedStringEnd`.
+    InterpolatedString,
     /// A type's `<`, closed by `>`.
     Angle,
     /// `do`, `function`, a statement `if`, or a loop past its `do`, closed by
@@ -105,6 +107,7 @@ impl Parser<'_> {
             TokenKind::Do | TokenKind::Function | TokenKind::If => Frame::End,
             TokenKind::While | TokenKind::For => Frame::LoopHeader,
             TokenKind::Repeat => Frame::Until,
+            TokenKind::InterpolatedStringBegin(_) => Frame::InterpolatedString,
             _ => Frame::Group,
         };
         let opener = self.advance();
@@ -112,7 +115,9 @@ impl Parser<'_> {
         let mut is_expr_next = precedes_expression(&opener.kind);
         while let Some(&innermost) = frames.last() {
             match innermost {
-                Frame::Group => self.skip_in_group(&mut frames, &mut is_expr_next),
+                Frame::Group | Frame::InterpolatedString => {
+                    self.skip_in_group(&mut frames, &mut is_expr_next);
+                }
                 Frame::Angle => self.skip_in_angle(&mut frames),
                 Frame::End | Frame::LoopHeader | Frame::Until | Frame::IfExpr => {
                     self.skip_in_block(&mut frames, &mut is_expr_next);
@@ -124,21 +129,26 @@ impl Parser<'_> {
         }
     }
 
-    /// Inside a bracket, keywords are balanced, so only brackets open or
-    /// close anything.
+    /// Inside a bracket or an interpolated string, keywords are balanced, so
+    /// only brackets and strings open or close anything.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token is inside the group")]
     fn skip_in_group(&mut self, frames: &mut Vec<Frame>, is_expr_next: &mut bool) {
         match self.peek() {
-            TokenKind::LeftParen
-            | TokenKind::LeftBracket
-            | TokenKind::LeftBrace
-            | TokenKind::InterpolatedStringBegin(_) => frames.push(Frame::Group),
-            TokenKind::RightParen
-            | TokenKind::RightBracket
-            | TokenKind::RightBrace
-            | TokenKind::InterpolatedStringEnd(_) => {
-                frames.pop();
+            TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::LeftBrace => {
+                frames.push(Frame::Group);
+            }
+            TokenKind::InterpolatedStringBegin(_) => frames.push(Frame::InterpolatedString),
+            TokenKind::RightParen | TokenKind::RightBracket | TokenKind::RightBrace => {
+                // A string's parse ends at a bracket in its hole and leaves
+                // the bracket to what holds the string.
+                if frames.pop() == Some(Frame::InterpolatedString) {
+                    return;
+                }
                 *is_expr_next = false;
+            }
+            TokenKind::InterpolatedStringMiddle(_) | TokenKind::InterpolatedStringEnd(_) => {
+                *is_expr_next = false;
+                return self.skip_string_continuation(frames);
             }
             _ => {}
         }
@@ -151,8 +161,12 @@ impl Parser<'_> {
             TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::LeftBrace => {
                 frames.push(Frame::Group);
             }
+            TokenKind::InterpolatedStringBegin(_) => frames.push(Frame::InterpolatedString),
             TokenKind::RightParen | TokenKind::RightBracket | TokenKind::RightBrace => {
                 return self.close_stray_bracket(frames);
+            }
+            TokenKind::InterpolatedStringMiddle(_) | TokenKind::InterpolatedStringEnd(_) => {
+                return self.skip_string_continuation(frames);
             }
             TokenKind::Less => frames.push(Frame::Angle),
             TokenKind::Greater => {
@@ -186,18 +200,20 @@ impl Parser<'_> {
         let kind = self.peek();
         let is_in_if_expr = frames.last() == Some(&Frame::IfExpr);
         let next_is_expr = match kind {
-            TokenKind::LeftParen
-            | TokenKind::LeftBracket
-            | TokenKind::LeftBrace
-            | TokenKind::InterpolatedStringBegin(_) => {
+            TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::LeftBrace => {
                 frames.push(Frame::Group);
                 true
             }
-            TokenKind::RightParen
-            | TokenKind::RightBracket
-            | TokenKind::RightBrace
-            | TokenKind::InterpolatedStringMiddle(_)
-            | TokenKind::InterpolatedStringEnd(_) => return self.close_stray_bracket(frames),
+            TokenKind::InterpolatedStringBegin(_) => {
+                frames.push(Frame::InterpolatedString);
+                true
+            }
+            TokenKind::RightParen | TokenKind::RightBracket | TokenKind::RightBrace => {
+                return self.close_stray_bracket(frames);
+            }
+            TokenKind::InterpolatedStringMiddle(_) | TokenKind::InterpolatedStringEnd(_) => {
+                return self.skip_string_continuation(frames);
+            }
             TokenKind::Do => {
                 if let Some(frame @ Frame::LoopHeader) = frames.last_mut() {
                     *frame = Frame::End;
@@ -254,6 +270,21 @@ impl Parser<'_> {
             return;
         };
         frames.truncate(group);
+        self.advance();
+    }
+
+    /// The lexer gives each string its own continuations, so one closes any
+    /// bracket left open in the hole before it, as parsing would. With no
+    /// string open, it belongs to a string around the skipped construct, and
+    /// the skip ends before it.
+    fn skip_string_continuation(&mut self, frames: &mut Vec<Frame>) {
+        let Some(string) = frames.iter().rposition(|frame| *frame == Frame::InterpolatedString)
+        else {
+            frames.clear();
+            return;
+        };
+        let is_end = matches!(self.peek(), TokenKind::InterpolatedStringEnd(_));
+        frames.truncate(if is_end { string } else { string.saturating_add(1) });
         self.advance();
     }
 

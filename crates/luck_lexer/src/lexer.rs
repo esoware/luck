@@ -179,7 +179,7 @@ impl<'source> Lexer<'source> {
             b'`' if self.version.has_interpolated_strings() => self.lex_interpolated_string(),
             // Luau: a `}` at depth 0 closes the expression and resumes the string.
             b'}' if self.interpolation_brace_depths.last() == Some(&0) => {
-                self.lex_interpolated_string_continuation()
+                Some(self.lex_interpolated_string_continuation())
             }
             b'-' if self.cursor.peek_next() == Some(b'-') => {
                 self.lex_comment();
@@ -341,17 +341,19 @@ impl<'source> Lexer<'source> {
 
     /// A string with no expressions becomes an empty `InterpolatedStringBegin`
     /// plus a queued `InterpolatedStringEnd` holding its text, so the parser
-    /// always sees a pair.
+    /// always sees a pair. One unterminated before its first `{` drops out,
+    /// as an unterminated short string does.
     fn lex_interpolated_string(&mut self) -> Option<Token> {
         let start = self.cursor.position();
         self.cursor.advance();
-        let result = scan_interpolated_segment(&mut self.cursor, self.version, start);
-        let token = match self.ok_or_record(result)? {
-            (text, InterpolatedSegmentEnd::OpenBrace) => {
+        let (text, end) =
+            scan_interpolated_segment(&mut self.cursor, self.version, start, &mut self.errors);
+        let token = match end {
+            InterpolatedSegmentEnd::OpenBrace => {
                 self.interpolation_brace_depths.push(0);
                 self.make_token(TokenKind::InterpolatedStringBegin(text), start)
             }
-            (text, InterpolatedSegmentEnd::Backtick) => {
+            InterpolatedSegmentEnd::Backtick => {
                 let closing_backtick = self.cursor.position().saturating_sub(1);
                 let begin = self.make_token(
                     TokenKind::InterpolatedStringBegin(CompactString::default()),
@@ -361,6 +363,7 @@ impl<'source> Lexer<'source> {
                     Some(self.make_token(TokenKind::InterpolatedStringEnd(text), closing_backtick));
                 begin
             }
+            InterpolatedSegmentEnd::Unterminated => return None,
         };
         Some(token)
     }
@@ -368,21 +371,25 @@ impl<'source> Lexer<'source> {
     /// Resume an interpolated string at the `}` that closes an expression,
     /// producing `InterpolatedStringMiddle` at the next `{` or
     /// `InterpolatedStringEnd` at the closing backtick.
-    fn lex_interpolated_string_continuation(&mut self) -> Option<Token> {
+    ///
+    /// An unterminated string ends at its line break, so the `}` always
+    /// yields one, and the lexer never closes a string the parser doesn't see
+    /// close.
+    fn lex_interpolated_string_continuation(&mut self) -> Token {
         self.interpolation_brace_depths.pop();
         let start = self.cursor.position();
         self.cursor.advance();
-        let result = scan_interpolated_segment(&mut self.cursor, self.version, start);
-        let token = match self.ok_or_record(result)? {
-            (text, InterpolatedSegmentEnd::OpenBrace) => {
+        let (text, end) =
+            scan_interpolated_segment(&mut self.cursor, self.version, start, &mut self.errors);
+        match end {
+            InterpolatedSegmentEnd::OpenBrace => {
                 self.interpolation_brace_depths.push(0);
                 self.make_token(TokenKind::InterpolatedStringMiddle(text), start)
             }
-            (text, InterpolatedSegmentEnd::Backtick) => {
+            InterpolatedSegmentEnd::Backtick | InterpolatedSegmentEnd::Unterminated => {
                 self.make_token(TokenKind::InterpolatedStringEnd(text), start)
             }
-        };
-        Some(token)
+        }
     }
 
     fn lex_symbol(&mut self) -> Option<Token> {

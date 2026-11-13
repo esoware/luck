@@ -494,6 +494,21 @@ fn empty_interpolation_rejected() {
 }
 
 #[test]
+fn an_unterminated_interpolated_string_is_one_error() {
+    let result = parse_luau("local s = `{x}a\nlocal after = 1");
+    let [error] = result.errors.as_slice() else {
+        panic!("{:?}", result.errors);
+    };
+    assert_eq!(error.message, "unterminated interpolated string");
+    let [Statement::LocalAssignment(_), Statement::LocalAssignment(after)] =
+        result.block.stmts.as_slice()
+    else {
+        panic!("{:?}", result.block.stmts);
+    };
+    assert_eq!(after.names.first().and_then(|name| name.name.identifier()), Some("after"));
+}
+
+#[test]
 fn integer_literals_have_a_distinct_ast_node() {
     let result = parse_luau(
         "return 1i, 1_000_000i, 0xffffffffffffffffi, \

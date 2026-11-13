@@ -368,6 +368,14 @@ fn at_the_cap_in_an_expression(construct: &str) -> (String, String) {
     (prefix, source)
 }
 
+/// `construct` as an expression nested one level under the cap, so it fits and
+/// anything nesting inside it doesn't.
+fn under_the_cap_in_an_expression(construct: &str) -> (String, String) {
+    let prefix = format!("local v = {}", "(".repeat(MAX_NESTING_DEPTH - 2));
+    let source = format!("{prefix}{construct}{}{AFTER}", ")".repeat(MAX_NESTING_DEPTH - 2));
+    (prefix, source)
+}
+
 /// `construct` as a statement in a block at the cap, so a statement that
 /// holds a block or an expression that nests is too deep.
 fn at_the_cap_in_a_block(construct: &str) -> (String, String) {
@@ -434,6 +442,10 @@ fn a_construct_past_the_cap_is_one_error_at_its_opener() {
         (at_the_cap_in_an_expression, luau, "if if a then b else c then d else e", "if"),
         (at_the_cap_in_an_expression, luau, "`a{b}c{`d{e}`}`", "`a{"),
         (at_the_cap_in_an_expression, luau, "`plain`", "`plain`"),
+        (at_the_cap_in_an_expression, luau, "`{f(a}{b[c}`", "`{"),
+        (under_the_cap_in_an_expression, luau, "`{(a}`", "("),
+        (under_the_cap_in_an_expression, luau, "`{f<<A<B}{c}`", "<"),
+        (under_the_cap_in_an_expression, luau, "`{function() return a}{b}`", "function"),
         (at_the_cap_in_an_expression, luau, "a :: (B) -> C | D", "::"),
         (at_the_cap_in_an_expression, luau, "f<<A<B>>>(c)", "<"),
         (at_the_cap_in_an_expression, luau, "@native @[deprecated{use = 'x'}] function() end", "@"),
@@ -508,6 +520,23 @@ fn a_construct_past_the_cap_is_one_error_at_its_opener() {
         };
         assert_eq!(after.names.first().and_then(|name| name.name.identifier()), Some("after"));
     }
+}
+
+/// An unterminated string ends at its line break, so one refused at the cap is
+/// skipped through there and the rest of the file parses.
+#[test]
+fn an_unterminated_string_past_the_cap_ends_at_its_line() {
+    let (_, source) = at_the_cap_in_a_block("local s = `{a}b\n");
+    let result = parse(source.as_str(), LuaVersion::Luau);
+    let errors: Vec<_> =
+        result.errors.iter().map(|e| (e.message.as_str(), e.span.text(&source))).collect();
+    let depth_limit =
+        format!("maximum nesting depth exceeded (luck parser resource limit: {MAX_NESTING_DEPTH})");
+    assert_eq!(errors, [(depth_limit.as_str(), "`{"), ("unterminated interpolated string", "}b")]);
+    let [_, Statement::LocalAssignment(after)] = result.block.stmts.as_slice() else {
+        panic!("{:?}", result.block.stmts);
+    };
+    assert_eq!(after.names.first().and_then(|name| name.name.identifier()), Some("after"));
 }
 
 /// A wrapper over an operand that holds an error adds no error of its own, so

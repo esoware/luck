@@ -61,6 +61,75 @@ fn interpolated_string_double_brace_is_error() {
     assert!(result.errors[0].message.contains("`{{` is not allowed"));
 }
 
+/// The parser and the skip past its depth cap find where a string ends by its
+/// `InterpolatedStringEnd`, so one still comes when the string's text is
+/// malformed.
+#[test]
+fn a_string_with_a_hole_still_ends_when_its_text_is_malformed() {
+    let name = |text: &str| TokenKind::Identifier(text.into());
+    let cases = [
+        (
+            "`{x}abc\ny",
+            vec![
+                TokenKind::InterpolatedStringBegin(CompactString::default()),
+                name("x"),
+                TokenKind::InterpolatedStringEnd("abc".into()),
+                name("y"),
+            ],
+            ("unterminated interpolated string", "}abc"),
+        ),
+        (
+            "`{x}a{{y}}b`",
+            vec![
+                TokenKind::InterpolatedStringBegin(CompactString::default()),
+                name("x"),
+                TokenKind::InterpolatedStringEnd("a{{y}}b".into()),
+            ],
+            ("`{{` is not allowed in interpolated strings, use `\\{` for a literal brace", "{{"),
+        ),
+        (
+            "`{x}a\\xZZ{y}b`",
+            vec![
+                TokenKind::InterpolatedStringBegin(CompactString::default()),
+                name("x"),
+                TokenKind::InterpolatedStringMiddle("a\\xZZ".into()),
+                name("y"),
+                TokenKind::InterpolatedStringEnd("b".into()),
+            ],
+            ("`\\x` escape requires exactly 2 hex digits, got 0", "\\x"),
+        ),
+        (
+            "`a\\u{}{x}`",
+            vec![
+                TokenKind::InterpolatedStringBegin("a\\u{}".into()),
+                name("x"),
+                TokenKind::InterpolatedStringEnd(CompactString::default()),
+            ],
+            ("`\\u{}` requires at least one hex digit", "\\u{"),
+        ),
+        // Nothing opened, so it drops out like an unterminated short string.
+        ("`abc\ny", vec![name("y")], ("unterminated interpolated string", "`abc")),
+    ];
+    for (source, expected, (message, text)) in cases {
+        let result = lex(source, LuaVersion::Luau);
+        let kinds: Vec<TokenKind> = result
+            .tokens
+            .into_iter()
+            .filter(|token| token.kind != TokenKind::Eof)
+            .map(|token| token.kind)
+            .collect();
+        assert_eq!(kinds, expected, "{source:?}");
+        let [error] = result.errors.as_slice() else {
+            panic!("{source:?}: {:?}", result.errors);
+        };
+        assert_eq!(
+            (error.message.as_str(), error.span.text(source)),
+            (message, text),
+            "{source:?}"
+        );
+    }
+}
+
 #[test]
 fn backtick_is_an_unexpected_character_outside_luau() {
     for version in [
