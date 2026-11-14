@@ -200,6 +200,22 @@ impl Diagnostic {
         .with_help(format!("files must be at most {limit} bytes"))
     }
 
+    /// A construct in a module that parses alone but that the module's bundle
+    /// wrapper, `wrapper_levels` deep, would nest past `limit`.
+    #[must_use]
+    pub fn e013(file_path: &str, span: Span, wrapper_levels: usize, limit: usize) -> Self {
+        Self::error_at(
+            "E013",
+            format!("maximum nesting depth exceeded once bundled (luck resource limit: {limit})"),
+            file_path,
+            span,
+        )
+        .with_help(format!(
+            "the bundle nests a module's code {wrapper_levels} levels deeper inside its loader \
+             function, so nest this less deeply, such as by moving part of it into a local"
+        ))
+    }
+
     #[must_use]
     pub fn w001(file_path: &str, span: Span, module_name: &str) -> Self {
         Self::warning_at(

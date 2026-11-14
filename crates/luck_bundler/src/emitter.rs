@@ -1,6 +1,11 @@
 use core::ops::Range;
 
-use luck_token::{LuaVersion, Span, chunk_start, encode_string, ends_with_line_break, line_breaks};
+use luck_ast::{MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_core::Diagnostic;
+use luck_token::{
+    LuaVersion, Span, chunk_start, encode_string, ends_with_line_break, line_breaks,
+    offset_to_index,
+};
 use rustc_hash::FxHashSet;
 
 use crate::exports::{ExportLowering, has_value_exports, lower_exports};
@@ -59,10 +64,22 @@ pub struct LineMapEntry {
 /// A shebang is only valid on a chunk's first line, so the entry's moves to
 /// the bundle's first line, which keeps the bundle runnable as a script, and
 /// every other module's is dropped.
-pub(crate) fn emit(graph: &DependencyGraph, version: LuaVersion) -> (String, Vec<LineMapEntry>) {
+///
+/// Each module registers in a top-level statement, so the only nesting a
+/// module gains is its own wrapper's.
+///
+/// # Errors
+///
+/// Returns an E013 for each construct a wrapper would nest past
+/// [`MAX_NESTING_DEPTH`], at its place in its module's source, since luck
+/// couldn't read that bundle back.
+pub(crate) fn emit(
+    graph: &DependencyGraph,
+    version: LuaVersion,
+) -> Result<(String, Vec<LineMapEntry>), Vec<Diagnostic>> {
     let modules = &graph.modules;
     let Some(entry) = modules.get(graph.entry_id.0) else {
-        return (String::new(), Vec::new());
+        return Ok((String::new(), Vec::new()));
     };
 
     if modules.len() == 1 && entry.dependencies.is_empty() {
@@ -74,7 +91,7 @@ pub(crate) fn emit(graph: &DependencyGraph, version: LuaVersion) -> (String, Vec
                 .saturating_add(usize::from(!ends_with_line_break(&entry.source, version))),
             path: entry.path.clone(),
         }];
-        return (entry.source.clone(), line_map);
+        return Ok((entry.source.clone(), line_map));
     }
 
     let prefix = choose_prefix(modules);
@@ -91,6 +108,7 @@ pub(crate) fn emit(graph: &DependencyGraph, version: LuaVersion) -> (String, Vec
         line_map: Vec::with_capacity(modules.len()),
         prefix: &prefix,
         version,
+        errors: Vec::new(),
     };
 
     if let Some(shebang) = entry.shebang {
@@ -105,7 +123,6 @@ pub(crate) fn emit(graph: &DependencyGraph, version: LuaVersion) -> (String, Vec
         writer.push("\n");
     }
 
-    writer.push("do\n");
     let is_loader_global = modules.iter().any(|module| {
         module.max_function_upvalues.saturating_add(LOADER_UPVALUES) > LUA51_MAX_UPVALUES
     });
@@ -127,9 +144,8 @@ pub(crate) fn emit(graph: &DependencyGraph, version: LuaVersion) -> (String, Vec
     }
 
     writer.push(&format!("return {prefix}entry(...)\n"));
-    writer.push("end\n");
 
-    (writer.output, writer.line_map)
+    if writer.errors.is_empty() { Ok((writer.output, writer.line_map)) } else { Err(writer.errors) }
 }
 
 #[derive(Clone, Copy)]
@@ -155,6 +171,68 @@ impl ModuleKeys<'_> {
     }
 }
 
+/// What a wrapped module's function is bound to.
+#[derive(Clone, Copy)]
+enum Binding<'slot> {
+    /// A slot of the module table, such as `__luck_modules[1]`.
+    Slot(&'slot str),
+    /// The entry's own local, which the bundle calls last.
+    Entry,
+}
+
+/// The text around a module's body.
+struct Wrapper {
+    opening: String,
+    closing: &'static str,
+    /// How many levels deeper the body nests than the module's own chunk, as
+    /// [`MAX_NESTING_DEPTH`] counts them.
+    levels: usize,
+}
+
+/// Where a wrapped body landed in the bundle, so a position in it maps back to
+/// the module's source.
+struct BodyLayout {
+    /// Where the source from `source_start` on begins in the bundle.
+    output_start: usize,
+    source_start: usize,
+    /// The splices over the source, in source order.
+    edits: Vec<(Span, String)>,
+}
+
+impl BodyLayout {
+    /// The source that `output`, a range of the bundle, came from. Text a
+    /// splice wrote maps to the span it replaced, and wrapper text to the
+    /// module's start.
+    fn source_span(&self, output: Range<usize>, source_len: usize) -> Span {
+        let wrapper_text = Span::from_indices(self.source_start, self.source_start);
+        if output.start < self.output_start {
+            return wrapper_text;
+        }
+        let mut output_position = self.output_start;
+        let mut source_position = self.source_start;
+        for edit in self.edits.iter().map(Some).chain([None]) {
+            let verbatim_end = edit.map_or(source_len, |(span, _)| offset_to_index(span.start));
+            let verbatim_len = verbatim_end.saturating_sub(source_position);
+            let offset = output.start.saturating_sub(output_position);
+            if offset < verbatim_len {
+                let start = source_position.saturating_add(offset);
+                let end = start.saturating_add(output.len()).min(verbatim_end);
+                return Span::from_indices(start, end);
+            }
+            output_position = output_position.saturating_add(verbatim_len);
+            let Some((span, replacement)) = edit else {
+                break;
+            };
+            if output.start.saturating_sub(output_position) < replacement.len() {
+                return *span;
+            }
+            output_position = output_position.saturating_add(replacement.len());
+            source_position = offset_to_index(span.end);
+        }
+        wrapper_text
+    }
+}
+
 struct BundleWriter<'prefix> {
     output: String,
     /// 1-based line the next pushed character lands on.
@@ -162,6 +240,7 @@ struct BundleWriter<'prefix> {
     line_map: Vec<LineMapEntry>,
     prefix: &'prefix str,
     version: LuaVersion,
+    errors: Vec<Diagnostic>,
 }
 
 impl BundleWriter<'_> {
@@ -195,12 +274,12 @@ impl BundleWriter<'_> {
         for (slot, (_, module)) in (1usize..).zip(non_entry_modules(graph)) {
             self.push_provenance(&format!("#{slot}"), &module.relative_path);
             let module_slot = format!("{prefix}modules[{slot}]");
-            if self.push_wrapped(&format!("{module_slot}="), module, keys) {
+            if self.push_wrapped(Binding::Slot(&module_slot), module, keys) {
                 self.push(&format!("{module_slot}={prefix}exporting({slot},{module_slot})\n"));
             }
         }
 
-        let has_entry_exports = self.push_wrapped(&format!("local {prefix}entry="), entry, keys);
+        let has_entry_exports = self.push_wrapped(Binding::Entry, entry, keys);
         if let Some(slot) = entry_slot {
             let registered = if has_entry_exports {
                 format!("{prefix}exporting({slot},{prefix}entry)")
@@ -242,7 +321,7 @@ impl BundleWriter<'_> {
             let first = encode_string(primary.as_bytes());
             self.push_provenance(&first, &module.relative_path);
             self.push_wrapped(
-                &format!("{prefix}modules[{first}]="),
+                Binding::Slot(&format!("{prefix}modules[{first}]")),
                 module,
                 ModuleKeys::RequireString,
             );
@@ -255,7 +334,7 @@ impl BundleWriter<'_> {
             self.push_path_registrations(strings, &module.relative_path);
         }
 
-        self.push_wrapped(&format!("local {prefix}entry="), entry, ModuleKeys::RequireString);
+        self.push_wrapped(Binding::Entry, entry, ModuleKeys::RequireString);
         if let Some(entry_strings) =
             strings_by_module.get(graph.entry_id.0).filter(|strings| !strings.is_empty())
         {
@@ -290,27 +369,48 @@ impl BundleWriter<'_> {
         }
     }
 
-    /// Writes `target` bound to `module` wrapped in a function, and reports
+    /// Writes `module` wrapped in a function bound to `binding`, and reports
     /// whether the module exports values, so it registers through
     /// `{prefix}exporting`.
-    fn push_wrapped(&mut self, target: &str, module: &ModuleInfo, keys: ModuleKeys<'_>) -> bool {
+    ///
+    /// A module the wrapper may nest past [`MAX_NESTING_DEPTH`] is checked by
+    /// reparsing its registration, which nests as it does in the bundle.
+    fn push_wrapped(
+        &mut self,
+        binding: Binding<'_>,
+        module: &ModuleInfo,
+        keys: ModuleKeys<'_>,
+    ) -> bool {
         let lowering = if self.version.has_value_exports() {
             lower_exports(&module.block, &module.source, self.version, self.prefix)
         } else {
             ExportLowering::default()
         };
-        let (opening, closing) = self.wrapper_text(module);
-        self.push(target);
-        self.push(&opening);
+        let wrapper = self.wrapper(binding, module);
+        let registration_start = self.output.len();
+        self.push(&wrapper.opening);
         self.push(lowering.table_declaration.as_deref().unwrap_or_default());
         self.push("\n");
         let has_exported_values = lowering.closing.is_some();
-        self.push_body(module, keys, lowering.edits, lowering.closing.as_deref());
-        self.push(closing);
+        // Lowering reads an export the table holds as a field, one level
+        // deeper than the bare name, and the lines it adds are a few levels
+        // deep at most.
+        let lowering_levels = usize::from(lowering.table_declaration.is_some());
+        let layout = self.push_body(module, keys, lowering.edits, lowering.closing.as_deref());
+        self.push(wrapper.closing);
+
+        let most_levels = block_nesting_depth(&module.block)
+            .saturating_add(wrapper.levels)
+            .saturating_add(lowering_levels);
+        if most_levels > MAX_NESTING_DEPTH {
+            self.check_nesting(registration_start, module, &layout, wrapper.levels);
+        }
         has_exported_values
     }
 
-    fn wrapper_text(&self, module: &ModuleInfo) -> (String, &'static str) {
+    /// A statement the wrapper puts before a body ends in `;`, so a body that
+    /// opens with `(` can't continue it as a call.
+    fn wrapper(&self, binding: Binding<'_>, module: &ModuleInfo) -> Wrapper {
         // 5.1's hidden `arg` and 5.5's `(vararg table)` each take a local
         // slot in a vararg function, so a body that reads no `...` gets none.
         let params = if module.has_vararg_read
@@ -320,20 +420,66 @@ impl BundleWriter<'_> {
         } else {
             ""
         };
+        let entry = format!("{}entry", self.prefix);
+        let target = match binding {
+            Binding::Slot(slot) => slot,
+            Binding::Entry => entry.as_str(),
+        };
+        let is_entry = matches!(binding, Binding::Entry);
         if module.has_env_rebinding {
             // A real chunk's `_ENV` is its own and its upvalue 1, which
-            // 5.2's `module()` sets.
-            return (
-                format!("(function(_ENV)return function({params})_ENV=_ENV"),
-                "end end)(_ENV)\n",
-            );
+            // 5.2's `module()` sets, so the block gives the module a private
+            // one and the body's first statement makes it upvalue 1.
+            let declaration = if is_entry { format!("local {target} ") } else { String::new() };
+            return Wrapper {
+                opening: format!(
+                    "{declaration}do local _ENV=_ENV {target}=function({params})_ENV=_ENV;"
+                ),
+                closing: "end end\n",
+                levels: 3,
+            };
         }
+        let declaration = if is_entry { "local " } else { "" };
         // 5.1: `function(...)` hides the global `arg` behind its hidden local.
         let should_restore_arg = module.has_vararg_read && module.has_global_arg_read;
-        (
-            format!("function({params}){}", if should_restore_arg { "arg=_G.arg" } else { "" }),
-            "end\n",
-        )
+        Wrapper {
+            opening: format!(
+                "{declaration}{target}=function({params}){}",
+                if should_restore_arg { "arg=_G.arg;" } else { "" }
+            ),
+            closing: "end\n",
+            levels: 2,
+        }
+    }
+
+    /// Reports each construct of `module` that its registration, written from
+    /// `registration_start` on, nests past [`MAX_NESTING_DEPTH`], at its place
+    /// in the module's source.
+    ///
+    /// The module parses alone, so each error here is a construct the cap
+    /// refuses.
+    #[cold]
+    #[inline(never)]
+    fn check_nesting(
+        &mut self,
+        registration_start: usize,
+        module: &ModuleInfo,
+        layout: &BodyLayout,
+        wrapper_levels: usize,
+    ) {
+        let registration = self.output.get(registration_start..).unwrap_or_default();
+        let reparsed = luck_parser::parse(registration, self.version);
+        for error in &reparsed.errors {
+            let Range { start, end } = Range::<usize>::from(error.span);
+            let output =
+                registration_start.saturating_add(start)..registration_start.saturating_add(end);
+            self.errors.push(Diagnostic::e013(
+                &module.path,
+                layout.source_span(output, module.source.len()),
+                wrapper_levels,
+                MAX_NESTING_DEPTH,
+            ));
+        }
     }
 
     /// A loader call keeps the newline count of the call it replaces, so the
@@ -344,7 +490,7 @@ impl BundleWriter<'_> {
         keys: ModuleKeys<'_>,
         export_edits: Vec<(Span, String)>,
         closing: Option<&str>,
-    ) {
+    ) -> BodyLayout {
         let source = module.source.as_str();
         let mut edits: Vec<(Span, String)> = module
             .dependencies
@@ -386,6 +532,8 @@ impl BundleWriter<'_> {
         {
             self.push(" ");
         }
+        let source_start = cursor;
+        let output_start = self.output.len();
         for (span, replacement) in &edits {
             let range = Range::<usize>::from(*span);
             self.push(source.get(cursor..range.start).unwrap_or_default());
@@ -410,6 +558,7 @@ impl BundleWriter<'_> {
             bundle_end_line: self.next_line.saturating_sub(1),
             path: module.path.clone(),
         });
+        BodyLayout { output_start, source_start, edits }
     }
 }
 
@@ -526,8 +675,12 @@ mod tests {
         DependencyGraph { modules, topological_order, entry_id: ModuleId(0), warnings: vec![] }
     }
 
+    fn emitted(fixtures: Vec<ModuleFixture>, version: LuaVersion) -> (String, Vec<LineMapEntry>) {
+        emit(&graph(fixtures), version).unwrap_or_else(|errors| panic!("bundle failed: {errors:?}"))
+    }
+
     fn bundle(fixtures: Vec<ModuleFixture>, version: LuaVersion) -> String {
-        emit(&graph(fixtures), version).0
+        emitted(fixtures, version).0
     }
 
     fn assert_reparses(output: &str, version: LuaVersion) {
@@ -675,7 +828,7 @@ mod tests {
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua54),
             module("src/main.lua", source, &[("dep", "src/dep.lua")], LuaVersion::Lua54),
         ];
-        let (output, line_map) = emit(&graph(modules), LuaVersion::Lua54);
+        let (output, line_map) = emitted(modules, LuaVersion::Lua54);
         assert!(
             output.contains("local d = __luck_require(\"dep\"\n\n)"),
             "padding keeps following lines in place: {output}"
@@ -695,8 +848,8 @@ mod tests {
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua54),
             module("src/main.lua", source, &[("dep", "src/dep.lua")], LuaVersion::Lua54),
         ];
-        let (output, line_map) = emit(&graph(modules), LuaVersion::Lua54);
-        assert!(output.starts_with("#!/usr/bin/env lua\ndo\n"), "{output}");
+        let (output, line_map) = emitted(modules, LuaVersion::Lua54);
+        assert!(output.starts_with("#!/usr/bin/env lua\nlocal __luck_modules={}\n"), "{output}");
         assert_eq!(output.matches("#!").count(), 1, "{output}");
         let entry = find_line_entry(&line_map, "src/main.lua");
         let output_lines: Vec<&str> = output.lines().collect();
@@ -949,7 +1102,7 @@ print(field, lazy())
                 LuaVersion::Lua54,
             ),
         ];
-        let (output, line_map) = emit(&graph(modules), LuaVersion::Lua54);
+        let (output, line_map) = emitted(modules, LuaVersion::Lua54);
         let output_lines: Vec<&str> = output.lines().collect();
 
         let utils = find_line_entry(&line_map, "src/utils.lua");
@@ -1001,7 +1154,7 @@ print(field, lazy())
     fn lone_module_emits_verbatim_and_maps_every_line() {
         let source = "print(\"a\")\nprint(\"b\")\nprint(\"c\")\n";
         let modules = vec![module("src/main.lua", source, &[], LuaVersion::Lua54)];
-        let (output, line_map) = emit(&graph(modules), LuaVersion::Lua54);
+        let (output, line_map) = emitted(modules, LuaVersion::Lua54);
         assert_eq!(output, source);
         assert_eq!(
             line_map,

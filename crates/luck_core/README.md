@@ -9,7 +9,7 @@ Dialect targets and diagnostics shared across the luck toolchain.
 ## Key features
 
 - **Build targets.** `LuaTarget` enumerates the supported flavors (Lua 5.1 through 5.5, standalone Luau, and Roblox Luau) and parses from common string forms (`"lua54"`, `"5.4"`, `"luau"`, `"roblox"`). It projects onto the two independent axes the rest of the workspace keys off: `lua_version()` (syntax) and `stdlib_environment()` (stdlib).
-- **Diagnostics.** `Diagnostic` carries a code, message, severity, file path, span, and help text. Its numbered `E002`-`E012` / `W001`-`W007` constructors, such as `Diagnostic::e008`, live in `diagnostic/codes.rs` and are the only way to build one with an `E` or `W` code.
+- **Diagnostics.** `Diagnostic` carries a code, message, severity, file path, span, and help text. Its numbered `E002`-`E013` / `W001`-`W007` constructors, such as `Diagnostic::e008`, live in `diagnostic/codes.rs` and are the only way to build one with an `E` or `W` code.
 
 Every item is exported once, from the crate root.
 
@@ -37,6 +37,7 @@ Every item is exported once, from the crate root.
 | E010 | cannot read file (IO error) |
 | E011 | entry file not found (not emitted, since a missing entry reports E010) |
 | E012 | file too large (byte-length limit exceeded) |
+| E013 | construct the bundle's module wrapper would nest past the nesting cap |
 | W001 | duplicate require |
 | W002 | top-level vararg in bundled module (not emitted) |
 | W003 | circular dependency between lazily-loaded modules |

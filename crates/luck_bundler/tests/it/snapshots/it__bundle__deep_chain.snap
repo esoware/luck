@@ -2,7 +2,6 @@
 source: crates/luck_bundler/tests/it/bundle.rs
 expression: output
 ---
-do
 local __luck_modules={}
 local __luck_loaded=type(package)=="table" and type(package.loaded)=="table" and package.loaded or {}
 local __luck_preload=type(package)=="table" and type(package.preload)=="table" and package.preload or {}
@@ -85,4 +84,3 @@ print(result)
 return result
 end
 return __luck_entry(...)
-end

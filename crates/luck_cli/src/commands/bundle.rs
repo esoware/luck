@@ -89,8 +89,9 @@ impl BundleArgs {
         let mut code = result.output;
 
         if self.minify {
-            code = luck_minifier::minify(&code, version, &transforms)
-                .map_err(|errors| fail_with_source_errors(self.entry, &code, &errors, version))?;
+            code = luck_minifier::minify(&code, version, &transforms).map_err(|errors| {
+                fail_with_source_errors("<bundle>".to_owned(), &code, &errors, version)
+            })?;
         }
 
         if let Some(map_path) = self.line_map.as_deref() {

@@ -256,12 +256,7 @@ impl BuildArgs {
         if config.minify {
             output =
                 luck_minifier::minify(&output, version, &config.transforms).map_err(|errors| {
-                    print_source_errors(
-                        config.entry.display().to_string(),
-                        &output,
-                        &errors,
-                        version,
-                    );
+                    print_source_errors("<bundle>".to_owned(), &output, &errors, version);
                     BuildFailure::Failed {
                         message: "minification failed",
                         source_files: source_files.clone(),
@@ -293,7 +288,8 @@ fn with_preamble(config: &BuildConfig, output: String, version: LuaVersion) -> S
     let mut lines = Vec::new();
 
     if let Some(text) = &config.preamble {
-        for line in text.lines() {
+        // A short comment ends at a CR as well as at an LF, on every target.
+        for line in text.lines().flat_map(|line| line.split('\r')) {
             lines.push(format!("-- {line}"));
         }
     }

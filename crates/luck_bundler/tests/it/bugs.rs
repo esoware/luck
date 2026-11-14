@@ -6,10 +6,11 @@
 use std::fs;
 use std::path::Path;
 
+use luck_ast::{Call, Visitor};
 use luck_bundler::{BundleOptions, BundleResult, DynamicRequire, LineMapEntry, bundle};
 use luck_core::Diagnostic;
 use luck_semantic::{ScopeId, ScopeKind, ScopeTree, SymbolId};
-use luck_token::LuaVersion;
+use luck_token::{LuaVersion, Token};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tempfile::TempDir;
 
@@ -176,6 +177,53 @@ fn module_assigning_env_rebinds_only_its_own_env() {
     assert_eq!(
         shared_writes, 0,
         "`_ENV = ...` must write a binding private to the module:\n{}",
+        result.output
+    );
+}
+
+#[test]
+fn lua51_arg_restore_ends_before_a_body_opening_with_a_parenthesis() {
+    let result = bundle_files(
+        &[("main.lua", LUA_REQUIRE_UTIL), ("util.lua", b"(print)(..., arg)\n")],
+        "main.lua",
+        LuaVersion::Lua51,
+    );
+    let parsed = luck_parser::parse(&result.output, LuaVersion::Lua51);
+    assert!(
+        parsed.errors.is_empty(),
+        "restoring `arg` must not run into the body's `(`: {:?}\n{}",
+        parsed.errors,
+        result.output
+    );
+}
+
+/// Counts calls of a function named `_ENV`.
+#[derive(Default)]
+struct EnvCalls(usize);
+
+impl<'ast> Visitor<'ast> for EnvCalls {
+    fn visit_call(&mut self, call: Call<'ast>) {
+        if call.callee.as_name().and_then(Token::identifier) == Some("_ENV") {
+            self.0 = self.0.saturating_add(1);
+        }
+        self.walk_call(call);
+    }
+}
+
+#[test]
+fn private_env_ends_before_a_body_opening_with_a_parenthesis() {
+    let result = bundle_files(
+        &[("main.lua", LUA_REQUIRE_UTIL), ("util.lua", b"(print)(\"x\")\n_ENV = {}\n")],
+        "main.lua",
+        LuaVersion::Lua54,
+    );
+    let parsed = luck_parser::parse(&result.output, LuaVersion::Lua54);
+    assert!(parsed.errors.is_empty(), "{:?}\n{}", parsed.errors, result.output);
+    let mut env_calls = EnvCalls::default();
+    env_calls.visit_block(&parsed.block);
+    assert_eq!(
+        env_calls.0, 0,
+        "`_ENV=_ENV` must not call `_ENV` with `(print)`:\n{}",
         result.output
     );
 }

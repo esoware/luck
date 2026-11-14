@@ -263,6 +263,75 @@ fn bundle_survives_long_runs() {
     );
 }
 
+/// A project whose `deep.lua` holds `1` in `groups` parenthesized groups.
+/// Its own block is a level, and its wrapper in a bundle adds two more.
+fn deep_module_project(groups: usize) -> TempDir {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.lua", "return require(\"deep\")\n");
+    let deep = format!("return {}1{}\n", "(".repeat(groups), ")".repeat(groups));
+    write_file(directory.path(), "deep.lua", &deep);
+    directory
+}
+
+#[test]
+fn bundle_at_the_nesting_cap_reads_back() {
+    // That bundle nests exactly `luck_ast::MAX_NESTING_DEPTH` levels deep.
+    let directory = deep_module_project(253);
+
+    for args in [
+        &["bundle", "main.lua", "-o", "bundle.lua"][..],
+        &["bundle", "main.lua", "--minify", "-o", "minified.lua"],
+        &["lint", "bundle.lua", "minified.lua"],
+        &["check", "bundle.lua", "minified.lua"],
+        &["fmt", "bundle.lua", "minified.lua"],
+    ] {
+        let output = run(directory.path(), args);
+        assert_eq!(
+            output.status.code(),
+            Some(0i32),
+            "`{}`:\n{}",
+            args.join(" "),
+            stderr_text(&output)
+        );
+    }
+}
+
+#[test]
+fn bundle_reports_a_module_too_deep_to_wrap_in_that_module() {
+    let directory = deep_module_project(255);
+
+    for args in [&["bundle", "main.lua"][..], &["bundle", "main.lua", "--minify"]] {
+        let output = run(directory.path(), args);
+        let stderr = stderr_text(&output);
+        assert_eq!(output.status.code(), Some(1i32), "`{}`:\n{stderr}", args.join(" "));
+        assert!(stderr.contains("E013"), "{stderr}");
+        // The 254th group, the first the wrapper pushes past the cap, opens at
+        // byte 260 of `deep.lua`.
+        assert!(stderr.contains("deep.lua:1:261 "), "{stderr}");
+        assert!(!stderr.contains("main.lua:"), "{stderr}");
+    }
+}
+
+#[test]
+fn build_keeps_every_preamble_line_inside_its_comment() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.lua", "print(1)\n");
+    write_file(
+        directory.path(),
+        "luck.json",
+        r#"{"entry":"main.lua","output":"bundle.lua","preamble":"one\rerror(\"escaped\")\r\ntwo"}"#,
+    );
+
+    run(directory.path(), &["build", "--quiet"]);
+    let bundle = fs::read_to_string(directory.path().join("bundle.lua")).unwrap();
+
+    assert!(
+        bundle.split(['\r', '\n']).all(|line| !line.starts_with("error(")),
+        "a short comment ends at a CR, so a preamble line must not hold one:\n{bundle:?}"
+    );
+    assert!(bundle.starts_with("-- one\n-- error(\"escaped\")\n-- two\n"), "{bundle:?}");
+}
+
 #[test]
 fn bundle_refuses_to_overwrite_its_entry() {
     let directory = two_module_project();

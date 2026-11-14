@@ -473,7 +473,7 @@ fn entry_shebang_moves_to_the_first_line_of_a_lua_bundle() {
     let directory =
         temp_project(&[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)]).expect("project");
     let output = bundle_lua_project(directory.path()).expect("bundle failed").output;
-    assert!(output.starts_with("#!/usr/bin/env lua\ndo\n"), "{output}");
+    assert!(output.starts_with("#!/usr/bin/env lua\nlocal __luck_modules={}\n"), "{output}");
     assert_eq!(output.matches("#!").count(), 1, "{output}");
     assert_reparses(&output, LuaVersion::Lua54);
 }
@@ -484,7 +484,7 @@ fn entry_shebang_moves_to_the_first_line_of_a_luau_bundle() {
     let directory = temp_project(&[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)])
         .expect("project");
     let output = bundle_luau_project(directory.path()).expect("bundle failed").output;
-    assert!(output.starts_with("#!/usr/bin/env luau\ndo\n"), "{output}");
+    assert!(output.starts_with("#!/usr/bin/env luau\nlocal __luck_modules={}\n"), "{output}");
     assert_eq!(output.matches("#!").count(), 1, "{output}");
     assert_reparses(&output, LuaVersion::Luau);
 }
@@ -495,7 +495,7 @@ fn first_line_comment_without_a_bang_moves_up_like_a_shebang() {
     let directory =
         temp_project(&[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)]).expect("project");
     let output = bundle_lua_project(directory.path()).expect("bundle failed").output;
-    assert!(output.starts_with("# not a shebang\ndo\n"), "{output}");
+    assert!(output.starts_with("# not a shebang\nlocal __luck_modules={}\n"), "{output}");
     assert_reparses(&output, LuaVersion::Lua54);
 }
 
@@ -507,7 +507,7 @@ fn dependency_shebang_is_dropped() {
     ])
     .expect("project");
     let output = bundle_lua_project(directory.path()).expect("bundle failed").output;
-    assert!(output.starts_with("do\n"), "{output}");
+    assert!(output.starts_with("local __luck_modules={}\n"), "{output}");
     assert!(!output.contains("#!"), "{output}");
     assert_reparses(&output, LuaVersion::Lua54);
 }
@@ -518,7 +518,7 @@ fn bom_before_an_entry_shebang_is_dropped() {
     let directory =
         temp_project(&[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)]).expect("project");
     let output = bundle_lua_project(directory.path()).expect("bundle failed").output;
-    assert!(output.starts_with("#!/usr/bin/env lua\ndo\n"), "{output}");
+    assert!(output.starts_with("#!/usr/bin/env lua\nlocal __luck_modules={}\n"), "{output}");
     assert!(!output.contains('\u{FEFF}'), "{output}");
     assert_reparses(&output, LuaVersion::Lua54);
 }
@@ -547,9 +547,9 @@ fn lone_module_with_a_shebang_stays_verbatim() {
 #[test]
 fn luau_hot_comment_after_a_block_comment_or_shebang_is_hoisted() {
     for (header, opening) in [
-        ("--[[\nblock comment\n]]\n", "--!strict\ndo\n"),
-        ("--[[ one line ]]\n", "--!strict\ndo\n"),
-        ("#!/usr/bin/env luau\n", "#!/usr/bin/env luau\n--!strict\ndo\n"),
+        ("--[[\nblock comment\n]]\n", "--!strict\nlocal __luck_modules={}\n"),
+        ("--[[ one line ]]\n", "--!strict\nlocal __luck_modules={}\n"),
+        ("#!/usr/bin/env luau\n", "#!/usr/bin/env luau\n--!strict\nlocal __luck_modules={}\n"),
     ] {
         let main = format!("{header}--!strict\n{REQUIRE_UTIL}");
         let directory = temp_project(&[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)])
@@ -566,7 +566,7 @@ fn luau_hot_comment_line_inside_a_block_comment_is_not_hoisted() {
     let directory = temp_project(&[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)])
         .expect("project");
     let output = bundle_luau_project(directory.path()).expect("bundle failed").output;
-    assert!(output.starts_with("do\n"), "{output}");
+    assert!(output.starts_with("local __luck_modules={}\n"), "{output}");
 }
 
 #[test]
@@ -575,7 +575,7 @@ fn luau_hot_comment_after_code_on_a_comment_line_is_not_hoisted() {
     let directory = temp_project(&[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)])
         .expect("project");
     let output = bundle_luau_project(directory.path()).expect("bundle failed").output;
-    assert!(output.starts_with("do\n"), "{output}");
+    assert!(output.starts_with("local __luck_modules={}\n"), "{output}");
 }
 
 #[test]
@@ -584,7 +584,7 @@ fn luau_hoisted_hot_comment_drops_the_carriage_return() {
     let directory =
         temp_project(&[("main.luau", main), ("util.luau", RETURN_ONE)]).expect("project");
     let output = bundle_luau_project(directory.path()).expect("bundle failed").output;
-    assert!(output.starts_with("--!strict\ndo\n"), "{output}");
+    assert!(output.starts_with("--!strict\nlocal __luck_modules={}\n"), "{output}");
 }
 
 #[test]
