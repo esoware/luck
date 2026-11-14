@@ -19,6 +19,7 @@ pub(crate) fn merge(block: Block, version: LuaVersion) -> Block {
         version,
         live_registers: 0,
         locals: Vec::new(),
+        counted_local_count: 0,
         local_counts: FxHashMap::default(),
         global_names: FxHashSet::default(),
     }
@@ -30,7 +31,9 @@ struct LocalMerger {
     live_registers: usize,
     /// Declared locals and parameters in scope, upvalues included.
     locals: Vec<CompactString>,
-    /// How many of `locals` have each name.
+    /// How many of `locals`, from the outermost, `local_counts` counts.
+    counted_local_count: usize,
+    /// How many of the counted locals have each name.
     local_counts: FxHashMap<CompactString, usize>,
     /// Lua 5.5: every name a `global` statement has declared so far, which
     /// stops counting as a local even past that statement's block.
@@ -72,25 +75,38 @@ fn can_join_group(
 
 impl LocalMerger {
     fn declare_local(&mut self, name: &Token) {
-        self.bind_local(identifier_name(name));
+        self.locals.push(identifier_name(name).into());
         self.live_registers = self.live_registers.saturating_add(1);
     }
 
-    fn bind_local(&mut self, name: &str) {
-        let count = self.local_counts.entry(name.into()).or_default();
-        *count = count.saturating_add(1);
-        self.locals.push(name.into());
-    }
-
     fn unbind_locals_past(&mut self, local_count: usize) {
-        for name in self.locals.drain(local_count..) {
-            if let Some(count) = self.local_counts.get_mut(&name) {
+        for name in self.locals.get(local_count..self.counted_local_count).unwrap_or_default() {
+            if let Some(count) = self.local_counts.get_mut(name) {
                 *count = count.saturating_sub(1);
-                if *count == 0 {
-                    self.local_counts.remove(&name);
-                }
             }
         }
+        self.counted_local_count = self.counted_local_count.min(local_count);
+        self.locals.truncate(local_count);
+    }
+
+    /// Scans the locals not counted yet while they're few, as they are in
+    /// real code, and counts them once they're many, so a run of lookups
+    /// under many locals stays linear.
+    fn is_in_scope(&mut self, name: &str) -> bool {
+        const MAX_SCANNED_LOCALS: usize = 64;
+        let uncounted = self.locals.get(self.counted_local_count..).unwrap_or_default();
+        if uncounted.len() <= MAX_SCANNED_LOCALS {
+            if uncounted.iter().rev().any(|local| local == name) {
+                return true;
+            }
+        } else {
+            for local in uncounted {
+                let count = self.local_counts.entry(local.clone()).or_default();
+                *count = count.saturating_add(1);
+            }
+            self.counted_local_count = self.locals.len();
+        }
+        self.local_counts.get(name).is_some_and(|&count| count > 0)
     }
 
     /// A group stores right to left, so only a proven local may join, since
@@ -98,7 +114,7 @@ impl LocalMerger {
     /// per value until the stores run, and only a leaf value needs exactly
     /// one.
     fn single_assignment<'stmt>(
-        &self,
+        &mut self,
         assignment: &'stmt Assignment,
     ) -> Option<(&'stmt Token, &'stmt Expression)> {
         if let ([Var::Name(name)], [expr]) =
@@ -108,7 +124,7 @@ impl LocalMerger {
             let target = identifier_name(name);
             let is_proven_local = !is_env_binding(target, self.version)
                 && !self.global_names.contains(target)
-                && self.local_counts.contains_key(target);
+                && self.is_in_scope(target);
             return is_proven_local.then_some((name, expr));
         }
         None
@@ -319,9 +335,7 @@ impl Transform for LocalMerger {
     fn transform_function_body(&mut self, body: FunctionBody) -> FunctionBody {
         let outer_live_registers = mem::replace(&mut self.live_registers, parameter_locals(&body));
         let outer_local_count = self.locals.len();
-        for param in body.params.iter() {
-            self.bind_local(identifier_name(&param.name));
-        }
+        self.locals.extend(body.params.iter().map(|param| identifier_name(&param.name).into()));
         let walked = self.walk_function_body(body);
         self.unbind_locals_past(outer_local_count);
         self.live_registers = outer_live_registers;
@@ -521,6 +535,25 @@ mod tests {
     #[test]
     fn no_merge_of_a_name_past_its_local_scope() {
         assert_eq!(apply("do local a = f() end\na = 1\nb = 2\n"), "do local a=f()end a=1 b=2");
+    }
+
+    #[test]
+    fn tracks_scopes_under_more_locals_than_a_lookup_scans() {
+        let names = |prefix: char| {
+            (0..100u32).map(|i| format!("{prefix}{i}")).collect::<Vec<_>>().join(",")
+        };
+        let (outer, inner) = (names('v'), names('w'));
+        let source = format!(
+            "local {outer} = f()\nv0 = 1\nv1 = 2\nlocal c, d = g()\nc = 1\nd = 2\n\
+             do local {inner} = h() w0 = 1 end\nw0 = 1\nv2 = 2\n"
+        );
+        assert_eq!(
+            apply(&source),
+            format!(
+                "local {outer}=f()v0,v1=1,2 local c,d=g()c,d=1,2 \
+                 do local {inner}=h()w0=1 end w0=1 v2=2"
+            )
+        );
     }
 
     #[test]

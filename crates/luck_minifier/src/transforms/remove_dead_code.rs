@@ -2,11 +2,11 @@ use core::{iter, mem};
 
 use luck_ast::{
     BinaryOp, Block, DoBlock, ElseClause, Expression, FunctionBody, IfStatement, LastStatement,
-    LocalAssignment, LocalFunction, OneOrMore, Punctuated, Statement, Transform, UnaryOp, Var,
-    Visitor,
+    LocalAssignment, LocalFunction, NumericFor, OneOrMore, Punctuated, RepeatLoop, Statement,
+    Transform, UnaryOp, Var, Visitor,
 };
 use luck_token::{BinOp, CompactString, LuaVersion, Span, Token, UnOp};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use crate::binding::{has_attributed_or_env_name, identifier_name, is_env_binding};
 use crate::expr::{
@@ -16,12 +16,10 @@ use crate::expr::{
 
 pub(crate) fn remove(mut block: Block, version: LuaVersion) -> Block {
     loop {
-        let mut remover = DeadCodeRemover {
-            live_names: live_names(&block, version),
-            version,
-            has_changed: false,
-            depth: 0,
+        let Some(live_names) = scan(&block, version) else {
+            return block;
         };
+        let mut remover = DeadCodeRemover { live_names, version, has_changed: false, depth: 0 };
         block = remover.transform_block(block);
         if !remover.has_changed {
             return block;
@@ -72,58 +70,137 @@ fn stmt_has_loop_exit(stmt: &Statement) -> bool {
     }
 }
 
-/// Every name the code a round keeps uses, matched by name and not by
-/// binding.
+/// The names the code a round keeps uses, or `None` when the round would
+/// leave `block` as it is, so it needn't run.
 ///
-/// A `local` the round drops when none of its names is live owns the uses in
-/// what goes with it, which count only once one of its names is live. So a
-/// run of locals each used only by the next goes in one round, where counting
-/// every use would take a round per link.
-fn live_names(block: &Block, version: LuaVersion) -> FxHashSet<CompactString> {
+/// Names match by name and not by binding. A `local` the round drops when
+/// none of its names is live owns the uses in what goes with it, which count
+/// only once one of its names is live. So a run of locals each used only by
+/// the next goes in one round, where counting every use would take a round
+/// per link.
+fn scan(block: &Block, version: LuaVersion) -> Option<LiveNames> {
     let mut scanner = UseScanner {
         version,
+        nodes_by_name: FxHashMap::default(),
+        nodes: Vec::new(),
+        edges: Vec::new(),
+        pending: Vec::new(),
         owner: None,
-        owned_uses: Vec::new(),
-        owners_by_name: FxHashMap::default(),
-        unowned_uses: FxHashSet::default(),
+        has_rewrite: false,
     };
     scanner.visit_block(block);
-    let UseScanner { owned_uses, owners_by_name, unowned_uses: mut live, .. } = scanner;
-    let mut is_kept = vec![false; owned_uses.len()];
-    let mut pending: Vec<usize> = owners_by_name
-        .iter()
-        .filter(|(name, _)| live.contains(*name))
-        .flat_map(|(_, owners)| owners.iter().copied())
-        .collect();
-    while let Some(owner) = pending.pop() {
-        if is_kept.get_mut(owner).is_some_and(|kept| !mem::replace(kept, true)) {
-            for used in owned_uses.get(owner).into_iter().flatten() {
-                if live.insert(used.clone()) {
-                    pending.extend(owners_by_name.get(used).into_iter().flatten());
-                }
-            }
-        }
+    scanner.propagate();
+    let UseScanner { nodes_by_name, nodes, has_rewrite, .. } = scanner;
+    (has_rewrite || nodes.iter().any(|node| node.is_local && !node.is_live))
+        .then_some(LiveNames { nodes_by_name, nodes })
+}
+
+struct LiveNames {
+    nodes_by_name: FxHashMap<CompactString, usize>,
+    nodes: Vec<UseNode>,
+}
+
+impl LiveNames {
+    fn contains(&self, name: &str) -> bool {
+        self.nodes_by_name
+            .get(name)
+            .and_then(|&node| self.nodes.get(node))
+            .is_some_and(|node| node.is_live)
     }
-    live
+}
+
+/// A name, live when code the round keeps uses it, or a droppable `local`,
+/// live when one of its names is.
+struct UseNode {
+    is_live: bool,
+    is_local: bool,
+    first_edge: Option<usize>,
+}
+
+/// What a node keeps once it's live: a name keeps the `local`s that declare
+/// it, and a `local` the names it uses. A node's edges are linked through
+/// `next`.
+#[derive(Clone, Copy)]
+struct UseEdge {
+    target: usize,
+    next: Option<usize>,
 }
 
 struct UseScanner {
     version: LuaVersion,
+    nodes_by_name: FxHashMap<CompactString, usize>,
+    nodes: Vec<UseNode>,
+    edges: Vec<UseEdge>,
+    /// Live nodes whose edges aren't followed yet.
+    pending: Vec<usize>,
     /// The innermost droppable `local` whose dropped parts the walk is in.
     owner: Option<usize>,
-    /// The uses each droppable `local` owns, in the order the walk opened them.
-    owned_uses: Vec<Vec<CompactString>>,
-    owners_by_name: FxHashMap<CompactString, Vec<usize>>,
-    unowned_uses: FxHashSet<CompactString>,
+    /// Whether the walk has met a rewrite other than an unused `local`. Every
+    /// rewrite `DeadCodeRemover` makes has to set it, or a round with nothing
+    /// else to do skips that rewrite.
+    has_rewrite: bool,
 }
 
 impl UseScanner {
-    fn record_use(&mut self, name: &str) {
-        match self.owner.and_then(|owner| self.owned_uses.get_mut(owner)) {
-            Some(uses) => uses.push(name.into()),
-            None => {
-                self.unowned_uses.insert(name.into());
+    fn push_node(&mut self, is_local: bool) -> usize {
+        let node = self.nodes.len();
+        self.nodes.push(UseNode { is_live: false, is_local, first_edge: None });
+        node
+    }
+
+    fn name_node(&mut self, name: &str) -> usize {
+        if let Some(&node) = self.nodes_by_name.get(name) {
+            return node;
+        }
+        let node = self.push_node(false);
+        self.nodes_by_name.insert(name.into(), node);
+        node
+    }
+
+    fn is_live(&self, node: usize) -> bool {
+        self.nodes.get(node).is_some_and(|state| state.is_live)
+    }
+
+    /// Makes `target` live once `node` is. Only a node that isn't live yet
+    /// gains an edge, so one that goes live with none never needs following.
+    fn keep(&mut self, node: usize, target: usize) {
+        if self.is_live(node) {
+            self.mark_live(target);
+            return;
+        }
+        let edge = self.edges.len();
+        if !self.is_live(target)
+            && let Some(source) = self.nodes.get_mut(node)
+        {
+            self.edges.push(UseEdge { target, next: source.first_edge.replace(edge) });
+        }
+    }
+
+    fn mark_live(&mut self, node: usize) {
+        if let Some(state) = self.nodes.get_mut(node)
+            && !mem::replace(&mut state.is_live, true)
+            && state.first_edge.is_some()
+        {
+            self.pending.push(node);
+        }
+    }
+
+    fn propagate(&mut self) {
+        while let Some(node) = self.pending.pop() {
+            let mut edge = self.nodes.get(node).and_then(|state| state.first_edge);
+            while let Some(&UseEdge { target, next }) = edge.and_then(|index| self.edges.get(index))
+            {
+                self.mark_live(target);
+                edge = next;
             }
+        }
+    }
+
+    fn record_use(&mut self, name: &str) {
+        let node = self.name_node(name);
+        match self.owner {
+            Some(owner) => self.keep(owner, node),
+            None => self.mark_live(node),
         }
     }
 
@@ -132,10 +209,10 @@ impl UseScanner {
     where
         Names: Iterator<Item = &'name Token>,
     {
-        let owner = self.owned_uses.len();
-        self.owned_uses.push(Vec::new());
+        let owner = self.push_node(true);
         for name in names {
-            self.owners_by_name.entry(identifier_name(name).into()).or_default().push(owner);
+            let name_node = self.name_node(identifier_name(name));
+            self.keep(name_node, owner);
         }
         self.owner.replace(owner)
     }
@@ -158,6 +235,11 @@ impl<'ast> Visitor<'ast> for UseScanner {
         if let Expression::Name(name) = expr {
             self.record_use(identifier_name(name));
         }
+        if !self.has_rewrite
+            && let Expression::BinaryOp(binary_op) = expr
+        {
+            self.has_rewrite = is_redundant_ternary(binary_op);
+        }
         self.walk_expr(expr);
     }
 
@@ -168,7 +250,13 @@ impl<'ast> Visitor<'ast> for UseScanner {
         self.walk_assignment_target(target);
     }
 
+    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
+        self.has_rewrite = self.has_rewrite || ends_in_bare_return(&body.block);
+        self.walk_function_body(body);
+    }
+
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
+        self.has_rewrite = self.has_rewrite || is_rewritten(stmt);
         match stmt {
             Statement::LocalAssignment(local)
                 if !matches!(unused_local_action(local, self.version), DeadLocalAction::Keep) =>
@@ -221,7 +309,7 @@ impl<'ast> Visitor<'ast> for UseScanner {
 /// the same result as separate rebuilds in half the traversals.
 ///
 struct DeadCodeRemover {
-    live_names: FxHashSet<CompactString>,
+    live_names: LiveNames,
     version: LuaVersion,
     has_changed: bool,
     /// Levels of nesting open where the walk is.
@@ -250,9 +338,7 @@ fn is_dead_branch(stmt: &Statement) -> bool {
         Statement::IfStatement(if_stmt) => {
             // An empty-body `if` can only go when evaluating the condition is
             // side-effect free: `if f() then end` calls f.
-            let has_no_effect = if_stmt.block.stmts.is_empty()
-                && if_stmt.block.last_stmt.is_none()
-                && is_pure_expr(&if_stmt.condition);
+            let has_no_effect = is_empty_block(&if_stmt.block) && is_pure_expr(&if_stmt.condition);
             if_stmt.elseif_clauses.is_empty()
                 && if_stmt.else_clause.is_none()
                 && (constant_truthiness(&if_stmt.condition) == Some(false) || has_no_effect)
@@ -280,6 +366,85 @@ fn is_dead_branch(stmt: &Statement) -> bool {
         | Statement::TypeDeclaration(_)
         | Statement::Error(_) => false,
     }
+}
+
+/// Whether the round rewrites `stmt` itself, other than to drop an unused
+/// `local`.
+///
+/// It may claim an `if` that `simplify_if` then finds too deep to negate,
+/// which costs only a round that changes nothing.
+fn is_rewritten(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::IfStatement(if_stmt) => {
+            iter::once(&if_stmt.condition)
+                .chain(if_stmt.elseif_clauses.iter().map(|clause| &clause.condition))
+                .any(|condition| constant_truthiness(condition).is_some())
+                || (if_stmt.elseif_clauses.is_empty()
+                    && if_stmt.else_clause.is_some()
+                    && (is_empty_block(&if_stmt.block) || is_negation(&if_stmt.condition)))
+                || is_dead_branch(stmt)
+        }
+        Statement::WhileLoop(_) => is_dead_branch(stmt),
+        Statement::RepeatLoop(repeat_loop) => runs_once(repeat_loop),
+        Statement::NumericFor(numeric_for) => has_default_step(numeric_for),
+        Statement::LocalAssignment(local) => is_nil_initialized(local),
+        Statement::DoBlock(do_block) => is_empty_block(&do_block.block),
+        Statement::Assignment(_)
+        | Statement::FunctionCall(_)
+        | Statement::GenericFor(_)
+        | Statement::FunctionDecl(_)
+        | Statement::LocalFunction(_)
+        | Statement::EmptyStatement(_)
+        | Statement::Goto(_)
+        | Statement::Label(_)
+        | Statement::GlobalDeclaration(_)
+        | Statement::GlobalFunction(_)
+        | Statement::GlobalStar(_)
+        | Statement::Break(_)
+        | Statement::CompoundAssignment(_)
+        | Statement::TypeDeclaration(_)
+        | Statement::Error(_) => false,
+    }
+}
+
+const fn is_empty_block(block: &Block) -> bool {
+    block.stmts.is_empty() && block.last_stmt.is_none()
+}
+
+fn is_negation(expr: &Expression) -> bool {
+    matches!(expr, Expression::UnaryOp(unop) if unop.op == UnOp::Not)
+}
+
+/// `repeat ... until true` runs once, so it can become a `do` block unless
+/// its body has its own `break` or `continue`, which a `do` block would
+/// rebind to an outer loop (or make invalid).
+fn runs_once(repeat_loop: &RepeatLoop) -> bool {
+    constant_truthiness(&repeat_loop.condition) == Some(true) && !has_loop_exit(&repeat_loop.block)
+}
+
+/// A step of 1 is the default.
+fn has_default_step(numeric_for: &NumericFor) -> bool {
+    matches!(&numeric_for.step, Some(Expression::Number(literal)) if literal.text == "1")
+}
+
+/// `local x = nil` can become `local x`, since nil is the default. Const
+/// declarations keep their mandatory initializer.
+fn is_nil_initialized(local: &LocalAssignment) -> bool {
+    !local.is_const
+        && local.names.len() == 1
+        && local
+            .exprs
+            .as_ref()
+            .is_some_and(|exprs| matches!(exprs.items.as_slice(), [value] if is_nil(value)))
+}
+
+/// Only a bare `return` is removable. `return nil` returns one value, and
+/// `select('#', f())` observes the difference.
+fn ends_in_bare_return(block: &Block) -> bool {
+    matches!(
+        block.last_stmt.as_deref(),
+        Some(LastStatement::Return(return_stmt)) if return_stmt.exprs.is_empty()
+    )
 }
 
 /// `cond and X or X`, which a run of `or`s starts with when its first two
@@ -365,13 +530,10 @@ impl DeadCodeRemover {
         if elseif_clauses.is_empty() && else_clause.is_some() {
             // The `not` and its parentheses nest the condition two levels
             // deeper.
-            if block.stmts.is_empty()
-                && block.last_stmt.is_none()
-                && fits_at_depth(self.depth, 2, condition)
-            {
+            if is_empty_block(block) && fits_at_depth(self.depth, 2, condition) {
                 return self.negate_into_else(if_stmt);
             }
-            if matches!(condition, Expression::UnaryOp(unop) if unop.op == UnOp::Not) {
+            if is_negation(condition) {
                 return self.swap_negated_branches(if_stmt);
             }
         }
@@ -460,7 +622,7 @@ impl Transform for DeadCodeRemover {
 
     fn transform_block(&mut self, block: Block) -> Block {
         self.descend();
-        let mut new_stmts: Vec<Statement> = Vec::new();
+        let mut new_stmts: Vec<Statement> = Vec::with_capacity(block.stmts.len());
         for stmt in block.stmts {
             let transformed = self.transform_stmt(stmt);
             // Unused-local removal first: a dropped/extracted statement
@@ -495,11 +657,7 @@ impl Transform for DeadCodeRemover {
         self.descend();
         body.block = self.transform_block(body.block);
         self.ascend();
-        // Only a bare `return` is removable. `return nil` returns one value,
-        // and `select('#', f())` observes the difference.
-        if let Some(LastStatement::Return(return_stmt)) = body.block.last_stmt.as_deref()
-            && return_stmt.exprs.is_empty()
-        {
+        if ends_in_bare_return(&body.block) {
             self.has_changed = true;
             body.block.last_stmt = None;
         }
@@ -509,35 +667,18 @@ impl Transform for DeadCodeRemover {
     fn transform_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
             Statement::IfStatement(if_stmt) => self.simplify_if(if_stmt),
-            // `repeat ... until true` runs once, so it becomes a `do` block
-            // unless its body has its own `break` or `continue`, which a `do`
-            // block would rebind to an outer loop (or make invalid).
-            Statement::RepeatLoop(repeat_loop)
-                if constant_truthiness(&repeat_loop.condition) == Some(true)
-                    && !has_loop_exit(&repeat_loop.block) =>
-            {
+            Statement::RepeatLoop(repeat_loop) if runs_once(&repeat_loop) => {
                 self.keep_only_block(repeat_loop.block)
             }
-            // A step of 1 is the default.
             Statement::NumericFor(mut numeric_for) => {
-                if let Some(step) = &numeric_for.step
-                    && let Expression::Number(literal) = step
-                    && literal.text == "1"
-                {
+                if has_default_step(&numeric_for) {
                     self.has_changed = true;
                     numeric_for.step = None;
                 }
                 self.walk_stmt(Statement::NumericFor(numeric_for))
             }
-            // `local x = nil` becomes `local x`, since nil is the default.
             Statement::LocalAssignment(mut local) => {
-                // Const declarations keep their mandatory initializer.
-                let is_single_nil = !local.is_const
-                    && local.names.len() == 1
-                    && local.exprs.as_ref().is_some_and(
-                        |exprs| matches!(exprs.items.as_slice(), [value] if is_nil(value)),
-                    );
-                if is_single_nil {
+                if is_nil_initialized(&local) {
                     self.has_changed = true;
                     local.span = Span::default();
                     local.exprs = None;
@@ -594,7 +735,7 @@ enum DeadLocalAction {
 
 fn classify_dead_local(
     stmt: &Statement,
-    live_names: &FxHashSet<CompactString>,
+    live_names: &LiveNames,
     version: LuaVersion,
 ) -> DeadLocalAction {
     match stmt {
@@ -618,7 +759,7 @@ fn classify_dead_local(
             }
         }
         Statement::DoBlock(do_block) => {
-            if do_block.block.stmts.is_empty() && do_block.block.last_stmt.is_none() {
+            if is_empty_block(&do_block.block) {
                 DeadLocalAction::Remove
             } else {
                 DeadLocalAction::Keep
@@ -691,7 +832,7 @@ mod tests {
     use core::fmt::Write as _;
 
     use super::*;
-    use crate::fixtures::run_pass;
+    use crate::fixtures::{parse, run_pass};
 
     fn apply(source: &str) -> String {
         run_pass(source, LuaVersion::Lua54, |block| remove(block, LuaVersion::Lua54))
@@ -742,8 +883,11 @@ mod tests {
     /// One round of the pass, without `remove`'s loop.
     fn apply_one_round(source: &str) -> String {
         run_pass(source, LuaVersion::Lua54, |block| {
+            let Some(live_names) = scan(&block, LuaVersion::Lua54) else {
+                return block;
+            };
             let mut remover = DeadCodeRemover {
-                live_names: live_names(&block, LuaVersion::Lua54),
+                live_names,
                 version: LuaVersion::Lua54,
                 has_changed: false,
                 depth: 0,
@@ -789,6 +933,34 @@ mod tests {
         ] {
             assert_eq!(apply_one_round(source), expected, "source: {source}");
         }
+    }
+
+    #[test]
+    fn makes_each_rewrite_when_it_is_the_only_one() {
+        for (source, expected) in [
+            ("local function f() return end return f", "local function f()end return f"),
+            ("for i = 1, 2, 1 do f(i) end", "for i=1,2 do f(i)end"),
+            ("local x = nil return x", "local x return x"),
+            ("repeat f() until true", "do f()end"),
+            ("if not a then f() else g() end", "if a then g()else f()end"),
+            ("if a then else f() end", "if not a then f()end"),
+            ("if a then f() elseif 1 then g() end", "if a then f()else g()end"),
+            ("if {} then end", ""),
+            ("while nil do f() end", ""),
+            ("do end", ""),
+            ("local x = f()", "f()"),
+        ] {
+            assert_eq!(apply(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn skips_a_round_that_would_rewrite_nothing() {
+        let block = parse(
+            "local a = f() local function g() return a end if a then g() else h() end return g",
+            LuaVersion::Lua54,
+        );
+        assert!(scan(&block, LuaVersion::Lua54).is_none());
     }
 
     #[test]

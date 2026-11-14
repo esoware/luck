@@ -66,8 +66,9 @@ impl StatementSimplifier {
     /// can gain.
     fn merge_nested_ifs(&mut self, mut outer_if: Box<IfStatement>) -> Statement {
         let mut inner_conditions = Vec::new();
-        if has_no_else(&outer_if) && fits_at_depth(self.depth, 2, &outer_if.condition) {
-            // The check guarantees the pop yields the inner `if`.
+        if has_no_else(&outer_if) {
+            // The check guarantees the pop yields the inner `if`. The outer
+            // condition is measured only once there's an `if` to merge.
             while outer_if.block.last_stmt.is_none()
                 && matches!(
                     outer_if.block.stmts.as_slice(),
@@ -75,6 +76,8 @@ impl StatementSimplifier {
                         if has_no_else(inner_if)
                             && fits_at_depth(self.depth, 2, &inner_if.condition)
                 )
+                && (!inner_conditions.is_empty()
+                    || fits_at_depth(self.depth, 2, &outer_if.condition))
                 && let Some(Statement::IfStatement(inner_if)) = outer_if.block.stmts.pop()
             {
                 let IfStatement { condition, block, .. } = *inner_if;
