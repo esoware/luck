@@ -51,9 +51,6 @@ fn assert_tree_is_the_parse(output: &str, tree: BlockBundle, version: LuaVersion
     assert!(parsed.errors.is_empty(), "the bundle must parse: {:?}\n{output}", parsed.errors);
     let expected = WithoutEmptyStatements.transform_block(parsed.block);
     let actual = WithoutEmptyStatements.transform_block(tree.block);
-    if let Err(diff) = luck_formatter::blocks_equivalent(&expected, &actual, version) {
-        panic!("the tree isn't the bundle's parse: {diff:?}\n{output}");
-    }
     assert_eq!(
         luck_codegen::compact(&actual).expect("the tree prints"),
         luck_codegen::compact(&expected).expect("the parse prints"),

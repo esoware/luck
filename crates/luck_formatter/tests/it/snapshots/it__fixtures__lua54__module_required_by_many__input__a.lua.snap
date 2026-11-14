@@ -1,0 +1,29 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/lua54/module_required_by_many/input/a.lua
+---
+-- line_width = 1
+local shared = require(
+	"shared"
+)
+
+local a = {}
+
+function a.value()
+	return shared.base
+		+ 1
+end
+
+return a
+
+-- line_width = 40, 80, 100, 120
+local shared = require("shared")
+
+local a = {}
+
+function a.value()
+	return shared.base + 1
+end
+
+return a

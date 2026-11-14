@@ -5,7 +5,7 @@
 use core::fmt::Write as _;
 use std::thread;
 
-use luck_formatter::{FormatOptions, format, format_and_verify};
+use luck_formatter::{FormatOptions, format};
 use luck_minifier::TransformConfig;
 use luck_token::LuaVersion;
 
@@ -249,15 +249,10 @@ fn formatting_fits_the_smallest_stack() {
         let options = FormatOptions::default();
         let formatted = format(source, version, &options);
         assert!(formatted.errors.is_empty(), "{:?}", formatted.errors.first());
+        let reparsed = luck_parser::parse(&formatted.output, version);
+        assert!(reparsed.errors.is_empty(), "the output reparses");
         let again = format(&formatted.output, version, &options);
         assert!(again.output == formatted.output, "formatting is idempotent");
-    });
-}
-
-#[test]
-fn verified_formatting_fits_the_smallest_stack() {
-    run_on_the_smallest_stack(|source, version| {
-        assert!(format_and_verify(source, version, &FormatOptions::default()).is_ok(), "verified");
     });
 }
 

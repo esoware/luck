@@ -889,7 +889,7 @@ fn after_line_break(source: &str, offset: u32, version: LuaVersion) -> u32 {
     index_to_offset(source.len().saturating_sub(remaining))
 }
 
-pub(crate) fn unix_line_breaks(text: &str, version: LuaVersion) -> Cow<'_, str> {
+fn unix_line_breaks(text: &str, version: LuaVersion) -> Cow<'_, str> {
     if !text.contains('\r') {
         return Cow::Borrowed(text);
     }

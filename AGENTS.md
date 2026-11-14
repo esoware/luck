@@ -112,7 +112,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - Lua fixtures that several crates' tests read live at the repo root in `tests/fixtures/`, a directory per dialect plus `idiomatic/`, which must stay lint-clean.
 - Lint rule tests name positive cases `flags_*` and negative ones `ignores_*`, and run through `crate::fixtures::run_rule`. A count assertion carries a `"{diags:?}"` message. Suppression has its own tests in `luck_linter`, so a rule's tests leave it out.
 - A fix test applies the edit and asserts that the result reparses.
-- Formatter tests go through `assert_format` or `assert_format_with`, which check idempotency and reparsing on every call.
+- Formatter tests go through `assert_format`, `assert_format_with`, `assert_format_range`, or, for a tree built in code, `assert_format_block`, which check exact output, idempotency, and reparsing on every call.
 - An error path asserts on the returned errors, never with `#[should_panic]`.
 - Tests need the exact directive syntax. `-- luck: allow(rule_a, rule_b)`, `deny(...)`, or `warn(...)` applies to the next statement, `start` or `end` after it marks a region, and `-- #luck: allow(foo)` applies to the whole file. `-- luck: format off` and `-- luck: format on` turn the formatter off for a region, and `-- luck: ignore`, or its alias `-- luck: format ignore`, skips one statement.
 

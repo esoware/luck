@@ -31,15 +31,15 @@ Determinism matters most. A single xorshift64\* `Rng` (`rng.rs`) drives every ch
 
 - **Parse cleanliness.** Every generated program parses with zero errors.
 - **Compact round-trip.** `compact` output re-parses cleanly.
-- **Format idempotency and structure.** `format(format(x)) == format(x)`, the output re-parses, and the AST structure survives (`blocks_equivalent`).
-- **AST-in format.** `format_block` on the bare parsed AST, with no source or comments, re-parses and keeps the structure.
+- **Format idempotency.** `format(format(x)) == format(x)`, and the output re-parses.
+- **AST-in format.** `format_block` on the bare parsed AST, with no source or comments, re-parses, and `format` leaves its output unchanged.
 - **Minify fixpoint.** Minified output re-parses, size is stable across passes, and a byte-exact fixpoint arrives from the second pass onward.
 
 These sweeps back the formatter and minifier guarantees. Strengthen them instead of working around them.
 
 ## Stack tests
 
-`tests/it/stack.rs` runs every stage (parse, validate, clone, compact, format, verified format, and minify) over one source per construct nested to the parser's cap, and over one per kind of run of operators or suffixes far longer than it, each on a thread with 1 MiB of stack, which is what a Windows main thread and a wasm module get. Test builds are unoptimized, where frames are largest, and a stage that outgrows the budget takes the test process down. A new recursive stage or a new nesting construct belongs in it.
+`tests/it/stack.rs` runs every stage (parse, validate, clone, compact, format, and minify) over one source per construct nested to the parser's cap, and over one per kind of run of operators or suffixes far longer than it, each on a thread with 1 MiB of stack, which is what a Windows main thread and a wasm module get. Test builds are unoptimized, where frames are largest, and a stage that outgrows the budget takes the test process down. A new recursive stage or a new nesting construct belongs in it.
 
 ## Fixtures
 

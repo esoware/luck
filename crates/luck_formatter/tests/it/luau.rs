@@ -1,7 +1,7 @@
 use luck_formatter::FormatOptions;
 use luck_token::LuaVersion;
 
-use crate::common::{assert_format_with, format_once};
+use crate::common::assert_format_with;
 
 fn assert_luau(input: &str, expected: &str) {
     assert_format_with(input, expected, LuaVersion::Luau, &FormatOptions::default());
@@ -157,20 +157,11 @@ fn type_declaration_with_generics() {
 #[test]
 fn luau_params_break_without_trailing_comma() {
     let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
-    let input = "local function f(aaa: number, bbb: string, ccc: boolean)\nend\n";
-    let result = luck_formatter::format(input, LuaVersion::Luau, &options);
-    assert_eq!(result.errors, Vec::<luck_token::SourceError>::new());
-    assert!(
-        !result.output.contains("boolean,"),
-        "params must not gain a trailing comma: {}",
-        result.output,
-    );
-    let reparsed = luck_parser::parse(&result.output, LuaVersion::Luau);
-    assert!(
-        reparsed.errors.is_empty(),
-        "formatted params failed to re-parse: {}\nerrors: {:?}",
-        result.output,
-        reparsed.errors,
+    assert_format_with(
+        "local function f(aaa: number, bbb: string, ccc: boolean)\nend\n",
+        "local function f(\n\taaa: number,\n\tbbb: string,\n\tccc: boolean\n) end\n",
+        LuaVersion::Luau,
+        &options,
     );
 }
 
@@ -205,39 +196,26 @@ fn merged_rfc_syntax_roundtrips() {
 
 #[test]
 fn broken_method_type_args_keep_the_call_paren_on_the_name_line() {
+    // Official Luau rejects a method call whose `(` is on a later line than
+    // its name.
     let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
-    let output = format_once(
+    assert_format_with(
         "local x = a:b<<Aaaaaaaaaaaaaa, Bbbbbbbbbbbbbbb>>(c)\n",
+        "local x = a:b<<Aaaaaaaaaaaaaa, Bbbbbbbbbbbbbbb>>(\n\tc\n)\n",
         LuaVersion::Luau,
         &options,
-    );
-    let call_line = output.lines().find(|line| line.contains(">>(")).expect("a call line");
-    assert!(
-        call_line.contains("a:b<<"),
-        "official Luau rejects a method call whose `(` is on a later line than its name: {output:?}"
     );
 }
 
 #[test]
 fn string_singleton_type_follows_the_quote_style() {
-    assert_eq!(
-        format_once("type A = 'b'\n", LuaVersion::Luau, &FormatOptions::default()),
-        "type A = \"b\"\n",
-        "`quote_style` must apply to a string singleton type as it does to a string literal"
-    );
+    assert_luau("type A = 'b'\n", "type A = \"b\"\n");
 }
 
 #[test]
-fn verify_accepts_dropping_a_lone_leading_separator() {
-    for input in ["type A = | B\n", "type A = & B\n"] {
-        let result =
-            luck_formatter::format_and_verify(input, LuaVersion::Luau, &FormatOptions::default());
-        assert!(
-            result.is_ok(),
-            "{input:?} means the same as the `type A = B` it formats to: {:?}",
-            result.err().map(|(_, diff)| diff)
-        );
-    }
+fn a_lone_leading_separator_is_dropped() {
+    assert_luau("type A = | B\n", "type A = B\n");
+    assert_luau("type A = & B\n", "type A = B\n");
 }
 
 #[test]
@@ -252,8 +230,5 @@ fn an_array_field_keeps_the_leading_operator_that_keeps_read_from_opening_it() {
         ("type A = { | Other | read }\n", "type A = { Other | read }\n"),
     ] {
         assert_luau(input, expected);
-        let verified =
-            luck_formatter::format_and_verify(input, LuaVersion::Luau, &FormatOptions::default());
-        assert!(verified.is_ok(), "{input:?}: {:?}", verified.err().map(|(_, diff)| diff));
     }
 }

@@ -30,7 +30,6 @@
 
 extern crate alloc;
 
-mod ast_equivalence;
 mod comments;
 mod directive;
 #[cfg(test)]
@@ -49,13 +48,10 @@ mod printer;
 mod quotes;
 mod sort_requires;
 mod tokens;
-mod verify;
 
-pub use ast_equivalence::{AstDiff, blocks_equivalent};
 pub use comments::Comments;
 pub use format::{FormatError, FormatResult, format, format_block, format_range};
 pub use format_options::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,
     IndentStyle, LineEndings, QuoteStyle, SpaceAfterFunction,
 };
-pub use verify::format_and_verify;

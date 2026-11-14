@@ -852,7 +852,6 @@ dependencies = [
  "luck_ast",
  "luck_codegen",
  "luck_core",
- "luck_formatter",
  "luck_lexer",
  "luck_parser",
  "luck_resolver",
@@ -932,6 +931,7 @@ dependencies = [
 name = "luck_formatter"
 version = "0.5.0"
 dependencies = [
+ "insta",
  "luck_ast",
  "luck_lexer",
  "luck_parser",

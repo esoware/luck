@@ -1,7 +1,7 @@
 use luck_formatter::{FormatOptions, IndentStyle};
 use luck_token::LuaVersion;
 
-use crate::common::{assert_format, assert_format_with, format_once, formatted, formatted_with};
+use crate::common::{assert_format, assert_format_with};
 
 #[test]
 fn if_stmt() {
@@ -71,8 +71,7 @@ fn paren_stmt_after_a_call_keeps_its_semicolon_guard() {
     // A `(`-starting statement must not glue onto the previous call.
     // The `;` in the input is what makes these parse as two statements;
     // without it the parser reads one chained call.
-    let output = formatted("f();(g)()");
-    assert!(output.contains(";("));
+    assert_format("f();(g)()", "f()\n;(g)()\n");
 }
 
 #[test]
@@ -238,20 +237,12 @@ fn leading_attribute_formats_as_distributed_trailing() {
 
 #[test]
 fn function_body_of_only_semicolons_formats_like_an_empty_body() {
-    assert_eq!(
-        format_once("function f() ; end\n", LuaVersion::Lua54, &FormatOptions::default()),
-        "function f() end\n",
-        "a dropped `;` must leave the same output as an empty body"
-    );
+    assert_format("function f() ; end\n", "function f() end\n");
 }
 
 #[test]
 fn empty_do_block_has_no_blank_line() {
-    assert_eq!(
-        format_once("do end\n", LuaVersion::Lua54, &FormatOptions::default()),
-        "do\nend\n",
-        "`block_newline_gaps = never` strips blank lines at the start and end of every block body"
-    );
+    assert_format("do end\n", "do\nend\n");
 }
 
 fn narrow() -> FormatOptions {
@@ -298,12 +289,17 @@ fn assigned_values_that_fit_neither_line_hang_from_the_equals() {
 
 #[test]
 fn a_lone_table_function_or_call_stays_on_the_equals_line() {
-    for (source, first_line) in [
-        ("local value = { first = 1, second = 2 }\n", "local value = {"),
-        ("local value = function() return 1 end\n", "local value = function()"),
-        ("local value = call_something(first, second)\n", "local value = call_something("),
+    for (source, expected) in [
+        (
+            "local value = { first = 1, second = 2 }\n",
+            "local value = {\n\tfirst = 1,\n\tsecond = 2,\n}\n",
+        ),
+        ("local value = function() return 1 end\n", "local value = function()\n\treturn 1\nend\n"),
+        (
+            "local value = call_something(first, second)\n",
+            "local value = call_something(\n\tfirst,\n\tsecond\n)\n",
+        ),
     ] {
-        let output = formatted_with(source, LuaVersion::Lua54, &narrow());
-        assert_eq!(output.lines().next(), Some(first_line), "{output}");
+        assert_format_with(source, expected, LuaVersion::Lua54, &narrow());
     }
 }

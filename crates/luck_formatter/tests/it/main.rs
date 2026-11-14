@@ -9,7 +9,6 @@
 mod common;
 
 mod comments;
-mod equivalence;
 mod exprs;
 mod fixtures;
 mod functions;

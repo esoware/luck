@@ -222,12 +222,7 @@ where
                 BlockItem::Stmt(_) | BlockItem::Last(_) | BlockItem::Verbatim { .. } => None,
             };
             match sortable {
-                Some(require) => {
-                    let source_end =
-                        f.comments().last_printed_end().map_or(end, |printed| printed.max(end));
-                    let elements = item_start..f.element_count();
-                    requires.push(require, elements, Span::new(start, source_end));
-                }
+                Some(require) => requires.push(require, item_start..f.element_count()),
                 None => requires.finish(f),
             }
         }

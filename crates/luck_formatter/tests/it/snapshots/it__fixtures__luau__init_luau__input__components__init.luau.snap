@@ -1,0 +1,26 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/luau/init_luau/input/components/init.luau
+---
+-- line_width = 1
+local button = require(
+	"@self/button"
+)
+
+local components = {}
+
+components.name = "ComponentLib"
+components.button = button
+
+return components
+
+-- line_width = 40, 80, 100, 120
+local button = require("@self/button")
+
+local components = {}
+
+components.name = "ComponentLib"
+components.button = button
+
+return components

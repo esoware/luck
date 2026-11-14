@@ -18,8 +18,6 @@ fn trailing_callback_is_hugged() {
     for width in [60, 80, 120] {
         let options = FormatOptions { line_width: width, ..FormatOptions::default() };
         assert_format_with(source, expected, LuaVersion::Lua54, &options);
-        luck_formatter::format_and_verify(source, LuaVersion::Lua54, &options)
-            .expect("layout verifies");
     }
 }
 

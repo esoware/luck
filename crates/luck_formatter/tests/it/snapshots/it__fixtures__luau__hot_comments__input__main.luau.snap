@@ -1,0 +1,23 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/luau/hot_comments/input/main.luau
+---
+-- line_width = 1
+--!strict
+--!native
+local util = require(
+	"./util"
+)
+print(
+	util.add(
+		1,
+		2
+	)
+)
+
+-- line_width = 40, 80, 100, 120
+--!strict
+--!native
+local util = require("./util")
+print(util.add(1, 2))

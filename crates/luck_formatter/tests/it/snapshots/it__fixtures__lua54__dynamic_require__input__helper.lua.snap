@@ -1,0 +1,12 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/lua54/dynamic_require/input/helper.lua
+---
+-- line_width = 1
+return {
+	value = 1,
+}
+
+-- line_width = 40, 80, 100, 120
+return { value = 1 }

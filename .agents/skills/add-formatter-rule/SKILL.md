@@ -20,14 +20,13 @@ Leaf text comes from token-carried values (`src/tokens.rs`), never from source s
 
 ## Tests
 
-White-box cases go in the owning file's `#[cfg(test)] mod tests` (render a node with `crate::fixtures::render`). Public-API cases go in `tests/it/` through `assert_format`/`assert_format_with`. Cover:
+White-box cases go in the owning file's `#[cfg(test)] mod tests` (render a node with `crate::fixtures::render`). Public-API cases go in `tests/it/` through `assert_format`/`assert_format_with` (`assert_format_range` for a selection), which pin the exact output and check that it re-parses and formats to itself. Nothing checks at runtime that the output means what the input does, so the expected text is the proof and needs the review code gets. Cover:
 
-1. Re-parses: `parse(format(src))` error-free, including at width 1 (the narrowest layout must still be valid syntax).
-2. Idempotent: `format(format(src)) == format(src)`, the non-negotiable invariant.
-3. AST-equivalent: run the construct through `format_and_verify`.
-4. Multiple widths: 60, 80, 120.
-5. Format-off survives: `-- luck: format off` ... `-- luck: format on` regions come through byte-for-byte (note the exact directive syntax).
-6. Synthetic path: if the construct has a `Synth` constructor, build -> `format_block` -> parse -> `blocks_equivalent`.
+1. Multiple widths: 1, 60, 80, 120. The narrowest layout must still be valid syntax.
+2. Comments inside the construct, at each of those widths.
+3. Format-off survives: `-- luck: format off` ... `-- luck: format on` regions come through byte-for-byte (note the exact directive syntax).
+4. Synthetic path: if the construct has a `Synth` constructor, build it and pin its output through `synthetic.rs`'s `assert_format_block`.
+5. Fixture snapshots: `tests/it/fixtures.rs` snapshots every shared fixture at several widths. Run `cargo insta test -p luck_formatter`, review each changed snapshot as a diff, and accept it with `just accept`.
 
 ## Gate and bump
 

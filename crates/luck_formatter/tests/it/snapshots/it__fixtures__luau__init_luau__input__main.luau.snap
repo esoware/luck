@@ -1,0 +1,33 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/luau/init_luau/input/main.luau
+---
+-- line_width = 1
+local components = require(
+	"./components"
+)
+
+print(
+	components.name
+)
+print(
+	components.button.label
+)
+return components
+
+-- line_width = 40
+local components = require(
+	"./components"
+)
+
+print(components.name)
+print(components.button.label)
+return components
+
+-- line_width = 80, 100, 120
+local components = require("./components")
+
+print(components.name)
+print(components.button.label)
+return components

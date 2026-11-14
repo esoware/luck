@@ -15,10 +15,10 @@ use core::ops::Range;
 use core::slice;
 
 use luck_ast::{Block, ChainHead, Expression, FunctionArgs, LocalAssignment, Statement, Suffix};
-use luck_token::{Span, offset_to_index};
+use luck_token::Span;
 use rustc_hash::FxHashSet;
 
-use crate::ir::{Formatter, SortedRun};
+use crate::ir::Formatter;
 
 /// The spans of the blocks whose runs sort.
 ///
@@ -120,8 +120,6 @@ struct Member<'block> {
     require: Require<'block>,
     /// The elements the formatter wrote for it, trailing comments included.
     elements: Range<usize>,
-    /// The source those came from.
-    source: Span,
 }
 
 /// The sortable statements a block has printed since the last thing that
@@ -132,8 +130,8 @@ pub(crate) struct RequireRun<'block> {
 }
 
 impl<'block> RequireRun<'block> {
-    pub(crate) fn push(&mut self, require: Require<'block>, elements: Range<usize>, source: Span) {
-        self.members.push(Member { require, elements, source });
+    pub(crate) fn push(&mut self, require: Require<'block>, elements: Range<usize>) {
+        self.members.push(Member { require, elements });
     }
 
     /// Prints the run sorted when it has two or more members and sorting
@@ -156,35 +154,9 @@ impl<'block> RequireRun<'block> {
         if order.iter().enumerate().all(|(position, &i)| position == i) {
             return;
         }
-        let slices: Vec<Range<usize>> =
-            members.iter().map(|member| member.elements.clone()).collect();
-        let sources = order.iter().filter_map(|&i| members.get(i)).map(|member| member.source);
-        f.reorder(&slices, &order, SortedRun { members: sources.collect() });
+        let slices: Vec<Range<usize>> = members.into_iter().map(|member| member.elements).collect();
+        f.reorder(&slices, &order);
     }
-}
-
-/// `source` with each of `runs` in the order it printed, one member per
-/// line, which parses to the tree the formatted text does.
-pub(crate) fn sorted_source(source: &str, runs: &[SortedRun]) -> String {
-    let mut spans: Vec<(Span, &SortedRun)> = runs
-        .iter()
-        .filter_map(|run| {
-            let start = run.members.iter().map(|member| member.start).min()?;
-            let end = run.members.iter().map(|member| member.end).max()?;
-            Some((Span::new(start, end), run))
-        })
-        .collect();
-    spans.sort_by_key(|(span, _)| span.start);
-    let mut sorted = String::with_capacity(source.len());
-    let mut cursor = 0u32;
-    for (span, run) in spans {
-        sorted.push_str(Span::new(cursor, span.start).text(source));
-        let lines: Vec<&str> = run.members.iter().map(|member| member.text(source)).collect();
-        sorted.push_str(&lines.join("\n"));
-        cursor = span.end;
-    }
-    sorted.push_str(source.get(offset_to_index(cursor)..).unwrap_or_default());
-    sorted
 }
 
 /// The one name `local` binds, unless it's a `<close>` binding, whose
@@ -248,123 +220,5 @@ fn is_single_string_arg(call_args: &FunctionArgs) -> bool {
         }
         FunctionArgs::StringLiteral(_) => true,
         FunctionArgs::TableConstructor(_) => false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::FormatOptions;
-
-    fn sort_source(input: &str) -> String {
-        let options = FormatOptions { sort_requires: true, ..FormatOptions::default() };
-        let result = crate::format(input, LuaVersion::Lua54, &options);
-        assert!(result.errors.is_empty(), "parse: {:?}", result.errors);
-        result.output
-    }
-
-    #[test]
-    fn sorts_simple_run() {
-        let input = "local zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\nlocal mid = require(\"mid\")\n";
-        let expected = "local alpha = require(\"alpha\")\nlocal mid = require(\"mid\")\nlocal zeta = require(\"zeta\")\n";
-        assert_eq!(sort_source(input), expected);
-    }
-
-    #[test]
-    fn blank_line_breaks_run() {
-        let input = "local zeta = require(\"zeta\")\n\nlocal alpha = require(\"alpha\")\n";
-        // The blank line leaves two one-statement runs, too short to sort.
-        assert_eq!(sort_source(input), input);
-    }
-
-    #[test]
-    fn non_require_breaks_run() {
-        let input =
-            "local zeta = require(\"zeta\")\nlocal x = 1\nlocal alpha = require(\"alpha\")\n";
-        // The `local x = 1` line splits the run; no reordering.
-        assert_eq!(sort_source(input), input);
-    }
-
-    #[test]
-    fn multi_binding_is_unsortable() {
-        let input =
-            "local zeta = require(\"zeta\")\nlocal a, b = 1, 2\nlocal alpha = require(\"alpha\")\n";
-        assert_eq!(sort_source(input), input);
-    }
-
-    #[test]
-    fn side_effect_require_is_unsortable() {
-        let input = "local zeta = require(\"zeta\")()\nlocal alpha = require(\"alpha\")()\n";
-        assert_eq!(sort_source(input), input);
-    }
-
-    #[test]
-    fn format_off_region_is_preserved() {
-        let input = "-- luck: format off\nlocal zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\n-- luck: format on\n";
-        assert_eq!(sort_source(input), input);
-    }
-
-    #[test]
-    fn mixed_require_and_get_service() {
-        let input = "local zeta = require(\"zeta\")\nlocal alpha = game:GetService(\"Players\")\n";
-        let expected =
-            "local alpha = game:GetService(\"Players\")\nlocal zeta = require(\"zeta\")\n";
-        assert_eq!(sort_source(input), expected);
-    }
-
-    #[test]
-    fn sorts_requires_of_field_paths() {
-        let input = "local Zebra = require(script.Parent.Zebra)\nlocal Apple = require(Packages.Apple)\nlocal Mango = require(module)\n";
-        let expected = "local Apple = require(Packages.Apple)\nlocal Mango = require(module)\nlocal Zebra = require(script.Parent.Zebra)\n";
-        assert_eq!(sort_source(input), expected);
-    }
-
-    #[test]
-    fn require_of_a_path_rooted_in_the_run_is_unsortable() {
-        let input =
-            "local Packages = require(script.Packages)\nlocal Apple = require(Packages.Apple)\n";
-        assert_eq!(sort_source(input), input);
-    }
-
-    #[test]
-    fn require_of_a_computed_path_is_unsortable() {
-        let called = "local Zebra = require(script:FindFirstChild(\"Zebra\"))\nlocal Apple = require(script.Apple)\n";
-        assert_eq!(sort_source(called), called);
-        let indexed = "local Zebra = require(script[name])\nlocal Apple = require(script.Apple)\n";
-        assert_eq!(sort_source(indexed), indexed);
-    }
-
-    #[test]
-    fn nested_function_body_run_sorts() {
-        let input = "local function f()\n\tlocal zeta = require(\"zeta\")\n\tlocal alpha = require(\"alpha\")\nend\n";
-        let expected = "local function f()\n\tlocal alpha = require(\"alpha\")\n\tlocal zeta = require(\"zeta\")\nend\n";
-        assert_eq!(sort_source(input), expected);
-    }
-
-    #[test]
-    fn trailing_comments_move_with_their_statements() {
-        let input = "local zeta = require(\"zeta\") -- last\nlocal alpha = require(\"alpha\") --[[ first ]]\n";
-        let expected = "local alpha = require(\"alpha\") --[[ first ]]\nlocal zeta = require(\"zeta\") -- last\n";
-        assert_eq!(sort_source(input), expected);
-    }
-
-    #[test]
-    fn statements_sharing_a_source_line_sort_as_the_lines_they_print() {
-        let input = "local zeta = require(\"zeta\") local alpha = require(\"alpha\")\n";
-        let expected = "local alpha = require(\"alpha\")\nlocal zeta = require(\"zeta\")\n";
-        assert_eq!(sort_source(input), expected);
-    }
-
-    #[test]
-    fn verification_reads_each_run_in_the_order_it_printed() {
-        let options = FormatOptions { sort_requires: true, ..FormatOptions::default() };
-        let input = "local zeta = require(\"zeta\") -- z\nlocal beta = require(\"beta\") local alpha = require(\"alpha\") --[[ a ]]\ndo\n\tlocal y = require(\"y\");local x = require(\"x\")\nend\n";
-        let result = crate::format_and_verify(input, LuaVersion::Lua54, &options)
-            .unwrap_or_else(|(_, diff)| panic!("{diff:?}"));
-        assert_eq!(
-            result.output,
-            "local alpha = require(\"alpha\") --[[ a ]]\nlocal beta = require(\"beta\")\nlocal zeta = require(\"zeta\") -- z\ndo\n\tlocal x = require(\"x\")\n\tlocal y = require(\"y\")\nend\n"
-        );
     }
 }

@@ -1,0 +1,54 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/luau/string_interpolation/input/greeter.luau
+---
+-- line_width = 1
+local greeter = {}
+
+function greeter.hello(
+	name: string
+): string
+	local msg = `hello {name}`
+	return msg
+end
+
+function greeter.farewell(
+	name: string,
+	time: string
+): string
+	return `goodbye {name}, see you at {time}`
+end
+
+return greeter
+
+-- line_width = 40
+local greeter = {}
+
+function greeter.hello(name: string): string
+	local msg = `hello {name}`
+	return msg
+end
+
+function greeter.farewell(
+	name: string,
+	time: string
+): string
+	return `goodbye {name}, see you at {time}`
+end
+
+return greeter
+
+-- line_width = 80, 100, 120
+local greeter = {}
+
+function greeter.hello(name: string): string
+	local msg = `hello {name}`
+	return msg
+end
+
+function greeter.farewell(name: string, time: string): string
+	return `goodbye {name}, see you at {time}`
+end
+
+return greeter

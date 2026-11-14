@@ -19,7 +19,6 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 - **Fill mode.** A table of positional literals and variables packs entries greedily onto lines instead of one per line.
 - **Blank lines in tables.** A blank line between two fields is kept, as one between statements is, and breaks the table. A packed list stays packed on either side of it. The lines right inside the braces take none.
 - **Range formatting.** `format_range` formats only the statements overlapping a byte range, or those of the innermost nested block holding the whole range, and copies every other byte as it was, line endings included. This is what an editor's "format selection" calls.
-- **Verified formatting.** `format_and_verify` checks re-parsing, AST equivalence (string literals compare by the bytes they decode to in the target dialect), comment text (normalizing line endings and trailing whitespace), comment position among the tokens both texts keep, and second-pass idempotency. It aligns the two token streams, skipping a paren only one side has, up to the first other mismatch, such as a leading `|` the formatter adds to or drops from a Luau union. Past that point, comments are checked by text and order only. It isn't a target VM compiler or a proof of runtime equivalence.
 - **Luau type annotations.** Luau type syntax formats from the `Type` AST, with group-based line breaking. A union or intersection that opens an array field with no access modifier keeps its leading `|` or `&` even when flat if its first member starts with `read` or `write`, which would otherwise read back as the field's access modifier.
 
 ## Architecture
@@ -74,5 +73,7 @@ The defaults follow the [Roblox Lua style guide](https://roblox.github.io/lua-st
 | `numbers.rs` | Numeric-literal normalization |
 | `tokens.rs` | Token-to-IR text emission |
 | `sort_requires.rs` | `require` statement sorting, which the block emitter applies as it prints by moving each statement's printed lines |
-| `ast_equivalence.rs` | AST-equality verifier backing `format_and_verify`, with its comparisons in `ast_equivalence/` split by node family as `luck_ast` is: `stmt.rs`, `expr.rs`, `function.rs`, and `types.rs` |
-| `verify.rs` | `format_and_verify`: the re-parse, AST, comment-placement, and idempotency checks |
+
+## Testing
+
+Public-API tests live in `tests/it/` as a single binary. Every case pins the exact output through `assert_format`, `assert_format_with`, or `assert_format_range`, or, for a tree built in code, `synthetic.rs`'s `assert_format_block`, and each also checks that the output re-parses and formats to itself. The expected text is what shows the output keeps the input's meaning, comments included. `fixtures.rs` snapshots every shared fixture with `insta` at widths 1, 40, 80, 100, and 120, writing each distinct layout once under the widths that give it, so a layout change at any width is a snapshot diff to review. `luck_testgen` checks re-parsing and idempotency over its generated programs and runs the formatter on a 1 MiB stack.

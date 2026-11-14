@@ -43,7 +43,7 @@ luck lsp [--socket <port>]                   # Run the language server over stdi
 | `minify` | `-c/--config`, `--fold-constants`/`--no-fold-constants`, `--rename-locals`/`--no-rename-locals`, ... (per-transform), `--rename-globals`/`--no-rename-globals`, `--stats` |
 | `graph` | `--format` (json / dot), `-s/--search-path`, `--dynamic-require` |
 | `check` | `-c/--config`, `--no-error-on-unmatched-pattern` |
-| `fmt` | `--write`, `--check`, `--list-different`, `--no-editorconfig`, `--stdin-filepath`, `--range-start`/`--range-end`, `--verify`, `-c/--config`, `--no-error-on-unmatched-pattern` (layout options live in `luck.json`/`.editorconfig`, not flags) |
+| `fmt` | `--write`, `--check`, `--list-different`, `--no-editorconfig`, `--stdin-filepath`, `--range-start`/`--range-end`, `-c/--config`, `--no-error-on-unmatched-pattern` (layout options live in `luck.json`/`.editorconfig`, not flags) |
 | `lint` | `--fix`, `-f/--format` (default / json / github), `-A/--allow`, `-W/--warn`, `-D/--deny` per rule or category, `--global`, `--max-warnings`, `--deny-warnings`, `--silent`, `--rules`, `--print-config`, `--stdin-filepath`, `-c/--config`, `--no-error-on-unmatched-pattern` |
 | `build` | `--release`, `--dev`, `-P/--profile <name>`, `-w/--watch`, `--dry-run`, `-c/--config` |
 

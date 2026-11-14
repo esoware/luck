@@ -1,0 +1,17 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/lua54/init_module/input/components/init.lua
+---
+-- line_width = 1, 40
+local components = {
+	name = "components_module",
+	version = 1,
+}
+
+return components
+
+-- line_width = 80, 100, 120
+local components = { name = "components_module", version = 1 }
+
+return components

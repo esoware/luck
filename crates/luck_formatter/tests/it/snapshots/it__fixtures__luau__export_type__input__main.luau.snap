@@ -1,0 +1,21 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/luau/export_type/input/main.luau
+---
+-- line_width = 1
+local util = require(
+	"./util"
+)
+type Adder = typeof(util.add)
+print(
+	util.add(
+		1,
+		2
+	)
+)
+
+-- line_width = 40, 80, 100, 120
+local util = require("./util")
+type Adder = typeof(util.add)
+print(util.add(1, 2))

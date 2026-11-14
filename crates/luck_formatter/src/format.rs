@@ -5,7 +5,7 @@ use luck_token::{LuaVersion, index_to_offset, offset_to_index};
 
 use crate::comments::{Comments, write_remaining_comments, write_shebang};
 use crate::format_block::{first_item_start, format_selection};
-use crate::ir::{Format as _, Formatter, SortedRun};
+use crate::ir::{Format as _, Formatter};
 use crate::sort_requires::sorting_blocks;
 use crate::{FormatOptions, LineEndings};
 
@@ -19,13 +19,12 @@ pub struct FormatResult {
 /// itself reports no others.
 pub type FormatError = luck_token::SourceError;
 
-/// Returns the output and the runs of requires it printed sorted.
 fn print_block(
     block: &Block,
     comments: Comments,
     options: &FormatOptions,
     should_sort_requires: bool,
-) -> (String, Vec<SortedRun>) {
+) -> String {
     let mut f = Formatter::new(*options, comments);
     if should_sort_requires {
         f = f.sorting_requires_in(sorting_blocks(block));
@@ -36,7 +35,6 @@ fn print_block(
     // those must not open a line before the trailing comment flush.
     let has_stmts = first_item_start(block).is_some();
     write_remaining_comments(&mut f, has_stmts);
-    let sorted_runs = f.take_sorted_runs();
     let mut output = f.print("");
 
     let trimmed = output.trim_end();
@@ -45,7 +43,7 @@ fn print_block(
     if options.line_endings == LineEndings::Windows {
         output = with_windows_line_endings(&output);
     }
-    (output, sorted_runs)
+    output
 }
 
 /// Verbatim text can already hold CRLF or LFCR, from CRLF input or an earlier
@@ -91,14 +89,20 @@ pub fn format_block(
             ),
         });
     }
-    Ok(print_block(block, comments, options, false).0)
+    Ok(print_block(block, comments, options, false))
 }
 
 /// Input that fails to parse returns empty output with its parse errors in
 /// `FormatResult::errors`.
 #[must_use]
 pub fn format(source: &str, version: LuaVersion, options: &FormatOptions) -> FormatResult {
-    format_source(source, version, options).result
+    let parsed = luck_parser::parse(source, version);
+    if !parsed.errors.is_empty() {
+        return FormatResult { output: String::new(), errors: parsed.errors };
+    }
+    let comments = Comments::from_source(&parsed.comments, &parsed.source, version);
+    let output = print_block(&parsed.block, comments, options, options.sort_requires);
+    FormatResult { output, errors: Vec::new() }
 }
 
 /// Format only the statements that overlap a byte range, or those of the
@@ -139,34 +143,4 @@ pub fn format_range(
         },
     );
     FormatResult { output, errors: Vec::new() }
-}
-
-/// A format, and the parse it read, so verification needn't repeat it.
-pub(crate) struct Formatted {
-    pub result: FormatResult,
-    /// `None` when the input doesn't parse.
-    pub parsed: Option<luck_parser::ParseResult>,
-    /// The runs of requires the output holds in another order than the
-    /// input does.
-    pub sorted_runs: Vec<SortedRun>,
-}
-
-pub(crate) fn format_source(
-    source: &str,
-    version: LuaVersion,
-    options: &FormatOptions,
-) -> Formatted {
-    let parsed = luck_parser::parse(source, version);
-    if !parsed.errors.is_empty() {
-        let result = FormatResult { output: String::new(), errors: parsed.errors };
-        return Formatted { result, parsed: None, sorted_runs: Vec::new() };
-    }
-    let comments = Comments::from_source(&parsed.comments, &parsed.source, version);
-    let (output, sorted_runs) =
-        print_block(&parsed.block, comments, options, options.sort_requires);
-    Formatted {
-        result: FormatResult { output, errors: Vec::new() },
-        parsed: Some(parsed),
-        sorted_runs,
-    }
 }

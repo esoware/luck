@@ -25,3 +25,5 @@ unicode-width = { workspace = true }
 
 [dev-dependencies]
 luck_testgen = { workspace = true }
+
+insta = { workspace = true }

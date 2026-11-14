@@ -1,0 +1,29 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/lua54/deep_chain/input/c.lua
+---
+-- line_width = 1
+local d = require(
+	"d"
+)
+
+local c = {}
+
+function c.compute()
+	return d.compute()
+		+ 1
+end
+
+return c
+
+-- line_width = 40, 80, 100, 120
+local d = require("d")
+
+local c = {}
+
+function c.compute()
+	return d.compute() + 1
+end
+
+return c

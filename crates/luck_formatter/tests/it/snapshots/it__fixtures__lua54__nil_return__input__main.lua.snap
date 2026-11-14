@@ -1,0 +1,22 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/lua54/nil_return/input/main.lua
+---
+-- line_width = 1
+local sideeffect = require(
+	"sideeffect"
+)
+
+print(
+	type(
+		sideeffect
+	)
+)
+return sideeffect
+
+-- line_width = 40, 80, 100, 120
+local sideeffect = require("sideeffect")
+
+print(type(sideeffect))
+return sideeffect
