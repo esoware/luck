@@ -65,7 +65,12 @@ mod tests {
 
     #[test]
     fn ignores_local_shadowing_global() {
-        let diags = run("local print = function() end\nprint(\"x\")", &[]);
+        let diags = run(
+            "\
+local print = function() end
+print(\"x\")",
+            &[],
+        );
         assert!(diags.iter().all(|diag| !diag.message.contains("`print`")), "got: {diags:?}");
     }
 
@@ -89,7 +94,12 @@ mod tests {
 
     #[test]
     fn flags_stdlib_despite_configured_extra_global() {
-        let diags = run("print(\"x\")\nmyCustomGlobal()", &["myCustomGlobal"]);
+        let diags = run(
+            "\
+print(\"x\")
+myCustomGlobal()",
+            &["myCustomGlobal"],
+        );
         assert!(diags.iter().any(|diag| diag.message.contains("`print`")), "{diags:?}");
         assert!(diags.iter().all(|diag| !diag.message.contains("`myCustomGlobal`")));
     }

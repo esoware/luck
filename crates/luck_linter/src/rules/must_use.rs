@@ -66,7 +66,12 @@ mod tests {
 
     #[test]
     fn ignores_used_tostring() {
-        let messages = run("local s = tostring(1)\nprint(s)", LuaVersion::Lua54);
+        let messages = run(
+            "\
+local s = tostring(1)
+print(s)",
+            LuaVersion::Lua54,
+        );
         assert!(messages.is_empty(), "{messages:?}");
     }
 
@@ -108,14 +113,24 @@ mod tests {
 
     #[test]
     fn flags_discarded_string_method() {
-        let messages = run("local s = 'x'\ns:upper()", LuaVersion::Lua54);
+        let messages = run(
+            "\
+local s = 'x'
+s:upper()",
+            LuaVersion::Lua54,
+        );
         assert!(messages.iter().any(|message| message.contains("s:upper")), "{messages:?}");
     }
 
     // A bare f:seek('set') rewind is idiomatic, so seek isn't must_use.
     #[test]
     fn ignores_discarded_file_seek() {
-        let messages = run("local f = io.open('x')\nf:seek('set')", LuaVersion::Lua54);
+        let messages = run(
+            "\
+local f = io.open('x')
+f:seek('set')",
+            LuaVersion::Lua54,
+        );
         assert!(messages.is_empty(), "{messages:?}");
     }
 

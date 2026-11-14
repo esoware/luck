@@ -756,10 +756,21 @@ mod tests {
     #[test]
     fn basic_bundle_uses_lazy_loader() {
         let modules = vec![
-            module("src/utils.lua", "local M = {}\nreturn M\n", &[], LuaVersion::Lua54),
+            module(
+                "src/utils.lua",
+                "\
+local M = {}
+return M
+",
+                &[],
+                LuaVersion::Lua54,
+            ),
             module(
                 "src/main.lua",
-                "local utils = require(\"utils\")\nprint(utils)\n",
+                "\
+local utils = require(\"utils\")
+print(utils)
+",
                 &[("utils", "src/utils.lua")],
                 LuaVersion::Lua54,
             ),
@@ -822,13 +833,19 @@ mod tests {
         let modules = vec![
             module(
                 "src/b.lua",
-                "local a = require(\"a\")\nreturn { a = a }\n",
+                "\
+local a = require(\"a\")
+return { a = a }
+",
                 &[("a", "src/a.lua")],
                 LuaVersion::Lua54,
             ),
             module(
                 "src/a.lua",
-                "local b = require(\"b\")\nreturn { b = b }\n",
+                "\
+local b = require(\"b\")
+return { b = b }
+",
                 &[("b", "src/b.lua")],
                 LuaVersion::Lua54,
             ),
@@ -849,7 +866,11 @@ mod tests {
         // Real Lua caches by name, so require("foo") and require("foo.init")
         // reaching one file run it twice. The slots share one function but
         // not a cache entry.
-        let source = "local a = require(\"foo\")\nlocal b = require(\"foo.init\")\nprint(a, b)\n";
+        let source = "\
+local a = require(\"foo\")
+local b = require(\"foo.init\")
+print(a, b)
+";
         let modules = vec![
             module("src/foo/init.lua", "return {}\n", &[], LuaVersion::Lua54),
             module(
@@ -870,8 +891,11 @@ mod tests {
 
     #[test]
     fn generated_prefix_avoids_user_identifiers() {
-        let source =
-            "local __luck_require = 1\nlocal d = require(\"dep\")\nprint(__luck_require, d)\n";
+        let source = "\
+local __luck_require = 1
+local d = require(\"dep\")
+print(__luck_require, d)
+";
         let modules = vec![
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua54),
             module("src/main.lua", source, &[("dep", "src/dep.lua")], LuaVersion::Lua54),
@@ -888,14 +912,24 @@ mod tests {
 
     #[test]
     fn multiline_require_preserves_line_count() {
-        let source = "local d = require(\n\"dep\"\n)\nprint(d)\n";
+        let source = "\
+local d = require(
+\"dep\"
+)
+print(d)
+";
         let modules = vec![
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua54),
             module("src/main.lua", source, &[("dep", "src/dep.lua")], LuaVersion::Lua54),
         ];
         let (output, line_map) = emitted(modules, LuaVersion::Lua54);
         assert!(
-            output.contains("local d = __luck_require(\"dep\"\n\n)"),
+            output.contains(
+                "\
+local d = __luck_require(\"dep\"
+
+)"
+            ),
             "padding keeps following lines in place: {output}"
         );
         let entry = find_line_entry(&line_map, "src/main.lua");
@@ -908,13 +942,25 @@ mod tests {
 
     #[test]
     fn entry_shebang_moves_up_and_keeps_its_line_for_the_map() {
-        let source = "#!/usr/bin/env lua\nlocal d = require(\"dep\")\nprint(d)\n";
+        let source = "\
+#!/usr/bin/env lua
+local d = require(\"dep\")
+print(d)
+";
         let modules = vec![
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua54),
             module("src/main.lua", source, &[("dep", "src/dep.lua")], LuaVersion::Lua54),
         ];
         let (output, line_map) = emitted(modules, LuaVersion::Lua54);
-        assert!(output.starts_with("#!/usr/bin/env lua\nlocal __luck_modules={}\n"), "{output}");
+        assert!(
+            output.starts_with(
+                "\
+#!/usr/bin/env lua
+local __luck_modules={}
+"
+            ),
+            "{output}"
+        );
         assert_eq!(output.matches("#!").count(), 1, "{output}");
         let entry = find_line_entry(&line_map, "src/main.lua");
         let output_lines: Vec<&str> = output.lines().collect();
@@ -929,7 +975,10 @@ mod tests {
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua51),
             module(
                 "src/main.lua",
-                "local d = require(\"dep\")\nprint(d)\n",
+                "\
+local d = require(\"dep\")
+print(d)
+",
                 &[("dep", "src/dep.lua")],
                 LuaVersion::Lua51,
             ),
@@ -945,7 +994,11 @@ mod tests {
 
     #[test]
     fn lua51_bundle_writes_no_global_by_default() {
-        let source = "local d = require(\"dep\")\nlocal name = \"dep\"\nprint(d, require(name))\n";
+        let source = "\
+local d = require(\"dep\")
+local name = \"dep\"
+print(d, require(name))
+";
         let modules = vec![
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua51),
             module("src/main.lua", source, &[("dep", "src/dep.lua")], LuaVersion::Lua51),
@@ -962,7 +1015,12 @@ mod tests {
             (0..captures).map(|i| format!("local u{i} = {i}\n")).collect::<Vec<_>>().concat();
         let sum = (0..captures).map(|i| format!("u{i}")).collect::<Vec<_>>().join(" + ");
         let source = format!(
-            "{locals}local function f()\n    return require(\"dep\"), {sum}\nend\nprint(f())\n"
+            "\
+{locals}local function f()
+    return require(\"dep\"), {sum}
+end
+print(f())
+"
         );
         let modules = vec![
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua51),
@@ -988,7 +1046,10 @@ mod tests {
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua52),
             module(
                 "src/main.lua",
-                "local d = require(\"dep\")\nprint(d)\n",
+                "\
+local d = require(\"dep\")
+print(d)
+",
                 &[("dep", "src/dep.lua")],
                 LuaVersion::Lua52,
             ),
@@ -1012,7 +1073,10 @@ mod tests {
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua54),
             module(
                 "src/main.lua",
-                "local d = require(\"dep\")\nprint(d)\n",
+                "\
+local d = require(\"dep\")
+print(d)
+",
                 &[("dep", "src/dep.lua")],
                 LuaVersion::Lua54,
             ),
@@ -1029,7 +1093,10 @@ mod tests {
             module("src/dep.luau", "return {}\n", &[], LuaVersion::Luau),
             module(
                 "src/main.luau",
-                "local m = require(\"./dep\") :: any\nprint(m)\n",
+                "\
+local m = require(\"./dep\") :: any
+print(m)
+",
                 &[("./dep", "src/dep.luau")],
                 LuaVersion::Luau,
             ),
@@ -1046,7 +1113,15 @@ mod tests {
 
     #[test]
     fn shadowed_require_call_survives_unrewritten() {
-        let source = "local d = require(\"dep\")\nlocal function f()\n    local require = print\n    require(\"dep\")\nend\nf()\nprint(d)\n";
+        let source = "\
+local d = require(\"dep\")
+local function f()
+    local require = print
+    require(\"dep\")
+end
+f()
+print(d)
+";
         let modules = vec![
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua54),
             module("src/main.lua", source, &[("dep", "src/dep.lua")], LuaVersion::Lua54),
@@ -1075,7 +1150,10 @@ end
             module("src/dep.luau", dependency, &[], LuaVersion::Luau),
             module(
                 "src/main.luau",
-                "local dep = require(\"./dep\")\nprint(dep.get())\n",
+                "\
+local dep = require(\"./dep\")
+print(dep.get())
+",
                 &[("./dep", "src/dep.luau")],
                 LuaVersion::Luau,
             ),
@@ -1085,7 +1163,14 @@ end
         assert!(!output.contains("export "), "{output}");
         assert!(output.contains("local value = 129312i"), "{output}");
         assert!(output.contains("const LIMIT = 0xffffffffffffffffi"), "{output}");
-        assert!(output.contains("@native\nlocal function get()"), "{output}");
+        assert!(
+            output.contains(
+                "\
+@native
+local function get()"
+            ),
+            "{output}"
+        );
         assert!(
             output.contains("return __luck_freeze({value=value,LIMIT=LIMIT,get=get})"),
             "{output}"
@@ -1120,7 +1205,11 @@ print(field, lazy())
 
     #[test]
     fn require_inside_string_literal_is_untouched() {
-        let source = "local d = require(\"dep\")\nlocal msg = 'use require(\"dep\") to load'\nprint(d, msg)\n";
+        let source = "\
+local d = require(\"dep\")
+local msg = 'use require(\"dep\") to load'
+print(d, msg)
+";
         let modules = vec![
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua54),
             module("src/main.lua", source, &[("dep", "src/dep.lua")], LuaVersion::Lua54),
@@ -1134,7 +1223,11 @@ print(field, lazy())
     fn escaped_require_string_is_rewritten_to_decoded_name() {
         // require("a\46b") is require("a.b"); both spellings share one
         // cache entry keyed by the decoded name.
-        let source = "local x = require(\"a\\46b\")\nlocal y = require(\"a.b\")\nprint(x, y)\n";
+        let source = "\
+local x = require(\"a\\46b\")
+local y = require(\"a.b\")
+print(x, y)
+";
         let modules = vec![
             module("src/a/b.lua", "return {}\n", &[], LuaVersion::Lua54),
             module("src/main.lua", source, &[("a.b", "src/a/b.lua")], LuaVersion::Lua54),
@@ -1154,10 +1247,26 @@ print(field, lazy())
 
     #[test]
     fn line_map_maps_module_lines_to_original_source_lines() {
-        let utils_source = "local M = {}\nfunction M.foo()\n    return 42\nend\nreturn M\n";
-        let entry_source = "local utils = require(\"utils\")\nlocal helper = require(\"helper\")\nprint(utils, helper)\n";
+        let utils_source = "\
+local M = {}
+function M.foo()
+    return 42
+end
+return M
+";
+        let entry_source = "\
+local utils = require(\"utils\")
+local helper = require(\"helper\")
+print(utils, helper)
+";
         // Leading comments and a blank line make the offsets nontrivial.
-        let helper_source = "-- helper module\n-- second comment line\n\nlocal helper = { ready = true }\nreturn helper\n";
+        let helper_source = "\
+-- helper module
+-- second comment line
+
+local helper = { ready = true }
+return helper
+";
         let modules = vec![
             module("src/utils.lua", utils_source, &[], LuaVersion::Lua54),
             module("src/helper.lua", helper_source, &[], LuaVersion::Lua54),
@@ -1218,7 +1327,11 @@ print(field, lazy())
 
     #[test]
     fn lone_module_emits_verbatim_and_maps_every_line() {
-        let source = "print(\"a\")\nprint(\"b\")\nprint(\"c\")\n";
+        let source = "\
+print(\"a\")
+print(\"b\")
+print(\"c\")
+";
         let modules = vec![module("src/main.lua", source, &[], LuaVersion::Lua54)];
         let (output, line_map) = emitted(modules, LuaVersion::Lua54);
         assert_eq!(output, source);
@@ -1239,7 +1352,10 @@ print(field, lazy())
             module(path, "return 1\n", &[], LuaVersion::Lua54),
             module(
                 "src/main.lua",
-                "local d = require(\"dep\")\nprint(d)\n",
+                "\
+local d = require(\"dep\")
+print(d)
+",
                 &[("dep", path)],
                 LuaVersion::Lua54,
             ),
@@ -1257,7 +1373,10 @@ print(field, lazy())
             module("src/dep.lua", "return 1\n", &[], LuaVersion::Lua54),
             module(
                 "src/main.lua",
-                "local d = require [[dep]]\nprint(d)\n",
+                "\
+local d = require [[dep]]
+print(d)
+",
                 &[("dep", "src/dep.lua")],
                 LuaVersion::Lua54,
             ),

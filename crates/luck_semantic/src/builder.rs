@@ -520,7 +520,11 @@ mod tests {
 
     #[test]
     fn reference_resolves_to_local() {
-        let tree = scope_tree("local x = 1\nprint(x)");
+        let tree = scope_tree(
+            "\
+local x = 1
+print(x)",
+        );
         let x_references = references(&tree, "x");
         assert_eq!(x_references.len(), 1);
         assert_eq!(x_references[0].resolved, Some(symbol(&tree, "x").id));
@@ -546,7 +550,11 @@ mod tests {
 
     #[test]
     fn local_read_from_nested_function_is_upvalue() {
-        let tree = scope_tree("local x = 1\nlocal function f() return x end");
+        let tree = scope_tree(
+            "\
+local x = 1
+local function f() return x end",
+        );
         let x_symbol = &tree.symbols[0];
         assert_eq!(x_symbol.name, "x");
         assert!(x_symbol.is_upvalue);
@@ -555,7 +563,11 @@ mod tests {
     #[test]
     fn local_read_two_functions_deep_is_upvalue() {
         let tree = scope_tree(
-            "local x = 1\nlocal function outer()\n  local function inner() return x end\nend",
+            "\
+local x = 1
+local function outer()
+  local function inner() return x end
+end",
         );
         assert!(
             symbol(&tree, "x").is_upvalue,
@@ -565,7 +577,13 @@ mod tests {
 
     #[test]
     fn inner_local_shadows_outer_local() {
-        let tree = scope_tree("local x = 1\ndo\n  local x = 2\nend");
+        let tree = scope_tree(
+            "\
+local x = 1
+do
+  local x = 2
+end",
+        );
         assert_eq!(tree.symbols.len(), 2);
         let inner_x = &tree.symbols[1];
         assert_eq!(inner_x.name, "x");
@@ -591,7 +609,11 @@ mod tests {
 
     #[test]
     fn numeric_for_variable_not_visible_after_loop() {
-        let tree = scope_tree("for i = 1, 10 do end\nprint(i)");
+        let tree = scope_tree(
+            "\
+for i = 1, 10 do end
+print(i)",
+        );
         assert!(
             references(&tree, "i").iter().any(|reference| reference.resolved.is_none()),
             "for-loop variable i should not be visible outside the loop"
@@ -600,7 +622,11 @@ mod tests {
 
     #[test]
     fn generic_for_variables_not_visible_after_loop() {
-        let tree = scope_tree("for k, v in pairs(t) do end\nprint(k)");
+        let tree = scope_tree(
+            "\
+for k, v in pairs(t) do end
+print(k)",
+        );
         assert!(
             references(&tree, "k").iter().any(|reference| reference.resolved.is_none()),
             "generic for variables should not be visible outside the loop"
@@ -623,7 +649,11 @@ mod tests {
 
     #[test]
     fn method_declares_self() {
-        let tree = scope_tree("local t = {}\nfunction t:method() return self end");
+        let tree = scope_tree(
+            "\
+local t = {}
+function t:method() return self end",
+        );
         assert!(
             tree.symbols.iter().any(|symbol| symbol.name == "self"),
             "self should be declared as a symbol in method scope"
@@ -632,7 +662,11 @@ mod tests {
 
     #[test]
     fn dot_function_declares_no_self() {
-        let tree = scope_tree("local t = {}\nfunction t.method() end");
+        let tree = scope_tree(
+            "\
+local t = {}
+function t.method() end",
+        );
         assert!(
             !tree.symbols.iter().any(|symbol| symbol.name == "self"),
             "self should not be declared in non-method function"
@@ -641,7 +675,12 @@ mod tests {
 
     #[test]
     fn repeat_until_condition_sees_block_locals() {
-        let tree = scope_tree("repeat\n  local done = true\nuntil done");
+        let tree = scope_tree(
+            "\
+repeat
+  local done = true
+until done",
+        );
         let done_references = references(&tree, "done");
         assert_eq!(done_references.len(), 1);
         assert!(
@@ -652,15 +691,23 @@ mod tests {
 
     #[test]
     fn global_function_body_captures_enclosing_local() {
-        let tree =
-            scope_tree_for("local x = 1\nglobal function f() return x end", LuaVersion::Lua55);
+        let tree = scope_tree_for(
+            "\
+local x = 1
+global function f() return x end",
+            LuaVersion::Lua55,
+        );
         assert!(symbol(&tree, "x").is_upvalue);
     }
 
     #[test]
     fn global_stmts_record_their_declared_names() {
         let tree = scope_tree_for(
-            "global a, b <const> = 1, 2\nglobal c\nglobal function d() end\n",
+            "\
+global a, b <const> = 1, 2
+global c
+global function d() end
+",
             LuaVersion::Lua55,
         );
         for name in ["a", "b", "c", "d"] {
@@ -671,7 +718,12 @@ mod tests {
 
     #[test]
     fn local_env_makes_free_names_its_fields() {
-        let tree = scope_tree("local _ENV = {}\nx = 1\nprint(y)");
+        let tree = scope_tree(
+            "\
+local _ENV = {}
+x = 1
+print(y)",
+        );
         let env_id = symbol(&tree, "_ENV").id;
         assert_eq!(references(&tree, "y")[0].env, Some(env_id));
         assert_eq!(tree.unresolved_references().count(), 0);
@@ -681,7 +733,12 @@ mod tests {
     #[test]
     fn local_env_is_an_ordinary_local_before_52() {
         for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-            let tree = scope_tree_for("local _ENV = {}\nprint(y)", version);
+            let tree = scope_tree_for(
+                "\
+local _ENV = {}
+print(y)",
+                version,
+            );
             assert_eq!(references(&tree, "y")[0].env, None, "{version:?}");
             assert_eq!(tree.unresolved_references().count(), 2, "{version:?}");
             assert!(!tree.is_env_binding(symbol(&tree, "_ENV").id), "{version:?}");
@@ -690,18 +747,34 @@ mod tests {
 
     #[test]
     fn assigning_the_chunk_env_redirects_every_free_name() {
-        let tree = scope_tree("_ENV = {}\nprint(y)");
+        let tree = scope_tree(
+            "\
+_ENV = {}
+print(y)",
+        );
         assert!(tree.is_env_assigned);
         assert_eq!(tree.unresolved_references().count(), 0);
 
-        let lua51 = scope_tree_for("_ENV = {}\nprint(y)", LuaVersion::Lua51);
+        let lua51 = scope_tree_for(
+            "\
+_ENV = {}
+print(y)",
+            LuaVersion::Lua51,
+        );
         assert!(!lua51.is_env_assigned);
         assert_eq!(lua51.unresolved_references().count(), 3);
     }
 
     #[test]
     fn assigned_globals_records_free_name_writes_only() {
-        let tree = scope_tree("x = 1\nfunction f() end\nfunction t.m() end\nlocal y\ny = 2");
+        let tree = scope_tree(
+            "\
+x = 1
+function f() end
+function t.m() end
+local y
+y = 2",
+        );
         assert!(tree.assigned_globals.contains("x"));
         assert!(tree.assigned_globals.contains("f"));
         assert!(!tree.assigned_globals.contains("t"), "`t.m` only reads `t`");
@@ -710,14 +783,26 @@ mod tests {
 
     #[test]
     fn global_declaration_ends_with_its_block() {
-        let tree = scope_tree_for("local x = 1\ndo global x end\nprint(x)", LuaVersion::Lua55);
+        let tree = scope_tree_for(
+            "\
+local x = 1
+do global x end
+print(x)",
+            LuaVersion::Lua55,
+        );
         let last_reference = *references(&tree, "x").last().expect("print(x) references x");
         assert_eq!(last_reference.resolved, Some(symbol(&tree, "x").id));
     }
 
     #[test]
     fn global_declaration_initializer_reads_the_enclosing_local() {
-        let tree = scope_tree_for("local x = 1\nglobal x = x\nprint(x)", LuaVersion::Lua55);
+        let tree = scope_tree_for(
+            "\
+local x = 1
+global x = x
+print(x)",
+            LuaVersion::Lua55,
+        );
         let x_references = references(&tree, "x");
         assert_eq!(x_references[0].resolved, Some(symbol(&tree, "x").id));
         assert_eq!(x_references[1].resolved, None);
@@ -726,32 +811,58 @@ mod tests {
 
     #[test]
     fn declared_global_without_initializer_is_not_assigned() {
-        let tree = scope_tree_for("global x\nglobal *\nprint(y)", LuaVersion::Lua55);
+        let tree = scope_tree_for(
+            "\
+global x
+global *
+print(y)",
+            LuaVersion::Lua55,
+        );
         assert!(tree.assigned_globals.is_empty());
     }
 
     #[test]
     fn global_star_covers_free_names_until_its_block_ends() {
-        let tree = scope_tree_for("do global *\na = 1 end\nb = 2", LuaVersion::Lua55);
+        let tree = scope_tree_for(
+            "\
+do global *
+a = 1 end
+b = 2",
+            LuaVersion::Lua55,
+        );
         assert!(references(&tree, "a")[0].is_declared_global);
         assert!(!references(&tree, "b")[0].is_declared_global);
     }
 
     #[test]
     fn global_star_does_not_void_enclosing_locals() {
-        let tree = scope_tree_for("local x = 1\nglobal *\nprint(x)", LuaVersion::Lua55);
+        let tree = scope_tree_for(
+            "\
+local x = 1
+global *
+print(x)",
+            LuaVersion::Lua55,
+        );
         assert_eq!(references(&tree, "x")[0].resolved, Some(symbol(&tree, "x").id));
     }
 
     #[test]
     fn explicit_self_stays_a_parameter() {
-        let tree = scope_tree("local t = {}\nfunction t.m(self) return self end");
+        let tree = scope_tree(
+            "\
+local t = {}
+function t.m(self) return self end",
+        );
         assert_eq!(symbol(&tree, "self").kind, SymbolKind::Parameter);
     }
 
     #[test]
     fn method_self_is_implicit_with_an_empty_span() {
-        let tree = scope_tree("local t = {}\nfunction t:m() return self end");
+        let tree = scope_tree(
+            "\
+local t = {}
+function t:m() return self end",
+        );
         let self_symbol = symbol(&tree, "self");
         assert_eq!(self_symbol.kind, SymbolKind::ImplicitSelf);
         assert_eq!(self_symbol.definition_span.start, self_symbol.definition_span.end);
@@ -760,7 +871,9 @@ mod tests {
     #[test]
     fn type_function_body_sees_a_later_type() {
         let tree = scope_tree_for(
-            "type function f(t) return g(t) end\ntype function g(t) return t end",
+            "\
+type function f(t) return g(t) end
+type function g(t) return t end",
             LuaVersion::Luau,
         );
         assert_eq!(references(&tree, "g").len(), 0);
@@ -768,13 +881,22 @@ mod tests {
 
     #[test]
     fn type_runtime_names_are_only_known_in_type_functions() {
-        let tree = scope_tree_for("type T = number\nprint(types, T)", LuaVersion::Luau);
+        let tree = scope_tree_for(
+            "\
+type T = number
+print(types, T)",
+            LuaVersion::Luau,
+        );
         assert_eq!(tree.unresolved_references().count(), 3);
     }
 
     #[test]
     fn references_by_span_finds_each_reference() {
-        let tree = scope_tree("local x = 1\nprint(x)");
+        let tree = scope_tree(
+            "\
+local x = 1
+print(x)",
+        );
         for reference in &tree.references {
             let id = tree.references_by_span[&reference.span];
             assert_eq!(tree.reference(id).name, reference.name);
@@ -783,7 +905,12 @@ mod tests {
 
     #[test]
     fn resolves_to_local_checks_the_name_at_the_span() {
-        let tree = scope_tree("local x = 1\nprint(x)\nprint(y)");
+        let tree = scope_tree(
+            "\
+local x = 1
+print(x)
+print(y)",
+        );
         let local_x = references(&tree, "x")[0].span;
         let global_y = references(&tree, "y")[0].span;
         assert!(tree.resolves_to_local("x", local_x));
@@ -793,7 +920,12 @@ mod tests {
 
     #[test]
     fn type_alias_typeof_reads_enclosing_local() {
-        let tree = scope_tree_for("local x = 1\ntype T = typeof(x)", LuaVersion::Luau);
+        let tree = scope_tree_for(
+            "\
+local x = 1
+type T = typeof(x)",
+            LuaVersion::Luau,
+        );
         let x_references = references(&tree, "x");
         assert_eq!(x_references.len(), 1);
         assert_eq!(x_references[0].resolved, Some(symbol(&tree, "x").id));
@@ -801,7 +933,14 @@ mod tests {
 
     #[test]
     fn implicit_self_span_does_not_cover_the_method_body() {
-        let tree = scope_tree("local t = {}\nfunction t:m()\n  local x = 1\n  return x\nend");
+        let tree = scope_tree(
+            "\
+local t = {}
+function t:m()
+  local x = 1
+  return x
+end",
+        );
         let self_span = symbol(&tree, "self").definition_span;
         let x_span = symbol(&tree, "x").definition_span;
         assert!(
@@ -813,7 +952,13 @@ mod tests {
 
     #[test]
     fn global_declaration_shadows_enclosing_local() {
-        let tree = scope_tree_for("local x = 1\nglobal print, x\nprint(x)", LuaVersion::Lua55);
+        let tree = scope_tree_for(
+            "\
+local x = 1
+global print, x
+print(x)",
+            LuaVersion::Lua55,
+        );
         assert_eq!(
             references(&tree, "x")[0].resolved,
             None,
@@ -823,7 +968,13 @@ mod tests {
 
     #[test]
     fn global_function_shadows_enclosing_local() {
-        let tree = scope_tree_for("local f = 1\nglobal function f() end\nf()", LuaVersion::Lua55);
+        let tree = scope_tree_for(
+            "\
+local f = 1
+global function f() end
+f()",
+            LuaVersion::Lua55,
+        );
         let last_reference = *references(&tree, "f").last().expect("f() references f");
         assert_eq!(
             last_reference.resolved, None,
@@ -833,8 +984,12 @@ mod tests {
 
     #[test]
     fn global_function_body_refers_to_the_global() {
-        let tree =
-            scope_tree_for("local f = 1\nglobal function f() return f end", LuaVersion::Lua55);
+        let tree = scope_tree_for(
+            "\
+local f = 1
+global function f() return f end",
+            LuaVersion::Lua55,
+        );
         assert!(
             !symbol(&tree, "f").is_upvalue,
             "the body of `global function f` sees the global f, so it captures no local f"
@@ -844,7 +999,9 @@ mod tests {
     #[test]
     fn param_annotation_typeof_does_not_see_parameters() {
         let tree = scope_tree_for(
-            "local a = 1\nlocal function f(a: number, b: typeof(a)) return b end",
+            "\
+local a = 1
+local function f(a: number, b: typeof(a)) return b end",
             LuaVersion::Luau,
         );
         assert_eq!(
@@ -858,7 +1015,9 @@ mod tests {
     #[test]
     fn return_annotation_typeof_does_not_see_parameters() {
         let tree = scope_tree_for(
-            "local a = 1\nlocal function f(a: number): typeof(a) return a end",
+            "\
+local a = 1
+local function f(a: number): typeof(a) return a end",
             LuaVersion::Luau,
         );
         assert_eq!(
@@ -872,7 +1031,12 @@ mod tests {
     #[test]
     fn local_annotation_typeof_does_not_see_sibling_name() {
         let tree = scope_tree_for(
-            "local a = 1\ndo\n  local a, b: typeof(a) = 2, 3\n  print(a, b)\nend",
+            "\
+local a = 1
+do
+  local a, b: typeof(a) = 2, 3
+  print(a, b)
+end",
             LuaVersion::Luau,
         );
         assert_eq!(
@@ -886,7 +1050,9 @@ mod tests {
     #[test]
     fn numeric_for_annotation_typeof_does_not_see_loop_variable() {
         let tree = scope_tree_for(
-            "local i = 1\nfor i: typeof(i) = 1, 2 do print(i) end",
+            "\
+local i = 1
+for i: typeof(i) = 1, 2 do print(i) end",
             LuaVersion::Luau,
         );
         assert_eq!(
@@ -900,7 +1066,9 @@ mod tests {
     #[test]
     fn generic_for_annotation_typeof_does_not_see_loop_variables() {
         let tree = scope_tree_for(
-            "local k = 1\nfor k, v: typeof(k) in pairs({}) do print(k, v) end",
+            "\
+local k = 1
+for k, v: typeof(k) in pairs({}) do print(k, v) end",
             LuaVersion::Luau,
         );
         assert_eq!(
@@ -914,7 +1082,9 @@ mod tests {
     #[test]
     fn local_function_annotation_typeof_does_not_see_its_name() {
         let tree = scope_tree_for(
-            "local g = 1\nlocal function g(z: typeof(g)) return z end",
+            "\
+local g = 1
+local function g(z: typeof(g)) return z end",
             LuaVersion::Luau,
         );
         assert_eq!(

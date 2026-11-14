@@ -6,7 +6,10 @@ use tempfile::TempDir;
 
 use crate::common::{luck_in, write_file};
 
-const TWO_MODULE_ENTRY: &str = "local h = require(\"helper\")\nprint(h)\n";
+const TWO_MODULE_ENTRY: &str = "\
+local h = require(\"helper\")
+print(h)
+";
 const HELPER_MODULE: &str = "return 1\n";
 
 fn run(directory: &Path, args: &[&str]) -> Output {
@@ -39,8 +42,16 @@ fn two_module_project() -> TempDir {
 fn long_runs_project() -> TempDir {
     const LINKS: usize = 100_000;
     let source = format!(
-        "local a = ...\nlocal sum = a{}\nlocal text = a{}\nlocal either = a{}\n\
-         local field = a{}\na{} = a{}\na{}\nreturn sum, text, either, field\n",
+        "\
+local a = ...
+local sum = a{}
+local text = a{}
+local either = a{}
+local field = a{}
+a{} = a{}
+a{}
+return sum, text, either, field
+",
         "+a".repeat(LINKS),
         "..a".repeat(LINKS),
         " and a or a".repeat(LINKS),
@@ -63,14 +74,28 @@ fn long_lists_project() -> TempDir {
         (0..ITEMS).map(|i| template.replace('#', &i.to_string())).collect()
     };
     let source = format!(
-        "local a = ...\nif a == 0 then a(){}\nend\n\
-         -- luck: allow(duplicate_conditions)\nif false then a(){}\nelseif a then a()\nend\n\
-         local function f(_{}) return a end\nlocal t = {{{}}}\n{}return f, t\n",
+        "\
+local a = ...
+if a == 0 then a(){}
+end
+-- luck: allow(duplicate_conditions)
+if false then a(){}
+elseif a then a()
+end
+local function f(_{}) return a end
+local t = {{{}}}
+{}return f, t
+",
         numbered("\nelseif a == # then a()"),
         "\nelseif false then a()".repeat(ITEMS),
         numbered(", _#"),
         numbered("k# = a, "),
-        numbered("goto l#\n::l#::\n"),
+        numbered(
+            "\
+goto l#
+::l#::
+"
+        ),
     );
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", &source);
@@ -146,13 +171,19 @@ fn lint_stdin_fix_json_keeps_findings_out_of_the_fixed_source() {
 
     let output = luck_in(directory.path())
         .args(["lint", "--fix", "--format", "json", "--stdin-filepath", "buffer.lua"])
-        .write_stdin("local unused = 1\nreturn missingglobal")
+        .write_stdin(
+            "\
+local unused = 1
+return missingglobal",
+        )
         .output()
         .expect("luck runs");
 
     assert_eq!(
         stdout_text(&output),
-        "local _unused = 1\nreturn missingglobal",
+        "\
+local _unused = 1
+return missingglobal",
         "`--fix` over stdin writes the fixed source to stdout, and nothing else may follow it"
     );
 }
@@ -160,7 +191,14 @@ fn lint_stdin_fix_json_keeps_findings_out_of_the_fixed_source() {
 #[test]
 fn lint_fix_exits_failure_when_a_file_cannot_be_written() {
     let directory = TempDir::new().unwrap();
-    let path = write_file(directory.path(), "main.lua", "local unused = 1\nreturn 1\n");
+    let path = write_file(
+        directory.path(),
+        "main.lua",
+        "\
+local unused = 1
+return 1
+",
+    );
     make_read_only(&path);
 
     let output = run(directory.path(), &["lint", "--fix", "main.lua"]);
@@ -176,7 +214,14 @@ fn lint_fix_exits_failure_when_a_file_cannot_be_written() {
 #[test]
 fn lint_counts_a_file_reached_twice_once() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "main.lua", "local unused = 1\nreturn 1\n");
+    write_file(
+        directory.path(),
+        "main.lua",
+        "\
+local unused = 1
+return 1
+",
+    );
 
     let output = run(directory.path(), &["lint", ".", "main.lua", "--max-warnings", "1"]);
 
@@ -329,7 +374,16 @@ fn build_keeps_every_preamble_line_inside_its_comment() {
         bundle.split(['\r', '\n']).all(|line| !line.starts_with("error(")),
         "a short comment ends at a CR, so a preamble line must not hold one:\n{bundle:?}"
     );
-    assert!(bundle.starts_with("-- one\n-- error(\"escaped\")\n-- two\n"), "{bundle:?}");
+    assert!(
+        bundle.starts_with(
+            "\
+-- one
+-- error(\"escaped\")
+-- two
+"
+        ),
+        "{bundle:?}"
+    );
 }
 
 #[test]
@@ -434,7 +488,14 @@ fn build_rejects_two_entries_writing_one_output() {
 #[test]
 fn build_preamble_stays_after_a_shebang() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "main.lua", "#!/usr/bin/env lua\nprint(1)\n");
+    write_file(
+        directory.path(),
+        "main.lua",
+        "\
+#!/usr/bin/env lua
+print(1)
+",
+    );
     write_file(
         directory.path(),
         "luck.json",
@@ -530,9 +591,22 @@ fn fmt_applies_a_path_scoped_editorconfig_section_from_a_subdirectory() {
     write_file(
         directory.path(),
         ".editorconfig",
-        "root = true\n[sources/*.lua]\nindent_style = space\nindent_size = 3\n",
+        "\
+root = true
+[sources/*.lua]
+indent_style = space
+indent_size = 3
+",
     );
-    let path = write_file(&sources, "main.lua", "local function f()\nreturn 1\nend\n");
+    let path = write_file(
+        &sources,
+        "main.lua",
+        "\
+local function f()
+return 1
+end
+",
+    );
 
     run(&sources, &["fmt", "main.lua"]);
     let formatted = fs::read_to_string(path).unwrap();

@@ -218,7 +218,11 @@ pub fn broken_sources() -> Vec<(LuaVersion, String)> {
         format!("return {}x{}", "`{".repeat(LEVELS), ")".repeat(LEVELS)),
         "local x = `{y}a\n".repeat(LEVELS),
         "local x: A<B = 1\n".repeat(LEVELS),
-        "continue\nx()\n".repeat(LEVELS),
+        "\
+continue
+x()
+"
+        .repeat(LEVELS),
     ];
     lua.into_iter()
         .map(|source| (LuaVersion::Lua54, source))

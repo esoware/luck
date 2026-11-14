@@ -72,7 +72,9 @@ mod tests {
 
     #[test]
     fn ignores_comparison_of_table_variables() {
-        let diags = run("local t = {}\nlocal same = x == t");
+        let diags = run("\
+local t = {}
+local same = x == t");
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

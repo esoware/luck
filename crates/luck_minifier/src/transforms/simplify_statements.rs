@@ -234,7 +234,15 @@ mod tests {
 
     #[test]
     fn flattens_nested_if() {
-        let result = apply("if a then\n  if b then\n    print(1)\n  end\nend\n");
+        let result = apply(
+            "\
+if a then
+  if b then
+    print(1)
+  end
+end
+",
+        );
         assert!(result.contains("and"), "Expected flattened if with and, got: {result}");
         let if_count = result.matches("if").count();
         assert_eq!(if_count, 1, "Expected single if, got: {result}");
@@ -250,7 +258,12 @@ mod tests {
 
     #[test]
     fn if_return_to_ternary() {
-        let result = apply("if x then return 1 end\nreturn 0\n");
+        let result = apply(
+            "\
+if x then return 1 end
+return 0
+",
+        );
         assert!(
             result.contains("and") && result.contains("or"),
             "Expected ternary conversion, got: {result}"
@@ -259,7 +272,12 @@ mod tests {
 
     #[test]
     fn no_ternary_when_falsy_return() {
-        let result = apply("if x then return false end\nreturn true\n");
+        let result = apply(
+            "\
+if x then return false end
+return true
+",
+        );
         assert!(
             result.contains("if"),
             "Should not convert when return value could be falsy, got: {result}"
@@ -270,7 +288,13 @@ mod tests {
     fn if_return_chain_spans_semicolons() {
         // Lua 5.2+ parses semicolons as EmptyStatement, which must not break
         // the chain.
-        let result = apply("if x then return 1 end;\nif y then return 2 end;\nreturn 0\n");
+        let result = apply(
+            "\
+if x then return 1 end;
+if y then return 2 end;
+return 0
+",
+        );
         assert!(
             result.contains("and") && result.contains("or"),
             "Semicolons between if-return guards should not prevent ternary conversion, got: {result}"
@@ -281,7 +305,12 @@ mod tests {
     fn no_ternary_when_variable_return() {
         // The return value is a variable, so is_always_truthy says no and the
         // chain stays an if.
-        let result = apply("if x then return y end\nreturn 0\n");
+        let result = apply(
+            "\
+if x then return y end
+return 0
+",
+        );
         assert!(
             result.contains("if"),
             "Variable return values are not always truthy, got: {result}"
@@ -290,7 +319,12 @@ mod tests {
 
     #[test]
     fn if_return_to_ternary_with_string_returns() {
-        let result = apply("if cond then return \"hello\" end\nreturn \"world\"\n");
+        let result = apply(
+            "\
+if cond then return \"hello\" end
+return \"world\"
+",
+        );
         assert!(
             result.contains("and") && result.contains("or"),
             "String literal returns should convert to ternary, got: {result}"
@@ -362,7 +396,12 @@ mod tests {
     #[test]
     fn chained_if_returns_to_one_ternary() {
         let result = apply(
-            "if a then return 1 end\nif b then return 2 end\nif c then return 3 end\nreturn 0\n",
+            "\
+if a then return 1 end
+if b then return 2 end
+if c then return 3 end
+return 0
+",
         );
         assert!(
             !result.contains("if"),

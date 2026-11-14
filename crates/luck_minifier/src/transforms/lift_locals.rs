@@ -650,17 +650,19 @@ mod tests {
 
     #[test]
     fn lifts_nested_locals() {
-        let result = apply(concat!(
-            "local function f(x)\n",
-            "  local a = 1\n",
-            "  if x then\n",
-            "    local b = 2\n",
-            "    print(a, b)\n",
-            "  end\n",
-            "  return a\n",
-            "end\n",
-            "return f\n",
-        ));
+        let result = apply(
+            "\
+local function f(x)
+  local a = 1
+  if x then
+    local b = 2
+    print(a, b)
+  end
+  return a
+end
+return f
+",
+        );
         assert!(
             result.contains("local a,b"),
             "both declarations should hoist to one function-head local: {result}"
@@ -673,19 +675,21 @@ mod tests {
 
     #[test]
     fn does_not_lift_parent_shadowed() {
-        // When rename gives inner and outer the same name, the inner
+        // When rename gives the inner `b` the outer `a`'s name, the inner
         // declaration must keep its `local`.
-        let result = rename_and_lift(concat!(
-            "local function f()\n",
-            "  local a = 1\n",
-            "  do\n",
-            "    local b = 2\n", // rename gives this `a`'s name
-            "    print(b)\n",
-            "  end\n",
-            "  return a\n",
-            "end\n",
-            "return f\n",
-        ));
+        let result = rename_and_lift(
+            "\
+local function f()
+  local a = 1
+  do
+    local b = 2
+    print(b)
+  end
+  return a
+end
+return f
+",
+        );
         assert!(
             result.contains("do local l=2"),
             "the shadowed inner declaration must keep its `local`: {result}"
@@ -695,17 +699,19 @@ mod tests {
     #[test]
     fn does_not_lift_closure_in_loop() {
         // Only function bodies get lifted, so the loop needs a wrapper.
-        let result = apply(concat!(
-            "local function f()\n",
-            "  local t = {}\n",
-            "  for i = 1, 10 do\n",
-            "    local x = i\n",
-            "    t[i] = function() return x end\n",
-            "  end\n",
-            "  return t\n",
-            "end\n",
-            "return f\n",
-        ));
+        let result = apply(
+            "\
+local function f()
+  local t = {}
+  for i = 1, 10 do
+    local x = i
+    t[i] = function() return x end
+  end
+  return t
+end
+return f
+",
+        );
         assert!(
             result.contains("local x=i"),
             "closure-captured loop local must keep its per-iteration binding: {result}"
@@ -715,17 +721,19 @@ mod tests {
 
     #[test]
     fn lifts_loop_local_without_closure() {
-        let result = apply(concat!(
-            "local function f()\n",
-            "  local s = 0\n",
-            "  for i = 1, 10 do\n",
-            "    local x = i * 2\n",
-            "    s = s + x\n",
-            "  end\n",
-            "  return s\n",
-            "end\n",
-            "return f\n",
-        ));
+        let result = apply(
+            "\
+local function f()
+  local s = 0
+  for i = 1, 10 do
+    local x = i * 2
+    s = s + x
+  end
+  return s
+end
+return f
+",
+        );
         assert!(
             result.contains("local s,x"),
             "an uncaptured loop local should hoist to the function head: {result}"
@@ -738,19 +746,21 @@ mod tests {
 
     #[test]
     fn lifts_a_multi_name_local_only_when_its_names_differ() {
-        let result = apply(concat!(
-            "local function f(c)\n",
-            "  if c then\n",
-            "    local a, b = 1, 2\n",
-            "    print(a, b)\n",
-            "  end\n",
-            "  if c then\n",
-            "    local d, d = 1, 2\n",
-            "    print(d)\n",
-            "  end\n",
-            "end\n",
-            "return f\n",
-        ));
+        let result = apply(
+            "\
+local function f(c)
+  if c then
+    local a, b = 1, 2
+    print(a, b)
+  end
+  if c then
+    local d, d = 1, 2
+    print(d)
+  end
+end
+return f
+",
+        );
         assert!(result.contains("then a,b=1,2"), "distinct names should hoist: {result}");
         assert!(result.contains("local d,d=1,2"), "a repeated name should stay local: {result}");
     }
@@ -760,16 +770,18 @@ mod tests {
         // `u[k]` reads the outer `u`, and the inner `local u` shadows it only
         // from its declaration on. Hoisting `local u` to the top of the body
         // would capture that read, which miscompiled roact's `Config:set`.
-        let result = apply(concat!(
-            "local u = {}\n",
-            "local function f(k)\n",
-            "  if u[k] == nil then\n",
-            "    local u = 1\n",
-            "    print(u)\n",
-            "  end\n",
-            "end\n",
-            "return f\n",
-        ));
+        let result = apply(
+            "\
+local u = {}
+local function f(k)
+  if u[k] == nil then
+    local u = 1
+    print(u)
+  end
+end
+return f
+",
+        );
         assert!(
             result.contains("local u=1") || result.contains("local u = 1"),
             "decl sharing a free-referenced name must stay local: {result}"
@@ -778,19 +790,21 @@ mod tests {
 
     #[test]
     fn capture_outside_loop_still_blocks_lift() {
-        let result = apply(concat!(
-            "local function f()\n",
-            "  do\n",
-            "    local x = 1\n",
-            "    g = function() return x end\n",
-            "  end\n",
-            "  do\n",
-            "    local x = 2\n",
-            "    h = function() return x end\n",
-            "  end\n",
-            "end\n",
-            "return f\n",
-        ));
+        let result = apply(
+            "\
+local function f()
+  do
+    local x = 1
+    g = function() return x end
+  end
+  do
+    local x = 2
+    h = function() return x end
+  end
+end
+return f
+",
+        );
         // Hoisting would merge both x bindings into one, letting the two
         // closures observe each other's writes.
         assert!(
@@ -803,17 +817,19 @@ mod tests {
     fn closure_internal_names_do_not_block_lift() {
         // The closure binds its own `x`; that must not veto lifting the
         // unrelated do-block `x`.
-        let result = apply(concat!(
-            "local function f()\n",
-            "  local c = function() local x = 1 return x end\n",
-            "  do\n",
-            "    local x = 2\n",
-            "    print(x)\n",
-            "  end\n",
-            "  return c\n",
-            "end\n",
-            "return f\n",
-        ));
+        let result = apply(
+            "\
+local function f()
+  local c = function() local x = 1 return x end
+  do
+    local x = 2
+    print(x)
+  end
+  return c
+end
+return f
+",
+        );
         assert!(
             !result.contains("local x=2") && !result.contains("local x = 2"),
             "closure-internal name must not block the lift: {result}"
@@ -822,15 +838,15 @@ mod tests {
 
     #[test]
     fn named_vararg_blocks_same_named_lift() {
-        let source = concat!(
-            "local function f(...args)\n",
-            "  do\n",
-            "    local args = 1\n",
-            "    print(args)\n",
-            "  end\n",
-            "end\n",
-            "return f\n",
-        );
+        let source = "\
+local function f(...args)
+  do
+    local args = 1
+    print(args)
+  end
+end
+return f
+";
         let output = run_pass(source, LuaVersion::Lua55, |block| lift(block, LuaVersion::Lua54));
         assert!(
             output.contains("local args=1") || output.contains("local args = 1"),
@@ -843,20 +859,22 @@ mod tests {
         // The rewrite matches by name, so a declaration under a same-named
         // binding (here the `for` variable) must stay `local`, or its
         // assignment would write to that binding.
-        let result = rename_and_lift(concat!(
-            "function W.new(c)\n",
-            "  for l = 1, 3 do\n",
-            "    if c then\n",
-            "      local l = f()\n",
-            "      print(l)\n",
-            "    end\n",
-            "  end\n",
-            "  while c do\n",
-            "    local l = g()\n",
-            "    print(l)\n",
-            "  end\n",
-            "end\n",
-        ));
+        let result = rename_and_lift(
+            "\
+function W.new(c)
+  for l = 1, 3 do
+    if c then
+      local l = f()
+      print(l)
+    end
+  end
+  while c do
+    local l = g()
+    print(l)
+  end
+end
+",
+        );
         // The declaration under the `for` variable must stay `local`. The
         // one in the while loop may be lifted.
         assert!(
@@ -872,7 +890,14 @@ mod tests {
             .collect::<Vec<_>>()
             .concat();
         let args = (0..100u32).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
-        let result = apply(&format!("local function w()\n{body}f({args})\nend\nreturn w\n"));
+        let result = apply(&format!(
+            "\
+local function w()
+{body}f({args})
+end
+return w
+"
+        ));
         let hoisted = result.split("local ").nth(2).expect("hoisted declaration");
         let (names, _) = hoisted.split_once(' ').expect("names end at the next statement");
         let name_count = names.split(',').count();
@@ -888,7 +913,13 @@ mod tests {
             .map(|i| format!("do local v{i} = g() print(v{i}) end\n"))
             .collect::<Vec<_>>()
             .concat();
-        let result = apply(&format!("local function w()\n{body}end\nreturn w\n"));
+        let result = apply(&format!(
+            "\
+local function w()
+{body}end
+return w
+"
+        ));
         let hoisted = result.split("local ").nth(2).expect("hoisted declaration");
         let (names, _) = hoisted.split_once(' ').expect("names end at the next statement");
         let name_count = names.split(',').count();

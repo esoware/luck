@@ -109,8 +109,12 @@ fn reports_e004_with_searched_paths_when_relative_module_missing() {
     assert_eq!(error.message, "module not found: `./nonexistent`");
     let base = format!("{}/./nonexistent", normalized(&project, "src"));
     let expected_help = format!(
-        "searched paths:\n  - `{base}.luau`\n  - `{base}.lua`\n  - `{base}/init.luau`\n  - \
-         `{base}/init.lua`"
+        "\
+searched paths:
+  - `{base}.luau`
+  - `{base}.lua`
+  - `{base}/init.luau`
+  - `{base}/init.lua`"
     );
     assert_eq!(error.help, Some(expected_help));
 }
@@ -124,7 +128,11 @@ fn reports_e004_when_no_luaurc_declares_the_alias() {
     assert_eq!(error.message, "module not found: `@Missing/utils`");
     assert_eq!(
         error.help.as_deref(),
-        Some("searched paths:\n  - alias `@Missing` not found in any `.luaurc`")
+        Some(
+            "\
+searched paths:
+  - alias `@Missing` not found in any `.luaurc`"
+        )
     );
 }
 
@@ -455,8 +463,13 @@ fn malformed_closer_luaurc_does_not_fall_through_to_a_parent_alias() {
 fn luaurc_with_non_utf8_bytes_keeps_its_aliases() {
     let project = luau_project();
     write_files(project.path(), &[("lib/m.luau", "return {}")]);
-    fs::write(project.path().join(".luaurc"), b"{// caf\xe9\n\"aliases\":{\"x\":\"./lib\"}}")
-        .expect("write .luaurc");
+    fs::write(
+        project.path().join(".luaurc"),
+        b"\
+{// caf\xe9
+\"aliases\":{\"x\":\"./lib\"}}",
+    )
+    .expect("write .luaurc");
     let resolved = resolve_luau(&project, "src/main.luau", "@x/m")
         .expect("Luau reads `.luaurc` as bytes, so a Latin-1 comment must not drop the aliases");
     assert_eq!(resolved.path, normalized(&project, "lib/m.luau"));

@@ -177,11 +177,30 @@ fn regenerate_roblox_api() {
     generated.push_str(
         "# excluded from roblox_services: they are not reachable via game:GetService.\n\n",
     );
-    generated.push_str("[constant_sets.roblox_services]\nvalues = [\n");
+    generated.push_str(
+        "\
+[constant_sets.roblox_services]
+values = [
+",
+    );
     generated.push_str(&services.join("\n"));
-    generated.push_str("\n]\n\n[constant_sets.roblox_creatable_classes]\nvalues = [\n");
+    generated.push_str(
+        "
+]
+
+[constant_sets.roblox_creatable_classes]
+values = [
+",
+    );
     generated.push_str(&creatable_classes.join("\n"));
-    generated.push_str("\n]\n\n[constant_sets.roblox_all_classes]\nvalues = [\n");
+    generated.push_str(
+        "
+]
+
+[constant_sets.roblox_all_classes]
+values = [
+",
+    );
     generated.push_str(&all_classes.join("\n"));
     generated.push_str("\n]\n");
 

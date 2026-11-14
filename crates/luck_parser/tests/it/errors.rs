@@ -26,7 +26,11 @@ fn expectation_errors_have_exact_message_and_span() {
 
 #[test]
 fn recovery_parses_subsequent_stmts() {
-    let result = parse("local = 5\nlocal y = 10");
+    let result = parse(
+        "\
+local = 5
+local y = 10",
+    );
     assert!(!result.errors.is_empty(), "should have errors from first statement");
     let has_valid_local = result.block.stmts.iter().any(|stmt| {
         matches!(stmt, Statement::LocalAssignment(local) if {
@@ -44,7 +48,12 @@ fn unclosed_parameter_list_is_an_error() {
 
 #[test]
 fn errors_in_separate_stmts_are_all_reported() {
-    let result = parse("local = 5\nlocal = 10\nlocal z = 15");
+    let result = parse(
+        "\
+local = 5
+local = 10
+local z = 15",
+    );
     assert!(result.errors.len() >= 2, "should collect multiple errors, got: {:?}", result.errors);
 }
 
@@ -65,13 +74,21 @@ fn unmatched_paren_in_expr_position_is_an_error() {
 #[test]
 fn stmt_after_top_level_return_is_an_error() {
     // Accepting it would silently drop the tail from the AST.
-    let result = parse("return 1\nlocal x = 2");
+    let result = parse(
+        "\
+return 1
+local x = 2",
+    );
     assert!(!result.errors.is_empty(), "statements after a top-level return must be an error");
 }
 
 #[test]
 fn stray_end_at_top_level_is_an_error() {
-    let result = parse("local x = 1\nend");
+    let result = parse(
+        "\
+local x = 1
+end",
+    );
     assert!(!result.errors.is_empty(), "a stray end at top level must be an error");
 }
 
@@ -80,7 +97,8 @@ fn stray_end_at_top_level_is_an_error() {
 fn assert_one_error_then_the_rest(cases: &[(LuaVersion, &str, &str, &str)]) {
     for &(version, broken, message, text) in cases {
         let source = format!(
-            "{broken}
+            "\
+{broken}
 local after = 1"
         );
         let result = luck_parser::parse(source.as_str(), version);
@@ -110,14 +128,16 @@ fn a_broken_construct_is_one_error_and_the_rest_parses() {
         (lua, "x = {a, b)", "expected `}`, found `)`", ")"),
         (
             lua,
-            "x = 1
+            "\
+x = 1
 end",
             "unexpected token `end` (extra `end` without matching block)",
             "end",
         ),
         (
             lua,
-            "x = 1
+            "\
+x = 1
 ) ) )",
             "unexpected token `)` (unmatched `)`)",
             ")",
@@ -137,7 +157,8 @@ end",
         ),
         (
             luau,
-            "while a do continue
+            "\
+while a do continue
 x() end",
             "`continue` must be the last statement in its block",
             "x",
@@ -158,7 +179,8 @@ fn a_broken_string_expression_or_type_is_one_error_and_the_rest_parses() {
             lua,
             "x = [[abc",
             "unterminated long bracket string",
-            "[[abc
+            "\
+[[abc
 local after = 1",
         ),
         (luau, "local s = `{function() + }tail`", "unexpected token `+`", "+"),
@@ -166,7 +188,8 @@ local after = 1",
         (luau, "local s = `tail", "unterminated interpolated string", "`tail"),
         (
             lua,
-            "f(function()
+            "\
+f(function()
   local y = 1
 )",
             "expected `end`, found `)`",
@@ -174,7 +197,8 @@ local after = 1",
         ),
         (
             lua,
-            "if a then
+            "\
+if a then
   f(x
 else
   g()
@@ -222,7 +246,8 @@ fn constructs_left_open_at_the_end_are_one_error() {
 #[test]
 fn a_misplaced_return_keeps_what_follows_it() {
     let result = parse(
-        "local a = 1
+        "\
+local a = 1
 return a
 local b = 2",
     );
@@ -240,7 +265,8 @@ local b = 2",
 /// An error in one statement doesn't hide one in the next.
 #[test]
 fn an_error_on_each_line_is_reported_on_each_line() {
-    let source = "local = 1
+    let source = "\
+local = 1
 x = = 2
 f(a b)
 local ok = 3";

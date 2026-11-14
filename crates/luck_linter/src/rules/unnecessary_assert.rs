@@ -122,7 +122,9 @@ mod tests {
 
     #[test]
     fn ignores_variable_condition() {
-        let diags = run("local x = 1\nassert(x)");
+        let diags = run("\
+local x = 1
+assert(x)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -134,7 +136,9 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_assert() {
-        let diags = run("local assert = function() end\nassert(true)");
+        let diags = run("\
+local assert = function() end
+assert(true)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 

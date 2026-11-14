@@ -113,16 +113,24 @@ mod tests {
 
     #[test]
     fn ignores_method_form() {
-        let diags =
-            run("local x = {}\nx:require(\"forbidden.lib\")", vec!["forbidden.lib".to_owned()]);
+        let diags = run(
+            "\
+local x = {}
+x:require(\"forbidden.lib\")",
+            vec!["forbidden.lib".to_owned()],
+        );
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_nonliteral_argument() {
         // Can't statically resolve a variable's value; skip.
-        let diags =
-            run("local p = \"forbidden.lib\"\nrequire(p)", vec!["forbidden.lib".to_owned()]);
+        let diags = run(
+            "\
+local p = \"forbidden.lib\"
+require(p)",
+            vec!["forbidden.lib".to_owned()],
+        );
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 

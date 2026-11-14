@@ -772,7 +772,11 @@ mod tests {
             },
             80,
         );
-        assert!(output.starts_with("{\n    x"));
+        assert!(output.starts_with(
+            "\
+{
+    x"
+        ));
         assert!(output.ends_with("\n}"));
     }
 
@@ -791,7 +795,14 @@ mod tests {
             80,
         );
         // Both the inner and outer group must expand.
-        assert_eq!(output, "a(\n\n)\nb");
+        assert_eq!(
+            output,
+            "\
+a(
+
+)
+b"
+        );
     }
 
     #[test]
@@ -848,7 +859,12 @@ mod tests {
             },
             80,
         );
-        assert_eq!(output, "a\nb");
+        assert_eq!(
+            output,
+            "\
+a
+b"
+        );
     }
 
     #[test]
@@ -859,7 +875,13 @@ mod tests {
             },
             80,
         );
-        assert_eq!(output, "a\n\nb");
+        assert_eq!(
+            output,
+            "\
+a
+
+b"
+        );
     }
 
     #[test]
@@ -872,7 +894,12 @@ mod tests {
             },
             80,
         );
-        assert_eq!(output, "local x = 1 -- trailing\nlocal y = 2");
+        assert_eq!(
+            output,
+            "\
+local x = 1 -- trailing
+local y = 2"
+        );
     }
 
     fn tab_formatter(indent_width: u8) -> Formatter {
@@ -898,8 +925,20 @@ mod tests {
             (token("a"), indent((hard_line(), format_with(write_bracketed)))).fmt(&mut f);
             f.print("")
         };
-        assert_eq!(print(1), "a\n\t[yyyyyyy]");
-        assert_eq!(print(4), "a\n\t[\n\tyyyyyyy\n\t]");
+        assert_eq!(
+            print(1),
+            "\
+a
+\t[yyyyyyy]"
+        );
+        assert_eq!(
+            print(4),
+            "\
+a
+\t[
+\tyyyyyyy
+\t]"
+        );
     }
 
     #[test]
@@ -910,7 +949,13 @@ mod tests {
             f.print(base_indent)
         };
         assert_eq!(print(1, "\t"), "\t[yyyyyyy]");
-        assert_eq!(print(4, "\t"), "\t[\n\tyyyyyyy\n\t]");
+        assert_eq!(
+            print(4, "\t"),
+            "\
+\t[
+\tyyyyyyy
+\t]"
+        );
         assert_eq!(print(4, " "), " [yyyyyyy]");
     }
 
@@ -959,16 +1004,35 @@ mod tests {
     #[test]
     fn hugged_group_breaks_in_its_parents_place() {
         assert_eq!(print_document(write_hugged_braces, 19), "(a, { xxxx }, bbbb)");
-        assert_eq!(print_document(write_hugged_braces, 18), "(a, {\n    xxxx\n}, bbbb)");
+        assert_eq!(
+            print_document(write_hugged_braces, 18),
+            "\
+(a, {
+    xxxx
+}, bbbb)"
+        );
     }
 
     #[test]
     fn hugging_needs_its_closing_line_to_fit() {
         // `}, bbbb)` is eight columns.
-        assert_eq!(print_document(write_hugged_braces, 8), "(a, {\n    xxxx\n}, bbbb)");
+        assert_eq!(
+            print_document(write_hugged_braces, 8),
+            "\
+(a, {
+    xxxx
+}, bbbb)"
+        );
         assert_eq!(
             print_document(write_hugged_braces, 7),
-            "(\n    a,\n    {\n        xxxx\n    },\n    bbbb\n)"
+            "\
+(
+    a,
+    {
+        xxxx
+    },
+    bbbb
+)"
         );
     }
 
@@ -1003,15 +1067,37 @@ mod tests {
             write_hugged_braces_and(f, block);
         };
         // `({ xxxx }, do` is thirteen columns.
-        assert_eq!(print_document(write, 13), "({ xxxx }, do\n    x\nend)");
-        assert_eq!(print_document(write, 12), "({\n    xxxx\n}, do\n    x\nend)");
+        assert_eq!(
+            print_document(write, 13),
+            "\
+({ xxxx }, do
+    x
+end)"
+        );
+        assert_eq!(
+            print_document(write, 12),
+            "\
+({
+    xxxx
+}, do
+    x
+end)"
+        );
     }
 
     #[test]
     fn hugged_groups_all_expand_when_none_is_forced_to() {
         let write = |f: &mut Formatter| write_hugged_braces_and(f, braces("yyyy"));
         assert_eq!(print_document(write, 20), "({ xxxx }, { yyyy })");
-        assert_eq!(print_document(write, 19), "({\n    xxxx\n}, {\n    yyyy\n})");
+        assert_eq!(
+            print_document(write, 19),
+            "\
+({
+    xxxx
+}, {
+    yyyy
+})"
+        );
     }
 
     #[test]
@@ -1024,11 +1110,24 @@ mod tests {
             );
             write_hugging_list(f, hugged);
         };
-        assert_eq!(print_document(write_hugged_block, 80), "(a, do\n    x\nend, bbbb)");
+        assert_eq!(
+            print_document(write_hugged_block, 80),
+            "\
+(a, do
+    x
+end, bbbb)"
+        );
         // `(a, do` is six columns.
         assert_eq!(
             print_document(write_hugged_block, 5),
-            "(\n    a,\n    do\n        x\n    end,\n    bbbb\n)"
+            "\
+(
+    a,
+    do
+        x
+    end,
+    bbbb
+)"
         );
     }
 }

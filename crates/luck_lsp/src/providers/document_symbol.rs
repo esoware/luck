@@ -214,7 +214,14 @@ mod tests {
 
     #[test]
     fn assigned_function_symbol_range_covers_its_body() {
-        let symbols = symbols_of("M.foo = function()\n  local x = 1\nend\n", LuaTarget::Lua54);
+        let symbols = symbols_of(
+            "\
+M.foo = function()
+  local x = 1
+end
+",
+            LuaTarget::Lua54,
+        );
         let foo = symbols.first().expect("the assigned function is outlined");
         assert_eq!(
             foo.range.end.line, 2,
@@ -234,7 +241,13 @@ mod tests {
 
     #[test]
     fn lua55_global_function_is_outlined() {
-        let symbols = symbols_of("global function setup()\nend\n", LuaTarget::Lua55);
+        let symbols = symbols_of(
+            "\
+global function setup()
+end
+",
+            LuaTarget::Lua55,
+        );
         assert!(
             symbols.iter().any(|symbol| symbol.name == "setup"),
             "a `global function` is a function in the outline: {symbols:?}"

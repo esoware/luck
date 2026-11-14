@@ -423,7 +423,12 @@ mod tests {
 
     #[test]
     fn extracts_single_require() {
-        let result = extract("local utils = require(\"utils\")\nprint(utils.foo())\n");
+        let result = extract(
+            "\
+local utils = require(\"utils\")
+print(utils.foo())
+",
+        );
         assert_eq!(require_strings(&result), ["utils"]);
         assert!(result.diags.is_empty(), "{:?}", result.diags);
     }
@@ -431,7 +436,12 @@ mod tests {
     #[test]
     fn extracts_multiple_requires_in_order() {
         let result = extract(
-            "local a = require(\"mod_a\")\nlocal b = require(\"mod_b\")\nlocal c = require(\"mod_c\")\nprint(a, b, c)\n",
+            "\
+local a = require(\"mod_a\")
+local b = require(\"mod_b\")
+local c = require(\"mod_c\")
+print(a, b, c)
+",
         );
         assert_eq!(require_strings(&result), ["mod_a", "mod_b", "mod_c"]);
         assert!(result.diags.is_empty(), "{:?}", result.diags);
@@ -440,7 +450,12 @@ mod tests {
     #[test]
     fn require_after_code_is_not_flagged() {
         // Requires are position-independent with the lazy loader.
-        let result = extract("print(\"hello\")\nlocal x = require(\"x\")\n");
+        let result = extract(
+            "\
+print(\"hello\")
+local x = require(\"x\")
+",
+        );
         assert_eq!(result.sites.len(), 1);
         assert!(result.diags.is_empty(), "{:?}", result.diags);
     }
@@ -501,7 +516,12 @@ mod tests {
     fn escape_sequences_decode_like_real_lua() {
         // require("a\46b") is require("a.b") at runtime; the bundler must
         // resolve and deduplicate on the decoded value.
-        let result = extract("local a = require(\"a\\46b\")\nlocal b = require(\"a.b\")\n");
+        let result = extract(
+            "\
+local a = require(\"a\\46b\")
+local b = require(\"a.b\")
+",
+        );
         assert_eq!(require_strings(&result), ["a.b", "a.b"]);
         // Same decoded module twice: the duplicate-require warning fires.
         assert_eq!(with_code(&result, "W001").len(), 1, "{:?}", result.diags);
@@ -515,7 +535,10 @@ mod tests {
 
     #[test]
     fn shadowed_require_is_skipped_with_w005() {
-        let source = "local require = function(s) return s end\nlocal x = require(\"dep\")\n";
+        let source = "\
+local require = function(s) return s end
+local x = require(\"dep\")
+";
         let result = extract(source);
         assert!(
             result.sites.is_empty(),
@@ -528,7 +551,13 @@ mod tests {
 
     #[test]
     fn shadowed_require_in_inner_scope_only_skips_there() {
-        let source = "local a = require(\"real\")\nlocal function f()\n    local require = print\n    require(\"fake\")\nend\n";
+        let source = "\
+local a = require(\"real\")
+local function f()
+    local require = print
+    require(\"fake\")
+end
+";
         let result = extract(source);
         assert_eq!(require_strings(&result), ["real"]);
         assert_eq!(with_code(&result, "W005").len(), 1, "{:?}", result.diags);
@@ -536,14 +565,24 @@ mod tests {
 
     #[test]
     fn aliased_require_flags_w005() {
-        let result = extract("local r = require\nlocal x = r(\"dep\")\n");
+        let result = extract(
+            "\
+local r = require
+local x = r(\"dep\")
+",
+        );
         assert!(result.sites.is_empty());
         assert_eq!(with_code(&result, "W005").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn direct_calls_do_not_flag_w005() {
-        let result = extract("local a = require(\"x\")\nrequire(\"y\")\n");
+        let result = extract(
+            "\
+local a = require(\"x\")
+require(\"y\")
+",
+        );
         assert_eq!(result.sites.len(), 2);
         assert!(with_code(&result, "W005").is_empty(), "{:?}", result.diags);
     }
@@ -552,7 +591,12 @@ mod tests {
     fn package_loaded_write_is_allowed_on_lua_targets() {
         // On Lua targets the bundle cache is package.loaded itself, so
         // writes to it behave as in real Lua and need no E006.
-        let result = extract("package.loaded[\"mymod\"] = {}\npackage.loaded.other = {}\n");
+        let result = extract(
+            "\
+package.loaded[\"mymod\"] = {}
+package.loaded.other = {}
+",
+        );
         assert!(with_code(&result, "E006").is_empty(), "{:?}", result.diags);
     }
 
@@ -589,20 +633,34 @@ mod tests {
     #[test]
     fn local_named_package_is_not_flagged_on_luau() {
         let result = extract_luau(
-            "local package = { loaded = {} }\npackage.loaded.x = 1\npackage.loaded.y ..= \"a\"\n",
+            "\
+local package = { loaded = {} }
+package.loaded.x = 1
+package.loaded.y ..= \"a\"
+",
         );
         assert!(with_code(&result, "E006").is_empty(), "{:?}", result.diags);
     }
 
     #[test]
     fn package_write_outside_a_local_named_package_is_flagged_on_luau() {
-        let result = extract_luau("do local package = {} end\npackage.loaded.x = 1\n");
+        let result = extract_luau(
+            "\
+do local package = {} end
+package.loaded.x = 1
+",
+        );
         assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn duplicate_require_flags_w001() {
-        let result = extract("local a = require(\"utils\")\nlocal b = require(\"utils\")\n");
+        let result = extract(
+            "\
+local a = require(\"utils\")
+local b = require(\"utils\")
+",
+        );
         assert_eq!(result.sites.len(), 2);
         assert_eq!(with_code(&result, "W001").len(), 1, "{:?}", result.diags);
     }
@@ -611,7 +669,12 @@ mod tests {
     fn top_level_vararg_is_not_flagged() {
         // The loader passes each module its real name, so the
         // `local modname = ...` idiom works and needs no warning.
-        let result = extract("local modname = ...\nreturn modname\n");
+        let result = extract(
+            "\
+local modname = ...
+return modname
+",
+        );
         assert!(result.diags.is_empty(), "{:?}", result.diags);
     }
 
@@ -627,12 +690,30 @@ mod tests {
             .has_global_arg_read
         };
         assert!(extract_arg_read("return arg\n"));
-        assert!(extract_arg_read("local function f() return arg end\nreturn f\n"));
-        assert!(!extract_arg_read("local function f(...) return arg end\nreturn f\n"));
-        assert!(!extract_arg_read(
-            "local function f(...) return function() return arg end end\nreturn f\n"
+        assert!(extract_arg_read(
+            "\
+local function f() return arg end
+return f
+"
         ));
-        assert!(!extract_arg_read("local arg = {}\nreturn arg\n"));
+        assert!(!extract_arg_read(
+            "\
+local function f(...) return arg end
+return f
+"
+        ));
+        assert!(!extract_arg_read(
+            "\
+local function f(...) return function() return arg end end
+return f
+"
+        ));
+        assert!(!extract_arg_read(
+            "\
+local arg = {}
+return arg
+"
+        ));
     }
 
     #[test]
@@ -668,13 +749,25 @@ mod tests {
 
     #[test]
     fn require_in_nested_function_is_extracted() {
-        let result = extract("local function setup()\n    local m = require(\"inner\")\nend\n");
+        let result = extract(
+            "\
+local function setup()
+    local m = require(\"inner\")
+end
+",
+        );
         assert_eq!(require_strings(&result), ["inner"]);
     }
 
     #[test]
     fn field_function_named_require_is_ignored() {
-        let result = extract("local obj = {}\nfunction obj.require(s) end\nobj.require(\"x\")\n");
+        let result = extract(
+            "\
+local obj = {}
+function obj.require(s) end
+obj.require(\"x\")
+",
+        );
         assert!(result.sites.is_empty());
         assert!(with_code(&result, "W005").is_empty(), "{:?}", result.diags);
     }

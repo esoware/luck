@@ -163,7 +163,9 @@ mod tests {
 
     #[test]
     fn hover_on_shaped_local_method_renders_colon_form() {
-        let text = "local f = io.open('x')\nlocal n = f:seek('set')";
+        let text = "\
+local f = io.open('x')
+local n = f:seek('set')";
         let document =
             DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         let utf16_column = index_to_offset(text.find(":seek").expect("method") + 2);
@@ -174,7 +176,9 @@ mod tests {
 
     #[test]
     fn hover_refuses_shadowed_namespace_member() {
-        let text = "local string = 1\nlocal x = string.format";
+        let text = "\
+local string = 1
+local x = string.format";
         let document =
             DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         let utf16_column = index_to_offset(text.find(".format").expect("member") + 3);
@@ -209,7 +213,10 @@ mod tests {
 
     #[test]
     fn hover_on_a_statement_level_method_call_resolves() {
-        let text = "local f = io.open('x')\nf:seek('set')\n";
+        let text = "\
+local f = io.open('x')
+f:seek('set')
+";
         let document =
             DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         let markdown = markdown_at(&document, 1, 3);

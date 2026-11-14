@@ -234,19 +234,25 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_builtin() {
-        let diags = run("local print = 1\nprint = 5");
+        let diags = run("\
+local print = 1
+print = 5");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_field_write_on_shadowed_builtin() {
-        let diags = run("local table = {}\ntable.insert = 1");
+        let diags = run("\
+local table = {}
+table.insert = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_function_decl_on_shadowed_builtin() {
-        let diags = run("local table = {}\nfunction table.foo() end");
+        let diags = run("\
+local table = {}
+function table.foo() end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -302,7 +308,9 @@ mod tests {
         let config = LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() };
         let diags = run_rule_with_config(
             &BuiltinGlobalWrite,
-            "vim = 5\nvim.api = 1",
+            "\
+vim = 5
+vim.api = 1",
             LuaVersion::Lua54,
             &config,
         );
@@ -317,7 +325,10 @@ mod tests {
             LintConfig { extra_globals: vec!["table".to_owned()], ..LintConfig::default() };
         let diags = run_rule_with_config(
             &BuiltinGlobalWrite,
-            "table = 5\ntable.insert = 1\nfunction table.foo() end",
+            "\
+table = 5
+table.insert = 1
+function table.foo() end",
             LuaVersion::Lua54,
             &config,
         );
@@ -344,14 +355,18 @@ mod tests {
 
     #[test]
     fn flags_only_the_whole_name_write_of_a_rebound_builtin() {
-        let diags = run("table = {}\ntable.insert = 1");
+        let diags = run("\
+table = {}
+table.insert = 1");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`table`"), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_field_write_under_a_local_env() {
-        let diags = run("local _ENV = {}\ntable.insert = 1");
+        let diags = run("\
+local _ENV = {}
+table.insert = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 

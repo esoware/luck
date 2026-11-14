@@ -77,7 +77,10 @@ const SHAPES: &[Shape] = &[
         version: LuaVersion::Lua51,
         entry: "main.lua",
         deep_file: "m.lua",
-        prefix: "local name = ...\nprint(name, arg)\nreturn ",
+        prefix: "\
+local name = ...
+print(name, arg)
+return ",
         other_files: &[("main.lua", "return require(\"m\")\n")],
         wrapper_levels: 2,
     },
@@ -95,7 +98,9 @@ const SHAPES: &[Shape] = &[
         version: LuaVersion::Lua54,
         entry: "main.lua",
         deep_file: "main.lua",
-        prefix: "require(\"m\")\nreturn ",
+        prefix: "\
+require(\"m\")
+return ",
         other_files: &[("m.lua", "return 1\n")],
         wrapper_levels: 2,
     },
@@ -104,7 +109,9 @@ const SHAPES: &[Shape] = &[
         version: LuaVersion::Lua54,
         entry: "main.lua",
         deep_file: "m.lua",
-        prefix: "_ENV = setmetatable({}, { __index = _ENV })\nreturn ",
+        prefix: "\
+_ENV = setmetatable({}, { __index = _ENV })
+return ",
         other_files: &[("main.lua", "return require(\"m\")\n")],
         wrapper_levels: 3,
     },
@@ -113,7 +120,10 @@ const SHAPES: &[Shape] = &[
         version: LuaVersion::Lua52,
         entry: "main.lua",
         deep_file: "main.lua",
-        prefix: "require(\"m\")\nmodule(\"main\")\nreturn ",
+        prefix: "\
+require(\"m\")
+module(\"main\")
+return ",
         other_files: &[("m.lua", "return 1\n")],
         wrapper_levels: 3,
     },
@@ -187,7 +197,17 @@ fn flags_e013_in_every_module_past_the_cap() {
     let deep = format!("return {}\n", parenthesized(MAX_NESTING_DEPTH - 1));
     let errors = bundle_files(
         "main.lua",
-        &[("main.lua", "require(\"a\")\nrequire(\"b\")\n"), ("a.lua", &deep), ("b.lua", &deep)],
+        &[
+            (
+                "main.lua",
+                "\
+require(\"a\")
+require(\"b\")
+",
+            ),
+            ("a.lua", &deep),
+            ("b.lua", &deep),
+        ],
         LuaVersion::Lua54,
     )
     .expect_err("neither module fits");
@@ -213,8 +233,13 @@ fn lone_module_at_the_cap_bundles_verbatim() {
 /// writes it, and whose deepest construct is `deep` in `parentheses` groups.
 fn luau_table_export_module(parentheses: usize, deep: &str) -> String {
     format!(
-        "export local value = 0\nlocal function bump() value += 1 end\nbump()\n\
-         local deep = {}{deep}{}\nprint(deep)\n",
+        "\
+export local value = 0
+local function bump() value += 1 end
+bump()
+local deep = {}{deep}{}
+print(deep)
+",
         "(".repeat(parentheses),
         ")".repeat(parentheses),
     )
@@ -225,7 +250,16 @@ fn luau_export_reads_are_measured_as_lowered() {
     let bundle_export_module = |source: &str| {
         bundle_files(
             "main.luau",
-            &[("main.luau", "local x = require(\"./x\")\nprint(x)\n"), ("x.luau", source)],
+            &[
+                (
+                    "main.luau",
+                    "\
+local x = require(\"./x\")
+print(x)
+",
+                ),
+                ("x.luau", source),
+            ],
             LuaVersion::Luau,
         )
     };

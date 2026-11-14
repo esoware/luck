@@ -126,7 +126,10 @@ mod tests {
 
     #[test]
     fn flags_each_parenthesized_condition() {
-        let diags = run("local c = 1\nif (c) then elseif (c) then end\nwhile (c) do break end");
+        let diags = run("\
+local c = 1
+if (c) then elseif (c) then end
+while (c) do break end");
         let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
         assert_eq!(
             messages,
@@ -141,17 +144,27 @@ mod tests {
 
     #[test]
     fn ignores_bare_and_partly_parenthesized_conditions() {
-        let diags = run("local a, b = 1, 2\nif a then end\nwhile (a) == b do break end");
+        let diags = run("\
+local a, b = 1, 2
+if a then end
+while (a) == b do break end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_and_fixes_parenthesized_comparison() {
-        let source = "local c = 1\nif (c == 1) then end";
+        let source = "\
+local c = 1
+if (c == 1) then end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local c = 1\nif c == 1 then end");
+        assert_eq!(
+            fixed,
+            "\
+local c = 1
+if c == 1 then end"
+        );
     }
 
     #[test]
@@ -174,10 +187,19 @@ mod tests {
 
     #[test]
     fn flags_and_fixes_elseif_and_while_keywords_glued_to_parens() {
-        let source = "local c = 1\nif c then elseif(c)then end\nwhile(c)do break end";
+        let source = "\
+local c = 1
+if c then elseif(c)then end
+while(c)do break end";
         let diags = run(source);
         assert_eq!(diags.len(), 2, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local c = 1\nif c then elseif c then end\nwhile c do break end");
+        assert_eq!(
+            fixed,
+            "\
+local c = 1
+if c then elseif c then end
+while c do break end"
+        );
     }
 }

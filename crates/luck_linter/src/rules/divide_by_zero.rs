@@ -154,7 +154,12 @@ mod tests {
 
     #[test]
     fn flags_compound_division_by_zero_on_luau() {
-        let diags = run("local x = 1\nx /= 0", LuaVersion::Luau);
+        let diags = run(
+            "\
+local x = 1
+x /= 0",
+            LuaVersion::Luau,
+        );
         assert_eq!(diags.len(), 1, "`x /= 0` divides by a literal zero: {diags:?}");
     }
 
@@ -178,13 +183,23 @@ mod tests {
 
     #[test]
     fn flags_compound_modulo_by_underscored_zero_on_luau() {
-        let diags = run("local x = 1\nx %= 0_0", LuaVersion::Luau);
+        let diags = run(
+            "\
+local x = 1
+x %= 0_0",
+            LuaVersion::Luau,
+        );
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn ignores_compound_multiplication_by_zero_on_luau() {
-        let diags = run("local x = 1\nx *= 0", LuaVersion::Luau);
+        let diags = run(
+            "\
+local x = 1
+x *= 0",
+            LuaVersion::Luau,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

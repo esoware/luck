@@ -17,7 +17,9 @@ fn flags_undefined_variable() {
 fn ignores_named_vararg_reads() {
     // Lua 5.5 `...name` declares a binding; its uses aren't globals.
     let diags = lint(
-        "local function f(...args) return args end\nf(1)",
+        "\
+local function f(...args) return args end
+f(1)",
         LuaVersion::Lua55,
         &LintConfig::default(),
     );
@@ -58,21 +60,38 @@ fn flags_duplicate_keys() {
 
 #[test]
 fn flags_compare_nan() {
-    let diags =
-        lint("local x = 1\nif x == 0/0 then end", LuaVersion::Lua54, &LintConfig::default());
+    let diags = lint(
+        "\
+local x = 1
+if x == 0/0 then end",
+        LuaVersion::Lua54,
+        &LintConfig::default(),
+    );
     assert!(diags.iter().any(|diag| diag.rule == "compare_nan"));
 }
 
 #[test]
 fn flags_constant_table_comparison() {
-    let diags =
-        lint("local x = {}\nif x == {} then end", LuaVersion::Lua54, &LintConfig::default());
+    let diags = lint(
+        "\
+local x = {}
+if x == {} then end",
+        LuaVersion::Lua54,
+        &LintConfig::default(),
+    );
     assert!(diags.iter().any(|diag| diag.rule == "constant_table_comparison"));
 }
 
 #[test]
 fn flags_almost_swapped() {
-    let diags = lint("local a, b = 1, 2\na = b\nb = a", LuaVersion::Lua54, &LintConfig::default());
+    let diags = lint(
+        "\
+local a, b = 1, 2
+a = b
+b = a",
+        LuaVersion::Lua54,
+        &LintConfig::default(),
+    );
     assert!(diags.iter().any(|diag| diag.rule == "almost_swapped"));
 }
 

@@ -177,7 +177,12 @@ mod tests {
 
     #[test]
     fn table_matches_visitor_preorder() {
-        let parse = luck_parser::parse("local a = 1 + 2\nprint(a)", LuaVersion::Lua54);
+        let parse = luck_parser::parse(
+            "\
+local a = 1 + 2
+print(a)",
+            LuaVersion::Lua54,
+        );
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         let nodes = Nodes::collect(&parse.block);
         let node_types: Vec<NodeType> =
@@ -207,7 +212,11 @@ mod tests {
 
     #[test]
     fn blocks_match_visitor_preorder() {
-        let source = "do local a = 1 end\nlocal function f()\n  if a then print(a) else end\nend";
+        let source = "\
+do local a = 1 end
+local function f()
+  if a then print(a) else end
+end";
         let parse = luck_parser::parse(source, LuaVersion::Lua54);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         let nodes = Nodes::collect(&parse.block);

@@ -30,7 +30,8 @@ fn bundling_fits_the_smallest_stack() {
         fs::write(directory.path().join(module_name), source).expect("write the module");
         let entry = directory.path().join(entry_name);
         let entry_source = format!(
-            "local m = {require}
+            "\
+local m = {require}
 print(m)
 "
         );

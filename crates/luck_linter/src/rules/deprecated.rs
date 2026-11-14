@@ -418,8 +418,12 @@ mod tests {
 
     #[test]
     fn ignores_deprecated_enum_item_on_shadowed_root() {
-        let diags =
-            run_rule_roblox(&Deprecated, "local Enum = {}\nlocal a = Enum.AlignType.Parallel");
+        let diags = run_rule_roblox(
+            &Deprecated,
+            "\
+local Enum = {}
+local a = Enum.AlignType.Parallel",
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -492,7 +496,13 @@ mod tests {
 
     #[test]
     fn flags_without_fix_for_length_template_as_statement() {
-        let diags = run_rule(&Deprecated, "local a = 1\ntable.getn(t)", LuaVersion::Lua54);
+        let diags = run_rule(
+            &Deprecated,
+            "\
+local a = 1
+table.getn(t)",
+            LuaVersion::Lua54,
+        );
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].fix.is_none(), "`#t` can't stand as a statement: {diags:?}");
     }
@@ -518,8 +528,13 @@ mod tests {
 
     #[test]
     fn flags_without_fix_when_the_replacement_name_is_shadowed() {
-        let diags =
-            run_rule(&Deprecated, "local table = {}\nlocal a = unpack(t)", LuaVersion::Lua54);
+        let diags = run_rule(
+            &Deprecated,
+            "\
+local table = {}
+local a = unpack(t)",
+            LuaVersion::Lua54,
+        );
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].fix.is_none(), "{diags:?}");
     }

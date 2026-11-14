@@ -5,12 +5,13 @@ use crate::common::assert_format;
 
 #[test]
 fn realistic_module() {
-    let input = r#"local M={}
+    let input = "\
+local M={}
 function M.init(config)
 if not config then
 config={}
 end
-M.name=config.name or "default"
+M.name=config.name or \"default\"
 M.items={}
 return M
 end
@@ -21,8 +22,9 @@ function M:get_all()
 return self.items
 end
 return M
-"#;
-    let expected = "local M = {}
+";
+    let expected = "\
+local M = {}
 function M.init(config)
 \tif not config then
 \t\tconfig = {}
@@ -44,7 +46,8 @@ return M
 
 #[test]
 fn nested_control_flow() {
-    let input = "for i=1,10 do
+    let input = "\
+for i=1,10 do
 if i%2==0 then
 while true do
 break
@@ -56,7 +59,8 @@ until x>10
 end
 end
 ";
-    let expected = "for i = 1, 10 do
+    let expected = "\
+for i = 1, 10 do
 \tif i % 2 == 0 then
 \t\twhile true do
 \t\t\tbreak
@@ -73,11 +77,13 @@ end
 
 #[test]
 fn complex_exprs() {
-    let input = r#"local result=a+b*c-d/e%f
-local s="hello ".."world"..tostring(42)
+    let input = "\
+local result=a+b*c-d/e%f
+local s=\"hello \"..\"world\"..tostring(42)
 local t={a=1,b={c=2,d={e=3}},f=function() return true end}
-"#;
-    let expected = "local result = a + b * c - d / e % f
+";
+    let expected = "\
+local result = a + b * c - d / e % f
 local s = \"hello \" .. \"world\" .. tostring(42)
 local t = {
 \ta = 1,
@@ -92,7 +98,8 @@ local t = {
 
 #[test]
 fn mixed_with_comments() {
-    let input = "-- Module header
+    let input = "\
+-- Module header
 local M = {} -- the module
 
 -- Initialize
@@ -103,7 +110,8 @@ end
 
 return M -- done
 ";
-    let expected = "-- Module header
+    let expected = "\
+-- Module header
 local M = {} -- the module
 
 -- Initialize
@@ -122,17 +130,35 @@ fn comment_inside_stmt_then_blank_line() {
     // No emitter claims a comment between a callee and its argument list, so
     // the call goes out verbatim, and the blank line after it has to survive
     // the second pass.
-    assert_format("goto l x\n--\n(\"\")\n\nc = x\n", "goto l\nx\n--\n(\"\")\n\nc = x\n");
+    assert_format(
+        "\
+goto l x
+--
+(\"\")
+
+c = x
+",
+        "\
+goto l
+x
+--
+(\"\")
+
+c = x
+",
+    );
 }
 
 #[test]
 fn empty_constructs() {
-    let input = "local t = {}
+    let input = "\
+local t = {}
 function noop() end
 do end
 if true then end
 ";
-    let expected = "local t = {}
+    let expected = "\
+local t = {}
 function noop() end
 do
 end

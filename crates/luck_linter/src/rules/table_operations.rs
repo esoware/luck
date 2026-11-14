@@ -282,7 +282,12 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_table_local() {
-        let diags = run("local table = {}\ntable.insert(t, 0, v)", LuaVersion::Lua54);
+        let diags = run(
+            "\
+local table = {}
+table.insert(t, 0, v)",
+            LuaVersion::Lua54,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 

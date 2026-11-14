@@ -72,7 +72,9 @@ mod tests {
 
     #[test]
     fn flags_prefix_and_key_of_assignment_target() {
-        let diags = run("_[_] = 1\n_.x = 2");
+        let diags = run("\
+_[_] = 1
+_.x = 2");
         assert_eq!(diags.len(), 3, "{diags:?}");
     }
 

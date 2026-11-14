@@ -269,9 +269,7 @@ mod tests {
 
     #[test]
     fn luckrc_schema_is_up_to_date() {
-        // core.autocrlf may have checked the file out with CRLF endings.
-        let committed =
-            fs::read_to_string(COMMITTED_SCHEMA_PATH).expect("read schema").replace("\r\n", "\n");
+        let committed = fs::read_to_string(COMMITTED_SCHEMA_PATH).expect("read schema");
         assert_eq!(
             committed,
             luckrc_schema_json(),

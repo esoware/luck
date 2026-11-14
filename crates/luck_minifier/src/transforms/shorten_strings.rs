@@ -74,7 +74,11 @@ mod tests {
     #[test]
     fn long_bracket_with_newline_becomes_escaped() {
         // The escaped form is both shorter and exact.
-        let result = apply("local x = [[hello\nworld]]");
+        let result = apply(
+            "\
+local x = [[hello
+world]]",
+        );
         assert_eq!(result, "local x=\"hello\\nworld\"");
         assert_reparses(&result, LuaVersion::Lua54);
     }

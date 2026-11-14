@@ -212,13 +212,22 @@ mod tests {
 
     #[test]
     fn ignores_escape_inside_line_comment() {
-        let diags = run("-- a \\q comment\nlocal x = 1\n", LuaVersion::Lua51);
+        let diags = run(
+            "\
+-- a \\q comment
+local x = 1
+",
+            LuaVersion::Lua51,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_escapes_between_comments() {
-        let source = "-- \"\\q\nlocal x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e\n";
+        let source = "\
+-- \"\\q
+local x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e
+";
         let diags = run(source, LuaVersion::Lua51);
         let flagged: Vec<&str> = diags.iter().map(|diag| diag.span.text(source)).collect();
         assert_eq!(flagged, ["\\q", "\\w"], "{diags:?}");

@@ -454,7 +454,9 @@ mod tests {
     #[test]
     fn method_chain_propagates_shapes() {
         let (tree, shapes) = shapes_for(
-            "local players = game:GetService('Players')\nlocal again = players:FindFirstChild('x')",
+            "\
+local players = game:GetService('Players')
+local again = players:FindFirstChild('x')",
         );
         assert_eq!(shape_of(&tree, &shapes, "players"), Some("Instance"));
         // FindFirstChild declares no return shape.
@@ -463,13 +465,21 @@ mod tests {
 
     #[test]
     fn reassigned_local_has_no_shape() {
-        let (tree, shapes) = shapes_for("local f = io.open('x')\nf = 1");
+        let (tree, shapes) = shapes_for(
+            "\
+local f = io.open('x')
+f = 1",
+        );
         assert_eq!(shape_of(&tree, &shapes, "f"), None);
     }
 
     #[test]
     fn shadowed_global_base_has_no_shape() {
-        let (tree, shapes) = shapes_for("local game = 1\nlocal g = game");
+        let (tree, shapes) = shapes_for(
+            "\
+local game = 1
+local g = game",
+        );
         assert_eq!(shape_of(&tree, &shapes, "g"), None);
     }
 

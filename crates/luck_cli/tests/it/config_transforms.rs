@@ -96,13 +96,21 @@ fn rename_globals_is_controllable_in_both_directions() {
     write_file(directory.path(), "luck.json", r#"{"transforms":{"rename_globals":true}}"#);
     luck_in(directory.path())
         .args(["minify", "-"])
-        .write_stdin("someGlobalName = 1\nreturn someGlobalName")
+        .write_stdin(
+            "\
+someGlobalName = 1
+return someGlobalName",
+        )
         .assert()
         .success()
         .stdout(predicate::str::contains("someGlobalName").not());
     luck_in(directory.path())
         .args(["minify", "-", "--no-rename-globals"])
-        .write_stdin("someGlobalName = 1\nreturn someGlobalName")
+        .write_stdin(
+            "\
+someGlobalName = 1
+return someGlobalName",
+        )
         .assert()
         .success()
         .stdout(predicate::str::contains("someGlobalName"));
@@ -144,11 +152,12 @@ fn renaming_a_bundles_globals_keeps_its_global_loader_name() {
     }
     let sum = (0..59u32).map(|i| format!("u{i}")).collect::<Vec<_>>().join(" + ");
     let entry = format!(
-        r#"{locals}local function f()
-  return require("dep"), {sum}
+        "\
+{locals}local function f()
+  return require(\"dep\"), {sum}
 end
 print(f())
-"#
+"
     );
     write_file(directory.path(), "main.lua", &entry);
     write_file(directory.path(), "dep.lua", "return 1");

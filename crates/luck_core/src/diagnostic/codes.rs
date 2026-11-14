@@ -343,7 +343,14 @@ mod tests {
 
         let e4 =
             Diagnostic::e004("f.lua", Span::new(0, 10), "mymod", &["src/mymod.lua".to_owned()]);
-        assert_eq!(e4.help.as_deref(), Some("searched paths:\n  - `src/mymod.lua`"));
+        assert_eq!(
+            e4.help.as_deref(),
+            Some(
+                "\
+searched paths:
+  - `src/mymod.lua`"
+            )
+        );
 
         let w1 = Diagnostic::w001("f.lua", Span::new(0, 5), "utils");
         assert_eq!(w1.code, "W001");

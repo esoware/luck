@@ -136,7 +136,11 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_enum_global() {
-        let diags = run_roblox("local Enum = { Materialz = 1 }\nlocal m = Enum.Materialz");
+        let diags = run_roblox(
+            "\
+local Enum = { Materialz = 1 }
+local m = Enum.Materialz",
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 

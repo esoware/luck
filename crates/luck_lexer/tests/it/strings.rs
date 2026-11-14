@@ -93,7 +93,8 @@ fn a_malformed_string_keeps_its_token() {
     let cases = [
         (
             LuaVersion::Lua54,
-            "\"abc
+            "\
+\"abc
 y",
             vec![string("\"abc"), name("y")],
             "unterminated string",
@@ -119,14 +120,17 @@ y",
         (LuaVersion::Lua54, "\"a\\", vec![string("\"a\\")], "unterminated string", "\"a\\", true),
         (
             LuaVersion::Lua51,
-            "[[a
+            "\
+[[a
 y",
             vec![string(
-                "[[a
+                "\
+[[a
 y",
             )],
             "unterminated long bracket string",
-            "[[a
+            "\
+[[a
 y",
             true,
         ),
@@ -282,7 +286,9 @@ fn long_strings_keep_their_spelling_at_every_level() {
 
 #[test]
 fn long_string_keeps_its_line_breaks() {
-    let source = "[[line1\nline2]]";
+    let source = "\
+[[line1
+line2]]";
     assert_eq!(first_kind(source), TokenKind::StringLiteral(source.into()));
 }
 
@@ -318,7 +324,12 @@ fn unicode_escape_above_10ffff_is_error_on_lua53_and_luau() {
 
 #[test]
 fn lua51_level_zero_long_bracket_rejects_a_nested_opener() {
-    for source in ["return [[ a [[ b ]]", "--[[ a [[ b ]]\nreturn 1"] {
+    for source in [
+        "return [[ a [[ b ]]",
+        "\
+--[[ a [[ b ]]
+return 1",
+    ] {
         let result = lex(source, LuaVersion::Lua51);
         assert!(
             !result.errors.is_empty(),

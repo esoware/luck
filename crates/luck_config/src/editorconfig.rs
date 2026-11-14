@@ -163,7 +163,13 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join(".editorconfig"),
-            "[*.lua]\nindent_style = space\nindent_size = 2\nend_of_line = lf\nmax_line_length = 80\n",
+            "\
+[*.lua]
+indent_style = space
+indent_size = 2
+end_of_line = lf
+max_line_length = 80
+",
         )
         .expect("write");
         let config = format_config_for(&directory.path().join("main.lua"));
@@ -179,7 +185,11 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join(".editorconfig"),
-            "[*]\nindent_style = tab\nend_of_line = crlf\n",
+            "\
+[*]
+indent_style = tab
+end_of_line = crlf
+",
         )
         .expect("write");
         let config = format_config_for(&directory.path().join("main.lua"));
@@ -190,12 +200,25 @@ mod tests {
     #[test]
     fn root_true_stops_the_walk() {
         let parent = tempfile::tempdir().expect("tempdir");
-        fs::write(parent.path().join(".editorconfig"), "[*]\nindent_size = 8\n")
-            .expect("write parent");
+        fs::write(
+            parent.path().join(".editorconfig"),
+            "\
+[*]
+indent_size = 8
+",
+        )
+        .expect("write parent");
         let child = parent.path().join("project");
         fs::create_dir_all(&child).expect("mkdir");
-        fs::write(child.join(".editorconfig"), "root = true\n[*]\nindent_size = 2\n")
-            .expect("write child");
+        fs::write(
+            child.join(".editorconfig"),
+            "\
+root = true
+[*]
+indent_size = 2
+",
+        )
+        .expect("write child");
         let config = format_config_for(&child.join("main.lua"));
         assert_eq!(config.indent_width, Some(2));
     }
@@ -203,8 +226,14 @@ mod tests {
     #[test]
     fn brace_alternation_matches_luau() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join(".editorconfig"), "[*.{lua,luau}]\nindent_size = 3\n")
-            .expect("write");
+        fs::write(
+            directory.path().join(".editorconfig"),
+            "\
+[*.{lua,luau}]
+indent_size = 3
+",
+        )
+        .expect("write");
         let config = format_config_for(&directory.path().join("init.luau"));
         assert_eq!(config.indent_width, Some(3));
     }
@@ -214,12 +243,23 @@ mod tests {
         let parent = tempfile::tempdir().expect("tempdir");
         fs::write(
             parent.path().join(".editorconfig"),
-            "[*]\nindent_size = 8\nmax_line_length = 100\n",
+            "\
+[*]
+indent_size = 8
+max_line_length = 100
+",
         )
         .expect("write parent");
         let child = parent.path().join("project");
         fs::create_dir_all(&child).expect("mkdir");
-        fs::write(child.join(".editorconfig"), "[*]\nindent_size = 2\n").expect("write child");
+        fs::write(
+            child.join(".editorconfig"),
+            "\
+[*]
+indent_size = 2
+",
+        )
+        .expect("write child");
         let config = format_config_for(&child.join("main.lua"));
         assert_eq!(config.indent_width, Some(2));
         assert_eq!(config.line_width, Some(100));
@@ -230,7 +270,12 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join(".editorconfig"),
-            "[*]\nindent_size = 4\n[*.lua]\nindent_size = 2\n",
+            "\
+[*]
+indent_size = 4
+[*.lua]
+indent_size = 2
+",
         )
         .expect("write");
         let config = format_config_for(&directory.path().join("main.lua"));
@@ -240,8 +285,14 @@ mod tests {
     #[test]
     fn max_line_length_off_is_ignored() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join(".editorconfig"), "[*]\nmax_line_length = off\n")
-            .expect("write");
+        fs::write(
+            directory.path().join(".editorconfig"),
+            "\
+[*]
+max_line_length = off
+",
+        )
+        .expect("write");
         let config = format_config_for(&directory.path().join("main.lua"));
         assert!(config.line_width.is_none());
     }
@@ -260,8 +311,14 @@ mod tests {
     #[test]
     fn luck_json_wins_over_editorconfig() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join(".editorconfig"), "[*.lua]\nindent_size = 2\n")
-            .expect("write");
+        fs::write(
+            directory.path().join(".editorconfig"),
+            "\
+[*.lua]
+indent_size = 2
+",
+        )
+        .expect("write");
         let file_path = directory.path().join("main.lua");
         let project = FormatConfig { indent_width: Some(4), ..FormatConfig::default() };
         let resolved = resolved_format_config(Some(project), Some(&file_path));
@@ -271,7 +328,14 @@ mod tests {
     #[test]
     fn tab_width_used_when_indent_size_absent() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join(".editorconfig"), "[*]\ntab_width = 6\n").expect("write");
+        fs::write(
+            directory.path().join(".editorconfig"),
+            "\
+[*]
+tab_width = 6
+",
+        )
+        .expect("write");
         let config = format_config_for(&directory.path().join("main.lua"));
         assert_eq!(config.indent_width, Some(6));
     }
@@ -279,8 +343,15 @@ mod tests {
     #[test]
     fn invalid_lines_are_skipped_without_losing_the_rest() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join(".editorconfig"), "[*]\nnot a pair\nindent_size = 2\n")
-            .expect("write");
+        fs::write(
+            directory.path().join(".editorconfig"),
+            "\
+[*]
+not a pair
+indent_size = 2
+",
+        )
+        .expect("write");
         let config = format_config_for(&directory.path().join("main.lua"));
         assert_eq!(config.indent_width, Some(2));
     }
@@ -288,11 +359,24 @@ mod tests {
     #[test]
     fn unset_clears_a_value_from_a_farther_file() {
         let parent = tempfile::tempdir().expect("tempdir");
-        fs::write(parent.path().join(".editorconfig"), "[*]\nindent_size = 8\n")
-            .expect("write parent");
+        fs::write(
+            parent.path().join(".editorconfig"),
+            "\
+[*]
+indent_size = 8
+",
+        )
+        .expect("write parent");
         let child = parent.path().join("project");
         fs::create_dir_all(&child).expect("mkdir");
-        fs::write(child.join(".editorconfig"), "[*]\nindent_size = unset\n").expect("write child");
+        fs::write(
+            child.join(".editorconfig"),
+            "\
+[*]
+indent_size = unset
+",
+        )
+        .expect("write child");
         let config = format_config_for(&child.join("main.lua"));
         assert!(config.indent_width.is_none());
     }
@@ -309,7 +393,15 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join(".editorconfig"),
-            "root = true\n# comment\n; also comment\n\n[*.lua]\n\nindent_size = 5 # inline kept as value? no\n",
+            "\
+root = true
+# comment
+; also comment
+
+[*.lua]
+
+indent_size = 5 # inline kept as value? no
+",
         )
         .expect("write");
         // The inline `# ...` is part of the value, and `5 # ...` doesn't

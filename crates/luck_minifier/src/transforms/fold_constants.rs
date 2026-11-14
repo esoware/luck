@@ -723,7 +723,9 @@ mod tests {
 
     #[test]
     fn keeps_negative_zero() {
-        let source = "local x = 0.0 * -1\nreturn 1/x";
+        let source = "\
+local x = 0.0 * -1
+return 1/x";
         let result = apply(source);
         assert_reparses(&result, LuaVersion::Lua54);
         // Must not turn -0 into 0.

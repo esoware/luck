@@ -91,7 +91,9 @@ mod tests {
 
     #[test]
     fn flags_explicit_self_in_colon_method() {
-        let diags = run("local t = {}\nfunction t:m(self) end");
+        let diags = run("\
+local t = {}
+function t:m(self) end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`self`"));
     }
@@ -116,7 +118,9 @@ mod tests {
 
     #[test]
     fn ignores_self_in_dot_function() {
-        let diags = run("local t = {}\nfunction t.m(self) end");
+        let diags = run("\
+local t = {}
+function t.m(self) end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 

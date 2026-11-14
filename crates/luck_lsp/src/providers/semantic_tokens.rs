@@ -660,7 +660,12 @@ mod tests {
             LuaTarget::LuauRoblox,
         ] {
             let document = parse_document(
-                "Players = Services.Players\nlocal object = {field = Players}\nif not object:IsA('Tool') and not object:IsA('HopperBin') then\n  if 0 < #getPlayer(arg1[1], arg2) then print(object.field) end\nend",
+                "\
+Players = Services.Players
+local object = {field = Players}
+if not object:IsA('Tool') and not object:IsA('HopperBin') then
+  if 0 < #getPlayer(arg1[1], arg2) then print(object.field) end
+end",
                 target,
             );
             let tokens = highlights(&document);
@@ -697,7 +702,12 @@ mod tests {
     #[test]
     fn type_names_and_table_keys_are_not_value_properties_or_globals() {
         let document = parse_document(
-            "type Alias<T> = {field: module.Member<T>, callback: (arg: T) -> T}\nlocal value: Alias<number> = {}\nlocal item = {field = value}\nlocal chosen = value :: module.Member<number>\n",
+            "\
+type Alias<T> = {field: module.Member<T>, callback: (arg: T) -> T}
+local value: Alias<number> = {}
+local item = {field = value}
+local chosen = value :: module.Member<number>
+",
             LuaTarget::Luau,
         );
         let tokens = highlights(&document);
@@ -723,7 +733,11 @@ mod tests {
     #[test]
     fn primitive_annotations_and_type_queries_keep_their_grammar_scopes() {
         let document = parse_document(
-            "local value: number = 1\nlocal text: string = ''\nlocal shape: typeof(value) = value\nfunction handler(arg: boolean): number return value end",
+            "\
+local value: number = 1
+local text: string = ''
+local shape: typeof(value) = value
+function handler(arg: boolean): number return value end",
             LuaTarget::Luau,
         );
         let tokens = highlights(&document);
@@ -743,7 +757,12 @@ mod tests {
     #[test]
     fn functions_keep_their_color_in_annotations_references_and_instantiations() {
         let document = parse_document(
-            "local callback: (number) -> number = function(value) return value end\nlocal saved = callback\nfunction object:method<T>(value: T): T return value end\nobject:method<<number>>(callback<<number>>(1))\n",
+            "\
+local callback: (number) -> number = function(value) return value end
+local saved = callback
+function object:method<T>(value: T): T return value end
+object:method<<number>>(callback<<number>>(1))
+",
             LuaTarget::Luau,
         );
         let tokens = highlights(&document);
@@ -758,7 +777,12 @@ mod tests {
     #[test]
     fn shadowed_stdlib_aliases_do_not_inherit_default_library() {
         let document = parse_document(
-            "local print = 1\nlocal alias = print\nlocal math = {floor = function(value) return value end}\nmath.floor(alias)\n",
+            "\
+local print = 1
+local alias = print
+local math = {floor = function(value) return value end}
+math.floor(alias)
+",
             LuaTarget::Lua54,
         );
         let tokens = highlights(&document);
@@ -773,8 +797,18 @@ mod tests {
     #[test]
     fn real_readonly_bindings_propagate_to_references() {
         for (source, target) in [
-            ("local limit <const> = 1\nprint(limit)", LuaTarget::Lua54),
-            ("const limit = 1\nprint(limit)", LuaTarget::Luau),
+            (
+                "\
+local limit <const> = 1
+print(limit)",
+                LuaTarget::Lua54,
+            ),
+            (
+                "\
+const limit = 1
+print(limit)",
+                LuaTarget::Luau,
+            ),
         ] {
             let tokens = highlights(&parse_document(source, target));
             for token in tokens.iter().filter(|token| token.text == "limit") {
@@ -844,8 +878,12 @@ mod tests {
 
     #[test]
     fn semantic_tokens_classify_shaped_method_calls() {
-        let document =
-            parse_document("local f = io.open('x')\nlocal n = f:read('n')", LuaTarget::Lua54);
+        let document = parse_document(
+            "\
+local f = io.open('x')
+local n = f:read('n')",
+            LuaTarget::Lua54,
+        );
         let tokens = full_tokens(&document);
         // `read` must be METHOD (5) with defaultLibrary (1 << 2).
         let read = tokens
@@ -889,8 +927,13 @@ mod tests {
 
     #[test]
     fn a_global_function_name_is_a_function_token() {
-        let tokens =
-            highlights(&parse_document("global function setup()\nend\n", LuaTarget::Lua55));
+        let tokens = highlights(&parse_document(
+            "\
+global function setup()
+end
+",
+            LuaTarget::Lua55,
+        ));
         let name = tokens.iter().find(|token| token.text == "setup").expect("setup");
         assert_eq!(name.kind, "function", "{tokens:?}");
     }

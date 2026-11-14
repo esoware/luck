@@ -190,7 +190,10 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
         let main_path = directory.path().join("main.lua");
-        let text = "local foo = require(\"foo\")\nlocal x = 1\n";
+        let text = "\
+local foo = require(\"foo\")
+local x = 1
+";
         fs::write(&main_path, text).expect("write main.lua");
         let uri = Uri::from_file_path(&main_path).expect("file path URI");
         let settings = ProjectSettings::default();
@@ -229,7 +232,12 @@ mod tests {
     fn a_shadowed_require_does_not_link() {
         // The bundler leaves a call through a local `require` alone (W005),
         // so a build doesn't resolve it to the module.
-        let links = links_beside_foo("local require = print\nlocal m = require(\"foo\")\n");
+        let links = links_beside_foo(
+            "\
+local require = print
+local m = require(\"foo\")
+",
+        );
         assert!(links.is_empty(), "a local `require` isn't the module loader: {links:?}");
     }
 

@@ -281,7 +281,11 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join(".editorconfig"),
-            "[*.lua]\nindent_style = space\nindent_size = 2\n",
+            "\
+[*.lua]
+indent_style = space
+indent_size = 2
+",
         )
         .expect("write editorconfig");
         let file_path = directory.path().join("main.lua");
@@ -297,7 +301,11 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join(".editorconfig"),
-            "[*.lua]\nindent_style = space\nindent_size = 2\n",
+            "\
+[*.lua]
+indent_style = space
+indent_size = 2
+",
         )
         .expect("write editorconfig");
         let file_path = directory.path().join("main.lua");

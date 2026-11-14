@@ -69,7 +69,8 @@ fn a_string_still_ends_when_its_text_is_malformed() {
     let name = |text: &str| TokenKind::Identifier(text.into());
     let cases = [
         (
-            "`{x}abc
+            "\
+`{x}abc
 y",
             vec![
                 TokenKind::InterpolatedStringBegin(CompactString::default()),
@@ -109,7 +110,8 @@ y",
             ("`\\u{}` requires at least one hex digit", "\\u{"),
         ),
         (
-            "`abc
+            "\
+`abc
 y",
             vec![
                 TokenKind::InterpolatedStringBegin(CompactString::default()),
@@ -161,12 +163,14 @@ y",
 fn an_unterminated_string_lists_the_tokens_it_cut_off() {
     for (source, cut_off) in [
         (
-            "`{x}abc
+            "\
+`{x}abc
 y",
             vec!["}abc"],
         ),
         (
-            "`abc
+            "\
+`abc
 y",
             vec!["`abc", ""],
         ),

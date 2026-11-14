@@ -18,7 +18,13 @@ fn expanded_table() {
     let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
     assert_format_with(
         "local t={very_long_key=1,another_key=2,third_key=3}\n",
-        "local t = {\n\tvery_long_key = 1,\n\tanother_key = 2,\n\tthird_key = 3,\n}\n",
+        "\
+local t = {
+\tvery_long_key = 1,
+\tanother_key = 2,
+\tthird_key = 3,
+}
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -59,7 +65,11 @@ fn long_single_field_expanded() {
     let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
     assert_format_with(
         "local t={very_long_field_name_here=some_very_long_value_here}\n",
-        "local t = {\n\tvery_long_field_name_here = some_very_long_value_here,\n}\n",
+        "\
+local t = {
+\tvery_long_field_name_here = some_very_long_value_here,
+}
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -79,35 +89,94 @@ fn long_string_index_keeps_space() {
 
 #[test]
 fn blank_line_between_fields_is_kept() {
-    let source = "local t = {\n\ta = 1,\n\n\tb = 2,\n\tc = 3,\n}\n";
+    let source = "\
+local t = {
+\ta = 1,
+
+\tb = 2,
+\tc = 3,
+}
+";
     assert_format(source, source);
     // A run of blank lines is one, and the edges of the table take none.
     assert_format(
-        "local t = {\n\n\ta = 1,\n\n\n\tb = 2,\n\n}\n",
-        "local t = {\n\ta = 1,\n\n\tb = 2,\n}\n",
+        "\
+local t = {
+
+\ta = 1,
+
+
+\tb = 2,
+
+}
+",
+        "\
+local t = {
+\ta = 1,
+
+\tb = 2,
+}
+",
     );
 }
 
 #[test]
 fn blank_line_between_fields_breaks_a_table_that_fits() {
-    assert_format("local t = { a = 1,\n\n b = 2 }\n", "local t = {\n\ta = 1,\n\n\tb = 2,\n}\n");
+    assert_format(
+        "\
+local t = { a = 1,
+
+ b = 2 }
+",
+        "\
+local t = {
+\ta = 1,
+
+\tb = 2,
+}
+",
+    );
 }
 
 #[test]
 fn blank_line_groups_a_packed_list() {
-    let source =
-        "local libs = {\n\t\"roact\", \"rodux\", \"cryo\",\n\n\t\"testez\", \"otter\",\n}\n";
+    let source = "\
+local libs = {
+\t\"roact\", \"rodux\", \"cryo\",
+
+\t\"testez\", \"otter\",
+}
+";
     assert_format(source, source);
 }
 
 #[test]
 fn blank_line_between_commented_fields_is_kept() {
-    let source = "local Status = {\n\t-- nothing runs\n\tDisabled = \"Disabled\",\n\n\t-- everything runs\n\tEnabled = \"Enabled\",\n}\n";
+    let source = "\
+local Status = {
+\t-- nothing runs
+\tDisabled = \"Disabled\",
+
+\t-- everything runs
+\tEnabled = \"Enabled\",
+}
+";
     assert_format(source, source);
     // The comment right after the opener takes no blank line above it.
     assert_format(
-        "local Status = {\n\n\t-- nothing runs\n\tDisabled = \"Disabled\",\n}\n",
-        "local Status = {\n\t-- nothing runs\n\tDisabled = \"Disabled\",\n}\n",
+        "\
+local Status = {
+
+\t-- nothing runs
+\tDisabled = \"Disabled\",
+}
+",
+        "\
+local Status = {
+\t-- nothing runs
+\tDisabled = \"Disabled\",
+}
+",
     );
 }
 

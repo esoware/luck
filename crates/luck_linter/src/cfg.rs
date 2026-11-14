@@ -550,7 +550,8 @@ print(a, b)"
             );
         }
         assert_eq!(flow(&run).node_count(), one);
-        let block_between = "local a
+        let block_between = "\
+local a
 do b() end
 c()";
         assert_eq!(flow(block_between).node_count(), one + 2);
@@ -579,14 +580,22 @@ c()";
 
     #[test]
     fn if_without_else_falls_through() {
-        let graph = flow("local c = 1\nif c then return 1 end");
+        let graph = flow(
+            "\
+local c = 1
+if c then return 1 end",
+        );
         assert!(graph.reaches(Exit::End));
         assert!(graph.reaches(Exit::ReturnValue));
     }
 
     #[test]
     fn if_else_both_returning_never_fall_through() {
-        let graph = flow("local c = 1\nif c then return 1 else return 2 end");
+        let graph = flow(
+            "\
+local c = 1
+if c then return 1 else return 2 end",
+        );
         assert!(graph.reaches(Exit::ReturnValue));
         assert!(!graph.reaches(Exit::End));
     }
@@ -594,7 +603,10 @@ c()";
     #[test]
     fn if_elseif_else_all_returning_never_fall_through() {
         let graph = flow(
-            "local c = 1\nlocal d = 1\nif c then return 1 elseif d then return 2 else return 3 end",
+            "\
+local c = 1
+local d = 1
+if c then return 1 elseif d then return 2 else return 3 end",
         );
         assert!(!graph.reaches(Exit::End));
     }
@@ -615,7 +627,11 @@ c()";
 
     #[test]
     fn while_true_with_conditional_break_falls_through() {
-        let graph = flow("local c = 1\nwhile true do if c then break end end");
+        let graph = flow(
+            "\
+local c = 1
+while true do if c then break end end",
+        );
         assert!(graph.reaches(Exit::End));
         assert!(!graph.reaches(Exit::Break), "the `break` belongs to the loop");
     }
@@ -670,21 +686,34 @@ c()";
 
     #[test]
     fn shadowed_error_is_an_ordinary_call() {
-        let graph = flow("local function error() end\nerror(\"x\")");
+        let graph = flow(
+            "\
+local function error() end
+error(\"x\")",
+        );
         assert!(!graph.reaches(Exit::Error));
         assert!(graph.reaches(Exit::End));
     }
 
     #[test]
     fn break_in_inner_loop_is_consumed() {
-        let graph = flow("local c = 1\nwhile c do if c then break end end");
+        let graph = flow(
+            "\
+local c = 1
+while c do if c then break end end",
+        );
         assert!(graph.reaches(Exit::End));
         assert!(!graph.reaches(Exit::Break));
     }
 
     #[test]
     fn continue_runs_the_until_condition() {
-        let graph = flow_of("repeat continue until true\nreturn 2", LuaVersion::Luau);
+        let graph = flow_of(
+            "\
+repeat continue until true
+return 2",
+            LuaVersion::Luau,
+        );
         assert!(graph.reaches(Exit::ReturnValue));
         assert!(!graph.reaches(Exit::End));
     }
@@ -701,20 +730,36 @@ c()";
 
     #[test]
     fn goto_jumps_over_the_code_before_its_label() {
-        let graph = flow("goto skip\ndo return end\n::skip::\nprint(1)");
+        let graph = flow(
+            "\
+goto skip
+do return end
+::skip::
+print(1)",
+        );
         assert!(!graph.reaches(Exit::ReturnEmpty));
         assert!(graph.reaches(Exit::End));
     }
 
     #[test]
     fn backward_goto_loops() {
-        let graph = flow("::top::\nprint(1)\ngoto top");
+        let graph = flow(
+            "\
+::top::
+print(1)
+goto top",
+        );
         assert!(!graph.reaches(Exit::End));
     }
 
     #[test]
     fn goto_to_a_label_outside_the_block_leaves_it() {
-        let block = parse_block("while true do goto done end\n::done::", LuaVersion::Lua54);
+        let block = parse_block(
+            "\
+while true do goto done end
+::done::",
+            LuaVersion::Lua54,
+        );
         let Some(Statement::WhileLoop(while_loop)) = block.stmts.first() else {
             panic!("the statement must be a while loop");
         };
@@ -727,14 +772,26 @@ c()";
     #[test]
     fn goto_takes_the_innermost_label_of_its_name() {
         // The outer `::a::` would loop forever.
-        let graph = flow("::a::\ndo\n  goto a\n  do return end\n  ::a::\nend");
+        let graph = flow(
+            "\
+::a::
+do
+  goto a
+  do return end
+  ::a::
+end",
+        );
         assert!(graph.reaches(Exit::End));
         assert!(!graph.reaches(Exit::ReturnEmpty));
     }
 
     #[test]
     fn label_goes_out_of_sight_with_its_block() {
-        let graph = flow("do ::a:: end\ngoto a");
+        let graph = flow(
+            "\
+do ::a:: end
+goto a",
+        );
         assert!(graph.reaches(Exit::Break));
         assert!(!graph.reaches(Exit::End));
     }
@@ -743,7 +800,13 @@ c()";
     fn gotos_find_their_labels_among_many() {
         let mut source = String::new();
         for i in 0..2_000u32 {
-            let _unused = writeln!(source, "goto l{i}\ndo return end\n::l{i}::");
+            let _unused = writeln!(
+                source,
+                "\
+goto l{i}
+do return end
+::l{i}::"
+            );
         }
         let graph = flow(&source);
         assert!(graph.reaches(Exit::End));
@@ -752,7 +815,11 @@ c()";
 
     #[test]
     fn can_run_is_false_after_a_jump_until_a_reached_label() {
-        let source = "goto a\nprint(1)\n::a::\nprint(2)";
+        let source = "\
+goto a
+print(1)
+::a::
+print(2)";
         let graph = flow(source);
         let offset_of = |text: &str| u32::try_from(source.find(text).expect("in source")).unwrap();
         assert!(!graph.can_run(offset_of("print(1)")));
@@ -767,19 +834,42 @@ c()";
 
     #[test]
     fn decision_points_single_if() {
-        assert_eq!(points("local c = 1\nif c then end"), 1);
+        assert_eq!(
+            points(
+                "\
+local c = 1
+if c then end"
+            ),
+            1
+        );
     }
 
     #[test]
     fn decision_points_if_with_and() {
         // +1 for the if, +1 for the `and`.
-        assert_eq!(points("local a = 1\nlocal b = 1\nif a and b then end"), 2);
+        assert_eq!(
+            points(
+                "\
+local a = 1
+local b = 1
+if a and b then end"
+            ),
+            2
+        );
     }
 
     #[test]
     fn decision_points_if_elseif() {
         // +1 for the if, +1 for the elseif.
-        assert_eq!(points("local a = 1\nlocal b = 1\nif a then elseif b then end"), 2);
+        assert_eq!(
+            points(
+                "\
+local a = 1
+local b = 1
+if a then elseif b then end"
+            ),
+            2
+        );
     }
 
     #[test]
@@ -822,7 +912,11 @@ c()";
         // +1 for the if, +1 per elseif (two of them) = 3.
         assert_eq!(
             points(
-                "local a = 1\nlocal b = 1\nlocal c = 1\nif a then elseif b then elseif c then end"
+                "\
+local a = 1
+local b = 1
+local c = 1
+if a then elseif b then elseif c then end"
             ),
             3
         );

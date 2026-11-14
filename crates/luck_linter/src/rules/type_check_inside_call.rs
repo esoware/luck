@@ -76,7 +76,10 @@ mod tests {
 
     #[test]
     fn ignores_method_call_on_a_table_named_type() {
-        let source = "type = {}\nfunction type:f(v) return v end\ntype:f(1 == 2)";
+        let source = "\
+type = {}
+function type:f(v) return v end
+type:f(1 == 2)";
         let diags = run(source);
         assert!(diags.is_empty(), "{diags:?}");
     }
@@ -101,7 +104,9 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_type() {
-        let diags = run("local function type(v) return v end\nlocal ok = type(x == 1)");
+        let diags = run("\
+local function type(v) return v end
+local ok = type(x == 1)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

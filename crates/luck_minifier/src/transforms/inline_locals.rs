@@ -757,32 +757,61 @@ mod tests {
 
     #[test]
     fn inlines_single_use_number() {
-        let result = apply("local x = 42\nreturn x\n");
+        let result = apply(
+            "\
+local x = 42
+return x
+",
+        );
         assert!(!result.contains("local"), "Declaration not removed: {result}");
         assert!(result.contains("42"), "Value not inlined: {result}");
     }
 
     #[test]
     fn no_inline_of_multi_use_local() {
-        let result = apply("local x = 42\nprint(x)\nreturn x\n");
+        let result = apply(
+            "\
+local x = 42
+print(x)
+return x
+",
+        );
         assert!(result.contains("local"), "Multi-use local was inlined: {result}");
     }
 
     #[test]
     fn no_inline_of_call_initializer() {
-        let result = apply("local x = foo()\nreturn x\n");
+        let result = apply(
+            "\
+local x = foo()
+return x
+",
+        );
         assert!(result.contains("local"), "Side-effectful init was inlined: {result}");
     }
 
     #[test]
     fn no_inline_of_variable_read() {
-        let result = apply("local x = y\nreturn x\n");
+        let result = apply(
+            "\
+local x = y
+return x
+",
+        );
         assert!(result.contains("local"), "Variable read was inlined: {result}");
     }
 
     #[test]
     fn inlines_in_nested_function_body() {
-        let result = apply("local function foo()\n  local x = 42\n  return x\nend\nreturn foo\n");
+        let result = apply(
+            "\
+local function foo()
+  local x = 42
+  return x
+end
+return foo
+",
+        );
         assert!(
             !result.contains("local x"),
             "Declaration inside function body not inlined: {result}"
@@ -791,13 +820,25 @@ mod tests {
 
     #[test]
     fn inlines_in_if_block() {
-        let result = apply("if true then\n  local x = 42\n  print(x)\nend\n");
+        let result = apply(
+            "\
+if true then
+  local x = 42
+  print(x)
+end
+",
+        );
         assert!(!result.contains("local x"), "Declaration inside if block not inlined: {result}");
     }
 
     #[test]
     fn parenthesizes_literal_inlined_into_index_prefix() {
-        let result = apply("local x = 37.5\nreturn x[\"k\"]\n");
+        let result = apply(
+            "\
+local x = 37.5
+return x[\"k\"]
+",
+        );
         assert!(
             result.contains("(37.5)[\"k\"]"),
             "Literal in index-prefix position must gain parens: {result}"
@@ -806,7 +847,12 @@ mod tests {
 
     #[test]
     fn parenthesizes_literal_inlined_into_field_prefix() {
-        let result = apply("local x = \"s\"\nreturn x.len\n");
+        let result = apply(
+            "\
+local x = \"s\"
+return x.len
+",
+        );
         assert!(
             result.contains("(\"s\").len"),
             "Literal in field-prefix position must gain parens: {result}"
@@ -822,12 +868,48 @@ mod tests {
     #[test]
     fn parenthesizes_literal_inlined_into_type_instantiation() {
         for (source, expected) in [
-            ("local s = \"x\"\nreturn s<<T>>\n", "return(\"x\")<<T>>"),
-            ("local s = 1\nreturn s<<T>>\n", "return(1)<<T>>"),
-            ("local s = nil\nreturn s<<T>>\n", "return(nil)<<T>>"),
-            ("local s = -1\nreturn s<<T>>\n", "return(-1)<<T>>"),
-            ("local s = \"x\" :: T\nreturn s<<U>>\n", "return(\"x\"::T)<<U>>"),
-            ("local s = \"x\"\nreturn s<<T>><<U>>\n", "return(\"x\")<<T>><<U>>"),
+            (
+                "\
+local s = \"x\"
+return s<<T>>
+",
+                "return(\"x\")<<T>>",
+            ),
+            (
+                "\
+local s = 1
+return s<<T>>
+",
+                "return(1)<<T>>",
+            ),
+            (
+                "\
+local s = nil
+return s<<T>>
+",
+                "return(nil)<<T>>",
+            ),
+            (
+                "\
+local s = -1
+return s<<T>>
+",
+                "return(-1)<<T>>",
+            ),
+            (
+                "\
+local s = \"x\" :: T
+return s<<U>>
+",
+                "return(\"x\"::T)<<U>>",
+            ),
+            (
+                "\
+local s = \"x\"
+return s<<T>><<U>>
+",
+                "return(\"x\")<<T>><<U>>",
+            ),
         ] {
             assert_eq!(apply_luau_reparsing(source), expected, "source: {source}");
         }
@@ -835,9 +917,24 @@ mod tests {
 
     #[test]
     fn literal_inlined_under_instantiation_reparses_as_prefix() {
-        apply_luau_reparsing("local s = \"x\"\nreturn s<<T>>()\n");
-        apply_luau_reparsing("local s = \"x\"\nreturn s<<T>>.y\n");
-        apply_luau_reparsing("local s = \"x\"\ns<<T>>()\n");
+        apply_luau_reparsing(
+            "\
+local s = \"x\"
+return s<<T>>()
+",
+        );
+        apply_luau_reparsing(
+            "\
+local s = \"x\"
+return s<<T>>.y
+",
+        );
+        apply_luau_reparsing(
+            "\
+local s = \"x\"
+s<<T>>()
+",
+        );
     }
 
     #[test]
@@ -845,8 +942,21 @@ mod tests {
         // A chain is already a valid prefix, whether it sits on a var or an
         // inlined prefix.
         for (source, expected) in [
-            ("local s = 1\nprint(s)\nreturn f<<T>><<U>>\n", "print(1)return f<<T>><<U>>"),
-            ("local s = (\"x\")<<T>>\nreturn s<<U>>\n", "return(\"x\")<<T>><<U>>"),
+            (
+                "\
+local s = 1
+print(s)
+return f<<T>><<U>>
+",
+                "print(1)return f<<T>><<U>>",
+            ),
+            (
+                "\
+local s = (\"x\")<<T>>
+return s<<U>>
+",
+                "return(\"x\")<<T>><<U>>",
+            ),
         ] {
             assert_eq!(apply_luau_reparsing(source), expected, "source: {source}");
         }
@@ -855,9 +965,30 @@ mod tests {
     #[test]
     fn leaves_type_instantiation_prefixes_unwrapped() {
         for (source, expected) in [
-            ("local s = 1\nprint(s)\nreturn f<<T>>(x)\n", "print(1)return f<<T>>(x)"),
-            ("local s = 1\nprint(s)\nreturn f<<T>>.y\n", "print(1)return f<<T>>.y"),
-            ("local s = 1\nprint(s)\nf<<T>>(x)\n", "print(1)f<<T>>(x)"),
+            (
+                "\
+local s = 1
+print(s)
+return f<<T>>(x)
+",
+                "print(1)return f<<T>>(x)",
+            ),
+            (
+                "\
+local s = 1
+print(s)
+return f<<T>>.y
+",
+                "print(1)return f<<T>>.y",
+            ),
+            (
+                "\
+local s = 1
+print(s)
+f<<T>>(x)
+",
+                "print(1)f<<T>>(x)",
+            ),
         ] {
             assert_eq!(apply_luau_reparsing(source), expected, "source: {source}");
         }
@@ -874,76 +1005,349 @@ mod tests {
     #[test]
     fn parenthesizes_inlined_operator_that_would_regroup() {
         assert_inlines(&[
-            ("local s = 1 / 0\nreturn 3 % s\n", "return 3%(1/0)"),
-            ("local s = 1 + 2\nreturn s * 2\n", "return(1+2)*2"),
-            ("local s = 1 + 2\nreturn 2 * s\n", "return 2*(1+2)"),
-            ("local s = 1 - 2\nreturn 5 - s\n", "return 5-(1-2)"),
-            ("local s = 2 ^ 3\nreturn s ^ 2\n", "return(2^3)^2"),
-            ("local s = 1 .. 2\nreturn s .. 3\n", "return(1 ..2)..3"),
-            ("local s = 1 + 2\nreturn 2 ^ s\n", "return 2^(1+2)"),
-            ("local s = 1 | 2\nreturn s & 3\n", "return(1|2)&3"),
-            ("local s = 1 or 2\nreturn s and 3\n", "return(1 or 2)and 3"),
-            ("local s = -2\nreturn s ^ y\n", "return(-2)^y"),
-            ("local s = not nil\nreturn s ^ y\n", "return(not nil)^y"),
+            (
+                "\
+local s = 1 / 0
+return 3 % s
+",
+                "return 3%(1/0)",
+            ),
+            (
+                "\
+local s = 1 + 2
+return s * 2
+",
+                "return(1+2)*2",
+            ),
+            (
+                "\
+local s = 1 + 2
+return 2 * s
+",
+                "return 2*(1+2)",
+            ),
+            (
+                "\
+local s = 1 - 2
+return 5 - s
+",
+                "return 5-(1-2)",
+            ),
+            (
+                "\
+local s = 2 ^ 3
+return s ^ 2
+",
+                "return(2^3)^2",
+            ),
+            (
+                "\
+local s = 1 .. 2
+return s .. 3
+",
+                "return(1 ..2)..3",
+            ),
+            (
+                "\
+local s = 1 + 2
+return 2 ^ s
+",
+                "return 2^(1+2)",
+            ),
+            (
+                "\
+local s = 1 | 2
+return s & 3
+",
+                "return(1|2)&3",
+            ),
+            (
+                "\
+local s = 1 or 2
+return s and 3
+",
+                "return(1 or 2)and 3",
+            ),
+            (
+                "\
+local s = -2
+return s ^ y
+",
+                "return(-2)^y",
+            ),
+            (
+                "\
+local s = not nil
+return s ^ y
+",
+                "return(not nil)^y",
+            ),
         ]);
     }
 
     #[test]
     fn parenthesizes_operator_inlined_under_a_unary() {
         assert_inlines(&[
-            ("local s = 1 + 2\nreturn -s\n", "return-(1+2)"),
-            ("local s = 1 == 2\nreturn not s\n", "return not(1==2)"),
-            ("local s = \"a\" .. \"b\"\nreturn #s\n", "return#(\"a\"..\"b\")"),
-            ("local s = 1 * 2\nreturn ~s\n", "return~(1*2)"),
+            (
+                "\
+local s = 1 + 2
+return -s
+",
+                "return-(1+2)",
+            ),
+            (
+                "\
+local s = 1 == 2
+return not s
+",
+                "return not(1==2)",
+            ),
+            (
+                "\
+local s = \"a\" .. \"b\"
+return #s
+",
+                "return#(\"a\"..\"b\")",
+            ),
+            (
+                "\
+local s = 1 * 2
+return ~s
+",
+                "return~(1*2)",
+            ),
         ]);
     }
 
     #[test]
     fn parenthesizes_operator_inlined_into_a_nested_operand() {
         assert_inlines(&[
-            ("local s = 1 + 2\nreturn -s ^ 2\n", "return-(1+2)^2"),
-            ("local s = -1\nreturn -s ^ 2\n", "return-(-1)^2"),
-            ("local s = 1 + 2\nreturn (s * 3)\n", "return((1+2)*3)"),
-            ("local s = 1 + 2\nprint(s * 3, 4)\n", "print((1+2)*3,4)"),
-            ("local s = 1 + 2\nreturn {s * 3}\n", "return{(1+2)*3}"),
-            ("local s = 1 + 2\nreturn t[s * 3]\n", "return t[(1+2)*3]"),
-            ("local s = 1 + 2\nif s * 3 then end\n", "if(1+2)*3 then end"),
-            ("local a = 1 + 2\nlocal b = a * 3\nreturn b ^ 2\n", "return((1+2)*3)^2"),
+            (
+                "\
+local s = 1 + 2
+return -s ^ 2
+",
+                "return-(1+2)^2",
+            ),
+            (
+                "\
+local s = -1
+return -s ^ 2
+",
+                "return-(-1)^2",
+            ),
+            (
+                "\
+local s = 1 + 2
+return (s * 3)
+",
+                "return((1+2)*3)",
+            ),
+            (
+                "\
+local s = 1 + 2
+print(s * 3, 4)
+",
+                "print((1+2)*3,4)",
+            ),
+            (
+                "\
+local s = 1 + 2
+return {s * 3}
+",
+                "return{(1+2)*3}",
+            ),
+            (
+                "\
+local s = 1 + 2
+return t[s * 3]
+",
+                "return t[(1+2)*3]",
+            ),
+            (
+                "\
+local s = 1 + 2
+if s * 3 then end
+",
+                "if(1+2)*3 then end",
+            ),
+            (
+                "\
+local a = 1 + 2
+local b = a * 3
+return b ^ 2
+",
+                "return((1+2)*3)^2",
+            ),
         ]);
     }
 
+    const BARE_INLINE_CASES: &[(&str, &str)] = &[
+        (
+            "\
+local s = 1 + 2
+return s
+",
+            "return 1+2",
+        ),
+        (
+            "\
+local s = 1 + 2
+print(s)
+",
+            "print(1+2)",
+        ),
+        (
+            "\
+local s = 1 + 2
+return {s}
+",
+            "return{1+2}",
+        ),
+        (
+            "\
+local s = 1 + 2
+return t[s]
+",
+            "return t[1+2]",
+        ),
+        (
+            "\
+local s = 1 * 2
+return s + 3
+",
+            "return 1*2+3",
+        ),
+        (
+            "\
+local s = 1 * 2
+return 3 + s
+",
+            "return 3+1*2",
+        ),
+        (
+            "\
+local s = 1 - 2
+return s - 5
+",
+            "return 1-2-5",
+        ),
+        (
+            "\
+local s = 2 ^ 3
+return 2 ^ s
+",
+            "return 2^2^3",
+        ),
+        (
+            "\
+local s = 1 .. 2
+return 3 .. s
+",
+            "return 3 ..1 ..2",
+        ),
+        (
+            "\
+local s = 1 + 2
+return s < 4
+",
+            "return 1+2<4",
+        ),
+        (
+            "\
+local s = 1 < 2
+return s == true
+",
+            "return 1<2==true",
+        ),
+        (
+            "\
+local s = 2 ^ 3
+return -s
+",
+            "return-2^3",
+        ),
+        (
+            "\
+local s = -2
+return 3 ^ s
+",
+            "return 3^-2",
+        ),
+        (
+            "\
+local s = -2
+return s * 3
+",
+            "return-2*3",
+        ),
+        (
+            "\
+local s = -1
+return -s
+",
+            "return- -1",
+        ),
+        (
+            "\
+local s = (1 + 2)
+return s * 2
+",
+            "return(1+2)*2",
+        ),
+        (
+            "\
+local s = 2
+return s * 3
+",
+            "return 2*3",
+        ),
+    ];
+
     #[test]
     fn leaves_inlined_expr_bare_where_its_grouping_holds() {
-        assert_inlines(&[
-            ("local s = 1 + 2\nreturn s\n", "return 1+2"),
-            ("local s = 1 + 2\nprint(s)\n", "print(1+2)"),
-            ("local s = 1 + 2\nreturn {s}\n", "return{1+2}"),
-            ("local s = 1 + 2\nreturn t[s]\n", "return t[1+2]"),
-            ("local s = 1 * 2\nreturn s + 3\n", "return 1*2+3"),
-            ("local s = 1 * 2\nreturn 3 + s\n", "return 3+1*2"),
-            ("local s = 1 - 2\nreturn s - 5\n", "return 1-2-5"),
-            ("local s = 2 ^ 3\nreturn 2 ^ s\n", "return 2^2^3"),
-            ("local s = 1 .. 2\nreturn 3 .. s\n", "return 3 ..1 ..2"),
-            ("local s = 1 + 2\nreturn s < 4\n", "return 1+2<4"),
-            ("local s = 1 < 2\nreturn s == true\n", "return 1<2==true"),
-            ("local s = 2 ^ 3\nreturn -s\n", "return-2^3"),
-            ("local s = -2\nreturn 3 ^ s\n", "return 3^-2"),
-            ("local s = -2\nreturn s * 3\n", "return-2*3"),
-            ("local s = -1\nreturn -s\n", "return- -1"),
-            ("local s = (1 + 2)\nreturn s * 2\n", "return(1+2)*2"),
-            ("local s = 2\nreturn s * 3\n", "return 2*3"),
-        ]);
+        assert_inlines(BARE_INLINE_CASES);
     }
 
     #[test]
     fn parenthesizes_expr_inlined_under_a_cast() {
         // `::` binds to a simple expression and doesn't chain.
         for (source, expected) in [
-            ("local s = 1 + 2\nreturn s :: any\n", "return(1+2)::any"),
-            ("local s = -1\nreturn s :: any\n", "return(-1)::any"),
-            ("local s = 1 :: number\nreturn s :: any\n", "return(1::number)::any"),
-            ("local s = 1\nreturn s :: any\n", "return 1::any"),
-            ("local s = (1 + 2)\nreturn s :: any\n", "return(1+2)::any"),
+            (
+                "\
+local s = 1 + 2
+return s :: any
+",
+                "return(1+2)::any",
+            ),
+            (
+                "\
+local s = -1
+return s :: any
+",
+                "return(-1)::any",
+            ),
+            (
+                "\
+local s = 1 :: number
+return s :: any
+",
+                "return(1::number)::any",
+            ),
+            (
+                "\
+local s = 1
+return s :: any
+",
+                "return 1::any",
+            ),
+            (
+                "\
+local s = (1 + 2)
+return s :: any
+",
+                "return(1+2)::any",
+            ),
         ] {
             assert_eq!(apply_luau_reparsing(source), expected, "source: {source}");
         }
@@ -953,13 +1357,55 @@ mod tests {
     fn parenthesizes_cast_inlined_before_less_than() {
         // `T<` opens generic arguments, so the cast has to end before the `<`.
         for (source, expected) in [
-            ("local s = 1 :: number\nreturn s < 2\n", "return(1::number)<2"),
-            ("local s = 1 :: number\nreturn 2 + s < 3\n", "return 2+(1::number)<3"),
-            ("local s = 1 :: number\nreturn -s < 2\n", "return-(1::number)<2"),
-            ("local s = 1 :: number\nreturn 1 < s < 3\n", "return 1<(1::number)<3"),
-            ("local s = 2 + 1 :: number\nreturn s < 3\n", "return 2+(1::number)<3"),
-            ("local s = -1 :: number\nreturn s < 3\n", "return-(1::number)<3"),
-            ("local s = 2 + 1 :: number\nreturn 2 * s < 3\n", "return 2*(2+(1::number))<3"),
+            (
+                "\
+local s = 1 :: number
+return s < 2
+",
+                "return(1::number)<2",
+            ),
+            (
+                "\
+local s = 1 :: number
+return 2 + s < 3
+",
+                "return 2+(1::number)<3",
+            ),
+            (
+                "\
+local s = 1 :: number
+return -s < 2
+",
+                "return-(1::number)<2",
+            ),
+            (
+                "\
+local s = 1 :: number
+return 1 < s < 3
+",
+                "return 1<(1::number)<3",
+            ),
+            (
+                "\
+local s = 2 + 1 :: number
+return s < 3
+",
+                "return 2+(1::number)<3",
+            ),
+            (
+                "\
+local s = -1 :: number
+return s < 3
+",
+                "return-(1::number)<3",
+            ),
+            (
+                "\
+local s = 2 + 1 :: number
+return 2 * s < 3
+",
+                "return 2*(2+(1::number))<3",
+            ),
         ] {
             assert_eq!(apply_luau_reparsing(source), expected, "source: {source}");
         }
@@ -968,14 +1414,62 @@ mod tests {
     #[test]
     fn leaves_cast_bare_where_nothing_extends_its_type() {
         for (source, expected) in [
-            ("local s = 1 :: number\nreturn s\n", "return 1::number"),
-            ("local s = 1 :: number\nreturn s + 1\n", "return 1::number+1"),
-            ("local s = 1 :: number\nreturn 1 + s\n", "return 1+1::number"),
-            ("local s = 1 :: number\nreturn -s\n", "return-1::number"),
-            ("local s = 1 :: number\nreturn s > 2\n", "return 1::number>2"),
-            ("local s = 1 :: number\nreturn 2 < s\n", "return 2<1::number"),
-            ("local s = 1\nreturn x :: Foo<T> < s\n", "return x::Foo<T><1"),
-            ("local s = (\"x\")<<T>>\nreturn s .. \"y\"\n", "return(\"x\")<<T>>..\"y\""),
+            (
+                "\
+local s = 1 :: number
+return s
+",
+                "return 1::number",
+            ),
+            (
+                "\
+local s = 1 :: number
+return s + 1
+",
+                "return 1::number+1",
+            ),
+            (
+                "\
+local s = 1 :: number
+return 1 + s
+",
+                "return 1+1::number",
+            ),
+            (
+                "\
+local s = 1 :: number
+return -s
+",
+                "return-1::number",
+            ),
+            (
+                "\
+local s = 1 :: number
+return s > 2
+",
+                "return 1::number>2",
+            ),
+            (
+                "\
+local s = 1 :: number
+return 2 < s
+",
+                "return 2<1::number",
+            ),
+            (
+                "\
+local s = 1
+return x :: Foo<T> < s
+",
+                "return x::Foo<T><1",
+            ),
+            (
+                "\
+local s = (\"x\")<<T>>
+return s .. \"y\"
+",
+                "return(\"x\")<<T>>..\"y\"",
+            ),
         ] {
             assert_eq!(apply_luau_reparsing(source), expected, "source: {source}");
         }
@@ -983,7 +1477,12 @@ mod tests {
 
     #[test]
     fn parenthesizes_literal_inlined_into_stmt_call_receiver() {
-        let result = apply("local x = false\nx:resize(9)\n");
+        let result = apply(
+            "\
+local x = false
+x:resize(9)
+",
+        );
         assert!(
             result.contains("(false):resize(9)"),
             "Literal receiver of a statement call must gain parens: {result}"
@@ -994,7 +1493,12 @@ mod tests {
     fn no_inline_of_table_constructor() {
         // Tables carry identity: moved into a loop, `{1,2,3}` would mint
         // a fresh table per iteration.
-        let result = apply("local t = {1, 2, 3}\nreturn t\n");
+        let result = apply(
+            "\
+local t = {1, 2, 3}
+return t
+",
+        );
         assert!(result.contains("local"), "Identity value was inlined: {result}");
     }
 
@@ -1003,7 +1507,12 @@ mod tests {
         // Closures carry identity and captures, and both depend on position:
         // in `local a=1 local f=function() return a end local a=2`, moving f's
         // body past the second `a` would rebind it.
-        let result = apply("local f = function() return 1 end\nreturn f\n");
+        let result = apply(
+            "\
+local f = function() return 1 end
+return f
+",
+        );
         assert!(result.contains("local"), "Closure was inlined: {result}");
     }
 
@@ -1011,7 +1520,13 @@ mod tests {
     fn inlines_chained_single_use() {
         // `x` is decided first, so `y`'s initializer is `42 + 1` by the time
         // `y` is, and both inline in the one walk.
-        let result = apply("local x = 42\nlocal y = x + 1\nreturn y\n");
+        let result = apply(
+            "\
+local x = 42
+local y = x + 1
+return y
+",
+        );
         assert_eq!(result, "return 42+1");
     }
 
@@ -1061,30 +1576,66 @@ mod tests {
     fn no_inline_of_vararg() {
         // Inside a nested function, `...` is that function's own varargs, or
         // a compile error if it takes none.
-        let result = apply("local function f(...)\n  local x = ...\n  return x\nend\n");
+        let result = apply(
+            "\
+local function f(...)
+  local x = ...
+  return x
+end
+",
+        );
         assert!(result.contains("local x"), "VarArg was inlined: {result}");
     }
 
     #[test]
     fn no_inline_of_multi_use_vararg() {
-        let result = apply("local function f(...)\n  local x = ...\n  print(x)\n  return x\nend\n");
+        let result = apply(
+            "\
+local function f(...)
+  local x = ...
+  print(x)
+  return x
+end
+",
+        );
         assert!(result.contains("local x"), "Multi-use vararg should not be inlined: {result}");
     }
 
     #[test]
     fn no_inline_of_variable_read_under_cast() {
         // TypeCast is transparent, and the inner variable read is impure.
-        let result = apply_version("local x = foo :: Bar\nreturn x\n", LuaVersion::Luau);
+        let result = apply_version(
+            "\
+local x = foo :: Bar
+return x
+",
+            LuaVersion::Luau,
+        );
         assert!(result.contains("local"), "TypeCast with var read should not be inlined: {result}");
     }
 
     #[test]
     fn no_inline_over_a_read_outside_the_declaration_scope() {
         for source in [
-            "print(x)\nlocal x = 1\n",
-            "local function g() return x end\nlocal x = 1\nprint(g())\n",
-            "do local x = 1 end\nprint(x)\n",
-            "for i = 1, 1 do\n  print(x)\n  local x = 2\nend\n",
+            "\
+print(x)
+local x = 1
+",
+            "\
+local function g() return x end
+local x = 1
+print(g())
+",
+            "\
+do local x = 1 end
+print(x)
+",
+            "\
+for i = 1, 1 do
+  print(x)
+  local x = 2
+end
+",
         ] {
             let result = apply(source);
             assert!(
@@ -1097,35 +1648,106 @@ mod tests {
     #[test]
     fn inlines_reads_inside_the_declaration_scope() {
         assert_inlines(&[
-            ("local x = 1\nprint(x)\n", "print(1)"),
-            ("local x = 1\nlocal function f() return x end\n", "local function f()return 1 end"),
-            ("if c then\n  local x = 1\n  print(x)\nend\n", "if c then print(1)end"),
-            ("do\n  local x = 1\n  do print(x) end\nend\n", "do do print(1)end end"),
-            ("repeat\n  local x = 1\nuntil x == y\n", "repeat until 1==y"),
-            ("repeat\n  local x = 1\n  repeat until x\nuntil z\n", "repeat repeat until 1 until z"),
+            (
+                "\
+local x = 1
+print(x)
+",
+                "print(1)",
+            ),
+            (
+                "\
+local x = 1
+local function f() return x end
+",
+                "local function f()return 1 end",
+            ),
+            (
+                "\
+if c then
+  local x = 1
+  print(x)
+end
+",
+                "if c then print(1)end",
+            ),
+            (
+                "\
+do
+  local x = 1
+  do print(x) end
+end
+",
+                "do do print(1)end end",
+            ),
+            (
+                "\
+repeat
+  local x = 1
+until x == y
+",
+                "repeat until 1==y",
+            ),
+            (
+                "\
+repeat
+  local x = 1
+  repeat until x
+until z
+",
+                "repeat repeat until 1 until z",
+            ),
         ]);
     }
 
     #[test]
     fn no_inline_over_a_write_to_the_name() {
         for source in [
-            "local x = 1\nx = 2\n",
-            "local x = 1\nfunction x() end\nprint(x)\n",
-            "local x = \"s\"\nfunction x.f() end\nprint(x)\n",
+            "\
+local x = 1
+x = 2
+",
+            "\
+local x = 1
+function x() end
+print(x)
+",
+            "\
+local x = \"s\"
+function x.f() end
+print(x)
+",
         ] {
             let result = apply(source);
             assert!(result.contains("local x"), "{source}: {result}");
         }
-        let compound = apply_version("local x = 1\nx += 2\n", LuaVersion::Luau);
+        let compound = apply_version(
+            "\
+local x = 1
+x += 2
+",
+            LuaVersion::Luau,
+        );
         assert!(compound.contains("local x"), "{compound}");
     }
 
     #[test]
     fn no_inline_over_lua55_bindings() {
         for source in [
-            "local args = 1\nlocal function f(...args) return args end\n",
-            "local x = 1\nglobal x\nprint(x)\n",
-            "local x = 1\nglobal function x() end\nprint(x)\n",
+            "\
+local args = 1
+local function f(...args) return args end
+",
+            "\
+local x = 1
+global x
+print(x)
+",
+            "\
+local x = 1
+global function x() end
+print(x)
+",
         ] {
             let result = apply_version(source, LuaVersion::Lua55);
             assert!(
@@ -1142,7 +1764,14 @@ mod tests {
         // second declaration, or the outer value leaks in as
         // `global function g()return 1 end`.
         let result = apply_version(
-            "local x = 1\nglobal function g()\n  local x = 2\n  return x\nend\nreturn g\n",
+            "\
+local x = 1
+global function g()
+  local x = 2
+  return x
+end
+return g
+",
             LuaVersion::Lua55,
         );
         assert!(
@@ -1159,7 +1788,12 @@ mod tests {
 
     #[test]
     fn no_inline_into_a_method_that_binds_self() {
-        let result = apply("local self = 5\nfunction M:get() return self end\n");
+        let result = apply(
+            "\
+local self = 5
+function M:get() return self end
+",
+        );
         assert!(
             result.contains("return self"),
             "`self` in a `:` method is the receiver, not the outer local: {result}"
@@ -1169,7 +1803,11 @@ mod tests {
     #[test]
     fn no_inline_into_a_lua51_vararg_function_that_binds_arg() {
         let result = apply_version(
-            "local arg = 5\nlocal function f(...) return arg end\nreturn f\n",
+            "\
+local arg = 5
+local function f(...) return arg end
+return f
+",
             LuaVersion::Lua51,
         );
         assert!(
@@ -1180,7 +1818,13 @@ mod tests {
 
     #[test]
     fn no_inline_of_a_literal_operation_that_raises() {
-        let result = apply("local x = 1 + nil\nprint(\"before\")\nreturn x\n");
+        let result = apply(
+            "\
+local x = 1 + nil
+print(\"before\")
+return x
+",
+        );
         assert!(
             !result.starts_with("print"),
             "the error must still fire before the print runs: {result}"

@@ -6,8 +6,12 @@ use crate::common::assert_compacts_to;
 #[test]
 fn output_capacity_hint_never_changes_output() {
     for version in LuaVersion::ALL {
-        let source =
-            format!("--{}\nlocal value = - -1; return value .. 'é'", "comment ".repeat(8192));
+        let source = format!(
+            "\
+--{}
+local value = - -1; return value .. 'é'",
+            "comment ".repeat(8192)
+        );
         let parsed = luck_parser::parse(&source, version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         let expected = luck_codegen::compact(&parsed.block).unwrap();
@@ -138,7 +142,15 @@ fn stmts_compact_to_minimal_whitespace() {
         ("if  x  then  a = 1  else  b = 2  end", "if x then a=1 else b=2 end"),
         ("if a then  elseif b then  else  end", "if a then elseif b then else end"),
         (
-            "if a then\n  x = 1\n  y = 2\nelseif b then\n  z = 3\nelse\n  w = 4\nend",
+            "\
+if a then
+  x = 1
+  y = 2
+elseif b then
+  z = 3
+else
+  w = 4
+end",
             "if a then x=1 y=2 elseif b then z=3 else w=4 end",
         ),
         (
@@ -306,7 +318,9 @@ fn luau_syntax_compacts_to_minimal_whitespace() {
             "local result=receiver:map<<number,string>>(value)",
         ),
         (
-            "local partial = f<<number>>\nlocal called = t.f<<number, string>>(value)",
+            "\
+local partial = f<<number>>
+local called = t.f<<number, string>>(value)",
             "local partial=f<<number>>local called=t.f<<number,string>>(value)",
         ),
         // Chaining requires parens (asexp allows one cast per simpleexp).
@@ -316,7 +330,13 @@ fn luau_syntax_compacts_to_minimal_whitespace() {
             "return 1i,1_000_000i,0xffffffffffffffffi,-123i",
         ),
         (
-            "export local seen = 0i\nexport const MAX = 2i\n@native\nexport function run()\nreturn seen\nend",
+            "\
+export local seen = 0i
+export const MAX = 2i
+@native
+export function run()
+return seen
+end",
             "export local seen=0i export const MAX=2i@native export function run()return seen end",
         ),
         ("@native function f() end", "@native function f()end"),
@@ -360,7 +380,13 @@ fn luau_types_compact_to_minimal_whitespace() {
         ("function  f < T > ( a :  T )  :  T  return  a  end", "function f<T>(a:T):T return a end"),
         ("function  f ( )  :  ( number , ... string )  end", "function f():(number,...string)end"),
         ("type  function  Add ( a )  return  a  end", "type function Add(a)return a end"),
-        ("type function Pair(t)\n\treturn t\nend", "type function Pair(t)return t end"),
+        (
+            "\
+type function Pair(t)
+\treturn t
+end",
+            "type function Pair(t)return t end",
+        ),
         (
             "for  k :  string , v :  number  in  pairs ( t )  do  end",
             "for k:string,v:number in pairs(t)do end",

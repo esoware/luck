@@ -94,7 +94,9 @@ mod tests {
 
     #[test]
     fn ignores_separate_lines() {
-        let diags = run("local a = 1\nlocal b = 2");
+        let diags = run("\
+local a = 1
+local b = 2");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -106,7 +108,10 @@ mod tests {
 
     #[test]
     fn flags_inside_nested_block() {
-        let diags = run("do\n  local a = 1 local b = 2\nend");
+        let diags = run("\
+do
+  local a = 1 local b = 2
+end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 

@@ -199,8 +199,12 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_type() {
-        let diags =
-            run("local type = function() end\nlocal ok = type(x) == \"strng\"", LuaVersion::Lua54);
+        let diags = run(
+            "\
+local type = function() end
+local ok = type(x) == \"strng\"",
+            LuaVersion::Lua54,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 

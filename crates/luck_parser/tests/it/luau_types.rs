@@ -342,8 +342,12 @@ fn generic_for_annotations_preserved() {
 
 #[test]
 fn generic_function_declaration() {
-    let result =
-        parse_luau("local function map<T, U>(items: {T}, fn: (T) -> U): {U}\n\treturn {}\nend");
+    let result = parse_luau(
+        "\
+local function map<T, U>(items: {T}, fn: (T) -> U): {U}
+\treturn {}
+end",
+    );
     assert_no_errors(&result);
     let Statement::LocalFunction(local_function) = &result.block.stmts[0] else {
         panic!("expected LocalFunction");

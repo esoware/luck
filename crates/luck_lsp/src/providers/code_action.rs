@@ -430,18 +430,30 @@ mod tests {
 
     #[test]
     fn disable_comment_stays_out_of_a_long_string() {
-        let text = "local s = [[\nx]] local y = nil\n";
+        let text = "\
+local s = [[
+x]] local y = nil
+";
         let config = config_enabling("redundant_nil_init");
         let edited = disabled(text, &config, 0);
         assert!(
-            edited.contains("[[\nx]]"),
+            edited.contains(
+                "\
+[[
+x]]"
+            ),
             "the comment must not rewrite the string's contents: {edited:?}"
         );
     }
 
     #[test]
     fn disable_comment_does_not_silence_the_next_statement() {
-        let text = "local t = {\n  first_missing,\n}\nlocal u = second_missing\n";
+        let text = "\
+local t = {
+  first_missing,
+}
+local u = second_missing
+";
         let config = config_enabling("undefined_variable");
         let edited = disabled(text, &config, 0);
         let remaining = document(&edited).lint(&config);

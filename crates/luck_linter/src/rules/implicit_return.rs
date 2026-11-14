@@ -159,7 +159,12 @@ mod tests {
 
     #[test]
     fn ignores_return_after_repeat_continue_until_true() {
-        let source = "local function f(x)\n if x then return 1 end\n repeat continue until true\n return 2\nend";
+        let source = "\
+local function f(x)
+ if x then return 1 end
+ repeat continue until true
+ return 2
+end";
         let diags = run_rule(&ImplicitReturn, source, LuaVersion::Luau);
         assert!(diags.is_empty(), "`continue` ends the repeat, so `return 2` runs: {diags:?}");
     }

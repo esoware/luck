@@ -474,7 +474,12 @@ mod tests {
 
     #[test]
     fn luaurc_with_an_unterminated_long_comment_is_malformed() {
-        let project = project_with(&[(".luaurc", "--[[ never closed\n{}")]);
+        let project = project_with(&[(
+            ".luaurc",
+            "\
+--[[ never closed
+{}",
+        )]);
         assert!(read_declared_aliases(project.path()).is_malformed);
     }
 

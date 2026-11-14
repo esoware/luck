@@ -9,7 +9,14 @@ use crate::common::{finishes_within, in_directory, project_with};
 /// value.
 #[test]
 fn editorconfig_empty_value_keeps_the_other_properties() {
-    let project = project_with(&[(".editorconfig", "[*.lua]\nindent_size = 2\ncharset =\n")]);
+    let project = project_with(&[(
+        ".editorconfig",
+        "\
+[*.lua]
+indent_size = 2
+charset =
+",
+    )]);
     let config = resolved_format_config(None, Some(&project.path().join("main.lua")));
     assert_eq!(
         config.indent_width,
@@ -20,7 +27,13 @@ fn editorconfig_empty_value_keeps_the_other_properties() {
 
 #[test]
 fn editorconfig_bom_before_the_first_section_keeps_its_properties() {
-    let project = project_with(&[(".editorconfig", "\u{feff}[*.lua]\nindent_size = 2\n")]);
+    let project = project_with(&[(
+        ".editorconfig",
+        "\
+\u{feff}[*.lua]
+indent_size = 2
+",
+    )]);
     let config = resolved_format_config(None, Some(&project.path().join("main.lua")));
     assert_eq!(
         config.indent_width,
@@ -34,7 +47,14 @@ fn editorconfig_bom_before_the_first_section_keeps_its_properties() {
 #[test]
 fn editorconfig_slash_section_applies_to_a_path_relative_to_a_subdirectory() {
     let project = project_with(&[
-        (".editorconfig", "root = true\n[src/*.lua]\nindent_size = 3\n"),
+        (
+            ".editorconfig",
+            "\
+root = true
+[src/*.lua]
+indent_size = 3
+",
+        ),
         ("src/a.lua", ""),
     ]);
     let config = in_directory(&project.path().join("src"), || {
@@ -49,16 +69,29 @@ fn editorconfig_slash_section_applies_to_a_path_relative_to_a_subdirectory() {
 
 #[test]
 fn editorconfig_alternative_after_a_starred_one_still_matches() {
-    let project =
-        project_with(&[(".editorconfig", "root = true\n[{a*b,xb}.lua]\nindent_size = 2\n")]);
+    let project = project_with(&[(
+        ".editorconfig",
+        "\
+root = true
+[{a*b,xb}.lua]
+indent_size = 2
+",
+    )]);
     let config = resolved_format_config(None, Some(&project.path().join("xb.lua")));
     assert_eq!(config.indent_width, Some(2), "`xb.lua` matches the `xb` alternative");
 }
 
 #[test]
 fn deeply_nested_editorconfig_section_does_not_crash() {
-    let section =
-        format!("root = true\n[{}a{}]\nindent_size = 2\n", "{a,".repeat(5000), "}".repeat(5000));
+    let section = format!(
+        "\
+root = true
+[{}a{}]
+indent_size = 2
+",
+        "{a,".repeat(5000),
+        "}".repeat(5000)
+    );
     let project = project_with(&[(".editorconfig", &section)]);
     let config = resolved_format_config(None, Some(&project.path().join("a.lua")));
     assert!(
@@ -69,7 +102,14 @@ fn deeply_nested_editorconfig_section_does_not_crash() {
 
 #[test]
 fn editorconfig_alternation_section_matches_promptly() {
-    let section = format!("root = true\n[b{}.lua]\nindent_size = 2\n", "{a,aa}".repeat(40));
+    let section = format!(
+        "\
+root = true
+[b{}.lua]
+indent_size = 2
+",
+        "{a,aa}".repeat(40)
+    );
     let project = project_with(&[(".editorconfig", &section)]);
     let file_path = project.path().join(format!("{}.lua", "a".repeat(60)));
     let is_finished = finishes_within(Duration::from_secs(10), move || {

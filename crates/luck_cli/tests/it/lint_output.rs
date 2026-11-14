@@ -10,7 +10,10 @@ use crate::common::{luck_in, write_file};
 
 /// `unused_variable` is a warning by default and `undefined_variable` an
 /// error.
-const WARNING_AND_ERROR: &str = "local unused = 1\nprint(undefined_name)\n";
+const WARNING_AND_ERROR: &str = "\
+local unused = 1
+print(undefined_name)
+";
 const WARNING_ONLY: &str = "local unused = 1\n";
 
 #[test]

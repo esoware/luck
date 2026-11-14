@@ -74,55 +74,192 @@ fn long_string_delimiters_and_bytes_roundtrip() {
     }
 }
 
+/// For each child of `composite_types_preserve_grouping`, its layouts at width
+/// 1 and at widths 60, 80, and 120 as an optional's operand and as either
+/// operand of a union and of an intersection.
+const COMPOSITE_TYPE_LAYOUTS: [[(&str, &str); 5]; 4] = [
+    [
+        (
+            "\
+type Result = (
+\t| A
+\t| B)?
+",
+            "type Result = (A | B)?\n",
+        ),
+        (
+            "\
+type Result =
+\t| (
+\t\t| A
+\t\t| B)
+\t| C
+",
+            "type Result = (A | B) | C\n",
+        ),
+        (
+            "\
+type Result =
+\t| C
+\t| (
+\t\t| A
+\t\t| B)
+",
+            "type Result = C | (A | B)\n",
+        ),
+        (
+            "\
+type Result =
+\t& (
+\t\t| A
+\t\t| B)
+\t& C
+",
+            "type Result = (A | B) & C\n",
+        ),
+        (
+            "\
+type Result =
+\t& C
+\t& (
+\t\t| A
+\t\t| B)
+",
+            "type Result = C & (A | B)\n",
+        ),
+    ],
+    [
+        (
+            "\
+type Result = (
+\t& A
+\t& B)?
+",
+            "type Result = (A & B)?\n",
+        ),
+        (
+            "\
+type Result =
+\t| (
+\t\t& A
+\t\t& B)
+\t| C
+",
+            "type Result = (A & B) | C\n",
+        ),
+        (
+            "\
+type Result =
+\t| C
+\t| (
+\t\t& A
+\t\t& B)
+",
+            "type Result = C | (A & B)\n",
+        ),
+        (
+            "\
+type Result =
+\t& (
+\t\t& A
+\t\t& B)
+\t& C
+",
+            "type Result = (A & B) & C\n",
+        ),
+        (
+            "\
+type Result =
+\t& C
+\t& (
+\t\t& A
+\t\t& B)
+",
+            "type Result = C & (A & B)\n",
+        ),
+    ],
+    [
+        ("type Result = (() -> A)?\n", "type Result = (() -> A)?\n"),
+        (
+            "\
+type Result =
+\t| (() -> A)
+\t| C
+",
+            "type Result = (() -> A) | C\n",
+        ),
+        (
+            "\
+type Result =
+\t| C
+\t| (() -> A)
+",
+            "type Result = C | (() -> A)\n",
+        ),
+        (
+            "\
+type Result =
+\t& (() -> A)
+\t& C
+",
+            "type Result = (() -> A) & C\n",
+        ),
+        (
+            "\
+type Result =
+\t& C
+\t& (() -> A)
+",
+            "type Result = C & (() -> A)\n",
+        ),
+    ],
+    [
+        ("type Result = A??\n", "type Result = A??\n"),
+        (
+            "\
+type Result =
+\t| A?
+\t| C
+",
+            "type Result = A? | C\n",
+        ),
+        (
+            "\
+type Result =
+\t| C
+\t| A?
+",
+            "type Result = C | A?\n",
+        ),
+        (
+            "\
+type Result =
+\t& (A?)
+\t& C
+",
+            "type Result = (A?) & C\n",
+        ),
+        (
+            "\
+type Result =
+\t& C
+\t& (A?)
+",
+            "type Result = C & (A?)\n",
+        ),
+    ],
+];
+
 #[test]
 fn composite_types_preserve_grouping() {
     let synth = Synth::new();
-    // Each child, then its layouts at width 1 and at widths 60, 80, and 120
-    // as an optional's operand and as either operand of a union and of an
-    // intersection.
-    let cases = [
-        (
-            synth.ty_union(vec![synth.ty_named("A"), synth.ty_named("B")]),
-            [
-                ("type Result = (\n\t| A\n\t| B)?\n", "type Result = (A | B)?\n"),
-                ("type Result =\n\t| (\n\t\t| A\n\t\t| B)\n\t| C\n", "type Result = (A | B) | C\n"),
-                ("type Result =\n\t| C\n\t| (\n\t\t| A\n\t\t| B)\n", "type Result = C | (A | B)\n"),
-                ("type Result =\n\t& (\n\t\t| A\n\t\t| B)\n\t& C\n", "type Result = (A | B) & C\n"),
-                ("type Result =\n\t& C\n\t& (\n\t\t| A\n\t\t| B)\n", "type Result = C & (A | B)\n"),
-            ],
-        ),
-        (
-            synth.ty_intersection(vec![synth.ty_named("A"), synth.ty_named("B")]),
-            [
-                ("type Result = (\n\t& A\n\t& B)?\n", "type Result = (A & B)?\n"),
-                ("type Result =\n\t| (\n\t\t& A\n\t\t& B)\n\t| C\n", "type Result = (A & B) | C\n"),
-                ("type Result =\n\t| C\n\t| (\n\t\t& A\n\t\t& B)\n", "type Result = C | (A & B)\n"),
-                ("type Result =\n\t& (\n\t\t& A\n\t\t& B)\n\t& C\n", "type Result = (A & B) & C\n"),
-                ("type Result =\n\t& C\n\t& (\n\t\t& A\n\t\t& B)\n", "type Result = C & (A & B)\n"),
-            ],
-        ),
-        (
-            synth.ty_function(vec![], synth.ty_named("A")),
-            [
-                ("type Result = (() -> A)?\n", "type Result = (() -> A)?\n"),
-                ("type Result =\n\t| (() -> A)\n\t| C\n", "type Result = (() -> A) | C\n"),
-                ("type Result =\n\t| C\n\t| (() -> A)\n", "type Result = C | (() -> A)\n"),
-                ("type Result =\n\t& (() -> A)\n\t& C\n", "type Result = (() -> A) & C\n"),
-                ("type Result =\n\t& C\n\t& (() -> A)\n", "type Result = C & (() -> A)\n"),
-            ],
-        ),
-        (
-            synth.ty_optional(synth.ty_named("A")),
-            [
-                ("type Result = A??\n", "type Result = A??\n"),
-                ("type Result =\n\t| A?\n\t| C\n", "type Result = A? | C\n"),
-                ("type Result =\n\t| C\n\t| A?\n", "type Result = C | A?\n"),
-                ("type Result =\n\t& (A?)\n\t& C\n", "type Result = (A?) & C\n"),
-                ("type Result =\n\t& C\n\t& (A?)\n", "type Result = C & (A?)\n"),
-            ],
-        ),
+    let children = [
+        synth.ty_union(vec![synth.ty_named("A"), synth.ty_named("B")]),
+        synth.ty_intersection(vec![synth.ty_named("A"), synth.ty_named("B")]),
+        synth.ty_function(vec![], synth.ty_named("A")),
+        synth.ty_optional(synth.ty_named("A")),
     ];
-    for (child, layouts) in cases {
+    for (child, layouts) in children.into_iter().zip(COMPOSITE_TYPE_LAYOUTS) {
         let types = [
             synth.ty_optional(child.clone()),
             synth.ty_union(vec![child.clone(), synth.ty_named("C")]),
@@ -172,7 +309,11 @@ fn typed_function_roundtrips() {
     assert_format_block(
         &block,
         LuaVersion::Luau,
-        "local identity = function(n: number): number\n\treturn n\nend\n",
+        "\
+local identity = function(n: number): number
+\treturn n
+end
+",
     );
 }
 
@@ -209,7 +350,16 @@ fn mixed_stmts_roundtrip() {
     assert_format_block(
         &block,
         LuaVersion::Luau,
-        "local data = { 1, name = 2, [\"k\"] = true }\nfor key, value in pairs(data) do\nend\nif data then\n\tdata:insert(3)\nelseif false then\nelse\nend\n",
+        "\
+local data = { 1, name = 2, [\"k\"] = true }
+for key, value in pairs(data) do
+end
+if data then
+\tdata:insert(3)
+elseif false then
+else
+end
+",
     );
 }
 
@@ -291,9 +441,20 @@ fn string_bytes_roundtrips() {
 #[test]
 fn long_string_roundtrips() {
     let synth = Synth::new();
-    let text = synth.long_string("line one\nline ]] two");
+    let text = synth.long_string(
+        "\
+line one
+line ]] two",
+    );
     let block = synth.block(vec![synth.local(&["doc"], vec![text])], None);
-    assert_format_block(&block, LuaVersion::Luau, "local doc = [=[line one\nline ]] two]=]\n");
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "\
+local doc = [=[line one
+line ]] two]=]
+",
+    );
 }
 
 #[test]
@@ -327,7 +488,10 @@ fn call_sugar_roundtrips() {
     assert_format_block(
         &block,
         LuaVersion::Luau,
-        "require(\"module\")\nconfigure({ debug = true })\n",
+        "\
+require(\"module\")
+configure({ debug = true })
+",
     );
 }
 
@@ -354,7 +518,13 @@ fn globals_roundtrip_in_lua55() {
     assert_format_block(
         &block,
         LuaVersion::Lua55,
-        "global shared\n\nglobal function main() end\n\nglobal *\n",
+        "\
+global shared
+
+global function main() end
+
+global *
+",
     );
 }
 
@@ -374,7 +544,14 @@ fn mid_block_break_roundtrips_in_lua54() {
     assert_format_block(
         &block,
         LuaVersion::Lua54,
-        "while true do\n\tif done then\n\t\tbreak\n\tend\n\tstep()\nend\n",
+        "\
+while true do
+\tif done then
+\t\tbreak
+\tend
+\tstep()
+end
+",
     );
 }
 
@@ -382,7 +559,14 @@ fn mid_block_break_roundtrips_in_lua54() {
 fn goto_roundtrips_in_lua54() {
     let synth = Synth::new();
     let block = synth.block(vec![synth.goto_("done"), synth.label("done")], None);
-    assert_format_block(&block, LuaVersion::Lua54, "goto done\n::done::\n");
+    assert_format_block(
+        &block,
+        LuaVersion::Lua54,
+        "\
+goto done
+::done::
+",
+    );
 }
 
 #[test]
@@ -435,7 +619,15 @@ fn luau_type_forms_roundtrip() {
     assert_format_block(
         &block,
         LuaVersion::Luau,
-        "export type Handler<T...> = <U>(name: string, T...) -> (U, boolean)\n\ntype Entry = { read id: number, [string]: boolean }\n\ntype Mode = \"fast\" | true | nil\n\nlocal narrowed = value :: typeof(template)\n",
+        "\
+export type Handler<T...> = <U>(name: string, T...) -> (U, boolean)
+
+type Entry = { read id: number, [string]: boolean }
+
+type Mode = \"fast\" | true | nil
+
+local narrowed = value :: typeof(template)
+",
     );
 }
 
@@ -449,7 +641,14 @@ fn function_attributes_roundtrip() {
         synth.block(vec![], None),
     );
     let block = synth.block(vec![stmt], None);
-    assert_format_block(&block, LuaVersion::Luau, "@native\nlocal function hot() end\n");
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "\
+@native
+local function hot() end
+",
+    );
 }
 
 #[test]
@@ -467,7 +666,10 @@ fn attribute_args_roundtrip() {
     assert_format_block(
         &block,
         LuaVersion::Luau,
-        "@[deprecated({ use = \"y\" })]\nlocal function old() end\n",
+        "\
+@[deprecated({ use = \"y\" })]
+local function old() end
+",
     );
 }
 
@@ -506,7 +708,11 @@ fn const_declarations_roundtrip() {
     assert_format_block(
         &block,
         LuaVersion::Luau,
-        "const frozen = 1\n\nconst function pinned() end\n",
+        "\
+const frozen = 1
+
+const function pinned() end
+",
     );
 }
 
@@ -578,7 +784,10 @@ fn synthetic_comments_placed_around_stmt() {
         Comments::synthetic(vec![leading, trailing]),
         LuaVersion::Luau,
         &FormatOptions::default(),
-        "-- leading note\nlocal x = 1 -- trailing note\n",
+        "\
+-- leading note
+local x = 1 -- trailing note
+",
     );
 }
 
@@ -594,7 +803,11 @@ fn dangling_comment_prints_inside_empty_function() {
         Comments::synthetic(vec![dangling]),
         LuaVersion::Luau,
         &FormatOptions::default(),
-        "local function stub()\n\t-- unreachable\nend\n",
+        "\
+local function stub()
+\t-- unreachable
+end
+",
     );
 }
 
@@ -606,13 +819,24 @@ fn requested_blank_lines_separate_stmts() {
     let blank_anchor = second.span().start;
     let block = synth.block(vec![first, second], None);
 
-    assert_format_block(&block, LuaVersion::Luau, "local a = 1\nlocal b = 2\n");
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "\
+local a = 1
+local b = 2
+",
+    );
     assert_format_block_with(
         &block,
         Comments::synthetic(vec![]).with_blank_before([blank_anchor]),
         LuaVersion::Luau,
         &FormatOptions::default(),
-        "local a = 1\n\nlocal b = 2\n",
+        "\
+local a = 1
+
+local b = 2
+",
     );
 }
 
@@ -648,7 +872,11 @@ fn synthetic_comment_on_a_collapsible_body_keeps_it_expanded() {
         Comments::synthetic(vec![trailing]),
         LuaVersion::Luau,
         &options,
-        "if a then\n\tlocal x = 1 -- why\nend\n",
+        "\
+if a then
+\tlocal x = 1 -- why
+end
+",
     );
 }
 
@@ -656,14 +884,23 @@ fn synthetic_comment_on_a_collapsible_body_keeps_it_expanded() {
 fn multi_line_synthetic_comment_stays_a_comment() {
     let synth = Synth::new();
     let stmt = synth.local(&["x"], vec![synth.number("1")]);
-    let comment = SyntheticComment::leading(&stmt, "first line\ny = 2");
+    let comment = SyntheticComment::leading(
+        &stmt,
+        "\
+first line
+y = 2",
+    );
     let block = synth.block(vec![stmt], None);
     assert_format_block_with(
         &block,
         Comments::synthetic(vec![comment]),
         LuaVersion::Lua54,
         &FormatOptions::default(),
-        "-- first line\n-- y = 2\nlocal x = 1\n",
+        "\
+-- first line
+-- y = 2
+local x = 1
+",
     );
 }
 
@@ -729,7 +966,11 @@ fn a_run_of_any_length_formats_as_one_level() {
     let block = synth.block(vec![], Some(synth.return_(vec![sum, methods])));
     assert_eq!(block_nesting_depth(&block), 2);
     let expected = format!(
-        "return x\n{}\t\t+ 1,\n\tobject\n{}",
+        "\
+return x
+{}\t\t+ 1,
+\tobject
+{}",
         "\t\t+ 1\n".repeat(links.saturating_sub(1)),
         "\t\t:next()\n".repeat(calls)
     );

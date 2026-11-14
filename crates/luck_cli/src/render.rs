@@ -306,8 +306,10 @@ mod tests {
         let text = String::from_utf8(rendered).unwrap();
         assert_eq!(
             text,
-            "[E010] error: cannot read file `gone.lua`: no such file (gone.lua: byte 0)\n\
-             help: check that the file exists and is readable\n",
+            "\
+[E010] error: cannot read file `gone.lua`: no such file (gone.lua: byte 0)
+help: check that the file exists and is readable
+",
             "{text}"
         );
     }

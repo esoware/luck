@@ -158,7 +158,11 @@ mod tests {
     #[test]
     fn changed_text_applies_each_range_to_the_previous_result() {
         let document = DocumentState::new(
-            "local a = 1\nlocal b = 2\nlocal c = 3".to_owned(),
+            "\
+local a = 1
+local b = 2
+local c = 3"
+                .to_owned(),
             1,
             LuaTarget::Lua54,
             FxHashSet::default(),
@@ -169,13 +173,21 @@ mod tests {
         let text = document.changed_text(vec![
             replace(
                 Range::new(Position::new(0, 0), Position::new(0, 11)),
-                "local a = 10\nlocal aa = 11",
+                "\
+local a = 10
+local aa = 11",
             ),
             replace(Range::new(Position::new(3, 10), Position::new(3, 11)), "30"),
         ]);
         assert_eq!(
             text.as_deref(),
-            Some("local a = 10\nlocal aa = 11\nlocal b = 2\nlocal c = 30"),
+            Some(
+                "\
+local a = 10
+local aa = 11
+local b = 2
+local c = 30"
+            ),
             "second edit must land on the line shifted by the first"
         );
     }

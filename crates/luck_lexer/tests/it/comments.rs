@@ -20,7 +20,11 @@ fn block_comment_without_line_break_is_single_line() {
 
 #[test]
 fn block_comment_with_line_break_is_multi_line() {
-    let result = lex_lua51("x --[[ block\n comment ]]");
+    let result = lex_lua51(
+        "\
+x --[[ block
+ comment ]]",
+    );
     assert_eq!(result.comments.len(), 1);
     assert_eq!(result.comments[0].kind, CommentKind::MultiLineBlock);
 }
@@ -44,7 +48,11 @@ fn unterminated_block_comment_is_error() {
 
 #[test]
 fn shebang_leads_the_first_token() {
-    let result = lex_lua51("#!/usr/bin/env lua\nlocal x");
+    let result = lex_lua51(
+        "\
+#!/usr/bin/env lua
+local x",
+    );
     assert_eq!(
         result.comments,
         vec![Comment {
@@ -60,7 +68,12 @@ fn shebang_leads_the_first_token() {
 
 #[test]
 fn bom_then_shebang_is_skipped() {
-    let result = lex("\u{FEFF}#!/usr/bin/lua\nprint(1)", LuaVersion::Lua54);
+    let result = lex(
+        "\
+\u{FEFF}#!/usr/bin/lua
+print(1)",
+        LuaVersion::Lua54,
+    );
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert_eq!(result.tokens[0].kind, TokenKind::Identifier("print".into()));
 }
@@ -84,7 +97,11 @@ fn trailing_comment_attaches_to_the_previous_token() {
 
 #[test]
 fn leading_comment_attaches_to_the_next_token() {
-    let result = lex_lua51("-- leading\nlocal x");
+    let result = lex_lua51(
+        "\
+-- leading
+local x",
+    );
     assert_eq!(result.comments.len(), 1);
     let comment = &result.comments[0];
     assert_eq!(comment.position, CommentPosition::Leading);
@@ -94,7 +111,12 @@ fn leading_comment_attaches_to_the_next_token() {
 
 #[test]
 fn comment_after_newline_is_leading() {
-    let result = lex_lua51("x\n-- comment\ny");
+    let result = lex_lua51(
+        "\
+x
+-- comment
+y",
+    );
     assert_eq!(result.comments.len(), 1);
     let comment = &result.comments[0];
     assert_eq!(comment.position, CommentPosition::Leading);
@@ -103,7 +125,12 @@ fn comment_after_newline_is_leading() {
 
 #[test]
 fn consecutive_leading_comments_all_lead_the_next_token() {
-    let result = lex_lua51("-- first\n-- second\nlocal x");
+    let result = lex_lua51(
+        "\
+-- first
+-- second
+local x",
+    );
     assert_eq!(result.comments.len(), 2);
     for comment in &result.comments {
         assert_eq!(comment.position, CommentPosition::Leading);
@@ -124,7 +151,11 @@ fn comment_before_the_first_token_on_its_line_leads_it() {
 
 #[test]
 fn comment_at_end_of_file_leads_eof() {
-    let result = lex_lua51("x\n-- end");
+    let result = lex_lua51(
+        "\
+x
+-- end",
+    );
     let eof = result.tokens.last().expect("an EOF token");
     assert_eq!(eof.kind, TokenKind::Eof);
     assert_eq!(result.comments[0].position, CommentPosition::Leading);
@@ -134,7 +165,11 @@ fn comment_at_end_of_file_leads_eof() {
 
 #[test]
 fn line_comment_is_followed_by_newline() {
-    let result = lex_lua51("x -- trailing\ny");
+    let result = lex_lua51(
+        "\
+x -- trailing
+y",
+    );
     assert_eq!(result.comments.len(), 1);
     assert!(result.comments[0].is_followed_by_newline);
 }
@@ -151,7 +186,12 @@ fn block_comment_is_followed_by_newline_only_across_spaces_and_tabs() {
 
 #[test]
 fn comment_after_a_multi_line_block_comment_leads_the_next_token() {
-    let result = lex_lua51("x --[[\n]] -- c\ny");
+    let result = lex_lua51(
+        "\
+x --[[
+]] -- c
+y",
+    );
     assert_eq!(result.comments.len(), 2);
     assert_eq!(result.comments[0].position, CommentPosition::Trailing);
     assert_eq!(result.comments[0].attached_to, 0);
@@ -163,7 +203,11 @@ fn comment_after_a_multi_line_block_comment_leads_the_next_token() {
 
 #[test]
 fn single_line_block_comment_keeps_the_next_comment_trailing() {
-    let result = lex_lua51("x --[[ a ]] -- c\ny");
+    let result = lex_lua51(
+        "\
+x --[[ a ]] -- c
+y",
+    );
     assert_eq!(result.comments[1].position, CommentPosition::Trailing);
     assert!(!result.comments[1].is_preceded_by_newline);
 }
@@ -183,7 +227,12 @@ fn shebang_runs_past_a_carriage_return_to_the_line_feed() {
 
 #[test]
 fn luau_hash_first_line_without_bang_is_not_a_shebang() {
-    let result = lex("#x\nreturn 1", LuaVersion::Luau);
+    let result = lex(
+        "\
+#x
+return 1",
+        LuaVersion::Luau,
+    );
     assert_eq!(
         result.comments,
         Vec::<Comment>::new(),

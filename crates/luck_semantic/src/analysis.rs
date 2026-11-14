@@ -206,31 +206,76 @@ mod tests {
     #[test]
     fn reaches_host_global_requires_a_global_the_chunk_leaves_alone() {
         assert!(reaches_host_print("print(1)", LuaVersion::Lua54));
-        assert!(!reaches_host_print("function print() end\nprint(1)", LuaVersion::Lua54));
+        assert!(!reaches_host_print(
+            "\
+function print() end
+print(1)",
+            LuaVersion::Lua54
+        ));
     }
 
     #[test]
     fn reaches_host_global_is_false_for_a_local_or_a_field_of_env() {
-        assert!(!reaches_host_print("local print = 1\nprint(1)", LuaVersion::Lua54));
-        assert!(!reaches_host_print("local _ENV = {}\nprint(1)", LuaVersion::Lua54));
-        assert!(reaches_host_print("local _ENV = {}\nprint(1)", LuaVersion::Lua51));
+        assert!(!reaches_host_print(
+            "\
+local print = 1
+print(1)",
+            LuaVersion::Lua54
+        ));
+        assert!(!reaches_host_print(
+            "\
+local _ENV = {}
+print(1)",
+            LuaVersion::Lua54
+        ));
+        assert!(reaches_host_print(
+            "\
+local _ENV = {}
+print(1)",
+            LuaVersion::Lua51
+        ));
     }
 
     #[test]
     fn reaches_host_global_is_false_when_the_chunk_assigns_its_env() {
-        assert!(!reaches_host_print("_ENV = {}\nprint(1)", LuaVersion::Lua54));
-        assert!(reaches_host_print("_ENV = {}\nprint(1)", LuaVersion::Lua51));
+        assert!(!reaches_host_print(
+            "\
+_ENV = {}
+print(1)",
+            LuaVersion::Lua54
+        ));
+        assert!(reaches_host_print(
+            "\
+_ENV = {}
+print(1)",
+            LuaVersion::Lua51
+        ));
     }
 
     #[test]
     fn reaches_host_global_is_true_for_a_declared_global_without_a_value() {
-        assert!(reaches_host_print("global print\nprint(1)", LuaVersion::Lua55));
-        assert!(!reaches_host_print("global print = 1\nprint(1)", LuaVersion::Lua55));
+        assert!(reaches_host_print(
+            "\
+global print
+print(1)",
+            LuaVersion::Lua55
+        ));
+        assert!(!reaches_host_print(
+            "\
+global print = 1
+print(1)",
+            LuaVersion::Lua55
+        ));
     }
 
     #[test]
     fn is_defined_global_counts_a_global_star_in_scope() {
-        let parsed = luck_parser::parse("global *\nreturn y", LuaVersion::Lua55);
+        let parsed = luck_parser::parse(
+            "\
+global *
+return y",
+            LuaVersion::Lua55,
+        );
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let analysis = analyze(&parsed.block, LuaVersion::Lua55);
         let y = &analysis.scope_tree.references[0];
@@ -295,8 +340,12 @@ mod tests {
 
     #[test]
     fn free_name_in_nested_function_captures_local_env() {
-        let analysis =
-            analyze_lua54("local _ENV = {}\nlocal function f() return missing end\nreturn f");
+        let analysis = analyze_lua54(
+            "\
+local _ENV = {}
+local function f() return missing end
+return f",
+        );
         assert!(
             env_symbol(&analysis).is_upvalue,
             "a free name inside a nested function reads _ENV as an upvalue of that function"
@@ -305,7 +354,9 @@ mod tests {
 
     #[test]
     fn resolve_callee_bails_under_a_local_env() {
-        let source = "local _ENV = { print = function() end }\nprint(1, 2)";
+        let source = "\
+local _ENV = { print = function() end }
+print(1, 2)";
         assert_eq!(
             resolve_last_statement_call(source, LuaVersion::Lua54),
             None,
@@ -315,7 +366,9 @@ mod tests {
 
     #[test]
     fn resolve_callee_bails_on_a_global_the_file_rebinds() {
-        let source = "function tostring(a, b) return a end\ntostring(1, 2)";
+        let source = "\
+function tostring(a, b) return a end
+tostring(1, 2)";
         assert_eq!(
             resolve_last_statement_call(source, LuaVersion::Lua54),
             None,
@@ -325,7 +378,12 @@ mod tests {
 
     #[test]
     fn type_function_body_knows_the_types_library() {
-        let unknown = unknown_globals("type function f(t)\n  return types.number\nend");
+        let unknown = unknown_globals(
+            "\
+type function f(t)
+  return types.number
+end",
+        );
         assert!(
             unknown.is_empty(),
             "type functions run with the `types` library, so the body has no unknown global: \
@@ -336,7 +394,13 @@ mod tests {
     #[test]
     fn type_function_body_knows_sibling_type_functions() {
         let unknown = unknown_globals(
-            "type function f(t)\n  return t\nend\ntype function g(t)\n  return f(t)\nend",
+            "\
+type function f(t)
+  return t
+end
+type function g(t)
+  return f(t)
+end",
         );
         assert!(
             unknown.is_empty(),

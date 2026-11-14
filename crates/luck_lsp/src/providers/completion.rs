@@ -365,8 +365,17 @@ mod tests {
 
     #[test]
     fn locals_before_the_cursor_are_offered_without_implicit_self() {
-        let text = "local a = 1\nlocal function f(p) end\nfor i = 1, 2 do end\n\
-                    for k, v in pairs({}) do end\nlocal t = {}\nfunction t:m(q)\n\nend\nlocal later\n";
+        let text = "\
+local a = 1
+local function f(p) end
+for i = 1, 2 do end
+for k, v in pairs({}) do end
+local t = {}
+function t:m(q)
+
+end
+local later
+";
         let document = lua54_document(text);
         // The blank line inside `t:m`.
         let items = items_at(&document, 6, 0);
@@ -380,7 +389,11 @@ mod tests {
 
     #[test]
     fn named_vararg_is_offered_on_lua55() {
-        let text = "local function f(...args)\n\nend\n";
+        let text = "\
+local function f(...args)
+
+end
+";
         let document = document_for(text, LuaTarget::Lua55);
         let items = items_at(&document, 1, 0);
         assert!(variables_of(&items).contains(&"args"), "{items:?}");
@@ -501,7 +514,9 @@ mod tests {
 
     #[test]
     fn completion_after_shaped_local_colon_offers_file_methods() {
-        let text = "local f = io.open('x')\nf:";
+        let text = "\
+local f = io.open('x')
+f:";
         let document = lua54_document(text);
         let items = items_at(&document, 1, 2);
         assert!(
@@ -514,7 +529,9 @@ mod tests {
 
     #[test]
     fn completion_after_shaped_local_colon_offers_datamodel_methods() {
-        let text = "local g = game\ng:";
+        let text = "\
+local g = game
+g:";
         let document = roblox_document(text);
         let items = items_at(&document, 1, 2);
         assert!(
@@ -578,7 +595,9 @@ mod tests {
 
     #[test]
     fn completion_refuses_members_of_a_shadowed_namespace() {
-        let text = "local math = {}\nmath.";
+        let text = "\
+local math = {}
+math.";
         let document = lua54_document(text);
         let items = items_at(&document, 1, 5);
         assert!(

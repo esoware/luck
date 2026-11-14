@@ -981,7 +981,9 @@ mod tests {
 
     #[test]
     fn sourced_leading_taken_once() {
-        let source = "-- leading\nlocal x = 1";
+        let source = "\
+-- leading
+local x = 1";
         let comments = vec![make_comment(0, 10, 11, CommentKind::Line, CommentPosition::Leading)];
         let mut f = formatter_over(Comments::from_source(&comments, source, LuaVersion::Lua54));
 
@@ -994,7 +996,9 @@ mod tests {
 
     #[test]
     fn ignore_directive_detected() {
-        let source = "-- luck: ignore\nlocal x = 1";
+        let source = "\
+-- luck: ignore
+local x = 1";
         let comments = vec![make_comment(0, 15, 16, CommentKind::Line, CommentPosition::Leading)];
         let mut f = formatter_over(Comments::from_source(&comments, source, LuaVersion::Lua54));
         assert!(write_leading_comments(&mut f, 16));
@@ -1090,7 +1094,11 @@ mod tests {
 
     #[test]
     fn format_off_disables_formatting_until_format_on() {
-        let source = "-- luck: format off\nlocal x=1\n-- luck: format on\nlocal y = 2";
+        let source = "\
+-- luck: format off
+local x=1
+-- luck: format on
+local y = 2";
         let source_comments = vec![
             make_comment(0, 19, 20, CommentKind::Line, CommentPosition::Leading),
             make_comment(30, 49, 50, CommentKind::Line, CommentPosition::Leading),

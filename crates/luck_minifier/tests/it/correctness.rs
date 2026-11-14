@@ -153,7 +153,13 @@ fn dead_code_is_idempotent() {
 
 #[test]
 fn reminifying_does_not_grow_output() {
-    let source = "local function add(a, b)\n  return a + b\nend\nlocal x = add(1, 2)\nprint(x)\n";
+    let source = "\
+local function add(a, b)
+  return a + b
+end
+local x = add(1, 2)
+print(x)
+";
     let first = minify_lua54(source);
     let second = minify_lua54(&first);
     // Re-minification may rename locals differently (naming is
@@ -169,7 +175,27 @@ fn reminifying_does_not_grow_output() {
 
 #[test]
 fn table_code_keeps_globals_and_fields() {
-    let source = "local function make_table(n)\n    local t = {}\n    for i = 1, n do\n        t[i] = { value = i * 2, label = \"item\" .. tostring(i) }\n    end\n    return t\nend\nlocal items = make_table(10)\nif #items > 5 then\n    print(\"many items\")\nelse\n    print(\"few items\")\nend\nfor _, v in ipairs(items) do\n    if v.value > 10 then\n        print(v.label)\n    end\nend\nreturn items\n";
+    let source = "\
+local function make_table(n)
+    local t = {}
+    for i = 1, n do
+        t[i] = { value = i * 2, label = \"item\" .. tostring(i) }
+    end
+    return t
+end
+local items = make_table(10)
+if #items > 5 then
+    print(\"many items\")
+else
+    print(\"few items\")
+end
+for _, v in ipairs(items) do
+    if v.value > 10 then
+        print(v.label)
+    end
+end
+return items
+";
     let result = minify_lua54(source);
     assert!(reparses(&result), "Parse errors\nOutput: {result}");
     assert!(result.contains("tostring"), "Global 'tostring' missing: {result}");
@@ -206,11 +232,23 @@ fn nested(open: &str, count: usize, innermost: &str, close: &str) -> String {
 fn a_local_is_not_inlined_where_its_value_would_nest_past_the_cap() {
     // The initializer is 31 levels deep, and its one use sits 241 levels in.
     let initializer = format!("{}#\"a\"{}", "#\"a\"+(".repeat(15), ")".repeat(15));
-    let source = format!("local x = {initializer}\nreturn {}\n", nested("{", 240, "x", "}"));
+    let source = format!(
+        "\
+local x = {initializer}
+return {}
+",
+        nested("{", 240, "x", "}")
+    );
     let output = assert_minifies_within_the_depth_cap(&source);
     assert!(output.starts_with("local "), "the local must stay declared");
 
-    let shallow = format!("local x = {initializer}\nreturn {}\n", nested("{", 200, "x", "}"));
+    let shallow = format!(
+        "\
+local x = {initializer}
+return {}
+",
+        nested("{", 200, "x", "}")
+    );
     let inlined = assert_minifies_within_the_depth_cap(&shallow);
     assert!(inlined.starts_with("return"), "the local fits where it's used");
 }

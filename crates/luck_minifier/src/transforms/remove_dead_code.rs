@@ -841,14 +841,23 @@ mod tests {
 
     #[test]
     fn removes_unused_local_literal() {
-        let result = apply("local unused = 42\nlocal used = 1\nreturn used\n");
+        let result = apply(
+            "\
+local unused = 42
+local used = 1
+return used
+",
+        );
         assert!(!result.contains("unused"), "Unused local not removed: {result}");
         assert!(result.contains("used"), "Used local was removed: {result}");
     }
 
     #[test]
     fn keeps_unused_env_only_where_it_redirects_globals() {
-        let source = "local _ENV = {}\nreturn 1\n";
+        let source = "\
+local _ENV = {}
+return 1
+";
         let kept = apply(source);
         assert!(kept.contains("_ENV"), "5.4 must pin _ENV: {kept}");
 
@@ -864,11 +873,31 @@ mod tests {
     #[test]
     fn keeps_local_rooting_a_function_declaration() {
         for source in [
-            "local M = {}\nfunction M.foo() end\nprint(\"ok\")\n",
-            "local M = {}\nfunction M:foo() end\nprint(\"ok\")\n",
-            "local M = {}\nfunction M.a.b() end\nprint(\"ok\")\n",
-            "local M = {}\ndo function M.foo() end end\nprint(\"ok\")\n",
-            "local M\nfunction M() end\nprint(\"ok\")\n",
+            "\
+local M = {}
+function M.foo() end
+print(\"ok\")
+",
+            "\
+local M = {}
+function M:foo() end
+print(\"ok\")
+",
+            "\
+local M = {}
+function M.a.b() end
+print(\"ok\")
+",
+            "\
+local M = {}
+do function M.foo() end end
+print(\"ok\")
+",
+            "\
+local M
+function M() end
+print(\"ok\")
+",
         ] {
             let result = apply(source);
             assert!(result.contains("local M"), "{source:?} must keep `local M`: {result}");
@@ -877,7 +906,12 @@ mod tests {
 
     #[test]
     fn removes_unused_local_named_like_a_function_declaration_field() {
-        let result = apply("local foo = {}\nfunction M.foo() end\n");
+        let result = apply(
+            "\
+local foo = {}
+function M.foo() end
+",
+        );
         assert!(!result.contains("local foo"), "only the root is a reference: {result}");
     }
 
@@ -914,7 +948,11 @@ mod tests {
 
     #[test]
     fn keeps_a_local_used_by_a_kept_local() {
-        let source = "local a = function() end\nlocal b = function() return a end\nreturn b\n";
+        let source = "\
+local a = function() end
+local b = function() return a end
+return b
+";
         assert_eq!(
             apply_one_round(source),
             "local a=function()end local b=function()return a end return b"
@@ -929,8 +967,20 @@ mod tests {
     #[test]
     fn a_kept_call_keeps_what_it_uses() {
         for (source, expected) in [
-            ("local y = 1\nlocal x = function() return y end, g()\n", "g()"),
-            ("local y = 1\nlocal x = g(y)\n", "local y=1 g(y)"),
+            (
+                "\
+local y = 1
+local x = function() return y end, g()
+",
+                "g()",
+            ),
+            (
+                "\
+local y = 1
+local x = g(y)
+",
+                "local y=1 g(y)",
+            ),
         ] {
             assert_eq!(apply_one_round(source), expected, "source: {source}");
         }
@@ -966,7 +1016,12 @@ mod tests {
 
     #[test]
     fn removes_unused_local_function() {
-        let result = apply("local function unused() return 1 end\nreturn 2\n");
+        let result = apply(
+            "\
+local function unused() return 1 end
+return 2
+",
+        );
         assert!(!result.contains("unused"), "Unused function not removed: {result}");
     }
 
@@ -1055,7 +1110,12 @@ mod tests {
 
     #[test]
     fn drops_nil_initializer() {
-        let result = apply("local x = nil\nreturn x\n");
+        let result = apply(
+            "\
+local x = nil
+return x
+",
+        );
         assert!(
             !result.contains("= nil") && !result.contains("=nil"),
             "Should remove = nil: {result}"
@@ -1068,7 +1128,12 @@ mod tests {
         // `x = x` on a global fires __index and __newindex under a metatabled
         // environment. Removal is only sound for proven locals, and this pass
         // has no binding info.
-        let result = apply("x = x\nreturn 1\n");
+        let result = apply(
+            "\
+x = x
+return 1
+",
+        );
         assert!(
             result.contains("x=x") || result.contains("x = x"),
             "global self-assignment must be preserved: {result}"
@@ -1105,7 +1170,12 @@ mod tests {
 
     #[test]
     fn keeps_unused_local_reading_a_global() {
-        let result = apply("local unused = g\nreturn 1\n");
+        let result = apply(
+            "\
+local unused = g
+return 1
+",
+        );
         assert!(result.contains('g'), "a global read can fire __index, so it must stay: {result}");
     }
 
@@ -1114,7 +1184,12 @@ mod tests {
         for initializer in
             ["1 // 0", "1 % 0", "nil + 1", "#nil", "\"a\" .. nil", "1 < \"a\"", "-\"a\""]
         {
-            let result = apply(&format!("local unused = {initializer}\nreturn 1\n"));
+            let result = apply(&format!(
+                "\
+local unused = {initializer}
+return 1
+"
+            ));
             assert!(
                 result.contains("local unused"),
                 "`{initializer}` raises at runtime, so it must stay: {result}"
@@ -1125,7 +1200,12 @@ mod tests {
     #[test]
     fn keeps_unused_table_whose_constructor_raises() {
         for k in ["nil", "0/0"] {
-            let result = apply(&format!("local unused = {{[{k}] = 1}}\nreturn 1\n"));
+            let result = apply(&format!(
+                "\
+local unused = {{[{k}] = 1}}
+return 1
+"
+            ));
             assert!(
                 result.contains("local unused"),
                 "a table key of `{k}` raises at runtime, so it must stay: {result}"

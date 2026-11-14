@@ -116,39 +116,53 @@ mod tests {
 
     #[test]
     fn flags_same_block_redeclaration() {
-        let diags = run("do local x = 1\nlocal x = 2\nprint(x) end");
+        let diags = run("\
+do local x = 1
+local x = 2
+print(x) end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]
     fn ignores_sibling_blocks() {
-        let diags = run("do local x = 1 end\ndo local x = 2 end");
+        let diags = run("\
+do local x = 1 end
+do local x = 2 end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_nested_block_shadowing() {
         // Inner block shadowing is `shadowing`'s job.
-        let diags = run("local x = 1\ndo local x = 2 end");
+        let diags = run("\
+local x = 1
+do local x = 2 end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn flags_multiple_redeclarations() {
-        let diags = run("local x = 1\nlocal x = 2\nlocal x = 3");
+        let diags = run("\
+local x = 1
+local x = 2
+local x = 3");
         assert_eq!(diags.len(), 2, "got: {diags:?}");
     }
 
     #[test]
     fn flags_local_function_redeclaration() {
-        let diags = run("local function f() end\nlocal function f() end");
+        let diags = run("\
+local function f() end
+local function f() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
     #[test]
     fn ignores_underscore_names() {
-        let diags = run("local _ = 1\nlocal _ = 2");
+        let diags = run("\
+local _ = 1
+local _ = 2");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 

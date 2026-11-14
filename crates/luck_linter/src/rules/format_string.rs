@@ -297,7 +297,9 @@ mod tests {
 
     #[test]
     fn ignores_nonliteral_format() {
-        let diags = run("local fmt = \"%d\"\nstring.format(fmt, 1)");
+        let diags = run("\
+local fmt = \"%d\"
+string.format(fmt, 1)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -310,7 +312,9 @@ mod tests {
     #[test]
     fn ignores_function_call_args() {
         // `f()` can return any number of values.
-        let diags = run("local function f() end\nstring.format(\"%d %d\", f())");
+        let diags = run("\
+local function f() end
+string.format(\"%d %d\", f())");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -361,7 +365,9 @@ mod tests {
     #[test]
     fn ignores_gsub_nonliteral_pattern_index() {
         // An unknown capture count disables the index check.
-        let diags = run("local p = \"(a)\"\nstring.gsub(\"x\", p, \"%9\")");
+        let diags = run("\
+local p = \"(a)\"
+string.gsub(\"x\", p, \"%9\")");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -388,7 +394,9 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_os() {
-        let diags = run("local os = {}\nos.date(\"%Q\")");
+        let diags = run("\
+local os = {}
+os.date(\"%Q\")");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -537,7 +545,9 @@ mod tests {
 
     #[test]
     fn flags_pattern_method_on_string_local() {
-        let diags = run("local s = \"abc\"\nlocal i = s:match(\"[\")");
+        let diags = run("\
+local s = \"abc\"
+local i = s:match(\"[\")");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
@@ -558,7 +568,9 @@ mod tests {
 
     #[test]
     fn ignores_rebound_string_global() {
-        let diags = run("string = {}\nlocal i = string.match(\"x\", \"[\")");
+        let diags = run("\
+string = {}
+local i = string.match(\"x\", \"[\")");
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

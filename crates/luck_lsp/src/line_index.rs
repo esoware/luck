@@ -209,7 +209,8 @@ mod tests {
     /// boundary at or before it.
     #[test]
     fn positions_and_offsets_count_utf16_units_on_every_line() {
-        let source = "a\u{e4}\u{6f22}\u{1F600}b
+        let source = "\
+a\u{e4}\u{6f22}\u{1F600}b
 \u{1F600}\r
 \u{e4}x\ry\u{6f22}
 

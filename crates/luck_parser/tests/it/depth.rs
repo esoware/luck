@@ -592,41 +592,48 @@ fn a_refused_construct_holding_any_program_ends_where_parsing_would_have() {
             let program = generate_full_embeddable(seed, version, 30);
             let mut wrappers = vec![
                 at_the_cap_in_a_block(&format!(
-                    "do
+                    "\
+do
 {program}
 end"
                 )),
                 at_the_cap_in_a_block(&format!(
-                    "repeat
+                    "\
+repeat
 {program}
 until x"
                 )),
                 at_the_cap_in_a_block(&format!(
-                    "while x do
+                    "\
+while x do
 {program}
 end"
                 )),
                 at_the_cap_in_a_block(&format!(
-                    "if x then
+                    "\
+if x then
 {program}
 else
 {program}
 end"
                 )),
                 at_the_cap_in_an_expression(&format!(
-                    "function(...)
+                    "\
+function(...)
 {program}
 end"
                 )),
                 at_the_cap_in_an_expression(&format!(
-                    "{{function(...)
+                    "\
+{{function(...)
 {program}
 end}}"
                 )),
             ];
             if version.has_interpolated_strings() {
                 wrappers.push(at_the_cap_in_an_expression(&format!(
-                    "`a{{function(...)
+                    "\
+`a{{function(...)
 {program}
 end}}b`"
                 )));

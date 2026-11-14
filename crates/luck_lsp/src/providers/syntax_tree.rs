@@ -171,7 +171,8 @@ return x"#,
             ),
             ("local t = {} f() function t.m(a, ...) return end", LuaTarget::Lua54),
             (
-                "type X<T> = {[string]: (T?) -> ()}
+                "\
+type X<T> = {[string]: (T?) -> ()}
 return `a{b}c`",
                 LuaTarget::Luau,
             ),

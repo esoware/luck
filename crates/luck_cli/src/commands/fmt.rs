@@ -371,11 +371,24 @@ mod tests {
         fs::write(&config_path, r#"{"lua":"lua54"}"#).expect("write luck.json");
         fs::write(
             directory.path().join(".editorconfig"),
-            "root = true\n[*.lua]\nindent_style = space\nindent_size = 2\n",
+            "\
+root = true
+[*.lua]
+indent_style = space
+indent_size = 2
+",
         )
         .expect("write .editorconfig");
         let source_path = directory.path().join("main.lua");
-        fs::write(&source_path, "local function f()\nreturn 1\nend\n").expect("write source");
+        fs::write(
+            &source_path,
+            "\
+local function f()
+return 1
+end
+",
+        )
+        .expect("write source");
 
         fmt_args(&[path_arg(&source_path), "-c", path_arg(&config_path)])
             .run(Verbosity::Quiet)
@@ -401,11 +414,24 @@ mod tests {
         .expect("write luck.json");
         fs::write(
             directory.path().join(".editorconfig"),
-            "root = true\n[*.lua]\nindent_style = space\nindent_size = 2\n",
+            "\
+root = true
+[*.lua]
+indent_style = space
+indent_size = 2
+",
         )
         .expect("write .editorconfig");
         let source_path = directory.path().join("main.lua");
-        fs::write(&source_path, "local function f()\nreturn 1\nend\n").expect("write source");
+        fs::write(
+            &source_path,
+            "\
+local function f()
+return 1
+end
+",
+        )
+        .expect("write source");
 
         fmt_args(&[path_arg(&source_path), "-c", path_arg(&config_path)])
             .run(Verbosity::Quiet)
@@ -423,13 +449,22 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join(".editorconfig"),
-            "root = true\n[*.lua]\nindent_style = space\nindent_size = 2\n",
+            "\
+root = true
+[*.lua]
+indent_style = space
+indent_size = 2
+",
         )
         .expect("write .editorconfig");
         let source_path = directory.path().join("main.lua");
         let outcome = fmt_args(&["--no-editorconfig"]).format_document(
             &LuckConfig::default(),
-            "local function f()\nreturn 1\nend\n",
+            "\
+local function f()
+return 1
+end
+",
             &source_path,
             LuaTarget::Lua54,
             None,

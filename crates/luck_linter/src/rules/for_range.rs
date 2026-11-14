@@ -228,14 +228,18 @@ mod tests {
 
     #[test]
     fn flags_length_to_zero() {
-        let diags = run("local t = {}\nfor i = #t, 0 do print(i) end");
+        let diags = run("\
+local t = {}
+for i = #t, 0 do print(i) end");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("1-indexed"), "{diags:?}");
     }
 
     #[test]
     fn flags_length_to_one_without_step() {
-        let diags = run("local t = {}\nfor i = #t, 1 do print(i) end");
+        let diags = run("\
+local t = {}
+for i = #t, 1 do print(i) end");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("backwards"), "{diags:?}");
     }
@@ -249,7 +253,9 @@ mod tests {
 
     #[test]
     fn ignores_length_to_one_with_negative_step() {
-        let diags = run("local t = {}\nfor i = #t, 1, -1 do print(i) end");
+        let diags = run("\
+local t = {}
+for i = #t, 1, -1 do print(i) end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 

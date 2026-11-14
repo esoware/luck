@@ -185,60 +185,80 @@ mod tests {
 
     #[test]
     fn flags_extra_args_to_local_function() {
-        let diags = run("local function f(a, b) return a + b end\nf(1, 2, 3)");
+        let diags = run("\
+local function f(a, b) return a + b end
+f(1, 2, 3)");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("accepts only 2"), "{diags:?}");
     }
 
     #[test]
     fn flags_extra_args_to_function_expr() {
-        let diags = run("local f = function(a) return a end\nf(1, 2)");
+        let diags = run("\
+local f = function(a) return a end
+f(1, 2)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn flags_zero_param_function() {
-        let diags = run("local function f() end\nf(1)");
+        let diags = run("\
+local function f() end
+f(1)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn flags_guaranteed_overflow_with_trailing_call() {
         // g() may yield nothing, but 1 and 2 already exceed one param.
-        let diags = run("local function g() end\nlocal function f(a) return a end\nf(1, 2, g())");
+        let diags = run("\
+local function g() end
+local function f(a) return a end
+f(1, 2, g())");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn ignores_exact_arg_count() {
-        let diags = run("local function f(a, b) return a + b end\nf(1, 2)");
+        let diags = run("\
+local function f(a, b) return a + b end
+f(1, 2)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_fewer_args() {
         // Missing args are nil, which is how Lua does optional arguments.
-        let diags = run("local function f(a, b) return a or b end\nf(1)");
+        let diags = run("\
+local function f(a, b) return a or b end
+f(1)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_vararg_function() {
-        let diags = run("local function f(...) return ... end\nf(1, 2, 3, 4)");
+        let diags = run("\
+local function f(...) return ... end
+f(1, 2, 3, 4)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_trailing_call_at_boundary() {
         // f(1, g()): g() may yield zero values, so 1 arg is guaranteed.
-        let diags = run("local function g() end\nlocal function f(a) return a end\nf(1, g())");
+        let diags = run("\
+local function g() end
+local function f(a) return a end
+f(1, g())");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_reassigned_function() {
-        let diags =
-            run("local function f(a) return a end\nf = function(a, b, c) return a end\nf(1, 2, 3)");
+        let diags = run("\
+local function f(a) return a end
+f = function(a, b, c) return a end
+f(1, 2, 3)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -250,19 +270,28 @@ mod tests {
 
     #[test]
     fn ignores_table_field_calls() {
-        let diags = run("local t = { f = function(a) return a end }\nt.f(1, 2)");
+        let diags = run("\
+local t = { f = function(a) return a end }
+t.f(1, 2)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_call_to_shadowing_local() {
-        let diags = run("local function f(a) return a end\ndo local f = print\nf(1, 2) end");
+        let diags = run("\
+local function f(a) return a end
+do local f = print
+f(1, 2) end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_recursive_call_within_limit() {
-        let diags = run("local function f(a)\n    if a > 0 then return f(a - 1) end\nend\nf(3)");
+        let diags = run("\
+local function f(a)
+    if a > 0 then return f(a - 1) end
+end
+f(3)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

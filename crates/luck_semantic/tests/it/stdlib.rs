@@ -1127,7 +1127,9 @@ fn get_service_call_resolves() {
 #[test]
 fn get_service_chain_resolves() {
     let name = resolve_last_call(
-        "local players = game:GetService('Players')\nlocal x = players:FindFirstChild('x')",
+        "\
+local players = game:GetService('Players')
+local x = players:FindFirstChild('x')",
     )
     .expect("chained FindFirstChild resolves");
     assert_eq!(name, "players:FindFirstChild");
@@ -1136,7 +1138,9 @@ fn get_service_chain_resolves() {
 #[test]
 fn script_parent_chain_resolves() {
     let name = resolve_last_call(
-        "local container = script.Parent\nlocal x = container:WaitForChild('Config')",
+        "\
+local container = script.Parent
+local x = container:WaitForChild('Config')",
     )
     .expect("script.Parent chain resolves");
     assert_eq!(name, "container:WaitForChild");

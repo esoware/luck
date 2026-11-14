@@ -43,7 +43,10 @@ mod tests {
 
     #[test]
     fn highlight_marks_compound_assignment_as_a_write() {
-        let text = "local n = 1\nn += 1\n";
+        let text = "\
+local n = 1
+n += 1
+";
         let document =
             DocumentState::new(text.to_owned(), 1, LuaTarget::Luau, FxHashSet::default());
         let highlights = document_highlights(&document, Position::new(1, 0));

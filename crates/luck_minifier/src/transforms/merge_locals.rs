@@ -471,28 +471,53 @@ mod tests {
 
     #[test]
     fn merges_consecutive_locals() {
-        let result = apply("local a = 1\nlocal b = 2\nlocal c = 3\nprint(a, b, c)\n");
+        let result = apply(
+            "\
+local a = 1
+local b = 2
+local c = 3
+print(a, b, c)
+",
+        );
         let local_count = result.matches("local").count();
         assert_eq!(local_count, 1, "Expected single local statement, got: {result}");
     }
 
     #[test]
     fn no_merge_across_non_local() {
-        let result = apply("local a = 1\nprint(a)\nlocal b = 2\n");
+        let result = apply(
+            "\
+local a = 1
+print(a)
+local b = 2
+",
+        );
         let local_count = result.matches("local").count();
         assert_eq!(local_count, 2, "Should have 2 separate locals, got: {result}");
     }
 
     #[test]
     fn no_merge_of_call_initializers() {
-        let result = apply("local x = f()\nlocal y = g()\nprint(x, y)\n");
+        let result = apply(
+            "\
+local x = f()
+local y = g()
+print(x, y)
+",
+        );
         let local_count = result.matches("local").count();
         assert_eq!(local_count, 2, "Function calls should not merge, got: {result}");
     }
 
     #[test]
     fn no_merge_when_dependency_in_binary() {
-        let result = apply("local a = 1\nlocal b = a + 1\nprint(b)\n");
+        let result = apply(
+            "\
+local a = 1
+local b = a + 1
+print(b)
+",
+        );
         let local_count = result.matches("local").count();
         assert_eq!(
             local_count, 2,
@@ -502,7 +527,12 @@ mod tests {
 
     #[test]
     fn no_merge_when_a_closure_declares_a_function_on_the_earlier_name() {
-        let source = "local a = {}\nlocal b = function() function a.x() end end\nb()\nprint(a.x)\n";
+        let source = "\
+local a = {}
+local b = function() function a.x() end end
+b()
+print(a.x)
+";
         let result = apply(source);
         assert!(result.contains("local a = {}") || result.contains("local a={}"), "{result}");
         assert!(!result.contains("local a, b") && !result.contains("local a,b"), "{result}");
@@ -511,10 +541,31 @@ mod tests {
     #[test]
     fn merges_assignments_to_proven_locals() {
         for (source, expected) in [
-            ("local a, b = f()\na = 1\nb = 2\n", "local a,b=f()a,b=1,2"),
-            ("local function g(a, b)\na = 1\nb = 2\nend\n", "local function g(a,b)a,b=1,2 end"),
             (
-                "local a, b = f()\nlocal function g()\na = 1\nb = 2\nend\n",
+                "\
+local a, b = f()
+a = 1
+b = 2
+",
+                "local a,b=f()a,b=1,2",
+            ),
+            (
+                "\
+local function g(a, b)
+a = 1
+b = 2
+end
+",
+                "local function g(a,b)a,b=1,2 end",
+            ),
+            (
+                "\
+local a, b = f()
+local function g()
+a = 1
+b = 2
+end
+",
                 "local a,b=f()local function g()a,b=1,2 end",
             ),
         ] {
@@ -524,17 +575,43 @@ mod tests {
 
     #[test]
     fn no_merge_of_global_assignments() {
-        assert_eq!(apply("a = 1\nb = 2\n"), "a=1 b=2");
+        assert_eq!(
+            apply(
+                "\
+a = 1
+b = 2
+"
+            ),
+            "a=1 b=2"
+        );
     }
 
     #[test]
     fn no_merge_of_a_local_with_a_global() {
-        assert_eq!(apply("local a = f()\na = 1\nb = 2\n"), "local a=f()a=1 b=2");
+        assert_eq!(
+            apply(
+                "\
+local a = f()
+a = 1
+b = 2
+"
+            ),
+            "local a=f()a=1 b=2"
+        );
     }
 
     #[test]
     fn no_merge_of_a_name_past_its_local_scope() {
-        assert_eq!(apply("do local a = f() end\na = 1\nb = 2\n"), "do local a=f()end a=1 b=2");
+        assert_eq!(
+            apply(
+                "\
+do local a = f() end
+a = 1
+b = 2
+"
+            ),
+            "do local a=f()end a=1 b=2"
+        );
     }
 
     #[test]
@@ -544,8 +621,17 @@ mod tests {
         };
         let (outer, inner) = (names('v'), names('w'));
         let source = format!(
-            "local {outer} = f()\nv0 = 1\nv1 = 2\nlocal c, d = g()\nc = 1\nd = 2\n\
-             do local {inner} = h() w0 = 1 end\nw0 = 1\nv2 = 2\n"
+            "\
+local {outer} = f()
+v0 = 1
+v1 = 2
+local c, d = g()
+c = 1
+d = 2
+do local {inner} = h() w0 = 1 end
+w0 = 1
+v2 = 2
+"
         );
         assert_eq!(
             apply(&source),
@@ -558,7 +644,17 @@ mod tests {
 
     #[test]
     fn no_merge_of_index_targets() {
-        for source in ["a.b = 1\nc.d = 2\n", "local a, c = f()\na.b = 1\nc[1] = 2\n"] {
+        for source in [
+            "\
+a.b = 1
+c.d = 2
+",
+            "\
+local a, c = f()
+a.b = 1
+c[1] = 2
+",
+        ] {
             let result = apply(source);
             assert!(result.ends_with("=1 c.d=2") || result.ends_with("=1 c[1]=2"), "{result}");
         }
@@ -566,18 +662,44 @@ mod tests {
 
     #[test]
     fn no_merge_of_fields_of_a_local_env() {
-        assert_eq!(apply("local _ENV = f()\nx = 1\ny = 2\n"), "local _ENV=f()x=1 y=2");
+        assert_eq!(
+            apply(
+                "\
+local _ENV = f()
+x = 1
+y = 2
+"
+            ),
+            "local _ENV=f()x=1 y=2"
+        );
     }
 
     #[test]
     fn no_merge_of_an_assignment_to_env() {
-        assert_eq!(apply("local _ENV, y = f()\n_ENV = 1\ny = 2\n"), "local _ENV,y=f()_ENV=1 y=2");
+        assert_eq!(
+            apply(
+                "\
+local _ENV, y = f()
+_ENV = 1
+y = 2
+"
+            ),
+            "local _ENV,y=f()_ENV=1 y=2"
+        );
     }
 
     #[test]
     fn no_merge_of_a_local_a_global_statement_shadows() {
         assert_eq!(
-            apply_version("local x, y = f()\nglobal x\nx = 1\ny = 2\n", LuaVersion::Lua55),
+            apply_version(
+                "\
+local x, y = f()
+global x
+x = 1
+y = 2
+",
+                LuaVersion::Lua55
+            ),
             "local x,y=f()global x x=1 y=2"
         );
     }
@@ -585,9 +707,30 @@ mod tests {
     #[test]
     fn no_merge_of_repeated_assignment_target() {
         for (source, expected) in [
-            ("x = 1\nx = 2\n", "x=1 x=2"),
-            ("local x\nx = 1\nx = 2\n", "local x=1 x=2"),
-            ("local x, y = f()\nx = 1\ny = 2\nx = 3\n", "local x,y=f()x,y=1,2 x=3"),
+            (
+                "\
+x = 1
+x = 2
+",
+                "x=1 x=2",
+            ),
+            (
+                "\
+local x
+x = 1
+x = 2
+",
+                "local x=1 x=2",
+            ),
+            (
+                "\
+local x, y = f()
+x = 1
+y = 2
+x = 3
+",
+                "local x,y=f()x,y=1,2 x=3",
+            ),
         ] {
             assert_eq!(apply(source), expected, "source: {source}");
         }
@@ -595,13 +738,26 @@ mod tests {
 
     #[test]
     fn no_fuse_of_repeated_declared_name() {
-        let result = apply("local a, a\na, a = 1, 2\n");
+        let result = apply(
+            "\
+local a, a
+a, a = 1, 2
+",
+        );
         assert_eq!(result, "local a,a a,a=1,2");
     }
 
     #[test]
     fn merges_redeclared_local() {
-        assert_eq!(apply("local x = 1\nlocal x = 2\n"), "local x,x=1,2");
+        assert_eq!(
+            apply(
+                "\
+local x = 1
+local x = 2
+"
+            ),
+            "local x,x=1,2"
+        );
     }
 
     fn parse_luau(source: &str) -> Block {
@@ -628,8 +784,14 @@ mod tests {
 
     #[test]
     fn type_cast_dependency_blocks_merge() {
-        let result =
-            apply_version("local a = 1\nlocal b = a :: number\nprint(b)\n", LuaVersion::Luau);
+        let result = apply_version(
+            "\
+local a = 1
+local b = a :: number
+print(b)
+",
+            LuaVersion::Luau,
+        );
         let local_count = result.matches("local").count();
         assert_eq!(
             local_count, 2,
@@ -639,21 +801,40 @@ mod tests {
 
     #[test]
     fn detects_reference_in_nested_block() {
-        let block =
-            parse_luau("local y = function()\n  if true then\n    while x do end\n  end\nend\n");
+        let block = parse_luau(
+            "\
+local y = function()
+  if true then
+    while x do end
+  end
+end
+",
+        );
         let expr = first_expr_value(&block);
         assert!(references_any_in_expr(&expr, &names_of(&["x"])));
     }
 
     #[test]
     fn detects_reference_in_call_argument() {
-        let block = parse_luau("local y = function()\n  foo(x)\nend\n");
+        let block = parse_luau(
+            "\
+local y = function()
+  foo(x)
+end
+",
+        );
         let expr = first_expr_value(&block);
         assert!(
             references_any_in_expr(&expr, &names_of(&["x"])),
             "call argument reference must be detected"
         );
-        let callee = parse_luau("local y = function()\n  x()\nend\n");
+        let callee = parse_luau(
+            "\
+local y = function()
+  x()
+end
+",
+        );
         assert!(references_any_in_expr(&first_expr_value(&callee), &names_of(&["x"])));
     }
 
@@ -668,7 +849,14 @@ mod tests {
     // tokens aren't `Var::Name` nodes.
     #[test]
     fn declaration_of_same_name_is_not_a_reference() {
-        let block = parse_luau("local y = function()\n  local x = 1\n  return 0\nend\n");
+        let block = parse_luau(
+            "\
+local y = function()
+  local x = 1
+  return 0
+end
+",
+        );
         let expr = first_expr_value(&block);
         assert!(
             !references_any_in_expr(&expr, &names_of(&["x"])),
@@ -679,9 +867,21 @@ mod tests {
     // Both the target and the value of a Luau `+=` count as references.
     #[test]
     fn detects_reference_in_compound_assignment() {
-        let target = parse_luau("local y = function()\n  x += 1\nend\n");
+        let target = parse_luau(
+            "\
+local y = function()
+  x += 1
+end
+",
+        );
         assert!(references_any_in_expr(&first_expr_value(&target), &names_of(&["x"])));
-        let value = parse_luau("local y = function()\n  z += x\nend\n");
+        let value = parse_luau(
+            "\
+local y = function()
+  z += x
+end
+",
+        );
         assert!(references_any_in_expr(&first_expr_value(&value), &names_of(&["x"])));
     }
 
@@ -704,8 +904,11 @@ mod tests {
     fn merged_assignment_stays_within_the_parser_assignment_limit() {
         let names = (0..100u32).map(|i| format!("g{i}")).collect::<Vec<_>>().join(",");
         let assignments = (0..100u32).map(|i| format!("g{i} = {i}\n")).collect::<Vec<_>>().concat();
-        let target_count =
-            largest_assignment_target_count(&apply(&format!("local {names} = f()\n{assignments}")));
+        let target_count = largest_assignment_target_count(&apply(&format!(
+            "\
+local {names} = f()
+{assignments}"
+        )));
         assert!(
             (2..=195).contains(&target_count),
             "PUC parsers reject an assignment this long, but a statement has {target_count} targets"
